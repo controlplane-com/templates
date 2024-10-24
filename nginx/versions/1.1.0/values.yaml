@@ -21,5 +21,3 @@ locations:
     workload: example
     port: 8080
     regexModifier: ""
-
-nginxConf: myconfig

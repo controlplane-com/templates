@@ -1,0 +1,152 @@
+kind: workload
+name: {{ include "kafka.clusterName" . }}
+gvc: {{ .Values.cpln.gvc }}
+spec:
+  type: stateful
+  containers:
+    - name: kafka
+      args:
+        - '-c'
+        - >-
+          cp /scripts/kafka-init.sh /tmp/ && chmod +x /tmp/kafka-init.sh &&
+          /tmp/kafka-init.sh && /opt/bitnami/scripts/kafka/entrypoint.sh
+          /opt/bitnami/scripts/kafka/run.sh
+      command: /bin/bash
+      cpu: '{{ .Values.kafka.cpu }}'
+      env:
+        - name: BITNAMI_DEBUG
+          value: '{{ .Values.kafka.debug }}'
+{{- if and .Values.kafka.secrets.client_passwords (eq .Values.kafka.configurations.client_listener_security_protocol "SASL_PLAINTEXT") }}
+        - name: KAFKA_CLIENT_PASSWORDS
+          value: 'cpln://secret/{{ include "kafka.name" . }}-secrets.client-passwords'
+{{- end }}
+        - name: KAFKA_CLIENT_USERS
+          value: kafka-admin
+        - name: KAFKA_CONTROLLER_PASSWORD
+          value: 'cpln://secret/{{ include "kafka.name" . }}-secrets.controller-password'
+        - name: KAFKA_CONTROLLER_USER
+          value: controller_user
+        - name: KAFKA_HEAP_OPTS
+          value: "{{ include "kafka.heap.opts" . | trim }}"
+        - name: KAFKA_INTER_BROKER_PASSWORD
+          value: 'cpln://secret/{{ include "kafka.name" . }}-secrets.inter-broker-password'
+        - name: KAFKA_INTER_BROKER_USER
+          value: inter_broker_user
+        - name: KAFKA_KRAFT_BOOTSTRAP_SCRAM_USERS
+          value: 'true'
+        - name: KAFKA_KRAFT_CLUSTER_ID
+          value: 'cpln://secret/{{ include "kafka.name" . }}-secrets.kraft-cluster-id'
+        - name: KAFKA_MIN_ID
+          value: '0'
+      image: {{ .Values.kafka.image }}
+      inheritEnv: false
+      livenessProbe:
+        failureThreshold: 5
+        initialDelaySeconds: 60
+        periodSeconds: 15
+        successThreshold: 1
+        tcpSocket:
+          port: 9093
+        timeoutSeconds: 15
+      memory: {{ .Values.kafka.memory }}
+      ports:
+        - number: {{ .Values.kafka.configurations.client_port }}
+          protocol: tcp
+        - number: 9093
+          protocol: tcp
+        - number: 9094
+          protocol: tcp
+      readinessProbe:
+        failureThreshold: 20
+        initialDelaySeconds: 20
+        periodSeconds: 10
+        successThreshold: 1
+        tcpSocket:
+          port: 9093
+        timeoutSeconds: 5
+      volumes:
+        {{- $root := . -}}
+        {{- $logDirs := split "," $root.Values.kafka.logDirs }}
+        {{- $counter := 0 }}
+        {{- range $path := $logDirs }}
+        - path: {{ $path | trim }}
+          recoveryPolicy: retain
+          uri: 'cpln://volumeset/{{ include "kafka.name" $root }}-logs-{{ $counter }}'
+        {{- $counter = add $counter 1 }}
+        {{- end }}
+        - path: /configmaps/server.properties
+          recoveryPolicy: retain
+          uri: 'cpln://secret/{{ include "kafka.name" $root }}-controller-configuration'
+        - path: /scripts/kafka-init.sh
+          recoveryPolicy: retain
+          uri: 'cpln://secret/{{ include "kafka.name" $root }}-init'
+{{- if .Values.kafka_exporter }}
+    - name: kafka-exporter
+      args:
+        - '-c'
+        - >-
+{{- if .Values.kafka.secrets.client_passwords }}
+  {{- if eq .Values.kafka.configurations.client_listener_security_protocol "SASL_PLAINTEXT" }}
+          sleep 60 && kafka_exporter --kafka.server=localhost:{{ .Values.kafka.configurations.client_port }}
+          --sasl.enabled --sasl.username=kafka-admin --sasl.mechanism=plain
+          --sasl.password=${KAFKA_CLIENT_PASSWORDS} --web.listen-address=:9308
+  {{- else }}
+          sleep 60 && kafka_exporter --kafka.server=localhost:{{ .Values.kafka.configurations.client_port }}
+          --no-sasl.handshake --web.listen-address=:9308
+  {{- end }}
+{{- else }}
+          sleep 60 && kafka_exporter --kafka.server=localhost:{{ .Values.kafka.configurations.client_port }}
+          --no-sasl.handshake --web.listen-address=:9308
+{{- end }}
+      command: /bin/bash
+      cpu: {{ .Values.kafka_exporter.cpu }}
+      metrics:
+        path: /metrics
+        port: 9308
+      env:
+        - name: BITNAMI_DEBUG
+          value: '{{ .Values.kafka_exporter.debug }}'
+  {{- if and .Values.kafka.secrets.client_passwords (eq .Values.kafka.configurations.client_listener_security_protocol "SASL_PLAINTEXT") }}
+        - name: KAFKA_CLIENT_PASSWORDS
+          value: 'cpln://secret/{{ include "kafka.name" . }}-secrets.client-passwords'
+  {{- end }}
+      image: {{ .Values.kafka_exporter.image }}
+      inheritEnv: false
+      memory: {{ .Values.kafka_exporter.memory }}
+      ports:
+        - number: 9308
+          protocol: tcp
+{{- end }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.kafka.replicas }}
+      metric: disabled
+      minScale: {{ .Values.kafka.replicas }}
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: {{ .Values.kafka.suspend }}
+    timeoutSeconds: 5
+{{- if .Values.kafka.firewall }}
+  firewallConfig:
+    {{- if or (hasKey .Values.kafka.firewall "external_inboundAllowCIDR") (hasKey .Values.kafka.firewall "external_outboundAllowCIDR") }}
+    external:
+      inboundAllowCIDR: {{- if .Values.kafka.firewall.external_inboundAllowCIDR }}{{ .Values.kafka.firewall.external_inboundAllowCIDR | splitList "," | toYaml | nindent 8 }}{{- else }} []{{- end }}
+      outboundAllowCIDR: {{- if .Values.kafka.firewall.external_outboundAllowCIDR }}{{ .Values.kafka.firewall.external_outboundAllowCIDR | splitList "," | toYaml | nindent 8 }}{{- else }} []{{- end }}
+    {{- end }}
+    {{- if hasKey .Values.kafka.firewall "internal_inboundAllowType" }}
+    internal:
+      inboundAllowType: {{ default "[]" .Values.kafka.firewall.internal_inboundAllowType }}
+    {{- end }}
+{{- end }}
+  identityLink: //identity/{{ include "kafka.name" . }}
+  rolloutOptions:
+    maxSurgeReplicas: 25%
+    maxUnavailableReplicas: '1'
+    minReadySeconds: {{ .Values.kafka.minReadySeconds }}
+    scalingPolicy: OrderedReady
+  securityOptions:
+    filesystemGroupId: 1001
+  supportDynamicTags: false

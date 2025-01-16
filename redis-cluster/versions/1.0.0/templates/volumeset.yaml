@@ -1,0 +1,8 @@
+kind: volumeset
+name: {{ .Release.Name }}
+gvc: {{ .Values.cpln.gvc }}
+description: {{ .Release.Name }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: 20
+  performanceClass: general-purpose-ssd

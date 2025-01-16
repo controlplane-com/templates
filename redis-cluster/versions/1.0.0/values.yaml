@@ -1,0 +1,8 @@
+replicas: 6 # minimum value is 6
+port: 6379
+diskCapacity: 10 # In Gigabytes
+memory: 250Mi
+cpu: 200m
+firewallConfig:
+  internal:
+    inboundAllowType: same-org

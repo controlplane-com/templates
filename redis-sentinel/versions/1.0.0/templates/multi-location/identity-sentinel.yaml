@@ -1,0 +1,6 @@
+{{- if .Values.locations }}
+kind: identity
+name: {{ .Release.Name }}-sentinel
+gvc: {{ .Release.Name }}-{{ index .Values.locations 0 }}
+{{- else }}
+{{- end }}

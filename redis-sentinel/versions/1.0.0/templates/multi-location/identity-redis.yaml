@@ -1,0 +1,9 @@
+{{- $current := . }}
+{{- range .Values.locations }}
+kind: identity
+name: {{ $current.Release.Name }}-redis
+gvc: {{ $current.Release.Name }}-{{ . }}
+{{- if gt (len $current.Values.locations) 1 }}
+---
+{{- end }}
+{{- end }}

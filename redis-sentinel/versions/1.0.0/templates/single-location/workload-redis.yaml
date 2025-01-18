@@ -1,0 +1,56 @@
+{{- if .Values.locations }}
+{{- else }}
+kind: workload
+name: {{ .Release.Name }}-redis
+spec:
+  type: stateful
+  containers:
+    - name: valkey
+      args:
+        - '-c'
+        - >-
+          mkdir /etc/redis
+
+          cp /config/redis.conf /etc/redis/redis.conf
+
+          echo "\nreplica-announce-ip ${HOSTNAME}.{{ .Release.Name }}-redis" >>
+          /etc/redis/redis.conf
+
+          if [ "$(hostname)" = "{{ .Release.Name }}-redis-0" ]; then
+            redis-server /etc/redis/redis.conf
+          else
+            redis-server /etc/redis/redis.conf --replicaof {{ .Release.Name }}-redis-0.{{ .Release.Name }}-redis 6379
+          fi
+      command: /bin/sh
+      cpu: {{ .Values.redis.resources.cpu }}
+      memory: {{ .Values.redis.resources.memory }}
+      image: valkey/valkey:8
+      inheritEnv: false
+      ports:
+        - number: 6379
+          protocol: tcp
+      volumes:
+        - path: /data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ .Release.Name }}-redis
+        - path: /config/redis.conf
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ .Release.Name }}-redis-config
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      metric: cpu
+      minScale: {{ .Values.redis.replicas }}
+      maxScale: {{ .Values.redis.replicas }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: same-gvc
+  identityLink: //gvc/{{ .Values.cpln.gvc }}/identity/{{ .Release.Name }}-redis
+{{- end }}

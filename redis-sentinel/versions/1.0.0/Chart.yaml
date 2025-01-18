@@ -1,0 +1,11 @@
+apiVersion: v2
+name: redis-sentinel
+description: A master-replica Redis configuration with Redis Sentinel, using Valkey
+type: application
+version: 0.1.0
+appVersion: "8"
+
+annotations:
+  created: "2024-11-27"
+  lastModified: "2024-11-27"
+  category: "cache"

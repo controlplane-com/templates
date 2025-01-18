@@ -1,0 +1,13 @@
+{{- $current := . }}
+{{- range .Values.locations }}
+kind: volumeset
+name: {{ $current.Release.Name }}-redis
+gvc: {{ $current.Release.Name }}-{{ . }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: 20
+  performanceClass: general-purpose-ssd
+{{- if gt (len $current.Values.locations) 1 }}
+---
+{{- end }}
+{{- end }}

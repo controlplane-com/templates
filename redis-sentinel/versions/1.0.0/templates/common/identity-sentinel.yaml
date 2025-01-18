@@ -1,0 +1,6 @@
+# {{- if .Values.locations }}
+# {{- else }}
+# kind: identity
+# name: {{ .Release.Name }}-sentinel
+# gvc: {{ .Values.cpln.gvc }}
+# {{- end }}

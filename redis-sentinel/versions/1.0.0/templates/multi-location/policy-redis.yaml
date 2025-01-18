@@ -1,0 +1,16 @@
+{{- $current := . }}
+{{- if .Values.locations }}
+kind: policy
+name: {{ $current.Release.Name }}-redis
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+    {{- range $current.Values.locations }}
+      - //gvc/{{ $current.Release.Name }}-{{ . }}/identity/{{ $current.Release.Name }}-redis
+    {{- end }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ $current.Release.Name }}-redis-config
+{{- else }}
+{{- end }}

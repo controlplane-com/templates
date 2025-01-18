@@ -1,0 +1,13 @@
+{{- if .Values.locations }}
+{{- else }}
+kind: policy
+name: {{ .Release.Name }}-sentinel
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.cpln.gvc }}/identity/{{ .Release.Name }}-sentinel
+targetKind: secret
+targetLinks:
+  - //secret/{{ .Release.Name }}-sentinel-config
+{{- end }}

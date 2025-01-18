@@ -1,0 +1,10 @@
+{{- if .Values.locations }}
+{{- else }}
+kind: volumeset
+name: {{ .Release.Name }}-redis
+gvc: {{ .Values.cpln.gvc }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: 20
+  performanceClass: general-purpose-ssd
+{{- end }}

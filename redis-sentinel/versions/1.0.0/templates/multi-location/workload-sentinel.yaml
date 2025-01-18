@@ -1,0 +1,70 @@
+{{- $current := . }}
+{{- if .Values.locations }}
+{{- $value := int .Values.sentinel.quorum }}
+{{- $number := 0 }}
+{{- if eq $value 1 }}
+  {{- $number = 1 }}
+{{- else }}
+  {{- $number = int (add $value 1) }}
+{{- end }}
+{{ range $i := until $number }}
+kind: workload
+name: {{ $current.Release.Name }}-sentinel-{{ $i }}
+gvc: {{ $current.Release.Name }}-{{ index $current.Values.locations 0 }} 
+spec:
+  type: stateful
+  containers:
+    - name: valkey
+      args:
+        - '-c'
+        - >-
+          cp /config/sentinel.conf /etc/sentinel/sentinel.conf
+
+          echo "\nsentinel announce-ip {{ $current.Release.Name }}-sentinel-{{ $i }}.{{ $current.Release.Name }}-{{ index $current.Values.locations 0 }}.cpln.local" >>
+          /etc/sentinel/sentinel.conf
+
+          echo "sentinel monitor mymaster {{ $current.Release.Name }}-redis.{{ $current.Release.Name }}-{{ index $current.Values.locations 0 }}.cpln.local
+          6379 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
+
+          redis-sentinel /etc/sentinel/sentinel.conf
+      command: /bin/sh
+      cpu: {{ $current.Values.sentinel.resources.cpu }}
+      memory: {{ $current.Values.sentinel.resources.memory }}
+      env:
+        - name: REDIS_SENTINEL_QUORUM
+          value: '{{ $current.Values.sentinel.quorum }}'
+      image: valkey/valkey:8
+      inheritEnv: false
+      ports:
+        - number: 26379
+          protocol: tcp
+      volumes:
+        - path: /config/sentinel.conf
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ $current.Release.Name }}-sentinel-config
+        - path: /etc/sentinel
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ $current.Release.Name }}-sentinel-{{ $i }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      minScale: 1
+      maxScale: 1
+      metric: cpu
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: same-org
+  identityLink: //gvc/{{ $current.Release.Name }}-{{ index $current.Values.locations 0 }}/identity/{{ $current.Release.Name }}-sentinel
+{{- if gt $number 1 }}
+---
+{{- end }}
+{{- end }}
+{{- else }}
+{{- end }}

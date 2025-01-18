@@ -1,0 +1,64 @@
+{{- if .Values.locations }}
+{{- else }}
+kind: workload
+name: {{ .Release.Name }}-sentinel
+spec:
+  type: stateful
+  containers:
+    - name: valkey
+      args:
+        - '-c'
+        - >-
+          cp /config/sentinel.conf /etc/sentinel/sentinel.conf
+
+          echo "\nsentinel announce-ip ${HOSTNAME}.{{ .Release.Name }}-sentinel" >>
+          /etc/sentinel/sentinel.conf
+
+          echo "sentinel monitor mymaster {{ .Release.Name }}-redis-0.{{ .Release.Name }}-redis
+          6379 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
+
+          redis-sentinel /etc/sentinel/sentinel.conf
+      command: /bin/sh
+      cpu: {{ .Values.sentinel.resources.cpu }}
+      memory: {{ .Values.sentinel.resources.memory }}
+      env:
+        - name: REDIS_SENTINEL_QUORUM
+          value: '{{ .Values.sentinel.quorum }}'
+      image: valkey/valkey:8
+      inheritEnv: false
+      ports:
+        - number: 26379
+          protocol: tcp
+      volumes:
+        - path: /config/sentinel.conf
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ .Release.Name }}-sentinel-config
+        - path: /etc/sentinel
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ .Release.Name }}-sentinel
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      minScale: {{ if eq (int .Values.sentinel.quorum) 1 }}
+        1
+      {{ else }}
+        {{ add (int .Values.sentinel.quorum) 1 }}
+      {{ end }}
+      maxScale: {{ if eq (int .Values.sentinel.quorum) 1 }}
+        1
+      {{ else }}
+        {{ add (int .Values.sentinel.quorum) 1 }}
+      {{ end }}
+      metric: cpu
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: same-gvc
+  identityLink: //gvc/{{ .Values.cpln.gvc }}/identity/{{ .Release.Name }}-sentinel
+{{- end }}

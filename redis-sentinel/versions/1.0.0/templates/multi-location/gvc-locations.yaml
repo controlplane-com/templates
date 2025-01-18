@@ -1,0 +1,12 @@
+{{- $current := . }}
+{{- range .Values.locations }}
+kind: gvc
+name: {{ $current.Release.Name }}-{{ . }}
+spec:
+  staticPlacement:
+    locationLinks:
+      - //location/{{ . }}
+{{- if gt (len $current.Values.locations) 1 }}
+---
+{{- end }}
+{{- end }}

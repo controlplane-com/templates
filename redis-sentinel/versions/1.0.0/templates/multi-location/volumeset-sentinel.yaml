@@ -1,0 +1,23 @@
+{{- $current := . }}
+{{- if .Values.locations }}
+{{- $value := int .Values.sentinel.quorum }}
+{{- $number := 0 }}
+{{- if eq $value 1 }}
+  {{- $number = 1 }}
+{{- else }}
+  {{- $number = int (add $value 1) }}
+{{- end }}
+{{ range $i := until $number }}
+kind: volumeset
+name: {{ $current.Release.Name }}-sentinel-{{ $i }}
+gvc: {{ $current.Release.Name }}-{{ index $current.Values.locations 0 }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: 10
+  performanceClass: general-purpose-ssd
+{{- if gt $number 1 }}
+---
+{{- end }}
+{{- end }}
+{{- else }}
+{{- end }}

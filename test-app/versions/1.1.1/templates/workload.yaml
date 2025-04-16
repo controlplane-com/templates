@@ -1,0 +1,21 @@
+kind: workload
+name: example
+{{- if (get (get .Values "workload") "description") }}
+description: {{ .Values.workload.description | quote }}
+{{- end }}
+gvc: {{ .Values.cpln.gvc }}
+spec:
+  type: serverless
+  containers:
+    - name: httpbin
+      cpu: 32m
+      image: gcr.io/knative-samples/helloworld-go
+      memory: 64Mi
+      ports:
+        - number: 8080
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /
+          port: 8080
+          scheme: HTTP

@@ -1,0 +1,7 @@
+workload:
+  description: default description for v1.0.1
+
+secret:
+  defaultProperty: defaultPropertyValue
+
+secretDefaultRootProperty: defaultRootPropertyValue

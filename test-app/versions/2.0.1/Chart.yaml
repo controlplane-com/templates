@@ -1,0 +1,11 @@
+apiVersion: v2
+name: testapp
+description: Test app for Control Plane
+type: application
+version: 2.0.1
+appVersion: "11.0.0"
+annotations:
+  created: "2025-04-16"
+  lastModified: "2025-04-16"
+  category: "test"
+  file-customFile: "Test Configuration File"

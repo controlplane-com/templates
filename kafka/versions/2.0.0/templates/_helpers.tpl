@@ -453,3 +453,9 @@ done
 echo "All Kafka connectors have been configured and started."
 sleep infinity
 {{- end }}
+
+{{- define "kafka.validateListenerName" -}}
+{{- if not (regexMatch "^[a-zA-Z0-9_]+$" .name) -}}
+  {{- fail (printf "Error: Listener name '%s' contains invalid characters. Only alphanumeric characters and underscores are allowed." .name) -}}
+{{- end -}}
+{{- end -}}

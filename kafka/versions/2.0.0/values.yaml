@@ -48,6 +48,14 @@ kafka:
       ## @param listeners.client.passwords Comma-separated list of passwords for client communications when SASL is enabled, must match the number of client.sasl.users
       ## @param listeners.client.admin Admin username and password for client communications when SASL is enabled
         admin:
+          # # Enable to use external secret for admin credentials
+          # existingSecret:
+          #   enabled: true
+          #   name: "kafka-custom-secret-credentials"
+          #   usernameKey: "admin_username"
+          #   passwordKey: "admin_password"
+          # Direct credentials (ignored if existingSecret.enabled is true)
+
           username: admin
           password: "your-admin-password"
         users: "user"
@@ -57,13 +65,20 @@ kafka:
     #   name: PUBLIC
     #   publicAddress: kafka.example.com # Make sure Dedicate Load Balancer is enabled on the GVC
     #   # containerPort: 9095 # If publicAddress is enabled, Client automatically set to port range 3000-3004
-    #   sasl:
+      sasl:
     #   ## @param listeners.client.sasl.users Comma-separated list of usernames for client communications when SASL is enabled
     #   ## @param listeners.client.brokersAddresses Comma-separated list of passwords for client communications when SASL is enabled, must match the number of client.sasl.users
     #   ## @param listeners.client.admin Admin username and password for client communications when SASL is enabled
-    #     # admin:
-    #     #   username: admin
-    #     #   password: tgtgtg
+          # admin:
+          #   # Enable to use external secret for admin credentials
+          #   existingSecret:
+          #     enabled: true
+          #     name: "your-secret-name"
+          #     usernameKey: "admin_username"
+          #     passwordKey: "admin_password"
+          # # Direct credentials (ignored if existingSecret.enabled is true)
+          # username: admin
+          # password: tgtgtg
     #     users: "public-user"
     #     passwords: "your-public-user-password"
   acl:
@@ -172,6 +187,7 @@ kafbat_ui:
 # kafka_connectors:
 #   - name: connect-cluster
 #     image: docker.io/bitnami/kafka:3.9
+#     deletionProtection: true
 #     multiZone: true
 #     cpu: 400m
 #     memory: 1500Mi

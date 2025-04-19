@@ -14,3 +14,8 @@ targetLinks:
 {{- if .Values.jmx_exporter }}
   - //secret/{{ include "kafka.name" . }}-jmx-exporter-conf
 {{- end }}
+{{- range $key, $listener := .Values.kafka.listeners }}
+{{- if and $listener.sasl $listener.sasl.admin $listener.sasl.admin.existingSecret $listener.sasl.admin.existingSecret.enabled }}
+  - //secret/{{ $listener.sasl.admin.existingSecret.name }}
+{{- end }}
+{{- end }}

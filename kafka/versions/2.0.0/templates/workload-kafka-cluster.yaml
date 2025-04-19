@@ -71,6 +71,14 @@ spec:
           value: 'cpln://secret/{{ include "kafka.name" . }}-secrets.kraft-cluster-id'
         - name: KAFKA_MIN_ID
           value: '0'
+        {{- range $key, $listener := .Values.kafka.listeners }}
+        {{- if and $listener.sasl $listener.sasl.admin $listener.sasl.admin.existingSecret $listener.sasl.admin.existingSecret.enabled }}
+        - name: FROM_SECRET_LISTENER_{{ $listener.name | upper }}_ADMIN_USERNAME
+          value: 'cpln://secret/{{ $listener.sasl.admin.existingSecret.name }}.{{ $listener.sasl.admin.existingSecret.usernameKey }}'
+        - name: FROM_SECRET_LISTENER_{{ $listener.name | upper }}_ADMIN_PASSWORD
+          value: 'cpln://secret/{{ $listener.sasl.admin.existingSecret.name }}.{{ $listener.sasl.admin.existingSecret.passwordKey }}'
+        {{- end }}
+        {{- end }}
       image: {{ .Values.kafka.image }}
       inheritEnv: false
       livenessProbe:
@@ -153,7 +161,7 @@ spec:
     {{- fail (printf "Error: SASL_PLAINTEXT listener '%s' must have sasl.admin configured for kafka_exporter" $listenerName) }}
   {{- end }}
           sleep 60 && POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev) && kafka_exporter --kafka.server=localhost:{{ if not $listener.containerPort }}$(echo $((3000 + $POD_ID))){{ else }}{{ $port }}{{ end }}
-          --sasl.enabled --sasl.username={{ $listener.sasl.admin.username }} --sasl.mechanism=plain
+          --sasl.enabled --sasl.username=${KAFKA_CLIENT_USERNAME} --sasl.mechanism=plain
           --sasl.password=${KAFKA_CLIENT_PASSWORDS} --web.listen-address=:9308
 {{- else if eq $listener.protocol "PLAINTEXT" }}
           sleep 60 && POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev) && kafka_exporter --kafka.server=localhost:{{ if not $listener.containerPort }}$(echo $((3000 + $POD_ID))){{ else }}{{ $port }}{{ end }}
@@ -176,8 +184,18 @@ spec:
 {{- end }}
 {{- $listener := index .Values.kafka.listeners $listenerName }}
 {{- if eq $listener.protocol "SASL_PLAINTEXT" }}
+        - name: KAFKA_CLIENT_USERNAME
+          {{- if and $listener.sasl.admin.existingSecret $listener.sasl.admin.existingSecret.enabled }}
+          value: 'cpln://secret/{{ $listener.sasl.admin.existingSecret.name }}.{{ $listener.sasl.admin.existingSecret.usernameKey }}'
+          {{- else }}
+          value: '{{ $listener.sasl.admin.username }}'
+          {{- end }}
         - name: KAFKA_CLIENT_PASSWORDS
+          {{- if and $listener.sasl.admin.existingSecret $listener.sasl.admin.existingSecret.enabled }}
+          value: 'cpln://secret/{{ $listener.sasl.admin.existingSecret.name }}.{{ $listener.sasl.admin.existingSecret.passwordKey }}'
+          {{- else }}
           value: 'cpln://secret/{{ include "kafka.name" $ }}-secrets.{{ $listener.name | lower }}-admin-password'
+          {{- end }}
 {{- end }}
       image: {{ .Values.kafka_exporter.image }}
       inheritEnv: false

@@ -25,6 +25,7 @@ kafka:
   memory: 2000Mi # Gi / Mi
   minCpu: 250m # For millicores us 'm' like 500m
   minMemory: 2000Mi # Gi / Mi
+  # overrideHeapOpts: "-Xmx1400m -Xms1400m" # To override the default heap options. Default is 60% of kafka.memory
   # To disable all traffic, comment out the corresponding rule. Docs: https://docs.controlplane.com/concepts/security#firewall
   firewall:
     internal_inboundAllowType: "same-gvc" # Options: same-org / same-gvc(Recommended)

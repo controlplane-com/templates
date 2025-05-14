@@ -29,6 +29,9 @@ tags:
   {{- if .Values.kafka.multiZone }}
   cpln/multiZone: true
   {{- $hasTags = true }}
+  {{- else }}
+  cpln/multiZone: false
+  {{- $hasTags = true }}
   {{- end }}
   {{- if not $hasTags }}
   {}

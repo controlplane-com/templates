@@ -124,7 +124,13 @@ Convert .Values.kafka.memory to appropriate JVM heap size settings.
   {{- if hasKey .Values.kafka.listeners $listenerName -}}
     {{- $listener := index .Values.kafka.listeners $listenerName -}}
     {{- if $listener.publicAddress -}}
-      {{- $bootstrapAddress = printf "%s:3000" $listener.publicAddress -}}
+      {{- $replicas := .Values.kafka.replicas | int -}}
+      {{- $addresses := list -}}
+      {{- range $i := until $replicas -}}
+        {{- $port := add 3000 $i -}}
+        {{- $addresses = append $addresses (printf "%s:%d" $listener.publicAddress $port) -}}
+      {{- end -}}
+      {{- $bootstrapAddress = join "," $addresses -}}
     {{- else -}}
       {{- $containerPort := $listener.containerPort | int -}}
       {{- $bootstrapAddress = printf "%s:%d" $clusterName $containerPort -}}

@@ -316,11 +316,62 @@ truststore_init() {
   echo "Truststore setup completed for $hostname"
 }
 
-# Start Kafka Connect in the background
-echo "Starting Kafka Connect distributed worker..."
+# Function to check if a configuration exists and add it if not
+add_config_if_not_exists() {
+  local config_key="$1"
+  local config_value="$2"
+  local config_file="$3"
 
-# Start Kafka Connect in the background
-nohup /opt/bitnami/kafka/bin/connect-distributed.sh /opt/bitnami/kafka/config/connect-distributed.properties > /proc/1/fd/1 2>&1 &
+  if [ -s "${config_file}" ] && [ "$(tail -c 1 "${config_file}" | wc -l)" -eq 0 ]; then
+    echo "" >> "${config_file}"
+    echo "Added trailing newline to ${config_file}"
+  fi
+  
+  if ! grep -q "^${config_key}=" "${config_file}"; then
+    echo "${config_key}=${config_value}" >> "${config_file}"
+    echo "Added ${config_key} to ${config_file}"
+    return 0
+  else
+    echo "${config_key} already exists in ${config_file}"
+    return 0
+  fi
+}
+
+CONFIG_FILE="/opt/bitnami/kafka/config/connect-distributed-run.properties"
+cp /opt/bitnami/kafka/config/connect-distributed.properties ${CONFIG_FILE}
+
+# Check if SASL credentials are available
+if [ -n "${FROM_SECRET_CLIENT_USERNAME}" ] && [ -n "${FROM_SECRET_CLIENT_PASSWORD}" ]; then
+  echo "Checking for existing SASL configuration..."
+  JAAS_CONFIG="org.apache.kafka.common.security.plain.PlainLoginModule required username=\"${FROM_SECRET_CLIENT_USERNAME}\" password=\"${FROM_SECRET_CLIENT_PASSWORD}\";"
+  add_config_if_not_exists "sasl.jaas.config" "${JAAS_CONFIG}" "${CONFIG_FILE}"
+  add_config_if_not_exists "consumer.sasl.jaas.config" "${JAAS_CONFIG}" "${CONFIG_FILE}"
+  add_config_if_not_exists "producer.sasl.jaas.config" "${JAAS_CONFIG}" "${CONFIG_FILE}"
+fi
+
+{{- if .listener }}
+{{- if .kafkaListeners }}
+{{- if hasKey .kafkaListeners .listener }}
+{{- $listenerConfig := index .kafkaListeners .listener }}
+{{- $protocol := "SASL_PLAINTEXT" }}
+{{- if $listenerConfig.publicAddress }}
+{{- $protocol = "SASL_SSL" }}
+{{- else if $listenerConfig.protocol }}
+{{- $protocol = $listenerConfig.protocol }}
+{{- end }}
+add_config_if_not_exists "security.protocol" "{{ $protocol }}" "${CONFIG_FILE}"
+add_config_if_not_exists "consumer.security.protocol" "{{ $protocol }}" "${CONFIG_FILE}"
+add_config_if_not_exists "producer.security.protocol" "{{ $protocol }}" "${CONFIG_FILE}"
+{{- end }}
+{{- end }}
+{{- end }}
+
+add_config_if_not_exists "sasl.mechanism" "PLAIN" "${CONFIG_FILE}"
+add_config_if_not_exists "consumer.sasl.mechanism" "PLAIN" "${CONFIG_FILE}"
+add_config_if_not_exists "producer.sasl.mechanism" "PLAIN" "${CONFIG_FILE}"
+
+echo "Starting Kafka Connect distributed worker..."
+nohup /opt/bitnami/kafka/bin/connect-distributed.sh ${CONFIG_FILE} > /proc/1/fd/1 2>&1 &
 
 # Wait for Kafka Connect to start
 echo "Waiting for Kafka Connect to start..."

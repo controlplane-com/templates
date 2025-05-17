@@ -6,7 +6,7 @@ kafka:
   replicas: 3 # must not be 2
   minReadySeconds: 60
   debug: false
-  multiZone: false
+  multiZone: false # Additional charges apply
   logDirs: /opt/bitnami/kafka/logs-0,/opt/bitnami/kafka/logs-1
   volumes:
     logs:
@@ -68,13 +68,13 @@ kafka:
       ## @param listeners.client.sasl.users Comma-separated list of usernames for client communications when SASL is enabled
       ## @param listeners.client.brokersAddresses Comma-separated list of passwords for client communications when SASL is enabled, must match the number of client.sasl.users
       ## @param listeners.client.admin Admin username and password for client communications when SASL is enabled
-          admin:
-            # Enable to use external secret for admin credentials
-            existingSecret:
-              enabled: true
-              name: "your-secret-name"
-              usernameKey: "admin_username"
-              passwordKey: "admin_password"
+          # admin:
+          #   # Enable to use external secret for admin credentials
+          #   existingSecret:
+          #     enabled: true
+          #     name: "your-secret-name"
+          #     usernameKey: "admin_username"
+          #     passwordKey: "admin_password"
           # Direct credentials (ignored if existingSecret.enabled is true)
             # username: admin
             # password: tgtgtg
@@ -187,7 +187,7 @@ kafbat_ui:
 #   - name: connect-cluster
 #     image: docker.io/bitnami/kafka:3.9
 #     deletionProtection: true
-#     multiZone: true
+#     multiZone: false # Additional charges apply
 #     cpu: 400m
 #     memory: 1500Mi
 #     minCpu: 100m
@@ -195,6 +195,15 @@ kafbat_ui:
 #     plugins_folder: /opt/bitnami/kafka/plugins
 #     timeoutSeconds: 15
 #     replicas: 1
+#     sasl:
+#       existingSecret:
+#         enabled: false
+#         name: "your-secret-name"
+#         usernameKey: "admin_username"
+#         passwordKey: "admin_password"
+#       # Direct credentials (ignored if existingSecret.enabled is true)
+#       user: "admin"
+#       password: "your-admin-password"
 #     env:
 #         - name: KAFKA_HEAP_OPTS 
 #           value: '-Xms900m -Xmx900m' # set to 50%-75% of the memory
@@ -209,17 +218,20 @@ kafbat_ui:
 #       external_outboundAllowCIDR: "0.0.0.0/0" # Provide a comma-separated list
 #     listener: client # Provide the listener name to connect to
 #     connector_properties:
-#       # bootstrap.servers: "kafka-dev-cluster:9092" # Optional. If not set, the bootstrap address will be the cluster name or publicAddress
+#      # CAUTION: The following configuration properties are OPTIONAL and automatically generated from the listener configuration.
+#      # DO NOT override these values unless you fully understand the implications. Incorrect configuration may break connectivity.
+#      # If provided here, they will override the auto-generated values.
+#      # bootstrap.servers: "kafka-dev-cluster:9092" # If not set, will use the cluster name or publicAddress from the specified listener
+#      # sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"admin\" password=\"password\";"
+#      # consumer.sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"admin\" password=\"password\";"
+#      # producer.sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"admin\" password=\"password\";"
+#      # security.protocol: "SASL_PLAINTEXT" # Based on listener protocol
+#      # consumer.security.protocol: "SASL_PLAINTEXT" # Based on listener protocol
+#      # producer.security.protocol: "SASL_PLAINTEXT" # Based on listener protocol
+#      # sasl.mechanism: "PLAIN" # Default mechanism used
+#      # consumer.sasl.mechanism: "PLAIN" # Default mechanism used
+#      # producer.sasl.mechanism: "PLAIN" # Default mechanism used
 #       group.id: "connect-cluster"
-#       security.protocol: "SASL_PLAINTEXT"
-#       sasl.mechanism: "PLAIN"
-#       sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"admin\" password=\"your-admin-password\";"
-#       consumer.security.protocol: "SASL_PLAINTEXT"
-#       consumer.sasl.mechanism: "PLAIN"
-#       consumer.sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"admin\" password=\"your-admin-password\";"
-#       producer.security.protocol: "SASL_PLAINTEXT"
-#       producer.sasl.mechanism: "PLAIN"
-#       producer.sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"admin\" password=\"your-admin-password\";"
 #       key.converter.schemas.enable: "false"
 #       value.converter.schemas.enable: "false"
 #       offset.storage.topic: "connect-offsets"
@@ -394,7 +406,6 @@ kafka_ui:
   memory: 600Mi
   listener: client
   # To disable all traffic, comment out the corresponding rule. Docs: https://docs.controlplane.com/concepts/security#firewall
-  firewall: {}
-    # internal_inboundAllowType: "same-gvc" # Options: same-org / same-gvc
+  firewall: {}    # internal_inboundAllowType: "same-gvc" # Options: same-org / same-gvc
     # external_inboundAllowCIDR: 0.0.0.0/0 # Provide a comma-separated list
     # external_outboundAllowCIDR: "111.222.333.444/16,111.222.444.333/32" # Provide a comma-separated list

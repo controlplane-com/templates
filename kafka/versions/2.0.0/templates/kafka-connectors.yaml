@@ -14,6 +14,20 @@ targetLinks:
   - //secret/{{ include "kafka.name" $ }}-connect-{{ .name }}-distributed-properties
   - //secret/{{ include "kafka.name" $ }}-connect-{{ .name }}-init
   - //secret/{{ include "kafka.name" $ }}-connect-{{ .name }}-download
+{{- if and .sasl .sasl.existingSecret .sasl.existingSecret.enabled }}
+  - //secret/{{ .sasl.existingSecret.name }}
+{{- else if and .sasl .sasl.user .sasl.password }}
+  - //secret/{{ include "kafka.name" $ }}-connect-{{ .name }}-client-credentials
+{{- end }}
+{{- if and .sasl (not (and .sasl.existingSecret .sasl.existingSecret.enabled)) .sasl.user .sasl.password }}
+---
+kind: secret
+name: {{ include "kafka.name" $ }}-connect-{{ .name }}-client-credentials
+type: dictionary
+data:
+  username: {{ .sasl.user }}
+  password: {{ .sasl.password }}
+{{- end }}
 ---
 kind: secret
 name: {{ include "kafka.name" $ }}-connect-{{ .name }}-download
@@ -29,7 +43,7 @@ type: opaque
 data:
   encoding: plain
   payload: |
-    {{- include "kafka.connectors.run.script" (dict "plugins" .plugins "plugins_folder" .plugins_folder) | nindent 4 }}
+    {{- include "kafka.connectors.run.script" (dict "plugins" .plugins "plugins_folder" .plugins_folder "listener" .listener "kafkaListeners" $.Values.kafka.listeners) | nindent 4 }}
 ---
 kind: secret
 name: {{ include "kafka.name" $ }}-connect-{{ .name }}-distributed-properties
@@ -45,6 +59,7 @@ data:
     {{- range $key, $value := .connector_properties }}
     {{ $key }}={{ $value }}
     {{- end }}
+    
 ---
 kind: identity
 name: {{ include "kafka.name" $ }}-connect-{{ .name }}
@@ -87,9 +102,22 @@ spec:
   type: stateful
   containers:
     - name: kafka-connect
-      {{- if and .env (ne (len .env) 0) }}
+      {{- if or (and .sasl (or (and .sasl.existingSecret .sasl.existingSecret.enabled) (and .sasl.user .sasl.password))) (and .env (ne (len .env) 0)) }}
       env:
+      {{- if and .sasl .sasl.existingSecret .sasl.existingSecret.enabled }}
+        - name: FROM_SECRET_CLIENT_USERNAME
+          value: 'cpln://secret/{{ .sasl.existingSecret.name }}.{{ .sasl.existingSecret.usernameKey }}'
+        - name: FROM_SECRET_CLIENT_PASSWORD
+          value: 'cpln://secret/{{ .sasl.existingSecret.name }}.{{ .sasl.existingSecret.passwordKey }}'
+      {{- else if and .sasl .sasl.user .sasl.password }}
+        - name: FROM_SECRET_CLIENT_USERNAME
+          value: 'cpln://secret/{{ include "kafka.name" $ }}-connect-{{ .name }}-client-credentials.username'
+        - name: FROM_SECRET_CLIENT_PASSWORD
+          value: 'cpln://secret/{{ include "kafka.name" $ }}-connect-{{ .name }}-client-credentials.password'
+      {{- end }}
+      {{- if and .env (ne (len .env) 0) }}
         {{- toYaml .env | nindent 8 }}
+      {{- end }}
       {{- end }}
       args:
         - '-c'

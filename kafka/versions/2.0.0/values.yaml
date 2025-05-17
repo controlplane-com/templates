@@ -363,19 +363,31 @@ kafka_rest_proxy:
     authentication.roles: user
     client.security.protocol: SASL_PLAINTEXT
 
-  # JAAS configuration for Kafka client and Kafka Rest Proxy
+  # If configured, JAAS configuration will be generated automatically
+  sasl:
+    existingSecret:
+      enabled: false
+      name: "your-secret-name"
+      usernameKey: "admin_username"
+      passwordKey: "admin_password"
+    # Direct credentials (ignored if existingSecret.enabled is true)
+    user: "admin"
+    password: "your-admin-password"
+
+  # JAAS configuration for Kafka client and Kafka Rest Proxy - will override the default configuration
   # https://docs.confluent.io/platform/current/kafka-rest/production-deployment/confluent-server/security.html#authentication-between-the-admin-rest-and-ak-brokers
-  jaas_conf:
-    KafkaClient {
-    org.apache.kafka.common.security.plain.PlainLoginModule required
-    username="admin"
-    password="your-admin-password";
-    };
-    KafkaRest {
-      org.eclipse.jetty.jaas.spi.PropertyFileLoginModule required
-      debug="true"
-      file="/etc/kafka-rest/password.properties";
-    };
+  # jaas_conf:
+  #   If provided, this will override the default configuration 
+  #   KafkaClient {
+  #   org.apache.kafka.common.security.plain.PlainLoginModule required
+  #   username="admin"
+  #   password="your-admin-password";
+  #   };
+  #   KafkaRest {
+  #     org.eclipse.jetty.jaas.spi.PropertyFileLoginModule required
+  #     debug="true"
+  #     file="/etc/kafka-rest/password.properties";
+  #   };
 
   # # Password properties for Kafka Rest Proxy
   # # Required when authentication.method is set to BASIC

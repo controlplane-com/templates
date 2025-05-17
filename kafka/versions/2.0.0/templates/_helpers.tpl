@@ -516,3 +516,42 @@ sleep infinity
   {{- fail (printf "Error: Listener name '%s' contains invalid characters. Only alphanumeric characters and underscores are allowed." .name) -}}
 {{- end -}}
 {{- end -}}
+
+{{- define "kafka.rest.jaas.conf" -}}
+{{- if .Values.kafka_rest_proxy.jaas_conf }}
+{{ .Values.kafka_rest_proxy.jaas_conf }}
+{{- else }}
+KafkaClient {
+  org.apache.kafka.common.security.plain.PlainLoginModule required
+  username="kafka-rest-proxy-client-username-placeholder"
+  password="kafka-rest-proxy-client-password-placeholder";
+};
+KafkaRest {
+  org.eclipse.jetty.jaas.spi.PropertyFileLoginModule required
+  debug="true"
+  file="/etc/kafka-rest/password.properties";
+};
+{{- end }}
+{{- end -}}
+
+{{- define "kafka.rest.init.script" -}}
+cp /etc/kafka-rest/kafka-rest.jaas.conf /etc/kafka-rest/kafka-rest-jaas.conf
+
+# Check if credentials placeholders exist and replace them with actual values
+if grep -q "kafka-rest-proxy-client-username-placeholder" /etc/kafka-rest/kafka-rest-jaas.conf || grep -q "kafka-rest-proxy-client-password-placeholder" /etc/kafka-rest/kafka-rest-jaas.conf; then
+  if [ -n "$FROM_SECRET_CLIENT_USERNAME" ] && [ -n "$FROM_SECRET_CLIENT_PASSWORD" ]; then
+    echo "Replacing client credentials placeholders with actual values"
+    sed -i "s/kafka-rest-proxy-client-username-placeholder/$FROM_SECRET_CLIENT_USERNAME/g" /etc/kafka-rest/kafka-rest-jaas.conf
+    sed -i "s/kafka-rest-proxy-client-password-placeholder/$FROM_SECRET_CLIENT_PASSWORD/g" /etc/kafka-rest/kafka-rest-jaas.conf
+  else
+    echo "Warning: Credential placeholders found but environment variables not set"
+  fi
+else
+  echo "No credential placeholders found in JAAS config"
+fi
+
+# Start Kafka REST with the configured JAAS file
+export KAFKAREST_OPTS="-Djava.security.auth.login.config=/etc/kafka-rest/kafka-rest-jaas.conf"
+exec kafka-rest-start /etc/kafka-rest/kafka-rest.properties
+{{- end }}
+

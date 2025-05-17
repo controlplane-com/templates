@@ -33,7 +33,15 @@ type: opaque
 data:
   encoding: plain
   payload: >-
-    {{- .Values.kafka_rest_proxy.jaas_conf | nindent 4 }}
+    {{- include "kafka.rest.jaas.conf" . | nindent 4}}
+---
+kind: secret
+name: {{ include "kafka.name" . }}-rest-proxy-init
+type: opaque
+data:
+  encoding: plain
+  payload: |
+    {{- include "kafka.rest.init.script" . | nindent 4 }}
 ---
 kind: identity
 name: {{ include "kafka.name" . }}-rest-proxy-identity
@@ -53,8 +61,23 @@ targetLinks:
 {{- if .Values.kafka_rest_proxy.password_properties }}
   - //secret/{{ include "kafka.name" . }}-rest-password-properties
 {{- end }}
+  - //secret/{{ include "kafka.name" . }}-rest-proxy-init
   - //secret/{{ include "kafka.name" . }}-rest-properties
   - //secret/{{ include "kafka.name" . }}-rest-jaas-conf
+{{- if and .Values.kafka_rest_proxy.sasl .Values.kafka_rest_proxy.sasl.existingSecret .Values.kafka_rest_proxy.sasl.existingSecret.enabled }}
+  - //secret/{{ .Values.kafka_rest_proxy.sasl.existingSecret.name }}
+{{- else if and .Values.kafka_rest_proxy.sasl .Values.kafka_rest_proxy.sasl.user .Values.kafka_rest_proxy.sasl.password }}
+  - //secret/{{ include "kafka.name" . }}-rest-proxy-client-credentials
+{{- end }}
+{{- if and .Values.kafka_rest_proxy.sasl (not (and .Values.kafka_rest_proxy.sasl.existingSecret .Values.kafka_rest_proxy.sasl.existingSecret.enabled)) .Values.kafka_rest_proxy.sasl.user .Values.kafka_rest_proxy.sasl.password }}
+---
+kind: secret
+name: {{ include "kafka.name" . }}-rest-proxy-client-credentials
+type: dictionary
+data:
+  username: {{ .Values.kafka_rest_proxy.sasl.user }}
+  password: {{ .Values.kafka_rest_proxy.sasl.password }}
+{{- end }}
 ---
 kind: workload
 name: {{ include "kafka.name" . }}-{{ .Values.kafka_rest_proxy.name }}
@@ -75,10 +98,25 @@ spec:
     - name: rest-proxy
       args:
         - '-c'
-        - >-
-          KAFKAREST_OPTS="-Djava.security.auth.login.config=/etc/kafka-rest/kafka-rest.jaas.conf"
-          kafka-rest-start /etc/kafka-rest/kafka-rest.properties
+        - sleep 10 && cp /etc/kafka-rest/kafka-rest.init /etc/kafka-rest/kafka-rest-init.sh && chmod +x /etc/kafka-rest/kafka-rest-init.sh && /etc/kafka-rest/kafka-rest-init.sh
       command: /bin/bash
+      {{- if or (and .Values.kafka_rest_proxy.sasl (or (and .Values.kafka_rest_proxy.sasl.existingSecret .Values.kafka_rest_proxy.sasl.existingSecret.enabled) (and .Values.kafka_rest_proxy.sasl.user .Values.kafka_rest_proxy.sasl.password))) (and .Values.kafka_rest_proxy.env (ne (len .Values.kafka_rest_proxy.env) 0)) }}
+      env:
+      {{- if and .Values.kafka_rest_proxy.sasl .Values.kafka_rest_proxy.sasl.existingSecret .Values.kafka_rest_proxy.sasl.existingSecret.enabled }}
+        - name: FROM_SECRET_CLIENT_USERNAME
+          value: 'cpln://secret/{{ .Values.kafka_rest_proxy.sasl.existingSecret.name }}.{{ .Values.kafka_rest_proxy.sasl.existingSecret.usernameKey }}'
+        - name: FROM_SECRET_CLIENT_PASSWORD
+          value: 'cpln://secret/{{ .Values.kafka_rest_proxy.sasl.existingSecret.name }}.{{ .Values.kafka_rest_proxy.sasl.existingSecret.passwordKey }}'
+      {{- else if and .Values.kafka_rest_proxy.sasl .Values.kafka_rest_proxy.sasl.user .Values.kafka_rest_proxy.sasl.password }}
+        - name: FROM_SECRET_CLIENT_USERNAME
+          value: 'cpln://secret/{{ include "kafka.name" . }}-rest-proxy-client-credentials.username'
+        - name: FROM_SECRET_CLIENT_PASSWORD
+          value: 'cpln://secret/{{ include "kafka.name" . }}-rest-proxy-client-credentials.password'
+      {{- end }}
+      {{- if and .Values.kafka_rest_proxy.env (ne (len .Values.kafka_rest_proxy.env) 0) }}
+        {{- toYaml .Values.kafka_rest_proxy.env | nindent 8 }}
+      {{- end }}
+      {{- end }}
       cpu: {{ .Values.kafka_rest_proxy.cpu }}
       image: {{ .Values.kafka_rest_proxy.image }}
       inheritEnv: false
@@ -106,6 +144,9 @@ spec:
         - path: /etc/kafka-rest/kafka-rest.properties
           recoveryPolicy: retain
           uri: cpln://secret/{{ include "kafka.name" . }}-rest-properties
+        - path: /etc/kafka-rest/kafka-rest.init
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "kafka.name" . }}-rest-proxy-init
   defaultOptions:
     autoscaling:
       maxConcurrency: 0

@@ -1,6 +1,6 @@
 # Global Virtual Cluster (gvc) settings
 gvc:
-  name: test-12
+  name: test-13
   description: AWS US East
   locationLinks:
     - //location/aws-eu-central-1

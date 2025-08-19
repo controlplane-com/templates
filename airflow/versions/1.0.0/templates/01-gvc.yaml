@@ -1,0 +1,15 @@
+kind: gvc
+name: {{ .Values.gvc.name }}
+description: {{ default .Values.gvc.description }}
+tags: {{- include "pg.tags" . | nindent 4 }}
+spec:
+  endpointNamingFormat: org
+  {{- if .Values.keda.enabled }}
+  keda:
+    enabled: true
+  {{- end }}
+  staticPlacement:
+    locationLinks:
+{{- range $location := .Values.gvc.locationLinks }}
+      - {{ $location }}
+{{- end }}

@@ -1,0 +1,39 @@
+kind: workload
+name: {{ .Values.redis.name }}
+gvc: {{ .Values.gvc.name }}
+tags:
+  {{- include "pg.tags" . | nindent 2 }}
+spec:
+  type: standard
+
+
+  containers:
+    - name: redis
+      cpu: {{ .Values.redis.resources.cpu }}
+      memory: {{ .Values.redis.resources.memory }}
+      image: redis:latest
+      inheritEnv: false
+      ports:
+        - number: 6379
+          protocol: tcp
+
+
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+      inboundAllowWorkload: []
+
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+
+  supportDynamicTags: false

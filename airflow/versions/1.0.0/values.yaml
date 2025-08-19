@@ -1,0 +1,61 @@
+# Global Virtual Cluster (gvc) settings
+gvc:
+  name: test-12
+  description: AWS US East
+  locationLinks:
+    - //location/aws-eu-central-1
+
+
+# PostgreSQL database configuration  
+postgres:
+  name: postgres
+  resources:
+    cpu: 500m
+    memory: 1024Mi
+  config:
+    username: username
+    password: password
+
+# Redis cache configuration
+redis:
+  name: redis
+  resources:
+    cpu: 250m
+    memory: 512Mi
+
+# Apache Airflow configuration   
+airflow:
+  webserverName: airflow
+  webserver:
+    resources:
+      cpu: 2000m
+      memory: 3Gi
+  celeryWorkerName: airflow-celery-worker
+  celeryWorker:
+    resources:
+      cpu: 256m
+      memory: 512Mi
+  webPort: 8080   # Port for accessing the Airflow web interface
+
+  auth:        
+    jwtSecret: P5lsoKdzuWsN7NcZYu4TlwVp9pRKdpHjJ902aiy05K6HvDja7r+1y6tOITuaAQHv # Secret key used to sign JWT tokens, generate in terminal using "openssl rand -base64 48"
+    jwtExpirationDelta: 3600  # JWT token expiration time in seconds 
+    jwtRefreshThreshold: 300 # Threshold before token expires to allow refresh in seconds
+
+  scheduler:
+    dagDirListInterval: 10  # How often to check DAG folder (seconds)
+    minFileProcessInterval: 10 # Minimum interval to process DAG files (seconds)
+
+  celery:
+    workerConcurrency: 1 # Number of tasks each worker can run concurrently when KEDA is enabled.
+
+# KEDA (Kubernetes Event-driven Autoscaling) configuration
+keda:
+  enabled: true # Enable or disable KEDA autoscaling
+  minScale: 1  # Minimum number of Celery workers
+  maxScale: 3  # Maximum number of Celery workers
+  scaleToZeroDelay: 300 # Time before scaling to zero (seconds)
+  listLength: 3   # Queue length threshold to trigger scaling
+  cooldownPeriod: 1 # Cooldown between scaling events (seconds)
+  initialCooldownPeriod: 1 # Cooldown after startup before scaling (seconds)
+  pollingInterval: 4  # Interval at which KEDA queries metrics for scaling(seconds)

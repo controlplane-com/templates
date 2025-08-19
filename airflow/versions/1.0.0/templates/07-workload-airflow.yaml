@@ -6,7 +6,6 @@ tags:
   {{- include "pg.tags" . | nindent 2 }}
 spec:
   type: stateful
-  identityLink: //identity/{{ include "pg.name" . }}
   containers:
     - name: airflow
       command: bash
@@ -37,10 +36,6 @@ spec:
           value: "{{ .Values.airflow.auth.jwtExpirationDelta }}"
         - name: AIRFLOW__API_AUTH__JWT_REFRESH_THRESHOLD
           value: "{{ .Values.airflow.auth.jwtRefreshThreshold }}"
-        - name: POSTGRES_USERNAME
-          value: cpln://secret/{{ include "pg.secretName" . }}.username         
-        - name: POSTGRES_PASSWORD 
-          value: cpln://secret/{{ include "pg.secretName" . }}.password          
         - name: AIRFLOW__API_AUTH__JWT_SECRET
           value: {{ .Values.airflow.auth.jwtSecret }}
         - name: AIRFLOW__API__BASE_URL
@@ -48,13 +43,13 @@ spec:
         - name: AIRFLOW__CELERY__BROKER_URL
           value: redis://{{ .Values.redis.name }}.{{ .Values.gvc.name }}.cpln.local
         - name: AIRFLOW__CELERY__RESULT_BACKEND
-          value: db+postgresql://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ .Values.postgres.name }}:5432/test
+          value: db+postgresql://{{ .Values.postgres.config.username }}:{{ .Values.postgres.config.password }}@{{ .Values.postgres.name }}:5432/test
         - name: AIRFLOW__CORE__DAGS_FOLDER
           value: /opt/airflow/dags
         - name: AIRFLOW__CORE__EXECUTOR
           value: CeleryExecutor
         - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
-          value: postgresql+psycopg2://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ .Values.postgres.name }}:5432/test
+          value: postgresql+psycopg2://{{ .Values.postgres.config.username }}:{{ .Values.postgres.config.password }}@{{ .Values.postgres.name }}:5432/test
         - name: AIRFLOW__LOGGING__REMOTE_LOGGING
           value: 'False'
         - name: AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL

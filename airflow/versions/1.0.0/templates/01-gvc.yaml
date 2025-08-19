@@ -1,6 +1,6 @@
 kind: gvc
 name: {{ .Values.gvc.name }}
-description: {{ .Values.gvc.name }}
+description: {{ default .Values.gvc.description }}
 tags: {{- include "pg.tags" . | nindent 4 }}
 spec:
   endpointNamingFormat: org

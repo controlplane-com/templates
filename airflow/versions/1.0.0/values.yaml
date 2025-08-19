@@ -1,6 +1,7 @@
 # Global Virtual Cluster (gvc) settings
 gvc:
-  name: airflow
+  name: test-12
+  description: AWS US East
   locationLinks:
     - //location/aws-eu-central-1
 
@@ -48,8 +49,7 @@ airflow:
   celery:
     workerConcurrency: 1 # Number of tasks each worker can run concurrently when KEDA is enabled.
 
-# KEDA (Kubernetes Event-driven Autoscaling) configuration 
-# NOT SUPPORTED in gcp/us-central1
+# KEDA (Kubernetes Event-driven Autoscaling) configuration
 keda:
   enabled: true # Enable or disable KEDA autoscaling
   minScale: 1  # Minimum number of Celery workers

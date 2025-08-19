@@ -1,7 +1,7 @@
 # Global Virtual Cluster (gvc) settings
 gvc:
   name: airflow
-  description: AWS US East
+  description: 
   locationLinks:
     - //location/aws-eu-central-1
 

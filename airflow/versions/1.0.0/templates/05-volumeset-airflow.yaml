@@ -1,0 +1,12 @@
+kind: volumeset
+name: {{ .Values.airflow.webserverName }}
+description: {{ .Values.airflow.webserverName }}
+gvc: {{ .Values.gvc.name }}
+tags:
+  {{- include "pg.tags" . | nindent 4 }}
+spec:
+  fileSystemType: shared
+  initialCapacity: 10
+  performanceClass: shared
+
+

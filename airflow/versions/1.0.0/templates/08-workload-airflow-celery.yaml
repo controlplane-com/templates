@@ -2,7 +2,8 @@ kind: workload
 name: {{ .Values.airflow.celeryWorkerName }}
 description: {{ .Values.airflow.celeryWorkerName }}
 gvc: {{ .Values.gvc.name }}
-tags: {}
+tags:
+  {{- include "pg.tags" . | nindent 4 }}
 spec:
   type: stateful
   identityLink: //identity/{{ include "pg.name" . }}
@@ -22,13 +23,13 @@ spec:
         - name: POSTGRES_PASSWORD 
           value: cpln://secret/{{ include "pg.secretName" . }}.password          
         - name: AIRFLOW__API_AUTH__JWT_SECRET
-          value: P5lsoKdzuWsN7NcZYu4TlwVp9pRKdpHjJ902aiy05K6HvDja7r+1y6tOITuaAQHv
+          value: {{ .Values.airflow.auth.jwtSecret }}
         - name: AIRFLOW__API__BASE_URL
           value: http://{{ .Values.airflow.webserverName}}:{{ .Values.airflow.webPort }}
         - name: AIRFLOW__CELERY__BROKER_URL
           value: redis://{{ .Values.redis.name }}.{{ .Values.gvc.name }}.cpln.local
         - name: AIRFLOW__CELERY__RESULT_BACKEND
-          value: db+postgresql://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ .Values.postgres.name }}:5432/test
+          value: db+postgresql://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ .Values.postgres.name }}:5432/{{ .Values.postgres.config.database }}
         {{- if .Values.keda.enabled }}
         - name: AIRFLOW__CELERY__WORKER_CONCURRENCY
           value: "{{ .Values.airflow.celery.workerConcurrency }}"
@@ -38,7 +39,7 @@ spec:
         - name: AIRFLOW__CORE__EXECUTOR
           value: CeleryExecutor
         - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
-          value: postgresql+psycopg2://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ .Values.postgres.name }}:5432/test
+          value: postgresql+psycopg2://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ .Values.postgres.name }}:5432/{{ .Values.postgres.config.database }}
         - name: AIRFLOW__LOGGING__REMOTE_LOGGING
           value: 'False'
       image: controlplanecorporation/celery:v1
@@ -47,7 +48,7 @@ spec:
       volumes:
         - path: /opt/airflow
           recoveryPolicy: retain
-          uri: cpln://volumeset/airflow
+          uri: cpln://volumeset/{{ .Values.airflow.webserverName }}
   {{- if .Values.keda.enabled }}
   defaultOptions:
       autoscaling:
@@ -73,15 +74,22 @@ spec:
       timeoutSeconds: 5
   {{- end }}        
   firewallConfig:
-    external:
+    {{- if or .Values.airflow.celeryWorker.inboundAllowCIDR .Values.airflow.celeryWorker.outboundAllowCIDR }}
+    external:   
+      {{- if .Values.airflow.celeryWorker.inboundAllowCIDR }}
       inboundAllowCIDR:
-        - 0.0.0.0/0
-      inboundBlockedCIDR: []
+        {{- range .Values.airflow.celeryWorker.inboundAllowCIDR }}
+        - {{ . | quote }}
+        {{- end }}
+      {{- end }}
+
+      {{- if .Values.airflow.celeryWorker.outboundAllowCIDR }}
       outboundAllowCIDR:
-        - 0.0.0.0/0
-      outboundAllowHostname: []
-      outboundAllowPort: []
-      outboundBlockedCIDR: []
+        {{- range .Values.airflow.celeryWorker.outboundAllowCIDR }}
+        - {{ . | quote }}
+        {{- end }}
+      {{- end }}
+    {{- end }} 
     internal:
       inboundAllowType: same-gvc
       inboundAllowWorkload: []

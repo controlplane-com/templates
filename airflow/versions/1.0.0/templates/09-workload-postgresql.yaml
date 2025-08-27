@@ -2,7 +2,7 @@ kind: workload
 name: {{ .Values.postgres.name }}
 gvc: {{ .Values.gvc.name }}
 tags:
-  {{- include "pg.tags" . | nindent 2 }}
+  {{- include "pg.tags" . | nindent 4 }}
 spec:
   type: stateful
   identityLink: //identity/{{ include "pg.name" . }}
@@ -12,12 +12,12 @@ spec:
         - name: PGDATA
           value: "/var/lib/postgresql/data/pg_data"
         - name: POSTGRES_DB
-          value: test
+          value: {{ .Values.postgres.config.database }}
         - name: POSTGRES_PASSWORD
           value: 'cpln://secret/{{ include "pg.secretName" . }}.password'
         - name: POSTGRES_USER
           value: 'cpln://secret/{{ include "pg.secretName" . }}.username'
-      image: 'postgres:15'
+      image: postgres:15
       inheritEnv: false
       cpu: {{ .Values.postgres.resources.cpu }}
       memory: {{ .Values.postgres.resources.memory }}
@@ -26,7 +26,7 @@ spec:
           protocol: tcp
       volumes:
         - path: /var/lib/postgresql/data
-          uri: 'cpln://volumeset/{{ .Values.postgres.name  }}'
+          uri: cpln://volumeset/{{ .Values.postgres.name }}
   defaultOptions:
     autoscaling:
       metric: disabled

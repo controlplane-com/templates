@@ -2,7 +2,7 @@ kind: workload
 name: {{ .Values.redis.name }}
 gvc: {{ .Values.gvc.name }}
 tags:
-  {{- include "pg.tags" . | nindent 2 }}
+  {{- include "pg.tags" . | nindent 4 }}
 spec:
   type: standard
 
@@ -11,7 +11,7 @@ spec:
     - name: redis
       cpu: {{ .Values.redis.resources.cpu }}
       memory: {{ .Values.redis.resources.memory }}
-      image: redis:latest
+      image: redis:8.2.0
       inheritEnv: false
       ports:
         - number: 6379

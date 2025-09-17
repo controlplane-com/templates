@@ -1,0 +1,16 @@
+kind: volumeset
+name: cockroach-vs
+gvc: {{ .Values.gvc.name }}
+tags:
+  workload: cockroach
+spec:
+  autoscaling:
+    maxCapacity: 1000
+    minFreePercentage: 1
+    scalingFactor: 1.1
+  fileSystemType: ext4
+  initialCapacity: 10
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d

@@ -1,0 +1,6 @@
+---
+kind: identity
+gvc: {{ .Values.gvc.name }}
+name: cockroach-identity
+description: cockroach-identity
+tags: {}

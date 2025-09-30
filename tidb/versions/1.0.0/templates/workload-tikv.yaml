@@ -1,0 +1,72 @@
+---
+kind: workload
+name: {{ .Release.Name }}-tikv
+description: tikv storage
+tags: {}
+spec:
+  type: stateful
+  containers:
+    - name: {{ .Release.Name }}-tikv
+      cpu: "{{ .Values.resources.tikv.cpu }}"
+      image: pingcap/tikv:v8.5.3
+      command: "/bin/bash"
+      args:
+        - "/scripts/tikv-startup.sh"
+      inheritEnv: false
+      memory: {{ .Values.resources.tikv.memory }}
+      ports:
+        - number: 20160
+          protocol: tcp
+        - number: 20180
+          protocol: tcp
+      volumes:
+        - path: /data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/tidb-tikv-vs
+        - path: /scripts/tikv-startup.sh
+          uri: cpln://secret/tidb-tikv-startup.payload
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/tidb-identity
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 3
+      metric: cpu
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  localOptions:
+    {{- range $location := .Values.gvc.locations }}
+    - autoscaling:
+        maxConcurrency: 0
+        maxScale: {{ if eq ($location.replicas | int) 0 }}1{{ else }}{{ $location.replicas | int }}{{ end }}
+        metric: disabled
+        minScale: {{ if eq ($location.replicas | int) 0 }}0{{ else }}{{ $location.replicas | int }}{{ end }}
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      location: //location/{{ $location.name }}
+      suspend: {{ if eq ($location.replicas | int) 0 }}true{{ else }}false{{ end }}
+      timeoutSeconds: 10
+    {{- end }}
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+      inboundAllowWorkload: []
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: true
+  supportDynamicTags: false

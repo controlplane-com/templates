@@ -1,0 +1,11 @@
+kind: gvc
+name: {{ .Values.gvc.name }}
+description: {{ .Values.gvc.name }}
+tags: {}
+spec:
+  endpointNamingFormat: org
+  staticPlacement:
+    locationLinks:
+    {{- range .Values.gvc.locations }}
+      - //location/{{ .name }}
+    {{- end }}

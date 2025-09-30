@@ -10,4 +10,5 @@ bindings:
       - //gvc/{{ .Values.gvc.name }}/identity/cockroach-identity
 targetKind: secret
 targetLinks:
-  - //secret/cockroach-secret
+  - //secret/cockroach-startup
+  - //secret/cockroach-user

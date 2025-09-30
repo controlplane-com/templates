@@ -10,3 +10,4 @@ annotations:
   created: "2024-11-01"
   lastModified: "2024-11-01"
   category: "database"
+  createsGvc: false

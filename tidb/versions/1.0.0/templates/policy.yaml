@@ -1,0 +1,16 @@
+---
+kind: policy
+name: tidb-{{ .Values.gvc.name }}-policy
+description: tidb-{{ .Values.gvc.name }}-policy
+tags: {}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.gvc.name }}/identity/tidb-identity
+targetKind: secret
+targetLinks:
+  - //secret/tidb-user
+  - //secret/tidb-pd-startup
+  - //secret/tidb-server-startup
+  - //secret/tidb-tikv-startup

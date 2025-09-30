@@ -1,0 +1,13 @@
+apiVersion: v2
+name: clickhouse
+description: Fast, open source column-oriented database management system for Control Plane
+
+type: application
+version: 1.0.0
+appVersion: "25.8"
+
+annotations:
+  created: "2025-09-18"
+  lastModified: "2025-09-29"
+  category: "database"
+  createsGvc: true

@@ -1,0 +1,34 @@
+kind: volumeset
+name: tidb-pd-vs
+gvc: {{ .Values.gvc.name }}
+tags:
+  workload: tidb
+spec:
+  autoscaling:
+    maxCapacity: 1000
+    minFreePercentage: 1
+    scalingFactor: 1.1
+  fileSystemType: ext4
+  initialCapacity: 10
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d
+    
+---
+kind: volumeset
+name: tidb-tikv-vs
+gvc: {{ .Values.gvc.name }}
+tags:
+  workload: tidb
+spec:
+  autoscaling:
+    maxCapacity: 1000
+    minFreePercentage: 1
+    scalingFactor: 1.1
+  fileSystemType: ext4
+  initialCapacity: 10
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d

@@ -1,0 +1,6 @@
+---
+kind: identity
+gvc: {{ .Values.gvc.name }}
+name: clickhouse-identity
+description: clickhouse-identity
+tags: {}

@@ -1,21 +1,28 @@
 gvc:
   name: cockroach-gvc
   locations:
-    - name: aws-us-east-1
+    - name: aws-us-east-2
       replicas: 2
-    - name: aws-us-west-2
-      replicas: 2
-    - name: gcp-us-east1
-      replicas: 2
+    - name: aws-eu-central-1
+      replicas: 3
+    - name: gcp-us-west1
+      replicas: 4
 
 resources:
   cpu: 2000m
   memory: 4096Mi
+
+database:
+  name: mydb
+  user: myuser
 
 cockroach_defaults:
   workload_name: cockroach
   sql_port: 26257
   http_port: 8080
 
-allowCIDR:
-  - 0.0.0.0/0
+internal_access:
+  type: same-gvc # options: same-gvc, same-org, workload-list
+  workloads:  # Note: can only be used if type is same-gvc or workload-list
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME

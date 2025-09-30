@@ -1,6 +1,6 @@
 kafka:
   name: cluster
-  image: docker.io/bitnami/kafka:3.9
+  image: ghcr.io/controlplane-com/bitnami/kafka:3.9
   suspend: false
   deletionProtection: true
   replicas: 3 # must not be 2
@@ -80,7 +80,7 @@ kafka:
 
 kafka_exporter:
   name: exporter
-  image: docker.io/bitnami/kafka-exporter:1.7.0
+  image: ghcr.io/controlplane-com/cpln-build/kafka-exporter:1.7.0
   debug: false
   cpu: 50m
   memory: 128Mi
@@ -88,7 +88,7 @@ kafka_exporter:
 
 jmx_exporter:
   name: jmx-exporter
-  image: docker.io/bitnami/jmx-exporter
+  image: ghcr.io/controlplane-com/bitnami/jmx-exporter
   kafkaJmxPort: 5557 # Ensure this port matches the port in the jmxUrl below
   exporterPort: 5556
   debug: false
@@ -171,7 +171,7 @@ kafbat_ui:
 
 # kafka_connectors:
 #   - name: connect-cluster
-#     image: docker.io/bitnami/kafka:3.9
+#     image: ghcr.io/controlplane-com/bitnami/kafka:3.9
 #     multiZone: true
 #     cpu: 400m
 #     memory: 1500Mi
@@ -360,7 +360,7 @@ kafka_rest_proxy:
 
 kafka_client:
   name: client
-  image: docker.io/bitnami/kafka:3.9
+  image: ghcr.io/controlplane-com/bitnami/kafka:3.9
   cpu: 500m
   memory: 1000Mi
   # To disable all traffic, comment out the corresponding rule. Docs: https://docs.controlplane.com/concepts/security#firewall

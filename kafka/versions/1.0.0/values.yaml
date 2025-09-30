@@ -1,6 +1,6 @@
 kafka:
   name: cluster
-  image: docker.io/bitnami/kafka:3.6-debian-11
+  image: ghcr.io/controlplane-com/bitnami/kafka:3.6-debian-11
   suspend: false
   replicas: 3 # must not be 2
   minReadySeconds: 60
@@ -38,7 +38,7 @@ kafka:
 
 kafka_exporter:
   name: exporter
-  image: docker.io/bitnami/kafka-exporter:1.7.0
+  image: ghcr.io/controlplane-com/cpln-build/kafka-exporter:1.7.0
   debug: false
   cpu: 50m
   memory: 128Mi
@@ -56,7 +56,7 @@ kafka_ui:
 
 kafka_client:
   name: client
-  image: docker.io/bitnami/kafka:3.6-debian-11
+  image: ghcr.io/controlplane-com/bitnami/kafka:3.6-debian-11
   cpu: 125m
   memory: 150Mi
   # To disable all traffic, comment out the corresponding rule. Docs: https://docs.controlplane.com/concepts/security#firewall

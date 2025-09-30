@@ -9,3 +9,4 @@ annotations:
   lastModified: "2025-04-16"
   category: "test"
   file-customFile: "Test Configuration File"
+  createsGvc: false

@@ -1,0 +1,33 @@
+gvc:
+  name: tidb-gvc
+  locations:
+  # Replica count will only affect storage (tikv) and server workloads
+    - name: aws-us-east-2
+      replicas: 2
+    - name: aws-eu-central-1
+      replicas: 2
+    - name: gcp-us-west1
+      replicas: 2
+
+resources:
+  pd:
+    cpu: 2
+    memory: 4Gi
+  server:
+    cpu: 2
+    memory: 2Gi
+  tikv:
+    cpu: 2
+    memory: 4Gi
+      
+database:
+  rootPassword: myrootpw
+  user: myuser
+  password: mypw
+  db: mydb
+
+internal_access:
+  type: same-org # options: same-gvc, same-org, workload-list
+  workloads:  # Note: can only be used if type is same-gvc or workload-list
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME

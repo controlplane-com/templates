@@ -1,31 +1,34 @@
-{{- $crdb := .Values.cockroach_defaults }}
 ---
 kind: workload
-name: {{ $crdb.workload_name }}
+name: {{ .Values.cockroach_defaults.workload_name }}
 description: CockroachDB cluster across multiple locations
-tags:
-  service: cockroach
-  environment: {{ .Values.gvc.name }}
 spec:
   type: stateful
   containers:
-    - name: {{ $crdb.workload_name }}
+    - name: {{ .Values.cockroach_defaults.workload_name }}
       cpu: {{ .Values.resources.cpu }}
       memory: {{ .Values.resources.memory }}
-      image: controlplanecorporation/cockroachdb:0.1
+      image: cockroachdb/cockroach:latest-v25.2
+      command: "/bin/bash"
+      args:
+        - "/cockroach/start.sh"
       inheritEnv: false
+      env:
+        - name: DB_NAME
+          value: {{ .Values.database.name }}
+        - name: DB_USER
+          value: cpln://secret/cockroach-user.payload
       ports:
-        - number: {{ $crdb.http_port }}
+        - number: {{ .Values.cockroach_defaults.http_port }}
           protocol: http
-        - number: {{ $crdb.sql_port }}
+        - number: {{ .Values.cockroach_defaults.sql_port }}
           protocol: tcp
       volumes:
         - path: /cockroach/cockroach-data
           recoveryPolicy: retain
           uri: cpln://volumeset/cockroach-vs
-        - path: /etc/cockroach/cockroach.yaml
-          recoveryPolicy: retain
-          uri: cpln://secret/cockroach-secret.payload
+        - path: /cockroach/start.sh
+          uri: cpln://secret/cockroach-startup.payload
   defaultOptions:
     autoscaling:
       maxConcurrency: 0
@@ -40,15 +43,13 @@ spec:
     timeoutSeconds: 10
   firewallConfig:
     external:
-      inboundAllowCIDR: {{ toYaml .Values.allowCIDR | nindent 6 }}
-      inboundBlockedCIDR: []
-      outboundAllowCIDR: []
-      outboundAllowHostname: []
-      outboundAllowPort: []
-      outboundBlockedCIDR: []
+      outboundAllowCIDR:
+      - 0.0.0.0/0
     internal:
-      inboundAllowType: same-gvc
-      inboundAllowWorkload: []
+      inboundAllowType: {{ .Values.internal_access.type }}
+      {{- if .Values.internal_access.workloads }}
+      inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
+      {{- end }}
   identityLink: //gvc/{{ .Values.gvc.name }}/identity/cockroach-identity
   loadBalancer:
     replicaDirect: true

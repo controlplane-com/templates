@@ -1,0 +1,64 @@
+kind: workload
+name: {{ .Release.Name }}
+description: dbeaver
+tags: {}
+spec:
+  type: stateful
+  containers:
+    - name: {{ .Release.Name }}
+      cpu: {{ .Values.resources.cpu }}
+      image: dbeaver/cloudbeaver:25.2.0
+      inheritEnv: false
+      env:
+        - name: CB_ADMIN_NAME
+          value: cpln://secret/dbeaver-admin-config.admin_name
+        - name: CB_ADMIN_PASSWORD
+          value: cpln://secret/dbeaver-admin-config.admin_password
+        - name: CB_SERVER_NAME
+          value: {{ .Release.Name }}
+        - name: CB_SERVER_URL
+          value: http://{{ .Release.Name }}.{{ .Values.global.cpln.gvc }}.cpln.local:8978
+      memory: {{ .Values.resources.memory }}
+      ports:
+        - number: 8978
+          protocol: http
+      volumes:
+        - path: /opt/cloudbeaver/workspace
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ .Release.Name }}-vs
+  defaultOptions:
+    autoscaling:
+      keda:
+        cooldownPeriod: 1
+        initialCooldownPeriod: 1
+        pollingInterval: 1
+        triggers: []
+      maxConcurrency: 0
+      maxScale: 3
+      metric: cpu
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: none
+      inboundAllowWorkload: []
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/dbeaver-identity
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

@@ -1,0 +1,16 @@
+kind: volumeset
+name: {{ .Release.Name }}-vs
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  workload: {{ .Release.Name }}
+spec:
+  autoscaling:
+    maxCapacity: 1000
+    minFreePercentage: 1
+    scalingFactor: 1.1
+  fileSystemType: ext4
+  initialCapacity: 10
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d

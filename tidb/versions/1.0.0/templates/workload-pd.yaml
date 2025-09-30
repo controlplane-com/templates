@@ -1,0 +1,73 @@
+kind: workload
+name: {{ .Release.Name }}-pd
+description: tidb placement driver
+tags: {}
+spec:
+  type: stateful
+  containers:
+    - name: {{ .Release.Name }}-pd
+      cpu: "{{ .Values.resources.pd.cpu }}"
+      image: pingcap/pd:v8.5.3
+      inheritEnv: false
+      memory: {{ .Values.resources.pd.memory }}
+      command: "/bin/bash"
+      args:
+        - "/scripts/pd-startup.sh"
+      ports:
+        - number: 2379
+          protocol: tcp
+        - number: 2380
+          protocol: tcp
+      volumes:
+        - path: /data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/tidb-pd-vs
+        - path: /scripts/pd-startup.sh
+          uri: cpln://secret/tidb-pd-startup.payload
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/tidb-identity
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: cpu
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  {{- $locs := .Values.gvc.locations }}
+  {{- $numLocs := len $locs }}
+  {{- if eq (mod $numLocs 2) 0 }}
+  localOptions:
+    - autoscaling:
+        maxConcurrency: 0
+        metric: cpu
+        minScale: 2
+        maxScale: 2
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      location: //location/{{ (index $locs 0).name }}
+      suspend: false
+      timeoutSeconds: 5
+  {{- end }}
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+      inboundAllowWorkload: []
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: true
+  supportDynamicTags: false

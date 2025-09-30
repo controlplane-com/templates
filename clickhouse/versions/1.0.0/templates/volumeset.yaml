@@ -1,0 +1,26 @@
+kind: volumeset
+name: clickhouse-server-vs
+description: clickhouse-server-vs
+tags:
+  workload: {{ .Release.Name }}-server
+spec:
+  fileSystemType: ext4
+  initialCapacity: 10
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d
+
+---
+kind: volumeset
+name: clickhouse-keeper-vs
+description: clickhouse-keeper-vs
+tags:
+  workload: {{ .Release.Name }}-keeper
+spec:
+  fileSystemType: ext4
+  initialCapacity: 10
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d

@@ -15,3 +15,4 @@ annotations:
   created: "2025-08-15"
   lastModified: "2025-08-19"
   category: "authentication"
+  createsGvc: false

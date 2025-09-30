@@ -9,3 +9,4 @@ annotations:
   created: "2025-05-30"
   lastModified: "2025-05-30"
   category: "cache"
+  createsGvc: false

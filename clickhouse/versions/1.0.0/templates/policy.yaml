@@ -1,0 +1,15 @@
+---
+kind: policy
+name: clickhouse-{{ .Values.gvc.name }}-policy
+description: clickhouse-{{ .Values.gvc.name }}-policy
+tags: {}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.gvc.name }}/identity/clickhouse-identity
+targetKind: secret
+targetLinks:
+  - //secret/clickhouse-database
+  - //secret/clickhouse-keeper-startup
+  - //secret/clickhouse-server-startup

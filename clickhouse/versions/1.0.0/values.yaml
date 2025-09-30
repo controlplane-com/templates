@@ -1,0 +1,35 @@
+gvc:
+  name: clickhouse-gvc
+  # Replica count will only affect the server workload
+  # Keeper will always have 3 total replicas (1 per location)
+  locations:
+    - name: aws-us-east-2
+      replicas: 2
+    - name: gcp-us-west1
+      replicas: 2
+    - name: gcp-us-east1
+      replicas: 2
+
+database:
+  name: mydb
+  password: mypw
+
+server:
+  resources:
+    cpu: 2
+    memory: 2Gi
+  internal_access:
+    type: same-gvc # options: same-gvc, same-org, workload-list
+    workloads:  # Note: can only be used if type is same-gvc or workload-list
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+keeper:
+  resources:
+    cpu: 2
+    memory: 2Gi
+  internal_access:
+    type: same-gvc # options: same-gvc, same-org, workload-list
+    workloads:  # Note: can only be used if type is same-gvc or workload-list
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME

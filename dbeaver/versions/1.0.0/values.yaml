@@ -1,0 +1,7 @@
+admin:
+  name: adminusername
+  password: Password123
+
+resources:
+  cpu: 500m
+  memory: 512Mi

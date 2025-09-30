@@ -1,0 +1,6 @@
+---
+kind: identity
+gvc: {{ .Values.gvc.name }}
+name: tidb-identity
+description: tidb-identity
+tags: {}

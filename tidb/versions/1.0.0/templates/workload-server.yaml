@@ -1,0 +1,84 @@
+---
+kind: workload
+name: {{ .Release.Name }}-server
+description: tidb server
+tags: {}
+spec:
+  type: standard
+  containers:
+    - name: {{ .Release.Name }}-server
+      cpu: "{{ .Values.resources.server.cpu }}"
+      image: pingcap/tidb:v8.5.3
+      command: "/bin/bash"
+      args:
+        - "/scripts/server-startup.sh"
+      inheritEnv: false
+      env:
+        - name: ROOT_PW
+          value: cpln://secret/tidb-user.rootPassword
+        - name: APP_DB
+          value: cpln://secret/tidb-user.db
+        - name: APP_USER
+          value: cpln://secret/tidb-user.user
+        - name: APP_PW
+          value: cpln://secret/tidb-user.password
+      memory: {{ .Values.resources.server.memory }}
+      ports:
+        - number: 10080
+          protocol: http
+        - number: 4000
+          protocol: tcp
+      volumes:
+        - path: /scripts/server-startup.sh
+          uri: cpln://secret/tidb-server-startup.payload
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/tidb-identity
+  defaultOptions:
+    autoscaling:
+      keda: {}
+      maxConcurrency: 0
+      maxScale: 5
+      metric: cpu
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: true
+    suspend: false
+    timeoutSeconds: 5
+  localOptions:
+    {{- range $location := .Values.gvc.locations }}
+    - autoscaling:
+        maxConcurrency: 0
+        maxScale: {{ if eq ($location.replicas | int) 0 }}1{{ else }}{{ $location.replicas | int }}{{ end }}
+        metric: disabled
+        minScale: {{ if eq ($location.replicas | int) 0 }}0{{ else }}{{ $location.replicas | int }}{{ end }}
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      location: //location/{{ $location.name }}
+      suspend: {{ if eq ($location.replicas | int) 0 }}true{{ else }}false{{ end }}
+      timeoutSeconds: 10
+    {{- end }}
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internal_access.type }}
+      {{- if .Values.internal_access.workloads }}
+      inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

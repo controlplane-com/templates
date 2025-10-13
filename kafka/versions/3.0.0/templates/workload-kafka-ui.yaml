@@ -1,0 +1,66 @@
+{{- if and .Values.kafka_ui .Values.kafka_ui.enabled }}
+kind: workload
+name: {{ include "kafka.name" . }}-{{ .Values.kafka_ui.name }}
+description: kafka-ui
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  type: standard
+  containers:
+    - name: kafka-ui
+      cpu: {{ .Values.kafka_ui.cpu }}
+      env:
+        - name: KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS
+          value: "{{- $replicas := int .Values.kafka.replicas -}}{{- $bootstrapServers := list -}}{{- range $i := until $replicas -}}{{- if $i -}},{{- end -}}{{- printf "%s-%s-%d.%s-%s:9092" $.Release.Name $.Values.kafka.name $i $.Release.Name $.Values.kafka.name -}}{{- end }}"
+        - name: KAFKA_CLUSTERS_0_NAME
+          value: {{ include "kafka.name" . }}
+        - name: KAFKA_CLUSTERS_0_PROPERTIES_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM
+          value: ''
+        - name: LOGGING_LEVEL_ROOT
+          value: INFO
+{{- $listenerName := .Values.kafka_ui.listener }}
+{{- $listener := index .Values.kafka.listeners $listenerName }}
+{{- if eq $listener.protocol "SASL_PLAINTEXT" }}
+  {{- if not (and $listener.sasl $listener.sasl.admin) }}
+    {{- fail (printf "Error: SASL_PLAINTEXT listener '%s' must have sasl.admin configured for kafka_exporter" $listenerName) }}
+  {{- end }}
+        - name: KAFKA_CLUSTERS_0_PROPERTIES_SECURITY_PROTOCOL
+          value: {{ $listener.protocol }}
+        - name: KAFKA_CLUSTERS_0_PROPERTIES_SASL_MECHANISM
+          value: PLAIN
+        - name: KAFKA_CLUSTERS_0_PROPERTIES_SASL_JAAS_CONFIG
+          value: >-
+            org.apache.kafka.common.security.plain.PlainLoginModule required username="{{ $listener.sasl.admin.username }}" password="{{ $listener.sasl.admin.password }}";
+{{- end }}
+      image: 'provectuslabs/kafka-ui:latest'
+      inheritEnv: false
+      memory: {{ .Values.kafka_ui.memory }}
+      ports:
+        - number: 8080
+          protocol: http
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: cpu
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+{{- if .Values.kafka_ui.firewall }}
+  firewallConfig:
+    {{- if or (hasKey .Values.kafka_ui.firewall "external_inboundAllowCIDR") (hasKey .Values.kafka_ui.firewall "external_outboundAllowCIDR") }}
+    external:
+      inboundAllowCIDR: {{- if .Values.kafka_ui.firewall.external_inboundAllowCIDR }}{{ .Values.kafka_ui.firewall.external_inboundAllowCIDR | splitList "," | toYaml | nindent 8 }}{{- else }} []{{- end }}
+      outboundAllowCIDR: {{- if .Values.kafka_ui.firewall.external_outboundAllowCIDR }}{{ .Values.kafka_ui.firewall.external_outboundAllowCIDR | splitList "," | toYaml | nindent 8 }}{{- else }} []{{- end }}
+    {{- end }}
+    {{- if hasKey .Values.kafka_ui.firewall "internal_inboundAllowType" }}
+    internal:
+      inboundAllowType: {{ default "[]" .Values.kafka_ui.firewall.internal_inboundAllowType }}
+    {{- end }}
+{{- end }}
+  localOptions: []
+  supportDynamicTags: false
+{{- end }}

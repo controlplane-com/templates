@@ -77,4 +77,4 @@ server:
 ```
 
 ### Release Notes
-See [RELEASE.md](RELEASES.md)
+See [RELEASES.md](https://github.com/controlplane-com/templates/blob/main/kafka/versions/3.0.0/RELEASES.md)

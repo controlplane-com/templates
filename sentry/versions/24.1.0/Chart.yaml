@@ -2,7 +2,7 @@ apiVersion: v2
 name: sentry
 description: Self-hosted Sentry on Control Plane
 type: application
-version: 0.1.0
+version: 24.1.0
 appVersion: "24.1.0"
 dependencies:
   - name: sentry

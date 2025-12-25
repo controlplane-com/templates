@@ -1,0 +1,57 @@
+sentry:
+  enabled: true
+  
+  # Disable Ingress by default, let user configure or use CPLN native ingress
+  ingress:
+    enabled: false
+
+  # Basic resource configuration - can be tuned
+  web:
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+
+  worker:
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+
+  # External access configuration (if needed)
+  # user:
+  #   create: true
+  #   email: admin@example.com
+  #   password: admin
+
+  # Persistence
+  postgresql:
+    enabled: true
+    persistence:
+      enabled: true
+      size: 10Gi
+
+  redis:
+    enabled: true
+    master:
+      persistence:
+        enabled: true
+        size: 5Gi
+
+  kafka:
+    enabled: true
+    persistence:
+      enabled: true
+      size: 10Gi
+
+  clickhouse:
+    enabled: true
+    persistence:
+      enabled: true
+      size: 10Gi

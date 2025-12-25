@@ -1,0 +1,4 @@
+name: sentry
+date-published: 2025-02-23
+description: Self-hosted Sentry error tracking and performance monitoring.
+latest: 24.1.0

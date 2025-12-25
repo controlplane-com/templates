@@ -1,0 +1,11 @@
+apiVersion: v2
+name: sentry
+description: Self-hosted Sentry on Control Plane
+type: application
+version: 0.1.0
+appVersion: "24.1.0"
+dependencies:
+  - name: sentry
+    version: "27.10.0"
+    repository: "https://sentry-kubernetes.github.io/charts"
+    condition: sentry.enabled

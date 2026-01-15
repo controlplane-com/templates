@@ -1,0 +1,14 @@
+kind: policy
+name: {{ .Release.Name }}-strapi-policy
+tags:
+  {{- include "strapi.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ .Release.Name }}-strapi-identity
+targetKind: secret
+targetLinks:
+  - //secret/{{ .Release.Name }}-pg-config
+  - //secret/{{ .Release.Name }}-strapi-secrets
+  - //secret/{{ .Release.Name }}-strapi-startup

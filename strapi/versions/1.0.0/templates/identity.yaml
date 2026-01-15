@@ -1,0 +1,5 @@
+kind: identity
+name: {{ .Release.Name }}-strapi-identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "strapi.tags" . | nindent 4 }}

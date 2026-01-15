@@ -1,0 +1,18 @@
+apiVersion: v2
+name: strapi
+description: Strapi headless CMS for Control Plane
+
+type: application
+version: 1.0.0
+appVersion: "4.25"
+
+dependencies:
+  - name: postgres
+    version: 3.0.0
+    repository: "https://controlplane-com.github.io/helm-packages"
+
+annotations:
+  created: "2026-01-15"
+  lastModified: "2026-01-15"
+  category: "app"
+  createsGvc: false

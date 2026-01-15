@@ -15,7 +15,6 @@ helm.sh/chart: {{ include "strapi.chart" . }}
 app.cpln.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 app.cpln.io/managed-by: {{ .Release.Service }}
-app.cpln.io/postgres-host: {{ include "strapi.postgresHost" . }}
 {{- end }}
 
 {{/*
@@ -24,11 +23,4 @@ Selector labels
 {{- define "strapi.selectorLabels" -}}
 app.cpln.io/name: {{ .Release.Name }}
 app.cpln.io/instance: {{ .Release.Name }}
-{{- end }}
-
-{{/*
-PostgreSQL Host Name
-*/}}
-{{- define "strapi.postgresHost" -}}
-{{- printf "%s-pg-db" .Release.Name }}
 {{- end }}

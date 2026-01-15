@@ -1,25 +1,46 @@
-postgres:
-  config:
-    username: strapi
-    password: strapi-password
-    database: strapi
-  resources:
-    cpu: 500m
-    memory: 1024Mi
-  volumeset:
-    capacity: 10
+# Global settings (required by cpln-helm)
+global:
+  cpln:
+    gvc: ""  # Your GVC name
 
 strapi:
-  image: naskio/strapi:latest
+  # REQUIRED: Your custom Strapi Docker image
+  # Build your own image with your content types and plugins baked in
+  # See README.md for instructions on building your image
+  image: ghcr.io/your-org/your-strapi:latest
+
+  # Image pull secret for private container registries (optional)
+  # Leave empty for public images
+  # For private registries, create a docker pull secret in Control Plane first
+  # See README.md for instructions on setting up registry authentication
+  imagePullSecret: ""  # e.g., "github-registry" or "gitlab-registry"
+
+  # Database connection settings
+  # Connect to your existing PostgreSQL database
+  database:
+    host: ""           # e.g., my-postgres.my-gvc.cpln.local
+    port: "5432"
+    name: "strapi"
+    username: ""       # Database username (stored in secret)
+    password: ""       # Database password (stored in secret)
+    ssl: "false"       # Set to "true" if your database requires SSL
+
+  # Container resources
   resources:
     cpu: 500m
     memory: 512Mi
+
+  # Autoscaling configuration
   autoscaling:
     minScale: 1
     maxScale: 3
+
+  # Strapi application secrets
+  # IMPORTANT: Generate unique values for production!
+  # Use: openssl rand -base64 32
   secrets:
-    appKeys: "toBeModified1,toBeModified2,toBeModified3,toBeModified4"
-    apiTokenSalt: "toBeModified"
-    adminJwtSecret: "toBeModified"
-    transferTokenSalt: "toBeModified"
-    jwtSecret: "toBeModified"
+    appKeys: ""              # Comma-separated list of keys
+    apiTokenSalt: ""         # API token salt
+    adminJwtSecret: ""       # Admin panel JWT secret
+    transferTokenSalt: ""    # Transfer token salt
+    jwtSecret: ""            # JWT secret for users-permissions plugin

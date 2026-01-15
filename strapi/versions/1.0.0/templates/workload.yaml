@@ -5,6 +5,12 @@ tags: {{- include "strapi.tags" . | nindent 4 }}
 spec:
   type: serverless
   identityLink: //identity/{{ .Release.Name }}-strapi-identity
+  {{- if .Values.strapi.imagePullSecret }}
+  localOptions:
+    - location: '*'
+      pullSecretLinks:
+        - //secret/{{ .Values.strapi.imagePullSecret }}
+  {{- end }}
   containers:
     - name: strapi
       cpu: {{ .Values.strapi.resources.cpu }}
@@ -12,18 +18,22 @@ spec:
       image: {{ .Values.strapi.image }}
       inheritEnv: false
       env:
+        # Database configuration
         - name: DATABASE_CLIENT
           value: postgres
         - name: DATABASE_HOST
-          value: {{ .Release.Name }}-pg-db.{{ .Values.global.cpln.gvc }}.cpln.local
+          value: cpln://secret/{{ .Release.Name }}-strapi-db.host
         - name: DATABASE_PORT
-          value: "5432"
+          value: cpln://secret/{{ .Release.Name }}-strapi-db.port
         - name: DATABASE_NAME
-          value: {{ .Values.postgres.config.database }}
+          value: cpln://secret/{{ .Release.Name }}-strapi-db.name
         - name: DATABASE_USERNAME
-          value: cpln://secret/{{ .Release.Name }}-pg-config.username
+          value: cpln://secret/{{ .Release.Name }}-strapi-db.username
         - name: DATABASE_PASSWORD
-          value: cpln://secret/{{ .Release.Name }}-pg-config.password
+          value: cpln://secret/{{ .Release.Name }}-strapi-db.password
+        - name: DATABASE_SSL
+          value: cpln://secret/{{ .Release.Name }}-strapi-db.ssl
+        # Strapi application secrets
         - name: APP_KEYS
           value: cpln://secret/{{ .Release.Name }}-strapi-secrets.appKeys
         - name: API_TOKEN_SALT
@@ -34,16 +44,16 @@ spec:
           value: cpln://secret/{{ .Release.Name }}-strapi-secrets.transferTokenSalt
         - name: JWT_SECRET
           value: cpln://secret/{{ .Release.Name }}-strapi-secrets.jwtSecret
+        # Server configuration
+        - name: HOST
+          value: "0.0.0.0"
+        - name: PORT
+          value: "1337"
+        - name: NODE_ENV
+          value: production
       ports:
         - number: 1337
           protocol: http
-      command: /bin/bash
-      args:
-        - /opt/strapi/start.sh
-      volumes:
-        - path: /opt/strapi/start.sh
-          recoveryPolicy: retain
-          uri: cpln://secret/{{ .Release.Name }}-strapi-startup.payload
   defaultOptions:
     autoscaling:
       maxConcurrency: 1000

@@ -1,0 +1,73 @@
+{{- if .Values.backup.enabled }}
+kind: workload
+name: {{ .Release.Name }}-pg-backup
+description: Postgres Backup
+tags:
+  {{- include "pg.tags" . | nindent 2 }}
+spec:
+  type: cron
+  containers:
+    - name: backup-postgres
+      cpu: {{ .Values.backup.resources.cpu }}
+      memory: {{ .Values.backup.resources.memory }}
+      env:
+      {{- if .Values.backup.aws.enabled }}
+        - name: AWS_REGION
+          value: cpln://secret/{{ .Release.Name }}-pg-config.aws-region
+        - name: BACKUP_PROVIDER
+          value: aws
+        - name: BACKUP_BUCKET
+          value: cpln://secret/{{ .Release.Name }}-pg-config.backup-bucket
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.aws.s3.prefix }}
+      {{- end }}
+      {{- if .Values.backup.gcp.enabled }}
+        - name: BACKUP_PROVIDER
+          value: gcp
+        - name: BACKUP_BUCKET
+          value: cpln://secret/{{ .Release.Name }}-pg-config.backup-bucket
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.gcp.gcs.prefix }}
+      {{- end }}
+        - name: PG_HOST
+          value: {{ .Release.Name }}-postgres.{{ .Values.global.cpln.gvc }}.cpln.local
+        - name: PG_PASSWORD
+          value: cpln://secret/{{ .Release.Name }}-pg-config.password
+        - name: PG_PORT
+          value: '5432'
+        - name: PG_USER
+          value: cpln://secret/{{ .Release.Name }}-pg-config.username
+      image: {{ .Values.backup.image }}
+      inheritEnv: false
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: concurrency
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: none
+      inboundAllowWorkload: []
+  identityLink: //identity/{{ .Release.Name }}-pg-identity
+  job:
+    concurrencyPolicy: Forbid
+    historyLimit: 5
+    restartPolicy: Never
+    schedule: {{ .Values.backup.schedule }}
+  supportDynamicTags: false
+{{- end }}

@@ -1,0 +1,811 @@
+/**
+ * Strapi Rich Text CSS
+ *
+ * Exhaustive styles for rendering Strapi's default rich text content.
+ * Apply this class to your container: <div class="strapi-rich-text">
+ *
+ * Usage in React/Next.js:
+ *   <div
+ *     className="strapi-rich-text"
+ *     dangerouslySetInnerHTML={{ __html: article.content }}
+ *   />
+ *
+ * Usage in Vue:
+ *   <div class="strapi-rich-text" v-html="article.content"></div>
+ *
+ * Theming:
+ *   Override CSS variables in :root or .strapi-rich-text to customize.
+ *   For dark mode, include rich-text.dark.css after this file.
+ */
+
+/* ==========================================================================
+   CSS Variables
+   ========================================================================== */
+
+:root {
+  /* -------------------------------------------------------------------------
+     Colors - Text
+     ------------------------------------------------------------------------- */
+  --srt-color-text-primary: #1a1a1a;
+  --srt-color-text-heading: #0a0a0a;
+  --srt-color-text-muted: #6b7280;
+  --srt-color-text-secondary: #4b5563;
+
+  /* -------------------------------------------------------------------------
+     Colors - Links
+     ------------------------------------------------------------------------- */
+  --srt-color-link: #2563eb;
+  --srt-color-link-hover: #1d4ed8;
+  --srt-color-link-visited: #7c3aed;
+  --srt-color-link-focus: #2563eb;
+
+  /* -------------------------------------------------------------------------
+     Colors - Backgrounds
+     ------------------------------------------------------------------------- */
+  --srt-color-bg-base: transparent;
+  --srt-color-bg-subtle: #f9fafb;
+  --srt-color-bg-muted: #f3f4f6;
+  --srt-color-bg-code-inline: #f3f4f6;
+  --srt-color-bg-code-block: #1f2937;
+  --srt-color-bg-blockquote: #f9fafb;
+  --srt-color-bg-mark: #fef08a;
+  --srt-color-bg-table-head: #f9fafb;
+  --srt-color-bg-table-hover: #f9fafb;
+  --srt-color-bg-kbd: #f3f4f6;
+  --srt-color-bg-details: #f9fafb;
+  --srt-color-bg-address: #f9fafb;
+
+  /* -------------------------------------------------------------------------
+     Colors - Borders
+     ------------------------------------------------------------------------- */
+  --srt-color-border-default: #e5e7eb;
+  --srt-color-border-muted: #d1d5db;
+  --srt-color-border-strong: #4b5563;
+  --srt-color-border-blockquote: #e5e7eb;
+  --srt-color-border-table: #e5e7eb;
+  --srt-color-border-table-head: #e5e7eb;
+  --srt-color-border-kbd: #d1d5db;
+  --srt-color-border-details: #e5e7eb;
+
+  /* -------------------------------------------------------------------------
+     Colors - Code
+     ------------------------------------------------------------------------- */
+  --srt-color-code-inline: #dc2626;
+  --srt-color-code-block: #e5e7eb;
+  --srt-color-code-label: #9ca3af;
+
+  /* -------------------------------------------------------------------------
+     Colors - Special
+     ------------------------------------------------------------------------- */
+  --srt-color-var: #7c3aed;
+  --srt-color-mark-text: inherit;
+
+  /* -------------------------------------------------------------------------
+     Typography - Font Families
+     ------------------------------------------------------------------------- */
+  --srt-font-family-base: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen,
+    Ubuntu, Cantarell, 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+  --srt-font-family-mono: 'SF Mono', 'Fira Code', 'Fira Mono', Menlo, Monaco, Consolas,
+    'Liberation Mono', 'Courier New', monospace;
+
+  /* -------------------------------------------------------------------------
+     Typography - Font Sizes
+     ------------------------------------------------------------------------- */
+  --srt-font-size-base: 1rem;
+  --srt-font-size-xs: 0.75rem;
+  --srt-font-size-sm: 0.875rem;
+  --srt-font-size-lg: 1.125rem;
+  --srt-font-size-xl: 1.25rem;
+  --srt-font-size-2xl: 1.5rem;
+  --srt-font-size-3xl: 1.875rem;
+  --srt-font-size-4xl: 2.25rem;
+
+  /* Relative sizes for inline elements */
+  --srt-font-size-small: 0.875em;
+  --srt-font-size-sup-sub: 0.75em;
+  --srt-font-size-code: 0.875em;
+  --srt-font-size-code-block: 0.875rem;
+
+  /* -------------------------------------------------------------------------
+     Typography - Font Weights
+     ------------------------------------------------------------------------- */
+  --srt-font-weight-normal: 400;
+  --srt-font-weight-medium: 500;
+  --srt-font-weight-semibold: 600;
+  --srt-font-weight-bold: 700;
+
+  /* -------------------------------------------------------------------------
+     Typography - Line Heights
+     ------------------------------------------------------------------------- */
+  --srt-line-height-tight: 1.3;
+  --srt-line-height-normal: 1.75;
+  --srt-line-height-relaxed: 1.7;
+
+  /* -------------------------------------------------------------------------
+     Typography - Letter Spacing
+     ------------------------------------------------------------------------- */
+  --srt-letter-spacing-tight: -0.025em;
+  --srt-letter-spacing-normal: 0;
+  --srt-letter-spacing-wide: 0.05em;
+  --srt-letter-spacing-h2: -0.02em;
+  --srt-letter-spacing-h3: -0.015em;
+
+  /* -------------------------------------------------------------------------
+     Spacing - Base Unit
+     ------------------------------------------------------------------------- */
+  --srt-spacing-unit: 1rem;
+
+  /* -------------------------------------------------------------------------
+     Spacing - Margins
+     ------------------------------------------------------------------------- */
+  --srt-margin-heading-top: 2em;
+  --srt-margin-heading-bottom: 0.75em;
+  --srt-margin-paragraph: 1.5em;
+  --srt-margin-list: 1.5em;
+  --srt-margin-list-item: 0.5em;
+  --srt-margin-list-nested: 0.5em;
+  --srt-margin-blockquote: 1.5em;
+  --srt-margin-code-block: 1.5em;
+  --srt-margin-image: 1.5em;
+  --srt-margin-figure: 2em;
+  --srt-margin-figcaption: 0.75em;
+  --srt-margin-table: 1.5em;
+  --srt-margin-hr: 2.5em;
+  --srt-margin-embed: 1.5em;
+  --srt-margin-dl: 1.5em;
+  --srt-margin-dt: 1em;
+  --srt-margin-dd: 0.25em;
+  --srt-margin-address: 1.5em;
+  --srt-margin-details: 1.5em;
+  --srt-margin-cite: 1em;
+
+  /* -------------------------------------------------------------------------
+     Spacing - Padding
+     ------------------------------------------------------------------------- */
+  --srt-padding-code-inline-x: 0.4em;
+  --srt-padding-code-inline-y: 0.2em;
+  --srt-padding-code-block-x: 1.5em;
+  --srt-padding-code-block-y: 1.25em;
+  --srt-padding-blockquote-x: 1.5em;
+  --srt-padding-blockquote-y: 1em;
+  --srt-padding-table-cell-x: 1em;
+  --srt-padding-table-cell-y: 0.75em;
+  --srt-padding-kbd-x: 0.4em;
+  --srt-padding-kbd-y: 0.2em;
+  --srt-padding-mark-x: 0.25em;
+  --srt-padding-mark-y: 0.125em;
+  --srt-padding-details: 1em;
+  --srt-padding-address: 1em;
+
+  /* -------------------------------------------------------------------------
+     Spacing - List Indentation
+     ------------------------------------------------------------------------- */
+  --srt-list-padding-left: 1.75em;
+  --srt-dd-margin-left: 1.5em;
+  --srt-task-list-offset: -1.5em;
+
+  /* -------------------------------------------------------------------------
+     Borders - Widths
+     ------------------------------------------------------------------------- */
+  --srt-border-width-default: 1px;
+  --srt-border-width-thick: 2px;
+  --srt-border-width-hr-thick: 3px;
+  --srt-border-width-blockquote: 4px;
+  --srt-border-width-table-head: 2px;
+
+  /* -------------------------------------------------------------------------
+     Borders - Radius
+     ------------------------------------------------------------------------- */
+  --srt-border-radius-sm: 0.125rem;
+  --srt-border-radius-default: 0.25rem;
+  --srt-border-radius-md: 0.5rem;
+  --srt-border-radius-lg: 0.75rem;
+
+  /* -------------------------------------------------------------------------
+     Effects - Shadows
+     ------------------------------------------------------------------------- */
+  --srt-shadow-kbd: 0 1px 0 var(--srt-color-border-kbd);
+
+  /* -------------------------------------------------------------------------
+     Effects - Transitions
+     ------------------------------------------------------------------------- */
+  --srt-transition-duration: 0.15s;
+  --srt-transition-timing: ease;
+
+  /* -------------------------------------------------------------------------
+     Misc
+     ------------------------------------------------------------------------- */
+  --srt-underline-offset: 2px;
+  --srt-outline-offset: 2px;
+  --srt-outline-width: 2px;
+  --srt-video-aspect-ratio: 56.25%; /* 16:9 */
+}
+
+/* ==========================================================================
+   Base Container
+   ========================================================================== */
+
+.strapi-rich-text {
+  font-family: var(--srt-font-family-base);
+  font-size: var(--srt-font-size-base);
+  line-height: var(--srt-line-height-normal);
+  color: var(--srt-color-text-primary);
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+/* ==========================================================================
+   Headings
+   ========================================================================== */
+
+.strapi-rich-text h1,
+.strapi-rich-text h2,
+.strapi-rich-text h3,
+.strapi-rich-text h4,
+.strapi-rich-text h5,
+.strapi-rich-text h6 {
+  margin-top: var(--srt-margin-heading-top);
+  margin-bottom: var(--srt-margin-heading-bottom);
+  font-weight: var(--srt-font-weight-semibold);
+  line-height: var(--srt-line-height-tight);
+  color: var(--srt-color-text-heading);
+}
+
+.strapi-rich-text h1:first-child,
+.strapi-rich-text h2:first-child,
+.strapi-rich-text h3:first-child,
+.strapi-rich-text h4:first-child,
+.strapi-rich-text h5:first-child,
+.strapi-rich-text h6:first-child {
+  margin-top: 0;
+}
+
+.strapi-rich-text h1 {
+  font-size: var(--srt-font-size-4xl);
+  letter-spacing: var(--srt-letter-spacing-tight);
+}
+
+.strapi-rich-text h2 {
+  font-size: var(--srt-font-size-3xl);
+  letter-spacing: var(--srt-letter-spacing-h2);
+}
+
+.strapi-rich-text h3 {
+  font-size: var(--srt-font-size-2xl);
+  letter-spacing: var(--srt-letter-spacing-h3);
+}
+
+.strapi-rich-text h4 {
+  font-size: var(--srt-font-size-xl);
+}
+
+.strapi-rich-text h5 {
+  font-size: var(--srt-font-size-lg);
+}
+
+.strapi-rich-text h6 {
+  font-size: var(--srt-font-size-base);
+  text-transform: uppercase;
+  letter-spacing: var(--srt-letter-spacing-wide);
+}
+
+/* ==========================================================================
+   Paragraphs and Text
+   ========================================================================== */
+
+.strapi-rich-text p {
+  margin-top: 0;
+  margin-bottom: var(--srt-margin-paragraph);
+}
+
+.strapi-rich-text p:last-child {
+  margin-bottom: 0;
+}
+
+.strapi-rich-text strong,
+.strapi-rich-text b {
+  font-weight: var(--srt-font-weight-semibold);
+  color: var(--srt-color-text-heading);
+}
+
+.strapi-rich-text em,
+.strapi-rich-text i {
+  font-style: italic;
+}
+
+.strapi-rich-text u {
+  text-decoration: underline;
+  text-underline-offset: var(--srt-underline-offset);
+}
+
+.strapi-rich-text s,
+.strapi-rich-text strike,
+.strapi-rich-text del {
+  text-decoration: line-through;
+}
+
+.strapi-rich-text small {
+  font-size: var(--srt-font-size-small);
+}
+
+.strapi-rich-text mark {
+  background-color: var(--srt-color-bg-mark);
+  color: var(--srt-color-mark-text);
+  padding: var(--srt-padding-mark-y) var(--srt-padding-mark-x);
+  border-radius: var(--srt-border-radius-sm);
+}
+
+.strapi-rich-text sup {
+  font-size: var(--srt-font-size-sup-sub);
+  vertical-align: super;
+}
+
+.strapi-rich-text sub {
+  font-size: var(--srt-font-size-sup-sub);
+  vertical-align: sub;
+}
+
+/* ==========================================================================
+   Links
+   ========================================================================== */
+
+.strapi-rich-text a {
+  color: var(--srt-color-link);
+  text-decoration: underline;
+  text-underline-offset: var(--srt-underline-offset);
+  transition: color var(--srt-transition-duration) var(--srt-transition-timing);
+}
+
+.strapi-rich-text a:hover {
+  color: var(--srt-color-link-hover);
+}
+
+.strapi-rich-text a:visited {
+  color: var(--srt-color-link-visited);
+}
+
+.strapi-rich-text a:focus {
+  outline: var(--srt-outline-width) solid var(--srt-color-link-focus);
+  outline-offset: var(--srt-outline-offset);
+}
+
+/* ==========================================================================
+   Lists
+   ========================================================================== */
+
+.strapi-rich-text ul,
+.strapi-rich-text ol {
+  margin-top: 0;
+  margin-bottom: var(--srt-margin-list);
+  padding-left: var(--srt-list-padding-left);
+}
+
+.strapi-rich-text ul {
+  list-style-type: disc;
+}
+
+.strapi-rich-text ol {
+  list-style-type: decimal;
+}
+
+.strapi-rich-text li {
+  margin-bottom: var(--srt-margin-list-item);
+}
+
+.strapi-rich-text li:last-child {
+  margin-bottom: 0;
+}
+
+/* Nested lists */
+.strapi-rich-text ul ul,
+.strapi-rich-text ol ol,
+.strapi-rich-text ul ol,
+.strapi-rich-text ol ul {
+  margin-top: var(--srt-margin-list-nested);
+  margin-bottom: var(--srt-margin-list-nested);
+}
+
+.strapi-rich-text ul ul {
+  list-style-type: circle;
+}
+
+.strapi-rich-text ul ul ul {
+  list-style-type: square;
+}
+
+/* Task lists (if supported) */
+.strapi-rich-text li[data-checked="true"],
+.strapi-rich-text li[data-checked="false"] {
+  list-style-type: none;
+  margin-left: var(--srt-task-list-offset);
+}
+
+.strapi-rich-text li[data-checked="true"]::before {
+  content: "☑ ";
+}
+
+.strapi-rich-text li[data-checked="false"]::before {
+  content: "☐ ";
+}
+
+/* ==========================================================================
+   Blockquotes
+   ========================================================================== */
+
+.strapi-rich-text blockquote {
+  margin: var(--srt-margin-blockquote) 0;
+  padding: var(--srt-padding-blockquote-y) var(--srt-padding-blockquote-x);
+  border-left: var(--srt-border-width-blockquote) solid var(--srt-color-border-blockquote);
+  background-color: var(--srt-color-bg-blockquote);
+  font-style: italic;
+  color: var(--srt-color-text-secondary);
+}
+
+.strapi-rich-text blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+.strapi-rich-text blockquote cite {
+  display: block;
+  margin-top: var(--srt-margin-cite);
+  font-size: var(--srt-font-size-small);
+  font-style: normal;
+  color: var(--srt-color-text-muted);
+}
+
+.strapi-rich-text blockquote cite::before {
+  content: "— ";
+}
+
+/* Nested blockquotes */
+.strapi-rich-text blockquote blockquote {
+  margin: var(--srt-margin-cite) 0;
+  border-left-color: var(--srt-color-border-muted);
+}
+
+/* ==========================================================================
+   Code
+   ========================================================================== */
+
+.strapi-rich-text code {
+  font-family: var(--srt-font-family-mono);
+  font-size: var(--srt-font-size-code);
+  background-color: var(--srt-color-bg-code-inline);
+  padding: var(--srt-padding-code-inline-y) var(--srt-padding-code-inline-x);
+  border-radius: var(--srt-border-radius-default);
+  color: var(--srt-color-code-inline);
+}
+
+.strapi-rich-text pre {
+  margin: var(--srt-margin-code-block) 0;
+  padding: var(--srt-padding-code-block-y) var(--srt-padding-code-block-x);
+  background-color: var(--srt-color-bg-code-block);
+  border-radius: var(--srt-border-radius-md);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.strapi-rich-text pre code {
+  background-color: transparent;
+  padding: 0;
+  font-size: var(--srt-font-size-code-block);
+  color: var(--srt-color-code-block);
+  line-height: var(--srt-line-height-relaxed);
+}
+
+/* Code block with language label */
+.strapi-rich-text pre[data-language]::before {
+  content: attr(data-language);
+  display: block;
+  margin-bottom: var(--srt-margin-heading-bottom);
+  font-size: var(--srt-font-size-xs);
+  color: var(--srt-color-code-label);
+  text-transform: uppercase;
+  letter-spacing: var(--srt-letter-spacing-wide);
+}
+
+/* ==========================================================================
+   Images
+   ========================================================================== */
+
+.strapi-rich-text img {
+  max-width: 100%;
+  height: auto;
+  margin: var(--srt-margin-image) 0;
+  border-radius: var(--srt-border-radius-md);
+  display: block;
+}
+
+.strapi-rich-text figure {
+  margin: var(--srt-margin-figure) 0;
+}
+
+.strapi-rich-text figure img {
+  margin: 0;
+}
+
+.strapi-rich-text figcaption {
+  margin-top: var(--srt-margin-figcaption);
+  font-size: var(--srt-font-size-sm);
+  color: var(--srt-color-text-muted);
+  text-align: center;
+}
+
+/* Image alignment */
+.strapi-rich-text img[style*="float: left"],
+.strapi-rich-text img.align-left {
+  float: left;
+  margin-right: var(--srt-margin-image);
+  margin-bottom: var(--srt-spacing-unit);
+}
+
+.strapi-rich-text img[style*="float: right"],
+.strapi-rich-text img.align-right {
+  float: right;
+  margin-left: var(--srt-margin-image);
+  margin-bottom: var(--srt-spacing-unit);
+}
+
+.strapi-rich-text img.align-center {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* ==========================================================================
+   Tables
+   ========================================================================== */
+
+.strapi-rich-text table {
+  width: 100%;
+  margin: var(--srt-margin-table) 0;
+  border-collapse: collapse;
+  font-size: var(--srt-font-size-sm);
+}
+
+.strapi-rich-text table thead {
+  background-color: var(--srt-color-bg-table-head);
+}
+
+.strapi-rich-text table th {
+  padding: var(--srt-padding-table-cell-y) var(--srt-padding-table-cell-x);
+  text-align: left;
+  font-weight: var(--srt-font-weight-semibold);
+  color: var(--srt-color-text-heading);
+  border-bottom: var(--srt-border-width-table-head) solid var(--srt-color-border-table-head);
+}
+
+.strapi-rich-text table td {
+  padding: var(--srt-padding-table-cell-y) var(--srt-padding-table-cell-x);
+  border-bottom: var(--srt-border-width-default) solid var(--srt-color-border-table);
+  vertical-align: top;
+}
+
+.strapi-rich-text table tr:last-child td {
+  border-bottom: none;
+}
+
+.strapi-rich-text table tbody tr:hover {
+  background-color: var(--srt-color-bg-table-hover);
+}
+
+/* Responsive table wrapper */
+.strapi-rich-text .table-wrapper {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: var(--srt-margin-table) 0;
+}
+
+.strapi-rich-text .table-wrapper table {
+  margin: 0;
+}
+
+/* ==========================================================================
+   Horizontal Rules
+   ========================================================================== */
+
+.strapi-rich-text hr {
+  margin: var(--srt-margin-hr) 0;
+  border: none;
+  border-top: var(--srt-border-width-default) solid var(--srt-color-border-default);
+}
+
+/* Decorative variants */
+.strapi-rich-text hr.dashed {
+  border-top-style: dashed;
+}
+
+.strapi-rich-text hr.thick {
+  border-top-width: var(--srt-border-width-hr-thick);
+}
+
+/* ==========================================================================
+   Embedded Media
+   ========================================================================== */
+
+.strapi-rich-text iframe {
+  max-width: 100%;
+  margin: var(--srt-margin-embed) 0;
+  border: none;
+  border-radius: var(--srt-border-radius-md);
+}
+
+/* Responsive video wrapper */
+.strapi-rich-text .video-wrapper,
+.strapi-rich-text .embed-wrapper {
+  position: relative;
+  padding-bottom: var(--srt-video-aspect-ratio);
+  height: 0;
+  overflow: hidden;
+  margin: var(--srt-margin-embed) 0;
+  border-radius: var(--srt-border-radius-md);
+}
+
+.strapi-rich-text .video-wrapper iframe,
+.strapi-rich-text .embed-wrapper iframe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+/* ==========================================================================
+   Definition Lists
+   ========================================================================== */
+
+.strapi-rich-text dl {
+  margin: var(--srt-margin-dl) 0;
+}
+
+.strapi-rich-text dt {
+  font-weight: var(--srt-font-weight-semibold);
+  color: var(--srt-color-text-heading);
+  margin-top: var(--srt-margin-dt);
+}
+
+.strapi-rich-text dt:first-child {
+  margin-top: 0;
+}
+
+.strapi-rich-text dd {
+  margin-left: var(--srt-dd-margin-left);
+  margin-top: var(--srt-margin-dd);
+  color: var(--srt-color-text-secondary);
+}
+
+/* ==========================================================================
+   Abbreviations
+   ========================================================================== */
+
+.strapi-rich-text abbr[title] {
+  text-decoration: underline dotted;
+  cursor: help;
+}
+
+/* ==========================================================================
+   Keyboard Input
+   ========================================================================== */
+
+.strapi-rich-text kbd {
+  font-family: var(--srt-font-family-mono);
+  font-size: var(--srt-font-size-small);
+  padding: var(--srt-padding-kbd-y) var(--srt-padding-kbd-x);
+  background-color: var(--srt-color-bg-kbd);
+  border: var(--srt-border-width-default) solid var(--srt-color-border-kbd);
+  border-radius: var(--srt-border-radius-default);
+  box-shadow: var(--srt-shadow-kbd);
+}
+
+/* ==========================================================================
+   Sample Output
+   ========================================================================== */
+
+.strapi-rich-text samp {
+  font-family: var(--srt-font-family-mono);
+  font-size: var(--srt-font-size-small);
+  background-color: var(--srt-color-bg-muted);
+  padding: var(--srt-padding-code-inline-y) var(--srt-padding-code-inline-x);
+  border-radius: var(--srt-border-radius-default);
+}
+
+/* ==========================================================================
+   Variables
+   ========================================================================== */
+
+.strapi-rich-text var {
+  font-style: italic;
+  color: var(--srt-color-var);
+}
+
+/* ==========================================================================
+   Address
+   ========================================================================== */
+
+.strapi-rich-text address {
+  font-style: normal;
+  margin: var(--srt-margin-address) 0;
+  padding: var(--srt-padding-address);
+  background-color: var(--srt-color-bg-address);
+  border-radius: var(--srt-border-radius-md);
+}
+
+/* ==========================================================================
+   Details/Summary (Accordion)
+   ========================================================================== */
+
+.strapi-rich-text details {
+  margin: var(--srt-margin-details) 0;
+  padding: var(--srt-padding-details);
+  background-color: var(--srt-color-bg-details);
+  border-radius: var(--srt-border-radius-md);
+  border: var(--srt-border-width-default) solid var(--srt-color-border-details);
+}
+
+.strapi-rich-text summary {
+  font-weight: var(--srt-font-weight-semibold);
+  cursor: pointer;
+  color: var(--srt-color-text-heading);
+}
+
+.strapi-rich-text details[open] summary {
+  margin-bottom: var(--srt-spacing-unit);
+}
+
+/* ==========================================================================
+   Clearfix
+   ========================================================================== */
+
+.strapi-rich-text::after {
+  content: "";
+  display: table;
+  clear: both;
+}
+
+/* ==========================================================================
+   Print Styles
+   ========================================================================== */
+
+@media print {
+  .strapi-rich-text {
+    color: #000;
+    font-size: 12pt;
+  }
+
+  .strapi-rich-text a {
+    color: #000;
+    text-decoration: underline;
+  }
+
+  .strapi-rich-text a[href]::after {
+    content: " (" attr(href) ")";
+    font-size: 0.8em;
+  }
+
+  .strapi-rich-text pre {
+    background-color: #f0f0f0;
+    border: 1px solid #ccc;
+  }
+
+  .strapi-rich-text pre code {
+    color: #000;
+  }
+
+  .strapi-rich-text blockquote {
+    border-left-color: #000;
+    background-color: transparent;
+  }
+
+  .strapi-rich-text img {
+    max-width: 100% !important;
+  }
+
+  .strapi-rich-text table {
+    border: 1px solid #000;
+  }
+
+  .strapi-rich-text th,
+  .strapi-rich-text td {
+    border: 1px solid #000;
+  }
+}

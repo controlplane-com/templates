@@ -1,0 +1,958 @@
+/**
+ * CKEditor 5 Rich Text CSS
+ *
+ * Exhaustive styles for rendering CKEditor 5 content from Strapi.
+ * CKEditor uses specific class names - this file targets those patterns.
+ *
+ * Apply this class to your container: <div class="ck-content">
+ *
+ * Usage in React/Next.js:
+ *   <div
+ *     className="ck-content"
+ *     dangerouslySetInnerHTML={{ __html: article.content }}
+ *   />
+ *
+ * Theming:
+ *   Override CSS variables in :root or .ck-content to customize.
+ *   For dark mode, include ckeditor5.dark.css after this file.
+ *
+ * Note: CKEditor 5 outputs clean semantic HTML, but some features
+ * use specific classes (like image alignment, text styling, etc.)
+ */
+
+/* ==========================================================================
+   CSS Variables
+   ========================================================================== */
+
+:root {
+  /* -------------------------------------------------------------------------
+     Colors - Text
+     ------------------------------------------------------------------------- */
+  --ck-color-text-primary: #1a1a1a;
+  --ck-color-text-heading: #0a0a0a;
+  --ck-color-text-muted: #6b7280;
+  --ck-color-text-secondary: #4b5563;
+  --ck-color-text-checked: #6b7280;
+
+  /* -------------------------------------------------------------------------
+     Colors - Links
+     ------------------------------------------------------------------------- */
+  --ck-color-link: #2563eb;
+  --ck-color-link-hover: #1d4ed8;
+  --ck-color-link-visited: #7c3aed;
+  --ck-color-link-focus: #2563eb;
+
+  /* -------------------------------------------------------------------------
+     Colors - Backgrounds
+     ------------------------------------------------------------------------- */
+  --ck-color-bg-base: transparent;
+  --ck-color-bg-subtle: #f8fafc;
+  --ck-color-bg-muted: #f3f4f6;
+  --ck-color-bg-code-inline: #f3f4f6;
+  --ck-color-bg-code-block: #1e293b;
+  --ck-color-bg-blockquote: #f8fafc;
+  --ck-color-bg-table-head: #f8fafc;
+  --ck-color-bg-table-even: #f9fafb;
+
+  /* -------------------------------------------------------------------------
+     Colors - Markers (Highlight)
+     ------------------------------------------------------------------------- */
+  --ck-color-marker-yellow: #fdfd77;
+  --ck-color-marker-green: #62f962;
+  --ck-color-marker-pink: #fc7999;
+  --ck-color-marker-blue: #72ccfd;
+  --ck-color-marker-text: inherit;
+
+  /* -------------------------------------------------------------------------
+     Colors - Pen (Text Color)
+     ------------------------------------------------------------------------- */
+  --ck-color-pen-red: #e91313;
+  --ck-color-pen-green: #118800;
+
+  /* -------------------------------------------------------------------------
+     Colors - Borders
+     ------------------------------------------------------------------------- */
+  --ck-color-border-default: #e5e7eb;
+  --ck-color-border-muted: #d1d5db;
+  --ck-color-border-strong: #4b5563;
+  --ck-color-border-blockquote: #2563eb;
+  --ck-color-border-blockquote-nested: #93c5fd;
+  --ck-color-border-table: #e5e7eb;
+  --ck-color-border-code-label: #334155;
+  --ck-color-border-page-break: #d1d5db;
+
+  /* -------------------------------------------------------------------------
+     Colors - Code
+     ------------------------------------------------------------------------- */
+  --ck-color-code-inline: #dc2626;
+  --ck-color-code-block: #e2e8f0;
+  --ck-color-code-label: #94a3b8;
+
+  /* -------------------------------------------------------------------------
+     Typography - Font Families
+     ------------------------------------------------------------------------- */
+  --ck-font-family-base: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen,
+    Ubuntu, Cantarell, 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+  --ck-font-family-mono: 'SF Mono', 'Fira Code', 'Fira Mono', Menlo, Monaco, Consolas,
+    'Liberation Mono', 'Courier New', monospace;
+
+  /* -------------------------------------------------------------------------
+     Typography - Font Sizes
+     ------------------------------------------------------------------------- */
+  --ck-font-size-base: 1rem;
+  --ck-font-size-xs: 0.75rem;
+  --ck-font-size-sm: 0.875rem;
+  --ck-font-size-lg: 1.125rem;
+  --ck-font-size-xl: 1.25rem;
+  --ck-font-size-2xl: 1.5rem;
+  --ck-font-size-3xl: 1.875rem;
+  --ck-font-size-4xl: 2.25rem;
+
+  /* CKEditor text size classes */
+  --ck-font-size-tiny: 0.7em;
+  --ck-font-size-small: 0.85em;
+  --ck-font-size-big: 1.4em;
+  --ck-font-size-huge: 1.8em;
+
+  /* Relative sizes for inline elements */
+  --ck-font-size-code: 0.875em;
+  --ck-font-size-code-block: 0.875rem;
+  --ck-font-size-sup-sub: 0.75em;
+
+  /* -------------------------------------------------------------------------
+     Typography - Font Weights
+     ------------------------------------------------------------------------- */
+  --ck-font-weight-normal: 400;
+  --ck-font-weight-medium: 500;
+  --ck-font-weight-semibold: 600;
+  --ck-font-weight-bold: 700;
+
+  /* -------------------------------------------------------------------------
+     Typography - Line Heights
+     ------------------------------------------------------------------------- */
+  --ck-line-height-tight: 1.3;
+  --ck-line-height-normal: 1.75;
+  --ck-line-height-relaxed: 1.7;
+
+  /* -------------------------------------------------------------------------
+     Typography - Letter Spacing
+     ------------------------------------------------------------------------- */
+  --ck-letter-spacing-tight: -0.025em;
+  --ck-letter-spacing-normal: 0;
+  --ck-letter-spacing-wide: 0.05em;
+  --ck-letter-spacing-wider: 0.1em;
+  --ck-letter-spacing-h2: -0.02em;
+  --ck-letter-spacing-h3: -0.015em;
+
+  /* -------------------------------------------------------------------------
+     Spacing - Margins
+     ------------------------------------------------------------------------- */
+  --ck-margin-heading-top: 1.5em;
+  --ck-margin-heading-bottom: 0.5em;
+  --ck-margin-paragraph: 1.25em;
+  --ck-margin-list: 1.25em;
+  --ck-margin-list-item: 0.25em;
+  --ck-margin-list-nested: 0.25em;
+  --ck-margin-todo-item: 0.5em;
+  --ck-margin-blockquote: 1.5em;
+  --ck-margin-blockquote-nested: 1em;
+  --ck-margin-code-block: 1.5em;
+  --ck-margin-code-label: 0.75em;
+  --ck-margin-image: 1.5em;
+  --ck-margin-figcaption: 0.75em;
+  --ck-margin-table: 1.5em;
+  --ck-margin-table-caption: 0.75em;
+  --ck-margin-hr: 2em;
+  --ck-margin-media: 1.5em;
+  --ck-margin-page-break: 2em;
+
+  /* -------------------------------------------------------------------------
+     Spacing - Padding
+     ------------------------------------------------------------------------- */
+  --ck-padding-code-inline-x: 0.4em;
+  --ck-padding-code-inline-y: 0.2em;
+  --ck-padding-code-block-x: 1.5em;
+  --ck-padding-code-block-y: 1.25em;
+  --ck-padding-code-label: 0.5em;
+  --ck-padding-blockquote-x: 1.5em;
+  --ck-padding-blockquote-y: 1em;
+  --ck-padding-table-cell-x: 1em;
+  --ck-padding-table-cell-y: 0.75em;
+  --ck-padding-marker: 0.1em;
+  --ck-padding-page-break: 0.5em;
+
+  /* -------------------------------------------------------------------------
+     Spacing - List & Todo
+     ------------------------------------------------------------------------- */
+  --ck-list-padding-left: 2em;
+  --ck-todo-padding-left: 1.75em;
+  --ck-todo-checkbox-size: 1em;
+  --ck-todo-checkbox-top: 0.35em;
+
+  /* -------------------------------------------------------------------------
+     Spacing - Images
+     ------------------------------------------------------------------------- */
+  --ck-image-float-margin: 1.5em;
+  --ck-image-max-width-float: 50%;
+
+  /* -------------------------------------------------------------------------
+     Borders - Widths
+     ------------------------------------------------------------------------- */
+  --ck-border-width-default: 1px;
+  --ck-border-width-thick: 2px;
+  --ck-border-width-blockquote: 4px;
+  --ck-border-width-page-break: 2px;
+
+  /* -------------------------------------------------------------------------
+     Borders - Radius
+     ------------------------------------------------------------------------- */
+  --ck-border-radius-sm: 0.125rem;
+  --ck-border-radius-default: 0.25rem;
+  --ck-border-radius-md: 0.5rem;
+  --ck-border-radius-lg: 0.75rem;
+
+  /* -------------------------------------------------------------------------
+     Effects - Transitions
+     ------------------------------------------------------------------------- */
+  --ck-transition-duration: 0.15s;
+  --ck-transition-timing: ease;
+
+  /* -------------------------------------------------------------------------
+     Misc
+     ------------------------------------------------------------------------- */
+  --ck-underline-offset: 2px;
+  --ck-outline-offset: 2px;
+  --ck-outline-width: 2px;
+  --ck-video-aspect-ratio: 56.25%; /* 16:9 */
+}
+
+/* ==========================================================================
+   Base Container
+   ========================================================================== */
+
+.ck-content {
+  font-family: var(--ck-font-family-base);
+  font-size: var(--ck-font-size-base);
+  line-height: var(--ck-line-height-normal);
+  color: var(--ck-color-text-primary);
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+/* ==========================================================================
+   Headings
+   ========================================================================== */
+
+.ck-content h1,
+.ck-content h2,
+.ck-content h3,
+.ck-content h4,
+.ck-content h5,
+.ck-content h6 {
+  margin-top: var(--ck-margin-heading-top);
+  margin-bottom: var(--ck-margin-heading-bottom);
+  font-weight: var(--ck-font-weight-semibold);
+  line-height: var(--ck-line-height-tight);
+  color: var(--ck-color-text-heading);
+}
+
+.ck-content h1:first-child,
+.ck-content h2:first-child,
+.ck-content h3:first-child,
+.ck-content h4:first-child,
+.ck-content h5:first-child,
+.ck-content h6:first-child {
+  margin-top: 0;
+}
+
+.ck-content h1 {
+  font-size: var(--ck-font-size-4xl);
+  letter-spacing: var(--ck-letter-spacing-tight);
+}
+
+.ck-content h2 {
+  font-size: var(--ck-font-size-3xl);
+  letter-spacing: var(--ck-letter-spacing-h2);
+}
+
+.ck-content h3 {
+  font-size: var(--ck-font-size-2xl);
+  letter-spacing: var(--ck-letter-spacing-h3);
+}
+
+.ck-content h4 {
+  font-size: var(--ck-font-size-xl);
+}
+
+.ck-content h5 {
+  font-size: var(--ck-font-size-lg);
+}
+
+.ck-content h6 {
+  font-size: var(--ck-font-size-base);
+  text-transform: uppercase;
+  letter-spacing: var(--ck-letter-spacing-wide);
+}
+
+/* ==========================================================================
+   Paragraphs and Text
+   ========================================================================== */
+
+.ck-content p {
+  margin-top: 0;
+  margin-bottom: var(--ck-margin-paragraph);
+}
+
+.ck-content p:last-child {
+  margin-bottom: 0;
+}
+
+/* CKEditor text styles */
+.ck-content strong,
+.ck-content b {
+  font-weight: var(--ck-font-weight-semibold);
+  color: var(--ck-color-text-heading);
+}
+
+.ck-content i,
+.ck-content em {
+  font-style: italic;
+}
+
+.ck-content u {
+  text-decoration: underline;
+  text-underline-offset: var(--ck-underline-offset);
+}
+
+.ck-content s,
+.ck-content strike {
+  text-decoration: line-through;
+}
+
+/* CKEditor subscript/superscript */
+.ck-content sup {
+  font-size: var(--ck-font-size-sup-sub);
+  vertical-align: super;
+}
+
+.ck-content sub {
+  font-size: var(--ck-font-size-sup-sub);
+  vertical-align: sub;
+}
+
+/* ==========================================================================
+   CKEditor Text Size Classes
+   ========================================================================== */
+
+.ck-content .text-tiny {
+  font-size: var(--ck-font-size-tiny);
+}
+
+.ck-content .text-small {
+  font-size: var(--ck-font-size-small);
+}
+
+.ck-content .text-big {
+  font-size: var(--ck-font-size-big);
+}
+
+.ck-content .text-huge {
+  font-size: var(--ck-font-size-huge);
+}
+
+/* Text alignment */
+.ck-content [style*="text-align:center"],
+.ck-content [style*="text-align: center"] {
+  text-align: center;
+}
+
+.ck-content [style*="text-align:right"],
+.ck-content [style*="text-align: right"] {
+  text-align: right;
+}
+
+.ck-content [style*="text-align:justify"],
+.ck-content [style*="text-align: justify"] {
+  text-align: justify;
+}
+
+/* ==========================================================================
+   CKEditor Highlight/Marker
+   ========================================================================== */
+
+.ck-content mark,
+.ck-content .marker-yellow {
+  background-color: var(--ck-color-marker-yellow);
+  color: var(--ck-color-marker-text);
+  padding: var(--ck-padding-marker) 0;
+}
+
+.ck-content .marker-green {
+  background-color: var(--ck-color-marker-green);
+  color: var(--ck-color-marker-text);
+  padding: var(--ck-padding-marker) 0;
+}
+
+.ck-content .marker-pink {
+  background-color: var(--ck-color-marker-pink);
+  color: var(--ck-color-marker-text);
+  padding: var(--ck-padding-marker) 0;
+}
+
+.ck-content .marker-blue {
+  background-color: var(--ck-color-marker-blue);
+  color: var(--ck-color-marker-text);
+  padding: var(--ck-padding-marker) 0;
+}
+
+/* Pen markers (text color) */
+.ck-content .pen-red {
+  color: var(--ck-color-pen-red);
+  background-color: transparent;
+}
+
+.ck-content .pen-green {
+  color: var(--ck-color-pen-green);
+  background-color: transparent;
+}
+
+/* ==========================================================================
+   Links
+   ========================================================================== */
+
+.ck-content a {
+  color: var(--ck-color-link);
+  text-decoration: underline;
+  text-underline-offset: var(--ck-underline-offset);
+  transition: color var(--ck-transition-duration) var(--ck-transition-timing);
+}
+
+.ck-content a:hover {
+  color: var(--ck-color-link-hover);
+}
+
+.ck-content a:visited {
+  color: var(--ck-color-link-visited);
+}
+
+.ck-content a:focus {
+  outline: var(--ck-outline-width) solid var(--ck-color-link-focus);
+  outline-offset: var(--ck-outline-offset);
+}
+
+/* ==========================================================================
+   Lists
+   ========================================================================== */
+
+.ck-content ul,
+.ck-content ol {
+  margin-top: 0;
+  margin-bottom: var(--ck-margin-list);
+  padding-left: var(--ck-list-padding-left);
+}
+
+.ck-content ul {
+  list-style-type: disc;
+}
+
+.ck-content ol {
+  list-style-type: decimal;
+}
+
+.ck-content li {
+  margin-bottom: var(--ck-margin-list-item);
+}
+
+.ck-content li:last-child {
+  margin-bottom: 0;
+}
+
+/* Nested lists */
+.ck-content ul ul,
+.ck-content ol ol,
+.ck-content ul ol,
+.ck-content ol ul {
+  margin-top: var(--ck-margin-list-nested);
+  margin-bottom: var(--ck-margin-list-nested);
+}
+
+.ck-content ul ul {
+  list-style-type: circle;
+}
+
+.ck-content ul ul ul {
+  list-style-type: square;
+}
+
+/* CKEditor list style types */
+.ck-content ol[style*="list-style-type:lower-alpha"],
+.ck-content ol[style*="list-style-type: lower-alpha"] {
+  list-style-type: lower-alpha;
+}
+
+.ck-content ol[style*="list-style-type:upper-alpha"],
+.ck-content ol[style*="list-style-type: upper-alpha"] {
+  list-style-type: upper-alpha;
+}
+
+.ck-content ol[style*="list-style-type:lower-roman"],
+.ck-content ol[style*="list-style-type: lower-roman"] {
+  list-style-type: lower-roman;
+}
+
+.ck-content ol[style*="list-style-type:upper-roman"],
+.ck-content ol[style*="list-style-type: upper-roman"] {
+  list-style-type: upper-roman;
+}
+
+/* ==========================================================================
+   CKEditor To-Do Lists
+   ========================================================================== */
+
+.ck-content .todo-list {
+  list-style: none;
+  padding-left: 0;
+}
+
+.ck-content .todo-list li {
+  position: relative;
+  padding-left: var(--ck-todo-padding-left);
+  margin-bottom: var(--ck-margin-todo-item);
+}
+
+.ck-content .todo-list .todo-list__label {
+  display: flex;
+  align-items: flex-start;
+}
+
+.ck-content .todo-list .todo-list__label > input {
+  position: absolute;
+  left: 0;
+  top: var(--ck-todo-checkbox-top);
+  width: var(--ck-todo-checkbox-size);
+  height: var(--ck-todo-checkbox-size);
+  margin: 0;
+  cursor: pointer;
+}
+
+.ck-content .todo-list .todo-list__label > input[checked] + span {
+  text-decoration: line-through;
+  color: var(--ck-color-text-checked);
+}
+
+/* ==========================================================================
+   Blockquotes
+   ========================================================================== */
+
+.ck-content blockquote {
+  margin: var(--ck-margin-blockquote) 0;
+  padding: var(--ck-padding-blockquote-y) var(--ck-padding-blockquote-x);
+  border-left: var(--ck-border-width-blockquote) solid var(--ck-color-border-blockquote);
+  background-color: var(--ck-color-bg-blockquote);
+  font-style: italic;
+  color: var(--ck-color-text-secondary);
+}
+
+.ck-content blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+/* Nested blockquotes */
+.ck-content blockquote blockquote {
+  margin: var(--ck-margin-blockquote-nested) 0;
+  border-left-color: var(--ck-color-border-blockquote-nested);
+}
+
+/* ==========================================================================
+   Code
+   ========================================================================== */
+
+.ck-content code {
+  font-family: var(--ck-font-family-mono);
+  font-size: var(--ck-font-size-code);
+  background-color: var(--ck-color-bg-code-inline);
+  padding: var(--ck-padding-code-inline-y) var(--ck-padding-code-inline-x);
+  border-radius: var(--ck-border-radius-default);
+  color: var(--ck-color-code-inline);
+}
+
+/* CKEditor code blocks */
+.ck-content pre {
+  margin: var(--ck-margin-code-block) 0;
+  padding: var(--ck-padding-code-block-y) var(--ck-padding-code-block-x);
+  background-color: var(--ck-color-bg-code-block);
+  border-radius: var(--ck-border-radius-md);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ck-content pre code {
+  background-color: transparent;
+  padding: 0;
+  font-size: var(--ck-font-size-code-block);
+  color: var(--ck-color-code-block);
+  line-height: var(--ck-line-height-relaxed);
+  border-radius: 0;
+}
+
+/* Code block language label */
+.ck-content pre[data-language]::before {
+  content: attr(data-language);
+  display: block;
+  margin-bottom: var(--ck-margin-code-label);
+  padding-bottom: var(--ck-padding-code-label);
+  font-size: var(--ck-font-size-xs);
+  color: var(--ck-color-code-label);
+  text-transform: uppercase;
+  letter-spacing: var(--ck-letter-spacing-wider);
+  border-bottom: var(--ck-border-width-default) solid var(--ck-color-border-code-label);
+}
+
+/* ==========================================================================
+   CKEditor Images
+   ========================================================================== */
+
+.ck-content img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* CKEditor image with caption (figure) */
+.ck-content figure.image {
+  margin: var(--ck-margin-image) 0;
+  display: table;
+}
+
+.ck-content figure.image img {
+  display: block;
+  margin: 0 auto;
+  border-radius: var(--ck-border-radius-md);
+}
+
+.ck-content figure.image figcaption {
+  display: table-caption;
+  caption-side: bottom;
+  margin-top: var(--ck-margin-figcaption);
+  font-size: var(--ck-font-size-sm);
+  color: var(--ck-color-text-muted);
+  text-align: center;
+  font-style: italic;
+}
+
+/* CKEditor image alignment */
+.ck-content figure.image.image-style-side,
+.ck-content figure.image.image-style-align-right {
+  float: right;
+  margin-left: var(--ck-image-float-margin);
+  margin-right: 0;
+  max-width: var(--ck-image-max-width-float);
+}
+
+.ck-content figure.image.image-style-align-left {
+  float: left;
+  margin-right: var(--ck-image-float-margin);
+  margin-left: 0;
+  max-width: var(--ck-image-max-width-float);
+}
+
+.ck-content figure.image.image-style-align-center {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Image resize handles (width styles) */
+.ck-content figure.image[style*="width"] {
+  display: block;
+}
+
+.ck-content figure.image[style*="width"] img {
+  width: 100%;
+}
+
+/* ==========================================================================
+   CKEditor Image Styles (Block vs Inline)
+   ========================================================================== */
+
+/* Block image (default) */
+.ck-content figure.image.image-style-block-align-left {
+  margin-right: auto;
+}
+
+.ck-content figure.image.image-style-block-align-center {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.ck-content figure.image.image-style-block-align-right {
+  margin-left: auto;
+}
+
+/* Inline image (wrapped by text) */
+.ck-content span.image-inline {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: flex-start;
+}
+
+.ck-content span.image-inline img {
+  flex-grow: 1;
+  flex-shrink: 1;
+  max-width: 100%;
+}
+
+/* ==========================================================================
+   CKEditor Tables
+   ========================================================================== */
+
+.ck-content table {
+  width: 100%;
+  margin: var(--ck-margin-table) 0;
+  border-collapse: collapse;
+  border: var(--ck-border-width-default) solid var(--ck-color-border-table);
+}
+
+.ck-content table thead {
+  background-color: var(--ck-color-bg-table-head);
+}
+
+.ck-content table th {
+  padding: var(--ck-padding-table-cell-y) var(--ck-padding-table-cell-x);
+  text-align: left;
+  font-weight: var(--ck-font-weight-semibold);
+  color: var(--ck-color-text-heading);
+  border: var(--ck-border-width-default) solid var(--ck-color-border-table);
+}
+
+.ck-content table td {
+  padding: var(--ck-padding-table-cell-y) var(--ck-padding-table-cell-x);
+  border: var(--ck-border-width-default) solid var(--ck-color-border-table);
+  vertical-align: top;
+}
+
+.ck-content table tbody tr:nth-child(even) {
+  background-color: var(--ck-color-bg-table-even);
+}
+
+/* CKEditor table caption */
+.ck-content figure.table {
+  margin: var(--ck-margin-table) 0;
+  display: table;
+}
+
+.ck-content figure.table table {
+  margin: 0;
+}
+
+.ck-content figure.table figcaption {
+  display: table-caption;
+  caption-side: top;
+  margin-bottom: var(--ck-margin-table-caption);
+  font-size: var(--ck-font-size-sm);
+  color: var(--ck-color-text-muted);
+  text-align: center;
+  font-weight: var(--ck-font-weight-medium);
+}
+
+/* Table cell alignment */
+.ck-content td[style*="text-align:center"],
+.ck-content th[style*="text-align:center"],
+.ck-content td[style*="text-align: center"],
+.ck-content th[style*="text-align: center"] {
+  text-align: center;
+}
+
+.ck-content td[style*="text-align:right"],
+.ck-content th[style*="text-align:right"],
+.ck-content td[style*="text-align: right"],
+.ck-content th[style*="text-align: right"] {
+  text-align: right;
+}
+
+.ck-content td[style*="vertical-align:middle"],
+.ck-content th[style*="vertical-align:middle"],
+.ck-content td[style*="vertical-align: middle"],
+.ck-content th[style*="vertical-align: middle"] {
+  vertical-align: middle;
+}
+
+.ck-content td[style*="vertical-align:bottom"],
+.ck-content th[style*="vertical-align:bottom"],
+.ck-content td[style*="vertical-align: bottom"],
+.ck-content th[style*="vertical-align: bottom"] {
+  vertical-align: bottom;
+}
+
+/* Table cell background colors - allow inline styles from CKEditor */
+
+/* ==========================================================================
+   Horizontal Rules
+   ========================================================================== */
+
+.ck-content hr {
+  margin: var(--ck-margin-hr) 0;
+  border: none;
+  border-top: var(--ck-border-width-default) solid var(--ck-color-border-default);
+}
+
+/* ==========================================================================
+   CKEditor Media Embeds
+   ========================================================================== */
+
+.ck-content .media {
+  margin: var(--ck-margin-media) 0;
+  clear: both;
+}
+
+/* Responsive embed wrapper */
+.ck-content .media .ck-media__wrapper {
+  position: relative;
+  padding-bottom: var(--ck-video-aspect-ratio);
+  height: 0;
+  overflow: hidden;
+  border-radius: var(--ck-border-radius-md);
+}
+
+.ck-content .media .ck-media__wrapper iframe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+/* Media wrapper for YouTube, Vimeo, etc. */
+.ck-content figure.media {
+  margin: var(--ck-margin-media) 0;
+}
+
+.ck-content oembed[url] {
+  display: block;
+}
+
+/* ==========================================================================
+   CKEditor Horizontal Line / Page Break
+   ========================================================================== */
+
+.ck-content .page-break {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: var(--ck-margin-page-break) 0;
+  padding: var(--ck-padding-page-break);
+}
+
+.ck-content .page-break::after {
+  content: '';
+  flex-grow: 1;
+  border-top: var(--ck-border-width-page-break) dashed var(--ck-color-border-page-break);
+}
+
+/* ==========================================================================
+   CKEditor Special Characters
+   ========================================================================== */
+
+/* No special styling needed - they render as unicode */
+
+/* ==========================================================================
+   CKEditor Font Family and Size
+   ========================================================================== */
+
+/* These are applied as inline styles by CKEditor */
+/* Supporting common font families */
+.ck-content [style*="font-family:'Arial'"],
+.ck-content [style*='font-family:"Arial"'] {
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.ck-content [style*="font-family:'Georgia'"],
+.ck-content [style*='font-family:"Georgia"'] {
+  font-family: Georgia, 'Times New Roman', serif;
+}
+
+.ck-content [style*="font-family:'Courier New'"],
+.ck-content [style*='font-family:"Courier New"'] {
+  font-family: 'Courier New', Courier, monospace;
+}
+
+/* ==========================================================================
+   CKEditor Indent
+   ========================================================================== */
+
+/* CKEditor uses margin-left for indentation */
+/* These styles ensure proper rendering */
+
+/* ==========================================================================
+   Clearfix (for floated images)
+   ========================================================================== */
+
+.ck-content::after {
+  content: "";
+  display: table;
+  clear: both;
+}
+
+/* ==========================================================================
+   Print Styles
+   ========================================================================== */
+
+@media print {
+  .ck-content {
+    color: #000;
+    font-size: 12pt;
+  }
+
+  .ck-content a {
+    color: #000;
+    text-decoration: underline;
+  }
+
+  .ck-content a[href]::after {
+    content: " (" attr(href) ")";
+    font-size: 0.8em;
+  }
+
+  .ck-content pre {
+    background-color: #f0f0f0;
+    border: 1px solid #ccc;
+    white-space: pre-wrap;
+  }
+
+  .ck-content pre code {
+    color: #000;
+  }
+
+  .ck-content blockquote {
+    border-left-color: #000;
+    background-color: transparent;
+  }
+
+  .ck-content img {
+    max-width: 100% !important;
+    page-break-inside: avoid;
+  }
+
+  .ck-content figure {
+    page-break-inside: avoid;
+  }
+
+  .ck-content table {
+    border: 1px solid #000;
+    page-break-inside: avoid;
+  }
+
+  .ck-content th,
+  .ck-content td {
+    border: 1px solid #000;
+  }
+
+  .ck-content .media,
+  .ck-content figure.media {
+    display: none;
+  }
+
+  .ck-content hr {
+    border-top-color: #000;
+  }
+}

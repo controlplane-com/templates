@@ -1,28 +1,63 @@
 # Global settings (required by cpln-helm)
 global:
   cpln:
-    gvc: ""  # Your GVC name
+    gvc: ""  # REQUIRED: Your GVC name (just the name, not a full link)
+             # Example: "production" or "staging"
 
 strapi:
   # REQUIRED: Your custom Strapi Docker image
-  # Build your own image with your content types and plugins baked in
+  # Build with: cpln image build --push --name my-strapi --tag v1 --org my-org
   # See README.md for instructions on building your image
-  image: ghcr.io/your-org/your-strapi:latest
+  #
+  # Control Plane Registry format (recommended):
+  #   /org/ORG_NAME/image/IMAGE_NAME:TAG
+  #   Example: /org/my-org/image/my-strapi:v1
+  #   Example: /org/my-org/image/my-strapi:abc1234
+  #
+  # External registry format:
+  #   Example: ghcr.io/your-org/your-strapi:latest
+  #   Example: docker.io/username/strapi:v1
+  image: /org/my-org/image/my-strapi:v1
 
-  # Image pull secret for private container registries (optional)
-  # Leave empty for public images
-  # For private registries, create a docker pull secret in Control Plane first
-  # See README.md for instructions on setting up registry authentication
-  imagePullSecret: ""  # e.g., "github-registry" or "gitlab-registry"
+  # Optional: Image pull secret for external container registries
+  # Leave empty ("") when using Control Plane registry
+  #
+  # VALUE FORMAT: Just the secret NAME, not a full link
+  #   Correct: "github-registry"
+  #   Wrong:   "//secret/github-registry"
+  #   Wrong:   "/org/my-org/secret/github-registry"
+  #
+  # The template automatically constructs the full reference:
+  #   //secret/{{ .Values.strapi.imagePullSecret }}
+  #
+  # To create a pull secret:
+  #   cpln secret create SECRET_NAME --org ORG --type docker \
+  #     --docker-server REGISTRY_URL \
+  #     --docker-username USERNAME \
+  #     --docker-password TOKEN
+  #
+  # Examples:
+  #   imagePullSecret: ""                  # No secret (Control Plane registry)
+  #   imagePullSecret: "github-registry"   # For ghcr.io
+  #   imagePullSecret: "dockerhub-creds"   # For docker.io
+  #   imagePullSecret: "gitlab-registry"   # For registry.gitlab.com
+  imagePullSecret: ""
 
-  # Database connection settings
+  # REQUIRED: Database connection settings
   # Connect to your existing PostgreSQL database
   database:
-    host: ""           # e.g., my-postgres.my-gvc.cpln.local
+    # Database hostname
+    # For Control Plane postgres template: RELEASE-postgres.GVC.cpln.local
+    # For external databases: your-db.example.com
+    # Examples:
+    #   host: "my-db-postgres.production.cpln.local"
+    #   host: "strapi-db.us-east-1.rds.amazonaws.com"
+    host: ""           # REQUIRED
+
     port: "5432"
     name: "strapi"
-    username: ""       # Database username (stored in secret)
-    password: ""       # Database password (stored in secret)
+    username: ""       # REQUIRED: Database username
+    password: ""       # REQUIRED: Database password
     ssl: "false"       # Set to "true" if your database requires SSL
 
   # Container resources
@@ -35,12 +70,39 @@ strapi:
     minScale: 1
     maxScale: 3
 
-  # Strapi application secrets
-  # IMPORTANT: Generate unique values for production!
-  # Use: openssl rand -base64 32
+  # REQUIRED: Strapi application secrets
+  # Generate unique values using: openssl rand -base64 32
   secrets:
-    appKeys: ""              # Comma-separated list of keys
-    apiTokenSalt: ""         # API token salt
-    adminJwtSecret: ""       # Admin panel JWT secret
-    transferTokenSalt: ""    # Transfer token salt
-    jwtSecret: ""            # JWT secret for users-permissions plugin
+    appKeys: ""              # REQUIRED: Comma-separated list (minimum 2 keys)
+    apiTokenSalt: ""         # REQUIRED: API token salt
+    adminJwtSecret: ""       # REQUIRED: Admin panel JWT secret
+    transferTokenSalt: ""    # REQUIRED: Transfer token salt
+    jwtSecret: ""            # REQUIRED: JWT secret for users-permissions plugin
+
+# =============================================================================
+# Control Plane Object Reference Formats (for reference)
+# =============================================================================
+#
+# Images (Control Plane registry):
+#   /org/ORG_NAME/image/IMAGE_NAME:TAG
+#
+# Secrets (referenced in templates):
+#   //secret/SECRET_NAME                    - Org-level secret
+#   //secret/SECRET_NAME.KEY                - Specific key in dictionary secret
+#   cpln://secret/SECRET_NAME.KEY           - For environment variable values
+#
+# Identities:
+#   //identity/IDENTITY_NAME                - Org-level identity
+#   //gvc/GVC_NAME/identity/IDENTITY_NAME   - GVC-scoped identity
+#
+# Workloads:
+#   WORKLOAD_NAME.GVC_NAME.cpln.local       - Internal DNS for workload
+#
+# Policies:
+#   //policy/POLICY_NAME
+#
+# Example full references used in this template:
+#   Image:    /org/my-org/image/my-strapi:v1
+#   Secret:   cpln://secret/my-release-strapi-secrets.appKeys
+#   Identity: //gvc/production/identity/my-release-strapi-identity
+# =============================================================================

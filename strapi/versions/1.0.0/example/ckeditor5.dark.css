@@ -1,0 +1,110 @@
+/**
+ * CKEditor 5 Rich Text CSS - Dark Theme
+ *
+ * Dark mode variable overrides for ckeditor5.css
+ * Include this file AFTER ckeditor5.css
+ *
+ * Usage:
+ *   <!-- Always dark -->
+ *   <link rel="stylesheet" href="ckeditor5.css">
+ *   <link rel="stylesheet" href="ckeditor5.dark.css">
+ *
+ *   <!-- Respect system preference -->
+ *   <link rel="stylesheet" href="ckeditor5.css">
+ *   <link rel="stylesheet" href="ckeditor5.dark.css" media="(prefers-color-scheme: dark)">
+ *
+ *   <!-- Toggle with class -->
+ *   <link rel="stylesheet" href="ckeditor5.css">
+ *   <style>
+ *     .dark { ... copy variables from this file ... }
+ *   </style>
+ */
+
+:root {
+  /* -------------------------------------------------------------------------
+     Colors - Text
+     ------------------------------------------------------------------------- */
+  --ck-color-text-primary: #e5e7eb;
+  --ck-color-text-heading: #f9fafb;
+  --ck-color-text-muted: #9ca3af;
+  --ck-color-text-secondary: #9ca3af;
+  --ck-color-text-checked: #9ca3af;
+
+  /* -------------------------------------------------------------------------
+     Colors - Links
+     ------------------------------------------------------------------------- */
+  --ck-color-link: #60a5fa;
+  --ck-color-link-hover: #93c5fd;
+  --ck-color-link-visited: #a78bfa;
+  --ck-color-link-focus: #60a5fa;
+
+  /* -------------------------------------------------------------------------
+     Colors - Backgrounds
+     ------------------------------------------------------------------------- */
+  --ck-color-bg-base: transparent;
+  --ck-color-bg-subtle: #1f2937;
+  --ck-color-bg-muted: #374151;
+  --ck-color-bg-code-inline: #374151;
+  --ck-color-bg-code-block: #0f172a;
+  --ck-color-bg-blockquote: #1f2937;
+  --ck-color-bg-table-head: #1f2937;
+  --ck-color-bg-table-even: #1f2937;
+
+  /* -------------------------------------------------------------------------
+     Colors - Markers (Highlight) - Dark mode variants
+     ------------------------------------------------------------------------- */
+  --ck-color-marker-yellow: #854d0e;
+  --ck-color-marker-green: #166534;
+  --ck-color-marker-pink: #9f1239;
+  --ck-color-marker-blue: #1e40af;
+  --ck-color-marker-text: #fef08a;
+
+  /* Override text color per marker for better contrast */
+  /* Note: These need to be set via additional rules if needed */
+
+  /* -------------------------------------------------------------------------
+     Colors - Pen (Text Color) - Dark mode variants
+     ------------------------------------------------------------------------- */
+  --ck-color-pen-red: #fca5a5;
+  --ck-color-pen-green: #86efac;
+
+  /* -------------------------------------------------------------------------
+     Colors - Borders
+     ------------------------------------------------------------------------- */
+  --ck-color-border-default: #4b5563;
+  --ck-color-border-muted: #374151;
+  --ck-color-border-strong: #6b7280;
+  --ck-color-border-blockquote: #3b82f6;
+  --ck-color-border-blockquote-nested: #1d4ed8;
+  --ck-color-border-table: #374151;
+  --ck-color-border-code-label: #1e293b;
+  --ck-color-border-page-break: #4b5563;
+
+  /* -------------------------------------------------------------------------
+     Colors - Code
+     ------------------------------------------------------------------------- */
+  --ck-color-code-inline: #fca5a5;
+  --ck-color-code-block: #e2e8f0;
+  --ck-color-code-label: #64748b;
+}
+
+/* -------------------------------------------------------------------------
+   Dark Mode Marker Text Colors
+   Need specific overrides for proper contrast
+   ------------------------------------------------------------------------- */
+
+.ck-content .marker-yellow {
+  color: #fef08a;
+}
+
+.ck-content .marker-green {
+  color: #86efac;
+}
+
+.ck-content .marker-pink {
+  color: #fda4af;
+}
+
+.ck-content .marker-blue {
+  color: #93c5fd;
+}

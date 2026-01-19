@@ -39,10 +39,10 @@ strapi/
 - **Private Registries**: Optional image pull secret for private container registries
 - **Resources & Scaling**: Configurable CPU, memory, and autoscaling settings
 
-### Breaking Changes from Previous Development
+### Design Decisions
 
-- Removed embedded PostgreSQL dependency - users now manage their own database
-- Requires a custom Docker image (no generic image support)
+- **BYOD (Bring Your Own Database)**: Users manage their own PostgreSQL database, providing flexibility to use cloud-hosted databases or the Control Plane postgres template
+- **Custom Image Required**: Since Strapi stores schema as code files, users must build their own Docker image with their content types and plugins
 
 ### Notes
 

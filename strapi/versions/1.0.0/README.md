@@ -10,12 +10,13 @@ Deploy Strapi, the leading open-source headless CMS, on Control Plane.
 4. [Creating Your Strapi Project](#4-creating-your-strapi-project)
 5. [Content Types Example](#5-content-types-example)
 6. [Plugins Example](#6-plugins-example)
-7. [Database Migrations](#7-database-migrations)
-8. [Building Your Docker Image](#8-building-your-docker-image)
-9. [Container Registries](#9-container-registries)
-10. [Deploying to Control Plane](#10-deploying-to-control-plane)
-11. [Production Considerations](#11-production-considerations)
-12. [Troubleshooting](#12-troubleshooting)
+7. [Frontend Styling](#7-frontend-styling)
+8. [Database Migrations](#8-database-migrations)
+9. [Building Your Docker Image](#9-building-your-docker-image)
+10. [Container Registries](#10-container-registries)
+11. [Deploying to Control Plane](#11-deploying-to-control-plane)
+12. [Production Considerations](#12-production-considerations)
+13. [Troubleshooting](#13-troubleshooting)
 
 ---
 
@@ -106,16 +107,13 @@ npx create-strapi-app@latest my-strapi --quickstart
 cd my-strapi
 npm run develop
 
-# 3. Build your Docker image
-docker build -t ghcr.io/your-org/my-strapi:v1 .
+# 3. Build and push to Control Plane registry
+cpln image build --push --name my-strapi --tag v1 --org my-org
 
-# 4. Push to registry
-docker push ghcr.io/your-org/my-strapi:v1
-
-# 5. Deploy to Control Plane
+# 4. Deploy to Control Plane
 cpln helm install my-cms strapi \
   --set global.cpln.gvc=my-gvc \
-  --set strapi.image=ghcr.io/your-org/my-strapi:v1 \
+  --set strapi.image=/org/my-org/image/my-strapi:v1 \
   --set strapi.database.host=my-postgres.my-gvc.cpln.local \
   --set strapi.database.username=strapi \
   --set strapi.database.password=secret123 \
@@ -293,15 +291,24 @@ Now your API is accessible without authentication.
 
 ## 6. Plugins Example
 
-Let's install and configure the GraphQL plugin.
+Let's install CKEditor 5 - a professional rich text editor similar to WordPress's editor.
+
+### Why CKEditor 5?
+
+The default Strapi rich text editor is basic. CKEditor 5 provides:
+- Professional WYSIWYG editing experience
+- Media library integration (insert images from Strapi)
+- Custom toolbar configuration
+- Dark mode support
+- Clean semantic HTML output
 
 ### Step 1: Install the Plugin
 
 ```bash
-npm install @strapi/plugin-graphql
+npm install @ckeditor/strapi-plugin-ckeditor
 ```
 
-### Step 2: Rebuild
+### Step 2: Rebuild Admin Panel
 
 ```bash
 npm run build
@@ -309,17 +316,51 @@ npm run build
 
 ### Step 3: Configure (Optional)
 
+Create or update `config/plugins.js`:
+
 ```javascript
 // config/plugins.js
 module.exports = {
-  graphql: {
+  ckeditor: {
+    enabled: true,
     config: {
-      endpoint: '/graphql',
-      playgroundAlways: false,
-      defaultLimit: 25,
-      maxLimit: 100,
-    },
-  },
+      plugin: {
+        // Customize editor styles
+        styles: `
+          .ck-editor__main {
+            --ck-font-size-base: 14px;
+          }
+        `
+      },
+      editor: {
+        // Toolbar configuration
+        toolbar: {
+          items: [
+            'heading',
+            '|',
+            'bold',
+            'italic',
+            'underline',
+            'link',
+            '|',
+            'bulletedList',
+            'numberedList',
+            '|',
+            'blockQuote',
+            'insertImage',
+            'mediaEmbed',
+            '|',
+            'undo',
+            'redo'
+          ]
+        },
+        // Enable media library integration
+        strapiMediaLib: {
+          enabled: true
+        }
+      }
+    }
+  }
 };
 ```
 
@@ -329,38 +370,195 @@ module.exports = {
 npm run develop
 ```
 
-GraphQL endpoint available at: http://localhost:1337/graphql
+When you create or edit a content type with a Rich Text field, you'll now see the CKEditor interface instead of the default editor.
 
-Example query:
+### Using CKEditor in Content Types
 
-```graphql
-query {
-  articles {
-    data {
-      id
-      attributes {
-        title
-        content
-        publishedAt
-      }
-    }
-  }
-}
-```
+1. Go to **Content-Type Builder**
+2. Add a new field → **Rich text (Blocks)**
+3. The field will use CKEditor for editing
 
 ### Popular Plugins
 
 | Plugin | Purpose | Install |
 |--------|---------|---------|
+| CKEditor 5 | Professional rich text editor | `@ckeditor/strapi-plugin-ckeditor` |
 | GraphQL | GraphQL API | `@strapi/plugin-graphql` |
 | SEO | Meta tags, sitemap | `@strapi/plugin-seo` |
 | i18n | Internationalization | Built-in, enable in plugins.js |
 | Users & Permissions | Authentication | Built-in |
 | Upload | Media management | Built-in |
 
+Browse more plugins at [Strapi Marketplace](https://market.strapi.io/)
+
 ---
 
-## 7. Database Migrations
+## 7. Frontend Styling
+
+When displaying Strapi rich text content on your frontend, you need CSS to style headings, paragraphs, code blocks, tables, and other HTML elements. The `example/` folder includes production-ready stylesheets.
+
+### Available CSS Files
+
+| File | Purpose |
+|------|---------|
+| `rich-text.css` | Styles for default Strapi rich text (light theme) |
+| `rich-text.dark.css` | Dark theme overrides for rich text |
+| `ckeditor5.css` | Styles for CKEditor 5 content (light theme) |
+| `ckeditor5.dark.css` | Dark theme overrides for CKEditor 5 |
+
+### Basic Usage
+
+**React/Next.js:**
+
+```jsx
+import './rich-text.css';
+// or for CKEditor content:
+// import './ckeditor5.css';
+
+function Article({ content }) {
+  return (
+    <div
+      className="strapi-rich-text"  // or "ck-content" for CKEditor
+      dangerouslySetInnerHTML={{ __html: content }}
+    />
+  );
+}
+```
+
+**Vue:**
+
+```vue
+<template>
+  <div class="strapi-rich-text" v-html="content"></div>
+</template>
+
+<style src="./rich-text.css"></style>
+```
+
+### Dark Mode
+
+**Option 1: Always Dark**
+
+```html
+<link rel="stylesheet" href="rich-text.css">
+<link rel="stylesheet" href="rich-text.dark.css">
+```
+
+**Option 2: Respect System Preference**
+
+```html
+<link rel="stylesheet" href="rich-text.css">
+<link rel="stylesheet" href="rich-text.dark.css" media="(prefers-color-scheme: dark)">
+```
+
+**Option 3: Toggle with JavaScript**
+
+```javascript
+// Add dark theme stylesheet dynamically
+function enableDarkMode() {
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = '/rich-text.dark.css';
+  link.id = 'dark-theme';
+  document.head.appendChild(link);
+}
+
+function disableDarkMode() {
+  document.getElementById('dark-theme')?.remove();
+}
+```
+
+### CSS Variables
+
+All styles use CSS variables for easy customization. Override variables in your own CSS:
+
+```css
+/* Custom theme */
+:root {
+  /* Typography */
+  --srt-font-family-base: 'Inter', sans-serif;
+  --srt-font-size-base: 1.125rem;
+  --srt-line-height-normal: 1.8;
+
+  /* Colors */
+  --srt-color-text-primary: #333;
+  --srt-color-link: #0066cc;
+  --srt-color-link-hover: #004499;
+
+  /* Spacing */
+  --srt-margin-paragraph: 1.25em;
+  --srt-margin-heading-top: 1.5em;
+
+  /* Code blocks */
+  --srt-color-bg-code-block: #1e1e1e;
+  --srt-color-code-inline: #c7254e;
+}
+```
+
+### Variable Reference
+
+**Colors:**
+- `--srt-color-text-primary` / `--ck-color-text-primary` - Main text color
+- `--srt-color-text-heading` / `--ck-color-text-heading` - Heading color
+- `--srt-color-link` / `--ck-color-link` - Link color
+- `--srt-color-bg-code-block` / `--ck-color-bg-code-block` - Code block background
+- `--srt-color-bg-blockquote` / `--ck-color-bg-blockquote` - Blockquote background
+
+**Typography:**
+- `--srt-font-family-base` / `--ck-font-family-base` - Body font
+- `--srt-font-family-mono` / `--ck-font-family-mono` - Code font
+- `--srt-font-size-base` / `--ck-font-size-base` - Base font size
+- `--srt-line-height-normal` / `--ck-line-height-normal` - Default line height
+
+**Spacing:**
+- `--srt-margin-paragraph` / `--ck-margin-paragraph` - Paragraph margin
+- `--srt-margin-heading-top` / `--ck-margin-heading-top` - Heading top margin
+- `--srt-padding-code-block-x` / `--ck-padding-code-block-x` - Code block horizontal padding
+
+**Borders:**
+- `--srt-border-radius-md` / `--ck-border-radius-md` - Default border radius
+- `--srt-border-width-blockquote` / `--ck-border-width-blockquote` - Blockquote border width
+
+See the CSS files for the complete list of available variables.
+
+### CKEditor-Specific Features
+
+The `ckeditor5.css` file includes styles for CKEditor-specific features:
+
+**Text Sizes:**
+```html
+<span class="text-tiny">Tiny text</span>
+<span class="text-small">Small text</span>
+<span class="text-big">Big text</span>
+<span class="text-huge">Huge text</span>
+```
+
+**Highlight Markers:**
+```html
+<mark class="marker-yellow">Yellow highlight</mark>
+<mark class="marker-green">Green highlight</mark>
+<mark class="marker-pink">Pink highlight</mark>
+<mark class="marker-blue">Blue highlight</mark>
+```
+
+**Image Alignment:**
+```html
+<figure class="image image-style-align-left">...</figure>
+<figure class="image image-style-align-center">...</figure>
+<figure class="image image-style-align-right">...</figure>
+```
+
+**To-Do Lists:**
+```html
+<ul class="todo-list">
+  <li><label class="todo-list__label"><input type="checkbox" checked><span>Done item</span></label></li>
+  <li><label class="todo-list__label"><input type="checkbox"><span>Pending item</span></label></li>
+</ul>
+```
+
+---
+
+## 8. Database Migrations
 
 Strapi includes **built-in migration support** using Knex.js. Migrations run automatically on startup, before Strapi's auto-sync.
 
@@ -479,7 +677,7 @@ module.exports = { up, down };
 
 ---
 
-## 8. Building Your Docker Image
+## 9. Building Your Docker Image
 
 ### Example Dockerfile
 
@@ -514,13 +712,22 @@ EXPOSE 1337
 CMD ["npm", "run", "start"]
 ```
 
-### Build and Push
+### Build and Push to Control Plane Registry
 
 ```bash
-# Build the image
-docker build -t ghcr.io/your-org/my-strapi:v1 .
+# Build and push in one command
+cpln image build --push --name my-strapi --tag v1 --org my-org
+```
 
-# Test locally (optional)
+The image will be available at: `/org/my-org/image/my-strapi:v1`
+
+### Test Locally (Optional)
+
+```bash
+# Build locally first
+docker build -t my-strapi:local .
+
+# Run with test environment
 docker run -p 1337:1337 \
   -e DATABASE_HOST=host.docker.internal \
   -e DATABASE_PORT=5432 \
@@ -532,10 +739,7 @@ docker run -p 1337:1337 \
   -e ADMIN_JWT_SECRET=secret1 \
   -e TRANSFER_TOKEN_SALT=salt2 \
   -e JWT_SECRET=secret2 \
-  ghcr.io/your-org/my-strapi:v1
-
-# Push to registry
-docker push ghcr.io/your-org/my-strapi:v1
+  my-strapi:local
 ```
 
 ### Generating Secrets
@@ -543,7 +747,7 @@ docker push ghcr.io/your-org/my-strapi:v1
 Use these commands to generate secure secrets:
 
 ```bash
-# Generate APP_KEYS (comma-separated, need at least 4)
+# Generate APP_KEYS (comma-separated, minimum 2 required)
 echo "$(openssl rand -base64 32),$(openssl rand -base64 32),$(openssl rand -base64 32),$(openssl rand -base64 32)"
 
 # Generate individual secrets
@@ -555,39 +759,108 @@ openssl rand -base64 32  # JWT_SECRET
 
 ---
 
-## 9. Container Registries
+## 10. Container Registries
 
-Your Docker image can be hosted on any container registry.
+### Control Plane Registry (Recommended)
 
-### Public Images (No Authentication)
+Control Plane has a built-in container registry. This is the simplest option - no pull secrets required.
 
-If your image is public, just specify the image URL:
+**Manual Build:**
+
+```bash
+cpln image build --push --name my-strapi --tag v1 --org my-org
+```
+
+**Configure values.yaml:**
 
 ```yaml
 strapi:
-  image: ghcr.io/your-org/your-strapi:latest
-  imagePullSecret: ""  # Leave empty
+  image: /org/my-org/image/my-strapi:v1
+  imagePullSecret: ""  # Not needed for Control Plane registry
 ```
-
-### Private Images
-
-For private images, you need to:
-1. Create a pull secret in Control Plane
-2. Reference it in your values.yaml
 
 ---
 
-### GitHub Container Registry (ghcr.io)
+### CI/CD with Control Plane Registry
 
-**Step 1: Create a Personal Access Token**
+For automated builds in CI/CD pipelines, use the `CPLN_TOKEN` secret and environment variables.
 
-1. Go to GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)
-2. Generate new token with `read:packages` scope
-3. Copy the token
+**GitHub Actions Example:**
 
-**Step 2: Create Pull Secret in Control Plane**
+```yaml
+name: Build and Deploy Strapi
+
+env:
+  CPLN_ORG: my-org
+  IMAGE_NAME: my-strapi
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Control Plane CLI
+        run: |
+          curl -sL https://github.com/controlplane-com/cli/releases/latest/download/cpln-linux-amd64 -o cpln
+          chmod +x cpln
+          sudo mv cpln /usr/local/bin/
+
+      - name: Build and push image
+        env:
+          CPLN_TOKEN: ${{ secrets.CPLN_TOKEN }}
+        run: |
+          cpln image build --push \
+            --name $IMAGE_NAME \
+            --tag ${GITHUB_SHA::7} \
+            --org $CPLN_ORG
+
+      - name: Deploy to Control Plane
+        env:
+          CPLN_TOKEN: ${{ secrets.CPLN_TOKEN }}
+        run: |
+          cpln helm upgrade my-cms strapi \
+            --org $CPLN_ORG \
+            --set strapi.image=/org/$CPLN_ORG/image/$IMAGE_NAME:${GITHUB_SHA::7} \
+            -f values.yaml
+```
+
+**GitLab CI Example:**
+
+```yaml
+variables:
+  CPLN_ORG: my-org
+  IMAGE_NAME: my-strapi
+
+build:
+  image: ubuntu:latest
+  script:
+    - curl -sL https://github.com/controlplane-com/cli/releases/latest/download/cpln-linux-amd64 -o cpln
+    - chmod +x cpln && mv cpln /usr/local/bin/
+    - export SHORT_SHA=$(echo $CI_COMMIT_SHA | cut -c1-7)
+    - cpln image build --push --name $IMAGE_NAME --tag $SHORT_SHA --org $CPLN_ORG
+  variables:
+    CPLN_TOKEN: $CPLN_TOKEN  # Set in GitLab CI/CD variables
+```
+
+**Environment Variables:**
+
+| Variable | Description |
+|----------|-------------|
+| `CPLN_TOKEN` | Service account token (store as secret) |
+| `CPLN_ORG` | Your Control Plane organization |
+| `IMAGE_NAME` | Name for your image (e.g., `my-strapi`) |
+
+---
+
+### Alternative: External Registries
+
+You can also use external container registries if preferred. For private registries, you'll need to create a pull secret.
+
+**GitHub Container Registry (ghcr.io):**
 
 ```bash
+# Create pull secret
 cpln secret create github-registry \
   --org your-org \
   --type docker \
@@ -596,75 +869,13 @@ cpln secret create github-registry \
   --docker-password YOUR_GITHUB_TOKEN
 ```
 
-**Step 3: Configure values.yaml**
-
 ```yaml
 strapi:
   image: ghcr.io/your-org/your-strapi:latest
   imagePullSecret: "github-registry"
 ```
 
----
-
-### GitLab Container Registry
-
-**Step 1: Create a Deploy Token**
-
-1. Go to GitLab → Project → Settings → Repository → Deploy tokens
-2. Create token with `read_registry` scope
-3. Copy username and token
-
-**Step 2: Create Pull Secret in Control Plane**
-
-```bash
-cpln secret create gitlab-registry \
-  --org your-org \
-  --type docker \
-  --docker-server registry.gitlab.com \
-  --docker-username YOUR_DEPLOY_TOKEN_USERNAME \
-  --docker-password YOUR_DEPLOY_TOKEN
-```
-
-**Step 3: Configure values.yaml**
-
-```yaml
-strapi:
-  image: registry.gitlab.com/your-group/your-project:latest
-  imagePullSecret: "gitlab-registry"
-```
-
----
-
-### Bitbucket Container Registry
-
-**Step 1: Create an App Password**
-
-1. Go to Bitbucket → Personal settings → App passwords
-2. Create password with `repository:read` permission
-3. Copy the password
-
-**Step 2: Create Pull Secret in Control Plane**
-
-```bash
-cpln secret create bitbucket-registry \
-  --org your-org \
-  --type docker \
-  --docker-server docker.io \
-  --docker-username YOUR_BITBUCKET_USERNAME \
-  --docker-password YOUR_APP_PASSWORD
-```
-
----
-
-### Docker Hub
-
-**Step 1: Create an Access Token**
-
-1. Go to Docker Hub → Account Settings → Security → Access Tokens
-2. Create new token with `Read-only` permission
-3. Copy the token
-
-**Step 2: Create Pull Secret in Control Plane**
+**Docker Hub:**
 
 ```bash
 cpln secret create dockerhub-registry \
@@ -675,49 +886,45 @@ cpln secret create dockerhub-registry \
   --docker-password YOUR_ACCESS_TOKEN
 ```
 
-**Step 3: Configure values.yaml**
-
 ```yaml
 strapi:
-  image: your-dockerhub-username/your-strapi:latest
+  image: your-username/your-strapi:latest
   imagePullSecret: "dockerhub-registry"
 ```
 
----
-
-### Image URL Formats Reference
+**Image URL Formats:**
 
 | Registry | URL Format |
 |----------|------------|
+| Control Plane | `/org/ORG_NAME/image/IMAGE:TAG` |
 | GitHub | `ghcr.io/owner/image:tag` |
 | GitLab | `registry.gitlab.com/group/project:tag` |
-| Docker Hub | `username/image:tag` or `docker.io/username/image:tag` |
+| Docker Hub | `username/image:tag` |
 | AWS ECR | `123456789.dkr.ecr.region.amazonaws.com/image:tag` |
-| Google GCR | `gcr.io/project-id/image:tag` |
-| Azure ACR | `myregistry.azurecr.io/image:tag` |
 
 ---
 
-## 10. Deploying to Control Plane
+## 11. Deploying to Control Plane
 
-### Step 1: Create PostgreSQL Database
+### Step 1: Set Up PostgreSQL Database
 
-First, deploy a PostgreSQL database using the `postgres` template:
+Strapi requires a PostgreSQL database. You can use any of these options:
 
-```bash
-cpln helm install my-db postgres \
-  --set global.cpln.gvc=my-gvc \
-  --set postgres.config.username=strapi \
-  --set postgres.config.password=secure-password \
-  --set postgres.config.database=strapi
-```
+- **Control Plane postgres template** - Deploy using `cpln helm install my-db postgres`
+- **Cloud-hosted PostgreSQL** - AWS RDS, Google Cloud SQL, Azure Database, etc.
+- **Self-managed PostgreSQL** - Any accessible PostgreSQL instance
+
+Whatever option you choose, you'll need:
+- Database hostname (e.g., `my-db-postgres.my-gvc.cpln.local` for Control Plane)
+- Database name, username, and password
+- Port (default: 5432)
 
 ### Step 2: Deploy Strapi
 
 ```bash
 cpln helm install my-cms strapi \
   --set global.cpln.gvc=my-gvc \
-  --set strapi.image=ghcr.io/your-org/my-strapi:v1 \
+  --set strapi.image=/org/my-org/image/my-strapi:v1 \
   --set strapi.database.host=my-db-postgres.my-gvc.cpln.local \
   --set strapi.database.name=strapi \
   --set strapi.database.username=strapi \
@@ -739,8 +946,8 @@ global:
     gvc: my-gvc
 
 strapi:
-  image: ghcr.io/your-org/my-strapi:v1
-  imagePullSecret: github-registry  # if private
+  image: /org/my-org/image/my-strapi:v1
+  imagePullSecret: ""  # Not needed for Control Plane registry
 
   database:
     host: my-db-postgres.my-gvc.cpln.local
@@ -788,7 +995,7 @@ https://my-cms-strapi.my-gvc.cpln.app/admin
 
 ---
 
-## 11. Production Considerations
+## 12. Production Considerations
 
 ### Security Checklist
 
@@ -823,7 +1030,7 @@ Strapi logs to stdout/stderr. Control Plane captures these automatically.
 
 ---
 
-## 12. Troubleshooting
+## 13. Troubleshooting
 
 ### Container Fails to Start
 
@@ -878,7 +1085,9 @@ cpln workload logs my-cms-strapi --gvc my-gvc
 
 ## Resources
 
+- [EXTRAS.md](./EXTRAS.md) - Automated deployments, webhooks, and advanced integrations
 - [Strapi Documentation](https://docs.strapi.io/)
+- [Strapi Marketplace](https://market.strapi.io/) - Plugins and integrations
 - [Strapi GitHub](https://github.com/strapi/strapi)
 - [Control Plane Documentation](https://docs.controlplane.com/)
 - [Knex.js Documentation](https://knexjs.org/) (for migrations)

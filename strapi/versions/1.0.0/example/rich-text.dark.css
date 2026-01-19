@@ -1,0 +1,85 @@
+/**
+ * Strapi Rich Text CSS - Dark Theme
+ *
+ * Dark mode variable overrides for rich-text.css
+ * Include this file AFTER rich-text.css
+ *
+ * Usage:
+ *   <!-- Always dark -->
+ *   <link rel="stylesheet" href="rich-text.css">
+ *   <link rel="stylesheet" href="rich-text.dark.css">
+ *
+ *   <!-- Respect system preference -->
+ *   <link rel="stylesheet" href="rich-text.css">
+ *   <link rel="stylesheet" href="rich-text.dark.css" media="(prefers-color-scheme: dark)">
+ *
+ *   <!-- Toggle with class -->
+ *   <link rel="stylesheet" href="rich-text.css">
+ *   <style>
+ *     .dark { ... copy variables from this file ... }
+ *   </style>
+ */
+
+:root {
+  /* -------------------------------------------------------------------------
+     Colors - Text
+     ------------------------------------------------------------------------- */
+  --srt-color-text-primary: #e5e7eb;
+  --srt-color-text-heading: #f9fafb;
+  --srt-color-text-muted: #9ca3af;
+  --srt-color-text-secondary: #9ca3af;
+
+  /* -------------------------------------------------------------------------
+     Colors - Links
+     ------------------------------------------------------------------------- */
+  --srt-color-link: #60a5fa;
+  --srt-color-link-hover: #93c5fd;
+  --srt-color-link-visited: #a78bfa;
+  --srt-color-link-focus: #60a5fa;
+
+  /* -------------------------------------------------------------------------
+     Colors - Backgrounds
+     ------------------------------------------------------------------------- */
+  --srt-color-bg-base: transparent;
+  --srt-color-bg-subtle: #1f2937;
+  --srt-color-bg-muted: #374151;
+  --srt-color-bg-code-inline: #374151;
+  --srt-color-bg-code-block: #111827;
+  --srt-color-bg-blockquote: #1f2937;
+  --srt-color-bg-mark: #854d0e;
+  --srt-color-bg-table-head: #1f2937;
+  --srt-color-bg-table-hover: #1f2937;
+  --srt-color-bg-kbd: #374151;
+  --srt-color-bg-details: #1f2937;
+  --srt-color-bg-address: #1f2937;
+
+  /* -------------------------------------------------------------------------
+     Colors - Borders
+     ------------------------------------------------------------------------- */
+  --srt-color-border-default: #4b5563;
+  --srt-color-border-muted: #374151;
+  --srt-color-border-strong: #6b7280;
+  --srt-color-border-blockquote: #4b5563;
+  --srt-color-border-table: #374151;
+  --srt-color-border-table-head: #4b5563;
+  --srt-color-border-kbd: #4b5563;
+  --srt-color-border-details: #374151;
+
+  /* -------------------------------------------------------------------------
+     Colors - Code
+     ------------------------------------------------------------------------- */
+  --srt-color-code-inline: #fca5a5;
+  --srt-color-code-block: #e5e7eb;
+  --srt-color-code-label: #6b7280;
+
+  /* -------------------------------------------------------------------------
+     Colors - Special
+     ------------------------------------------------------------------------- */
+  --srt-color-var: #c4b5fd;
+  --srt-color-mark-text: #fef08a;
+
+  /* -------------------------------------------------------------------------
+     Effects - Shadows
+     ------------------------------------------------------------------------- */
+  --srt-shadow-kbd: 0 1px 0 var(--srt-color-border-kbd);
+}

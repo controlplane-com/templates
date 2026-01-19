@@ -1,0 +1,25 @@
+{{- include "pg.validateBackupConfig" . -}}
+kind: identity
+name: {{ .Release.Name }}-pg-identity
+description: Postgres identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "pg.tags" . | nindent 4 }}
+{{- if .Values.backup.aws.enabled }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.backup.aws.s3.cloudAccountName }}
+  policyRefs:
+    - cpln-connector
+    - aws::ReadOnlyAccess
+    - "{{ .Values.backup.aws.s3.policyName }}"
+{{- end }}
+{{- if .Values.backup.gcp.enabled }}
+gcp:
+  bindings:
+    - resource: //storage.googleapis.com/projects/_/buckets/{{ .Values.backup.gcp.gcs.bucket }}
+      roles:
+        - roles/storage.objectAdmin
+  cloudAccountLink: //cloudaccount/{{ .Values.backup.gcp.gcs.cloudAccountName }}
+  scopes:
+    - https://www.googleapis.com/auth/cloud-platform
+{{- end }}

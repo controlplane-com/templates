@@ -1,0 +1,20 @@
+{{- if and (hasKey .Values.sentinel "publicAccess") .Values.sentinel.publicAccess.enabled }}
+kind: domain
+name: {{ .Values.sentinel.publicAccess.address }}
+description: {{ .Values.sentinel.publicAccess.address }}
+spec:
+  acceptAllHosts: false
+  dnsMode: cname
+  {{- if gt (.Values.sentinel.replicas | int) 0 }}
+  ports:
+    {{- range $i := until (int .Values.sentinel.replicas) }}
+    - number: {{ add 26380 $i }}
+      protocol: tcp
+      routes:
+        - port: {{ add 26380 $i }}
+          prefix: /
+          replica: {{ $i }}
+          workloadLink: //gvc/{{ $.Values.global.cpln.gvc }}/workload/{{ $.Release.Name }}-sentinel
+    {{- end }}
+  {{- end }}
+{{- end }}

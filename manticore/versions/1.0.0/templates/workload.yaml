@@ -237,7 +237,7 @@ spec:
         - "*.amazonaws.com"
     internal:
       inboundAllowType: none
-  identityLink: /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.orchestratorIdentityName" . }}
+  identityLink: /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.orchestratorJobIdentityName" . }}
   job:
     schedule: {{ .Values.orchestrator.schedule | quote }}
     concurrencyPolicy: Forbid
@@ -296,6 +296,18 @@ spec:
           value: "{{ .Values.orchestrator.api.importPollInterval | default "30s" }}"
         - name: IMPORT_POLL_TIMEOUT
           value: "{{ .Values.orchestrator.api.importPollTimeout | default "2h" }}"
+        {{- if .Values.orchestrator.backup.enabled }}
+        - name: BACKUP_SCHEDULES
+          value: '{{ .Values.orchestrator.backup.schedules | toJson }}'
+        - name: BACKUP_BUCKET
+          value: {{ .Values.orchestrator.backup.s3Bucket }}
+        - name: BACKUP_PREFIX
+          value: {{ .Values.orchestrator.backup.prefix }}
+        - name: BACKUP_PROVIDER
+          value: aws
+        - name: BACKUP_REGION
+          value: {{ .Values.orchestrator.backup.s3Region }}
+        {{- end }}
   defaultOptions:
     autoscaling:
       maxScale: {{ .Values.orchestrator.api.autoscaling.maxScale }}
@@ -364,12 +376,94 @@ spec:
       inboundAllowType: same-gvc
   identityLink: /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.orchestratorIdentityName" . }}
   supportDynamicTags: false
-{{- if .Values.loadTest.enabled }}
+
+{{- if .Values.orchestrator.backup.enabled }}
 ---
+# =============================================================================
+# Backup Workload (Cron)
+# =============================================================================
+# Cron job for logical backups on delta table to S3 bucket
+kind: workload
+name: {{ include "manticore.backupName" . }}
+description: manticore backup
+tags: {{- include "manticore.tags" . | nindent 4 }}
+spec:
+  type: cron
+  containers:
+    - name: backup
+      cpu: {{ .Values.orchestrator.backup.resources.cpu | quote }}
+      env:
+        - name: ACTION
+          value: backup
+        - name: TYPE
+          value: delta
+        - name: BACKUP_BUCKET
+          value: {{ .Values.orchestrator.backup.s3Bucket }}
+        - name: BACKUP_PREFIX
+          value: {{ .Values.orchestrator.backup.prefix }}
+        - name: BACKUP_PROVIDER
+          value: aws
+        - name: BACKUP_REGION
+          value: {{ .Values.buckets.awsRegion }}
+        - name: DATASET
+          value: {{ .Values.orchestrator.backup.dataSet }}
+        - name: MANTICORE_HOST
+          value: "{{ include "manticore.name" . }}"
+        - name: MANTICORE_PORT
+          value: "9306"
+        - name: AUTH_TOKEN
+          value: "cpln://secret/{{ include "manticore.secretAgentTokenName" . }}.payload"
+      image: {{ .Values.orchestrator.backup.image }}:{{ .Values.orchestrator.backup.version }}
+      inheritEnv: false
+      memory: {{ .Values.orchestrator.backup.resources.memory | quote }}
+      ports:
+        - number: 8080
+          protocol: http
+      volumes:
+        - path: /mnt/shared
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "manticore.sharedVolumeName" . }}
+  defaultOptions:
+    autoscaling:
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: false
+    suspend: true
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname:
+        - s3.{{ .Values.orchestrator.backup.s3Region }}.amazonaws.com
+        - s3.amazonaws.com
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+      inboundAllowWorkload: []
+  identityLink: //gvc/aws-us-east-2/identity/{{ include "manticore.backupIdentityName" . }}
+  job:
+    concurrencyPolicy: Forbid
+    historyLimit: 5
+    restartPolicy: Never
+    schedule: '0 2 * * *'
+    activeDeadlineSeconds: {{ .Values.orchestrator.backup.activeDeadlineSeconds }}
+  localOptions: []
+  supportDynamicTags: false
+{{- end }}
+
 # =============================================================================
 # K6 Load Test Workload (Standard)
 # =============================================================================
 # Runs k6 load tests (starts at scale 0, scaled up by controller)
+{{- if .Values.loadTest.enabled }}
+---
 kind: workload
 name: {{ include "manticore.loadTestName" . }}
 description: K6 load test runner for Manticore search

@@ -1,101 +1,22 @@
 # Manticore Search Cluster
 
-Deploys a distributed Manticore Search cluster on Control Plane with:
-- **Stateful replicas** with automatic Galera-based clustering and replication
-- **Dual-slot import system** (main_a/main_b) for zero-downtime data updates
-- **Intelligent cluster orchestration** with automatic initialization, recovery, and repair
-- **Multi-table support** with independent schemas and import configurations
-- **Web UI** for cluster monitoring and management
-- **Load testing** with k6 for performance validation
+Deploys a distributed Manticore Search cluster on Control Plane with automatic Galera-based replication, zero-downtime data imports, multi-table support, backup/restore, and a web UI for cluster management.
 
 ## Architecture
 
-### Components
+The template deploys several components that work together:
 
-| Component | Type | Description |
-|-----------|------|-------------|
-| **Manticore Workload** | Stateful | Clustered Manticore searchd instances with agent sidecar |
-| **Agent** | Sidecar | Per-replica HTTP API for local operations (init, import, health, repair) |
-| **Orchestrator API** | Standard | Continuous REST API for cluster-wide coordination |
-| **Orchestrator** | Cron | On-demand job execution (imports, maintenance) |
-| **UI** | Standard | Web dashboard for cluster monitoring and management |
+- **Manticore Workload** - Stateful replicas running Manticore searchd, each with a sidecar agent for local operations
+- **Orchestrator API** - REST API that coordinates cluster-wide operations (initialization, imports, repairs, backups)
+- **Orchestrator Job** - Cron workload for on-demand job execution
+- **UI** - Web dashboard for monitoring and managing the cluster
 
-### How It Works
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              Orchestrator API                               │
-│    (cluster-wide coordination, init decisions, import scheduling)           │
-└─────────────────────────────────────┬───────────────────────────────────────┘
-                                      │
-          ┌───────────────────────────┼───────────────────────────┐
-          │                           │                           │
-          ▼                           ▼                           ▼
-┌─────────────────────┐   ┌─────────────────────┐   ┌─────────────────────┐
-│  Replica-0          │   │  Replica-1          │   │  Replica-N          │
-│ ┌─────────────────┐ │   │ ┌─────────────────┐ │   │ ┌─────────────────┐ │
-│ │  Agent (8080)   │ │   │ │  Agent (8080)   │ │   │ │  Agent (8080)   │ │
-│ └────────┬────────┘ │   │ └────────┬────────┘ │   │ └────────┬────────┘ │
-│          │          │   │          │          │   │          │          │
-│ ┌────────▼────────┐ │   │ ┌────────▼────────┐ │   │ ┌────────▼────────┐ │
-│ │ Manticore (9306)│ │   │ │ Manticore (9306)│ │   │ │ Manticore (9306)│ │
-│ └─────────────────┘ │   │ └─────────────────┘ │   │ └─────────────────┘ │
-│         │           │   │         │           │   │         │           │
-│    ┌────▼────┐      │   │    ┌────▼────┐      │   │    ┌────▼────┐      │
-│    │Volumeset│      │   │    │Volumeset│      │   │    │Volumeset│      │
-│    └─────────┘      │   │    └─────────┘      │   │    └─────────┘      │
-└─────────────────────┘   └─────────────────────┘   └─────────────────────┘
-          ▲                         ▲                         ▲
-          └─────────────────────────┴─────────────────────────┘
-                        Galera Cluster Replication
-```
-
-### Table Structure (Per Dataset)
-
-Each table configured in `values.yaml` creates:
-
-| Table | Type | Replicated | Purpose |
-|-------|------|------------|---------|
-| `{name}_main_a` | Plain | Optional* | Primary data slot (indexed from CSV) |
-| `{name}_main_b` | Plain | Optional* | Secondary data slot (for zero-downtime swap) |
-| `{name}_delta` | RT | Yes | Real-time updates between imports |
-| `{name}` | Distributed | No | Query aggregator across main + delta |
-
-*Main table replication controlled by `config.clusterMain` per table.
-
-### Dual-Slot Import System
-
-The orchestrator uses an A/B slot system for zero-downtime imports:
-
-1. **Identify inactive slot**: If `main_a` is active, target `main_b` (or vice versa)
-2. **Import to inactive**: Build new index in the inactive slot
-3. **Atomic swap**: Update `{name}` to point to the new slot
-4. **Cleanup**: Drop old slot data (optional)
-
-This ensures queries are never interrupted during imports.
-
-## Cluster Initialization
-
-When replicas start, the agent calls the orchestrator API's `/api/init` endpoint. The orchestrator evaluates cluster state and returns one of:
-
-| Action | Condition | What Happens |
-|--------|-----------|--------------|
-| **bootstrap** | No existing cluster, replica-0 | Creates new cluster |
-| **join** | Cluster exists, new replica | Joins existing cluster |
-| **rejoin** | Cluster exists, known replica | Rejoins with existing UUID |
-| **continue** | Already in cluster | No action needed |
-
-The orchestrator uses `grastate.dat` files (Galera state) to make safe decisions about cluster topology, preventing split-brain scenarios.
+The orchestrator handles cluster initialization, coordinates imports across all replicas using a dual-slot (A/B) system for zero-downtime swaps, and provides automatic repair for split-brain scenarios. All replicas stay in sync via Galera cluster replication.
 
 ## Prerequisites
 
-### 1. S3 Bucket
-
-Create an S3 bucket to store your CSV source files.
-
-### 2. Control Plane Cloud Account
-
-Follow the [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account) guide to establish trust between Control Plane and your AWS account.
+1. **S3 Bucket** - Create an S3 bucket to store your CSV source files
+2. **Control Plane Cloud Account** - Follow the [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account) guide to establish trust between Control Plane and your AWS account
 
 ## Installation
 
@@ -111,13 +32,13 @@ Follow the [Create a Cloud Account](https://docs.controlplane.com/guides/create-
 2. **Define your tables**:
    ```yaml
    tables:
-     - name: products # table name
+     - name: products
        csvPath: imports/products/data.csv
        config:
-         haStrategy: noerrors      # HA strategy for distributed table
-         agentRetryCount: 3        # Retries for agent connections
-         clusterMain: false        # Whether to replicate main tables
-         importMethod: indexer     # indexer or sql
+         haStrategy: noerrors
+         agentRetryCount: 3
+         clusterMain: false
+         importMethod: indexer  # indexer or sql
        schema:
          columns:
            - name: title
@@ -130,34 +51,19 @@ Follow the [Create a Cloud Account](https://docs.controlplane.com/guides/create-
    ```bash
    openssl rand -base64 32
    ```
-   Set this in `orchestrator.agent.token`. This bearer token secures communication between all orchestrator components (see [Authentication](#authentication) below).
+   Set this in `orchestrator.agent.token`. This bearer token secures all internal API communication between components.
 
-**Note:** After installation, Manticore will show as healthy and the cluster will be initialized, but tables will be empty until you run an import job. See [Operations](#operations) below to trigger your first import either manually or via schedule.
+**Note:** After installation, the cluster will be initialized but tables will be empty until you run an import. See [Operations](#operations) below.
 
 ## Authentication
 
-All internal API communication is secured with a shared bearer token configured in `orchestrator.agent.token`. This token authenticates:
+All internal communication is secured with the bearer token set in `orchestrator.agent.token`. This token is shared across the orchestrator, agents, and UI.
 
-| Communication Path | Purpose |
-|--------------------|---------|
-| Orchestrator API → Agent | Coordinated imports, health checks |
-| Agent → Orchestrator API | Cluster init requests at startup |
-| UI → Orchestrator API | Dashboard operations (import, repair) |
-
-**Token requirements:**
-- Must be set before deployment (required field)
+- Must be set before deployment
 - Should be cryptographically random (use `openssl rand -base64 32`)
-- Rotating the token requires redeploying all components simultaneously
+- Rotating requires redeploying all components
 
-**How it's used:**
-- Stored in the `{release-name}-manticore-agent-token` secret
-- Injected into workloads via `cpln://secret/{release-name}-manticore-agent-token.payload`
-- Passed in the `Authorization: Bearer {token}` header for API requests
-
-**Security note:** The UI automatically injects this token when communicating with the Orchestrator API. This means anyone with network access to the UI can perform administrative operations (imports, repairs, etc.). Control access to the UI by:
-- Setting `orchestrator.ui.allowExternalAccess: false` to restrict to internal GVC access only
-- Using a domain with authentication if external access is required
-- Limiting network access via firewall rules
+**Security note:** The UI injects this token automatically, so anyone with network access to the UI can perform admin operations. Restrict access by setting `orchestrator.ui.allowExternalAccess: false` or using a domain with authentication.
 
 ## Configuration Reference
 
@@ -177,13 +83,13 @@ Each entry in `tables[]` supports:
 
 | Field | Description |
 |-------|-------------|
-| `name` | Table name (used for `{name}_main_a`, etc.) |
+| `name` | Table name |
 | `csvPath` | Path to CSV in S3 bucket |
 | `config.haStrategy` | HA strategy: `noerrors`, `nodeads`, etc. |
 | `config.agentRetryCount` | Retry count for distributed queries |
 | `config.clusterMain` | Replicate main tables across cluster |
 | `config.importMethod` | Import method: `indexer` or `sql` |
-| `schema.columns` | Column definitions for csv-to-manticore |
+| `schema.columns` | Column definitions (see column types below) |
 
 ### Column Types
 
@@ -213,124 +119,30 @@ Each entry in `tables[]` supports:
 | `orchestrator.suspend` | Start suspended | `true` |
 | `orchestrator.agent.token` | Bearer token for auth | **required** |
 
-## API Endpoints
-
-All API endpoints (except health/ready probes) require authentication via the bearer token configured in `orchestrator.agent.token`:
-
-```
-Authorization: Bearer {token}
-```
-
-### Orchestrator API (`/api/...`)
-
-| Endpoint | Method | Auth | Description |
-|----------|--------|------|-------------|
-| `/api/status` | GET | No | Health check (used by readiness probe) |
-| `/api/init` | POST | Yes | Initialize/bootstrap cluster |
-| `/api/import` | POST | Yes | Trigger coordinated import |
-| `/api/repair` | POST | Yes | Repair cluster state |
-| `/api/cluster` | GET | Yes | Cluster topology info |
-| `/api/tables/status` | GET | Yes | Table status across replicas |
-
-### Agent API (per-replica, port 8080)
-
-| Endpoint | Method | Auth | Description |
-|----------|--------|------|-------------|
-| `/api/health` | GET | No | Replica health |
-| `/api/ready` | GET | No | Readiness probe |
-| `/api/tables` | GET | Yes | Local table list |
-| `/api/cluster/status` | GET | Yes | Local cluster status |
-| `/api/import/{table}` | POST | Yes | Import specific table |
-
 ## Operations
 
-### Triggering Operations
+Operations can be triggered via the **Orchestrator UI** or the **Control Plane CLI/API**.
 
-Operations can be triggered via the **Orchestrator UI** or the **Control Plane API**.
+### Via Orchestrator UI
 
-#### Via Orchestrator UI
+The web dashboard provides controls for:
+- **Import** - Select a table and trigger a coordinated import
+- **Repair** - Recover the cluster from split-brain scenarios
+- **Monitoring** - View cluster health, replica status, and table details
 
-The web dashboard provides buttons for common operations:
-- **Import**: Select a table and click "Start Import" to trigger a coordinated import
-- **Repair**: Click "Repair Cluster" from the Dashboard to recover from split-brain
-- **Health Check**: View real-time cluster and replica status
+### Via Control Plane
 
-#### Via Control Plane API
+Run the orchestrator cron workload to execute operations:
 
-Operations are executed by running the orchestrator cron workload with the `runCronWorkload` command. The `ACTION` environment variable determines what operation runs.
-
-**Trigger an import:**
 ```bash
-# Run orchestrator cron with ACTION=import (configured in values.yaml)
+# Trigger an import
+cpln workload run-cron {release-name}-orchestrator-job --gvc {gvc-name}
+
+# Trigger a repair (set ACTION=repair on the workload first)
 cpln workload run-cron {release-name}-orchestrator-job --gvc {gvc-name}
 ```
 
-**Important:** If you plan to scale Manticore replicas, run imports with the maximum number of replicas active. This ensures all replicas have the imported data when new replicas are added during autoscaling. The orchestrator coordinates imports across all active replicas, so scaling up after an import may leave new replicas without the main table data.
-
-**Trigger a repair:**
-First update the orchestrator workload's `ACTION` env var to `repair`, then:
-```bash
-cpln workload run-cron {release-name}-orchestrator-job --gvc {gvc-name}
-```
-
-Or use the REST API directly:
-```bash
-curl -X POST "https://api.cpln.io/org/{org}/gvc/{gvc}/workload/{release-name}-orchestrator-job/-runCronWorkload" \
-  -H "Authorization: Bearer $AUTH_TOKEN"
-```
-
-### Cluster Repair
-
-If replicas lose sync (split-brain, network partition):
-
-1. **Via UI**: Navigate to Dashboard and click "Repair Cluster"
-2. **Via Control Plane**: Run the orchestrator cron with `ACTION=repair`
-
-The repair process:
-1. Identifies all replica states via grastate.dat
-2. Selects the best source replica (highest seqno, safe_to_bootstrap)
-3. Rebuilds cluster from the source
-
-### Monitoring
-
-**Via Orchestrator UI**:
-- **Dashboard**: Cluster health, replica status, split-brain detection
-- **Tables**: Per-table status, row counts, slot info across replicas
-- **Imports**: Import history and progress
-
-**Via MySQL** (connect to any replica on port 9306):
-```sql
--- Cluster status
-SHOW STATUS LIKE 'cluster%';
-
--- Table list
-SHOW TABLES;
-
--- Check specific table
-SELECT * FROM products LIMIT 10;
-```
-
-## Troubleshooting
-
-### Replica Not Joining Cluster
-
-1. Check agent logs for init action response
-2. Verify firewall allows `same-gvc` internal access
-3. Review the "Dashboard" page in the UI to check for a split brain scenario. Run a repair operation from the dashbaord if necessary.
-
-### Import Failures
-
-1. Verify CSV exists at configured path in S3
-2. Check agent logs for import errors
-3. Verify schema columns match CSV structure
-4. Check available memory (imports require memory for indexing)
-
-### Split-Brain Recovery
-
-1. Open the Orchestrator UI Dashboard to view cluster state
-2. Click "Repair Cluster" or run the orchestrator cron with `ACTION=repair` via Control Plane
-3. Monitor the orchestrator logs for source replica selection
-4. Verify all replicas rejoin with same cluster UUID in the UI
+**Important:** Run imports with the maximum number of replicas active. Scaling up after an import may leave new replicas without main table data.
 
 ## Load Testing
 
@@ -348,9 +160,69 @@ loadTest:
         "*": "test"
 ```
 
-**Trigger load tests:**
-- **Via Control Plane**: Run the load-test-controller cron workload:
-  ```bash
-  cpln workload run-cron {release-name}-load-test-controller --gvc {gvc-name}
-  ```
-- **On a schedule**: Set `loadTest.controller.schedule` to a cron expression (e.g., `"0 2 * * *"` for daily at 2am)
+Trigger via Control Plane:
+```bash
+cpln workload run-cron {release-name}-load-test-controller --gvc {gvc-name}
+```
+
+Or set `loadTest.controller.schedule` to run on a cron schedule.
+
+## Backup & Restore
+
+Backup and restore is available for both **delta** (real-time updates) and **main** (full indexed dataset) tables. Backups are stored as compressed archives in S3.
+
+### Prerequisites
+
+1. **S3 Bucket** for storing backups (can be shared with or separate from source data)
+2. **IAM Policy** with `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket` permissions on the bucket
+3. **Cloud Account** with the above policy attached
+
+### Configuration
+
+Enable backups in `values.yaml`:
+
+```yaml
+orchestrator:
+  backup:
+    enabled: true
+    cloudAccountName: my-backup-cloud-account
+    s3Bucket: my-backup-bucket
+    s3Policy:
+      - my-backup-policy
+    s3Region: us-east-1
+    prefix: manticore-backups
+    schedules: [                  # Automated backup schedules (optional)
+      {"table": "products", "type": "delta", "schedule": "0 2 * * *"},
+      {"table": "products", "type": "main", "schedule": "0 3 * * 0"}
+    ]
+```
+
+### Usage
+
+**Via Orchestrator UI:**
+- **Backup**: Select a type (delta/main) and click "Backup"
+- **Restore**: Select a type, choose a backup file from the list, and confirm
+- **Rotate Main**: After a main restore, swap the active slot
+
+**Via API:**
+```bash
+# Backup
+curl -X POST "https://{orchestrator-api-url}/api/backup" \
+  -H "Authorization: Bearer {token}" \
+  -H "Content-Type: application/json" \
+  -d '{"tableName": "products", "type": "delta"}'
+
+# List backups
+curl "https://{orchestrator-api-url}/api/backups/files?tableName=products" \
+  -H "Authorization: Bearer {token}"
+
+# Restore
+curl -X POST "https://{orchestrator-api-url}/api/restore" \
+  -H "Authorization: Bearer {token}" \
+  -H "Content-Type: application/json" \
+  -d '{"tableName": "products", "type": "delta", "filename": "products_delta-2024-01-28T22-50-49Z.tar.gz"}'
+```
+
+## Links
+- [Manticore Search Docs](https://manual.manticoresearch.com/)
+- [Orchestrator, Agent, UI and Backup source code](https://github.com/controlplane-com/manticore-orchestrator)

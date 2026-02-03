@@ -4,13 +4,29 @@
 # Manticore identity - S3 access via AWS Cloud Account
 kind: identity
 name: {{ include "manticore.identityName" . }}
-description: Manticore workload identity for S3 and secret access
+description: Manticore workload identity for secret access
 tags: {{- include "manticore.tags" . | nindent 4 }}
+
 ---
-# Orchestrator identity - secret access + CPLN API for cluster operations
+# Orchestrator identity - secret access + CPLN API for cluster operations + s3 access
 kind: identity
 name: {{ include "manticore.orchestratorIdentityName" . }}
-description: Orchestrator identity for secrets and CPLN API
+description: Orchestrator identity for secrets, CPLN API, and S3 access
+tags: {{- include "manticore.tags" . | nindent 4 }}
+{{- if .Values.orchestrator.backup.enabled }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.orchestrator.backup.cloudAccountName }}
+  policyRefs:
+    {{- range .Values.orchestrator.backup.s3Policy }}
+    - {{ . }}
+    {{- end }}
+{{- end }}
+
+---
+# Orchestrator job identity - secret access + S3 access for cron operations
+kind: identity
+name: {{ include "manticore.orchestratorJobIdentityName" . }}
+description: Orchestrator job identity for secrets and S3 access
 tags: {{- include "manticore.tags" . | nindent 4 }}
 aws:
   cloudAccountLink: //cloudaccount/{{ .Values.buckets.cloudAccountName }}
@@ -18,6 +34,22 @@ aws:
     {{- range .Values.buckets.awsPolicyRefs }}
     - {{ . }}
     {{- end }}
+
+{{- if .Values.orchestrator.backup.enabled }}
+---
+# Backup identity - S3 access for backups
+kind: identity
+name: {{ include "manticore.backupIdentityName" . }}
+description: Manticore backup identity for S3 access
+tags: {{- include "manticore.tags" . | nindent 4 }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.orchestrator.backup.cloudAccountName }}
+  policyRefs:
+    {{- range .Values.orchestrator.backup.s3Policy }}
+    - {{ . }}
+    {{- end }}
+{{- end }}
+
 {{- if .Values.loadTest.enabled }}
 ---
 # Load test identity - access to k6 script secret

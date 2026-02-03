@@ -87,83 +87,6 @@ tables:
           type: attr_string
 
 # =============================================================================
-# Orchestrator Configuration
-# =============================================================================
-orchestrator:
-  version: v1.2.0
-  image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-api
-  logLevel: debug                 # debug, info, warn, error
-  resources:
-    cpu: 1
-    memory: 2Gi
-
-  # Cron job settings
-  schedule: "0 * * * *"           # Cron schedule (default = every hour)
-  action: import                  # init, import, health, repair
-  tableName: addresses            # Must match a name in tables[]
-  suspend: true                   # Start suspended (trigger via UI/API)
-  timeoutSeconds: 900             # Container timeout (seconds, default 15 minutes)
-  importMemLimit: 2G              # Memory limit for import jobs
-  activeDeadlineSeconds: 14400    # Max job runtime (seconds, default 4 hours)
-
-  # Orchestrator API
-  api:
-    version: v1.2.0
-    image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-api
-    logLevel: debug
-    importPollInterval: 30s
-    importPollTimeout: 2h
-    resources:
-      cpu: 0.25
-      memory: 256Mi
-    autoscaling:
-      maxScale: 3
-      minScale: 2
-      metric: cpu
-      target: 80
-
-  # Agent sidecar
-  agent:
-    version: v1.2.0
-    image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-agent
-    # REQUIRED: Generate with `openssl rand -base64 32`
-    token: "6Gl5uO9KkKAh1u+ymoBW98WCtjTFpljuhpLdKb+tNAA="
-    resources:
-      cpu: 250m
-      minCpu: 100m
-      memory: 512Mi
-      minMemory: 128Mi
-    import:
-      batchSize: 20000            # Rows per INSERT statement
-    recovery:
-      maxRetries: 5               # Retry attempts for cluster recovery
-      initialBackoffSec: 5        # Initial delay between retries
-      maxBackoffSec: 60           # Max backoff delay (exponential)
-
-  # Web UI - See README.md "Authentication" section for security notes
-  ui:
-    version: v1.2.0
-    image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-ui
-    resources:
-      cpu: 0.25
-      memory: 0.25Gi
-    allowExternalAccess: true     # false = internal GVC access only
-    autoscaling:
-      maxScale: 2
-      minScale: 1
-      metric: cpu
-      target: 80
-
-# =============================================================================
-# Domain Configuration (Optional)
-# =============================================================================
-# Routes /api/* to orchestrator-api, everything else to UI.
-domain:
-  enabled: false
-  name: ""                        # FQDN, e.g., manticore.example.com
-  dnsMode: cname                  # cname (subdomains) or ns (zone delegation)
-
-# =============================================================================
 # Manticore Search Configuration
 # =============================================================================
 manticore:
@@ -199,10 +122,108 @@ manticore:
       workloads: []
 
 # =============================================================================
+# Orchestrator Configuration
+# =============================================================================
+orchestrator:
+  version: v3.0.0
+  image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-api
+  logLevel: debug                 # debug, info, warn, error
+  resources:
+    cpu: 1
+    memory: 2Gi
+
+  # Cron job settings
+  schedule: "0 * * * *"           # Cron schedule (default = every hour)
+  action: import                  # init, import, health, repair
+  tableName: addresses            # Must match a name in tables[]
+  suspend: true                   # Start suspended (trigger via UI/API)
+  timeoutSeconds: 900             # Container timeout (seconds, default 15 minutes)
+  importMemLimit: 2G              # Memory limit for import jobs
+  activeDeadlineSeconds: 14400    # Max job runtime (seconds, default 4 hours)
+
+  # Orchestrator API
+  api:
+    version: v3.0.0
+    image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-api
+    logLevel: debug
+    importPollInterval: 30s
+    importPollTimeout: 2h
+    resources:
+      cpu: 0.25
+      memory: 256Mi
+    autoscaling:
+      maxScale: 3
+      minScale: 2
+      metric: cpu
+      target: 80
+
+  # Agent sidecar
+  agent:
+    version: v3.0.0
+    image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-agent
+    # REQUIRED: Generate with `openssl rand -base64 32`
+    token: "6Gl5uO9KkKAh1u+ymoBW98WCtjTFpljuhpLdKb+tNAA="
+    resources:
+      cpu: 250m
+      minCpu: 100m
+      memory: 512Mi
+      minMemory: 128Mi
+    import:
+      batchSize: 20000            # Rows per INSERT statement
+    recovery:
+      maxRetries: 5               # Retry attempts for cluster recovery
+      initialBackoffSec: 5        # Initial delay between retries
+      maxBackoffSec: 60           # Max backoff delay (exponential)
+
+  # Web UI - See README.md "Authentication" section for security notes
+  ui:
+    version: v3.0.0
+    image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-ui
+    resources:
+      cpu: 0.25
+      memory: 0.25Gi
+    allowExternalAccess: true     # false = internal GVC access only
+    autoscaling:
+      maxScale: 2
+      minScale: 1
+      metric: cpu
+      target: 80
+
+  # Backup Configuration (Optional) - Cron job runs logical backup on delta table to S3 bucket.
+  backup:
+    enabled: false
+    version: v3.0.0
+    image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-backup
+    cloudAccountName: my-backup-cloud-account
+    s3Bucket: my-backup-bucket    # S3 bucket for backups
+    s3Policy:                     # IAM policies for S3 access
+      - my-backup-policy          # Custom policy created in S3 setup instructions
+    s3Region: us-east-1
+    dataSet: addresses_full       # Data set to back up (must be delta)
+    prefix: manticore-backups     # S3 prefix/folder for backups
+    schedules: [
+      {"table":"addresses","type":"delta","schedule":"0 2 * * *"},     # Daily at 2am UTC
+      {"table":"addresses","type":"main","schedule":"0 2 1 * *"}       # Monthly full backup on 1st at 2am UTC
+      ]
+    activeDeadlineSeconds: 14400  # Max job runtime (seconds, default 4 hours)
+    resources:
+      cpu: 1
+      memory: 1Gi
+
+# =============================================================================
+# Domain Configuration (Optional)
+# =============================================================================
+# Routes /api/* to orchestrator-api, everything else to UI.
+domain:
+  enabled: false
+  name: ""                        # FQDN, e.g., manticore.example.com
+  dnsMode: cname                  # cname (subdomains) or ns (zone delegation)
+
+# =============================================================================
 # Load Testing Configuration (Optional)
 # =============================================================================
 loadTest:
-  enabled: true
+  enabled: false
   image: grafana/k6:0.47.0
   resources:
     cpu: 0.5

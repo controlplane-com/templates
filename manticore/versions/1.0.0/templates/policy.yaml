@@ -12,6 +12,8 @@ bindings:
     principalLinks:
       - /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.identityName" . }}
       - /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.orchestratorIdentityName" . }}
+      - /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.orchestratorJobIdentityName" . }}
+      - /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.backupIdentityName" . }}
 targetKind: secret
 targetLinks:
   - //secret/{{ include "manticore.secretConfigName" . }}
@@ -40,6 +42,10 @@ bindings:
 targetKind: workload
 targetLinks:
   - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "manticore.orchestratorJobName" . }}
+  {{- if .Values.orchestrator.backup.enabled }}
+  - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "manticore.backupName" . }}
+  {{- end }}
+
 ---
 # Workload view policy - allows orchestrator to read Manticore workload config
 kind: policy
@@ -54,6 +60,7 @@ bindings:
 targetKind: workload
 targetLinks:
   - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "manticore.name" . }}
+
 {{- if .Values.loadTest.enabled }}
 ---
 # Load test script access

@@ -40,22 +40,23 @@ spec:
           echo "\nsentinel announce-port $PORT" >> /etc/sentinel/sentinel.conf
           {{ else }}
           echo "\nport 26379" >> /etc/sentinel/sentinel.conf
+          POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev)
           LOCATION=${CPLN_LOCATION##*/}
           CPLN_WORKLOAD_NAME="${CPLN_WORKLOAD##*/}"
-          replicaIndex=${HOSTNAME##*-}
           if [ -n "$REPLICA_DIRECT" ]; then
-            echo "\nsentinel announce-ip ${CPLN_WORKLOAD_NAME}.${CPLN_GVC_ALIAS}-${replicaIndex}.${LOCATION}.controlplane.us" >>  /etc/sentinel/sentinel.conf
+            echo "\nsentinel announce-ip replica-${POD_ID}.${CPLN_WORKLOAD_NAME}.${LOCATION}.${CPLN_GVC}.cpln.local" >> /etc/sentinel/sentinel.conf
           else
             echo "\nsentinel announce-ip ${HOSTNAME}.{{ .Release.Name }}-sentinel" >> /etc/sentinel/sentinel.conf
           fi
           echo "\nsentinel announce-port 26379" >> /etc/sentinel/sentinel.conf
           {{ end }}
-
           {{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
           echo "sentinel monitor mymaster {{ .Values.redis.publicAccess.address }} 6380 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
-          {{ else }}
+          {{- else if and (hasKey .Values.redis "replicaDirect") .Values.redis.replicaDirect }}
+          echo "sentinel monitor mymaster replica-${POD_ID}.${CPLN_WORKLOAD_NAME}.${LOCATION}.${CPLN_GVC}.cpln.local 6379 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
+          {{- else }}
           echo "sentinel monitor mymaster {{ .Release.Name }}-redis-0.{{ .Release.Name }}-redis 6379 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
-          {{ end }}
+          {{- end }}
 
           redis-sentinel /etc/sentinel/sentinel.conf
       command: /bin/sh
@@ -82,12 +83,12 @@ spec:
         - name: CUSTOM_SENTINEL_PASSWORD
           value: cpln://secret/{{ .Release.Name }}-sentinel-auth-password.password
       {{- end }}
-      {{- if .Values.sentinel.env }}
-{{ toYaml .Values.sentinel.env | indent 8 }}
-      {{- end }}
       {{- if and (hasKey .Values.sentinel "replicaDirect") .Values.sentinel.replicaDirect }}
         - name: REPLICA_DIRECT
           value: "true"
+      {{- end }}
+      {{- if .Values.sentinel.env }}
+{{ toYaml .Values.sentinel.env | indent 8 }}
       {{- end }}
       image: {{ .Values.sentinel.image }}
       readinessProbe:

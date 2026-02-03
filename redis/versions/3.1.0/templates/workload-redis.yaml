@@ -18,6 +18,10 @@ spec:
       {{- if .Values.redis.env }}
 {{ toYaml .Values.redis.env | indent 8 }}
       {{- end }}
+      {{- if and (hasKey .Values.redis "replicaDirect") .Values.redis.replicaDirect }}
+        - name: REPLICA_DIRECT
+          value: "true"
+      {{- end }}
       {{- if and (hasKey .Values.redis "auth") (hasKey .Values.redis.auth "fromSecret") .Values.redis.auth.fromSecret.enabled }}
         - name: CUSTOM_REDIS_PASSWORD
           value: cpln://secret/{{ .Values.redis.auth.fromSecret.name }}.{{ .Values.redis.auth.fromSecret.passwordKey }}
@@ -25,12 +29,8 @@ spec:
         - name: CUSTOM_REDIS_PASSWORD
           value: cpln://secret/{{ .Release.Name }}-redis-auth-password.password
       {{- end }}
-      {{- if not (or .Values.redis.env (and (hasKey .Values.redis "auth") (or (and (hasKey .Values.redis.auth "fromSecret") .Values.redis.auth.fromSecret.enabled) (and (hasKey .Values.redis.auth "password") .Values.redis.auth.password.enabled)))) }}
+      {{- if not (or .Values.redis.env .Values.redis.replicaDirect (and (hasKey .Values.redis "auth") (or (and (hasKey .Values.redis.auth "fromSecret") .Values.redis.auth.fromSecret.enabled) (and (hasKey .Values.redis.auth "password") .Values.redis.auth.password.enabled)))) }}
         []
-      {{- end }}
-      {{- if and (hasKey .Values.redis "replicaDirect") .Values.redis.replicaDirect }}
-        - name: REPLICA_DIRECT
-          value: "true"
       {{- end }}
       args:
         - '-c'
@@ -43,7 +43,6 @@ spec:
             echo "\nrequirepass $CUSTOM_REDIS_PASSWORD" >> /etc/redis/redis.conf
             echo "\nmasterauth $CUSTOM_REDIS_PASSWORD" >> /etc/redis/redis.conf
           fi
-
           {{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
           POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev)
           PORT=$((6380 + POD_ID))
@@ -52,11 +51,11 @@ spec:
           echo "\nreplica-announce-port $PORT" >> /etc/redis/redis.conf
           {{ else }}
           echo "\nport 6379" >> /etc/redis/redis.conf
+          POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev)
           LOCATION=${CPLN_LOCATION##*/}
           CPLN_WORKLOAD_NAME="${CPLN_WORKLOAD##*/}"
-          replicaIndex=${HOSTNAME##*-}
           if [ -n "$REPLICA_DIRECT" ]; then
-            echo "\nreplica-announce-ip ${CPLN_WORKLOAD_NAME}.${CPLN_GVC_ALIAS}-${replicaIndex}.${LOCATION}.controlplane.us" >> /etc/redis/redis.conf
+            echo "\nreplica-announce-ip replica-${POD_ID}.${CPLN_WORKLOAD_NAME}.${LOCATION}.${CPLN_GVC}.cpln.local" >> /etc/redis/redis.conf
           else
             echo "\nreplica-announce-ip ${HOSTNAME}.{{ .Release.Name }}-redis" >> /etc/redis/redis.conf
           fi
@@ -68,6 +67,8 @@ spec:
           else
             {{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
             {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof {{ .Values.redis.publicAccess.address }} 6380
+            {{- else if and (hasKey .Values.redis "replicaDirect") .Values.redis.replicaDirect }}
+            {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof replica-${POD_ID}.${CPLN_WORKLOAD_NAME}.${LOCATION}.${CPLN_GVC}.cpln.local 6379
             {{- else }}
             {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof {{ .Release.Name }}-redis-0.{{ .Release.Name }}-redis 6379
             {{- end }}

@@ -447,7 +447,7 @@ spec:
     internal:
       inboundAllowType: same-gvc
       inboundAllowWorkload: []
-  identityLink: //gvc/aws-us-east-2/identity/{{ include "manticore.backupIdentityName" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.backupIdentityName" . }}
   job:
     concurrencyPolicy: Forbid
     historyLimit: 5

@@ -1,0 +1,15 @@
+kind: policy
+name: {{ .Release.Name }}-redis
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ .Release.Name }}-redis
+targetKind: secret
+targetLinks:
+  - //secret/{{ .Release.Name }}-redis-config
+  {{- if and (hasKey .Values.redis "auth") (hasKey .Values.redis.auth "fromSecret") .Values.redis.auth.fromSecret.enabled }}
+  - //secret/{{ .Values.redis.auth.fromSecret.name }}
+  {{- else if and (hasKey .Values.redis "auth") (hasKey .Values.redis.auth "password") .Values.redis.auth.password.enabled }}
+  - //secret/{{ .Release.Name }}-redis-auth-password
+  {{- end }}

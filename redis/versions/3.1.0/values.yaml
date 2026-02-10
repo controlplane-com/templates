@@ -8,7 +8,7 @@ redis:
   replicas: 2
   timeoutSeconds: 15
   multiZone: false
-  replicaDirect: true # https://docs.controlplane.com/reference/workload/general#internal-endpoint-formatting
+  replicaDirect: false # https://docs.controlplane.com/reference/workload/general#internal-endpoint-formatting
   auth:
     fromSecret:
       enabled: false
@@ -61,9 +61,9 @@ sentinel:
     minMemory: 128Mi
   replicas: 3
   timeoutSeconds: 10
-  multiZone: true
-  replicaDirect: true # https://docs.controlplane.com/reference/workload/general#internal-endpoint-formatting
-  quorumAutoCalculation: false  # Set to false if you want to override quorum. Quorum is (replicas/2)+1
+  multiZone: false
+  replicaDirect: false # https://docs.controlplane.com/reference/workload/general#internal-endpoint-formatting
+  quorumAutoCalculation: true  # Set to false if you want to override quorum. Quorum is (replicas/2)+1
   quorumOverride: null  # Only used if quorumAutoCalculation is false
   auth:
     fromSecret:

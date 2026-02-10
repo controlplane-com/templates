@@ -1,0 +1,228 @@
+{{- if .Values.kafka_connectors }}
+{{- range .Values.kafka_connectors }}
+{{- include "kafka.validateImage" . -}}
+kind: policy
+name: {{ include "kafka.name" $ }}-connect-{{ .name }}
+description: {{ include "kafka.name" $ }}-connect-{{ .name }}
+tags: {}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ $.Values.global.cpln.gvc }}/identity/{{ include "kafka.name" $ }}-connect-{{ .name }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "kafka.name" $ }}-connect-{{ .name }}-props
+  - //secret/{{ include "kafka.name" $ }}-connect-{{ .name }}-init
+  - //secret/{{ include "kafka.name" $ }}-connect-{{ .name }}-download
+  {{- if and .extraVolumes (ne (len .extraVolumes) 0) }}
+  {{- range .extraVolumes }}
+  {{- if contains "/secret/" .uri }}
+  {{- $secretName := regexReplaceAll ".*//secret/([^.]+).*" .uri "${1}" }}
+  - //secret/{{ $secretName }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- /* Check for secrets in ssl_truststore configuration values */ -}}
+  {{- if hasKey . "ssl_truststore" }}
+  {{- range $key, $value := .ssl_truststore }}
+  {{- if and (kindIs "string" $value) (contains "//secret/" $value) }}
+  {{- $secretName := regexReplaceAll ".*//secret/([^.]+).*" $value "${1}" }}
+  - //secret/{{ $secretName }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- /* Check for secrets in env variables */ -}}
+  {{- if hasKey . "env" }}
+  {{- range .env }}
+  {{- if and (hasKey . "value") (contains "//secret/" .value) }}
+  {{- $secretName := regexReplaceAll ".*//secret/([^.]+).*" .value "${1}" }}
+  - //secret/{{ $secretName }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- /* Check for secrets in connector_properties */ -}}
+  {{- if hasKey . "connector_properties" }}
+  {{- range $key, $value := .connector_properties }}
+  {{- if and (kindIs "string" $value) (contains "//secret/" $value) }}
+  {{- $secretName := regexReplaceAll ".*//secret/([^.]+).*" $value "${1}" }}
+  - //secret/{{ $secretName }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+---
+kind: secret
+name: {{ include "kafka.name" $ }}-connect-{{ .name }}-download
+type: opaque
+data:
+  encoding: plain
+  payload: |
+    {{- include "kafka.connectors.download.script" (dict "plugins" .plugins "plugins_folder" .plugins_folder "verbose" .verbose) | nindent 4 }}
+---
+kind: secret
+name: {{ include "kafka.name" $ }}-connect-{{ .name }}-init
+type: opaque
+data:
+  encoding: plain
+  payload: |
+    {{- include "kafka.connectors.run.script" (dict "plugins" .plugins "plugins_folder" .plugins_folder "verbose" .verbose) | nindent 4 }}
+---
+kind: secret
+name: {{ include "kafka.name" $ }}-connect-{{ .name }}-props
+description: {{ include "kafka.name" $ }}-connect-{{ .name }}-props
+tags: {}
+type: opaque
+data:
+  encoding: plain
+  payload: |-
+    {{- if not (hasKey .connector_properties "bootstrap.servers") }}
+    bootstrap.servers={{ include "kafka.clientBootstrapAddress" $ }}
+    {{- end }}
+    {{- range $key, $value := .connector_properties }}
+    {{ $key }}={{ $value }}
+    {{- end }}
+---
+kind: identity
+name: {{ include "kafka.name" $ }}-connect-{{ .name }}
+description: {{ include "kafka.name" $ }}-connect-{{ .name }}
+gvc: {{ $.Values.global.cpln.gvc }}
+---
+kind: volumeset
+name: {{ include "kafka.name" $ }}-connect-{{ .name }}
+description: {{ include "kafka.name" $ }}-connect-{{ .name }}
+tags: {}
+spec:
+  fileSystemType: {{ dig "volumes" "fileSystemType" "ext4" . }}
+  initialCapacity: {{ dig "volumes" "initialCapacity" 10 . }}
+  performanceClass: {{ dig "volumes" "performanceClass" "general-purpose-ssd" . }}
+  {{- if and .volumes .volumes.customEncryption .volumes.customEncryption.enabled }}
+  customEncryption:
+    regions:
+      {{ .volumes.customEncryption.region }}:
+        keyId: '{{ .volumes.customEncryption.keyId }}'
+  {{- end }}
+  {{- if and .volumes .volumes.snapshots }}
+  snapshots:
+    createFinalSnapshot: {{ .volumes.snapshots.createFinalSnapshot | default true }}
+    retentionDuration: {{ .volumes.snapshots.retentionDuration | default "7d" }}
+    {{- if .volumes.snapshots.schedule }}
+    schedule: {{ .volumes.snapshots.schedule }}
+    {{- end }}
+  {{- else }}
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d
+  {{- end }}
+---
+kind: workload
+name: {{ include "kafka.name" $ }}-connect-{{ .name }}
+description: {{ include "kafka.name" $ }}-connect-{{ .name }}
+gvc: {{ $.Values.global.cpln.gvc }}
+tags:
+  {{- $hasTags := false }}
+  {{- if .deletionProtection }}
+  cpln/protected: true
+  {{- $hasTags = true }}
+  {{- end }}
+  {{- if not $hasTags }}
+  {}
+  {{- end }}
+spec:
+  type: stateful
+  containers:
+    - name: kafka-connect
+      {{- if and .env (ne (len .env) 0) }}
+      env:
+        {{- toYaml .env | nindent 8 }}
+      {{- end }}
+      args:
+        - '-c'
+        - sleep 60 && cp /opt/kafka/init.sh /opt/kafka/init-run.sh && chmod +x /opt/kafka/init-run.sh && /opt/kafka/init-run.sh
+      command: /bin/bash
+      cpu: {{ .cpu }}
+      {{- if .minCpu }}
+      minCpu: {{ .minCpu }}
+      {{- end }}
+      image: {{ .image }}
+      inheritEnv: false
+      memory: {{ .memory }}
+      {{- if .minMemory }}
+      minMemory: {{ .minMemory }}
+      {{- end }}
+      ports:
+        - number: 8083
+          protocol: http
+      volumes:
+        - path: /opt/kafka/plugins
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "kafka.name" $ }}-connect-{{ .name }}
+        - path: /opt/kafka/config/connect-distributed.properties
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "kafka.name" $ }}-connect-{{ .name }}-props
+        - path: /opt/kafka/init.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "kafka.name" $ }}-connect-{{ .name }}-init
+        {{- if .extraVolumes }}
+        {{- toYaml .extraVolumes | nindent 8 }}
+        {{- end }}
+    - name: plugins-downloader
+      args:
+        - '-c'
+        - cp /opt/kafka/download.sh /opt/kafka/download-run.sh && chmod +x /opt/kafka/download-run.sh && /opt/kafka/download-run.sh 
+      command: /bin/sh
+      cpu: 80m
+      image: busybox:musl
+      inheritEnv: false
+      memory: 120Mi
+      ports: []
+      volumes:
+        - path: /opt/kafka/plugins
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "kafka.name" $ }}-connect-{{ .name }}
+        - path: /opt/kafka/download.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "kafka.name" $ }}-connect-{{ .name }}-download
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .replicas }}
+      metric: cpu
+      minScale: {{ .replicas }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    {{- if .multiZone }}
+    multiZone:
+      enabled: true
+    {{- else }}
+    multiZone:
+      enabled: false
+    {{- end }}
+    suspend: false
+    timeoutSeconds: {{ .timeoutSeconds }}
+{{- if .firewall }}
+  firewallConfig:
+    {{- if or (hasKey .firewall "external_inboundAllowCIDR") (hasKey .firewall "external_outboundAllowCIDR") }}
+    external:
+      inboundAllowCIDR: {{- if .firewall.external_inboundAllowCIDR }}{{ .firewall.external_inboundAllowCIDR | splitList "," | toYaml | nindent 8 }}{{- else }} []{{- end }}
+      outboundAllowCIDR: {{- if .firewall.external_outboundAllowCIDR }}{{ .firewall.external_outboundAllowCIDR | splitList "," | toYaml | nindent 8 }}{{- else }} []{{- end }}
+    {{- end }}
+    {{- if hasKey .firewall "internal_inboundAllowType" }}
+    internal:
+      inboundAllowType: {{ default "none" .firewall.internal_inboundAllowType }}
+      {{- if hasKey .firewall "inboundAllowWorkload" }}
+      inboundAllowWorkload: {{ .firewall.inboundAllowWorkload | toYaml | nindent 8 }}
+      {{- end }}
+    {{- end }}
+{{- end }}
+  identityLink: //gvc/{{ $.Values.global.cpln.gvc }}/identity/{{ include "kafka.name" $ }}-connect-{{ .name }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+  securityOptions:
+    filesystemGroupId: 1001
+  supportDynamicTags: false
+{{- end }}
+{{- end }}

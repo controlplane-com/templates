@@ -1,3 +1,11 @@
+# Release Notes - Version 3.3.0
+
+## What's New
+
+- **Kafka Connect Dynamic Advertised Hostname**: Added automatic configuration of `rest.advertised.host.name` for distributed workers
+  - Enables proper worker-to-worker communication in multi-replica Kafka Connect deployments
+  - Dynamically sets hostname based on pod ID and workload name
+
 # Release Notes - Version 3.2.0
 
 ## What's New

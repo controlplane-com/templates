@@ -142,8 +142,11 @@ spec:
     timeoutSeconds: 5
   firewallConfig:
     external:
-      inboundAllowCIDR: []
-      outboundAllowHostname: []
+      inboundAllowCIDR: {{ if .Values.manticore.firewall.externalAccess.inboundCIDR }}{{ .Values.manticore.firewall.externalAccess.inboundCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundAllowHostname: {{ if .Values.manticore.firewall.outboundAccess.allowedHostnames }}{{ .Values.manticore.firewall.outboundAccess.allowedHostnames | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundAllowCIDR: {{ if .Values.manticore.firewall.outboundAccess.outboundAllowCIDR }}{{ .Values.manticore.firewall.outboundAccess.outboundAllowCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundAllowPort: {{ if .Values.manticore.firewall.outboundAccess.outboundAllowPort }}{{ .Values.manticore.firewall.outboundAccess.outboundAllowPort | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundBlockedCIDR: {{ if .Values.manticore.firewall.outboundAccess.outboundBlockedCIDR }}{{ .Values.manticore.firewall.outboundAccess.outboundBlockedCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
     internal:
       inboundAllowType: {{ .Values.manticore.firewall.internalAccess.type }}
       {{- if .Values.manticore.firewall.internalAccess.workloads }}
@@ -230,11 +233,11 @@ spec:
     timeoutSeconds: {{ .Values.orchestrator.timeoutSeconds }}
   firewallConfig:
     external:
-      inboundAllowCIDR: []
-      outboundAllowHostname:
-        - s3.{{ .Values.buckets.awsRegion }}.amazonaws.com
-        - s3.amazonaws.com
-        - "*.amazonaws.com"
+      inboundAllowCIDR: {{ if .Values.manticore.firewall.externalAccess.inboundCIDR }}{{ .Values.manticore.firewall.externalAccess.inboundCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundAllowHostname: {{ if .Values.manticore.firewall.outboundAccess.allowedHostnames }}{{ .Values.manticore.firewall.outboundAccess.allowedHostnames | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundAllowCIDR: {{ if .Values.manticore.firewall.outboundAccess.outboundAllowCIDR }}{{ .Values.manticore.firewall.outboundAccess.outboundAllowCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundAllowPort: {{ if .Values.manticore.firewall.outboundAccess.outboundAllowPort }}{{ .Values.manticore.firewall.outboundAccess.outboundAllowPort | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundBlockedCIDR: {{ if .Values.manticore.firewall.outboundAccess.outboundBlockedCIDR }}{{ .Values.manticore.firewall.outboundAccess.outboundBlockedCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
     internal:
       inboundAllowType: none
   identityLink: /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.orchestratorJobIdentityName" . }}
@@ -438,12 +441,10 @@ spec:
     external:
       inboundAllowCIDR: []
       inboundBlockedCIDR: []
-      outboundAllowCIDR: []
-      outboundAllowHostname:
-        - s3.{{ .Values.orchestrator.backup.s3Region }}.amazonaws.com
-        - s3.amazonaws.com
-      outboundAllowPort: []
-      outboundBlockedCIDR: []
+      outboundAllowCIDR: {{ if .Values.manticore.firewall.outboundAccess.outboundAllowCIDR }}{{ .Values.manticore.firewall.outboundAccess.outboundAllowCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundAllowHostname: {{ if .Values.manticore.firewall.outboundAccess.allowedHostnames }}{{ .Values.manticore.firewall.outboundAccess.allowedHostnames | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundAllowPort: {{ if .Values.manticore.firewall.outboundAccess.outboundAllowPort }}{{ .Values.manticore.firewall.outboundAccess.outboundAllowPort | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundBlockedCIDR: {{ if .Values.manticore.firewall.outboundAccess.outboundBlockedCIDR }}{{ .Values.manticore.firewall.outboundAccess.outboundBlockedCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
     internal:
       inboundAllowType: same-gvc
       inboundAllowWorkload: []

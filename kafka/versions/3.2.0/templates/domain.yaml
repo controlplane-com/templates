@@ -1,0 +1,64 @@
+{{- include "kafka.validateOnePublicAddress" . }}
+{{- include "kafka.validatedirectReplicaRoutingConfig" . }}
+{{- range $key, $listener := .Values.kafka.listeners }}
+{{- if and $listener.directReplicaRouting $listener.directReplicaRouting.enabled }}
+---
+kind: domain
+name: {{ $listener.directReplicaRouting.publicAddress }}
+description: {{ $listener.directReplicaRouting.publicAddress }}
+spec:
+  acceptAllHosts: false
+  acceptAllSubdomains: false
+  certChallengeType: dns01
+  dnsMode: cname
+  ports:
+    - number: {{ $listener.directReplicaRouting.containerPort }}
+      protocol: tcp
+      routes:
+        - port: {{ $listener.directReplicaRouting.containerPort }}
+          prefix: /
+          workloadLink: //gvc/{{ $.Values.global.cpln.gvc }}/workload/{{ include "kafka.clusterName" $ }}
+      tls:
+        cipherSuites:
+          - ECDHE-ECDSA-AES256-GCM-SHA384
+          - ECDHE-ECDSA-CHACHA20-POLY1305
+          - ECDHE-ECDSA-AES128-GCM-SHA256
+          - ECDHE-RSA-AES256-GCM-SHA384
+          - ECDHE-RSA-CHACHA20-POLY1305
+          - ECDHE-RSA-AES128-GCM-SHA256
+          - AES256-GCM-SHA384
+          - AES128-GCM-SHA256
+        minProtocolVersion: TLSV1_2
+  workloadLink: //gvc/{{ $.Values.global.cpln.gvc }}/workload/{{ include "kafka.clusterName" $ }}
+{{- else if $listener.publicAddress }}
+---
+kind: domain
+name: {{ $listener.publicAddress }}
+description: {{ $listener.publicAddress }}
+spec:
+  acceptAllHosts: false
+  dnsMode: cname
+  ports:
+  {{- $replicaCount := $.Values.kafka.replicas | int }}
+  {{- range $i := until $replicaCount }}
+    - number: {{ add 3000 $i }}
+      protocol: tcp
+      routes:
+        - port: {{ add 3000 $i }}
+          prefix: /
+          replica: {{ $i }}
+          workloadLink: //gvc/{{ $.Values.global.cpln.gvc }}/workload/{{ include "kafka.clusterName" $ }}
+      tls:
+        cipherSuites:
+          - ECDHE-ECDSA-AES256-GCM-SHA384
+          - ECDHE-ECDSA-CHACHA20-POLY1305
+          - ECDHE-ECDSA-AES128-GCM-SHA256
+          - ECDHE-RSA-AES256-GCM-SHA384
+          - ECDHE-RSA-CHACHA20-POLY1305
+          - ECDHE-RSA-AES128-GCM-SHA256
+          - AES256-GCM-SHA384
+          - AES128-GCM-SHA256
+        minProtocolVersion: TLSV1_2
+  {{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,74 @@
+{{- if and .Values.backup.enabled (eq .Values.backup.mode "logical") }}
+kind: workload
+name: {{ .Release.Name }}-postgres-ha-backup
+description: Scheduled logical backup
+tags:
+  {{- include "pg-ha.tags" . | nindent 2 }}
+spec:
+  type: cron
+  containers:
+    - name: backup
+      image: {{ .Values.backup.logical.image }}
+      cpu: {{ .Values.backup.resources.cpu | quote }}
+      memory: {{ .Values.backup.resources.memory | quote }}
+      inheritEnv: false
+      env:
+        - name: PG_HOST
+          value: {{ .Release.Name }}-postgres-ha-proxy.{{ .Values.global.cpln.gvc }}.cpln.local
+        - name: PG_PORT
+          value: '5432'
+        - name: PG_USER
+          value: cpln://secret/{{ .Release.Name }}-postgres-config.username
+        - name: PG_PASSWORD
+          value: cpln://secret/{{ .Release.Name }}-postgres-config.password
+        - name: BACKUP_BUCKET
+          value: cpln://secret/{{ .Release.Name }}-postgres-config.backup-bucket
+      {{- if .Values.backup.aws.enabled }}
+        - name: AWS_REGION
+          value: cpln://secret/{{ .Release.Name }}-postgres-config.aws-region
+        - name: BACKUP_PROVIDER
+          value: aws
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.aws.s3.prefix }}
+      {{- end }}
+      {{- if .Values.backup.gcp.enabled }}
+        - name: BACKUP_PROVIDER
+          value: gcp
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.gcp.gcs.prefix }}
+      {{- end }}
+  identityLink: //identity/{{ .Release.Name }}-postgres-ha-identity
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: false
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowPort:
+        - number: 443
+          protocol: tcp
+      {{- if .Values.backup.aws.enabled }}
+      outboundAllowHostname:
+        - s3.{{ .Values.backup.aws.region }}.amazonaws.com
+        - s3.amazonaws.com
+      {{- end }}
+      {{- if .Values.backup.gcp.enabled }}
+      outboundAllowHostname:
+        - storage.googleapis.com
+      {{- end }}
+  job:
+    schedule: {{ .Values.backup.logical.schedule | quote }}
+    concurrencyPolicy: Forbid
+    restartPolicy: Never
+    historyLimit: 5
+{{- end }}

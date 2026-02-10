@@ -1,0 +1,118 @@
+{{- if .Values.kafbat_ui.enabled }}
+{{- if .Values.kafbat_ui.domain }}
+kind: domain
+name: {{ .Values.kafbat_ui.domain }}
+description: {{ .Values.kafbat_ui.domain }}
+spec:
+  acceptAllHosts: false
+  dnsMode: cname
+  ports:
+    - number: 443
+      protocol: http2
+      routes:
+        - port: 8080
+          prefix: /
+          workloadLink: //gvc/{{ $.Values.global.cpln.gvc }}/workload/{{ include "kafka.name" $ }}-{{ .Values.kafbat_ui.name }}
+      tls:
+        cipherSuites:
+          - ECDHE-ECDSA-AES256-GCM-SHA384
+          - ECDHE-ECDSA-CHACHA20-POLY1305
+          - ECDHE-ECDSA-AES128-GCM-SHA256
+          - ECDHE-RSA-AES256-GCM-SHA384
+          - ECDHE-RSA-CHACHA20-POLY1305
+          - ECDHE-RSA-AES128-GCM-SHA256
+          - AES256-GCM-SHA384
+          - AES128-GCM-SHA256
+        minProtocolVersion: TLSV1_2
+---
+{{- end }}
+kind: policy
+name: {{ include "kafka.name" $ }}-{{ .Values.kafbat_ui.name }}
+description: {{ include "kafka.name" $ }}-{{ .Values.kafbat_ui.name }}
+tags: {}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ $.Values.global.cpln.gvc }}/identity/{{ include "kafka.name" $ }}-{{ .Values.kafbat_ui.name }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ .Values.kafbat_ui.configuration_secret }}
+---
+kind: identity
+name: {{ include "kafka.name" $ }}-{{ .Values.kafbat_ui.name }}
+description: {{ include "kafka.name" $ }}-{{ .Values.kafbat_ui.name }}
+gvc: {{ $.Values.global.cpln.gvc }}
+---
+kind: workload
+name: {{ include "kafka.name" $ }}-{{ .Values.kafbat_ui.name }}
+description: {{ include "kafka.name" $ }}-{{ .Values.kafbat_ui.name }}
+tags:
+  {{- $hasTags := false }}
+  {{- if .Values.kafbat_ui.deletionProtection }}
+  cpln/protected: true
+  {{- $hasTags = true }}
+  {{- end }}
+  {{- if not $hasTags }}
+  {}
+  {{- end }}
+spec:
+  type: standard
+  containers:
+    - name: kafbat-ui
+      cpu: {{ .Values.kafbat_ui.cpu }}
+      {{- if .Values.kafbat_ui.minCpu }}
+      minCpu: '{{ .Values.kafbat_ui.minCpu }}'
+      {{- end }}
+      env:
+        - name: SPRING_CONFIG_ADDITIONAL-LOCATION
+          value: /etc/config.yaml
+      image: {{ .Values.kafbat_ui.image }}
+      inheritEnv: false
+      memory: {{ .Values.kafbat_ui.memory }}
+      {{- if .Values.kafbat_ui.minMemory }}
+      minMemory: {{ .Values.kafbat_ui.minMemory }}
+      {{- end }}
+      ports:
+        - number: 8080
+      volumes:
+        - path: /etc/config.yaml
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ .Values.kafbat_ui.configuration_secret }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.kafbat_ui.replicas }}
+      metric: disabled
+      minScale: {{ .Values.kafbat_ui.replicas }}
+      scaleToZeroDelay: 300
+      target: 100
+    {{- if or .Values.kafbat_ui.minCpu .Values.kafbat_ui.minMemory }}
+    capacityAI: true
+    {{- else }}
+    capacityAI: false
+    {{- end }}
+    debug: false
+    suspend: false
+    timeoutSeconds: {{ .Values.kafbat_ui.timeoutSeconds }}
+{{- if .Values.kafbat_ui.firewall }}
+  firewallConfig:
+    {{- if or (hasKey .Values.kafbat_ui.firewall "external_inboundAllowCIDR") (hasKey .Values.kafbat_ui.firewall "external_outboundAllowCIDR") }}
+    external:
+      inboundAllowCIDR: {{- if .Values.kafbat_ui.firewall.external_inboundAllowCIDR }}{{ .Values.kafbat_ui.firewall.external_inboundAllowCIDR | splitList "," | toYaml | nindent 8 }}{{- else }} []{{- end }}
+      outboundAllowCIDR: {{- if .Values.kafbat_ui.firewall.external_outboundAllowCIDR }}{{ .Values.kafbat_ui.firewall.external_outboundAllowCIDR | splitList "," | toYaml | nindent 8 }}{{- else }} []{{- end }}
+    {{- end }}
+    {{- if hasKey .Values.kafbat_ui.firewall "internal_inboundAllowType" }}
+    internal:
+      inboundAllowType: {{ default "[]" .Values.kafbat_ui.firewall.internal_inboundAllowType }}
+    {{- end }}
+{{- end }}
+  identityLink: //gvc/{{ $.Values.global.cpln.gvc }}/identity/{{ include "kafka.name" $ }}-{{ .Values.kafbat_ui.name }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+  securityOptions:
+    filesystemGroupId: 101
+  supportDynamicTags: false
+{{- end }}

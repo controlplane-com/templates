@@ -1,0 +1,34 @@
+# =============================================================================
+# External Domain (Optional)
+# =============================================================================
+# Routes /api/* to orchestrator-api, /* to UI
+{{- if .Values.domain.enabled }}
+kind: domain
+name: {{ .Values.domain.name }}
+description: External domain for Manticore cluster UI and API
+tags: {{- include "manticore.tags" . | nindent 4 }}
+spec:
+  dnsMode: {{ .Values.domain.dnsMode }}
+  gvcLink: /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}
+  acceptAllHosts: false
+  ports:
+    - number: 443
+      protocol: http2
+      cors:
+        allowOrigins:
+          - exact: '*'
+        allowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        allowHeaders:
+          - '*'
+        allowCredentials: true
+      routes:
+        - prefix: /api/
+          workloadLink: //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "manticore.orchestratorAPIName" . }}
+          port: 8080
+        - prefix: /
+          workloadLink: //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "manticore.UIName" . }}
+          port: 3000
+{{- end }}

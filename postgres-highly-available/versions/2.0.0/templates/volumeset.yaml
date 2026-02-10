@@ -1,0 +1,14 @@
+kind: volumeset
+name: {{ .Release.Name }}-postgres-ha-vs
+description: Postgres Highly Available volumeset
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "pg-ha.tags" . | nindent 2 }}
+  workload: {{ .Release.Name }}-postgres-ha
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.capacity }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d

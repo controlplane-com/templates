@@ -1,0 +1,262 @@
+{{- include "kafka.validateKafkaImage" . -}}
+{{- include "kafka.validatedirectReplicaRoutingConfig" . -}}
+{{- if .Values.jmx_exporter }}
+kind: secret
+name: {{ include "kafka.name" . }}-jmx-exporter-conf
+type: opaque
+data:
+  encoding: plain
+  payload: |-
+    {{ .Values.jmx_exporter.config | toYaml | nindent 4 }}
+---
+{{- end }}
+kind: workload
+name: {{ include "kafka.clusterName" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- $hasTags := false }}
+  {{- if .Values.kafka.deletionProtection }}
+  cpln/protected: true
+  {{- $hasTags = true }}
+  {{- end }}
+  {{- if not $hasTags }}
+  {}
+  {{- end }}
+spec:
+  type: stateful
+  containers:
+    - name: kafka
+      args:
+        - '-c'
+        - >-
+          cp /scripts/kafka-init.sh /tmp/ && chmod +x /tmp/kafka-init.sh &&
+          /tmp/kafka-init.sh
+      command: /bin/bash
+      cpu: '{{ .Values.kafka.cpu }}'
+      {{- if .Values.kafka.minCpu }}
+      minCpu: '{{ .Values.kafka.minCpu }}'
+      {{- end }}
+      env:
+        {{- if .Values.kafka.env }}
+{{ toYaml .Values.kafka.env | indent 8 }}
+        {{- end }}
+        {{- if .Values.jmx_exporter }}
+        - name: JMX_PORT
+          value: {{ .Values.jmx_exporter.kafkaJmxPort | quote }}
+        {{- end }}
+        - name: KAFKA_CONTROLLER_PASSWORD
+          value: 'cpln://secret/{{ include "kafka.name" . }}-secrets.controller-password'
+        - name: KAFKA_CONTROLLER_USER
+          value: controller_user
+        - name: KAFKA_HEAP_OPTS
+          value: "{{ .Values.kafka.overrideHeapOpts | default (include "kafka.heap.opts" .) | trim }}"
+        - name: KAFKA_INTER_BROKER_PASSWORD
+          value: 'cpln://secret/{{ include "kafka.name" . }}-secrets.inter-broker-password'
+        - name: KAFKA_INTER_BROKER_USER
+          value: inter_broker_user
+        - name: KAFKA_KRAFT_BOOTSTRAP_SCRAM_USERS
+          value: 'true'
+        - name: CLUSTER_ID
+          value: 'cpln://secret/{{ include "kafka.name" . }}-secrets.kraft-cluster-id'
+        - name: KAFKA_MIN_ID
+          value: '0'
+      image: {{ .Values.kafka.image }}
+      inheritEnv: false
+      livenessProbe:
+        failureThreshold: 5
+        initialDelaySeconds: 60
+        periodSeconds: 15
+        successThreshold: 1
+        tcpSocket:
+          port: 9093
+        timeoutSeconds: 15
+      memory: {{ .Values.kafka.memory }}
+      {{- if .Values.kafka.minMemory }}
+      minMemory: {{ .Values.kafka.minMemory }}
+      {{- end }}
+      ports:
+{{ range $key, $listener := .Values.kafka.listeners }}
+{{- include "kafka.validateListenerConfig" $listener }}
+{{- if and $listener.directReplicaRouting $listener.directReplicaRouting.enabled }}
+        - number: {{ $listener.directReplicaRouting.containerPort }}
+          protocol: tcp
+{{- else if $listener.publicAddress }}
+    {{- $startPort := 3000 }}
+    {{- $replicas := $.Values.kafka.replicas | int }}
+    {{- range $replicaIndex := until $replicas }}
+        - number: {{ add $startPort $replicaIndex }}
+          protocol: tcp
+    {{- end }}
+{{- else }}
+        - number: {{ $listener.containerPort }}
+          protocol: tcp
+{{- end }}
+{{- end }}
+        - number: 9093
+          protocol: tcp
+        - number: 9094
+          protocol: tcp
+{{- if .Values.jmx_exporter }}
+        - number: {{ .Values.jmx_exporter.kafkaJmxPort }}
+          protocol: tcp
+{{- end }}
+      readinessProbe:
+        failureThreshold: 20
+        initialDelaySeconds: 20
+        periodSeconds: 10
+        successThreshold: 6
+        tcpSocket:
+          port: 9093
+        timeoutSeconds: 5
+      volumes:
+        {{- $root := . -}}
+        {{- $logDirs := split "," $root.Values.kafka.logDirs }}
+        {{- $counter := 0 }}
+        {{- range $path := $logDirs }}
+        - path: {{ $path | trim }}
+          recoveryPolicy: retain
+          uri: 'cpln://volumeset/{{ include "kafka.name" $root }}-logs-{{ $counter }}'
+        {{- $counter = add $counter 1 }}
+        {{- end }}
+        - path: /configmaps/server.properties
+          recoveryPolicy: retain
+          uri: 'cpln://secret/{{ include "kafka.name" $root }}-controller-configuration'
+        - path: /scripts/kafka-init.sh
+          recoveryPolicy: retain
+          uri: 'cpln://secret/{{ include "kafka.name" $root }}-init'
+{{- if .Values.kafka_exporter }}
+    - name: kafka-exporter
+      args:
+        - '-c'
+        - >-
+{{- $listenerName := .Values.kafka_exporter.listener }}
+{{- if not (hasKey .Values.kafka.listeners $listenerName) }}
+  {{- fail (printf "Error: Listener '%s' specified in kafka_exporter.listener does not exist" $listenerName) }}
+{{- end }}
+{{- $listener := index .Values.kafka.listeners $listenerName }}
+{{- $port := 3000 }}
+{{- if $listener.containerPort }}
+  {{- $port = $listener.containerPort }}
+{{- else }}
+  {{- $port = "$(echo $((3000 + $POD_ID)))" }}
+{{- end }}
+{{- if eq $listener.protocol "SASL_PLAINTEXT" }}
+  {{- if not (and $listener.sasl $listener.sasl.admin) }}
+    {{- fail (printf "Error: SASL_PLAINTEXT listener '%s' must have sasl.admin configured for kafka_exporter" $listenerName) }}
+  {{- end }}
+          sleep 60 && POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev) && kafka_exporter --kafka.server=localhost:{{ if not $listener.containerPort }}$(echo $((3000 + $POD_ID))){{ else }}{{ $port }}{{ end }}
+          --sasl.enabled --sasl.username={{ $listener.sasl.admin.username }} --sasl.mechanism=plain
+          --sasl.password=${KAFKA_CLIENT_PASSWORDS} --web.listen-address=:9308
+{{- else if eq $listener.protocol "PLAINTEXT" }}
+          sleep 60 && POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev) && kafka_exporter --kafka.server=localhost:{{ if not $listener.containerPort }}$(echo $((3000 + $POD_ID))){{ else }}{{ $port }}{{ end }}
+          --no-sasl.handshake --web.listen-address=:9308
+{{- else }}
+          sleep 60 && POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev) && kafka_exporter --kafka.server=localhost:{{ if not $listener.containerPort }}$(echo $((3000 + $POD_ID))){{ else }}{{ $port }}{{ end }}
+          --no-sasl.handshake --web.listen-address=:9308
+{{- end }}
+      command: /bin/sh
+      cpu: {{ .Values.kafka_exporter.cpu }}
+      metrics:
+        path: /metrics
+        port: 9308
+        dropMetrics: {{- if .Values.kafka_exporter.dropMetrics }}{{ .Values.kafka_exporter.dropMetrics | toYaml | nindent 8 }}{{- else }} []{{- end }}
+      env:
+{{- if .Values.kafka_exporter.env }}
+{{ toYaml .Values.kafka_exporter.env | indent 8 }}
+{{- end }}
+{{- $listenerName := .Values.kafka_exporter.listener }}
+{{- if not (hasKey .Values.kafka.listeners $listenerName) }}
+  {{- fail (printf "Error: Listener '%s' specified in kafka_exporter.listener does not exist" $listenerName) }}
+{{- end }}
+{{- $listener := index .Values.kafka.listeners $listenerName }}
+{{- if eq $listener.protocol "SASL_PLAINTEXT" }}
+        - name: KAFKA_CLIENT_PASSWORDS
+          value: 'cpln://secret/{{ include "kafka.name" $ }}-secrets.{{ $listener.name | lower }}-admin-password'
+{{- end }}
+      image: {{ .Values.kafka_exporter.image }}
+      inheritEnv: false
+      memory: {{ .Values.kafka_exporter.memory }}
+      ports:
+        - number: 9308
+          protocol: tcp
+{{- end }}
+{{- if .Values.jmx_exporter }}
+    - name: jmx-exporter
+      command: java
+      args:
+        - -XX:MaxRAMPercentage=100
+        - -XshowSettings:vm
+        - -jar
+        - jmx_prometheus_standalone.jar
+        - {{ .Values.jmx_exporter.exporterPort | quote }}
+        - /etc/jmx-kafka/jmx-kafka-prometheus.yml
+      cpu: {{ .Values.jmx_exporter.cpu }}
+      {{- if .Values.jmx_exporter.minCpu }}
+      minCpu: '{{ .Values.jmx_exporter.minCpu }}'
+      {{- end }}
+      metrics:
+        path: /metrics
+        port: {{ .Values.jmx_exporter.exporterPort }}
+        dropMetrics: {{- if .Values.jmx_exporter.dropMetrics }}{{ .Values.jmx_exporter.dropMetrics | toYaml | nindent 8 }}{{- else }} []{{- end }}
+      image: {{ .Values.jmx_exporter.image }}
+      inheritEnv: false
+      memory: {{ .Values.jmx_exporter.memory }}
+      {{- if .Values.jmx_exporter.minMemory }}
+      minMemory: {{ .Values.jmx_exporter.minMemory }}
+      {{- end }}
+      ports:
+        - number: {{ .Values.jmx_exporter.exporterPort }}
+          protocol: tcp
+      volumes:
+        - path: /etc/jmx-kafka/jmx-kafka-prometheus.yml
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "kafka.name" . }}-jmx-exporter-conf
+{{- end }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.kafka.replicas }}
+      metric: disabled
+      minScale: {{ .Values.kafka.replicas }}
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    {{- if .Values.kafka.multiZone }}
+    multiZone:
+      enabled: true
+    {{- else }}
+    multiZone:
+      enabled: false
+    {{- end }}
+    suspend: {{ .Values.kafka.suspend }}
+    timeoutSeconds: 30
+{{- if .Values.kafka.firewall }}
+  firewallConfig:
+    {{- if or (hasKey .Values.kafka.firewall "external_inboundAllowCIDR") (hasKey .Values.kafka.firewall "external_outboundAllowCIDR") }}
+    external:
+      inboundAllowCIDR: {{- if .Values.kafka.firewall.external_inboundAllowCIDR }}{{ .Values.kafka.firewall.external_inboundAllowCIDR | splitList "," | toYaml | nindent 8 }}{{- else }} []{{- end }}
+      outboundAllowCIDR: {{- if .Values.kafka.firewall.external_outboundAllowCIDR }}{{ .Values.kafka.firewall.external_outboundAllowCIDR | splitList "," | toYaml | nindent 8 }}{{- else }} []{{- end }}
+    {{- end }}
+    {{- if hasKey .Values.kafka.firewall "internal_inboundAllowType" }}
+    internal:
+      inboundAllowType: {{ default "[]" .Values.kafka.firewall.internal_inboundAllowType }}
+      {{- if .Values.kafka.firewall.inboundAllowWorkload }}
+      inboundAllowWorkload: {{ .Values.kafka.firewall.inboundAllowWorkload | toYaml | nindent 8 }}
+      {{- end }}
+    {{- end }}
+{{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: true
+  identityLink: //identity/{{ include "kafka.name" . }}
+  rolloutOptions:
+    maxSurgeReplicas: 25%
+    maxUnavailableReplicas: '1'
+    minReadySeconds: {{ .Values.kafka.minReadySeconds }}
+    scalingPolicy: OrderedReady
+  securityOptions:
+    filesystemGroupId: 1001
+  supportDynamicTags: false

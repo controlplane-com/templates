@@ -1,0 +1,579 @@
+# =============================================================================
+# Manticore Search Workload (Stateful)
+# =============================================================================
+# Each replica runs manticore (searchd) + agent sidecar for orchestrator coordination
+kind: workload
+name: {{ include "manticore.name" . }}
+description: Manticore search cluster with agent sidecar
+tags: {{- include "manticore.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  containers:
+    - name: manticore
+      cpu: {{ .Values.manticore.resources.cpu | quote }}
+      image: {{ .Values.manticore.image }}
+      command: "/bin/bash"
+      args:
+        - "/usr/local/bin/start.sh"
+      inheritEnv: false
+      memory: {{ .Values.manticore.resources.memory | quote }}
+      metrics:
+        path: "/metrics"
+        port: 9308
+      ports:
+        - number: 9306
+          protocol: tcp
+        - number: 9308
+          protocol: http
+        - number: 9312
+          protocol: tcp
+        # Galera replication ports
+        - number: 9313
+          protocol: tcp
+        - number: 9314
+          protocol: tcp
+        - number: 9315
+          protocol: tcp
+        - number: 9316
+          protocol: tcp
+        - number: 9317
+          protocol: tcp
+        - number: 9318
+          protocol: tcp
+        - number: 9319
+          protocol: tcp
+        - number: 9320
+          protocol: tcp
+      readinessProbe:
+        failureThreshold: 6
+        initialDelaySeconds: 30
+        periodSeconds: 15
+        successThreshold: 1
+        tcpSocket:
+          port: 9306
+        timeoutSeconds: 10
+      volumes:
+        - path: /var/lib/manticore
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "manticore.volumeName" . }}
+        - path: /mnt/shared
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "manticore.sharedVolumeName" . }}
+        - path: /etc/manticore/manticore.conf
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "manticore.secretConfigName" . }}.payload
+        - path: /etc/manticore/schema.conf
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "manticore.secretSchemaConfigName" . }}.payload
+        - path: /usr/local/bin/start.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "manticore.secretStartupName" . }}.payload
+    - name: agent
+      cpu: {{ .Values.orchestrator.agent.resources.cpu | quote }}
+      minCpu: {{ .Values.orchestrator.agent.resources.minCpu | default .Values.orchestrator.agent.resources.cpu | quote }}
+      image: {{ .Values.orchestrator.agent.image }}:{{ .Values.orchestrator.agent.version }}
+      inheritEnv: false
+      memory: {{ .Values.orchestrator.agent.resources.memory | quote }}
+      minMemory: {{ .Values.orchestrator.agent.resources.minMemory | default .Values.orchestrator.agent.resources.memory | quote }}
+      ports:
+        - number: 8080
+          protocol: http
+      env:
+        - name: MYSQL_HOST
+          value: "127.0.0.1"
+        - name: MYSQL_PORT
+          value: "9306"
+        - name: SCHEMA_FILE
+          value: "/etc/manticore/schema.conf"
+        - name: CLUSTER_NAME
+          value: "{{ .Values.manticore.clusterName }}"
+        - name: LISTEN_ADDR
+          value: ":8080"
+        - name: AUTH_TOKEN
+          value: "cpln://secret/{{ include "manticore.secretAgentTokenName" . }}.payload"
+        # Cluster recovery settings
+        - name: WORKLOAD_NAME
+          value: "{{ include "manticore.name" . }}"
+        - name: DATA_DIR
+          value: "/var/lib/manticore"
+        - name: MAX_SCALE
+          value: "{{ .Values.manticore.autoscaling.maxScale }}"
+        - name: RECOVERY_MAX_RETRIES
+          value: "{{ .Values.orchestrator.agent.recovery.maxRetries | default 5 }}"
+        - name: RECOVERY_INITIAL_BACKOFF_SEC
+          value: "{{ .Values.orchestrator.agent.recovery.initialBackoffSec | default 5 }}"
+        - name: RECOVERY_MAX_BACKOFF_SEC
+          value: "{{ .Values.orchestrator.agent.recovery.maxBackoffSec | default 60 }}"
+        - name: REPLICATION_PORT
+          value: "9312"
+        - name: IMPORT_BATCH_SIZE
+          value: "{{ .Values.orchestrator.agent.import.batchSize | default 1000 }}"
+        - name: ORCHESTRATOR_API_URL
+          value: "http://{{ include "manticore.orchestratorAPIName" . }}.{{ .Values.cpln.gvc }}.cpln.local:8080"
+      readinessProbe:
+        failureThreshold: 3
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        successThreshold: 1
+        httpGet:
+          path: /api/ready
+          port: 8080
+        timeoutSeconds: 5
+      volumes:
+        - path: /etc/manticore/schema.conf
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "manticore.secretSchemaConfigName" . }}.payload
+        - path: /mnt/shared
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "manticore.sharedVolumeName" . }}
+        - path: /var/lib/manticore
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "manticore.volumeName" . }}
+  defaultOptions:
+    autoscaling:
+      maxScale: {{ .Values.manticore.autoscaling.maxScale }}
+      metric: {{ .Values.manticore.autoscaling.metric }}
+      minScale: {{ .Values.manticore.autoscaling.minScale }}
+      scaleToZeroDelay: {{ .Values.manticore.autoscaling.scaleToZeroDelay }}
+      target: {{ .Values.manticore.autoscaling.target }}
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      outboundAllowHostname: []
+    internal:
+      inboundAllowType: {{ .Values.manticore.firewall.internalAccess.type }}
+      {{- if .Values.manticore.firewall.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.manticore.firewall.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  identityLink: /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.identityName" . }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: true
+  rolloutOptions:
+    maxSurgeReplicas: {{ .Values.manticore.rolloutOptions.maxSurgeReplicas }}
+    maxUnavailableReplicas: '{{ .Values.manticore.rolloutOptions.maxUnavailableReplicas }}'
+    minReadySeconds: {{ .Values.manticore.rolloutOptions.minReadySeconds }}
+    scalingPolicy: {{ .Values.manticore.rolloutOptions.scalingPolicy }}
+    terminationGracePeriodSeconds: {{ .Values.manticore.rolloutOptions.terminationGracePeriodSeconds }}
+  supportDynamicTags: false
+---
+# =============================================================================
+# Orchestrator Cron Workload
+# =============================================================================
+# Executes scheduled/manual actions: init, import, health, repair
+# Starts suspended by default (trigger via UI/API)
+kind: workload
+name: {{ include "manticore.orchestratorJobName" . }}
+description: Manticore orchestrator for scheduled/manual cluster operations
+tags: {{- include "manticore.tags" . | nindent 4 }}
+spec:
+  type: cron
+  containers:
+    - name: orchestrator
+      cpu: {{ .Values.orchestrator.resources.cpu | quote }}
+      image: {{ .Values.orchestrator.image }}:{{ .Values.orchestrator.version }}
+      inheritEnv: false
+      memory: {{ .Values.orchestrator.resources.memory | quote }}
+      env:
+        - name: MODE
+          value: "cli"
+        - name: ACTION
+          value: "{{ .Values.orchestrator.action }}"
+        - name: REPLICA_COUNT
+          value: "{{ .Values.manticore.autoscaling.minScale }}"
+        - name: AGENT_PORT
+          value: "8080"
+        - name: WORKLOAD_NAME
+          value: "{{ include "manticore.name" . }}"
+        - name: GVC
+          value: "{{ .Values.global.cpln.gvc }}"
+        - name: LOCATION
+          value: "{{ .Values.global.cpln.location }}"
+        - name: TABLE_NAME
+          value: "{{ .Values.orchestrator.tableName }}"
+        - name: TABLES_CONFIG
+          value: '{{ include "manticore.tablesConfigJSON" .Values.tables }}'
+        - name: STATE_FILE
+          value: "/tmp/orchestrator_state.json"
+        - name: AUTH_TOKEN
+          value: "cpln://secret/{{ include "manticore.secretAgentTokenName" . }}.payload"
+        - name: LOG_LEVEL
+          value: "{{ .Values.orchestrator.logLevel }}"
+        - name: IMPORT_MEM_LIMIT
+          value: "{{ .Values.orchestrator.importMemLimit }}"
+        - name: INDEXER_WORK_DIR
+          value: "/mnt/s3/indexer-temp"
+        - name: S3_MOUNT
+          value: "/mnt/s3"
+        - name: SHARED_VOLUME_MOUNT
+          value: "/mnt/shared"
+      volumes:
+        - path: /mnt/shared
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "manticore.sharedVolumeName" . }}
+        - path: /mnt/s3
+          uri: s3://{{ .Values.buckets.sourceBucket }}
+          recoveryPolicy: retain
+  defaultOptions:
+    autoscaling:
+      maxScale: 1
+      minScale: 1
+    capacityAI: false
+    debug: false
+    suspend: {{ .Values.orchestrator.suspend }}
+    timeoutSeconds: {{ .Values.orchestrator.timeoutSeconds }}
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      outboundAllowHostname:
+        - s3.{{ .Values.buckets.awsRegion }}.amazonaws.com
+        - s3.amazonaws.com
+        - "*.amazonaws.com"
+    internal:
+      inboundAllowType: none
+  identityLink: /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.orchestratorJobIdentityName" . }}
+  job:
+    schedule: {{ .Values.orchestrator.schedule | quote }}
+    concurrencyPolicy: Forbid
+    restartPolicy: Never
+    activeDeadlineSeconds: {{ .Values.orchestrator.activeDeadlineSeconds }}
+  supportDynamicTags: false
+---
+# =============================================================================
+# Orchestrator API Workload (Standard)
+# =============================================================================
+# REST API for cluster coordination (init, import, repair, cluster status)
+# Backend for UI dashboard, communicates with agents via bearer token
+kind: workload
+name: {{ include "manticore.orchestratorAPIName" . }}
+description: Manticore orchestrator REST API for cluster coordination
+tags: {{- include "manticore.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: api
+      cpu: {{ .Values.orchestrator.api.resources.cpu | quote }}
+      image: {{ .Values.orchestrator.api.image }}:{{ .Values.orchestrator.api.version }}
+      inheritEnv: false
+      memory: {{ .Values.orchestrator.api.resources.memory | quote }}
+      port: 8080
+      readinessProbe:
+        httpGet:
+          path: /api/status
+          port: 8080
+        periodSeconds: 10
+        failureThreshold: 3
+      env:
+        - name: MODE
+          value: "server"
+        - name: LISTEN_ADDR
+          value: ":8080"
+        - name: REPLICA_COUNT
+          value: "{{ .Values.manticore.autoscaling.minScale }}"
+        - name: AGENT_PORT
+          value: "8080"
+        - name: WORKLOAD_NAME
+          value: "{{ include "manticore.name" . }}"
+        # CPLN_GVC, CPLN_LOCATION auto-injected by Control Plane
+        - name: TABLES_CONFIG
+          value: '{{ include "manticore.tablesConfigJSON" .Values.tables }}'
+        - name: STATE_FILE
+          value: "/tmp/orchestrator_state.json"
+        - name: AUTH_TOKEN
+          value: "cpln://secret/{{ include "manticore.secretAgentTokenName" . }}.payload"
+        - name: LOG_LEVEL
+          value: "{{ .Values.orchestrator.logLevel }}"
+        # CPLN_TOKEN, CPLN_ORG, CPLN_GVC auto-injected by Control Plane
+        - name: ORCHESTRATOR_WORKLOAD
+          value: "{{ include "manticore.orchestratorJobName" . }}"
+        - name: IMPORT_POLL_INTERVAL
+          value: "{{ .Values.orchestrator.api.importPollInterval | default "30s" }}"
+        - name: IMPORT_POLL_TIMEOUT
+          value: "{{ .Values.orchestrator.api.importPollTimeout | default "2h" }}"
+        {{- if .Values.orchestrator.backup.enabled }}
+        - name: BACKUP_SCHEDULES
+          value: '{{ .Values.orchestrator.backup.schedules | toJson }}'
+        - name: BACKUP_BUCKET
+          value: {{ .Values.orchestrator.backup.s3Bucket }}
+        - name: BACKUP_PREFIX
+          value: {{ .Values.orchestrator.backup.prefix }}
+        - name: BACKUP_PROVIDER
+          value: aws
+        - name: BACKUP_REGION
+          value: {{ .Values.orchestrator.backup.s3Region }}
+        {{- end }}
+  defaultOptions:
+    autoscaling:
+      maxScale: {{ .Values.orchestrator.api.autoscaling.maxScale }}
+      minScale: {{ .Values.orchestrator.api.autoscaling.minScale }}
+      metric: {{ .Values.orchestrator.api.autoscaling.metric }}
+      target: {{ .Values.orchestrator.api.autoscaling.target }}
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: same-gvc
+  identityLink: /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.orchestratorIdentityName" . }}
+  supportDynamicTags: false
+---
+# =============================================================================
+# Web UI Workload (Standard)
+# =============================================================================
+# Dashboard for cluster monitoring, table status, imports, and repairs
+kind: workload
+name: {{ include "manticore.UIName" . }}
+description: Manticore cluster management dashboard
+tags: {{- include "manticore.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: ui
+      cpu: {{ .Values.orchestrator.ui.resources.cpu | quote }}
+      image: {{ .Values.orchestrator.ui.image }}:{{ .Values.orchestrator.ui.version }}
+      inheritEnv: false
+      memory: {{ .Values.orchestrator.ui.resources.memory | quote }}
+      port: 3000
+      env:
+        - name: ORCHESTRATOR_API_URL
+          value: "http://{{ include "manticore.orchestratorAPIName" . }}.{{ .Values.cpln.gvc }}.cpln.local:8080"
+        - name: ORCHESTRATOR_AUTH_TOKEN
+          value: "cpln://secret/{{ include "manticore.secretAgentTokenName" . }}.payload"
+        - name: PORT
+          value: "3000"
+      readinessProbe:
+        httpGet:
+          path: /
+          port: 3000
+        periodSeconds: 10
+        failureThreshold: 3
+  defaultOptions:
+    autoscaling:
+      maxScale: {{ .Values.orchestrator.ui.autoscaling.maxScale }}
+      minScale: {{ .Values.orchestrator.ui.autoscaling.minScale }}
+      metric: {{ .Values.orchestrator.ui.autoscaling.metric }}
+      target: {{ .Values.orchestrator.ui.autoscaling.target }}
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      inboundAllowCIDR: {{ if .Values.orchestrator.ui.allowExternalAccess }}[ "0.0.0.0/0" ]{{ else }}[ ]{{ end }}
+      outboundAllowCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+  identityLink: /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.orchestratorIdentityName" . }}
+  supportDynamicTags: false
+
+{{- if .Values.orchestrator.backup.enabled }}
+---
+# =============================================================================
+# Backup Workload (Cron)
+# =============================================================================
+# Cron job for logical backups on delta table to S3 bucket
+kind: workload
+name: {{ include "manticore.backupName" . }}
+description: manticore backup
+tags: {{- include "manticore.tags" . | nindent 4 }}
+spec:
+  type: cron
+  containers:
+    - name: backup
+      cpu: {{ .Values.orchestrator.backup.resources.cpu | quote }}
+      env:
+        - name: ACTION
+          value: backup
+        - name: TYPE
+          value: delta
+        - name: BACKUP_BUCKET
+          value: {{ .Values.orchestrator.backup.s3Bucket }}
+        - name: BACKUP_PREFIX
+          value: {{ .Values.orchestrator.backup.prefix }}
+        - name: BACKUP_PROVIDER
+          value: aws
+        - name: BACKUP_REGION
+          value: {{ .Values.buckets.awsRegion }}
+        - name: DATASET
+          value: {{ .Values.orchestrator.backup.dataSet }}
+        - name: MANTICORE_HOST
+          value: "{{ include "manticore.name" . }}"
+        - name: MANTICORE_PORT
+          value: "9306"
+        - name: AUTH_TOKEN
+          value: "cpln://secret/{{ include "manticore.secretAgentTokenName" . }}.payload"
+      image: {{ .Values.orchestrator.backup.image }}:{{ .Values.orchestrator.backup.version }}
+      inheritEnv: false
+      memory: {{ .Values.orchestrator.backup.resources.memory | quote }}
+      ports:
+        - number: 8080
+          protocol: http
+      volumes:
+        - path: /mnt/shared
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "manticore.sharedVolumeName" . }}
+  defaultOptions:
+    autoscaling:
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: false
+    suspend: true
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname:
+        - s3.{{ .Values.orchestrator.backup.s3Region }}.amazonaws.com
+        - s3.amazonaws.com
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+      inboundAllowWorkload: []
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.backupIdentityName" . }}
+  job:
+    concurrencyPolicy: Forbid
+    historyLimit: 5
+    restartPolicy: Never
+    schedule: '0 2 * * *'
+    activeDeadlineSeconds: {{ .Values.orchestrator.backup.activeDeadlineSeconds }}
+  localOptions: []
+  supportDynamicTags: false
+{{- end }}
+
+# =============================================================================
+# K6 Load Test Workload (Standard)
+# =============================================================================
+# Runs k6 load tests (starts at scale 0, scaled up by controller)
+{{- if .Values.loadTest.enabled }}
+---
+kind: workload
+name: {{ include "manticore.loadTestName" . }}
+description: K6 load test runner for Manticore search
+tags: {{- include "manticore.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: k6
+      image: {{ .Values.loadTest.image }}
+      cpu: {{ .Values.loadTest.resources.cpu | quote }}
+      memory: {{ .Values.loadTest.resources.memory | quote }}
+      inheritEnv: false
+      command: /bin/sh
+      args:
+        - '-c'
+        - >-
+          k6 run
+          --vus {{ .Values.loadTest.vus }}
+          --duration {{ .Values.loadTest.duration }}
+          {{- if .Values.loadTest.rps }}
+          --rps {{ .Values.loadTest.rps }}
+          {{- end }}
+          /scripts/payload
+      volumes:
+        - path: /scripts
+          recoveryPolicy: retain
+          uri: 'cpln://secret/{{ include "manticore.secretK6ScriptName" . }}.payload'
+  defaultOptions:
+    autoscaling:
+      maxScale: 0
+      minScale: 0
+      scaleToZeroDelay: 30
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 3600
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: none
+  identityLink: /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.loadTestIdentityName" . }}
+  supportDynamicTags: false
+---
+# =============================================================================
+# Load Test Controller (Cron)
+# =============================================================================
+# Scales k6 workload up, waits for test duration, then scales back to 0
+# Suspended if no schedule (manual trigger only)
+kind: workload
+name: {{ include "manticore.loadTestControllerName" . }}
+description: Controller for triggering and managing load tests
+tags: {{- include "manticore.tags" . | nindent 4 }}
+spec:
+  type: cron
+  containers:
+    - name: controller
+      image: {{ .Values.loadTest.controller.image }}
+      cpu: '0.25'
+      memory: 256Mi
+      inheritEnv: false
+      command: /bin/sh
+      args:
+        - '-c'
+        - |
+          set -e
+          WORKLOAD="{{ include "manticore.loadTestName" . }}"
+          REPLICAS="{{ .Values.loadTest.replicas }}"
+
+          echo "Scaling $WORKLOAD to $REPLICAS replicas..."
+          curl -sf -X PATCH \
+            -H "Authorization: Bearer $CPLN_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"spec\":{\"defaultOptions\":{\"autoscaling\":{\"minScale\":$REPLICAS,\"maxScale\":$REPLICAS}}}}" \
+            "http://api.cpln.io/org/$CPLN_ORG/gvc/$CPLN_GVC/workload/$WORKLOAD"
+
+          echo "Waiting for test duration + buffer..."
+          sleep {{ include "loadTest.totalDurationSeconds" . }}
+
+          echo "Scaling $WORKLOAD back to 0..."
+          curl -sf -X PATCH \
+            -H "Authorization: Bearer $CPLN_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"spec":{"defaultOptions":{"autoscaling":{"minScale":0,"maxScale":0}}}}' \
+            "http://api.cpln.io/org/$CPLN_ORG/gvc/$CPLN_GVC/workload/$WORKLOAD"
+
+          echo "Load test complete."
+  defaultOptions:
+    autoscaling:
+      maxScale: 1
+      minScale: 1
+    capacityAI: false
+    debug: false
+    suspend: {{ if .Values.loadTest.controller.schedule }}false{{ else }}true{{ end }}
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: none
+  identityLink: /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.loadTestControllerIdentityName" . }}
+  job:
+    schedule: '{{ .Values.loadTest.controller.schedule | default "0 0 1 1 *" }}'
+    concurrencyPolicy: Forbid
+    restartPolicy: Never
+    historyLimit: 10
+    activeDeadlineSeconds: 7200
+  supportDynamicTags: false
+{{- end }}

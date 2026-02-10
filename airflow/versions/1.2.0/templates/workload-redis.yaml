@@ -1,0 +1,35 @@
+kind: workload
+name: {{ .Release.Name }}-airflow-redis
+description: Airflow Redis
+gvc: {{ .Values.gvc.name }}
+tags:
+  {{- include "airflow.tags" . | nindent 2 }}
+spec:
+  type: standard
+  containers:
+    - name: redis
+      cpu: {{ .Values.redis.resources.cpu }}
+      memory: {{ .Values.redis.resources.memory }}
+      image: {{ .Values.redis.image }}
+      inheritEnv: false
+      ports:
+        - number: 6379
+          protocol: tcp
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+      inboundAllowWorkload: []
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+
+  supportDynamicTags: false

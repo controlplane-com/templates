@@ -1,3 +1,18 @@
+# Release Notes - Version 3.3.0
+
+## What's New
+
+- **Kafka Connect Dynamic Advertised Hostname**: Added automatic configuration of `rest.advertised.host.name` for distributed workers
+  - Enables proper worker-to-worker communication in multi-replica Kafka Connect deployments
+  - Dynamically sets hostname based on pod ID and workload name
+
+# Release Notes - Version 3.2.0
+
+## What's New
+
+- **Drop Metrics**: Added support to filter metrics on the kafka-exporter and jmx-exporter containers
+  - Include regex patterns that drop all matching metrics
+
 # Release Notes - Version 3.1.1
 
 ## What's New

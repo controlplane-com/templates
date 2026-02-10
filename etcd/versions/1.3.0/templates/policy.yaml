@@ -1,0 +1,14 @@
+---
+kind: policy
+name: {{ .Release.Name }}-etcd-policy
+description: etcd policy
+tags:
+  {{- include "etcd.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ .Release.Name }}-etcd-identity
+targetKind: secret
+targetLinks:
+  - //secret/{{ .Release.Name }}-etcd-startup

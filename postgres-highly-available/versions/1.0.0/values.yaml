@@ -18,7 +18,7 @@ internal_access:
 etcd:
   replicas: 3
   resources:
-    cpu: 1
+    cpu: 1000m
     memory: 2Gi
   internal_access:
     type: same-gvc # options: same-gvc, same-org, workload-list

@@ -1,57 +1,256 @@
+# =============================================================================
+# AWS Cloud Account and S3 Configuration
+# =============================================================================
+# See README.md for Cloud Account and IAM policy setup instructions.
 buckets:
-  cloudAccountName: my-s3-cloud-account
-  policyName: manticore-policy  # Custom policy name to access S3 bucket
-  awsRegion: us-east-1
-  dataset: addresses # Dataset name
-  sourceBucket: address-source-csv # S3 bucket where the CSV files are stored
-  artifactBucket: manticore-index-artifacts # S3 bucket where the artifacts will be fetched from
-  deltaArtifactPrefix: builds/delta # Prefix for the delta artifacts in the S3 bucket
-  mainArtifactPrefix: builds/main # Prefix for the main artifacts in the S3 bucket
+  cloudAccountName: my-cloud-account    # Name of your configured Cloud Account
+  awsPolicyRefs:                        # IAM policies for S3 access
+    - aws::AmazonS3ReadOnlyAccess       # Note: if using a custom policy, omit the aws:: prefix as this is only for AWS managed policies
+  awsRegion: us-east-1                  # Region of your S3 bucket
+  sourceBucket: my-bucket               # S3 bucket containing files to import
 
-ingester:
-  main:
-    image: controlplanecorporation/manticore-ingester:1.0
-    csvPath: main/addresses_main.csv # Path to the main CSV file in the S3 bucket
-    resources:
-      cpu: 4
-      memory: 8Gi
-    jobSchedule: 0 0 1 * * # Midnight UTC on the 1st of every month
-  delta:
-    image: controlplanecorporation/manticore-ingester:1.0
-    csvPath: delta/addresses_delta.csv # Path to the delta CSV file in the S3 bucket
-    resources:
-      cpu: 4
-      memory: 8Gi
-    jobSchedule: 0 * * * * # Every hour on the hour
+# =============================================================================
+# Tables Configuration
+# =============================================================================
+# See README.md for table structure, column types, and config options.
+# Add/remove tables as needed.
+tables:
+  - name: addresses
+    csvPath: manticore-imports/addresses/data.csv
+    config:
+      haStrategy: noerrors
+      agentRetryCount: 3
+      clusterMain: false
+      importMethod: indexer
+    schema:
+      columns:
+        - name: street_number
+          type: attr_uint
+        - name: street_name
+          type: field
+        - name: city
+          type: field
+        - name: county
+          type: field
+        - name: state
+          type: field
+        - name: postal_code
+          type: field
+        - name: country
+          type: field
+        - name: latitude
+          type: attr_float
+        - name: longitude
+          type: attr_float
+  - name: addresses_full
+    csvPath: manticore-imports/addresses-full/data.tsv
+    config:
+      haStrategy: noerrors
+      agentRetryCount: 3
+      clusterMain: false
+      importMethod: indexer
+    schema:
+      columns:
+        - name: record_hash
+          type: attr_string
+        - name: number
+          type: attr_string
+        - name: street
+          type: field
+        - name: street2
+          type: field
+        - name: city
+          type: field
+        - name: state
+          type: field
+        - name: country
+          type: field
+        - name: county
+          type: field
+        - name: latitude
+          type: attr_float
+        - name: longitude
+          type: attr_float
+        - name: postal_code
+          type: field
+        - name: address
+          type: field
+        - name: full_address
+          type: field
+        - name: created_date
+          type: attr_timestamp
+        - name: is_unincorporated
+          type: attr_bool
+        - name: uploaded_to_es_at
+          type: attr_timestamp
+        - name: source
+          type: attr_string
 
-query:
-  image: controlplanecorporation/manticore-query:1.0
+# =============================================================================
+# Manticore Search Configuration
+# =============================================================================
+manticore:
+  image: manticoresearch/manticore:15.1.0
+  clusterName: manticore          # Galera cluster name
   resources:
-    cpu: 4
+    cpu: 2
     memory: 8Gi
+  volumeset:
+    capacity: 200                 # GB per replica
+  sharedVolumeset:
+    capacity: 100                 # GB shared across replicas and orchestrator
+
+  # minScale = replica count used by orchestrator for coordination
   autoscaling:
+    minScale: 3
     maxScale: 4
-    minScale: 2
+    metric: rps                   # rps for stateful, cpu for standard
     target: 100
     scaleToZeroDelay: 300
-    metric: rps
+
   rolloutOptions:
     maxSurgeReplicas: 25%
     maxUnavailableReplicas: '0'
     minReadySeconds: 10
     scalingPolicy: OrderedReady
-    terminationGracePeriodSeconds: 90
+    terminationGracePeriodSeconds: 60
+
+  # IMPORTANT: same-gvc required for Galera replication
   firewall:
-    external:
-      inboundAllowCIDR: []
-      outboundAllowHostname:
-        - s3.us-east-1.amazonaws.com # S3 endpoints for region us-east-1
-        - s3.amazonaws.com
-      outboundAllowPort:
-        - number: 443
-          protocol: tcp
-    internalAccess: # Sets the internal firewall scope - if set to none, replicas will not be able to reach each other
-      type: same-gvc # options: none, same-gvc, same-org, workload-list
-      workloads:  # Note: can only be used if type is same-gvc or workload-list
-        #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
-        #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+    internalAccess:
+      type: same-gvc
+      workloads: []
+
+# =============================================================================
+# Orchestrator Configuration
+# =============================================================================
+orchestrator:
+  version: v3.0.0
+  image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-api
+  logLevel: debug                 # debug, info, warn, error
+  resources:
+    cpu: 1
+    memory: 2Gi
+
+  # Cron job settings
+  schedule: "0 * * * *"           # Cron schedule (default = every hour)
+  action: import                  # init, import, health, repair
+  tableName: addresses            # Must match a name in tables[]
+  suspend: true                   # Start suspended (trigger via UI/API)
+  timeoutSeconds: 900             # Container timeout (seconds, default 15 minutes)
+  importMemLimit: 2G              # Memory limit for import jobs
+  activeDeadlineSeconds: 14400    # Max job runtime (seconds, default 4 hours)
+
+  # Orchestrator API
+  api:
+    version: v3.0.0
+    image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-api
+    logLevel: debug
+    importPollInterval: 30s
+    importPollTimeout: 2h
+    resources:
+      cpu: 0.25
+      memory: 256Mi
+    autoscaling:
+      maxScale: 3
+      minScale: 2
+      metric: cpu
+      target: 80
+
+  # Agent sidecar
+  agent:
+    version: v3.0.0
+    image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-agent
+    # REQUIRED: Generate with `openssl rand -base64 32`
+    token: "6Gl5uO9KkKAh1u+ymoBW98WCtjTFpljuhpLdKb+tNAA="
+    resources:
+      cpu: 250m
+      minCpu: 100m
+      memory: 512Mi
+      minMemory: 128Mi
+    import:
+      batchSize: 20000            # Rows per INSERT statement
+    recovery:
+      maxRetries: 5               # Retry attempts for cluster recovery
+      initialBackoffSec: 5        # Initial delay between retries
+      maxBackoffSec: 60           # Max backoff delay (exponential)
+
+  # Web UI - See README.md "Authentication" section for security notes
+  ui:
+    version: v3.0.0
+    image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-ui
+    resources:
+      cpu: 0.25
+      memory: 0.25Gi
+    allowExternalAccess: true     # false = internal GVC access only
+    autoscaling:
+      maxScale: 2
+      minScale: 1
+      metric: cpu
+      target: 80
+
+  # Backup Configuration (Optional) - Cron job runs logical backup on delta table to S3 bucket.
+  backup:
+    enabled: false
+    version: v3.0.0
+    image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-backup
+    cloudAccountName: my-backup-cloud-account
+    s3Bucket: my-backup-bucket    # S3 bucket for backups
+    s3Policy:                     # IAM policies for S3 access
+      - my-backup-policy          # Custom policy created in S3 setup instructions
+    s3Region: us-east-1
+    dataSet: addresses_full       # Data set to back up (must be delta)
+    prefix: manticore-backups     # S3 prefix/folder for backups
+    schedules: [
+      {"table":"addresses","type":"delta","schedule":"0 2 * * *"},     # Daily at 2am UTC
+      {"table":"addresses","type":"main","schedule":"0 2 1 * *"}       # Monthly full backup on 1st at 2am UTC
+      ]
+    activeDeadlineSeconds: 14400  # Max job runtime (seconds, default 4 hours)
+    resources:
+      cpu: 1
+      memory: 1Gi
+
+# =============================================================================
+# Domain Configuration (Optional)
+# =============================================================================
+# Routes /api/* to orchestrator-api, everything else to UI.
+domain:
+  enabled: false
+  name: ""                        # FQDN, e.g., manticore.example.com
+  dnsMode: cname                  # cname (subdomains) or ns (zone delegation)
+
+# =============================================================================
+# Load Testing Configuration (Optional)
+# =============================================================================
+loadTest:
+  enabled: false
+  image: grafana/k6:0.47.0
+  resources:
+    cpu: 0.5
+    memory: 512Mi
+
+  vus: 10                         # Virtual users
+  duration: "5m"                  # Test duration (e.g., 30s, 5m, 1h)
+  rps: null                       # Target RPS (null = unlimited)
+  replicas: 1                     # Number of k6 pods to spawn
+
+  controller:
+    image: alpine/curl            # Alpine image with curl pre-installed
+    schedule: ""                  # Cron expression (empty = manual only)
+    testDurationBuffer: 60        # Seconds added to duration before scale-down
+
+  target:
+    port: 9308                    # Manticore HTTP API port
+    endpoint: search              # "search" or "sql"
+
+  # Full JSON body for /search endpoint
+  query:
+    index: addresses_full
+    query:
+      match:
+        "*": "test"
+    limit: 10
+
+  thresholds:
+    p95ResponseTime: 500          # ms
+    errorRate: 0.01               # 1%

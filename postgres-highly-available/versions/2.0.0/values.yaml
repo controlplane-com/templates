@@ -1,0 +1,77 @@
+replicas: 3
+
+resources:
+  cpu: 1
+  memory: 2Gi
+
+image: controlplanecorporation/patroni-postgres:0.7
+
+postgres:
+    username: username
+    password: password
+    database: test
+
+multiZone: false
+
+volumeset:
+  capacity: 10 # initial capacity in GiB (minimum is 10)
+  
+internal_access:
+  type: same-gvc # options: same-gvc, same-org, workload-list
+  workloads:  # Note: can only be used if type is same-gvc or workload-list
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+etcd:
+  replicas: 3
+  resources:
+    cpu: 500m
+    memory: 512Mi
+  multiZone: false
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+  internal_access:
+    type: same-gvc # options: same-gvc, same-org, workload-list
+    workloads:  # Note: can only be used if type is same-gvc or workload-list
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+proxy: # HA Proxy endpoint to write to leader replica
+  enabled: true
+  image: haproxy:2.9
+  resources:
+    cpu: 100m
+    memory: 128Mi
+  minReplicas: 2
+  maxReplicas: 2
+
+backup:
+  enabled: false
+  mode: logical  # logical or wal-g
+  resources: # applies to whichever mode is enabled
+    cpu: 100m
+    memory: 128Mi
+
+  logical: # logical backup settings
+    image: controlplanecorporation/pg-backup:17.1.0 # tag 17.1.0 = Postgres 17, no other tags currently supported
+    schedule: "0 2 * * *" # cron schedule, default isdaily at 2am UTC
+
+  walg: # wal-g backup settings
+    intervalSeconds: 21600 # interval in seconds between backups, default is every 6 hours
+
+  # storage settings are applied to whichever mode is enabled
+  aws:
+    enabled: false
+    s3:
+      bucket: pg-ha-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: pg-ha-backup-policy
+      prefix: postgres/my-cluster # folder name where your backups will be stored
+
+  gcp:
+    enabled: false
+    gcs:
+      bucket: pg-ha-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/my-cluster # folder name where your backups will be stored

@@ -1,0 +1,483 @@
+kafka:
+  name: cluster
+  image: apache/kafka:3.9.1
+  suspend: false
+  deletionProtection: false
+  replicas: 3 # must not be 2
+  minReadySeconds: 0
+  debug: false
+  multiZone: false # If true: It's recommended to enable multi-zone on the Dedicated Load Balancer setting on GVC to reduce the cross-zone traffic
+  logDirs: /opt/kafka/logs-0,/opt/kafka/logs-1
+  env: [] # If you need to set environment variables, add them here
+  volumes:
+    logs:
+      initialCapacity: 10 # In GB
+      performanceClass: general-purpose-ssd # general-purpose-ssd / high-throughput-ssd (Min 1000GB)
+      fileSystemType: ext4 # ext4 / xfs
+      snapshots:
+        createFinalSnapshot: true
+        retentionDuration: 7d
+        schedule: 0 0 * * * # UTC
+      autoscaling:
+        maxCapacity: 1000 # In GB
+        minFreePercentage: 20
+        scalingFactor: 1.2
+    # customEncryption:
+    #   enabled: false
+    #   region: aws-us-east-2 # Replace with the appropriate region
+    #   keyId: arn:aws:kms:us-east-2:1234567890:key/d411f35a-1d31-4515-9934-4f193e042d80 # Replace with your AWS KMS key ARN
+  cpu: 1000m # For millicores us 'm' like 500m
+  memory: 2000Mi # Gi / Mi
+  minCpu: 250m # For millicores us 'm' like 500m
+  minMemory: 2000Mi # Gi / Mi
+  # overrideHeapOpts: "-Xmx1024m -Xms1024m" # Override the default heap Options settings
+  # To disable all traffic, comment out the corresponding rule. Docs: https://docs.controlplane.com/concepts/security#firewall
+  firewall:
+    internal_inboundAllowType: "same-gvc" # Options: same-org / same-gvc(Recommended)
+    # external_inboundAllowCIDR: 0.0.0.0/0 # Provide a comma-separated list
+    # # You can specify additional workloads with either same-gvc or workload-list:
+    # inboundAllowWorkload:
+    #   - //gvc/main-kafka/workload/main-kafka-kafbat-ui
+    #   - //gvc/client-gvc/workload/client
+    # external_outboundAllowCIDR: "111.222.333.444/16,111.222.444.333/32" # Provide a comma-separated list
+  listeners:
+    # @param listeners.client.name Name for the Kafka client listener
+    # @param listeners.client.containerPort Port for the Kafka client listener. Except ports 9091,9093,9094
+    # @param listeners.client.protocol Security protocol for the Kafka client listener. Allowed values are 'PLAINTEXT', 'SASL_PLAINTEXT'
+    # @param listeners.client.publicAddress DNS address for public access to brokers. Must be the same as kafka.replicas
+    client:
+      protocol: SASL_PLAINTEXT
+      name: CLIENT
+      containerPort: 9092 # If publicAddress is enabled, Client automatically set to port range 3000-3004
+      sasl:
+      ## @param listeners.client.sasl.users Comma-separated list of usernames for client communications when SASL is enabled
+      ## @param listeners.client.passwords Comma-separated list of passwords for client communications when SASL is enabled, must match the number of client.sasl.users
+      ## @param listeners.client.admin Admin username and password for client communications when SASL is enabled
+        admin:
+          username: admin
+          password: "your-admin-password"
+        users: "user"
+        passwords: "your-user-password"
+    # public:
+    #   protocol: SASL_PLAINTEXT # TLS enforced, Kafka clients should use SASL_SSL to access 'publicAddress' if provided
+    #   name: PUBLIC
+    #   # containerPort: 9095 # Uncomment only when no directReplicaRouting or publicAddress is provided
+    #   # Use directReplicaRouting for automatic public replica endpoints with DNS01 cert challenge
+    #   directReplicaRouting:
+    #     enabled: true
+    #     containerPort: 9095 # ports 9093 and 9094 are reserved for controller and inter-broker communication
+    #     publicAddress: kafka.example.com # Make sure Dedicate Load Balancer is enabled on the GVC
+    #   sasl:
+    #   ## @param listeners.client.sasl.users Comma-separated list of usernames for client communications when SASL is enabled
+    #   ## @param listeners.client.brokersAddresses Comma-separated list of passwords for client communications when SASL is enabled, must match the number of client.sasl.users
+    #   ## @param listeners.client.admin Admin username and password for client communications when SASL is enabled
+    #     # admin:
+    #     #   username: admin
+    #     #   password: tgtgtg
+    #     users: "public-user"
+    #     passwords: "your-public-user-password"
+  acl:
+    superUsers: "User:admin" # User:admin;User:connectors (for multiple users)
+    allowEveryoneIfNoAclFound: false
+  secrets:
+    kraft_cluster_id: your-kraft-cluster-id # Example:bkdDtS1Rsf536si7BGM0JY
+    inter_broker_password: your-inter-broker-password # Example: HfcgCHp32e
+    controller_password: your-controller-password # Example: ayd8iJwqXe
+  extra_configurations:
+    default.replication.factor: 3 # default.replication.factor Can't be greater than the number of cluster replicas
+    auto.create.topics.enable: true # auto.create.topics.enable
+    log.retention.hours: 168 # The number of hours to keep a log file before deleting it (in hours)
+
+kafka_exporter:
+  name: exporter
+  image: danielqsj/kafka-exporter:v1.9.0
+  debug: false
+  cpu: 50m
+  memory: 128Mi
+  listener: client
+  env: [] # If you need to set environment variables, add them here
+  dropMetrics: [] # e.g., ["kafka_consumergroup.*", "^kafka_topic_partition_current_offset"]
+
+jmx_exporter:
+  name: jmx-exporter
+  image: ghcr.io/controlplane-com/bitnami/jmx-exporter
+  kafkaJmxPort: 5557 # Ensure this port matches the port in the jmxUrl below
+  exporterPort: 5556
+  debug: false
+  cpu: 250m
+  memory: 256Mi
+  minCpu: 80m
+  minMemory: 125Mi
+  listener: client
+  dropMetrics: [] # e.g., ["kafka_consumergroup.*", "^kafka_topic_partition_current_offset"]
+  config:
+    jmxUrl: service:jmx:rmi:///jndi/rmi://127.0.0.1:5557/jmxrmi
+    lowercaseOutputName: true
+    lowercaseOutputLabelNames: true
+    ssl: false
+    whitelistObjectNames:
+      - kafka.controller:*
+      - kafka.server:*
+      - java.lang:*
+      - kafka.network:*
+      - kafka.log:*
+      - kafka.producer:*
+      - kafka.consumer:*
+    rules:
+      - labels:
+          request: "$3"
+        name: kafka_request_count
+        pattern: kafka.network<type=(RequestMetrics), name=(.+), request=(.+)><>(Count)
+      - labels:
+          request: "$3"
+          stat: "$4"
+        name: kafka_request_metrics_totaltimems
+        pattern: kafka.network<type=(RequestMetrics), name=(TotalTimeMs), request=(.+)><>(.+)
+      - labels:
+          request: "$3"
+          component: "$2"
+          stat: "$4"
+        name: kafka_request_latency_ms
+        pattern: kafka.network<type=(RequestMetrics), name=(.+TimeMs), request=(.+)><>(.+)
+      - labels:
+          client_type: "$3"
+          metric: "$2"
+          stat: "$4"
+        name: kafka_client_metrics
+        pattern: kafka.network<type=(RequestMetrics), name=(.+), request=(Fetch|Produce)><>(.+)
+      - labels:
+          client_id: "$1"
+          metric: "$2"
+        name: kafka_consumer_metrics
+        pattern: kafka.consumer<type=consumer-fetch-manager-metrics, client-id=(.+)><>(.+)
+      - labels:
+          client_id: "$1" 
+          metric: "$2"
+        name: kafka_producer_metrics
+        pattern: kafka.producer<type=producer-metrics, client-id=(.+)><>(.+)
+      - name: kafka_server_$1_$2_$3
+        pattern: kafka.server<type=(.+), name=(.+)><>(Count|Value)
+      - name: java_lang_$1_$2
+        pattern: java.lang<type=(.+)><>(.+)
+
+kafbat_ui:
+  enabled: true
+  deletionProtection: false
+  name: kafbat-ui
+  image: ghcr.io/kafbat/kafka-ui
+  cpu: 300m
+  memory: 1000Mi
+  minCpu: 100m
+  minMemory: 400Mi
+  replicas: 1
+  timeoutSeconds: 30
+  configuration_secret: kafka-kafbat-ui-config # Pre-create a secret with the configuration; Example in README
+  # Domain name for the UI. 
+  # Make sure the required DNS records are created in your DNS server
+  # https://docs.controlplane.com/guides/configure-domain#subdomain-e-g-sample-domain-com-cname-mode-path-based-routing
+  # domain: kafbat-ui.example.com # Domain name for the UI. 
+  # To disable all traffic, comment out the corresponding rule. Docs: https://docs.controlplane.com/concepts/security#firewall
+  firewall:
+    # internal_inboundAllowType: "same-gvc" # Options: same-org / same-gvc
+    external_inboundAllowCIDR: "0.0.0.0/0" # Provide a comma-separated list
+    external_outboundAllowCIDR: "0.0.0.0/0" # Provide a comma-separated list
+
+# kafka_connectors:
+#   - name: cluster
+#     image: apache/kafka:3.9.1
+#     multiZone: true
+#     cpu: 400m
+#     memory: 1500Mi
+#     minCpu: 100m
+#     minMemory: 375Mi
+#     plugins_folder: /opt/kafka/plugins
+#     timeoutSeconds: 15
+#     replicas: 1
+#     verbose: false
+#     extraVolumes: []
+#     # Volume configuration for Kafka Connect (Optional - defaults shown below)
+#     volumes:
+#       initialCapacity: 10 # In GB (Default: 10)
+#       performanceClass: general-purpose-ssd # general-purpose-ssd / high-throughput-ssd (Min 1000GB) (Default: general-purpose-ssd)
+#       fileSystemType: ext4 # ext4 / xfs (Default: ext4)
+#       snapshots:
+#         createFinalSnapshot: true # Default: true
+#         retentionDuration: 7d # Default: 7d
+#         # schedule: 0 0 * * * # UTC (Optional)
+#       # customEncryption: 
+#       #   enabled: true # Encrypting is only possible for new volumes. Existing volumes cannot be re-encrypted after creation.
+#       #   region: aws-us-east-2 # Replace with the appropriate region
+#       #   keyId: arn:aws:kms:us-east-2:1234567890:key/fewf2f43-1d31-2332-9934-efhg4334gfe # Replace with your AWS KMS key ARN
+#     env:
+#         - name: KAFKA_HEAP_OPTS 
+#           value: '-Xms900m -Xmx900m' # set to 50%-75% of the memory
+#     # To disable all traffic, comment out the corresponding rule. Docs: https://docs.controlplane.com/concepts/security#firewall
+#     firewall:
+#       external_inboundAllowCIDR: 0.0.0.0/0 # Provide a comma-separated list
+#       internal_inboundAllowType: "same-gvc" # Options: same-org / same-gvc
+#       # You can specify additional workloads with either same-gvc or workload-list:
+#       inboundAllowWorkload:
+#         - //gvc/main-kafka/workload/main-kafka-kafbat-ui
+#         - //gvc/client-gvc/workload/client
+#       external_outboundAllowCIDR: "0.0.0.0/0" # Provide a comma-separated list
+#     listener: client # Provide the listener name to connect to
+#     connector_properties:
+#       # bootstrap.servers: "kafka-dev-cluster:9092" # Optional. If not set, the bootstrap address will be the cluster name or publicAddress
+#       group.id: "connect-cluster"
+#       security.protocol: "SASL_PLAINTEXT"
+#       sasl.mechanism: "PLAIN"
+#       sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"admin\" password=\"your-admin-password\";"
+#       consumer.security.protocol: "SASL_PLAINTEXT"
+#       consumer.sasl.mechanism: "PLAIN"
+#       consumer.sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"admin\" password=\"your-admin-password\";"
+#       producer.security.protocol: "SASL_PLAINTEXT"
+#       producer.sasl.mechanism: "PLAIN"
+#       producer.sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"admin\" password=\"your-admin-password\";"
+#       key.converter.schemas.enable: "false"
+#       value.converter.schemas.enable: "false"
+#       offset.storage.topic: "connect-offsets"
+#       offset.storage.replication.factor: "3"
+#       config.storage.topic: "connect-configs"
+#       config.storage.replication.factor: "3"
+#       status.storage.topic: "connect-status"
+#       status.storage.replication.factor: "3"
+#       offset.flush.interval.ms: "10000"
+#       plugin.path: "/opt/kafka/plugins"
+#       key.converter: "org.apache.kafka.connect.storage.StringConverter"
+#       value.converter: "org.apache.kafka.connect.converters.ByteArrayConverter"
+#     plugins:
+#       - name: kafka-mirror-test-1
+#         enabled: true
+#         config:
+#           connector.class: org.apache.kafka.connect.mirror.MirrorSourceConnector
+#           tasks.max: '1'
+#           offset-syncs.topic.location: source
+#           source.cluster.alias: remote
+#           target.cluster.alias: local
+#           source.bootstrap.servers: kafka-dev-cluster:9092
+#           target.bootstrap.servers: kafka-dev-cluster:9092
+#           source.consumer.bootstrap.servers: kafka-dev-cluster:9092
+#           target.consumer.bootstrap.servers: kafka-dev-cluster:9092
+#           source.producer.bootstrap.servers: kafka-dev-cluster:9092
+#           target.producer.bootstrap.servers: kafka-dev-cluster:9092
+#           source.admin.bootstrap.servers: kafka-dev-cluster:9092
+#           target.admin.bootstrap.servers: kafka-dev-cluster:9092
+#           replication.policy.class: org.apache.kafka.connect.mirror.DefaultReplicationPolicy
+#           topics: mirror-test-1-a,mirror-test-1-b
+#           groups: .*
+#           sync.topic.configs.enabled: 'true'
+#           sync.topic.acls.enabled: 'false'
+#           refresh.topics.interval.seconds: '60'
+#           refresh.groups.interval.seconds: '60'
+#           replication.factor: '3'
+#           offset.syncs.topic.replication.factor: '3'
+#           checkpoints.topic.replication.factor: '3'
+#           heartbeats.topic.replication.factor: '3'
+#           source.consumer.security.protocol: SASL_PLAINTEXT
+#           source.consumer.sasl.mechanism: PLAIN
+#           source.consumer.sasl.jaas.config: >-
+#             org.apache.kafka.common.security.plain.PlainLoginModule required
+#             username='admin' password='your-admin-password';
+#           source.producer.security.protocol: SASL_PLAINTEXT
+#           source.producer.sasl.mechanism: PLAIN
+#           source.producer.sasl.jaas.config: >-
+#             org.apache.kafka.common.security.plain.PlainLoginModule required
+#             username='admin' password='your-admin-password';
+#           target.producer.security.protocol: SASL_PLAINTEXT
+#           target.producer.sasl.mechanism: PLAIN
+#           target.producer.sasl.jaas.config: >-
+#             org.apache.kafka.common.security.plain.PlainLoginModule required
+#             username='admin' password='your-admin-password';
+#           target.consumer.security.protocol: SASL_PLAINTEXT
+#           target.consumer.sasl.mechanism: PLAIN
+#           target.consumer.sasl.jaas.config: >-
+#             org.apache.kafka.common.security.plain.PlainLoginModule required
+#             username='admin' password='your-admin-password';
+#           admin.security.protocol: SASL_PLAINTEXT
+#           admin.sasl.mechanism: PLAIN
+#           admin.sasl.jaas.config: >-
+#             org.apache.kafka.common.security.plain.PlainLoginModule required
+#             username='admin' password='your-admin-password';
+#           consumer.security.protocol: SASL_PLAINTEXT
+#           consumer.sasl.mechanism: PLAIN
+#           consumer.sasl.jaas.config: >-
+#             org.apache.kafka.common.security.plain.PlainLoginModule required
+#             username='admin' password='your-admin-password';
+#           producer.security.protocol: SASL_PLAINTEXT
+#           producer.sasl.mechanism: PLAIN
+#           producer.sasl.jaas.config: >-
+#             org.apache.kafka.common.security.plain.PlainLoginModule required
+#             username='admin' password='your-admin-password';
+#       - name: "camel-s3-sink"
+#         enabled: true
+#         artifacts:
+#           - type: tgz
+#             url: https://repo.maven.apache.org/maven2/org/apache/camel/kafkaconnector/camel-aws-s3-sink-kafka-connector/4.8.5/camel-aws-s3-sink-kafka-connector-4.8.5-package.tar.gz
+#         config:
+#           "connector.class": "org.apache.camel.kafkaconnector.awss3sink.CamelAwss3sinkSinkConnector"
+#           "tasks.max": "1"
+#           "topics": "your-topic"
+#           "camel.kamelet.aws-s3-sink.useSessionCredentials": "false"
+#           "camel.kamelet.aws-s3-sink.bucketNameOrArn": "your-bucket-name"
+#           "camel.kamelet.aws-s3-sink.keyName": "your-topic-sink-${exchangeId}.txt"
+#           "camel.kamelet.aws-s3-sink.region": "your-region"
+#           "camel.kamelet.aws-s3-sink.autoCreateBucket": "true"
+#           "camel.kamelet.aws-s3-sink.accessKey": "your-access-key"
+#           "camel.kamelet.aws-s3-sink.secretKey": "your-secret-key"
+#       - name: "clickhouse-sink"
+#         enabled: true
+#         ssl_truststore:
+#           generate: true
+#           truststore_path: /tmp/kafka.autogenerated.truststore.jks
+#           truststore_password_env: "SSL_CLICKHOUSE_SINK_TRUSTSTORE_PASSWORD"
+#           hostnames:
+#             - domain1.clickhouse-sink.com
+#             - domain2.clickhouse-sink.com
+#         artifacts:
+#           - type: zip
+#             url: https://github.com/ClickHouse/clickhouse-kafka-connect/releases/download/v1.2.8/clickhouse-kafka-connect-v1.2.8.zip
+#         config:
+#           "connector.class": "com.clickhouse.kafka.connect.ClickHouseSinkConnector"
+#           "tasks.max": "1"
+#           "topics": "your-topic"
+#           "security.protocol": "SASL_PLAINTEXT" # Connect to Kafka cluster using PLAINTEXT protocol - Internal connection mTLS encrypted
+#           "hostname": "your-hostname"
+#           "username": "your-username"
+#           "database": "your-database"
+#           "password": "your-password"
+#           "port": "8443"
+#           "value.converter.schemas.enable": "false"
+#           "ssl": "true" # Connect to ClickHouse using SSL protocol
+#           "value.converter": "org.apache.kafka.connect.json.JsonConverter"
+#           "key.converter": "org.apache.kafka.connect.storage.StringConverter"
+#           "errors.retry.timeout": "30"
+#           "schemas.enable": "false"
+#           "jdbcConnectionProperties": "?sslmode=STRICT"
+#           "ssl.truststore.location": "/tmp/kafka.autogenerated.truststore.jks"
+#           "ssl.truststore.password": "${SSL_CLICKHOUSE_SINK_TRUSTSTORE_PASSWORD}"
+#           "errors.tolerance": "all"
+#           "errors.log.enable": "true"
+#           "errors.log.include.messages": "true"
+#       - name: "snowflake-sink"
+#         enabled: true
+#         artifacts:
+#           - type: jar
+#             url: https://repo1.maven.org/maven2/com/snowflake/snowflake-kafka-connector/3.1.1/snowflake-kafka-connector-3.1.1.jar
+#           - type: jar
+#             url: https://repo1.maven.org/maven2/org/bouncycastle/bc-fips/2.1.0/bc-fips-2.1.0.jar
+#           - type: jar
+#             url: https://repo1.maven.org/maven2/org/bouncycastle/bcpkix-fips/2.1.9/bcpkix-fips-2.1.9.jar
+#         config:
+#           "connector.class": "com.snowflake.kafka.connector.SnowflakeSinkConnector"
+#           "tasks.max": "1"
+#           "topics": "your-topic"
+#           "key.converter": "org.apache.kafka.connect.storage.StringConverter"
+#           "value.converter": "com.snowflake.kafka.connector.records.SnowflakeJsonConverter"
+#           "value.converter.schemas.enable": "false"
+#           "security.protocol": "SASL_PLAINTEXT" # Connect to Kafka cluster using SASL_PLAINTEXT protocol - Internal connection mTLS encrypted
+#           "snowflake.url.name": "your-snowflake-url"
+#           "snowflake.user.name": "your-snowflake-username"
+#           "snowflake.private.key": "your-snowflake-private-key"
+#           "snowflake.private.key.passphrase": "your-snowflake-private-key-passphrase"
+#           "snowflake.warehouse.name": "your-snowflake-warehouse-name"
+#           "snowflake.database.name": "your-snowflake-database-name"
+#           "snowflake.schema.name": "your-snowflake-schema-name"
+#           "snowflake.topic2table.map": "your-topic:your-table"
+#           "snowflake.role.name": "your-snowflake-role-name"
+#           "snowflake.enable.schematization": "false"
+#           "snowflake.disable.ssl.certificate.verification": "true"
+#           "snowflake.log.enable": "true"
+#           "snowflake.log.level": "DEBUG"
+#           "buffer.count.records": "10000"
+#           "buffer.flush.time": "120"
+#           "buffer.size.bytes": "10000000"
+#           "errors.tolerance": "all"
+#           "errors.log.enable": "true"
+#           "errors.log.include.messages": "true"
+
+kafka_rest_proxy:
+  enabled: true
+  deletionProtection: false
+  name: rest-proxy
+  image: confluentinc/cp-kafka-rest:latest
+  cpu: 500m
+  memory: 1000Mi
+  capacityAI:
+    enabled: true
+    minCpu: 125m # This only applied when capacityAI is enabled
+    minMemory: 200Mi # This only applied when capacityAI is enabled
+  replicas: 1
+  timeoutSeconds: 15
+  # domain: kafka-rest.example.com # Domain name for the Kafka Rest Proxy.
+
+  # To disable all traffic, comment out the corresponding rule. Docs: https://docs.controlplane.com/concepts/security#firewall
+  firewall:
+    # internal_inboundAllowType: "same-gvc" # Options: same-org / same-gvc(Recommended)
+    external_inboundAllowCIDR: 0.0.0.0/0 # Provide a comma-separated list
+    # # You can specify additional workloads with either same-gvc or workload-list:
+    # inboundAllowWorkload:
+    #   - //gvc/main-kafka/workload/main-kafka-kafbat-ui
+    #   - //gvc/client-gvc/workload/client
+    external_outboundAllowCIDR: "0.0.0.0/0" # Provide a comma-separated list
+  properties:
+    # host.name: kafka-rest.example.com
+    bootstrap.servers: SASL_PLAINTEXT://kafka-dev-cluster:9092
+    resource.extension: ALL
+    api.v3.enable: true
+    api.v2.enable: true
+    client.sasl.mechanism: PLAIN
+    api.compatibility.mode: BOTH
+    log4j.opts: -Dlog4j.configuration=file:/tmp/log4j.properties
+    listeners: http://0.0.0.0:8082
+    authentication.realm: KafkaRest
+    authentication.method: BASIC
+    authentication.roles: user
+    client.security.protocol: SASL_PLAINTEXT
+
+  # JAAS configuration for Kafka client and Kafka Rest Proxy
+  # https://docs.confluent.io/platform/current/kafka-rest/production-deployment/confluent-server/security.html#authentication-between-the-admin-rest-and-ak-brokers
+  jaas_conf:
+    KafkaClient {
+    org.apache.kafka.common.security.plain.PlainLoginModule required
+    username="admin"
+    password="your-admin-password";
+    };
+    KafkaRest {
+      org.eclipse.jetty.jaas.spi.PropertyFileLoginModule required
+      debug="true"
+      file="/etc/kafka-rest/password.properties";
+    };
+
+  # # Password properties for Kafka Rest Proxy
+  # # Required when authentication.method is set to BASIC
+  # # https://docs.confluent.io/platform/current/kafka-rest/production-deployment/confluent-server/security.html#password-properties
+  password_properties:
+    user: your-user-password,user
+    user1: password213,user
+    user2: password214,user
+
+kafka_client:
+  name: client
+  image: apache/kafka:3.9.1
+  cpu: 500m
+  memory: 1000Mi
+  # To disable all traffic, comment out the corresponding rule. Docs: https://docs.controlplane.com/concepts/security#firewall
+  firewall:
+  # internal_inboundAllowType: "same-gvc" # Options: same-org / same-gvc
+  # external_inboundAllowCIDR: 0.0.0.0/0 # Provide a comma-separated list
+    external_outboundAllowCIDR: "0.0.0.0/0" # Provide a comma-separated list
+
+# DEPRECATED NOTICE https://github.com/provectus/kafka-ui
+# PLEASE USE KAFBAT UI INSTEAD
+kafka_ui:
+  enabled: false
+  name: ui
+  image: provectuslabs/kafka-ui:latest
+  cpu: 200m
+  memory: 600Mi
+  listener: client
+  # To disable all traffic, comment out the corresponding rule. Docs: https://docs.controlplane.com/concepts/security#firewall
+  firewall: {}
+    # internal_inboundAllowType: "same-gvc" # Options: same-org / same-gvc
+    # external_inboundAllowCIDR: 0.0.0.0/0 # Provide a comma-separated list
+    # external_outboundAllowCIDR: "111.222.333.444/16,111.222.444.333/32" # Provide a comma-separated list

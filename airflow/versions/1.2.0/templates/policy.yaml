@@ -1,0 +1,15 @@
+# Helm template for Airflow policies
+---
+kind: policy
+name: {{ .Release.Name }}-airflow-policy
+description: Airflow policy
+tags:
+  {{- include "airflow.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.gvc.name }}/identity/{{ .Release.Name }}-airflow-identity
+targetKind: secret
+targetLinks:
+  - //secret/{{ .Release.Name }}-airflow-config

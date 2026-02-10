@@ -1,0 +1,14 @@
+kind: volumeset
+name: {{ .Release.Name }}-etcd-vs
+description: etcd volumeset
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "etcd.tags" . | nindent 2 }}
+  workload: {{ .Release.Name }}-etcd
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.capacity }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d

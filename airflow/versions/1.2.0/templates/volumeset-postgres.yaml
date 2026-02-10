@@ -1,0 +1,14 @@
+kind: volumeset
+name: {{ .Release.Name }}-airflow-postgres-vs
+description: Postgres volumeset
+gvc: {{ .Values.gvc.name }}
+tags:
+  {{- include "airflow.tags" . | nindent 4 }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.postgres.capacity }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d
+  

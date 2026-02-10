@@ -231,10 +231,11 @@ spec:
   firewallConfig:
     external:
       inboundAllowCIDR: []
-      outboundAllowHostname:
-        - s3.{{ .Values.buckets.awsRegion }}.amazonaws.com
-        - s3.amazonaws.com
-        - "*.amazonaws.com"
+      outboundAllowHostname: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
     internal:
       inboundAllowType: none
   identityLink: /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.orchestratorJobIdentityName" . }}
@@ -438,10 +439,9 @@ spec:
     external:
       inboundAllowCIDR: []
       inboundBlockedCIDR: []
-      outboundAllowCIDR: []
-      outboundAllowHostname:
-        - s3.{{ .Values.orchestrator.backup.s3Region }}.amazonaws.com
-        - s3.amazonaws.com
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
       outboundAllowPort: []
       outboundBlockedCIDR: []
     internal:

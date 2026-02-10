@@ -1,0 +1,171 @@
+{{- if .Values.kafka_rest_proxy.enabled }}
+{{- if .Values.kafka_rest_proxy.password_properties }}
+kind: secret
+name: {{ include "kafka.name" . }}-rest-password-properties
+description: {{ include "kafka.name" . }}-rest-password-properties
+tags: {}
+type: opaque
+data:
+  encoding: plain
+  payload: |-
+    {{- range $key, $value := .Values.kafka_rest_proxy.password_properties }}
+    {{ $key }}: {{ $value }}
+    {{- end }}
+{{- end }}
+---
+kind: secret
+name: {{ include "kafka.name" . }}-rest-properties
+description: {{ include "kafka.name" . }}-rest-properties
+tags: {}
+type: opaque
+data:
+  encoding: plain
+  payload: |-
+    {{- range $key, $value := .Values.kafka_rest_proxy.properties }}
+    {{ $key }}={{ $value }}
+    {{- end }}
+---
+kind: secret
+name: {{ include "kafka.name" . }}-rest-jaas-conf
+description: {{ include "kafka.name" . }}-rest-jaas-conf
+tags: {}
+type: opaque
+data:
+  encoding: plain
+  payload: >-
+    {{- .Values.kafka_rest_proxy.jaas_conf | nindent 4 }}
+---
+kind: identity
+name: {{ include "kafka.name" . }}-rest-proxy-identity
+description: Identity for Kafka Rest Proxy {{ include "kafka.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+---
+kind: policy
+name: {{ include "kafka.name" . }}-rest-proxy-policy
+origin: default
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "kafka.name" . }}-rest-proxy-identity
+targetKind: secret
+targetLinks:
+{{- if .Values.kafka_rest_proxy.password_properties }}
+  - //secret/{{ include "kafka.name" . }}-rest-password-properties
+{{- end }}
+  - //secret/{{ include "kafka.name" . }}-rest-properties
+  - //secret/{{ include "kafka.name" . }}-rest-jaas-conf
+---
+kind: workload
+name: {{ include "kafka.name" . }}-{{ .Values.kafka_rest_proxy.name }}
+description: Kafka Rest Proxy
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- $hasTags := false }}
+  {{- if .Values.kafka_rest_proxy.deletionProtection }}
+  cpln/protected: true
+  {{- $hasTags = true }}
+  {{- end }}
+  {{- if not $hasTags }}
+  {}
+  {{- end }}
+spec:
+  type: standard
+  containers:
+    - name: rest-proxy
+      args:
+        - '-c'
+        - >-
+          KAFKAREST_OPTS="-Djava.security.auth.login.config=/etc/kafka-rest/kafka-rest.jaas.conf"
+          kafka-rest-start /etc/kafka-rest/kafka-rest.properties
+      command: /bin/bash
+      cpu: {{ .Values.kafka_rest_proxy.cpu }}
+      image: {{ .Values.kafka_rest_proxy.image }}
+      inheritEnv: false
+      memory: {{ .Values.kafka_rest_proxy.memory }}
+      {{- if and .Values.kafka_rest_proxy.capacityAI .Values.kafka_rest_proxy.capacityAI.enabled }}
+      {{- if .Values.kafka_rest_proxy.capacityAI.minCpu }}
+      minCpu: {{ .Values.kafka_rest_proxy.capacityAI.minCpu }}
+      {{- end }}
+      {{- if .Values.kafka_rest_proxy.capacityAI.minMemory }}
+      minMemory: {{ .Values.kafka_rest_proxy.capacityAI.minMemory }}
+      {{- end }}
+      {{- end }}
+      ports:
+        - number: 8082
+          protocol: http
+      volumes:
+        {{- if .Values.kafka_rest_proxy.password_properties }}
+        - path: /etc/kafka-rest/password.properties
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "kafka.name" . }}-rest-password-properties
+        {{- end }}
+        - path: /etc/kafka-rest/kafka-rest.jaas.conf
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "kafka.name" . }}-rest-jaas-conf
+        - path: /etc/kafka-rest/kafka-rest.properties
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "kafka.name" . }}-rest-properties
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.kafka_rest_proxy.replicas }}
+      metric: disabled
+      minScale: {{ .Values.kafka_rest_proxy.replicas }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: {{ .Values.kafka_rest_proxy.capacityAI.enabled }}
+    debug: false
+    suspend: false
+    timeoutSeconds: {{ .Values.kafka_rest_proxy.timeoutSeconds }}
+{{- if .Values.kafka_rest_proxy.firewall }}
+  firewallConfig:
+    {{- if or (hasKey .Values.kafka_rest_proxy.firewall "external_inboundAllowCIDR") (hasKey .Values.kafka_rest_proxy.firewall "external_outboundAllowCIDR") }}
+    external:
+      inboundAllowCIDR: {{- if .Values.kafka_rest_proxy.firewall.external_inboundAllowCIDR }}{{ .Values.kafka_rest_proxy.firewall.external_inboundAllowCIDR | splitList "," | toYaml | nindent 8 }}{{- else }} []{{- end }}
+      outboundAllowCIDR: {{- if .Values.kafka_rest_proxy.firewall.external_outboundAllowCIDR }}{{ .Values.kafka_rest_proxy.firewall.external_outboundAllowCIDR | splitList "," | toYaml | nindent 8 }}{{- else }} []{{- end }}
+    {{- end }}
+    {{- if hasKey .Values.kafka_rest_proxy.firewall "internal_inboundAllowType" }}
+    internal:
+      inboundAllowType: {{ default "[]" .Values.kafka_rest_proxy.firewall.internal_inboundAllowType }}
+      {{- if .Values.kafka_rest_proxy.firewall.inboundAllowWorkload }}
+      inboundAllowWorkload: {{ .Values.kafka_rest_proxy.firewall.inboundAllowWorkload | toYaml | nindent 8 }}
+      {{- end }}
+    {{- end }}
+{{- end }}
+  identityLink: //identity/{{ include "kafka.name" . }}-rest-proxy-identity
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+  securityOptions:
+    filesystemGroupId: 1000
+  supportDynamicTags: false
+{{ if .Values.kafka_rest_proxy.domain }}
+---
+kind: domain
+name: {{ .Values.kafka_rest_proxy.domain }}
+description: {{ .Values.kafka_rest_proxy.domain }}
+spec:
+  acceptAllHosts: false
+  dnsMode: cname
+  ports:
+    - number: 443
+      protocol: http2
+      routes:
+        - port: 8082
+          prefix: /
+          workloadLink: //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "kafka.name" . }}-{{ .Values.kafka_rest_proxy.name }}
+      tls:
+        cipherSuites:
+          - ECDHE-ECDSA-AES256-GCM-SHA384
+          - ECDHE-ECDSA-CHACHA20-POLY1305
+          - ECDHE-ECDSA-AES128-GCM-SHA256
+          - ECDHE-RSA-AES256-GCM-SHA384
+          - ECDHE-RSA-CHACHA20-POLY1305
+          - ECDHE-RSA-AES128-GCM-SHA256
+          - AES256-GCM-SHA384
+          - AES128-GCM-SHA256
+        minProtocolVersion: TLSV1_2
+{{- end }}
+{{- end }}

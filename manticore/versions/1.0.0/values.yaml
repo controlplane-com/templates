@@ -5,7 +5,7 @@
 buckets:
   cloudAccountName: my-cloud-account    # Name of your configured Cloud Account
   awsPolicyRefs:                        # IAM policies for S3 access
-    - aws::AmazonS3ReadOnlyAccess
+    - aws::AmazonS3ReadOnlyAccess       # Note: if using a custom policy, omit the aws:: prefix as this is only for AWS managed policies
   awsRegion: us-east-1                  # Region of your S3 bucket
   sourceBucket: my-bucket               # S3 bucket containing files to import
 

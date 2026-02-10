@@ -4,7 +4,7 @@ kafka:
   suspend: false
   deletionProtection: false
   replicas: 3 # must not be 2
-  minReadySeconds: 60
+  minReadySeconds: 0
   debug: false
   multiZone: false # If true: It's recommended to enable multi-zone on the Dedicated Load Balancer setting on GVC to reduce the cross-zone traffic
   logDirs: /opt/kafka/logs-0,/opt/kafka/logs-1

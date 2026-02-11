@@ -35,6 +35,7 @@ tags: {{- include "manticore.tags" . | nindent 4 }}
 bindings:
   - permissions:
       - view
+      - edit
       - exec.runCronWorkload
     principalLinks:
       - /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.identityName" . }}
@@ -42,6 +43,7 @@ bindings:
 targetKind: workload
 targetLinks:
   - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "manticore.orchestratorJobName" . }}
+  - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "manticore.name" . }}
   {{- if .Values.orchestrator.backup.enabled }}
   - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "manticore.backupName" . }}
   {{- end }}

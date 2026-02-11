@@ -22,6 +22,8 @@ tables:
       agentRetryCount: 3
       clusterMain: false
       importMethod: indexer
+      memLimit: 2G
+      hasHeader: true
     schema:
       columns:
         - name: address_id

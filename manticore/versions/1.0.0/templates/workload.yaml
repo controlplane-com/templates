@@ -21,10 +21,10 @@ spec:
         path: "/metrics"
         port: 9308
       ports:
-        - number: 9306
-          protocol: tcp
         - number: 9308
           protocol: http
+        - number: 9306
+          protocol: tcp
         - number: 9312
           protocol: tcp
         # Galera replication ports
@@ -109,7 +109,7 @@ spec:
         - name: IMPORT_BATCH_SIZE
           value: "{{ .Values.orchestrator.agent.import.batchSize | default 1000 }}"
         - name: ORCHESTRATOR_API_URL
-          value: "http://{{ include "manticore.orchestratorAPIName" . }}.{{ .Values.cpln.gvc }}.cpln.local:8080"
+          value: "http://{{ include "manticore.orchestratorAPIName" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:8080"
       readinessProbe:
         failureThreshold: 3
         initialDelaySeconds: 5
@@ -139,11 +139,15 @@ spec:
     capacityAI: false
     debug: false
     suspend: false
-    timeoutSeconds: 5
+    timeoutSeconds: 30
   firewallConfig:
     external:
-      inboundAllowCIDR: []
-      outboundAllowHostname: []
+      inboundAllowCIDR: {{ if .Values.manticore.firewall.externalAccess.inboundCIDR }}{{ .Values.manticore.firewall.externalAccess.inboundCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      inboundBlockedCIDR: {{ if .Values.manticore.firewall.externalAccess.inboundBlockedCIDR }}{{ .Values.manticore.firewall.externalAccess.inboundBlockedCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundAllowHostname: {{ if .Values.manticore.firewall.outboundAccess.allowedHostnames }}{{ .Values.manticore.firewall.outboundAccess.allowedHostnames | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundAllowCIDR: {{ if .Values.manticore.firewall.outboundAccess.outboundAllowCIDR }}{{ .Values.manticore.firewall.outboundAccess.outboundAllowCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundAllowPort: {{ if .Values.manticore.firewall.outboundAccess.outboundAllowPort }}{{ .Values.manticore.firewall.outboundAccess.outboundAllowPort | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundBlockedCIDR: {{ if .Values.manticore.firewall.outboundAccess.outboundBlockedCIDR }}{{ .Values.manticore.firewall.outboundAccess.outboundBlockedCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
     internal:
       inboundAllowType: {{ .Values.manticore.firewall.internalAccess.type }}
       {{- if .Values.manticore.firewall.internalAccess.workloads }}
@@ -155,6 +159,12 @@ spec:
       enabled: false
       ports: []
     replicaDirect: true
+    #   enabled: true
+    #   ports:
+    #     - containerPort: 9308
+    #       externalPort: 9308
+    #       protocol: http
+    #       scheme: https
   rolloutOptions:
     maxSurgeReplicas: {{ .Values.manticore.rolloutOptions.maxSurgeReplicas }}
     maxUnavailableReplicas: '{{ .Values.manticore.rolloutOptions.maxUnavailableReplicas }}'
@@ -230,12 +240,12 @@ spec:
     timeoutSeconds: {{ .Values.orchestrator.timeoutSeconds }}
   firewallConfig:
     external:
-      inboundAllowCIDR: []
-      outboundAllowHostname: []
-      outboundAllowCIDR:
-        - 0.0.0.0/0
-      outboundAllowPort: []
-      outboundBlockedCIDR: []
+      inboundAllowCIDR: {{ if .Values.manticore.firewall.externalAccess.inboundCIDR }}{{ .Values.manticore.firewall.externalAccess.inboundCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      inboundBlockedCIDR: {{ if .Values.manticore.firewall.externalAccess.inboundBlockedCIDR }}{{ .Values.manticore.firewall.externalAccess.inboundBlockedCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundAllowHostname: {{ if .Values.manticore.firewall.outboundAccess.allowedHostnames }}{{ .Values.manticore.firewall.outboundAccess.allowedHostnames | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundAllowCIDR: {{ if .Values.manticore.firewall.outboundAccess.outboundAllowCIDR }}{{ .Values.manticore.firewall.outboundAccess.outboundAllowCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundAllowPort: {{ if .Values.manticore.firewall.outboundAccess.outboundAllowPort }}{{ .Values.manticore.firewall.outboundAccess.outboundAllowPort | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundBlockedCIDR: {{ if .Values.manticore.firewall.outboundAccess.outboundBlockedCIDR }}{{ .Values.manticore.firewall.outboundAccess.outboundBlockedCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
     internal:
       inboundAllowType: none
   identityLink: /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.orchestratorJobIdentityName" . }}
@@ -321,9 +331,12 @@ spec:
     timeoutSeconds: 30
   firewallConfig:
     external:
-      inboundAllowCIDR: []
-      outboundAllowCIDR:
-        - 0.0.0.0/0
+      inboundAllowCIDR: {{ if .Values.manticore.firewall.externalAccess.inboundCIDR }}{{ .Values.manticore.firewall.externalAccess.inboundCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      inboundBlockedCIDR: {{ if .Values.manticore.firewall.externalAccess.inboundBlockedCIDR }}{{ .Values.manticore.firewall.externalAccess.inboundBlockedCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundAllowHostname: {{ if .Values.manticore.firewall.outboundAccess.allowedHostnames }}{{ .Values.manticore.firewall.outboundAccess.allowedHostnames | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundAllowCIDR: {{ if .Values.manticore.firewall.outboundAccess.outboundAllowCIDR }}{{ .Values.manticore.firewall.outboundAccess.outboundAllowCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundAllowPort: {{ if .Values.manticore.firewall.outboundAccess.outboundAllowPort }}{{ .Values.manticore.firewall.outboundAccess.outboundAllowPort | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundBlockedCIDR: {{ if .Values.manticore.firewall.outboundAccess.outboundBlockedCIDR }}{{ .Values.manticore.firewall.outboundAccess.outboundBlockedCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
     internal:
       inboundAllowType: same-gvc
   identityLink: /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.orchestratorIdentityName" . }}
@@ -348,7 +361,7 @@ spec:
       port: 3000
       env:
         - name: ORCHESTRATOR_API_URL
-          value: "http://{{ include "manticore.orchestratorAPIName" . }}.{{ .Values.cpln.gvc }}.cpln.local:8080"
+          value: "http://{{ include "manticore.orchestratorAPIName" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:8080"
         - name: ORCHESTRATOR_AUTH_TOKEN
           value: "cpln://secret/{{ include "manticore.secretAgentTokenName" . }}.payload"
         - name: PORT
@@ -405,7 +418,7 @@ spec:
         - name: BACKUP_PROVIDER
           value: aws
         - name: BACKUP_REGION
-          value: {{ .Values.buckets.awsRegion }}
+          value: {{ .Values.orchestrator.backup.s3Region }}
         - name: DATASET
           value: {{ .Values.orchestrator.backup.dataSet }}
         - name: MANTICORE_HOST
@@ -439,15 +452,14 @@ spec:
     external:
       inboundAllowCIDR: []
       inboundBlockedCIDR: []
-      outboundAllowCIDR:
-        - 0.0.0.0/0
-      outboundAllowHostname: []
-      outboundAllowPort: []
-      outboundBlockedCIDR: []
+      outboundAllowCIDR: {{ if .Values.manticore.firewall.outboundAccess.outboundAllowCIDR }}{{ .Values.manticore.firewall.outboundAccess.outboundAllowCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundAllowHostname: {{ if .Values.manticore.firewall.outboundAccess.allowedHostnames }}{{ .Values.manticore.firewall.outboundAccess.allowedHostnames | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundAllowPort: {{ if .Values.manticore.firewall.outboundAccess.outboundAllowPort }}{{ .Values.manticore.firewall.outboundAccess.outboundAllowPort | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundBlockedCIDR: {{ if .Values.manticore.firewall.outboundAccess.outboundBlockedCIDR }}{{ .Values.manticore.firewall.outboundAccess.outboundBlockedCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
     internal:
       inboundAllowType: same-gvc
       inboundAllowWorkload: []
-  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.backupIdentityName" . }}
+  identityLink: /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.backupIdentityName" . }}
   job:
     concurrencyPolicy: Forbid
     historyLimit: 5
@@ -563,9 +575,12 @@ spec:
     suspend: {{ if .Values.loadTest.controller.schedule }}false{{ else }}true{{ end }}
   firewallConfig:
     external:
-      inboundAllowCIDR: []
-      outboundAllowCIDR:
-        - 0.0.0.0/0
+      inboundAllowCIDR: {{ if .Values.manticore.firewall.externalAccess.inboundCIDR }}{{ .Values.manticore.firewall.externalAccess.inboundCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      inboundBlockedCIDR: {{ if .Values.manticore.firewall.externalAccess.inboundBlockedCIDR }}{{ .Values.manticore.firewall.externalAccess.inboundBlockedCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundAllowHostname: {{ if .Values.manticore.firewall.outboundAccess.allowedHostnames }}{{ .Values.manticore.firewall.outboundAccess.allowedHostnames | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundAllowCIDR: {{ if .Values.manticore.firewall.outboundAccess.outboundAllowCIDR }}{{ .Values.manticore.firewall.outboundAccess.outboundAllowCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundAllowPort: {{ if .Values.manticore.firewall.outboundAccess.outboundAllowPort }}{{ .Values.manticore.firewall.outboundAccess.outboundAllowPort | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      outboundBlockedCIDR: {{ if .Values.manticore.firewall.outboundAccess.outboundBlockedCIDR }}{{ .Values.manticore.firewall.outboundAccess.outboundBlockedCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
     internal:
       inboundAllowType: none
   identityLink: /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.loadTestControllerIdentityName" . }}

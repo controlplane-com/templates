@@ -109,7 +109,7 @@ spec:
         - name: IMPORT_BATCH_SIZE
           value: "{{ .Values.orchestrator.agent.import.batchSize | default 1000 }}"
         - name: ORCHESTRATOR_API_URL
-          value: "http://{{ include "manticore.orchestratorAPIName" . }}.{{ .Values.cpln.gvc }}.cpln.local:8080"
+          value: "http://{{ include "manticore.orchestratorAPIName" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:8080"
       readinessProbe:
         failureThreshold: 3
         initialDelaySeconds: 5
@@ -143,6 +143,7 @@ spec:
   firewallConfig:
     external:
       inboundAllowCIDR: {{ if .Values.manticore.firewall.externalAccess.inboundCIDR }}{{ .Values.manticore.firewall.externalAccess.inboundCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
+      inboundBlockedCIDR: {{ if .Values.manticore.firewall.externalAccess.inboundBlockedCIDR }}{{ .Values.manticore.firewall.externalAccess.inboundBlockedCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
       outboundAllowHostname: {{ if .Values.manticore.firewall.outboundAccess.allowedHostnames }}{{ .Values.manticore.firewall.outboundAccess.allowedHostnames | toYaml | nindent 8 }}{{ else }}[]{{ end }}
       outboundAllowCIDR: {{ if .Values.manticore.firewall.outboundAccess.outboundAllowCIDR }}{{ .Values.manticore.firewall.outboundAccess.outboundAllowCIDR | toYaml | nindent 8 }}{{ else }}[]{{ end }}
       outboundAllowPort: {{ if .Values.manticore.firewall.outboundAccess.outboundAllowPort }}{{ .Values.manticore.firewall.outboundAccess.outboundAllowPort | toYaml | nindent 8 }}{{ else }}[]{{ end }}
@@ -350,7 +351,7 @@ spec:
       port: 3000
       env:
         - name: ORCHESTRATOR_API_URL
-          value: "http://{{ include "manticore.orchestratorAPIName" . }}.{{ .Values.cpln.gvc }}.cpln.local:8080"
+          value: "http://{{ include "manticore.orchestratorAPIName" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:8080"
         - name: ORCHESTRATOR_AUTH_TOKEN
           value: "cpln://secret/{{ include "manticore.secretAgentTokenName" . }}.payload"
         - name: PORT

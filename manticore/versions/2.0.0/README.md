@@ -89,6 +89,8 @@ Each entry in `tables[]` supports:
 | `config.agentRetryCount` | Retry count for distributed queries |
 | `config.clusterMain` | Replicate main tables across cluster |
 | `config.importMethod` | Import method: `indexer` or `sql` |
+| `config.memLimit` | Memory limit for indexer operations (e.g., `2G`) |
+| `config.hasHeader` | Whether the CSV file has a header row (`true`/`false`) |
 | `schema.columns` | Column definitions (see column types below) |
 
 ### Column Types

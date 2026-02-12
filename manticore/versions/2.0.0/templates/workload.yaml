@@ -111,9 +111,9 @@ spec:
         - name: ORCHESTRATOR_API_URL
           value: "http://{{ include "manticore.orchestratorAPIName" . }}.{{ .Values.cpln.gvc }}.cpln.local:8080"
       readinessProbe:
-        failureThreshold: 3
-        initialDelaySeconds: 5
-        periodSeconds: 5
+        failureThreshold: 6
+        initialDelaySeconds: 10
+        periodSeconds: 15
         successThreshold: 1
         httpGet:
           path: /api/ready

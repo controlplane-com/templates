@@ -3,47 +3,20 @@
 # =============================================================================
 # See README.md for Cloud Account and IAM policy setup instructions.
 buckets:
-  cloudAccountName: my-cloud-account    # Name of your configured Cloud Account
+  cloudAccountName: kintsugi-aws-dev   # Name of your configured Cloud Account
   awsPolicyRefs:                        # IAM policies for S3 access
-    - aws::AmazonS3ReadOnlyAccess       # Note: if using a custom policy, omit the aws:: prefix as this is only for AWS managed policies
-  awsRegion: us-east-1                  # Region of your S3 bucket
-  sourceBucket: my-bucket               # S3 bucket containing files to import
+    - manticore_search_s3_bucket_access_policy
+  awsRegion: us-west-2                  # Region of your S3 bucket
+  sourceBucket: manticore-imports               # S3 bucket containing files to import
 
 # =============================================================================
 # Tables Configuration
 # =============================================================================
-# See README.md for table structure, column types, and config options.
+# See README.md for table structure, column types, and config options.csvPath: manticore-imports/addresses_small.tsv
 # Add/remove tables as needed.
 tables:
-  - name: addresses
-    csvPath: manticore-imports/addresses/data.csv
-    config:
-      haStrategy: noerrors
-      agentRetryCount: 3
-      clusterMain: false
-      importMethod: indexer
-    schema:
-      columns:
-        - name: street_number
-          type: attr_uint
-        - name: street_name
-          type: field
-        - name: city
-          type: field
-        - name: county
-          type: field
-        - name: state
-          type: field
-        - name: postal_code
-          type: field
-        - name: country
-          type: field
-        - name: latitude
-          type: attr_float
-        - name: longitude
-          type: attr_float
-  - name: addresses_full
-    csvPath: manticore-imports/addresses-full/data.tsv
+  - name: addresses_us
+    csvPath: addresses_small.tsv
     config:
       haStrategy: noerrors
       agentRetryCount: 3
@@ -62,9 +35,9 @@ tables:
         - name: city
           type: field
         - name: state
-          type: field
+          type: attr_string
         - name: country
-          type: field
+          type: attr_string
         - name: county
           type: field
         - name: latitude
@@ -77,14 +50,14 @@ tables:
           type: field
         - name: full_address
           type: field
-        - name: created_date
+        - name: created_at
           type: attr_timestamp
         - name: is_unincorporated
           type: attr_bool
-        - name: uploaded_to_es_at
-          type: attr_timestamp
         - name: source
           type: attr_string
+        - name: updated_at
+          type: attr_timestamp
 
 # =============================================================================
 # Manticore Search Configuration
@@ -117,6 +90,17 @@ manticore:
 
   # IMPORTANT: same-gvc required for Galera replication
   firewall:
+    externalAccess:
+      allowInbound: true            # Set to true to allow external inbound (e.g., Postman)
+      inboundCIDR:
+        - 0.0.0.0/0                 # CIDRs allowed for external inbound (when allowInbound=true)
+      inboundBlockedCIDR: []
+    outboundAccess:
+      allowedHostnames: []            # Hostnames the workload is allowed to reach
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
     internalAccess:
       type: same-gvc
       workloads: []
@@ -135,7 +119,7 @@ orchestrator:
   # Cron job settings
   schedule: "0 * * * *"           # Cron schedule (default = every hour)
   action: import                  # init, import, health, repair
-  tableName: addresses            # Must match a name in tables[]
+  tableName: addresses_us         # Must match a name in tables[]
   suspend: true                   # Start suspended (trigger via UI/API)
   timeoutSeconds: 900             # Container timeout (seconds, default 15 minutes)
   importMemLimit: 2G              # Memory limit for import jobs
@@ -162,7 +146,11 @@ orchestrator:
     version: v3.0.0
     image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-agent
     # REQUIRED: Generate with `openssl rand -base64 32`
-    token: "6Gl5uO9KkKAh1u+ymoBW98WCtjTFpljuhpLdKb+tNAA="
+    # token: "JxI7n1EB1lnafzeAztfjZYbU5eDTn7NMyxENC4PcT+g="
+    # REQUIRED: Supply at install time via environment variable:
+    #   helm install ... --set orchestrator.agent.token=$MANTICORE_AGENT_TOKEN
+    # Generate with: openssl rand -base64 32
+    token: ""
     resources:
       cpu: 250m
       minCpu: 100m
@@ -191,19 +179,19 @@ orchestrator:
 
   # Backup Configuration (Optional) - Cron job runs logical backup on delta table to S3 bucket.
   backup:
-    enabled: false
+    enabled: true
     version: v3.0.0
     image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-backup
-    cloudAccountName: my-backup-cloud-account
-    s3Bucket: my-backup-bucket    # S3 bucket for backups
+    cloudAccountName: kintsugi-aws-dev
+    s3Bucket: address-validation-manticore-backup    # S3 bucket for backups
     s3Policy:                     # IAM policies for S3 access
-      - my-backup-policy          # Custom policy created in S3 setup instructions
-    s3Region: us-east-1
-    dataSet: addresses_full       # Data set to back up (must be delta)
+      - manticore_search_s3_bucket_access_policy          # Custom policy created in S3 setup instructions
+    s3Region: us-west-2
+    dataSet: addresses_us       # Data set to back up (must be delta)
     prefix: manticore-backups     # S3 prefix/folder for backups
     schedules: [
-      {"table":"addresses","type":"delta","schedule":"0 2 * * *"},     # Daily at 2am UTC
-      {"table":"addresses","type":"main","schedule":"0 2 1 * *"}       # Monthly full backup on 1st at 2am UTC
+      {"table":"addresses_us","type":"delta","schedule":"0 2 * * *"},     # Daily at 2am UTC
+      {"table":"addresses_us","type":"main","schedule":"0 2 1 * *"}       # Monthly full backup on 1st at 2am UTC
       ]
     activeDeadlineSeconds: 14400  # Max job runtime (seconds, default 4 hours)
     resources:
@@ -245,7 +233,7 @@ loadTest:
 
   # Full JSON body for /search endpoint
   query:
-    index: addresses_full
+    index: addresses_us
     query:
       match:
         "*": "test"

@@ -3,11 +3,11 @@
 # =============================================================================
 # See README.md for Cloud Account and IAM policy setup instructions.
 buckets:
-  cloudAccountName: my-s3-cloud-account    # Name of your configured Cloud Account
+  cloudAccountName: my-cloud-account    # Name of your configured Cloud Account
   awsPolicyRefs:                        # IAM policies for S3 access
     - aws::AmazonS3ReadOnlyAccess       # Note: if using a custom policy, omit the aws:: prefix as this is only for AWS managed policies
   awsRegion: us-east-1                  # Region of your S3 bucket
-  sourceBucket: test-manticore-imports               # S3 bucket containing files to import
+  sourceBucket: my-bucket               # S3 bucket containing files to import
 
 # =============================================================================
 # Tables Configuration
@@ -16,7 +16,7 @@ buckets:
 # Add/remove tables as needed.
 tables:
   - name: addresses
-    csvPath: large-file/large_addresses.csv
+    csvPath: manticore-imports/addresses/data.csv
     config:
       haStrategy: noerrors
       agentRetryCount: 3
@@ -152,15 +152,15 @@ orchestrator:
 
   # Backup Configuration (Optional) - Cron job runs logical backup on delta table to S3 bucket.
   backup:
-    enabled: true
+    enabled: false
     version: v4.0.0
     image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-backup
-    cloudAccountName: my-s3-cloud-account
-    s3Bucket: test-manticore-backups    # S3 bucket for backups
+    cloudAccountName: my-backup-cloud-account
+    s3Bucket: my-backup-bucket    # S3 bucket for backups
     s3Policy:                     # IAM policies for S3 access
       - my-backup-policy          # Custom policy created in S3 setup instructions
     s3Region: us-east-1
-    dataSet: addresses       # Data set to back up (must be delta)
+    dataSet: addresses            # Data set to back up
     prefix: manticore-backups     # S3 prefix/folder for backups
     schedules: [
       {"table":"addresses","type":"delta","schedule":"0 2 * * *"},     # Daily at 2am UTC
@@ -206,7 +206,7 @@ loadTest:
 
   # Full JSON body for /search endpoint
   query:
-    index: addresses_full
+    index: addresses
     query:
       match:
         "*": "test"

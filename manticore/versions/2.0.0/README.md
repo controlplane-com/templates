@@ -38,7 +38,9 @@ The orchestrator handles cluster initialization, coordinates imports across all 
          haStrategy: noerrors
          agentRetryCount: 3
          clusterMain: false
-         importMethod: indexer  # indexer or sql
+         importMethod: indexer
+         memLimit: 2G
+         hasHeader: true
        schema:
          columns:
            - name: title
@@ -128,7 +130,7 @@ Operations can be triggered via the **Orchestrator UI** or the **Control Plane C
 ### Via Orchestrator UI
 
 The web dashboard provides controls for:
-- **Import** - Select a table and trigger a coordinated import
+- **Import, Backup and Restore** - Select a table and trigger a coordinated import, backup, or restore process
 - **Repair** - Recover the cluster from split-brain scenarios
 - **Monitoring** - View cluster health, replica status, and table details
 
@@ -143,8 +145,6 @@ cpln workload run-cron {release-name}-orchestrator-job --gvc {gvc-name}
 # Trigger a repair (set ACTION=repair on the workload first)
 cpln workload run-cron {release-name}-orchestrator-job --gvc {gvc-name}
 ```
-
-**Important:** Run imports with the maximum number of replicas active. Scaling up after an import may leave new replicas without main table data.
 
 ## Load Testing
 

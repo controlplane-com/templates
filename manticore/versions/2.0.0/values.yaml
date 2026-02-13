@@ -16,7 +16,7 @@ buckets:
 # Add/remove tables as needed.
 tables:
   - name: addresses
-    csvPath: small-file/small_addresses.csv
+    csvPath: large-file/large_addresses.csv
     config:
       haStrategy: noerrors
       agentRetryCount: 3
@@ -54,7 +54,7 @@ manticore:
   image: manticoresearch/manticore:15.1.0
   clusterName: manticore          # Galera cluster name
   resources:
-    cpu: 2
+    cpu: 4
     memory: 8Gi
   volumeset:
     capacity: 200                 # GB per replica

@@ -57,6 +57,7 @@ bindings:
       - view
     principalLinks:
       - /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.orchestratorIdentityName" . }}
+      - /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.backupIdentityName" . }}
 targetKind: workload
 targetLinks:
   - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "manticore.name" . }}

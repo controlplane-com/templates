@@ -2,15 +2,13 @@ apiVersion: v2
 name: manticore
 description: >-
   Distributed Manticore Search cluster with intelligent orchestration.
-  Features Galera-based clustering, dual-slot zero-downtime imports,
-  web UI dashboard, and automated cluster recovery.
 
 type: application
-version: 1.0.0
-appVersion: "1.0.0"
+version: 2.0.0
+appVersion: "2.0.0"
 
 annotations:
   created: "2026-01-05"
-  lastModified: "2026-01-28"
+  lastModified: "2026-02-13"
   category: "search"
   createsGvc: false

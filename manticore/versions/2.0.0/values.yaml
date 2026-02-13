@@ -26,6 +26,8 @@ tables:
       hasHeader: true
     schema:
       columns:
+        - name: address_id
+          type: attr_uint
         - name: street_number
           type: attr_uint
         - name: street_name
@@ -44,51 +46,6 @@ tables:
           type: attr_float
         - name: longitude
           type: attr_float
-  - name: addresses_full
-    csvPath: manticore-imports/addresses-full/data.tsv
-    config:
-      haStrategy: noerrors
-      agentRetryCount: 3
-      clusterMain: false
-      importMethod: indexer
-      memLimit: 2G
-      hasHeader: true
-    schema:
-      columns:
-        - name: record_hash
-          type: attr_string
-        - name: number
-          type: attr_string
-        - name: street
-          type: field
-        - name: street2
-          type: field
-        - name: city
-          type: field
-        - name: state
-          type: field
-        - name: country
-          type: field
-        - name: county
-          type: field
-        - name: latitude
-          type: attr_float
-        - name: longitude
-          type: attr_float
-        - name: postal_code
-          type: field
-        - name: address
-          type: field
-        - name: full_address
-          type: field
-        - name: created_date
-          type: attr_timestamp
-        - name: is_unincorporated
-          type: attr_bool
-        - name: uploaded_to_es_at
-          type: attr_timestamp
-        - name: source
-          type: attr_string
 
 # =============================================================================
 # Manticore Search Configuration
@@ -97,7 +54,7 @@ manticore:
   image: manticoresearch/manticore:15.1.0
   clusterName: manticore          # Galera cluster name
   resources:
-    cpu: 2
+    cpu: 4
     memory: 8Gi
   volumeset:
     capacity: 200                 # GB per replica
@@ -203,7 +160,7 @@ orchestrator:
     s3Policy:                     # IAM policies for S3 access
       - my-backup-policy          # Custom policy created in S3 setup instructions
     s3Region: us-east-1
-    dataSet: addresses_full       # Data set to back up (must be delta)
+    dataSet: addresses            # Data set to back up
     prefix: manticore-backups     # S3 prefix/folder for backups
     schedules: [
       {"table":"addresses","type":"delta","schedule":"0 2 * * *"},     # Daily at 2am UTC
@@ -249,7 +206,7 @@ loadTest:
 
   # Full JSON body for /search endpoint
   query:
-    index: addresses_full
+    index: addresses
     query:
       match:
         "*": "test"

@@ -231,11 +231,9 @@ spec:
   firewallConfig:
     external:
       inboundAllowCIDR: []
-      outboundAllowHostname: []
       outboundAllowCIDR:
         - 0.0.0.0/0
-      outboundAllowPort: []
-      outboundBlockedCIDR: []
+      outboundAllowHostname: []
     internal:
       inboundAllowType: none
   identityLink: /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.orchestratorJobIdentityName" . }}

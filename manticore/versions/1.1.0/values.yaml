@@ -3,11 +3,11 @@
 # =============================================================================
 # See README.md for Cloud Account and IAM policy setup instructions.
 buckets:
-  cloudAccountName: my-cloud-account    # Name of your configured Cloud Account
+  cloudAccountName: my-s3-cloud-account    # Name of your configured Cloud Account
   awsPolicyRefs:                        # IAM policies for S3 access
     - aws::AmazonS3ReadOnlyAccess       # Note: if using a custom policy, omit the aws:: prefix as this is only for AWS managed policies
   awsRegion: us-east-1                  # Region of your S3 bucket
-  sourceBucket: my-bucket               # S3 bucket containing files to import
+  sourceBucket: test-manticore-imports               # S3 bucket containing files to import
 
 # =============================================================================
 # Tables Configuration
@@ -16,7 +16,7 @@ buckets:
 # Add/remove tables as needed.
 tables:
   - name: addresses
-    csvPath: manticore-imports/addresses/data.csv
+    csvPath: large-file/large_addresses.csv
     config:
       haStrategy: noerrors
       agentRetryCount: 3
@@ -86,7 +86,7 @@ manticore:
 # Orchestrator Configuration
 # =============================================================================
 orchestrator:
-  version: v4.0.0
+  version: v4.4.0
   image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-api
   logLevel: debug                 # debug, info, warn, error
   resources:
@@ -104,7 +104,7 @@ orchestrator:
 
   # Orchestrator API
   api:
-    version: v4.0.0
+    version: v4.4.0
     image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-api
     logLevel: debug
     importPollInterval: 30s
@@ -120,7 +120,7 @@ orchestrator:
 
   # Agent sidecar
   agent:
-    version: v4.0.0
+    version: v4.4.0
     image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-agent
     # REQUIRED: Generate with `openssl rand -base64 32`
     token: "6Gl5uO9KkKAh1u+ymoBW98WCtjTFpljuhpLdKb+tNAA="
@@ -138,7 +138,7 @@ orchestrator:
 
   # Web UI - See README.md "Authentication" section for security notes
   ui:
-    version: v4.0.0
+    version: v4.4.0
     image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-ui
     resources:
       cpu: 0.25
@@ -152,10 +152,10 @@ orchestrator:
 
   # Backup Configuration (Optional) - Cron job runs logical backup on delta table to S3 bucket.
   backup:
-    enabled: false
-    version: v4.0.0
+    enabled: true
+    version: v4.4.0
     image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-backup
-    cloudAccountName: my-backup-cloud-account
+    cloudAccountName: my-s3-cloud-account
     s3Bucket: my-backup-bucket    # S3 bucket for backups
     s3Policy:                     # IAM policies for S3 access
       - my-backup-policy          # Custom policy created in S3 setup instructions

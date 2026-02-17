@@ -155,7 +155,7 @@ orchestrator:
     enabled: false
     version: v4.6.0
     image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-backup
-    cloudAccountName: my-backup-cloud-account
+    cloudAccountName: my-s3-cloud-account
     s3Bucket: my-backup-bucket    # S3 bucket for backups
     s3Policy:                     # IAM policies for S3 access
       - my-backup-policy          # Custom policy created in S3 setup instructions

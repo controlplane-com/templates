@@ -57,6 +57,7 @@ tags: {{- include "manticore.tags" . | nindent 4 }}
 bindings:
   - permissions:
       - view
+      - edit
     principalLinks:
       - /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.orchestratorJobIdentityName" . }}
       - /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.backupIdentityName" . }}

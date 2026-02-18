@@ -16,11 +16,14 @@ buckets:
 # Add/remove tables as needed.
 tables:
   - name: addresses
-    csvPath: manticore-imports/addresses/data.csv
+    csvPath:
+      - manticore-imports/addresses/data_1.csv
+      - manticore-imports/addresses/data_2.csv
     config:
       haStrategy: noerrors
       agentRetryCount: 3
       clusterMain: false
+      segmentCount: 2
       importMethod: indexer
       charsetTable: non_cont
       memLimit: 2G
@@ -87,7 +90,7 @@ manticore:
 # Orchestrator Configuration
 # =============================================================================
 orchestrator:
-  version: v4.6.0
+  version: v4.7.0
   image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-api
   logLevel: debug                 # debug, info, warn, error
   resources:
@@ -105,7 +108,7 @@ orchestrator:
 
   # Orchestrator API
   api:
-    version: v4.6.0
+    version: v4.7.0
     image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-api
     logLevel: debug
     importPollInterval: 30s
@@ -121,7 +124,7 @@ orchestrator:
 
   # Agent sidecar
   agent:
-    version: v4.6.0
+    version: v4.7.0
     image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-agent
     # REQUIRED: Generate with `openssl rand -base64 32`
     token: "6Gl5uO9KkKAh1u+ymoBW98WCtjTFpljuhpLdKb+tNAA="
@@ -139,7 +142,7 @@ orchestrator:
 
   # Web UI - See README.md "Authentication" section for security notes
   ui:
-    version: v4.6.0
+    version: v4.7.0
     image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-ui
     resources:
       cpu: 0.25
@@ -154,7 +157,7 @@ orchestrator:
   # Backup Configuration (Optional) - Cron job runs logical backup on delta table to S3 bucket.
   backup:
     enabled: false
-    version: v4.6.0
+    version: v4.7.0
     image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-backup
     cloudAccountName: my-backup-cloud-account
     s3Bucket: my-backup-bucket    # S3 bucket for backups

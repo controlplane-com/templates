@@ -179,8 +179,10 @@ Manticore Shared Volume Set Name
 {{/* Functions */}}
 
 {{/*
-Generate JSON mapping of table names to CSV paths for orchestrator
-Output: {"addresses":"imports/addresses/data.csv","products":"imports/products/data.csv"}
+Generate JSON mapping of table names to CSV paths for orchestrator.
+csvPath accepts a single string or a list for multi-segment tables.
+Output (single):  {"addresses":"imports/addresses/data.csv"}
+Output (multi):   {"addresses":["imports/addresses/data_1.csv","imports/addresses/data_2.csv"]}
 */}}
 {{- define "manticore.tablesConfigJSON" -}}
 {{- $config := dict -}}

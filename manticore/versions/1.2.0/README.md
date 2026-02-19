@@ -150,13 +150,7 @@ tables:
 
 `segmentCount` must equal the number of items in `csvPath`. The template will fail at render time with a descriptive error if they don't match.
 
-### Backups with multiple segments
-
-When a table has multiple segments, a backup backs up **all segments**. Each segment is stored as a separate archive file in S3.
-
-### Restoring multi-segment tables
-
-Restores must be done **per segment** — each segment's backup file is restored independently. Use the UI or API to select and restore each segment file individually before rotating the slot.
+When a table has multiple segments, a backup backs up **all segments** as one file. Restores on multi-segment tables will restore all segments on the table.
 
 ## Operations
 

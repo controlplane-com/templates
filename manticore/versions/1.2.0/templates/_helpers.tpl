@@ -193,6 +193,27 @@ Output (multi):   {"addresses":["imports/addresses/data_1.csv","imports/addresse
 {{- end }}
 
 {{/*
+Validate that each table's csvPath length matches its config.segmentCount.
+csvPath may be a single string (segmentCount must be 1) or a list (length must equal segmentCount).
+*/}}
+{{- define "manticore.validateTables" -}}
+{{- range .Values.tables -}}
+{{- $tableName := .name -}}
+{{- $segmentCount := .config.segmentCount | int -}}
+{{- if kindIs "slice" .csvPath -}}
+  {{- $csvCount := len .csvPath -}}
+  {{- if ne $csvCount $segmentCount -}}
+    {{- fail (printf "Table %q: csvPath has %d entries but segmentCount is %d — they must match." $tableName $csvCount $segmentCount) -}}
+  {{- end -}}
+{{- else -}}
+  {{- if ne $segmentCount 1 -}}
+    {{- fail (printf "Table %q: csvPath is a single string but segmentCount is %d — it must be 1 when csvPath is a single value." $tableName $segmentCount) -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Calculate total load test duration in seconds (duration + buffer)
 Parses duration strings like "5m", "1h", "30s"
 */}}

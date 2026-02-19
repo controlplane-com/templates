@@ -86,11 +86,13 @@ Each entry in `tables[]` supports:
 | Field | Description |
 |-------|-------------|
 | `name` | Table name |
-| `csvPath` | Path to CSV in S3 bucket |
+| `csvPath` | Path to CSV in S3 bucket, or a list of paths for multi-segment tables (see [Multi-Segment Tables](#multi-segment-tables)) |
 | `config.haStrategy` | HA strategy: `noerrors`, `nodeads`, etc. |
 | `config.agentRetryCount` | Retry count for distributed queries |
 | `config.clusterMain` | Replicate main tables across cluster |
+| `config.segmentCount` | Number of distributed table segments; must match the number of entries in `csvPath` (default: `1`) |
 | `config.importMethod` | Import method: `indexer` or `sql` |
+| `config.charsetTable` | Manticore `charset_table` tokenization preset (e.g., `non_cont`) — omit to use the Manticore default |
 | `config.memLimit` | Memory limit for indexer operations (e.g., `2G`) |
 | `config.hasHeader` | Whether the CSV file has a header row (`true`/`false`) |
 | `schema.columns` | Column definitions (see column types below) |
@@ -122,6 +124,39 @@ Each entry in `tables[]` supports:
 | `orchestrator.tableName` | Table to import | - |
 | `orchestrator.suspend` | Start suspended | `true` |
 | `orchestrator.agent.token` | Bearer token for auth | **required** |
+
+## Multi-Segment Tables
+
+Large datasets can be split across multiple CSV files and imported as a distributed table with multiple independent segments. Manticore fans queries across all segments automatically.
+
+Set `csvPath` to a list of S3 paths and set `segmentCount` to match the number of entries:
+
+```yaml
+tables:
+  - name: addresses
+    csvPath:
+      - large-file/part1.csv
+      - large-file/part2.csv
+    config:
+      segmentCount: 2       # must match the number of csvPath entries
+      importMethod: indexer
+      memLimit: 2G
+      hasHeader: true
+    schema:
+      columns:
+        - name: street_name
+          type: field
+```
+
+`segmentCount` must equal the number of items in `csvPath`. The template will fail at render time with a descriptive error if they don't match.
+
+### Backups with multiple segments
+
+When a table has multiple segments, a backup backs up **all segments**. Each segment is stored as a separate archive file in S3.
+
+### Restoring multi-segment tables
+
+Restores must be done **per segment** — each segment's backup file is restored independently. Use the UI or API to select and restore each segment file individually before rotating the slot.
 
 ## Operations
 

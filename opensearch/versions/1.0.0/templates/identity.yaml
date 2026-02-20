@@ -1,0 +1,4 @@
+kind: identity
+name: {{ include "opensearch.identityName" . }}
+description: OpenSearch identity
+tags: {{ include "opensearch.tags" . | indent 4 }}

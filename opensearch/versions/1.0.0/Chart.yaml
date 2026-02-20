@@ -1,0 +1,13 @@
+apiVersion: v2
+name: opensearch
+description: OpenSearch distributed search and analytics engine for Control Plane
+
+type: application
+version: 1.0.0
+appVersion: "3.4.0"
+
+annotations:
+  created: "2026-02-19"
+  lastModified: "2026-02-19"
+  category: "search"
+  createsGvc: false

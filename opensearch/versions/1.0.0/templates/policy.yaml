@@ -1,0 +1,12 @@
+kind: policy
+name: {{ include "opensearch.policyName" . }}
+description: OpenSearch policy granting permissions to access the startup script secret
+tags: {{ include "opensearch.tags" . | indent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/test-gvc/identity/{{ include "opensearch.identityName" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "opensearch.secretStartupName" . }}

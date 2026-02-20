@@ -1,0 +1,11 @@
+kind: volumeset
+name: {{ include "opensearch.volumeName" . }}
+description: OpenSearch volumeset
+tags: {{ include "opensearch.tags" . | indent 4 }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.capacity }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d

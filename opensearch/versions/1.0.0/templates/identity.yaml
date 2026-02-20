@@ -1,4 +1,13 @@
+---
 kind: identity
-name: {{ include "opensearch.identityName" . }}
+name: {{ include "opensearch.identity.name" . }}
 description: OpenSearch identity
-tags: {{ include "opensearch.tags" . | indent 4 }}
+tags: {{ include "opensearch.tags" . | nindent 4 }}
+
+{{- if .Values.enable_demo_logs }}
+---
+kind: identity
+name: {{ include "opensearch.demoLogsIdentity.name" . }}
+description: Identity for OpenSearch demo logs app
+tags: {{ include "opensearch.tags" . | nindent 4 }}
+{{- end }}

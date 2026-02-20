@@ -1,0 +1,53 @@
+{{- if .Values.dashboard.enabled }}
+kind: workload
+name: {{ include "opensearch.dashboard.name" . }}
+description: OpenSearch Dashboard
+tags: {{ include "opensearch.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: opensearch-dashboard
+      cpu: {{ .Values.dashboard.resources.cpu | quote }}
+      env:
+        - name: DISABLE_SECURITY_DASHBOARDS_PLUGIN
+          value: 'true'
+        - name: OPENSEARCH_HOSTS
+          value: '["http://{{ include "opensearch.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:9200"]'
+        - name: SERVER_HOST
+          value: 0.0.0.0
+        - name: SERVER_PORT
+          value: '5601'
+      image: {{ .Values.dashboard.image }}
+      inheritEnv: false
+      memory: {{ .Values.dashboard.resources.memory | quote }}
+      ports:
+        - number: 5601
+          protocol: http
+      volumes: []
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: false
+    suspend: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+      inboundAllowWorkload: []
+  identityLink: //gvc/test-gvc/identity/{{ include "opensearch.identity.name" . }}
+  loadBalancer:
+    replicaDirect: false
+  localOptions: []
+  supportDynamicTags: false
+{{- end }}

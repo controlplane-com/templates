@@ -16,3 +16,12 @@ internal_access:
   workloads:  # Note: can only be used if type is same-gvc or workload-list
     #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
     #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+dashboard:
+  enabled: true
+  image: opensearchproject/opensearch-dashboards:3.4.0
+  resources:
+    cpu: 100m
+    memory: 512Mi
+
+enable_demo_logs: false

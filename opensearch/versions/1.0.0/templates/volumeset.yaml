@@ -1,0 +1,29 @@
+kind: volumeset
+name: {{ include "opensearch.volume.name" . }}
+description: OpenSearch volumeset
+tags: {{ include "opensearch.tags" . | nindent 4 }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.capacity }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d
+
+{{- if .Values.enable_demo_logs }}
+---
+kind: volumeset
+name: {{ include "opensearch.demoLogsVolume.name" . }}
+description: Shared volumeset for OpenSearch demo logs
+tags: {{ include "opensearch.tags" . | nindent 4 }}
+spec:
+  fileSystemType: shared
+  initialCapacity: 10
+  mountOptions:
+    resources:
+      maxCpu: 2000m
+      maxMemory: 2Gi
+      minCpu: 500m
+      minMemory: 1Gi
+  performanceClass: shared
+{{- end }}

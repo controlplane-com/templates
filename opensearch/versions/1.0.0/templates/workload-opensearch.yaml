@@ -1,7 +1,7 @@
 kind: workload
 name: {{ include "opensearch.name" . }}
 description: opensearch
-tags: {{ include "opensearch.tags" . | indent 4 }}
+tags: {{ include "opensearch.tags" . | nindent 4 }}
 spec:
   type: stateful
   containers:
@@ -26,10 +26,10 @@ spec:
       volumes:
         - path: /usr/share/opensearch/data
           recoveryPolicy: retain
-          uri: cpln://volumeset/{{ include "opensearch.volumeName" . }}
+          uri: cpln://volumeset/{{ include "opensearch.volume.name" . }}
         - path: /usr/local/bin/opensearch-startup.sh
           recoveryPolicy: retain
-          uri: cpln://secret/{{ include "opensearch.secretStartupName" . }}.payload
+          uri: cpln://secret/{{ include "opensearch.secretStartup.name" . }}.payload
   defaultOptions:
     autoscaling:
       metric: disabled
@@ -53,7 +53,7 @@ spec:
       {{- if .Values.internal_access.workloads }}
       inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
       {{- end }}
-  identityLink: //gvc/test-gvc/identity/opensearch-identity
+  identityLink: //gvc/test-gvc/identity/{{ include "opensearch.identity.name" . }}
   loadBalancer:
     replicaDirect: true
   localOptions: []

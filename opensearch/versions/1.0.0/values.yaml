@@ -25,3 +25,32 @@ dashboard:
     memory: 512Mi
 
 enable_demo_logs: false
+
+# Backup Configuration (Optional)
+backup:
+  enabled: false      # Set to true to enable automated snapshots
+  
+  # Cloud provider: aws or gcp
+  provider: aws
+  
+  # Backup schedule (cron format, UTC timezone)
+  schedule: 0 2 * * *  # Daily at 2am UTC
+  
+  # Snapshot retention
+  retention:
+    maxAge: 30d        # Delete snapshots older than 30 days
+    maxCount: 30       # Keep maximum 30 snapshots
+  
+  # AWS S3 Configuration
+  aws:
+    bucket: my-s3-bucket                 # S3 bucket name (required if provider=aws)
+    region: us-east-1                    # S3 bucket region (required if provider=aws)
+    prefix: opensearch-snapshots         # Path prefix in bucket
+    cloudAccountName: my-cloud-account   # Control Plane Cloud Account name (required)
+    policyName: my-backup-policy         # AWS IAM custom policy name (required)
+  
+  # GCP GCS Configuration
+  gcp:
+    bucket: my-gcs-bucket                # GCS bucket name (required if provider=gcp)
+    prefix: opensearch-snapshots         # Path prefix in bucket
+    cloudAccountName: my-cloud-account   # Control Plane Cloud Account name (required)

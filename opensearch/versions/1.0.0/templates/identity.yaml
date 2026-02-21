@@ -3,6 +3,24 @@ kind: identity
 name: {{ include "opensearch.identity.name" . }}
 description: OpenSearch identity
 tags: {{ include "opensearch.tags" . | nindent 4 }}
+{{- if and .Values.backup.enabled .Values.backup.provider "aws" }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.backup.aws.s3.cloudAccountName }}
+  policyRefs:
+    - cpln-connector
+    - aws::ReadOnlyAccess
+    - {{ .Values.backup.aws.policyName  | quote }}
+{{- end }}
+{{- if and .Values.backup.enabled .Values.backup.provider "gcp" }}
+gcp:
+  bindings:
+    - resource: //storage.googleapis.com/projects/_/buckets/{{ .Values.backup.gcp.gcs.bucket }}
+      roles:
+        - roles/storage.objectAdmin
+  cloudAccountLink: //cloudaccount/{{ .Values.backup.gcp.cloudAccountName }}
+  scopes:
+    - https://www.googleapis.com/auth/cloud-platform
+{{- end }}
 
 {{- if .Values.enable_demo_logs }}
 ---

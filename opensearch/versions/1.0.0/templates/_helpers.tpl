@@ -22,6 +22,13 @@ Opensearch Demo Workload Name
 {{- end }}
 
 {{/*
+Backup setup workload name
+*/}}
+{{- define "opensearch.backupSetup.name" -}}
+{{ .Release.Name }}-backup-setup
+{{- end }}
+
+{{/*
 Opensearch Demo Startup Workload Name
 */}}
 {{- define "opensearch.demoLogsStartup.name" -}}

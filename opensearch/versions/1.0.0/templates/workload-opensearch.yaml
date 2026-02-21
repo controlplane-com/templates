@@ -44,7 +44,8 @@ spec:
     external:
       inboundAllowCIDR: []
       inboundBlockedCIDR: []
-      outboundAllowCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
       outboundAllowHostname: []
       outboundAllowPort: []
       outboundBlockedCIDR: []

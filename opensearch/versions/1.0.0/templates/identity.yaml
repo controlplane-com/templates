@@ -5,7 +5,7 @@ description: OpenSearch identity
 tags: {{ include "opensearch.tags" . | nindent 4 }}
 {{- if and .Values.backup.enabled .Values.backup.provider "aws" }}
 aws:
-  cloudAccountLink: //cloudaccount/{{ .Values.backup.aws.s3.cloudAccountName }}
+  cloudAccountLink: //cloudaccount/{{ .Values.backup.aws.cloudAccountName }}
   policyRefs:
     - cpln-connector
     - aws::ReadOnlyAccess
@@ -14,7 +14,7 @@ aws:
 {{- if and .Values.backup.enabled .Values.backup.provider "gcp" }}
 gcp:
   bindings:
-    - resource: //storage.googleapis.com/projects/_/buckets/{{ .Values.backup.gcp.gcs.bucket }}
+    - resource: //storage.googleapis.com/projects/_/buckets/{{ .Values.backup.gcp.bucket }}
       roles:
         - roles/storage.objectAdmin
   cloudAccountLink: //cloudaccount/{{ .Values.backup.gcp.cloudAccountName }}

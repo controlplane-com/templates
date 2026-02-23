@@ -1,4 +1,4 @@
-{{- if .Values.enable_demo_logs }}
+{{- if .Values.demoLogs.enabled }}
 ---
 kind: workload
 name: {{ include "opensearch.demoLogs.name" . }}
@@ -149,9 +149,10 @@ spec:
   localOptions: []
   supportDynamicTags: false
 
+{{- if not .Values.demoLogs.remove_setup_workload }}
 ---
 kind: workload
-name: {{ include "opensearch.demoLogsStartup.name" . }}
+name: {{ include "opensearch.demoLogsSetup.name" . }}
 description: One-time setup job for OpenSearch demo
 tags: {{ include "opensearch.tags" . | nindent 4 }}
 spec:
@@ -377,4 +378,5 @@ spec:
     internal:
       inboundAllowType: same-gvc
   supportDynamicTags: false
+{{- end }}
 {{- end }}

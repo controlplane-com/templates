@@ -1,4 +1,5 @@
 {{- if .Values.backup.enabled }}
+{{- if not .Values.backup.remove_setup_workload }}
 ---
 kind: workload
 name: {{ include "opensearch.backupSetup.name" . }}
@@ -209,4 +210,5 @@ spec:
       inboundAllowCIDR: []
     internal:
       inboundAllowType: same-gvc
+{{- end }}
 {{- end }}

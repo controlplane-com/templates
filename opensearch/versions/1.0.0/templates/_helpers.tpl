@@ -29,10 +29,10 @@ Backup setup workload name
 {{- end }}
 
 {{/*
-Opensearch Demo Startup Workload Name
+Opensearch Demo Setup Workload Name
 */}}
-{{- define "opensearch.demoLogsStartup.name" -}}
-{{- printf "%s-demo-log-startup" .Release.Name }}
+{{- define "opensearch.demoLogsSetup.name" -}}
+{{- printf "%s-demo-log-setup" .Release.Name }}
 {{- end }}
 
 {{/*

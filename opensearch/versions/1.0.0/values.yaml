@@ -17,6 +17,7 @@ internal_access:
     #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
     #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
+# Dashboard Configuration (recommended)
 dashboard:
   enabled: true
   image: opensearchproject/opensearch-dashboards:3.4.0
@@ -24,11 +25,15 @@ dashboard:
     cpu: 100m
     memory: 512Mi
 
-enable_demo_logs: true
+# Demo Logs Configuration (optional)
+demoLogs:
+  enabled: false
+  remove_setup_workload: false # Set to true after demo logs startup is no longer needed to reduce resource usage
 
-# Backup Configuration (Optional)
+# Backup Configuration (optional)
 backup:
-  enabled: true      # Set to true to enable automated snapshots
+  enabled: false      # Set to true to enable automated snapshots
+  remove_setup_workload: false # Set to true after initial setup workload is no longer needed to reduce resource usage
   
   # Cloud provider: aws or gcp
   provider: aws
@@ -43,10 +48,10 @@ backup:
   
   # AWS S3 Configuration
   aws:
-    bucket: my-s3-bucket-opensearch                 # S3 bucket name (required if provider=aws)
+    bucket: my-s3-bucket                 # S3 bucket name (required if provider=aws)
     region: us-east-1                    # S3 bucket region (required if provider=aws)
     prefix: opensearch-snapshots         # Path prefix in bucket
-    cloudAccountName: my-s3-cloud-account   # Control Plane Cloud Account name (required)
+    cloudAccountName: my-cloud-account   # Control Plane Cloud Account name (required)
     policyName: my-backup-policy         # AWS IAM custom policy name (required)
   
   # GCP GCS Configuration

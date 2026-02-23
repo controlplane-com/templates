@@ -11,7 +11,7 @@ targetKind: secret
 targetLinks:
   - //secret/{{ include "opensearch.secretStartup.name" . }}
 
-{{- if .Values.enable_demo_logs }}
+{{- if .Values.demoLogs.enabled }}
 ---
 kind: policy
 name: {{ include "opensearch.demoLogsPolicy.name" . }}

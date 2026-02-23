@@ -10,7 +10,7 @@ spec:
     createFinalSnapshot: true
     retentionDuration: 7d
 
-{{- if .Values.enable_demo_logs }}
+{{- if .Values.demoLogs.enabled }}
 ---
 kind: volumeset
 name: {{ include "opensearch.demoLogsVolume.name" . }}

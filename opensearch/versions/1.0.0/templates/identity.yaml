@@ -22,7 +22,7 @@ gcp:
     - https://www.googleapis.com/auth/cloud-platform
 {{- end }}
 
-{{- if .Values.enable_demo_logs }}
+{{- if .Values.demoLogs.enabled }}
 ---
 kind: identity
 name: {{ include "opensearch.demoLogsIdentity.name" . }}

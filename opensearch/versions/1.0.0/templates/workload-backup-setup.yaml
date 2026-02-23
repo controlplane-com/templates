@@ -147,19 +147,24 @@ spec:
             }
           }'
           
-          RESPONSE=$(curl -w "%{http_code}" -o /tmp/policy_response.json -s -X PUT \
-            "${OPENSEARCH_URL}/_plugins/_sm/policies/automated-snapshots" \
-            -H 'Content-Type: application/json' \
-            -d "${POLICY_CONFIG}")
-          
-          if [ "$RESPONSE" -eq 200 ] || [ "$RESPONSE" -eq 201 ]; then
-            echo "✅ Snapshot policy created"
-            echo "   Schedule: {{ .Values.backup.schedule }}"
-            echo "   Retention: {{ .Values.backup.retention.maxAge }} / {{ .Values.backup.retention.maxCount }} snapshots"
+
+          # Try to get existing policy
+          if curl -sf "${OPENSEARCH_URL}/_plugins/_sm/policies/automated-snapshots" > /dev/null 2>&1; then
+            echo "✅ Snapshot policy already exists (skipping)"
           else
-            echo "❌ Failed to create snapshot policy (HTTP $RESPONSE)"
-            cat /tmp/policy_response.json
-            exit 1
+            # Create new policy
+            RESPONSE=$(curl -w "%{http_code}" -o /tmp/policy_response.json -s -X POST \
+              "${OPENSEARCH_URL}/_plugins/_sm/policies/automated-snapshots" \
+              -H 'Content-Type: application/json' \
+              -d "${POLICY_CONFIG}")
+            
+            if [ "$RESPONSE" -eq 200 ] || [ "$RESPONSE" -eq 201 ] || [ "$RESPONSE" -eq 409 ]; then
+              echo "✅ Snapshot policy created"
+            else
+              echo "❌ Failed (HTTP $RESPONSE)"
+              cat /tmp/policy_response.json
+              exit 1
+            fi
           fi
           echo ""
           

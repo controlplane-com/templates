@@ -1,0 +1,83 @@
+kind: workload
+name: {{ include "coraza.name" . }}
+description: Coraza WAF
+tags: {{- include "coraza.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: coraza-crs
+      cpu: {{ .Values.resources.cpu | quote }}
+      env:
+        - name: ACCESSLOG
+          value: /dev/stdout
+        - name: BACKEND
+          value: http://{{ .Values.targetWorkload }}:{{ .Values.targetPort }}
+        - name: CORAZA_AUDIT_LOG
+          value: /dev/stdout
+        - name: CORAZA_AUDIT_LOG_PARTS
+          value: ABDEFHIJZ
+        - name: CORAZA_DEBUG_LOG
+          value: /dev/stdout
+        - name: CORAZA_DEBUG_LOGLEVEL
+          value: '1'
+        - name: CORAZA_RULE_ENGINE
+          value: 'On'
+        - name: PORT
+          value: "{{ .Values.WAFPort }}"
+      image: {{ .Values.image }}
+      inheritEnv: false
+      lifecycle:
+        postStart:
+          exec:
+            command:
+              - /bin/sh
+              - /opt/coraza/startup.sh
+      memory: {{ .Values.resources.memory | quote }}
+      ports:
+        - number: {{ .Values.WAFPort }}
+          protocol: http
+      volumes:
+        - path: /opt/coraza/rules.d/custom.conf
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "coraza.secretRulesName" . }}
+        - path: /opt/coraza/startup.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "coraza.secretStartupName" . }}
+  defaultOptions:
+    multiZone:
+      enabled: {{ .Values.multiZone }}
+    autoscaling:
+      keda:
+        cooldownPeriod: 1
+        initialCooldownPeriod: 1
+        pollingInterval: 1
+        triggers: []
+      maxConcurrency: 0
+      maxScale: 3
+      metric: cpu
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+      inboundAllowWorkload: []
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "coraza.identityName" . }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

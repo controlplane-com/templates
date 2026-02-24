@@ -1,0 +1,6 @@
+---
+kind: identity
+gvc: {{ .Values.global.cpln.gvc }}
+name: {{ include "coraza.identityName" . }}
+description: Coraza identity
+tags: {{- include "coraza.tags" . | nindent 4 }}

@@ -1,0 +1,14 @@
+---
+kind: policy
+name: {{ include "coraza.policyName" . }}
+description: Coraza WAF policy
+tags: {{- include "coraza.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "coraza.identityName" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "coraza.secretStartupName" . }}
+  - //secret/{{ include "coraza.secretRulesName" . }}

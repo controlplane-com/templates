@@ -19,8 +19,8 @@ spec:
           airflow scheduler &
           airflow triggerer &
           exec airflow api-server
-      cpu: {{ .Values.airflow.webserver.resources.cpu }}
-      memory: {{ .Values.airflow.webserver.resources.memory }}
+      cpu: {{ .Values.airflow.webserver.resources.cpu | quote }}
+      memory: {{ .Values.airflow.webserver.resources.memory | quote }}
       image: {{ .Values.airflow.webserver.image }}
       inheritEnv: false
       lifecycle:

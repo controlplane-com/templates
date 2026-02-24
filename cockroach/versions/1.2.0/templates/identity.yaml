@@ -1,0 +1,6 @@
+---
+kind: identity
+gvc: {{ .Values.gvc.name }}
+name: {{ include "cockroach.identity.name" . }}
+description: CockroachDB identity
+tags: {{- include "cockroach.tags" . | nindent 4 }}

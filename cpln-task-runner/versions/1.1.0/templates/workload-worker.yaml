@@ -1,0 +1,100 @@
+{{- if .Values.worker.enabled }}
+kind: workload
+name: {{ include "task-runner-worker.name" . }}
+description: Task Runner Worker - Processes tasks from the queue
+tags: {{- include "cpln-task-runner.tags" . | nindent 4 }}
+spec:
+  type: serverless
+
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "task-runner.identityName" . }}
+
+  containers:
+    - name: worker
+      image: {{ .Values.image }}
+      port: {{ .Values.worker.port }}
+
+      cpu: {{ .Values.worker.resources.cpu | quote }}
+      memory: {{ .Values.worker.resources.memory | quote }}
+
+      env:
+        - name: MODE
+          value: "worker"
+        - name: PORT
+          value: {{ .Values.worker.port | quote }}
+        # Redis configuration
+        - name: REDIS_MASTER_NAME
+          value: mymaster
+        - name: REDIS_SENTINEL_ADDR
+          value: {{ include "task-runner-sentinel.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:26379
+        # Secrets
+        {{- if .Values.createSecret }}
+        - name: REDIS_PASSWORD
+          value: "cpln://secret/{{ .Values.secretName }}.redis-password"
+        - name: REDIS_SENTINEL_PASSWORD
+          value: "cpln://secret/{{ .Values.secretName }}.redis-sentinel-password"
+        {{- else }}
+        - name: REDIS_PASSWORD
+          value: "cpln://secret/{{ .Values.redis.redis.auth.fromSecret.name }}.{{ .Values.redis.redis.auth.fromSecret.passwordKey }}"
+        - name: REDIS_SENTINEL_PASSWORD
+          value: "cpln://secret/{{ .Values.redis.sentinel.auth.fromSecret.name }}.{{ .Values.redis.sentinel.auth.fromSecret.passwordKey }}"
+        {{- end }}
+        - name: LOG_LEVEL
+          value: {{ .Values.worker.env.logLevel | quote }}
+        - name: WORKER_CONCURRENCY
+          value: {{ .Values.worker.env.concurrency | quote }}
+        - name: TASK_TIMEOUT_SEC
+          value: {{ .Values.worker.env.taskTimeoutSec | quote }}
+        - name: MAX_RETRY
+          value: {{ .Values.worker.env.maxRetry | quote }}
+        - name: ALLOW_PRIVATE_URLS
+          value: {{ .Values.worker.env.allowPrivateUrls | quote }}
+        - name: CB_FAILURE_THRESHOLD
+          value: {{ .Values.worker.env.cbFailureThreshold | quote }}
+        - name: CB_TIMEOUT_SEC
+          value: {{ .Values.worker.env.cbTimeoutSec | quote }}
+        - name: REDIS_CONNECT_RETRIES
+          value: {{ .Values.worker.env.connectRetries | quote }}
+        - name: REDIS_RETRY_INTERVAL_SEC
+          value: {{ .Values.worker.env.retryIntervalSec | quote }}
+        # OpenTelemetry configuration
+        {{- if .Values.worker.env.otelEndpoint }}
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: {{ .Values.worker.env.otelEndpoint | quote }}
+        {{- end }}
+
+      readinessProbe:
+        httpGet:
+          path: /health/ready
+          port: {{ .Values.worker.port }}
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 3
+
+      livenessProbe:
+        httpGet:
+          path: /health/live
+          port: {{ .Values.worker.port }}
+        initialDelaySeconds: 10
+        periodSeconds: 15
+        timeoutSeconds: 5
+        failureThreshold: 3
+
+  defaultOptions:
+    autoscaling:
+      metric: concurrency
+      target: 50
+      minScale: {{ .Values.worker.replicas.min }}
+      maxScale: {{ .Values.worker.replicas.max }}
+      scaleToZeroDelay: 300
+    capacityAI: false
+    timeoutSeconds: 60
+
+  # Worker is internal only - no public access
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: same-gvc
+{{- end }}

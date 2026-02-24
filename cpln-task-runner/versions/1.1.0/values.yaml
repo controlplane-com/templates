@@ -1,0 +1,104 @@
+# Same image for both API and Worker workloads
+image: controlplanecorporation/cpln-task-runner:0.4
+
+# API configuration
+api:
+  # Enable/disable the API workload
+  enabled: true
+  # Number of replicas
+  replicas:
+    min: 1
+    max: 3
+  # Container port
+  port: 8080
+  # Public access configuration
+  public:
+    enabled: true
+    # Path prefix for public endpoint (empty for root)
+    pathPrefix: ""
+  # Resource allocation
+  resources:
+    cpu: "500m"
+    memory: "512Mi"
+  # Environment variables
+  env:
+    # Log level (debug, info, warn, error)
+    logLevel: "info"
+    # Admin API key for protected endpoints (leave empty to disable admin auth)
+    adminApiKey: ""
+    # OpenTelemetry endpoint (leave empty to disable tracing)
+    otelEndpoint: ""
+    # Redis connection retries
+    connectRetries: 30
+    # Redis retry interval in seconds
+    retryIntervalSec: 2
+
+# Worker configuration
+worker:
+  # Enable/disable the Worker workload
+  enabled: true
+  # Number of replicas
+  replicas:
+    min: 1
+    max: 5
+  # Container port (for health checks)
+  port: 8082
+  # Resource allocation
+  resources:
+    cpu: "1000m"
+    memory: "1Gi"
+  # Environment variables
+  env:
+    # Log level (debug, info, warn, error)
+    logLevel: "info"
+    # Number of concurrent workers per replica
+    concurrency: 10
+    # Task timeout in seconds (default: 30 minutes)
+    taskTimeoutSec: 1800
+    # Maximum retry attempts
+    maxRetry: 5
+    # Allow tasks to target private/internal URLs
+    allowPrivateUrls: false
+    # Circuit breaker failure threshold
+    cbFailureThreshold: 5
+    # Circuit breaker timeout in seconds
+    cbTimeoutSec: 30
+    # Redis connection retries
+    connectRetries: 30
+    # Redis retry interval in seconds
+    retryIntervalSec: 2
+    # OpenTelemetry endpoint (leave empty to disable tracing)
+    otelEndpoint: ""
+
+# Creates a secret for redis + sentinel passwords and admin api key
+createSecret: true
+# Must match names below. Disregard if providing your own secret
+secretName: "task-runner-secrets"
+
+# Redis configuration
+redis:
+  # Redis and sentinel passwords
+  redisPassword: "mypassword"
+  sentinelPassword: "mypassword"
+  # If createSecret is true, do not change
+  # If providing a secret, adjust secret values below to match the secret name and password key.
+  admin:
+    fromSecret:
+      name: "task-runner-secrets"
+      apiKeyKey: admin-api-key
+  redis:
+    auth:
+      fromSecret:
+        enabled: true
+        name: "task-runner-secrets"
+        passwordKey: redis-password
+    persistence:
+      enabled: true
+  sentinel:
+    auth:
+      fromSecret:
+        enabled: true
+        name: "task-runner-secrets"
+        passwordKey: redis-sentinel-password
+    persistence:
+      enabled: true

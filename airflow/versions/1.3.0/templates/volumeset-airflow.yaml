@@ -1,0 +1,12 @@
+kind: volumeset
+name: {{ include "airflow.volume.name" . }}
+description: Airflow volume set
+gvc: {{ .Values.gvc.name }}
+tags:
+  {{- include "airflow.tags" . | nindent 4 }}
+spec:
+  fileSystemType: shared
+  initialCapacity: {{ .Values.volumeset.airflow.capacity }}
+  performanceClass: shared
+
+

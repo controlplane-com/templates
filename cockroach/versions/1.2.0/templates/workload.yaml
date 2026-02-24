@@ -1,0 +1,73 @@
+{{- include "cockroach.validateLocations" . -}}
+---
+kind: workload
+name: {{ include "cockroach.name" . }}
+description: CockroachDB cluster
+tags: {{- include "cockroach.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  containers:
+    - name: cockroach
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
+      image: cockroachdb/cockroach:v25.4.0
+      command: "/bin/bash"
+      args:
+        - "/cockroach/start.sh"
+      inheritEnv: false
+      env:
+        - name: DB_NAME
+          value: cpln://secret/{{ include "cockroach.secretDatabase.name" . }}.db
+        - name: DB_USER
+          value: cpln://secret/{{ include "cockroach.secretDatabase.name" . }}.user
+      ports:
+        - number: 8080
+          protocol: http
+        - number: 26257
+          protocol: tcp
+      volumes:
+        - path: /cockroach/cockroach-data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "cockroach.volume.name" . }}
+        - path: /cockroach/start.sh
+          uri: cpln://secret/{{ include "cockroach.secretStartup.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      metric: disabled
+      minScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 10
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+      - 0.0.0.0/0
+    internal:
+      inboundAllowType: {{ .Values.internal_access.type }}
+      {{- if .Values.internal_access.workloads }}
+      inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "cockroach.identity.name" . }}
+  loadBalancer:
+    replicaDirect: true
+  localOptions:
+    {{- range $location := .Values.gvc.locations }}
+    - autoscaling:
+        maxConcurrency: 0
+        maxScale: {{ if eq ($location.replicas | int) 0 }}1{{ else }}{{ $location.replicas | int }}{{ end }}
+        metric: disabled
+        minScale: {{ if eq ($location.replicas | int) 0 }}0{{ else }}{{ $location.replicas | int }}{{ end }}
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      location: //location/{{ $location.name }}
+      suspend: {{ if eq ($location.replicas | int) 0 }}true{{ else }}false{{ end }}
+      timeoutSeconds: 10
+    {{- end }}
+  supportDynamicTags: false

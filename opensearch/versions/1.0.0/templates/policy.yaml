@@ -1,0 +1,34 @@
+kind: policy
+name: {{ include "opensearch.policy.name" . }}
+description: OpenSearch policy granting permissions to access the startup script secret
+tags: {{ include "opensearch.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/test-gvc/identity/{{ include "opensearch.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "opensearch.secretStartup.name" . }}
+
+{{- if .Values.demoLogs.enabled }}
+---
+kind: policy
+name: {{ include "opensearch.demoLogsPolicy.name" . }}
+description: Policy granting permissions for OpenSearch demo logs app to access Fluent Bit config
+tags: {{ include "opensearch.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/test-gvc/identity/{{ include "opensearch.demoLogsIdentity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "opensearch.secretFluentBitDemo.name" . }}
+targetQuery:
+  kind: secret
+  fetch: items
+  spec:
+    match: all
+    terms: []
+{{- end }}

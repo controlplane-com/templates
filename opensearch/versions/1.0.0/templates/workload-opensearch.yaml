@@ -1,0 +1,64 @@
+kind: workload
+name: {{ include "opensearch.name" . }}
+description: opensearch
+tags: {{ include "opensearch.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  containers:
+    - name: opensearch
+      command: /bin/bash
+      args:
+        - /usr/local/bin/opensearch-startup.sh
+      cpu: {{ .Values.resources.cpu | quote }}
+      env:
+        - name: DISABLE_INSTALL_DEMO_CONFIG
+          value: 'true'
+        - name: DISABLE_SECURITY_PLUGIN
+          value: 'true'
+      image: {{ .Values.image }}
+      inheritEnv: false
+      memory: {{ .Values.resources.memory | quote }}
+      ports:
+        - number: 9200
+          protocol: http
+        - number: 9300
+          protocol: tcp
+      volumes:
+        - path: /usr/share/opensearch/data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "opensearch.volume.name" . }}
+        - path: /usr/local/bin/opensearch-startup.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "opensearch.secretStartup.name" . }}.payload
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: {{ .Values.replicas }}
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: false
+    suspend: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internal_access.type }}
+      {{- if .Values.internal_access.workloads }}
+      inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  identityLink: //gvc/test-gvc/identity/{{ include "opensearch.identity.name" . }}
+  loadBalancer:
+    replicaDirect: true
+  localOptions: []
+  securityOptions:
+    filesystemGroupId: 1000
+    runAsUser: 1000
+  supportDynamicTags: false

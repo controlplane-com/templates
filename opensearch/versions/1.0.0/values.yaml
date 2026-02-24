@@ -33,7 +33,7 @@ demoLogs:
 # Backup Configuration (optional)
 backup:
   enabled: false      # Set to true to enable automated snapshots
-  remove_setup_workload: false # Set to true after initial setup workload is no longer needed to reduce resource usage
+  remove_setup_workload: false # Set to true after backup setup is no longer needed to reduce resource usage
   
   # Cloud provider: aws or gcp
   provider: aws

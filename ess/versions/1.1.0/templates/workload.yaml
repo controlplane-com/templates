@@ -1,0 +1,61 @@
+kind: workload
+name: {{ include "ess.name" . }}
+description: External Secret Syncer
+tags: {{- include "ess.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: ess
+      cpu: {{ .Values.resources.cpu | quote }}
+      image: {{ .Values.image }}
+      inheritEnv: false
+      memory: {{ .Values.resources.memory | quote }}
+      ports:
+        - number: {{ .Values.port }}
+          protocol: http
+      readinessProbe:
+        failureThreshold: 3
+        httpGet:
+          httpHeaders: []
+          path: /about
+          port: {{ .Values.port }}
+          scheme: HTTP
+        initialDelaySeconds: 0
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 1
+      volumes:
+        - path: /usr/src/app/sync.yaml
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "ess.secret.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 3
+      metric: cpu
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR: 
+        {{- toYaml .Values.allowedIp | nindent 8 }}
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: none
+      inboundAllowWorkload: []
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "ess.identity.name" . }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+  supportDynamicTags: false

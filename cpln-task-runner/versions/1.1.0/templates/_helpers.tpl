@@ -24,14 +24,14 @@ Task Runner Sentinel Workload Name
 {{/*
 Task Runner Identity Name
 */}}
-{{- define "task-runner.identityName" -}}
+{{- define "task-runner.identity.name" -}}
 {{- printf "%s-task-runner-identity" .Release.Name }}
 {{- end }}
 
 {{/*
 Task Runner Policy Name
 */}}
-{{- define "task-runner.policyName" -}}
+{{- define "task-runner.policy.name" -}}
 {{- printf "%s-task-runner-policy" .Release.Name }}
 {{- end }}
 

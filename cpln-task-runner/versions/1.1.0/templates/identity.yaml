@@ -1,5 +1,5 @@
 kind: identity
-name: {{ include "task-runner.identityName" . }}
+name: {{ include "task-runner.identity.name" . }}
 gvc: {{ .Values.global.cpln.gvc }}
 description: Identity for Task Runner workloads
 tags: {{- include "cpln-task-runner.tags" . | nindent 4 }}

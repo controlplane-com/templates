@@ -6,7 +6,7 @@ tags: {{- include "cpln-task-runner.tags" . | nindent 4 }}
 spec:
   type: serverless
 
-  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "task-runner.identityName" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "task-runner.identity.name" . }}
 
   containers:
     - name: worker
@@ -18,7 +18,7 @@ spec:
 
       env:
         - name: MODE
-          value: "worker"
+          value: worker
         - name: PORT
           value: {{ .Values.worker.port | quote }}
         # Redis configuration

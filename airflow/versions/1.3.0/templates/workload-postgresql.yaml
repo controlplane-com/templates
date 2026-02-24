@@ -20,8 +20,8 @@ spec:
           value: 'cpln://secret/{{ include "airflow.secret.name" . }}.username'
       image: {{ .Values.postgres.image }}
       inheritEnv: false
-      cpu: {{ .Values.postgres.resources.cpu }}
-      memory: {{ .Values.postgres.resources.memory }}
+      cpu: {{ .Values.postgres.resources.cpu | quote }}
+      memory: {{ .Values.postgres.resources.memory | quote }}
       ports:
         - number: 5432
           protocol: tcp

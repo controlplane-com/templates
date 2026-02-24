@@ -8,8 +8,8 @@ spec:
   identityLink: //identity/{{ include "airflow.identity.name" . }}
   containers:
     - name: celery-worker
-      cpu: {{ .Values.airflow.celeryWorker.resources.cpu }}
-      memory: {{ .Values.airflow.celeryWorker.resources.memory }}
+      cpu: {{ .Values.airflow.celeryWorker.resources.cpu | quote }}
+      memory: {{ .Values.airflow.celeryWorker.resources.memory | quote }}
       env:
         - name: AIRFLOW_HOME
           value: /opt/airflow

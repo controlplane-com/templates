@@ -2,14 +2,14 @@
 ---
 kind: identity
 gvc: {{ .Values.gvc.name }}
-name: {{ include "clickhouse.identityName" . }}
+name: {{ include "clickhouse.identity.name" . }}
 description: Clickhouse identity
 tags: {{- include "clickhouse.tags" . | nindent 4 }}
-{{- if .Values.aws.enabled }}
+{{- if eq .Values.provider "aws" }}
 aws:
-  cloudAccountLink: //cloudaccount/{{ .Values.aws.s3.cloudAccountName }}
+  cloudAccountLink: //cloudaccount/{{ .Values.aws.cloudAccountName }}
   policyRefs:
     - cpln-connector
     - aws::ReadOnlyAccess
-    - "{{ .Values.aws.s3.policyName }}"
+    - "{{ .Values.aws.policyName }}"
 {{- end }}

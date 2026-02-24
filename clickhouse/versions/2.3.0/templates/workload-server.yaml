@@ -1,7 +1,7 @@
 {{ include "clickhouse.validateLocations" . }}
 {{ include "clickhouse.validateStorage" . }}
 kind: workload
-name: {{ include "clickhouse.serverName" . }}
+name: {{ include "clickhouse.server.name" . }}
 description: clickhouse server
 tags: {{- include "clickhouse.tags" . | nindent 4 }}
 spec:
@@ -15,9 +15,9 @@ spec:
       - name: LOCATIONS_STR
         value: "{{- range $i, $loc := .Values.gvc.locations -}}{{ $loc.name }}:{{ $loc.replicas }}{{ if lt $i (sub (len $.Values.gvc.locations) 1) }},{{ end }}{{- end }}"
       - name: CLICKHOUSE_PASSWORD
-        value: cpln://secret/{{ include "clickhouse.secretDatabaseName" . }}
+        value: cpln://secret/{{ include "clickhouse.secretDatabase.name" . }}
       - name: CLICKHOUSE_DATABASE
-        value: cpln://secret/{{ include "clickhouse.secretDatabaseName" . }}
+        value: cpln://secret/{{ include "clickhouse.secretDatabase.name" . }}
       memory: {{ .Values.server.resources.memory | quote }}
       command: "/bin/bash"
       args:
@@ -32,26 +32,26 @@ spec:
       volumes:
         - path: /var/lib/clickhouse
           recoveryPolicy: retain
-          uri: cpln://volumeset/{{ include "clickhouse.volumeServerName" . }}
+          uri: cpln://volumeset/{{ include "clickhouse.volumeServer.name" . }}
         - path: /scripts/server-startup.sh
-          uri: cpln://secret/{{ include "clickhouse.secretServerName" . }}
+          uri: cpln://secret/{{ include "clickhouse.secretServer.name" . }}
         - path: /var/lib/clickhouse_cache
           recoveryPolicy: retain
           uri: scratch://cache-vol
         - path: /var/lib/clickhouse-tmp
           recoveryPolicy: retain
           uri: scratch://tmp-vol
-        {{- if .Values.aws.enabled }}
+        {{- if eq .Values.provider "aws" }}
         - path: /etc/clickhouse-server/config.d/storage.xml
           recoveryPolicy: retain
-          uri: cpln://secret/{{ include "clickhouse.secretS3Name" . }}
+          uri: cpln://secret/{{ include "clickhouse.secretS3.name" . }}
         {{- end }}
-        {{- if .Values.gcp.enabled }}
+        {{- if eq .Values.provider "gcp" }}
         - path: /etc/clickhouse-server/config.d/storage.xml
           recoveryPolicy: retain
-          uri: cpln://secret/{{ include "clickhouse.secretGCSName" . }}
+          uri: cpln://secret/{{ include "clickhouse.secretGCS.name" . }}
         {{- end }}
-  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "clickhouse.identityName" . }}
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "clickhouse.identity.name" . }}
   defaultOptions:
     autoscaling:
       keda: {}

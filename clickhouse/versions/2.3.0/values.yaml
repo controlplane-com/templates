@@ -10,20 +10,18 @@ gvc:
     - name: aws-us-east-1
       replicas: 1
 
-aws:
-  enabled: false # Enable to use S3 for storage
-  s3: # If enabled, all fields below are required - See README for guidance
-    bucket: clickhouse-s3-bucket # Name of your S3 bucket
-    region: us-east-1 # Region of your S3 bucket
-    cloudAccountName: clickhouse-s3-cloudaccount # Name of your Cloud Account
-    policyName: clickhouse-s3-policy # Name of your pre-created policy to allow access to the S3 bucket
+provider: aws # Options: aws or gcp
 
-gcp:
-  enabled: false # Enable to use GCS for storage
-  gcs: # If enabled, all fields below are required - See README for guidance
-    bucket: clickhouse-gcs-bucket # Name of your GCS bucket
-    accessKeyId: gcs-access-key-id # Access key ID for your GCS service account
-    secretAccessKey: gcs-secret-access-key # Secret access key for your GCS service account
+aws: # If enabled, all fields below are required - See README for guidance
+  bucket: clickhouse-s3-bucket # Name of your S3 bucket
+  region: us-east-1 # Region of your S3 bucket
+  cloudAccountName: clickhouse-s3-cloudaccount # Name of your Cloud Account
+  policyName: clickhouse-s3-policy # Name of your pre-created policy to allow access to the S3 bucket
+
+gcp: # If enabled, all fields below are required - See README for guidance
+  bucket: clickhouse-gcs-bucket # Name of your GCS bucket
+  accessKeyId: gcs-access-key-id # Access key ID for your GCS service account
+  secretAccessKey: gcs-secret-access-key # Secret access key for your GCS service account
 
 clusterName: my_cluster # Name of ClickHouse cluster
 

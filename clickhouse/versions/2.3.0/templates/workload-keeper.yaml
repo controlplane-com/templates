@@ -1,6 +1,6 @@
 {{ include "clickhouse.validateLocations" . }}
 kind: workload
-name: {{ include "clickhouse.keeperName" . }}
+name: {{ include "clickhouse.keeper.name" . }}
 description: clickhouse keeper
 tags: {{- include "clickhouse.tags" . | nindent 4 }}
 spec:
@@ -25,10 +25,10 @@ spec:
       volumes:
         - path: /var/lib/clickhouse
           recoveryPolicy: retain
-          uri: cpln://volumeset/{{ include "clickhouse.volumeKeeperName" . }}
+          uri: cpln://volumeset/{{ include "clickhouse.volumeKeeper.name" . }}
         - path: /scripts/keeper-startup.sh
-          uri: cpln://secret/{{ include "clickhouse.secretKeeperName" . }}
-  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "clickhouse.identityName" . }}
+          uri: cpln://secret/{{ include "clickhouse.secretKeeper.name" . }}
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "clickhouse.identity.name" . }}
   defaultOptions:
     autoscaling:
       keda: {}

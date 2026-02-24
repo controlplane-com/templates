@@ -1,22 +1,22 @@
 {{ include "clickhouse.validateStorage" . }}
 ---
 kind: policy
-name: {{ include "clickhouse.policyName" . }}
+name: {{ include "clickhouse.policy.name" . }}
 description: Clickhouse policy
 tags: {{- include "clickhouse.tags" . | nindent 4 }}
 bindings:
   - permissions:
       - reveal
     principalLinks:
-      - //gvc/{{ .Values.gvc.name }}/identity/{{ include "clickhouse.identityName" . }}
+      - //gvc/{{ .Values.gvc.name }}/identity/{{ include "clickhouse.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "clickhouse.secretDatabaseName" . }}
-  - //secret/{{ include "clickhouse.secretKeeperName" . }}
-  - //secret/{{ include "clickhouse.secretServerName" . }}
-  {{- if .Values.aws.enabled }}
-  - //secret/{{ include "clickhouse.secretS3Name" . }}
+  - //secret/{{ include "clickhouse.secretDatabase.name" . }}
+  - //secret/{{ include "clickhouse.secretKeeper.name" . }}
+  - //secret/{{ include "clickhouse.secretServer.name" . }}
+  {{- if eq .Values.provider "aws" }}
+  - //secret/{{ include "clickhouse.secretS3.name" . }}
   {{- end }}
-  {{- if .Values.gcp.enabled }}
-  - //secret/{{ include "clickhouse.secretGCSName" . }}
+  {{- if eq .Values.provider "gcp" }}
+  - //secret/{{ include "clickhouse.secretGCS.name" . }}
   {{- end }}

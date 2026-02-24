@@ -3,77 +3,77 @@
 {{/*
 Clickhouse Keeper Workload Name
 */}}
-{{- define "clickhouse.keeperName" -}}
+{{- define "clickhouse.keeper.name" -}}
 {{- printf "%s-clickhouse-keeper" .Release.Name }}
 {{- end }}
 
 {{/*
 Clickhouse Server Workload Name
 */}}
-{{- define "clickhouse.serverName" -}}
+{{- define "clickhouse.server.name" -}}
 {{- printf "%s-clickhouse-server" .Release.Name }}
 {{- end }}
 
 {{/*
 Clickhouse Secret Database Config Name
 */}}
-{{- define "clickhouse.secretDatabaseName" -}}
+{{- define "clickhouse.secretDatabase.name" -}}
 {{- printf "%s-clickhouse-db-config" .Release.Name }}
 {{- end }}
 
 {{/*
 Clickhouse Secret Keeper Config Name
 */}}
-{{- define "clickhouse.secretKeeperName" -}}
+{{- define "clickhouse.secretKeeper.name" -}}
 {{- printf "%s-clickhouse-keeper-startup" .Release.Name }}
 {{- end }}
 
 {{/*
 Clickhouse Secret Server Config Name
 */}}
-{{- define "clickhouse.secretServerName" -}}
+{{- define "clickhouse.secretServer.name" -}}
 {{- printf "%s-clickhouse-server-startup" .Release.Name }}
 {{- end }}
 
 {{/*
 Clickhouse Secret GCS Config Name
 */}}
-{{- define "clickhouse.secretGCSName" -}}
+{{- define "clickhouse.secretGCS.name" -}}
 {{- printf "%s-clickhouse-gcs-config" .Release.Name }}
 {{- end }}
 
 {{/*
 Clickhouse Secret S3 Config Name
 */}}
-{{- define "clickhouse.secretS3Name" -}}
+{{- define "clickhouse.secretS3.name" -}}
 {{- printf "%s-clickhouse-s3-config" .Release.Name }}
 {{- end }}
 
 {{/*
 Clickhouse Identity Name
 */}}
-{{- define "clickhouse.identityName" -}}
+{{- define "clickhouse.identity.name" -}}
 {{- printf "%s-clickhouse-identity" .Release.Name }}
 {{- end }}
 
 {{/*
 Clickhouse Policy Name
 */}}
-{{- define "clickhouse.policyName" -}}
+{{- define "clickhouse.policy.name" -}}
 {{- printf "%s-clickhouse-policy" .Release.Name }}
 {{- end }}
 
 {{/*
 Clickhouse Volume Set Server Name
 */}}
-{{- define "clickhouse.volumeServerName" -}}
+{{- define "clickhouse.volumeServer.name" -}}
 {{- printf "%s-clickhouse-server-vs" .Release.Name }}
 {{- end }}
 
 {{/*
 Clickhouse Volume Set Keeper Name
 */}}
-{{- define "clickhouse.volumeKeeperName" -}}
+{{- define "clickhouse.volumeKeeper.name" -}}
 {{- printf "%s-clickhouse-keeper-vs" .Release.Name }}
 {{- end }}
 
@@ -81,37 +81,33 @@ Clickhouse Volume Set Keeper Name
 {{/* Validation */}}
 
 {{- define "clickhouse.validateStorage" -}}
-{{- $awsEnabled := .Values.aws.enabled -}}
-{{- $gcpEnabled := .Values.gcp.enabled -}}
-{{- if and $awsEnabled $gcpEnabled -}}
-  {{- fail "Only one storage option can be enabled. Please enable either AWS or GCP, not both." -}}
+{{- $provider := .Values.provider -}}
+{{- if not (or (eq $provider "aws") (eq $provider "gcp")) -}}
+  {{- fail "provider must be set to either 'aws' or 'gcp'." -}}
 {{- end -}}
-{{- if and (not $awsEnabled) (not $gcpEnabled) -}}
-  {{- fail "A storage option must be selected. Please enable either AWS or GCP." -}}
-{{- end -}}
-{{- if $awsEnabled -}}
-  {{- if not .Values.aws.s3.bucket -}}
-    {{- fail "All fields are required for S3 when enabled. Missing: bucket" -}}
+{{- if eq $provider "aws" -}}
+  {{- if not .Values.aws.bucket -}}
+    {{- fail "All fields are required for AWS. Missing: aws.bucket" -}}
   {{- end -}}
-  {{- if not .Values.aws.s3.region -}}
-    {{- fail "All fields are required for S3 when enabled. Missing: region" -}}
+  {{- if not .Values.aws.region -}}
+    {{- fail "All fields are required for AWS. Missing: aws.region" -}}
   {{- end -}}
-  {{- if not .Values.aws.s3.cloudAccountName -}}
-    {{- fail "All fields are required for S3 when enabled. Missing: cloudAccountName" -}}
+  {{- if not .Values.aws.cloudAccountName -}}
+    {{- fail "All fields are required for AWS. Missing: aws.cloudAccountName" -}}
   {{- end -}}
-  {{- if not .Values.aws.s3.policyName -}}
-    {{- fail "All fields are required for S3 when enabled. Missing: policyName" -}}
+  {{- if not .Values.aws.policyName -}}
+    {{- fail "All fields are required for AWS. Missing: aws.policyName" -}}
   {{- end -}}
 {{- end -}}
-{{- if $gcpEnabled -}}
-  {{- if not .Values.gcp.gcs.bucket -}}
-    {{- fail "All fields are required for GCS when enabled. Missing: bucket" -}}
+{{- if eq $provider "gcp" -}}
+  {{- if not .Values.gcp.bucket -}}
+    {{- fail "All fields are required for GCP. Missing: gcp.bucket" -}}
   {{- end -}}
-  {{- if not .Values.gcp.gcs.accessKeyId -}}
-    {{- fail "All fields are required for GCS when enabled. Missing: accessKeyId" -}}
+  {{- if not .Values.gcp.accessKeyId -}}
+    {{- fail "All fields are required for GCP. Missing: gcp.accessKeyId" -}}
   {{- end -}}
-  {{- if not .Values.gcp.gcs.secretAccessKey -}}
-    {{- fail "All fields are required for GCS when enabled. Missing: secretAccessKey" -}}
+  {{- if not .Values.gcp.secretAccessKey -}}
+    {{- fail "All fields are required for GCP. Missing: gcp.secretAccessKey" -}}
   {{- end -}}
 {{- end -}}
 {{- end -}}

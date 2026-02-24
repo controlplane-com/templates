@@ -1,0 +1,28 @@
+kind: volumeset
+name: {{ include "clickhouse.volumeServerName" . }}
+description: Clickhouse server volumeset
+tags: 
+  {{- include "clickhouse.tags" . | nindent 2 }}
+  workload: {{ include "clickhouse.serverName" . }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.server.capacity }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d
+
+---
+kind: volumeset
+name: {{ include "clickhouse.volumeKeeperName" . }}
+description: Clickhouse keeper volumeset
+tags:
+  {{- include "clickhouse.tags" . | nindent 2 }}
+  workload: {{ include "clickhouse.keeperName" . }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.keeper.capacity }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d

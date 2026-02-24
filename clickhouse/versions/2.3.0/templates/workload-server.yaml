@@ -1,0 +1,100 @@
+{{ include "clickhouse.validateLocations" . }}
+{{ include "clickhouse.validateStorage" . }}
+kind: workload
+name: {{ include "clickhouse.serverName" . }}
+description: clickhouse server
+tags: {{- include "clickhouse.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  containers:
+    - name: server
+      cpu: {{ .Values.server.resources.cpu | quote }}
+      image: clickhouse/clickhouse-server:25.10
+      inheritEnv: false
+      env:
+      - name: LOCATIONS_STR
+        value: "{{- range $i, $loc := .Values.gvc.locations -}}{{ $loc.name }}:{{ $loc.replicas }}{{ if lt $i (sub (len $.Values.gvc.locations) 1) }},{{ end }}{{- end }}"
+      - name: CLICKHOUSE_PASSWORD
+        value: cpln://secret/{{ include "clickhouse.secretDatabaseName" . }}
+      - name: CLICKHOUSE_DATABASE
+        value: cpln://secret/{{ include "clickhouse.secretDatabaseName" . }}
+      memory: {{ .Values.server.resources.memory | quote }}
+      command: "/bin/bash"
+      args:
+        - "/scripts/server-startup.sh"
+      ports:
+        - number: 8123
+          protocol: http
+        - number: 9000
+          protocol: tcp
+        - number: 9009
+          protocol: http
+      volumes:
+        - path: /var/lib/clickhouse
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "clickhouse.volumeServerName" . }}
+        - path: /scripts/server-startup.sh
+          uri: cpln://secret/{{ include "clickhouse.secretServerName" . }}
+        - path: /var/lib/clickhouse_cache
+          recoveryPolicy: retain
+          uri: scratch://cache-vol
+        - path: /var/lib/clickhouse-tmp
+          recoveryPolicy: retain
+          uri: scratch://tmp-vol
+        {{- if .Values.aws.enabled }}
+        - path: /etc/clickhouse-server/config.d/storage.xml
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "clickhouse.secretS3Name" . }}
+        {{- end }}
+        {{- if .Values.gcp.enabled }}
+        - path: /etc/clickhouse-server/config.d/storage.xml
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "clickhouse.secretGCSName" . }}
+        {{- end }}
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "clickhouse.identityName" . }}
+  defaultOptions:
+    autoscaling:
+      keda: {}
+      maxConcurrency: 0
+      maxScale: {{ if eq ((index .Values.gvc.locations 0).replicas | int) 0 }}1{{ else }}{{ (index .Values.gvc.locations 0).replicas | int }}{{ end }}
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  localOptions:
+  {{- range $location := .Values.gvc.locations }}
+  - autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ if eq ($location.replicas | int) 0 }}1{{ else }}{{ $location.replicas | int }}{{ end }}
+      metric: disabled
+      minScale: {{ if eq ($location.replicas | int) 0 }}0{{ else }}{{ $location.replicas | int }}{{ end }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    location: //location/{{ $location.name }}
+    suspend: {{ if eq ($location.replicas | int) 0 }}true{{ else }}false{{ end }}
+    timeoutSeconds: 10
+  {{- end }}
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.server.internal_access.type }}
+      inboundAllowWorkload: []
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: true
+  supportDynamicTags: false

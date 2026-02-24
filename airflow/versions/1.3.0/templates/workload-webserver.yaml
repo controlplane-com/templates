@@ -1,0 +1,100 @@
+kind: workload
+name: {{ include "airflow.webserver.name" . }}
+description: Airflow webserver
+gvc: {{ .Values.gvc.name }}
+tags:
+  {{- include "airflow.tags" . | nindent 2 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "airflow.identity.name" . }}
+  containers:
+    - name: airflow
+      command: bash
+      args:
+        - '-c'
+        - |-
+          mkdir -p /opt/airflow/dags;
+          airflow db migrate;
+          airflow dag-processor &
+          airflow scheduler &
+          airflow triggerer &
+          exec airflow api-server
+      cpu: {{ .Values.airflow.webserver.resources.cpu }}
+      memory: {{ .Values.airflow.webserver.resources.memory }}
+      image: {{ .Values.airflow.webserver.image }}
+      inheritEnv: false
+      lifecycle:
+        preStop:
+          exec:
+            command:
+              - bash
+              - '-c'
+              - sleep 0
+      env:
+        - name: AIRFLOW_HOME
+          value: /opt/airflow
+        - name: AIRFLOW__API_AUTH__JWT_EXPIRATION_DELTA
+          value: {{ .Values.airflow.auth.jwtExpirationDelta | quote }}
+        - name: AIRFLOW__API_AUTH__JWT_REFRESH_THRESHOLD
+          value: {{ .Values.airflow.auth.jwtRefreshThreshold | quote }}
+        - name: POSTGRES_USERNAME
+          value: cpln://secret/{{ include "airflow.secret.name" . }}.username         
+        - name: POSTGRES_PASSWORD 
+          value: cpln://secret/{{ include "airflow.secret.name" . }}.password          
+        - name: AIRFLOW__API_AUTH__JWT_SECRET
+          value: cpln://secret/{{ include "airflow.secret.name" . }}.jwtSecret
+        - name: AIRFLOW__API__BASE_URL
+          value: http://{{ include "airflow.webserver.name" . }}:{{ .Values.airflow.webPort }}
+        - name: AIRFLOW__CELERY__BROKER_URL
+          value: redis://{{ include "airflow.redis.name" . }}.{{ .Values.gvc.name }}.cpln.local
+        - name: AIRFLOW__CELERY__RESULT_BACKEND
+          value: db+postgresql://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ include "airflow.postgres.name" . }}:5432/test
+        - name: AIRFLOW__CORE__DAGS_FOLDER
+          value: /opt/airflow/dags
+        - name: AIRFLOW__CORE__EXECUTOR
+          value: CeleryExecutor
+        - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+          value: postgresql+psycopg2://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ include "airflow.postgres.name" . }}:5432/test
+        - name: AIRFLOW__LOGGING__REMOTE_LOGGING
+          value: 'False'
+        - name: AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL
+          value: "{{ .Values.airflow.scheduler.dagDirListInterval }}"
+        - name: AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL
+          value: "{{ .Values.airflow.scheduler.minFileProcessInterval }}"
+        - name: AIRFLOW__WEBSERVER__WEB_SERVER_HOST
+          value: 0.0.0.0
+        - name: AIRFLOW__WEBSERVER__WEB_SERVER_PORT
+          value: "{{ .Values.airflow.webPort }}"
+      ports:
+        - number: {{ .Values.airflow.webPort }}
+          protocol: http
+      volumes:
+        - path: /opt/airflow
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "airflow.volume.name" . }}
+  firewallConfig:
+    external:
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+      inboundAllowWorkload: []
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  rolloutOptions:
+    maxSurgeReplicas: 25%
+    minReadySeconds: 0
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 1
+  securityOptions:
+    filesystemGroupId: 50000
+  supportDynamicTags: false

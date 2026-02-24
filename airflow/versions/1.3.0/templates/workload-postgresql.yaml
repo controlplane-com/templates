@@ -1,0 +1,39 @@
+kind: workload
+name: {{ include "airflow.postgres.name" . }}
+description: Airflow Postgres
+gvc: {{ .Values.gvc.name }}
+tags:
+  {{- include "airflow.tags" . | nindent 2 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "airflow.identity.name" . }}
+  containers:
+    - name: postgresql
+      env:
+        - name: PGDATA
+          value: "/var/lib/postgresql/data/pg_data"
+        - name: POSTGRES_DB
+          value: test
+        - name: POSTGRES_PASSWORD
+          value: 'cpln://secret/{{ include "airflow.secret.name" . }}.password'
+        - name: POSTGRES_USER
+          value: 'cpln://secret/{{ include "airflow.secret.name" . }}.username'
+      image: {{ .Values.postgres.image }}
+      inheritEnv: false
+      cpu: {{ .Values.postgres.resources.cpu }}
+      memory: {{ .Values.postgres.resources.memory }}
+      ports:
+        - number: 5432
+          protocol: tcp
+      volumes:
+        - path: /var/lib/postgresql/data
+          uri: 'cpln://volumeset/{{ include "airflow.postgresVolume.name" . }}'
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+    capacityAI: false
+  firewallConfig:
+    internal:
+      inboundAllowType: same-gvc

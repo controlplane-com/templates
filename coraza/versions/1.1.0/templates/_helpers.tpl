@@ -10,28 +10,28 @@ Coraza Workload Name
 {{/*
 Coraza Secret Custom Rules Name
 */}}
-{{- define "coraza.secretRulesName" -}}
+{{- define "coraza.secretRules.name" -}}
 {{- printf "%s-coraza-custom-rules" .Release.Name }}
 {{- end }}
 
 {{/*
 Coraza Secret Startup Name
 */}}
-{{- define "coraza.secretStartupName" -}}
+{{- define "coraza.secretStartup.name" -}}
 {{- printf "%s-coraza-startup" .Release.Name }}
 {{- end }}
 
 {{/*
 Coraza Identity Name
 */}}
-{{- define "coraza.identityName" -}}
+{{- define "coraza.identity.name" -}}
 {{- printf "%s-coraza-identity" .Release.Name }}
 {{- end }}
 
 {{/*
 Coraza Policy Name
 */}}
-{{- define "coraza.policyName" -}}
+{{- define "coraza.policy.name" -}}
 {{- printf "%s-coraza-policy" .Release.Name }}
 {{- end }}
 

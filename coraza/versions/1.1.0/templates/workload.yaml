@@ -1,6 +1,6 @@
 kind: workload
 name: {{ include "coraza.name" . }}
-description: Coraza WAF
+description: Coraza Web Application Firewall (WAF)
 tags: {{- include "coraza.tags" . | nindent 4 }}
 spec:
   type: standard
@@ -39,19 +39,14 @@ spec:
       volumes:
         - path: /opt/coraza/rules.d/custom.conf
           recoveryPolicy: retain
-          uri: cpln://secret/{{ include "coraza.secretRulesName" . }}
+          uri: cpln://secret/{{ include "coraza.secretRules.name" . }}
         - path: /opt/coraza/startup.sh
           recoveryPolicy: retain
-          uri: cpln://secret/{{ include "coraza.secretStartupName" . }}
+          uri: cpln://secret/{{ include "coraza.secretStartup.name" . }}
   defaultOptions:
     multiZone:
       enabled: {{ .Values.multiZone }}
     autoscaling:
-      keda:
-        cooldownPeriod: 1
-        initialCooldownPeriod: 1
-        pollingInterval: 1
-        triggers: []
       maxConcurrency: 0
       maxScale: 3
       metric: cpu
@@ -74,7 +69,7 @@ spec:
     internal:
       inboundAllowType: same-gvc
       inboundAllowWorkload: []
-  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "coraza.identityName" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "coraza.identity.name" . }}
   loadBalancer:
     direct:
       enabled: false

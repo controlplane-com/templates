@@ -7,13 +7,13 @@ spec:
   type: stateful
   containers:
     - name: keeper
-      cpu: "{{ .Values.keeper.resources.cpu }}"
+      cpu: {{ .Values.keeper.resources.cpu | quote }}
       image: clickhouse/clickhouse-keeper:25.10
       inheritEnv: false
       env:
       - name: LOCATIONS_STR
         value: "{{- range $i, $loc := .Values.gvc.locations -}}{{ $loc.name }}:{{ $loc.replicas }}{{ if lt $i (sub (len $.Values.gvc.locations) 1) }},{{ end }}{{- end }}"
-      memory: {{ .Values.keeper.resources.memory }}
+      memory: {{ .Values.keeper.resources.memory | quote }}
       command: "/bin/bash"
       args:
         - "/scripts/keeper-startup.sh"

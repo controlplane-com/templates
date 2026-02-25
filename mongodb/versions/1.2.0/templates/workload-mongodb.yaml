@@ -5,30 +5,32 @@ tags:
   {{- include "mongo.tags" . | nindent 2 }}
 spec:
   type: stateful
-  identityLink: //identity/{{ include "mongo.identityName" . }}
+  identityLink: //identity/{{ include "mongo.identity.name" . }}
   containers:
     - name: mongo
       env:
         - name: MONGO_INITDB_DATABASE
           value: test
         - name: MONGO_INITDB_PWD
-          value: 'cpln://secret/{{ include "mongo.secretDatabaseName" . }}.password'
+          value: 'cpln://secret/{{ include "mongo.secretDatabase.name" . }}.password'
         - name: MONGO_INITDB_ROOT_PASSWORD
-          value: 'cpln://secret/{{ include "mongo.secretDatabaseName" . }}.password'
+          value: 'cpln://secret/{{ include "mongo.secretDatabase.name" . }}.password'
         - name: MONGO_INITDB_ROOT_USERNAME
-          value: 'cpln://secret/{{ include "mongo.secretDatabaseName" . }}.username'
+          value: 'cpln://secret/{{ include "mongo.secretDatabase.name" . }}.username'
         - name: MONGO_INITDB_USER
-          value: 'cpln://secret/{{ include "mongo.secretDatabaseName" . }}.username'
+          value: 'cpln://secret/{{ include "mongo.secretDatabase.name" . }}.username'
       image: {{ .Values.image }}
       inheritEnv: false
-      cpu: {{ .Values.resources.cpu | quote }}
-      memory: {{ .Values.resources.memory | quote }}
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
       ports:
         - number: 27017
           protocol: tcp
       volumes:
         - path: /data/db
-          uri: 'cpln://volumeset/{{ include "mongo.volumeName" . }}'
+          uri: 'cpln://volumeset/{{ include "mongo.volume.name" . }}'
   defaultOptions:
     autoscaling:
       metric: disabled
@@ -40,7 +42,10 @@ spec:
       outboundAllowCIDR:
         - 0.0.0.0/0
     internal:
-      inboundAllowType: same-gvc
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
   loadBalancer:
     direct:
       enabled: {{ .Values.directLoadBalancer.enabled }}

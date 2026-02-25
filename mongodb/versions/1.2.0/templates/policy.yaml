@@ -1,12 +1,12 @@
 kind: policy
-name: {{ include "mongo.policyName" . }}
+name: {{ include "mongo.policy.name" . }}
 tags:
   {{- include "mongo.tags" . | nindent 4 }}
 bindings:
   - permissions:
       - reveal
     principalLinks:
-      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "mongo.identityName" . }}
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "mongo.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "mongo.secretDatabaseName" . }}
+  - //secret/{{ include "mongo.secretDatabase.name" . }}

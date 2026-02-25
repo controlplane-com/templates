@@ -10,28 +10,28 @@ Mongo Workload Name
 {{/*
 Mongo Secret Database Config Name
 */}}
-{{- define "mongo.secretDatabaseName" -}}
+{{- define "mongo.secretDatabase.name" -}}
 {{- printf "%s-mongo-config" .Release.Name }}
 {{- end }}
 
 {{/*
 Mongo Identity Name
 */}}
-{{- define "mongo.identityName" -}}
+{{- define "mongo.identity.name" -}}
 {{- printf "%s-mongo-identity" .Release.Name }}
 {{- end }}
 
 {{/*
 Mongo Policy Name
 */}}
-{{- define "mongo.policyName" -}}
+{{- define "mongo.policy.name" -}}
 {{- printf "%s-mongo-policy" .Release.Name }}
 {{- end }}
 
 {{/*
 Mongo Volume Set Name
 */}}
-{{- define "mongo.volumeName" -}}
+{{- define "mongo.volume.name" -}}
 {{- printf "%s-mongo-vs" .Release.Name }}
 {{- end }}
 

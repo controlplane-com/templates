@@ -1,0 +1,51 @@
+kind: workload
+name: {{ include "mongo.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "mongo.tags" . | nindent 2 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "mongo.identityName" . }}
+  containers:
+    - name: mongo
+      env:
+        - name: MONGO_INITDB_DATABASE
+          value: test
+        - name: MONGO_INITDB_PWD
+          value: 'cpln://secret/{{ include "mongo.secretDatabaseName" . }}.password'
+        - name: MONGO_INITDB_ROOT_PASSWORD
+          value: 'cpln://secret/{{ include "mongo.secretDatabaseName" . }}.password'
+        - name: MONGO_INITDB_ROOT_USERNAME
+          value: 'cpln://secret/{{ include "mongo.secretDatabaseName" . }}.username'
+        - name: MONGO_INITDB_USER
+          value: 'cpln://secret/{{ include "mongo.secretDatabaseName" . }}.username'
+      image: {{ .Values.image }}
+      inheritEnv: false
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
+      ports:
+        - number: 27017
+          protocol: tcp
+      volumes:
+        - path: /data/db
+          uri: 'cpln://volumeset/{{ include "mongo.volumeName" . }}'
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+    capacityAI: false
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: same-gvc
+  loadBalancer:
+    direct:
+      enabled: {{ .Values.directLoadBalancer.enabled }}
+      ports:
+        - containerPort: 27017
+          externalPort: 27017
+          protocol: TCP
+          scheme: tcp

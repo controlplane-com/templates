@@ -49,19 +49,14 @@ spec:
     timeoutSeconds: 30
   firewallConfig:
     external:
-      inboundAllowCIDR:
-        - 0.0.0.0/0
+      inboundAllowCIDR: {{- if .Values.firewall.external.inboundAllowCIDR }}{{ toYaml .Values.firewall.external.inboundAllowCIDR | nindent 8 }}{{ else }}[]{{ end }}
       inboundBlockedCIDR: []
-      outboundAllowCIDR: []
-      outboundAllowHostname:
-{{- if .Values.identityProviders.google.enabled }}
-        - oauth2.googleapis.com
-        - www.googleapis.com
-        - accounts.google.com
-{{- end }}
-      outboundAllowPort:
-{{- if .Values.identityProviders.google.enabled }}
-        - number: 443
-          protocol: tcp
-{{- end }}
+      outboundAllowCIDR: {{ - if .Values.firewall.external.outboundAllowCIDR }}{{ toYaml .Values.firewall.external.outboundAllowCIDR | nindent 8 }}{{ else }}[]{{ end }}
+      outboundAllowHostname: []
+      outboundAllowPort: []
       outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.firewall.internal.type }}
+      {{- if .Values.firewall.internal.workloads }}
+      inboundAllowWorkload: {{ .Values.firewall.internal.workloads | toYaml | nindent 8 }}
+      {{- end }}

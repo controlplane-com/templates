@@ -4,9 +4,17 @@ resources:
   cpu: 512m
   memory: 1024Mi
 
-identityProviders:
-  google:
-    enabled: true
+firewall:
+  external:
+    inboundAllowCIDR:
+        - 0.0.0.0/0
+    outboundAllowCIDR: [] # Set to 0.0.0.0/0 to allow outbound traffic if communicating with IDP
+  internal:
+    type: same-gvc # options: same-gvc, same-org, workload-list
+    workloads:  # Note: can only be used if type is same-gvc or workload-list
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
 
 postgres:
   image: postgres:18

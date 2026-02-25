@@ -1,0 +1,40 @@
+kind: workload
+name: {{ include "postgis.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "postgis.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "postgis.identityName" . }}
+  containers:
+    - name: postgis
+      env:
+        - name: PGDATA
+          value: "/var/lib/postgresql/data/pg_data"
+        - name: POSTGRES_DB
+          value: {{ .Values.postgres.database }}
+        - name: POSTGRES_PASSWORD
+          value: 'cpln://secret/{{ include "postgis.secretDatabaseName" . }}.password'
+        - name: POSTGRES_USER
+          value: 'cpln://secret/{{ include "postgis.secretDatabaseName" . }}.username'
+      image: {{ .Values.image }}
+      inheritEnv: false
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
+      ports:
+        - number: 5432
+          protocol: tcp
+      volumes:
+        - path: /var/lib/postgresql/data
+          uri: 'cpln://volumeset/{{ include "postgis.volumeName" . }}'
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+    capacityAI: false
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: same-gvc

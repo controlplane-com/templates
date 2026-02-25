@@ -1,0 +1,15 @@
+image: postgis/postgis:17-3.5
+
+resources:
+  cpu: 500m
+  memory: 1024Mi
+
+config:
+  username: username
+  password: password
+
+postgres:
+  database: database
+
+volumeset:
+  capacity: 10 # initial capacity in GiB (minimum is 10)

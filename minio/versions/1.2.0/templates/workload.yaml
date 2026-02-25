@@ -1,0 +1,70 @@
+kind: workload
+name: {{ include "minio.name" . }}
+description: MinIO
+tags: {{- include "minio.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  containers:
+    - name: minio
+      command: "/bin/bash"
+      args:
+        - "/minio/start.sh"
+      cpu: {{ .Values.resources.cpu | quote }}
+      env:
+        - name: LOCAL_IP
+          value: cpln://reference/status.podIP
+        - name: MINIO_ROOT_PASSWORD
+          value: cpln://secret/{{ include "minio.secretAdminName" . }}.password
+        - name: MINIO_ROOT_USER
+          value: cpln://secret/{{ include "minio.secretAdminName" . }}.username
+      image: {{ .Values.image }}
+      inheritEnv: false
+      memory: {{ .Values.resources.memory | quote }}
+      ports:
+        - number: 9000
+          protocol: http
+        - number: 9001
+          protocol: http
+      volumes:
+        - path: /data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "minio.volumeName" . }}
+        - path: /minio/start.sh
+          uri: cpln://secret/{{ include "minio.secretStartupName" . }}.payload
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "minio.identityName" . }}
+  defaultOptions:
+    autoscaling:
+      keda:
+        cooldownPeriod: 1
+        initialCooldownPeriod: 1
+        pollingInterval: 1
+        triggers: []
+      maxConcurrency: 0
+      maxScale: {{ .Values.replicas }}
+      metric: disabled
+      minScale: {{ .Values.replicas }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: true
+  supportDynamicTags: false

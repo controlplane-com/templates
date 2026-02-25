@@ -1,0 +1,30 @@
+{{- if .Values.enableExample }}
+kind: workload
+name: {{ include "nginx.example.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: default
+spec:
+  type: serverless
+  containers:
+    - name: httpbin
+      cpu: 50m
+      env:
+        - name: TARGET
+          value: $(CPLN_WORKLOAD)
+      image: gcr.io/knative-samples/helloworld-go
+      memory: 128Mi
+      ports:
+        - number: 8080
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /
+          port: 8080
+          scheme: HTTP
+  firewallConfig:
+    internal:
+      inboundAllowType: workload-list
+      # allow access from envoyproxy internally
+      inboundAllowWorkload:
+        - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "nginx.name" . }}
+{{- end }}

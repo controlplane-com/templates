@@ -18,12 +18,12 @@ nats_defaults:
   allowNonTls: true
   cluster:
     listen: "0.0.0.0:6222"
-    port: 6222 
+    port: 6222
     noAdvertise: false
   gateway:
     listen: "0.0.0.0:7222"
     port: 7222
-  
+
   websocket:
     enabled: true
     port: 8080
@@ -43,3 +43,9 @@ allowCIDR:
 # You can add any VALID NATS configuration under nats_extra_config
 nats_extra_config: |
   jetstream: false
+
+internalAccess: # Sets the internal firewall scope - if set to none, replicas will not be able to reach each other
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads:  # Note: can only be used if type is same-gvc or workload-list
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME

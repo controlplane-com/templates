@@ -10,33 +10,31 @@ NATS Workload Name
 {{/*
 NATS Secret Config Name
 */}}
-{{- define "nats.secretName" -}}
+{{- define "nats.secret.name" -}}
 {{- printf "%s-nats-secret" .Release.Name }}
 {{- end }}
 
 {{/*
 NATS Secret Extra Data Name
 */}}
-{{- define "nats.extraDataName" -}}
+{{- define "nats.extraData.name" -}}
 {{- printf "%s-nats-extra-data" .Release.Name }}
 {{- end }}
 
 {{/*
 NATS Identity Name
 */}}
-{{- define "nats.identityName" -}}
+{{- define "nats.identity.name" -}}
 {{- printf "%s-nats-identity" .Release.Name }}
 {{- end }}
 
 {{/*
 NATS Policy Name
 */}}
-{{- define "nats.policyName" -}}
+{{- define "nats.policy.name" -}}
 {{- printf "%s-nats-policy" .Release.Name }}
 {{- end }}
 
-
-{{/* Resource Naming */}}
 
 {{/* Labeling */}}
 

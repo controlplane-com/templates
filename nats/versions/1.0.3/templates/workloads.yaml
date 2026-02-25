@@ -30,10 +30,10 @@ spec:
       volumes:
         - path: /etc/nats/nats.yaml
           recoveryPolicy: retain
-          uri: cpln://secret/{{ include "nats.secretName" . }}.payload
+          uri: cpln://secret/{{ include "nats.secret.name" . }}.payload
         - path: /etc/nats/nats-extra.yaml
           recoveryPolicy: retain
-          uri: cpln://secret/{{ include "nats.extraDataName" . }}.payload
+          uri: cpln://secret/{{ include "nats.extraData.name" . }}.payload
   defaultOptions:
     autoscaling:
       maxConcurrency: 0
@@ -55,9 +55,11 @@ spec:
       outboundAllowPort: []
       outboundBlockedCIDR: []
     internal:
-      inboundAllowType: same-gvc
-      inboundAllowWorkload: []
-  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "nats.identityName" . }}
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "nats.identity.name" . }}
   loadBalancer:
     replicaDirect: true
   localOptions:

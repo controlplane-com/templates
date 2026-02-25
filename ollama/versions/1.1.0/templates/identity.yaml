@@ -1,5 +1,5 @@
 kind: identity
 gvc: {{ .Values.global.cpln.gvc }}
-name: {{ include "ollama.identityName" . }}
+name: {{ include "ollama.identity.name" . }}
 description: Ollama identity
 tags: {{- include "ollama.tags" . | nindent 4 }}

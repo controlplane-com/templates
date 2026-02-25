@@ -15,7 +15,7 @@ workload:
       image: ollama/ollama
       port: 11434
       resources:
-        cpu: 6000m
+        cpu: 6
         memory: 7Gi
       gpu:
         nvidia:
@@ -24,12 +24,23 @@ workload:
 
 volumeset:
   initialCapacity: 10
+  autoscaling:
+    enabled: false # Set to true to enable autoscaling
+    maxCapacity: 100 # Maximum capacity in GiB when autoscaling is enabled
+    minFreePercentage: 10 # Minimum free percentage to trigger scaling when autoscaling is enabled
+    scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
   performanceClass: general-purpose-ssd
   snapshots:
     retentionDuration: 7d
 
+firewall:
+  external: # Change to restrict access to the workload if needed
+    inboundAllowCIDR:
+        - 0.0.0.0/0
+    outboundAllowCIDR:
+        - 0.0.0.0/0
 internal_access:
-  type: none # options: same-gvc, same-org, workload-list
+  type: same-gvc # options: same-gvc, same-org, workload-list
   workloads:  # Note: can only be used if type is same-gvc or workload-list
     #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
     #- //gvc/GVC_NAME/workload/WORKLOAD_NAME

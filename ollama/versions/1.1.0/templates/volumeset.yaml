@@ -1,9 +1,15 @@
 kind: volumeset
 gvc: {{ .Values.global.cpln.gvc }}
-name: {{ include "ollama.volumeName" . }}
+name: {{ include "ollama.volume.name" . }}
 spec:
   fileSystemType: ext4
   initialCapacity: {{ .Values.volumeset.initialCapacity }}
+  {{- if .Values.volumeset.autoscaling.enabled }}
+  autoscaling:
+    maxCapacity: {{ .Values.volumeset.autoscaling.maxCapacity }}
+    minFreePercentage: {{ .Values.volumeset.autoscaling.minFreePercentage }}
+    scalingFactor: {{ .Values.volumeset.autoscaling.scalingFactor }}
+  {{- end }}
   performanceClass: {{ .Values.volumeset.performanceClass }}
   snapshots:
     createFinalSnapshot: true

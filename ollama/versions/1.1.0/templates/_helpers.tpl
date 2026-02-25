@@ -10,28 +10,28 @@ Ollama Workload Name
 {{/*
 Ollama Secret Entrypoint Name
 */}}
-{{- define "ollama.secretName" -}}
+{{- define "ollama.secret.name" -}}
 {{- printf "%s-ollama-secret" .Release.Name }}
 {{- end }}
 
 {{/*
 Ollama Identity Name
 */}}
-{{- define "ollama.identityName" -}}
+{{- define "ollama.identity.name" -}}
 {{- printf "%s-ollama-identity" .Release.Name }}
 {{- end }}
 
 {{/*
 Ollama Policy Name
 */}}
-{{- define "ollama.policyName" -}}
+{{- define "ollama.policy.name" -}}
 {{- printf "%s-ollama-policy" .Release.Name }}
 {{- end }}
 
 {{/*
 Ollama Volume Set Name
 */}}
-{{- define "ollama.volumeName" -}}
+{{- define "ollama.volume.name" -}}
 {{- printf "%s-ollama-vs" .Release.Name }}
 {{- end }}
 

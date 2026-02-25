@@ -42,7 +42,7 @@ spec:
       volumes:
         - path: /app/backend/data
           recoveryPolicy: retain
-          uri: cpln://volumeset/{{ include "ollama.volumeName" . }}
+          uri: cpln://volumeset/{{ include "ollama.volume.name" . }}
     - name: {{ .Values.workload.containers.api.name }}
       args:
         - '-c'
@@ -78,10 +78,10 @@ spec:
       volumes:
         - path: /root/.ollama
           recoveryPolicy: retain
-          uri: 'cpln://volumeset/{{ include "ollama.volumeName" . }}'
+          uri: 'cpln://volumeset/{{ include "ollama.volume.name" . }}'
         - path: /startup/entrypoint.sh
           recoveryPolicy: retain
-          uri: 'cpln://secret/{{ include "ollama.secretName" . }}'
+          uri: 'cpln://secret/{{ include "ollama.secret.name" . }}'
   defaultOptions:
     autoscaling:
       maxConcurrency: 0
@@ -94,13 +94,11 @@ spec:
     timeoutSeconds: 600
   firewallConfig:
     external:
-      inboundAllowCIDR:
-        - 0.0.0.0/0
-      outboundAllowCIDR:
-        - 0.0.0.0/0
+      inboundAllowCIDR: {{ if .Values.firewall.external.inboundAllowCIDR }}{{ toYaml .Values.firewall.external.inboundAllowCIDR | nindent 8 }}{{ else }}[]{{ end }}
+      outboundAllowCIDR: {{ if .Values.firewall.external.outboundAllowCIDR }}{{ toYaml .Values.firewall.external.outboundAllowCIDR | nindent 8 }}{{ else }}[]{{ end }}
     internal:
       inboundAllowType: {{ .Values.internal_access.type }}
       {{- if .Values.internal_access.workloads }}
       inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
       {{- end }}
-  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "ollama.identityName" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "ollama.identity.name" . }}

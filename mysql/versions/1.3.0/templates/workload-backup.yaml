@@ -1,0 +1,76 @@
+{{- include "mysql.validateBackupConfig" . -}}
+{{- if .Values.backup.enabled }}
+kind: workload
+name: {{ include "mysql.backup.name" . }}
+description: MySQL Backup
+tags:
+  {{- include "mysql.tags" . | nindent 2 }}
+spec:
+  type: cron
+  containers:
+    - name: backup-mysql
+      cpu: {{ .Values.backup.resources.cpu | quote }}
+      memory: {{ .Values.backup.resources.memory | quote }}
+      env:
+      {{- if eq .Values.backup.provider "aws" }}
+        - name: AWS_REGION
+          value: cpln://secret/{{ include "mysql.secretDatabase.name" . }}.aws-region
+        - name: BACKUP_PROVIDER
+          value: aws
+        - name: BACKUP_BUCKET
+          value: cpln://secret/{{ include "mysql.secretDatabase.name" . }}.backup-bucket
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.aws.prefix }}
+      {{- end }}
+      {{- if eq .Values.backup.provider "gcp" }}
+        - name: BACKUP_PROVIDER
+          value: gcp
+        - name: BACKUP_BUCKET
+          value: cpln://secret/{{ include "mysql.secretDatabase.name" . }}.backup-bucket
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.gcp.prefix }}
+      {{- end }}
+        - name: MYSQL_HOST
+          value: {{ include "mysql.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local
+        - name: MYSQL_ROOT_PASSWORD
+          value: cpln://secret/{{ include "mysql.secretDatabase.name" . }}.rootPassword
+        - name: MYSQL_PASSWORD
+          value: cpln://secret/{{ include "mysql.secretDatabase.name" . }}.password
+        - name: MYSQL_PORT
+          value: '3306'
+        - name: MYSQL_USER
+          value: cpln://secret/{{ include "mysql.secretDatabase.name" . }}.user
+      image: {{ .Values.backup.image }}
+      inheritEnv: false
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: none
+      inboundAllowWorkload: []
+  identityLink: //identity/{{ include "mysql.identity.name" . }}
+  job:
+    concurrencyPolicy: Forbid
+    historyLimit: 5
+    restartPolicy: Never
+    schedule: {{ .Values.backup.schedule }}
+  supportDynamicTags: false
+{{- end }}

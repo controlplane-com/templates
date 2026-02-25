@@ -1,0 +1,61 @@
+kind: workload
+name: {{ include "mysql.name" . }}
+description: MySQL database
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "mysql.tags" . | nindent 2 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "mysql.identity.name" . }}
+  containers:
+    - name: mysql
+      env:
+        - name: MYSQL_DATABASE
+          value: 'cpln://secret/{{ include "mysql.secretDatabase.name" . }}.database'
+        - name: MYSQL_PASSWORD
+          value: 'cpln://secret/{{ include "mysql.secretDatabase.name" . }}.password'
+        - name: MYSQL_ROOT_PASSWORD
+          value: 'cpln://secret/{{ include "mysql.secretDatabase.name" . }}.rootPassword'
+        - name: MYSQL_USER
+          value: 'cpln://secret/{{ include "mysql.secretDatabase.name" . }}.user'
+      image: {{ .Values.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      ports:
+        - number: 3306
+          protocol: tcp
+      readinessProbe:
+        exec:
+          command:
+            - sh
+            - '-c'
+            - 'mysqladmin ping -u root -p${MYSQL_ROOT_PASSWORD}'
+        failureThreshold: 10
+        initialDelaySeconds: 17
+        periodSeconds: 5
+        successThreshold: 1
+        timeoutSeconds: 3
+      volumes:
+        - path: /var/lib/mysql
+          recoveryPolicy: retain
+          uri: 'cpln://volumeset/{{ include "mysql.volume.name" . }}'
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+    capacityAI: false
+    timeoutSeconds: {{ .Values.timeoutSeconds | int }}
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
+      inboundAllowWorkload: []

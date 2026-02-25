@@ -49,9 +49,9 @@ spec:
     timeoutSeconds: 30
   firewallConfig:
     external:
-      inboundAllowCIDR: {{- if .Values.firewall.external.inboundAllowCIDR }}{{ toYaml .Values.firewall.external.inboundAllowCIDR | nindent 8 }}{{ else }}[]{{ end }}
+      inboundAllowCIDR: {{ if .Values.firewall.external.inboundAllowCIDR }}{{ toYaml .Values.firewall.external.inboundAllowCIDR | nindent 8 }}{{ else }}[]{{ end }}
       inboundBlockedCIDR: []
-      outboundAllowCIDR: {{ - if .Values.firewall.external.outboundAllowCIDR }}{{ toYaml .Values.firewall.external.outboundAllowCIDR | nindent 8 }}{{ else }}[]{{ end }}
+      outboundAllowCIDR: {{ if .Values.firewall.external.outboundAllowCIDR }}{{ toYaml .Values.firewall.external.outboundAllowCIDR | nindent 8 }}{{ else }}[]{{ end }}
       outboundAllowHostname: []
       outboundAllowPort: []
       outboundBlockedCIDR: []

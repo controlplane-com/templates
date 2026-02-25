@@ -2,8 +2,8 @@ image: postgres:18  # versions before postgres:17 are compatible but do not supp
 
 resources:
   minCpu: 200m
-  maxCpu: 500m
   minMemory: 128Mi
+  maxCpu: 500m
   maxMemory: 256Mi
 
 config:
@@ -14,7 +14,7 @@ config:
 volumeset:
   capacity: 10 # initial capacity in GiB (minimum is 10)
   autoscaling:
-    enabled: true # Set to true to enable autoscaling
+    enabled: false # Set to true to enable autoscaling
     maxCapacity: 100 # Maximum capacity in GiB when autoscaling is enabled
     minFreePercentage: 10 # Minimum free percentage to trigger scaling when autoscaling is enabled
     scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
@@ -27,7 +27,7 @@ internalAccess: # Sets the internal firewall scope - if set to none, replicas wi
     #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
 backup: # compatible with Postgres 17+
-  enabled: true
+  enabled: false
   image: controlplanecorporation/pg-backup:18.1.0 # tag 18.1.0 = Postgres 18, 17.1.0 = Postgres 17
   schedule: "0 2 * * *"   # daily at 2am UTC
 

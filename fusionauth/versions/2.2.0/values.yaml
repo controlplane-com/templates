@@ -15,7 +15,7 @@ firewall:
       #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
       #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
-
+# Database configuration
 postgres:
   image: postgres:18
   config:
@@ -23,17 +23,25 @@ postgres:
     password: password
     database: test
   resources:
-    cpu: 500m
-    memory: 1024Mi
+    minCpu: 200m
+    minMemory: 128Mi
+    maxCpu: 500m
+    maxMemory: 256Mi
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)
+    autoscaling:
+      enabled: false # Set to true to enable autoscaling
+      maxCapacity: 100 # Maximum capacity in GiB when autoscaling is enabled
+      minFreePercentage: 10 # Minimum free percentage to trigger scaling when autoscaling is enabled
+      scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
+
   internalAccess: # Sets the internal firewall scope - if set to none, replicas will not be able to reach each other
     type: same-gvc # options: none, same-gvc, same-org, workload-list
     workloads:  # Note: can only be used if type is same-gvc or workload-list
       #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
       #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
-  # POSTGRES BACKUP CONFIG   
+  # Postgres backup configuration   
   backup: # compatible with Postgres 17+
     enabled: false
     image: controlplanecorporation/pg-backup:18.1.0 # tag 18.1.0 = Postgres 18, 17.1.0 = Postgres 17
@@ -43,18 +51,16 @@ postgres:
       cpu: 100m
       memory: 128Mi
 
+    provider: aws # Options: aws or gcp
+
     aws:
-      enabled: false
-      s3:
-        bucket: pg-backup-bucket
-        region: us-east-1
-        cloudAccountName: pg-backup-cloudaccount
-        policyName: pg-backup-policy
-        prefix: postgres/my-cluster # folder name where your backups will be stored
+      bucket: my-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-backup-cloudaccount
+      policyName: my-backup-policy
+      prefix: postgres/backups # folder name where your backups will be stored
 
     gcp:
-      enabled: false
-      gcs:
-        bucket: pg-backup-bucket
-        cloudAccountName: pg-backup-cloudaccount
-        prefix: postgres/my-cluster # folder name where your backups will be stored
+      bucket: my-backup-bucket
+      cloudAccountName: my-backup-cloudaccount
+      prefix: postgres/backups # folder name where your backups will be stored

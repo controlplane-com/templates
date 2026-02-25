@@ -5,11 +5,18 @@ replicas: 3 # Must be odd
 clusterName: my-opensearch-cluster
 
 resources:
-  cpu: 1
-  memory: 4Gi
+  minCpu: 500m
+  minMemory: 2Gi
+  maxCpu: 1
+  maxMemory: 4Gi
 
 volumeset:
   capacity: 10 # initial capacity in GiB (minimum is 10)
+  autoscaling:
+    enabled: false # Set to true to enable autoscaling
+    maxCapacity: 100 # Maximum capacity in GiB when autoscaling is enabled
+    minFreePercentage: 10 # Minimum free percentage to trigger scaling when autoscaling is enabled
+    scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
 
 internal_access:
   type: same-gvc # options: same-gvc, same-org, workload-list

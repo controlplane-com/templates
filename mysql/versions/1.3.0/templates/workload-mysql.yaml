@@ -58,4 +58,3 @@ spec:
       {{- if .Values.internalAccess.workloads }}
       inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
       {{- end }}
-      inboundAllowWorkload: []

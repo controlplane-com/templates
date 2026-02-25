@@ -1,0 +1,5 @@
+kind: identity
+gvc: {{ .Values.gvc.name }}
+name: {{ include "nats.identity.name" . }}
+description: NATS identity
+tags: {{- include "nats.tags" . | nindent 4 }}

@@ -1,0 +1,67 @@
+kind: workload
+name: {{ include "fusionauth.name" . }}
+description: FusionAuth
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "fusionauth.tags" . | nindent 4 }}
+spec:
+  type: serverless
+  identityLink: //identity/{{ include "fusionauth.identity.name" . }}
+  containers:
+    - name: fusionauth
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
+      image: {{ .Values.image }}
+      inheritEnv: false
+      env:
+        - name: DATABASE_PASSWORD
+          value: 'cpln://secret/{{ include "fusionauth.secretPostgres.name" . }}.password'
+        - name: DATABASE_URL
+          value: jdbc:postgresql://{{ include "fusionauth.postgres.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:5432/{{ .Values.postgres.config.database }}
+        - name: DATABASE_USERNAME
+          value: 'cpln://secret/{{ include "fusionauth.secretPostgres.name" . }}.username'
+        - name: fusionauth-app.runtime-mode
+          value: 'production'
+        - name: fusionauth-app.silent-mode
+          value: 'true'
+        - name: fusionauth-app.http.port
+          value: '9011'
+      ports:
+        - number: 9011
+          protocol: http
+      command: /bin/bash
+      args:
+        - /opt/fusionauth/start-fusionauth.sh
+      volumes:
+        - path: /opt/fusionauth/start-fusionauth.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "fusionauth.secretStartup.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 1000
+      maxScale: 3
+      metric: concurrency
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: true
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname:
+{{- if .Values.identityProviders.google.enabled }}
+        - oauth2.googleapis.com
+        - www.googleapis.com
+        - accounts.google.com
+{{- end }}
+      outboundAllowPort:
+{{- if .Values.identityProviders.google.enabled }}
+        - number: 443
+          protocol: tcp
+{{- end }}
+      outboundBlockedCIDR: []

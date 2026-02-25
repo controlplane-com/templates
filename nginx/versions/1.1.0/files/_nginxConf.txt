@@ -17,7 +17,15 @@ http {
       return 500 '{"success":false,"message":"Error"}';
     }
 
-    # This is an example of adding a workload as a location to nginx. See Host header and and it's value. 
+{{- if .Values.enableExample }}
+    location / {
+      proxy_pass http://{{ include "nginx.example.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:8080;
+      proxy_http_version 1.1;
+      proxy_set_header Host {{ include "nginx.example.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local;
+      proxy_intercept_errors on;
+      error_page 500 502 503 504 /fail;
+    }
+{{- end }}
 {{- range .Values.locations }}
     location {{ .regexModifier }} {{ .path }} {
       proxy_pass http://{{ .workload }}.{{ $.Values.global.cpln.gvc }}.cpln.local:{{ .port }};

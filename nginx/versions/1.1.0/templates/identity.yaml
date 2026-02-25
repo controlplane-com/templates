@@ -1,5 +1,5 @@
 kind: identity
-name: {{ include "nginx.identityName" . }}
+name: {{ include "nginx.identity.name" . }}
 gvc: {{ .Values.global.cpln.gvc }}
 description: Nginx identity
 tags: {{- include "nginx.tags" . | nindent 4 }}

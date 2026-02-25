@@ -1,13 +1,6 @@
-{{- $targetItem := "example" -}}
-{{- $found := false -}}
-{{- range .Values.locations }}
-  {{- if eq .workload $targetItem }}
-    {{- $found = true -}}
-  {{- end }}
-{{- end }}
-{{- if $found }}
+{{- if .Values.enableExample }}
 kind: workload
-name: example
+name: {{ include "nginx.example.name" . }}
 gvc: {{ .Values.global.cpln.gvc }}
 description: default
 spec:

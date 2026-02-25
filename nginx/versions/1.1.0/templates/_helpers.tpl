@@ -8,23 +8,30 @@ Nginx Workload Name
 {{- end }}
 
 {{/*
+Nginx Example Workload Name
+*/}}
+{{- define "nginx.example.name" -}}
+{{- printf "%s-example" .Release.Name }}
+{{- end }}
+
+{{/*
 Nginx Secret Config Name
 */}}
-{{- define "nginx.secretConfigName" -}}
+{{- define "nginx.secretConfig.name" -}}
 {{- printf "%s-nginx-config" .Release.Name }}
 {{- end }}
 
 {{/*
 Nginx Identity Name
 */}}
-{{- define "nginx.identityName" -}}
+{{- define "nginx.identity.name" -}}
 {{- printf "%s-nginx-identity" .Release.Name }}
 {{- end }}
 
 {{/*
 Nginx Policy Name
 */}}
-{{- define "nginx.policyName" -}}
+{{- define "nginx.policy.name" -}}
 {{- printf "%s-nginx-policy" .Release.Name }}
 {{- end }}
 

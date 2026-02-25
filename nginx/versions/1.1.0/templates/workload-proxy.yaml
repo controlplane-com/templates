@@ -6,7 +6,7 @@ tags:
   cpln/checksum: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
 spec:
   type: serverless
-  identityLink: //identity/{{ include "nginx.identityName" . }}
+  identityLink: //identity/{{ include "nginx.identity.name" . }}
   defaultOptions:
     autoscaling:
       maxConcurrency: {{ .Values.autoscaling.maxConcurrency }}
@@ -26,7 +26,8 @@ spec:
   containers:
     - name: nginx
       image: {{ .Values.proxyWorkload.image }}
-      {{- toYaml .Values.resources | nindent 6 }}
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
       ports:
         - number: {{ .Values.proxyWorkload.port | int }}
           protocol: http
@@ -41,4 +42,4 @@ spec:
       volumes:
         - path: /etc/nginx/nginx.conf
           recoveryPolicy: retain
-          uri: 'cpln://secret/{{ include "nginx.secretConfigName" . }}'
+          uri: 'cpln://secret/{{ include "nginx.secretConfig.name" . }}'

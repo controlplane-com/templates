@@ -9,7 +9,10 @@ spec:
       command: /bin/bash
       args:
         - /usr/local/bin/opensearch-startup.sh
-      cpu: {{ .Values.resources.cpu | quote }}
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
       env:
         - name: DISABLE_INSTALL_DEMO_CONFIG
           value: 'true'
@@ -17,7 +20,6 @@ spec:
           value: 'true'
       image: {{ .Values.image }}
       inheritEnv: false
-      memory: {{ .Values.resources.memory | quote }}
       ports:
         - number: 9200
           protocol: http

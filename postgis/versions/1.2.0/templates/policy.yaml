@@ -1,12 +1,12 @@
 kind: policy
-name: {{ include "postgis.policyName" . }}
+name: {{ include "postgis.policy.name" . }}
 description: PostGIS policy
 tags: {{- include "postgis.tags" . | nindent 4 }}
 bindings:
   - permissions:
       - reveal
     principalLinks:
-      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "postgis.identityName" . }}
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "postgis.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "postgis.secretDatabaseName" . }}
+  - //secret/{{ include "postgis.secretDatabase.name" . }}

@@ -1,14 +1,16 @@
 kind: volumeset
-name: {{ include "postgis.volumeName" . }}
+name: {{ include "postgis.volume.name" . }}
 gvc: {{ .Values.global.cpln.gvc }}
 tags: {{- include "postgis.tags" . | nindent 4 }}
 spec:
-  autoscaling:
-    maxCapacity: 1000
-    minFreePercentage: 10
-    scalingFactor: 1.1
   fileSystemType: ext4
   initialCapacity: {{ .Values.volumeset.capacity }}
+  {{- if .Values.volumeset.autoscaling.enabled }}
+  autoscaling:
+    maxCapacity: {{ .Values.volumeset.autoscaling.maxCapacity }}
+    minFreePercentage: {{ .Values.volumeset.autoscaling.minFreePercentage }}
+    scalingFactor: {{ .Values.volumeset.autoscaling.scalingFactor }}
+  {{- end }}
   performanceClass: general-purpose-ssd
   snapshots:
     createFinalSnapshot: true

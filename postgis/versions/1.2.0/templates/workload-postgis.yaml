@@ -4,28 +4,30 @@ gvc: {{ .Values.global.cpln.gvc }}
 tags: {{- include "postgis.tags" . | nindent 4 }}
 spec:
   type: stateful
-  identityLink: //identity/{{ include "postgis.identityName" . }}
+  identityLink: //identity/{{ include "postgis.identity.name" . }}
   containers:
     - name: postgis
       env:
         - name: PGDATA
           value: "/var/lib/postgresql/data/pg_data"
         - name: POSTGRES_DB
-          value: {{ .Values.postgres.database }}
+          value: {{ .Values.postgres.database | quote }}
         - name: POSTGRES_PASSWORD
-          value: 'cpln://secret/{{ include "postgis.secretDatabaseName" . }}.password'
+          value: 'cpln://secret/{{ include "postgis.secretDatabase.name" . }}.password'
         - name: POSTGRES_USER
-          value: 'cpln://secret/{{ include "postgis.secretDatabaseName" . }}.username'
+          value: 'cpln://secret/{{ include "postgis.secretDatabase.name" . }}.username'
       image: {{ .Values.image }}
       inheritEnv: false
-      cpu: {{ .Values.resources.cpu | quote }}
-      memory: {{ .Values.resources.memory | quote }}
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
       ports:
         - number: 5432
           protocol: tcp
       volumes:
         - path: /var/lib/postgresql/data
-          uri: 'cpln://volumeset/{{ include "postgis.volumeName" . }}'
+          uri: 'cpln://volumeset/{{ include "postgis.volume.name" . }}'
   defaultOptions:
     autoscaling:
       metric: disabled
@@ -37,4 +39,7 @@ spec:
       outboundAllowCIDR:
         - 0.0.0.0/0
     internal:
-      inboundAllowType: same-gvc
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}

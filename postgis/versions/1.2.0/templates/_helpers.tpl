@@ -10,28 +10,28 @@ Postgis Workload Name
 {{/*
 Postgis Secret Database Config Name
 */}}
-{{- define "postgis.secretDatabaseName" -}}
+{{- define "postgis.secretDatabase.name" -}}
 {{- printf "%s-postgis-config" .Release.Name }}
 {{- end }}
 
 {{/*
 Postgis Identity Name
 */}}
-{{- define "postgis.identityName" -}}
+{{- define "postgis.identity.name" -}}
 {{- printf "%s-postgis-identity" .Release.Name }}
 {{- end }}
 
 {{/*
 Postgis Policy Name
 */}}
-{{- define "postgis.policyName" -}}
+{{- define "postgis.policy.name" -}}
 {{- printf "%s-postgis-policy" .Release.Name }}
 {{- end }}
 
 {{/*
 Postgis Volume Set Name
 */}}
-{{- define "postgis.volumeName" -}}
+{{- define "postgis.volume.name" -}}
 {{- printf "%s-postgis-vs" .Release.Name }}
 {{- end }}
 

@@ -1,0 +1,12 @@
+kind: policy
+name: {{ include "ollama.policyName" . }}
+description: Ollama policy
+tags: {{- include "ollama.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "ollama.identityName" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "ollama.secretName" . }}

@@ -1,0 +1,10 @@
+kind: volumeset
+gvc: {{ .Values.global.cpln.gvc }}
+name: {{ include "ollama.volumeName" . }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.initialCapacity }}
+  performanceClass: {{ .Values.volumeset.performanceClass }}
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: {{ .Values.volumeset.snapshots.retentionDuration }}

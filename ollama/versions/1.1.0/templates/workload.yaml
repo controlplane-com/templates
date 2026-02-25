@@ -1,0 +1,106 @@
+kind: workload
+gvc: {{ .Values.global.cpln.gvc }}
+name: {{ include "ollama.name" . }}
+spec:
+  type: stateful
+  containers:
+    - name: {{ .Values.workload.containers.ui.name }}
+      cpu: {{ .Values.workload.containers.ui.resources.cpu | quote }}
+      env:
+        - name: DEFAULT_MODELS
+          value: {{ .Values.defaultModel }}
+        - name: OLLAMA_BASE_URL
+          value: http://localhost:{{ .Values.workload.containers.api.port }}
+      image: {{ .Values.workload.containers.ui.image }}
+      inheritEnv: false
+      memory: {{ .Values.workload.containers.ui.resources.memory | quote }}
+      ports:
+        - number: {{ .Values.workload.containers.ui.port }}
+          protocol: http
+      readinessProbe:
+        failureThreshold: 3
+        httpGet:
+          httpHeaders: []
+          path: /
+          port: {{ .Values.workload.containers.ui.port }}
+          scheme: HTTP
+        initialDelaySeconds: 0
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 1
+      livenessProbe:
+        failureThreshold: 3
+        httpGet:
+          httpHeaders: []
+          path: /
+          port: {{ .Values.workload.containers.ui.port }}
+          scheme: HTTP
+        initialDelaySeconds: 120
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 1
+      volumes:
+        - path: /app/backend/data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "ollama.volumeName" . }}
+    - name: {{ .Values.workload.containers.api.name }}
+      args:
+        - '-c'
+        - /startup/entrypoint.sh
+      command: bash
+      cpu: {{ .Values.workload.containers.api.resources.cpu | quote }}
+      {{- if .Values.workload.containers.api.gpu }}
+      gpu: 
+        {{- toYaml .Values.workload.containers.api.gpu | nindent 8 }}
+      {{- end }}
+      image: {{ .Values.workload.containers.api.image }}
+      inheritEnv: false
+      livenessProbe:
+        failureThreshold: 5
+        initialDelaySeconds: 180
+        periodSeconds: 30
+        successThreshold: 1
+        tcpSocket:
+          port: {{ .Values.workload.containers.api.port }}
+        timeoutSeconds: 1
+      memory: {{ .Values.workload.containers.api.resources.memory | quote }}
+      ports:
+        - number: {{ .Values.workload.containers.api.port }}
+          protocol: http
+      readinessProbe:
+        failureThreshold: 6
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        successThreshold: 1
+        tcpSocket:
+          port: {{ .Values.workload.containers.api.port }}
+        timeoutSeconds: 1
+      volumes:
+        - path: /root/.ollama
+          recoveryPolicy: retain
+          uri: 'cpln://volumeset/{{ include "ollama.volumeName" . }}'
+        - path: /startup/entrypoint.sh
+          recoveryPolicy: retain
+          uri: 'cpln://secret/{{ include "ollama.secretName" . }}'
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: cpu
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    timeoutSeconds: 600
+  firewallConfig:
+    external:
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: {{ .Values.internal_access.type }}
+      {{- if .Values.internal_access.workloads }}
+      inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "ollama.identityName" . }}

@@ -9,17 +9,19 @@ spec:
       command: "/bin/bash"
       args:
         - "/minio/start.sh"
-      cpu: {{ .Values.resources.cpu | quote }}
       env:
         - name: LOCAL_IP
           value: cpln://reference/status.podIP
         - name: MINIO_ROOT_PASSWORD
-          value: cpln://secret/{{ include "minio.secretAdminName" . }}.password
+          value: cpln://secret/{{ include "minio.secretAdmin.name" . }}.password
         - name: MINIO_ROOT_USER
-          value: cpln://secret/{{ include "minio.secretAdminName" . }}.username
+          value: cpln://secret/{{ include "minio.secretAdmin.name" . }}.username
       image: {{ .Values.image }}
       inheritEnv: false
-      memory: {{ .Values.resources.memory | quote }}
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
       ports:
         - number: 9000
           protocol: http
@@ -30,8 +32,9 @@ spec:
           recoveryPolicy: retain
           uri: cpln://volumeset/{{ include "minio.volumeName" . }}
         - path: /minio/start.sh
-          uri: cpln://secret/{{ include "minio.secretStartupName" . }}.payload
-  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "minio.identityName" . }}
+          uri: cpln://secret/{{ include "minio.secretStartup.name" . }}.payload
+          
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "minio.identity.name" . }}
   defaultOptions:
     autoscaling:
       keda:

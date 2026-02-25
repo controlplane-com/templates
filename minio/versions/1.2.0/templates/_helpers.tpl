@@ -8,30 +8,23 @@ MinIO Workload Name
 {{- end }}
 
 {{/*
-MinIO Secret Database Config Name
-*/}}
-{{- define "minio.secretDatabaseName" -}}
-{{- printf "%s-minio-config" .Release.Name }}
-{{- end }}
-
-{{/*
 MinIO Secret Config Name
 */}}
-{{- define "minio.secretStartupName" -}}
+{{- define "minio.secretStartup.name" -}}
 {{- printf "%s-minio-startup" .Release.Name }}
 {{- end }}
 
 {{/*
 MinIO Secret Admin Name
 */}}
-{{- define "minio.secretAdminName" -}}
+{{- define "minio.secretAdmin.name" -}}
 {{- printf "%s-minio-admin" .Release.Name }}
 {{- end }}
 
 {{/*
 MinIO Identity Name
 */}}
-{{- define "minio.identityName" -}}
+{{- define "minio.identity.name" -}}
 {{- printf "%s-minio-identity" .Release.Name }}
 {{- end }}
 

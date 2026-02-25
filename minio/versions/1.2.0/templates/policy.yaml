@@ -7,8 +7,8 @@ bindings:
   - permissions:
       - reveal
     principalLinks:
-      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "minio.identityName" . }}
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "minio.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "minio.secretStartupName" . }}
-  - //secret/{{ include "minio.secretAdminName" . }}
+  - //secret/{{ include "minio.secretStartup.name" . }}
+  - //secret/{{ include "minio.secretAdmin.name" . }}

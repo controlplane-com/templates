@@ -1,6 +1,6 @@
 kind: identity
 gvc: {{ .Values.global.cpln.gvc }}
-name: {{ include "minio.identityName" . }}
+name: {{ include "minio.identity.name" . }}
 description: MinIO identity
 tags:
   {{- include "minio.tags" . | nindent 4 }}

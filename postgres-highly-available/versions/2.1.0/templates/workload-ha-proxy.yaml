@@ -1,0 +1,52 @@
+{{- if .Values.proxy.enabled }}
+kind: workload
+name: {{ include "pg-ha.proxy.name" . }}
+description: HAProxy leader-only endpoint for Patroni Postgres
+tags:
+  {{- include "pg-ha.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: haproxy
+      image: {{ .Values.proxy.image }}
+      inheritEnv: false
+      command: /bin/sh
+      args:
+        - /proxy/start.sh
+      cpu: {{ .Values.proxy.resources.cpu }}
+      memory: {{ .Values.proxy.resources.memory }}
+      ports:
+        - number: 5432
+          protocol: tcp
+      volumes:
+        - path: /proxy/start.sh
+          uri: cpln://secret/{{ include "pg-ha.secretProxyStartup.name" . }}.payload
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pg-ha.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      metric: rps
+      minScale: {{ .Values.proxy.minReplicas }}
+      maxScale: {{ .Values.proxy.maxReplicas }}
+      maxConcurrency: 0
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: {{ .Values.multiZone }}
+    timeoutSeconds: 5
+  firewallConfig:
+    internal:
+      inboundAllowType: {{ .Values.internal_access.type }}
+      {{- if .Values.internal_access.workloads }}
+      inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
+      {{- end }}
+    external:
+      inboundAllowCIDR: []
+      outboundAllowCIDR: []
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+{{- end }}

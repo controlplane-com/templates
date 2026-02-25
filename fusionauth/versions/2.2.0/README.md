@@ -98,5 +98,5 @@ gsutil cp "gs://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" - \
 unset PGPASSWORD
 ```
 
-## Additional Resources
+## Supported External Services
 - [FusionAuth Documentation](https://fusionauth.io/docs/)

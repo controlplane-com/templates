@@ -1,0 +1,106 @@
+redis:
+  image: redis:7.4
+  resources:
+    cpu: 200m
+    memory: 256Mi
+    minCpu: 80m
+    minMemory: 128Mi
+  replicas: 2
+  timeoutSeconds: 15
+  multiZone: false
+  replicaDirect: false # https://docs.controlplane.com/reference/workload/general#internal-endpoint-formatting
+  auth:
+    fromSecret:
+      enabled: false
+      name: example-redis-auth-password
+      passwordKey: password
+    password:
+      enabled: false
+      value: your-password
+  serverCommand: redis-server  # Can be overridden based on the version of redis image
+  # extraArgs: "--maxclients 20000 --maxmemory 200mb --maxmemory-policy allkeys-lru"
+  publicAccess:
+    enabled: false
+    address: redis-test.example-cpln.com
+  firewall:
+    internal_inboundAllowType: "same-gvc" # Options: same-org / same-gvc(Recommended) / workload-list
+    # external_inboundAllowCIDR: 0.0.0.0/0 # Provide a comma-separated list
+    # # You can specify additional workloads with either same-gvc or workload-list:
+    # inboundAllowWorkload:
+    #   - //gvc/main-redis/workload/main-redis-sentinel
+    #   - //gvc/client-gvc/workload/client
+    # external_outboundAllowCIDR: "0.0.0.0/0" # Provide a comma-separated list
+  env: []
+  tags: {}
+  dataDir: /data
+  persistence:
+    enabled: false
+    volumes:
+      data:
+        initialCapacity: 10 # In GB
+        performanceClass: general-purpose-ssd # general-purpose-ssd / high-throughput-ssd (Min 1000GB)
+        fileSystemType: ext4 # ext4 / xfs
+        snapshots:
+          retentionDuration: 7d
+          schedule: 0 0 * * * # UTC
+        autoscaling:
+          maxCapacity: 100 # In GB
+          minFreePercentage: 20
+          scalingFactor: 1.2
+        # customEncryption:
+        #   enabled: true
+        #   region: aws-us-east-1 # Replace with the appropriate region
+        #   keyId: arn:aws:kms:us-east-1:1234567890:key/d411f35a-1d31-4515-9934-4f193e042d80 # Replace with your AWS KMS key ARN
+
+sentinel:
+  image: redis:7.4
+  resources:
+    cpu: 200m
+    memory: 256Mi
+    minCpu: 80m
+    minMemory: 128Mi
+  replicas: 3
+  timeoutSeconds: 10
+  multiZone: false
+  replicaDirect: false # https://docs.controlplane.com/reference/workload/general#internal-endpoint-formatting
+  quorumAutoCalculation: true  # Set to false if you want to override quorum. Quorum is (replicas/2)+1
+  quorumOverride: null  # Only used if quorumAutoCalculation is false
+  auth:
+    fromSecret:
+      enabled: false
+      name: example-redis-auth-password
+      passwordKey: password
+    password:
+      enabled: false
+      value: your-password
+  publicAccess:
+    enabled: false
+    address: redis-sentinel-test.example-cpln.com
+  firewall:
+    internal_inboundAllowType: "same-gvc" # Options: same-org / same-gvc(Recommended)
+    # external_inboundAllowCIDR: 0.0.0.0/0 # Provide a comma-separated list
+    # # You can specify additional workloads with either same-gvc or workload-list:
+    # inboundAllowWorkload:
+    #   - //gvc/main-redis/workload/main-redis-sentinel
+    #   - //gvc/client-gvc/workload/client
+    # external_outboundAllowCIDR: "0.0.0.0/0" # Provide a comma-separated list
+  env: []
+  tags: {}
+  persistence:
+    enabled: false
+    volumes:
+      data:
+        initialCapacity: 10 # In GB
+        performanceClass: general-purpose-ssd # general-purpose-ssd / high-throughput-ssd (Min 1000GB)
+        fileSystemType: ext4 # ext4 / xfs
+        snapshots:
+          retentionDuration: 7d
+          schedule: 0 0 * * * # UTC
+        autoscaling:
+          maxCapacity: 50 # In GB
+          minFreePercentage: 20
+          scalingFactor: 1.2
+        # customEncryption:
+        #   enabled: true
+        #   region: aws-us-east-1 # Replace with the appropriate region
+        #   keyId: arn:aws:kms:us-east-1:1234567890:key/d411f35a-1d31-4515-9934-4f193e042d80 # Replace with your AWS KMS key ARN

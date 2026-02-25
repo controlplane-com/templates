@@ -1,0 +1,13 @@
+apiVersion: v2
+name: rabbitmq
+description: A single replica RabbitMQ helm chart for Control Plane
+
+type: application
+version: 1.1.0
+appVersion: "3"
+
+annotations:
+  created: "2024-01-23"
+  lastModified: "2026-01-20"
+  category: "queue"
+  createsGvc: false

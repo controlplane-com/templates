@@ -1,0 +1,13 @@
+kind: policy
+name: {{ include "rabbitmq.policyName" . }}
+description: RabbitMQ Policy
+tags: {{- include "rabbitmq.tags" . | nindent 4 }}
+origin: default
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "rabbitmq.identityName" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "rabbitmq.secretName" . }}

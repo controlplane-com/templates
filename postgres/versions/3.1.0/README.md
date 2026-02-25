@@ -89,3 +89,6 @@ gsutil cp "gs://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" - \
 
 unset PGPASSWORD
 ```
+
+### Supported External Services
+- [PostgresSQL Docs](https://www.postgresql.org/docs/)

@@ -1,0 +1,12 @@
+apiVersion: v2
+name: nats
+description: NATS super cluster across regions
+type: application
+version: 1.0.3
+appVersion: "2.11.6"
+
+annotations:
+  created: "2025-07-04"
+  lastModified: "2026-01-19"
+  category: "app"
+  createsGvc: true

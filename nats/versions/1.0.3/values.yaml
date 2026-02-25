@@ -1,0 +1,45 @@
+gvc:
+  name: nats-gvc
+  locations:
+    - name: aws-us-east-1
+      replicas: 3
+    - name: aws-us-west-2
+      replicas: 2
+    - name: aws-eu-central-1
+      replicas: 4
+
+resources:
+  cpu: 100m
+  memory: 256Mi
+
+nats_defaults:
+  image: controlplanecorporation/mynats:0.1
+  port: 4222
+  allowNonTls: true
+  cluster:
+    listen: "0.0.0.0:6222"
+    port: 6222 
+    noAdvertise: false
+  gateway:
+    listen: "0.0.0.0:7222"
+    port: 7222
+  
+  websocket:
+    enabled: true
+    port: 8080
+    compression: false
+    noTls: true # Control Plane handles TLS termination
+    # allowedOrigins: []  # Uncomment and add origins if needed
+    # advertise: "ws://example.com:8080"  # Uncomment if different from default
+    # tls:  # Uncomment for WebSocket TLS (when not using Control Plane TLS termination)
+    #   certFile: "/path/to/cert.pem"
+    #   keyFile: "/path/to/key.pem"
+    #   caFile: "/path/to/ca.pem"
+
+allowCIDR:
+  - 0.0.0.0/0 # Allow all traffic. CAREFUL: Change this to a more specific CIDRs to not expose the NATS server to the world.
+              # Only applicable to the WebSocket port. Control Plane exposes it on port 443.
+
+# You can add any VALID NATS configuration under nats_extra_config
+nats_extra_config: |
+  jetstream: false

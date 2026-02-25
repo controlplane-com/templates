@@ -1,0 +1,13 @@
+kind: policy
+name: {{ include "nats.policyName" . }}
+description: NATS policy
+tags: {{- include "nats.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.gvc.name }}/identity/{{ include "nats.identityName" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "nats.secretName" . }}
+  - //secret/{{ include "nats.extraDataName" . }}

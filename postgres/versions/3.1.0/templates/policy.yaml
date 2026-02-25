@@ -1,0 +1,12 @@
+kind: policy
+name: {{ include "postgres.policy.name" . }}
+description: Postgres policy
+tags: {{- include "pg.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "postgres.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "postgres.secretDatabase.name" . }}

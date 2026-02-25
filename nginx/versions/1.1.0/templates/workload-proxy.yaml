@@ -1,0 +1,44 @@
+kind: workload
+name: {{ include "nginx.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "nginx.tags" . | nindent 2 }}
+  cpln/checksum: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+spec:
+  type: serverless
+  identityLink: //identity/{{ include "nginx.identityName" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: {{ .Values.autoscaling.maxConcurrency }}
+      maxScale: {{ .Values.autoscaling.maxScale }}
+      metric: cpu
+      minScale: {{ .Values.autoscaling.minScale }}
+      scaleToZeroDelay: 300
+      target: 50
+    capacityAI: {{ .Values.proxyWorkload.capacityAI }}
+    debug: false
+    suspend: false
+    timeoutSeconds: {{ .Values.proxyWorkload.timeoutSeconds }}
+  firewallConfig:
+    external:
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+  containers:
+    - name: nginx
+      image: {{ .Values.proxyWorkload.image }}
+      {{- toYaml .Values.resources | nindent 6 }}
+      ports:
+        - number: {{ .Values.proxyWorkload.port | int }}
+          protocol: http
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: 80
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 80
+      volumes:
+        - path: /etc/nginx/nginx.conf
+          recoveryPolicy: retain
+          uri: 'cpln://secret/{{ include "nginx.secretConfigName" . }}'

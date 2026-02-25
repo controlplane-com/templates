@@ -1,0 +1,20 @@
+proxyWorkload:
+  image: nginx:latest
+  port: 80
+  capacityAI: false
+  timeoutSeconds: 5
+
+resources:
+  cpu: 100m
+  memory: 128Mi
+
+autoscaling:
+  minScale: 1
+  maxScale: 1
+  maxConcurrency: 1000
+
+locations:
+  - path: /
+    workload: example # starts an example workload to proxy requests to
+    port: 8080
+    regexModifier: ""

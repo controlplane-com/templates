@@ -1,8 +1,9 @@
 kind: volumeset
-name: {{ include "maria.volume.name" . }}
+name: {{ include "minio.volumeName" . }}
 gvc: {{ .Values.global.cpln.gvc }}
 tags:
-  {{- include "maria.tags" . | nindent 4 }}
+  {{- include "minio.tags" . | nindent 2 }}
+  workload: {{ include "minio.name" . }}
 spec:
   fileSystemType: ext4
   initialCapacity: {{ .Values.volumeset.capacity }}
@@ -13,3 +14,6 @@ spec:
     scalingFactor: {{ .Values.volumeset.autoscaling.scalingFactor }}
   {{- end }}
   performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d

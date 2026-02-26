@@ -23,7 +23,6 @@ tables:
       agentRetryCount: 3
       clusterMain: false
       segmentCount: 1
-      importMethod: indexer
       charsetTable: non_cont
       memLimit: 2G
       hasHeader: true

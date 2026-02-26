@@ -38,7 +38,6 @@ The orchestrator handles cluster initialization, coordinates imports across all 
          haStrategy: noerrors
          agentRetryCount: 3
          clusterMain: false
-         importMethod: indexer
          memLimit: 2G
          hasHeader: true
        schema:

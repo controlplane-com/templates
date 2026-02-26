@@ -1,0 +1,26 @@
+{{- if and (hasKey .Values.sentinel "persistence") .Values.sentinel.persistence.enabled }}
+kind: volumeset
+name: {{ include "redis.sentinelVolume.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  fileSystemType: {{ .Values.sentinel.persistence.volumes.data.fileSystemType }}
+  initialCapacity: {{ .Values.sentinel.persistence.volumes.data.initialCapacity }}
+  performanceClass: {{ .Values.sentinel.persistence.volumes.data.performanceClass }}
+  {{- if and .Values.sentinel.persistence.volumes.data.customEncryption .Values.sentinel.persistence.volumes.data.customEncryption.enabled }}
+  customEncryption:
+    regions:
+      {{ .Values.sentinel.persistence.volumes.data.customEncryption.region }}:
+        keyId: '{{ .Values.sentinel.persistence.volumes.data.customEncryption.keyId }}'
+  {{- end }}
+  {{- if .Values.sentinel.persistence.volumes.data.snapshots }}
+  snapshots:
+    retentionDuration: {{ .Values.sentinel.persistence.volumes.data.snapshots.retentionDuration }}
+    schedule: {{ .Values.sentinel.persistence.volumes.data.snapshots.schedule }}
+  {{- end }}
+  {{- if .Values.sentinel.persistence.volumes.data.autoscaling }}
+  autoscaling:
+    maxCapacity: {{ .Values.sentinel.persistence.volumes.data.autoscaling.maxCapacity }}
+    minFreePercentage: {{ .Values.sentinel.persistence.volumes.data.autoscaling.minFreePercentage }}
+    scalingFactor: {{ .Values.sentinel.persistence.volumes.data.autoscaling.scalingFactor }}
+  {{- end }}
+{{- end }}

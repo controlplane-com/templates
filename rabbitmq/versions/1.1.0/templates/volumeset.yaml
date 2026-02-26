@@ -1,0 +1,8 @@
+{{- if .Values.volumeset }}
+kind: volumeset
+name: {{ include "rabbitmq.volume.name" . }}
+spec:
+  fileSystemType: {{ .Values.volumeset.volume.fileSystemType }}
+  initialCapacity: {{ .Values.volumeset.volume.initialCapacity }}
+  performanceClass: {{ .Values.volumeset.volume.performanceClass }}
+{{- end }}

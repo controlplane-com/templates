@@ -35,12 +35,11 @@ The orchestrator handles cluster initialization, coordinates imports across all 
      - name: products
        csvPath: imports/products/data.csv
        config:
-         haStrategy: noerrors
-         agentRetryCount: 3
-         clusterMain: false
-         importMethod: indexer
-         memLimit: 2G
-         hasHeader: true
+         haStrategy: noerrors    # HA strategy for distributed queries; 'noerrors' skips agents that return errors
+         agentRetryCount: 3      # Number of times to retry failed agent connections
+         clusterMain: false      # Set to true to replicate the main table across all cluster nodes
+         memLimit: 2G            # Memory limit for indexer during import (max = 2G)
+         hasHeader: true         # Set to true if the CSV file includes a header row
        schema:
          columns:
            - name: title

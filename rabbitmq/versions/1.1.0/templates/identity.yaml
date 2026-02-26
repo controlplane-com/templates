@@ -1,5 +1,5 @@
 kind: identity
 gvc: {{ .Values.global.cpln.gvc }}
-name: {{ include "rabbitmq.identityName" . }}
+name: {{ include "rabbitmq.identity.name" . }}
 description: RabbitMQ Identity
 tags: {{- include "rabbitmq.tags" . | nindent 4 }}

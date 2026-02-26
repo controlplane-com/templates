@@ -2,8 +2,8 @@ image:
   repository: rabbitmq:3-management
 
 diskCapacity: 10 # In Gigabytes
-memory: 250Mi # EX. 3000Mi = 3Gi
-cpu: 200m # vCPU or milicores with; EX. 1.5 = 1500m
+memory: 250Mi
+cpu: 200m
 firewall:
     internal_inboundAllowType: "same-gvc" # Options: same-org / same-gvc(Recommended)
     # external_inboundAllowCIDR: 0.0.0.0/0 # Provide a comma-separated list

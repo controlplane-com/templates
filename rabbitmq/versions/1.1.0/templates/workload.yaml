@@ -35,13 +35,13 @@ spec:
           protocol: http
       volumes:
         - path: {{ .Values.env.RABBITMQ_CONFIG_FILE }}
-          uri: 'cpln://secret/{{ include "rabbitmq.secretName" . }}'
+          uri: 'cpln://secret/{{ include "rabbitmq.secret.name" . }}'
     {{- if .Values.volumeset }}
         - path: /var/lib/rabbitmq
           recoveryPolicy: retain
-          uri: 'cpln://volumeset/{{ include "rabbitmq.volumeName" . }}'
+          uri: 'cpln://volumeset/{{ include "rabbitmq.volume.name" . }}'
     {{- end }}
-  identityLink: //identity/{{ include "rabbitmq.identityName" . }}
+  identityLink: //identity/{{ include "rabbitmq.identity.name" . }}
   defaultOptions:
     autoscaling:
       maxConcurrency: 0

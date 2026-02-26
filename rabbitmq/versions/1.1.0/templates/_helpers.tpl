@@ -10,28 +10,28 @@ RabbitMQ Workload Name
 {{/*
 RabbitMQ Secret Database Config Name
 */}}
-{{- define "rabbitmq.secretName" -}}
+{{- define "rabbitmq.secret.name" -}}
 {{- printf "%s-rabbitmq-config" .Release.Name }}
 {{- end }}
 
 {{/*
 RabbitMQ Identity Name
 */}}
-{{- define "rabbitmq.identityName" -}}
+{{- define "rabbitmq.identity.name" -}}
 {{- printf "%s-rabbitmq-identity" .Release.Name }}
 {{- end }}
 
 {{/*
 RabbitMQ Policy Name
 */}}
-{{- define "rabbitmq.policyName" -}}
+{{- define "rabbitmq.policy.name" -}}
 {{- printf "%s-rabbitmq-policy" .Release.Name }}
 {{- end }}
 
 {{/*
 RabbitMQ Volume Set Name
 */}}
-{{- define "rabbitmq.volumeName" -}}
+{{- define "rabbitmq.volume.name" -}}
 {{- printf "%s-rabbitmq-vs" .Release.Name }}
 {{- end }}
 

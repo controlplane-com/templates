@@ -1,6 +1,6 @@
 {{ include "validateAuth" (dict "auth" .Values.sentinel.auth) }}
 kind: workload
-name: {{ .Release.Name }}-sentinel
+name: {{ include "redis.sentinel.name" . }}
 tags:
   {{- $hasTags := false }}
   {{- if .Values.sentinel.tags }}
@@ -46,16 +46,16 @@ spec:
           if [ -n "$REPLICA_DIRECT" ]; then
             echo "\nsentinel announce-ip replica-${POD_ID}.${CPLN_WORKLOAD_NAME}.${LOCATION}.${CPLN_GVC}.cpln.local" >> /etc/sentinel/sentinel.conf
           else
-            echo "\nsentinel announce-ip ${HOSTNAME}.{{ .Release.Name }}-sentinel" >> /etc/sentinel/sentinel.conf
+            echo "\nsentinel announce-ip ${HOSTNAME}.{{ include "redis.sentinel.name" . }}" >> /etc/sentinel/sentinel.conf
           fi
           echo "\nsentinel announce-port 26379" >> /etc/sentinel/sentinel.conf
           {{ end }}
           {{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
           echo "sentinel monitor mymaster {{ .Values.redis.publicAccess.address }} 6380 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
           {{- else if and (hasKey .Values.redis "replicaDirect") .Values.redis.replicaDirect }}
-          echo "sentinel monitor mymaster replica-0.{{ .Release.Name }}-redis.${LOCATION}.${CPLN_GVC}.cpln.local 6379 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
+          echo "sentinel monitor mymaster replica-0.{{ include "redis.name" . }}.${LOCATION}.${CPLN_GVC}.cpln.local 6379 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
           {{- else }}
-          echo "sentinel monitor mymaster {{ .Release.Name }}-redis-0.{{ .Release.Name }}-redis 6379 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
+          echo "sentinel monitor mymaster {{ include "redis.name" . }}-0.{{ include "redis.name" . }} 6379 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
           {{- end }}
 
           redis-sentinel /etc/sentinel/sentinel.conf
@@ -74,14 +74,14 @@ spec:
           value: cpln://secret/{{ .Values.redis.auth.fromSecret.name }}.{{ .Values.redis.auth.fromSecret.passwordKey }}
       {{- else if and (hasKey .Values.redis "auth") (hasKey .Values.redis.auth "password") .Values.redis.auth.password.enabled }}
         - name: CUSTOM_REDIS_PASSWORD
-          value: cpln://secret/{{ .Release.Name }}-redis-auth-password.password
+          value: cpln://secret/{{ include "redis.secretPassword.name" . }}.password
       {{- end }}
       {{- if and (hasKey .Values.sentinel "auth") (hasKey .Values.sentinel.auth "fromSecret") .Values.sentinel.auth.fromSecret.enabled }}
         - name: CUSTOM_SENTINEL_PASSWORD
           value: cpln://secret/{{ .Values.sentinel.auth.fromSecret.name }}.{{ .Values.sentinel.auth.fromSecret.passwordKey }}
       {{- else if and (hasKey .Values.sentinel "auth") (hasKey .Values.sentinel.auth "password") .Values.sentinel.auth.password.enabled }}
         - name: CUSTOM_SENTINEL_PASSWORD
-          value: cpln://secret/{{ .Release.Name }}-sentinel-auth-password.password
+          value: cpln://secret/{{ include "redis.sentinelSecretPassword.name" . }}.password
       {{- end }}
       {{- if and (hasKey .Values.sentinel "replicaDirect") .Values.sentinel.replicaDirect }}
         - name: REPLICA_DIRECT
@@ -129,11 +129,11 @@ spec:
       volumes:
         - path: /config/sentinel.conf
           recoveryPolicy: retain
-          uri: cpln://secret/{{ .Release.Name }}-sentinel-config
+          uri: cpln://secret/{{ include "redis.sentinelSecretConfig.name" . }}
         {{- if and (hasKey .Values.sentinel "persistence") .Values.sentinel.persistence.enabled }}
         - path: /etc/sentinel
           recoveryPolicy: retain
-          uri: cpln://volumeset/{{ .Release.Name }}-sentinel
+          uri: cpln://volumeset/{{ include "redis.sentinelVolume.name" . }}
         {{- end }}
   defaultOptions:
     autoscaling:
@@ -169,7 +169,7 @@ spec:
       {{- end }}
     {{- end }}
 {{- end }}
-  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ .Release.Name }}-sentinel
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "redis.sentinelIdentity.name" . }}
 {{- if and (hasKey .Values.sentinel "publicAccess") .Values.sentinel.publicAccess.enabled }}
   loadBalancer:
     replicaDirect: true

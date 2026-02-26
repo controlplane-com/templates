@@ -1,6 +1,6 @@
 {{- if and (hasKey .Values.redis "persistence") .Values.redis.persistence.enabled }}
 kind: volumeset
-name: {{ .Release.Name }}-redis
+name: {{ include "redis.volume.name" . }}
 gvc: {{ .Values.global.cpln.gvc }}
 spec:
   fileSystemType: {{ .Values.redis.persistence.volumes.data.fileSystemType }}

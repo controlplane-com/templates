@@ -1,6 +1,6 @@
 {{- if and (hasKey .Values.sentinel "persistence") .Values.sentinel.persistence.enabled }}
 kind: volumeset
-name: {{ .Release.Name }}-sentinel
+name: {{ include "redis.sentinelVolume.name" . }}
 gvc: {{ .Values.global.cpln.gvc }}
 spec:
   fileSystemType: {{ .Values.sentinel.persistence.volumes.data.fileSystemType }}

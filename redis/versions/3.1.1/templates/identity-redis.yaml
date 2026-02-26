@@ -1,3 +1,4 @@
 kind: identity
-name: {{ .Release.Name }}-redis
+name: {{ include "redis.identity.name" . }}
+description: Redis Identity
 gvc: {{ .Values.global.cpln.gvc }}

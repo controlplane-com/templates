@@ -1,51 +1,78 @@
-## Redis Sentinel App
+## Redis Sentinel
 
-This app creates a Redis sentinel cluster on Control Plane Platform.
+Creates a Redis Sentinel cluster on Control Plane with automatic leader election and failover.
 
-### Accessing redis
+### Configuration
 
-Workloads are allowed to access Redis based on the `firewallConfig` you specify. You can learn more about it in our [documentation](https://docs.controlplane.com/reference/workload#internal).
+**Redis and Sentinel** — set replicas, resources, and timeouts for each. Sentinel replicas must be an odd number for quorum:
+```yaml
+redis:
+  replicas: 2
+  resources:
+    minCpu: 80m
+    minMemory: 128Mi
+    cpu: 200m
+    memory: 256Mi
 
-#### Option 1:
-
-Syntax: <WORKLOAD_NAME>
-```
-redis-cli -h {workload-name} -p 6379 set mykey "test"
-redis-cli -h {workload-name} -p 6379 get mykey
-```
-#### Option 2: (By replica)
-
-Syntax: <REPLICA_NAME>.<WORKLOAD_NAME>
-```
-redis-cli -h {workload-name}-0.{workload-name} -p 6379 set mykey "test"
-redis-cli -h {workload-name}-1.{workload-name} -p 6379 get mykey
+sentinel:
+  replicas: 3
+  quorumAutoCalculation: true  # calculates as (replicas/2)+1
 ```
 
-#### To get the master node for write, you can query sentinel
+**Authentication** — enable one method. Apply the same config under both `redis.auth` and `sentinel.auth`:
+```yaml
+redis:
+  auth:
+    password:
+      enabled: true
+      value: your-password
+    # fromSecret:
+    #   enabled: true
+    #   name: my-redis-secret
+    #   passwordKey: password
 ```
-# Connect to Redis Sentinel to get the master address
-redis-cli -h {sentinel-workload-node} -p 26379 sentinel get-master-addr-by-name mymaster
 
-# Then, connect to the master node and set a key:
-redis-cli -h {master-workload-node} -p 6379 SET test_key "Hello world"
-
-# Then, connect to any redis node and get the key
-redis-cli -h {redis-workload-node} -p 6379 GET test_key
+**Persistence** — disabled by default. Enable to attach a persistent volume to Redis:
+```yaml
+redis:
+  persistence:
+    enabled: true
+    volumes:
+      data:
+        initialCapacity: 10
+        performanceClass: general-purpose-ssd  # or high-throughput-ssd (min 1000 GiB)
+        fileSystemType: ext4
 ```
 
-#### To get the master node for write, you can query sentinel
+**Firewall** — set the internal access scope for both Redis and Sentinel:
+```yaml
+firewall:
+  internal_inboundAllowType: same-gvc  # same-gvc, same-org, or workload-list
+```
+
+### Connecting
+
+Redis is accessible internally on port 6379:
+```
+RELEASE_NAME-redis.GVC_NAME.cpln.local:6379
+```
+
+Sentinel is accessible on port 26379:
+```
+RELEASE_NAME-sentinel.GVC_NAME.cpln.local:26379
+```
+
+To route writes to the current master:
 ```bash
-# First, query Sentinel to get the current master address
-MASTER_INFO=$(redis-cli -h {sentinel-workload-name} -p 26379 SENTINEL get-master-addr-by-name mymaster)
+MASTER_INFO=$(redis-cli -h RELEASE_NAME-sentinel.GVC_NAME.cpln.local -p 26379 SENTINEL get-master-addr-by-name mymaster)
 MASTER_HOST=$(echo $MASTER_INFO | cut -d' ' -f1)
 MASTER_PORT=$(echo $MASTER_INFO | cut -d' ' -f2)
-
-# Then, connect to the master node and set a key
-redis-cli -h $MASTER_HOST -p $MASTER_PORT SET test_key "Hello world"
-
-# You can then connect to any redis node to get the key
-redis-cli -h {workload-name} -p 6379 GET test_key
+redis-cli -h $MASTER_HOST -p $MASTER_PORT SET my-key "value"
 ```
+
+### Supported External Services
+- [Redis Documentation](https://redis.io/docs/)
+- [Redis Sentinel Documentation](https://redis.io/docs/latest/operate/oss_and_stack/management/sentinel/)
 
 ### Release Notes
 See [RELEASES.md](https://github.com/controlplane-com/templates/blob/main/redis/RELEASES.md)

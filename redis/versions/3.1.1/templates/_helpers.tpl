@@ -10,79 +10,82 @@ Redis Workload Name
 {{/*
 Redis Sentinel Workload Name
 */}}
-{{- define "redis.sentinelName" -}}
+{{- define "redis.sentinel.name" -}}
 {{- printf "%s-sentinel" .Release.Name }}
 {{- end }}
 
 {{/*
 Redis Secret Config Name
 */}}
-{{- define "redis.secretConfigName" -}}
+{{- define "redis.secretConfig.name" -}}
 {{- printf "%s-redis-config" .Release.Name }}
 {{- end }}
 
 {{/*
 Redis Secret Auth Password Name
 */}}
-{{- define "redis.secretPasswordName" -}}
+{{- define "redis.secretPassword.name" -}}
 {{- printf "%s-redis-auth-password" .Release.Name }}
 {{- end }}
 
 {{/*
 Redis Sentinel Secret Config Name
 */}}
-{{- define "redis.sentinelSecretConfigName" -}}
+{{- define "redis.sentinelSecretConfig.name" -}}
 {{- printf "%s-sentinel-config" .Release.Name }}
 {{- end }}
 
 {{/*
 Redis Sentinel Secret Auth Password Name
 */}}
-{{- define "redis.sentinelSecretPasswordName" -}}
+{{- define "redis.sentinelSecretPassword.name" -}}
 {{- printf "%s-sentinel-auth-password" .Release.Name }}
 {{- end }}
 
 {{/*
 Redis Identity Name
 */}}
-{{- define "redis.identityName" -}}
+{{- define "redis.identity.name" -}}
 {{- printf "%s-redis-identity" .Release.Name }}
 {{- end }}
 
 {{/*
 Redis Sentinel Identity Name
 */}}
-{{- define "redis.sentinelIdentityName" -}}
+{{- define "redis.sentinelIdentity.name" -}}
 {{- printf "%s-sentinel-identity" .Release.Name }}
 {{- end }}
 
 {{/*
 Redis Policy Name
 */}}
-{{- define "redis.policyName" -}}
+{{- define "redis.policy.name" -}}
 {{- printf "%s-redis-policy" .Release.Name }}
 {{- end }}
 
 {{/*
 Redis Sentinel Policy Name
 */}}
-{{- define "redis.sentinelPolicyName" -}}
+{{- define "redis.sentinelPolicy.name" -}}
 {{- printf "%s-sentinel-policy" .Release.Name }}
 {{- end }}
 
 {{/*
 Redis Volume Set Name
 */}}
-{{- define "redis.volumeName" -}}
+{{- define "redis.volume.name" -}}
 {{- printf "%s-redis-vs" .Release.Name }}
 {{- end }}
 
 {{/*
 Redis Sentinel Volume Set Name
 */}}
-{{- define "redis.sentinelVolumeName" -}}
+{{- define "redis.sentinelVolume.name" -}}
 {{- printf "%s-sentinel-vs" .Release.Name }}
 {{- end }}
+
+
+{{/* Validation */}}
 
 {{- define "calculateWorkloadCounts" -}}
 {{- $quorumCount := int .Values.sentinel.quorum }}
@@ -107,8 +110,6 @@ Redis Sentinel Volume Set Name
 {{- end }}
 {{- end }}
 
-
-{{/* Validation */}}
 
 {{ include "redis.auth" (dict "auth" .Values.redis.auth) }}
 

@@ -1,6 +1,6 @@
 gvc:
   name: my-redis-gvc
-  locations:
+  locations: # Replica count applies to Redis workload only
     - name: aws-eu-central-1
       replicas: 2
     - name: aws-us-west-2
@@ -19,7 +19,7 @@ redis:
   volumeset:
     initialCapacity: 20 # GiB
     autoscaling:
-      enabled: true
+      enabled: false
       maxCapacity: 100 # GiB
       minFreePercentage: 10
       scalingFactor: 1.2
@@ -33,6 +33,7 @@ sentinel:
   # extraArgs: "--sentinel down-after-milliseconds mymaster 5000 --sentinel failover-timeout mymaster 10000"
   # password: poek290f4238f
 
+# Applies to both Redis and Sentinel workloads
 firewall:
   internalAllowType: same-gvc # options: same-gvc, same-org, workload-list
   # workloads:

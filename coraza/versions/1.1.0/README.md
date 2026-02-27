@@ -11,6 +11,7 @@ The following values can be configured in your values file:
 - `WAFPort`: The port on the WAF workload to expose to the internet
 - `resources`: Reserved resources for the workload
 - `multiZone`: Deploys replicas across multiple zones
+- `diskBodyInspection`: When `true` (default), request bodies exceeding the 512KB in-memory limit are buffered to disk at `/tmp/coraza` for full inspection up to 12.5MB. When `false`, all body inspection is kept in memory — bodies up to 12.5MB are held in memory rather than spilling to disk, which avoids disk I/O but increases memory pressure on large requests.
 
 ### Logging
 

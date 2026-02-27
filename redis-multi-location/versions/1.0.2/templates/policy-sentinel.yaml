@@ -1,18 +1,12 @@
-{{- $current := . }}
 kind: policy
-name: {{ include "redis.sentinelPolicy.name" $current }}
+name: {{ include "redis.sentinelPolicy.name" . }}
 description: Sentinel Policy
-tags: {{- include "redis.tags" $current | nindent 4 }}
+tags: {{- include "redis.tags" . | nindent 4 }}
 bindings:
   - permissions:
       - reveal
     principalLinks:
-      {{ include "calculateWorkloadCounts" $current }}
-      {{- $locationCount := $current.Values.global.locationCount }}
-      {{- range $l := until $locationCount }}
-      {{ $locationName := index $current.Values.locations $l }}
-      - //gvc/{{ $current.Release.Name }}-{{ $locationName }}/identity/{{ include "redis.sentinelIdentity.name" $current }}
-      {{- end }}
+      - //gvc/{{ .Values.gvc.name }}/identity/{{ include "redis.sentinelIdentity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "redis.sentinelSecretConfig.name" $current }}
+  - //secret/{{ include "redis.sentinelSecretConfig.name" . }}

@@ -1,14 +1,8 @@
-{{- $current := . }}
-{{ include "calculateWorkloadCounts" $current }}
-{{- $locationCount := $current.Values.global.locationCount }}
-{{- range $l := until $locationCount }}
-{{- range $i := until (int $current.Values.redis.replicas) }}
-{{ $locationName := index $current.Values.locations (int $l) }}
 kind: workload
-name: {{ include "redis.name" $current }}-{{ $i }}
+name: {{ include "redis.name" . }}
 description: Redis
-tags: {{- include "redis.tags" $current | nindent 4 }}
-gvc: {{ $current.Release.Name }}-{{ $locationName }}
+tags: {{- include "redis.tags" . | nindent 4 }}
+gvc: {{ .Values.gvc.name }}
 spec:
   type: stateful
   containers:
@@ -20,18 +14,18 @@ spec:
 
           cp /config/redis.conf /etc/redis/redis.conf
 
-          echo "\nreplica-announce-ip {{ include "redis.name" $current }}-{{ $i }}.{{ $current.Release.Name }}-{{ $locationName }}.cpln.local" >>
+          echo "\nreplica-announce-ip ${HOSTNAME}.{{ include "redis.name" . }}" >>
           /etc/redis/redis.conf
 
-          if [ "{{ $locationName }}" = "{{ index $current.Values.locations 0 }}" -a "{{ $i }}" = "0" ]; then
-            {{ $current.Values.redis.serverCommand | default "redis-server" }} /etc/redis/redis.conf {{ $current.Values.redis.extraArgs }}
+          if [ "$(hostname)" = "{{ include "redis.name" . }}-0" ]; then
+            {{ .Values.redis.serverCommand | default "redis-server" }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }}
           else
-            {{ $current.Values.redis.serverCommand | default "redis-server" }} /etc/redis/redis.conf {{ $current.Values.redis.extraArgs }} --replicaof {{ include "redis.name" $current }}-0.{{ $current.Release.Name }}-{{ index $current.Values.locations 0 }}.cpln.local 6379
+            {{ .Values.redis.serverCommand | default "redis-server" }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --replicaof {{ include "redis.name" . }}-0.{{ include "redis.name" . }} 6379
           fi
       command: /bin/sh
-      cpu: {{ $current.Values.redis.resources.cpu | quote }}
-      memory: {{ $current.Values.redis.resources.memory | quote }}
-      image: {{ $current.Values.redis.image | default "valkey/valkey:8" }}
+      cpu: {{ .Values.redis.resources.cpu | quote }}
+      memory: {{ .Values.redis.resources.memory | quote }}
+      image: {{ .Values.redis.image | default "redis:7.2" }}
       inheritEnv: false
       ports:
         - number: 6379
@@ -39,16 +33,16 @@ spec:
       volumes:
         - path: /data
           recoveryPolicy: retain
-          uri: cpln://volumeset/{{ include "redis.volume.name" $current }}-{{ $i }}
+          uri: cpln://volumeset/{{ include "redis.volume.name" . }}
         - path: /config/redis.conf
           recoveryPolicy: retain
-          uri: cpln://secret/{{ include "redis.secretConfig.name" $current }}
+          uri: cpln://secret/{{ include "redis.secretConfig.name" . }}
   defaultOptions:
     autoscaling:
       maxConcurrency: 0
-      metric: cpu
-      minScale: 1
-      maxScale: 1
+      metric: disabled
+      minScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      maxScale: {{ (index .Values.gvc.locations 0).replicas | int }}
       scaleToZeroDelay: 300
       target: 100
     capacityAI: false
@@ -58,10 +52,21 @@ spec:
       outboundAllowCIDR:
         - 0.0.0.0/0
     internal:
-      inboundAllowType: same-org
-  identityLink: //gvc/{{ $current.Release.Name }}-{{ $locationName }}/identity/{{ include "redis.identity.name" $current }}
-{{- if or (gt (len $current.Values.locations) 1) (gt (int $current.Values.redis.replicas) 1) }}
----
-{{- end }}
-{{- end }}
-{{- end }}
+      inboundAllowType: {{ .Values.firewall.internalAllowType }}
+      {{- if .Values.firewall.workloads }}
+      inboundAllowWorkload: {{ .Values.firewall.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "redis.identity.name" . }}
+  localOptions:
+    {{- range $location := .Values.gvc.locations }}
+    - location: //location/{{ $location.name }}
+      autoscaling:
+        maxConcurrency: 0
+        metric: disabled
+        minScale: {{ $location.replicas | int }}
+        maxScale: {{ $location.replicas | int }}
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      timeoutSeconds: 5
+    {{- end }}

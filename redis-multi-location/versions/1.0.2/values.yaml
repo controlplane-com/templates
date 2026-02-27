@@ -1,16 +1,25 @@
+gvc:
+  name: my-redis-gvc
+  locations:
+    - name: aws-eu-central-1
+      replicas: 2
+    - name: aws-us-west-2
+      replicas: 2
+    - name: aws-us-east-1
+      replicas: 2
+
 redis:
   image: redis:7.2
   resources:
     cpu: 200m
     memory: 256Mi
-  replicas: 2
   # serverCommand: redis-server  # Can be overridden based on the version of redis/valkey image
   # extraArgs: "--maxclients 20000 --maxmemory 200mb --maxmemory-policy allkeys-lru"
   # password: fu3h4f9834f8
   volumeset:
     initialCapacity: 20 # GiB
     autoscaling:
-      enabled: false
+      enabled: true
       maxCapacity: 100 # GiB
       minFreePercentage: 10
       scalingFactor: 1.2
@@ -20,12 +29,11 @@ sentinel:
   resources:
     cpu: 200m
     memory: 256Mi
-  quorum: 2 # Keep this an even number or just 1
+  quorum: 2
   # extraArgs: "--sentinel down-after-milliseconds mymaster 5000 --sentinel failover-timeout mymaster 10000"
   # password: poek290f4238f
 
-# Uncomment the location list below and update as you wish if you want a multi location configuration
-locations:
-  - aws-eu-central-1
-  - azure-eastus2
-  - gcp-us-east1
+firewall:
+  internalAllowType: same-gvc # options: same-gvc, same-org, workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME

@@ -1,15 +1,12 @@
-{{- $current := . }}
 kind: policy
-name: {{ include "redis.policy.name" $current }}
+name: {{ include "redis.policy.name" . }}
 description: Redis Policy
-tags: {{- include "redis.tags" $current | nindent 4 }}
+tags: {{- include "redis.tags" . | nindent 4 }}
 bindings:
   - permissions:
       - reveal
     principalLinks:
-    {{- range $current.Values.locations }}
-      - //gvc/{{ $current.Release.Name }}-{{ . }}/identity/{{ include "redis.identity.name" $current }}
-    {{- end }}
+      - //gvc/{{ .Values.gvc.name }}/identity/{{ include "redis.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "redis.secretConfig.name" $current }}
+  - //secret/{{ include "redis.secretConfig.name" . }}

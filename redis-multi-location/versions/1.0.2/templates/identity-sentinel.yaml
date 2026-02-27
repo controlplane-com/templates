@@ -1,14 +1,5 @@
-{{- $current := . }}
-{{ include "calculateWorkloadCounts" $current }}
-{{- $locationCount := $current.Values.global.locationCount }}
-{{- range $l := until $locationCount }}
-{{ $locationName := index $current.Values.locations $l }}
 kind: identity
-name: {{ include "redis.sentinelIdentity.name" $current }}
+name: {{ include "redis.sentinelIdentity.name" . }}
 description: Sentinel Identity
-tags: {{- include "redis.tags" $current | nindent 4 }}
-gvc: {{ $current.Release.Name }}-{{ $locationName }}
-{{- if gt $locationCount 1 }}
----
-{{- end }}
-{{- end }}
+tags: {{- include "redis.tags" . | nindent 4 }}
+gvc: {{ .Values.gvc.name }}

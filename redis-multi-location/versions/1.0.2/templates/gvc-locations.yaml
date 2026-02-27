@@ -1,15 +1,11 @@
 {{- include "redis.validateLocations" . }}
-{{- $current := . }}
-{{- range .Values.locations }}
 kind: gvc
-name: {{ $current.Release.Name }}-{{ . }}
+name: {{ .Values.gvc.name }}
 description: Redis GVC
-tags: {{- include "redis.tags" $current | nindent 4 }}
+tags: {{- include "redis.tags" . | nindent 4 }}
 spec:
   staticPlacement:
     locationLinks:
-      - //location/{{ . }}
-{{- if gt (len $current.Values.locations) 1 }}
----
-{{- end }}
-{{- end }}
+    {{- range .Values.gvc.locations }}
+      - //location/{{ .name }}
+    {{- end }}

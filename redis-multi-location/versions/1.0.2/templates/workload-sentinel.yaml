@@ -1,18 +1,8 @@
-{{- $current := . }}
-{{ include "calculateWorkloadCounts" $current }}
-{{- $locationCount := $current.Values.global.locationCount }}
-{{- $baseCount := $current.Values.global.baseCount }}
-{{- $remainderCount := $current.Values.global.remainderCount }}
-{{- $workloadCount := $current.Values.global.workloadCount }}
-{{- range $l := until $locationCount }}
-{{- $workloadCountForLocation := $baseCount | int | add (ternary 1 0 (lt $l $remainderCount)) | int }}
-{{- range $w := until $workloadCountForLocation }}
-{{ $locationName := index $current.Values.locations $l }}
 kind: workload
-name: {{ include "redis.sentinel.name" $current }}-{{ $w }}
+name: {{ include "redis.sentinel.name" . }}
 description: Sentinel
-tags: {{- include "redis.tags" $current | nindent 4 }}
-gvc: {{ $current.Release.Name }}-{{ $locationName }}
+tags: {{- include "redis.tags" . | nindent 4 }}
+gvc: {{ .Values.gvc.name }}
 spec:
   type: stateful
   containers:
@@ -22,20 +12,20 @@ spec:
         - >-
           cp /config/sentinel.conf /etc/sentinel/sentinel.conf
 
-          echo "\nsentinel announce-ip {{ include "redis.sentinel.name" $current }}-{{ $w }}.{{ $current.Release.Name }}-{{ $locationName }}.cpln.local" >>
+          echo "\nsentinel announce-ip ${HOSTNAME}.{{ include "redis.sentinel.name" . }}" >>
           /etc/sentinel/sentinel.conf
 
-          echo "sentinel monitor mymaster {{ include "redis.name" $current }}-0.{{ $current.Release.Name }}-{{ index $current.Values.locations 0 }}.cpln.local
+          echo "sentinel monitor mymaster {{ include "redis.name" . }}-0.{{ include "redis.name" . }}
           6379 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
 
-          redis-sentinel /etc/sentinel/sentinel.conf {{ $current.Values.sentinel.extraArgs }}
+          redis-sentinel /etc/sentinel/sentinel.conf {{ .Values.sentinel.extraArgs }}
       command: /bin/sh
-      cpu: {{ $current.Values.sentinel.resources.cpu | quote }}
-      memory: {{ $current.Values.sentinel.resources.memory | quote }}
+      cpu: {{ .Values.sentinel.resources.cpu | quote }}
+      memory: {{ .Values.sentinel.resources.memory | quote }}
       env:
         - name: REDIS_SENTINEL_QUORUM
-          value: '{{ $current.Values.sentinel.quorum }}'
-      image: {{ $current.Values.sentinel.image | default "valkey/valkey:8" }}
+          value: '{{ .Values.sentinel.quorum }}'
+      image: {{ .Values.sentinel.image | default "redis:7.2" }}
       inheritEnv: false
       ports:
         - number: 26379
@@ -43,16 +33,16 @@ spec:
       volumes:
         - path: /config/sentinel.conf
           recoveryPolicy: retain
-          uri: cpln://secret/{{ include "redis.sentinelSecretConfig.name" $current }}
+          uri: cpln://secret/{{ include "redis.sentinelSecretConfig.name" . }}
         - path: /etc/sentinel
           recoveryPolicy: retain
-          uri: cpln://volumeset/{{ include "redis.sentinelVolume.name" $current }}-{{ $w }}
+          uri: cpln://volumeset/{{ include "redis.sentinelVolume.name" . }}
   defaultOptions:
     autoscaling:
       maxConcurrency: 0
+      metric: disabled
       minScale: 1
       maxScale: 1
-      metric: cpu
       scaleToZeroDelay: 300
       target: 100
     capacityAI: false
@@ -62,10 +52,21 @@ spec:
       outboundAllowCIDR:
         - 0.0.0.0/0
     internal:
-      inboundAllowType: same-org
-  identityLink: //gvc/{{ $current.Release.Name }}-{{ $locationName }}/identity/{{ include "redis.sentinelIdentity.name" $current }}
-{{- if gt $workloadCount 1 }}
----
-{{- end }}
-{{- end }}
-{{- end }}
+      inboundAllowType: {{ .Values.firewall.internalAllowType }}
+      {{- if .Values.firewall.workloads }}
+      inboundAllowWorkload: {{ .Values.firewall.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "redis.sentinelIdentity.name" . }}
+  localOptions:
+    {{- range $location := .Values.gvc.locations }}
+    - location: //location/{{ $location.name }}
+      autoscaling:
+        maxConcurrency: 0
+        metric: disabled
+        minScale: 1
+        maxScale: 1
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      timeoutSeconds: 5
+    {{- end }}

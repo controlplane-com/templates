@@ -1,7 +1,7 @@
 image: ghcr.io/coreruleset/coraza-crs@sha256:eed7280e0de4820507b500b1ee10de820c175165d5cce329609bf34f32977af8 # Coraza GitHub image
 
 # MUST BE CHANGED
-targetWorkload: WORKLOAD_NAME.GVC_NAME.cpln.local # Workload internal name of the workload to proxy traffic to
+targetWorkload: netshoot.test-gvc.cpln.local # Workload internal name of the workload to proxy traffic to
 
 targetPort: 8080 # Port of the workload to proxy traffic to
 

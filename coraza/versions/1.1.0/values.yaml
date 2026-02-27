@@ -12,3 +12,5 @@ resources:
   memory: 128Mi
 
 multiZone: false
+
+diskBodyInspection: true # When true, request bodies exceeding the in-memory limit are buffered to disk for inspection. Disable to keep all body inspection in memory.

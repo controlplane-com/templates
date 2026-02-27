@@ -27,7 +27,7 @@ spec:
           echo "\nsentinel announce-ip {{ include "redis.sentinel.name" $current }}-{{ $w }}.{{ $current.Release.Name }}-{{ $locationName }}.cpln.local" >>
           /etc/sentinel/sentinel.conf
 
-          echo "sentinel monitor mymaster {{ include "redis.sentinel.name" $current }}-0.{{ $current.Release.Name }}-{{ index $current.Values.locations 0 }}.cpln.local
+          echo "sentinel monitor mymaster {{ include "redis.name" $current }}-0.{{ $current.Release.Name }}-{{ index $current.Values.locations 0 }}.cpln.local
           6379 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
 
           redis-sentinel /etc/sentinel/sentinel.conf {{ $current.Values.sentinel.extraArgs }}

@@ -1,6 +1,0 @@
-# {{- if .Values.locations }}
-# {{- else }}
-# kind: identity
-# name: {{ include "redis.identity.name" . }}
-# gvc: {{ .Values.global.cpln.gvc }}
-# {{- end }}

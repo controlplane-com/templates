@@ -29,8 +29,8 @@ spec:
             {{ $current.Values.redis.serverCommand | default "redis-server" }} /etc/redis/redis.conf {{ $current.Values.redis.extraArgs }} --replicaof {{ include "redis.name" $current }}-0.{{ $current.Release.Name }}-{{ index $current.Values.locations 0 }}.cpln.local 6379
           fi
       command: /bin/sh
-      cpu: {{ $current.Values.redis.resources.cpu }}
-      memory: {{ $current.Values.redis.resources.memory }}
+      cpu: {{ $current.Values.redis.resources.cpu | quote }}
+      memory: {{ $current.Values.redis.resources.memory | quote }}
       image: {{ $current.Values.redis.image | default "valkey/valkey:8" }}
       inheritEnv: false
       ports:

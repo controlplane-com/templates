@@ -11,7 +11,13 @@ tags: {{- include "redis.tags" $current | nindent 4 }}
 gvc: {{ $current.Release.Name }}-{{ $locationName }}
 spec:
   fileSystemType: ext4
-  initialCapacity: 20
+  initialCapacity: {{ $current.Values.redis.volumeset.initialCapacity }}
+  {{- if $current.Values.redis.volumeset.autoscaling.enabled }}
+  autoscaling:
+    maxCapacity: {{ $current.Values.redis.volumeset.autoscaling.maxCapacity }}
+    minFreePercentage: {{ $current.Values.redis.volumeset.autoscaling.minFreePercentage }}
+    scalingFactor: {{ $current.Values.redis.volumeset.autoscaling.scalingFactor }}
+  {{- end }}
   performanceClass: general-purpose-ssd
 {{- if or (gt (len $current.Values.locations) 1) (gt (int $current.Values.redis.replicas) 1) }}
 ---

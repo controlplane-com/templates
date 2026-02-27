@@ -7,6 +7,13 @@ redis:
   # serverCommand: redis-server  # Can be overridden based on the version of redis/valkey image
   # extraArgs: "--maxclients 20000 --maxmemory 200mb --maxmemory-policy allkeys-lru"
   # password: fu3h4f9834f8
+  volumeset:
+    initialCapacity: 20 # GiB
+    autoscaling:
+      enabled: false
+      maxCapacity: 100 # GiB
+      minFreePercentage: 10
+      scalingFactor: 1.2
 
 sentinel:
   image: redis:7.2

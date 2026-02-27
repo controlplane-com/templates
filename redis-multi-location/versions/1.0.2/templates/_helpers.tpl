@@ -74,8 +74,8 @@ Redis Sentinel Volume Set Name
 {{/* Validation */}}
 
 {{- define "redis.validateLocations" -}}
-{{- if not .Values.locations }}
-  {{- fail "redis-multi-location requires at least one location. Set locations in your values.yaml." }}
+{{- if lt (len .Values.locations) 2 }}
+  {{- fail "redis-multi-location requires at least 2 locations. For a single-location setup, use the redis template instead." }}
 {{- end }}
 {{- end }}
 

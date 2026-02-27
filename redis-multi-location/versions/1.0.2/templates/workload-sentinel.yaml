@@ -30,8 +30,8 @@ spec:
 
           redis-sentinel /etc/sentinel/sentinel.conf {{ $current.Values.sentinel.extraArgs }}
       command: /bin/sh
-      cpu: {{ $current.Values.sentinel.resources.cpu }}
-      memory: {{ $current.Values.sentinel.resources.memory }}
+      cpu: {{ $current.Values.sentinel.resources.cpu | quote }}
+      memory: {{ $current.Values.sentinel.resources.memory | quote }}
       env:
         - name: REDIS_SENTINEL_QUORUM
           value: '{{ $current.Values.sentinel.quorum }}'

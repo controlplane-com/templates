@@ -1,0 +1,17 @@
+{{- if .Values.locations }}
+{{- $current := . }}
+{{- range .Values.locations }}
+kind: gvc
+name: {{ $current.Release.Name }}-{{ . }}
+description: Redis GVC
+tags: {{- include "redis.tags" $current | nindent 4 }}
+spec:
+  staticPlacement:
+    locationLinks:
+      - //location/{{ . }}
+{{- if gt (len $current.Values.locations) 1 }}
+---
+{{- end }}
+{{- end }}
+{{- else }}
+{{- end }}

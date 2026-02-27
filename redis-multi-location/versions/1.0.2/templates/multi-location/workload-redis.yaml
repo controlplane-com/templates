@@ -1,0 +1,70 @@
+{{- if .Values.locations }}
+{{- $current := . }}
+{{ include "calculateWorkloadCounts" $current }}
+{{- $locationCount := $current.Values.global.locationCount }}
+{{- range $l := until $locationCount }}
+{{- range $i := until (int $current.Values.redis.replicas) }}
+{{ $locationName := index $current.Values.locations (int $l) }}
+kind: workload
+name: {{ include "redis.name" $current }}-{{ $i }}
+description: Redis
+tags: {{- include "redis.tags" $current | nindent 4 }}
+gvc: {{ $current.Release.Name }}-{{ $locationName }}
+spec:
+  type: stateful
+  containers:
+    - name: valkey
+      args:
+        - '-c'
+        - >-
+          mkdir /etc/redis
+
+          cp /config/redis.conf /etc/redis/redis.conf
+
+          echo "\nreplica-announce-ip {{ include "redis.name" $current }}-{{ $i }}.{{ $current.Release.Name }}-{{ $locationName }}.cpln.local" >>
+          /etc/redis/redis.conf
+
+          if [ "{{ $locationName }}" = "{{ index $current.Values.locations 0 }}" -a "{{ $i }}" = "0" ]; then
+            {{ $current.Values.redis.serverCommand | default "redis-server" }} /etc/redis/redis.conf {{ $current.Values.redis.extraArgs }}
+          else
+            {{ $current.Values.redis.serverCommand | default "redis-server" }} /etc/redis/redis.conf {{ $current.Values.redis.extraArgs }} --replicaof {{ include "redis.name" $current }}-0.{{ $current.Release.Name }}-{{ index $current.Values.locations 0 }}.cpln.local 6379
+          fi
+      command: /bin/sh
+      cpu: {{ $current.Values.redis.resources.cpu }}
+      memory: {{ $current.Values.redis.resources.memory }}
+      image: {{ $current.Values.redis.image | default "valkey/valkey:8" }}
+      inheritEnv: false
+      ports:
+        - number: 6379
+          protocol: tcp
+      volumes:
+        - path: /data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "redis.volume.name" $current }}-{{ $i }}
+        - path: /config/redis.conf
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "redis.secretConfig.name" $current }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      metric: cpu
+      minScale: 1
+      maxScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: same-org
+  identityLink: //gvc/{{ $current.Release.Name }}-{{ $locationName }}/identity/{{ include "redis.identity.name" $current }}
+{{- if or (gt (len $current.Values.locations) 1) (gt (int $current.redis.replicas) 1) }}
+---
+{{- end }}
+{{- end }}
+{{- end }}
+{{- else }}
+{{- end }}

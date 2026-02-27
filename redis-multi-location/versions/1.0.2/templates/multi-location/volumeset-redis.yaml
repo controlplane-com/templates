@@ -1,0 +1,23 @@
+{{- if .Values.locations }}
+{{- $current := . }}
+{{ include "calculateWorkloadCounts" $current }}
+{{- $locationCount := $current.Values.global.locationCount }}
+{{- range $l := until $locationCount }} # C
+{{- range $i := until (int $current.Values.redis.replicas) }}
+{{ $locationName := index $current.Values.locations (int $l) }}
+kind: volumeset
+name: {{ include "redis.volume.name" $current }}-{{ $i }}
+description: Redis Volumeset
+tags: {{- include "redis.tags" $current | nindent 4 }}
+gvc: {{ $current.Release.Name }}-{{ $locationName }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: 20
+  performanceClass: general-purpose-ssd
+{{- if or (gt (len $current.Values.locations) 1) (gt (int $current.redis.replicas) 1) }}
+---
+{{- end }}
+{{- end }}
+{{- end }}
+{{- else }}
+{{- end }}

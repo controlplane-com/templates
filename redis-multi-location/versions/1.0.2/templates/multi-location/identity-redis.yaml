@@ -1,0 +1,14 @@
+{{- if .Values.locations }}
+{{- $current := . }}
+{{- range .Values.locations }}
+kind: identity
+name: {{ include "redis.identity.name" $current }}
+description: Redis Identity
+tags: {{- include "redis.tags" $current | nindent 4 }}
+gvc: {{ $current.Release.Name }}-{{ . }}
+{{- if gt (len $current.Values.locations) 1 }}
+---
+{{- end }}
+{{- end }}
+{{- else }}
+{{- end }}

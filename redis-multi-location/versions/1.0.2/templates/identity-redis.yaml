@@ -1,0 +1,5 @@
+kind: identity
+name: {{ include "redis.identity.name" . }}
+description: Redis Identity
+tags: {{- include "redis.tags" . | nindent 4 }}
+gvc: {{ .Values.gvc.name }}

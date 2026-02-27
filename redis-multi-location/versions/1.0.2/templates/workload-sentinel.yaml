@@ -1,0 +1,72 @@
+kind: workload
+name: {{ include "redis.sentinel.name" . }}
+description: Sentinel
+tags: {{- include "redis.tags" . | nindent 4 }}
+gvc: {{ .Values.gvc.name }}
+spec:
+  type: stateful
+  containers:
+    - name: valkey
+      args:
+        - '-c'
+        - >-
+          cp /config/sentinel.conf /etc/sentinel/sentinel.conf
+
+          echo "\nsentinel announce-ip ${HOSTNAME}.{{ include "redis.sentinel.name" . }}" >>
+          /etc/sentinel/sentinel.conf
+
+          echo "sentinel monitor mymaster {{ include "redis.name" . }}-0.{{ include "redis.name" . }}
+          6379 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
+
+          redis-sentinel /etc/sentinel/sentinel.conf {{ .Values.sentinel.extraArgs }}
+      command: /bin/sh
+      cpu: {{ .Values.sentinel.resources.cpu | quote }}
+      memory: {{ .Values.sentinel.resources.memory | quote }}
+      env:
+        - name: REDIS_SENTINEL_QUORUM
+          value: '{{ .Values.sentinel.quorum }}'
+      image: {{ .Values.sentinel.image | default "redis:7.2" }}
+      inheritEnv: false
+      ports:
+        - number: 26379
+          protocol: tcp
+      volumes:
+        - path: /config/sentinel.conf
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "redis.sentinelSecretConfig.name" . }}
+        - path: /etc/sentinel
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "redis.sentinelVolume.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: {{ .Values.firewall.internalAllowType }}
+      {{- if .Values.firewall.workloads }}
+      inboundAllowWorkload: {{ .Values.firewall.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "redis.sentinelIdentity.name" . }}
+  localOptions:
+    {{- range $location := .Values.gvc.locations }}
+    - location: //location/{{ $location.name }}
+      autoscaling:
+        maxConcurrency: 0
+        metric: disabled
+        minScale: 1
+        maxScale: 1
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      timeoutSeconds: 5
+    {{- end }}

@@ -1,8 +1,7 @@
-{{- if .Values.locations }}
 {{- $current := . }}
 {{ include "calculateWorkloadCounts" $current }}
 {{- $locationCount := $current.Values.global.locationCount }}
-{{- range $l := until $locationCount }} # C
+{{- range $l := until $locationCount }}
 {{- range $i := until (int $current.Values.redis.replicas) }}
 {{ $locationName := index $current.Values.locations (int $l) }}
 kind: volumeset
@@ -14,10 +13,8 @@ spec:
   fileSystemType: ext4
   initialCapacity: 20
   performanceClass: general-purpose-ssd
-{{- if or (gt (len $current.Values.locations) 1) (gt (int $current.redis.replicas) 1) }}
+{{- if or (gt (len $current.Values.locations) 1) (gt (int $current.Values.redis.replicas) 1) }}
 ---
 {{- end }}
 {{- end }}
-{{- end }}
-{{- else }}
 {{- end }}

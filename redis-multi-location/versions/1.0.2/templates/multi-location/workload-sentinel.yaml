@@ -1,20 +1,18 @@
-{{- if .Values.locations }} # A
 {{- $current := . }}
 {{ include "calculateWorkloadCounts" $current }}
 {{- $locationCount := $current.Values.global.locationCount }}
 {{- $baseCount := $current.Values.global.baseCount }}
 {{- $remainderCount := $current.Values.global.remainderCount }}
 {{- $workloadCount := $current.Values.global.workloadCount }}
-
-{{- range $l := until $locationCount }} # C
+{{- range $l := until $locationCount }}
 {{- $workloadCountForLocation := $baseCount | int | add (ternary 1 0 (lt $l $remainderCount)) | int }}
-{{- range $w := until $workloadCountForLocation }} # D
+{{- range $w := until $workloadCountForLocation }}
 {{ $locationName := index $current.Values.locations $l }}
 kind: workload
 name: {{ include "redis.sentinel.name" $current }}-{{ $w }}
 description: Sentinel
 tags: {{- include "redis.tags" $current | nindent 4 }}
-gvc: {{ $current.Release.Name }}-{{ $locationName }} 
+gvc: {{ $current.Release.Name }}-{{ $locationName }}
 spec:
   type: stateful
   containers:
@@ -66,10 +64,8 @@ spec:
     internal:
       inboundAllowType: same-org
   identityLink: //gvc/{{ $current.Release.Name }}-{{ $locationName }}/identity/{{ include "redis.sentinelIdentity.name" $current }}
-{{- if gt $workloadCount 1 }} # E
+{{- if gt $workloadCount 1 }}
 ---
-{{- end }} # E
-{{- end }} # D
-{{- end }} # C
-{{- else }}
-{{- end }} # A
+{{- end }}
+{{- end }}
+{{- end }}

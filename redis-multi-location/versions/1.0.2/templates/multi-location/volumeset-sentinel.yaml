@@ -1,14 +1,12 @@
-{{- if .Values.locations }} # A
 {{- $current := . }}
 {{ include "calculateWorkloadCounts" $current }}
 {{- $locationCount := $current.Values.global.locationCount }}
 {{- $baseCount := $current.Values.global.baseCount }}
 {{- $remainderCount := $current.Values.global.remainderCount }}
 {{- $workloadCount := $current.Values.global.workloadCount }}
-
-{{- range $l := until $locationCount }} # C
+{{- range $l := until $locationCount }}
 {{- $workloadCountForLocation := $baseCount | int | add (ternary 1 0 (lt $l $remainderCount)) | int }}
-{{- range $w := until $workloadCountForLocation }} # D
+{{- range $w := until $workloadCountForLocation }}
 {{ $locationName := index $current.Values.locations $l }}
 kind: volumeset
 name: {{ include "redis.sentinelVolume.name" $current }}-{{ $w }}
@@ -19,11 +17,8 @@ spec:
   fileSystemType: ext4
   initialCapacity: 10
   performanceClass: general-purpose-ssd
-
-{{- if gt $workloadCount 1 }} # E
+{{- if gt $workloadCount 1 }}
 ---
-{{- end }} # E
-{{- end }} # D
-{{- end }} # C
-{{- else }}
-{{- end }} # A
+{{- end }}
+{{- end }}
+{{- end }}

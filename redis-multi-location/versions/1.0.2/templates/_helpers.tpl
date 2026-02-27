@@ -73,6 +73,12 @@ Redis Sentinel Volume Set Name
 
 {{/* Validation */}}
 
+{{- define "redis.validateLocations" -}}
+{{- if not .Values.locations }}
+  {{- fail "redis-multi-location requires at least one location. Set locations in your values.yaml." }}
+{{- end }}
+{{- end }}
+
 {{- define "calculateWorkloadCounts" -}}
 {{- $quorumCount := int .Values.sentinel.quorum }}
 {{- $workloadCount := 0 }}

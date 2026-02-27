@@ -1,8 +1,0 @@
-{{- if .Values.locations }}
-{{- else }}
-kind: identity
-name: {{ include "redis.sentinelIdentity.name" . }}
-description: Sentinel Identity
-tags: {{- include "redis.tags" . | nindent 4 }}
-gvc: {{ .Values.global.cpln.gvc }}
-{{- end }}

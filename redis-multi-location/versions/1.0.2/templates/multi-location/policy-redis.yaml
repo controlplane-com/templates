@@ -1,4 +1,3 @@
-{{- if .Values.locations }}
 {{- $current := . }}
 kind: policy
 name: {{ include "redis.policy.name" $current }}
@@ -14,5 +13,3 @@ bindings:
 targetKind: secret
 targetLinks:
   - //secret/{{ include "redis.secretConfig.name" $current }}
-{{- else }}
-{{- end }}

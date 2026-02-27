@@ -1,4 +1,4 @@
-{{- if .Values.locations }}
+{{- include "redis.validateLocations" . }}
 {{- $current := . }}
 {{- range .Values.locations }}
 kind: gvc
@@ -12,6 +12,4 @@ spec:
 {{- if gt (len $current.Values.locations) 1 }}
 ---
 {{- end }}
-{{- end }}
-{{- else }}
 {{- end }}

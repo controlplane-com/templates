@@ -1,4 +1,3 @@
-{{- if .Values.locations }}
 {{- $current := . }}
 {{ include "calculateWorkloadCounts" $current }}
 {{- $locationCount := $current.Values.global.locationCount }}
@@ -61,10 +60,8 @@ spec:
     internal:
       inboundAllowType: same-org
   identityLink: //gvc/{{ $current.Release.Name }}-{{ $locationName }}/identity/{{ include "redis.identity.name" $current }}
-{{- if or (gt (len $current.Values.locations) 1) (gt (int $current.redis.replicas) 1) }}
+{{- if or (gt (len $current.Values.locations) 1) (gt (int $current.Values.redis.replicas) 1) }}
 ---
 {{- end }}
 {{- end }}
-{{- end }}
-{{- else }}
 {{- end }}

@@ -1,4 +1,3 @@
-{{- if .Values.locations }}
 {{- $current := . }}
 {{- range .Values.locations }}
 kind: identity
@@ -9,6 +8,4 @@ gvc: {{ $current.Release.Name }}-{{ . }}
 {{- if gt (len $current.Values.locations) 1 }}
 ---
 {{- end }}
-{{- end }}
-{{- else }}
 {{- end }}

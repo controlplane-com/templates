@@ -1,4 +1,3 @@
-{{- if .Values.locations }}
 {{- $current := . }}
 kind: policy
 name: {{ include "redis.sentinelPolicy.name" $current }}
@@ -13,9 +12,7 @@ bindings:
       {{- range $l := until $locationCount }}
       {{ $locationName := index $current.Values.locations $l }}
       - //gvc/{{ $current.Release.Name }}-{{ $locationName }}/identity/{{ include "redis.sentinelIdentity.name" $current }}
-      {{- end }}      
+      {{- end }}
 targetKind: secret
 targetLinks:
   - //secret/{{ include "redis.sentinelSecretConfig.name" $current }}
-{{- else }}
-{{- end }}

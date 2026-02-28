@@ -22,6 +22,12 @@ tags:
 spec:
   fileSystemType: ext4
   initialCapacity: {{ .Values.volumeset.tikv.capacity }}
+  {{- if .Values.volumeset.tikv.autoscaling.enabled }}
+  autoscaling:
+    maxCapacity: {{ .Values.volumeset.tikv.autoscaling.maxCapacity }}
+    minFreePercentage: {{ .Values.volumeset.tikv.autoscaling.minFreePercentage }}
+    scalingFactor: {{ .Values.volumeset.tikv.autoscaling.scalingFactor }}
+  {{- end }}
   performanceClass: general-purpose-ssd
   snapshots:
     createFinalSnapshot: true

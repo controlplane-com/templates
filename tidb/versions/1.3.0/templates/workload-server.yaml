@@ -7,7 +7,7 @@ spec:
   type: standard
   containers:
     - name: tidb-server
-      cpu: "{{ .Values.resources.server.cpu }}"
+      cpu: {{ .Values.resources.server.cpu | quote }}
       image: pingcap/tidb:v8.5.3
       command: "/bin/bash"
       args:
@@ -24,7 +24,7 @@ spec:
         - name: APP_PW
           value: cpln://secret/{{ include "tidb.userSecret.name" . }}.password
       {{- end }}
-      memory: {{ .Values.resources.server.memory }}
+      memory: {{ .Values.resources.server.memory | quote }}
       ports:
         - number: 10080
           protocol: http
@@ -74,15 +74,15 @@ spec:
     autoscaling:
       keda: {}
       maxConcurrency: 0
-      maxScale: 5
-      metric: cpu
+      maxScale: 1
+      metric: disabled
       minScale: 1
       scaleToZeroDelay: 300
       target: 95
     capacityAI: false
     debug: false
     multiZone:
-      enabled: true
+      enabled: false
     suspend: false
     timeoutSeconds: 5
   localOptions:

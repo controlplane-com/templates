@@ -1,4 +1,4 @@
-{{ if .Values.autoCreateDatabase.enabled }}
+{{ if and .Values.autoCreateDatabase.enabled .Values.autoCreateDatabase.deployInitWorkload }}
 ---
 kind: workload
 name: {{ include "tidb.dbInit.name" . }}

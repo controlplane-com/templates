@@ -9,10 +9,10 @@ spec:
   type: stateful
   containers:
     - name: tidb-pd
-      cpu: "{{ .Values.resources.pd.cpu }}"
+      cpu: {{ .Values.resources.pd.cpu | quote }}
       image: pingcap/pd:v8.5.3
       inheritEnv: false
-      memory: {{ .Values.resources.pd.memory }}
+      memory: {{ .Values.resources.pd.memory | quote }}
       command: "/bin/bash"
       args:
         - "/scripts/pd-startup.sh"
@@ -34,7 +34,7 @@ spec:
   defaultOptions:
     autoscaling:
       maxConcurrency: 0
-      metric: cpu
+      metric: disabled
       maxScale: 0
       minScale: 0
       scaleToZeroDelay: 300
@@ -62,7 +62,7 @@ spec:
       {{- $replicas = add $baseReplicas 1 }}
     {{- end }}
     - autoscaling:
-        metric: cpu
+        metric: disabled
         maxConcurrency: 0
         minScale: {{ $replicas }}
         maxScale: {{ $replicas }}

@@ -21,8 +21,9 @@ resources:
     cpu: 2
     memory: 4Gi
 
-autoCreateDatabase: # Enable to automatically create the database on initialization 
+autoCreateDatabase: # Enable to automatically create the database on initialization
   enabled: true
+  deployInitWorkload: true # Set to false after the DB has been initialized to remove the init workload and save resources
   database: # Set database values
     rootPassword: myrootpw
     user: myuser
@@ -32,6 +33,11 @@ autoCreateDatabase: # Enable to automatically create the database on initializat
 volumeset:
   tikv:
     capacity: 10 # initial capacity in GiB (minimum is 10)
+    autoscaling:
+      enabled: false # Set to true to enable autoscaling
+      maxCapacity: 100 # Maximum capacity in GiB
+      minFreePercentage: 10 # Minimum free percentage before scaling triggers
+      scalingFactor: 1.2 # Multiplier applied to current capacity when scaling
   pd:
     capacity: 10 # initial capacity in GiB (minimum is 10)
 

@@ -7,13 +7,13 @@ spec:
   type: stateful
   containers:
     - name: tidb-tikv
-      cpu: "{{ .Values.resources.tikv.cpu }}"
+      cpu: {{ .Values.resources.tikv.cpu | quote }}
       image: pingcap/tikv:v8.5.3
       command: "/bin/bash"
       args:
         - "/scripts/tikv-startup.sh"
       inheritEnv: false
-      memory: {{ .Values.resources.tikv.memory }}
+      memory: {{ .Values.resources.tikv.memory | quote }}
       ports:
         - number: 20160
           protocol: tcp
@@ -46,7 +46,7 @@ spec:
     autoscaling:
       maxConcurrency: 0
       maxScale: 3
-      metric: cpu
+      metric: disabled
       minScale: 1
       scaleToZeroDelay: 300
       target: 100

@@ -1,0 +1,35 @@
+# Set this to a single location in your gvc
+location: aws-us-east-1
+
+image:
+  repository: tailscale/tailscale
+  tag: stable
+
+resources:
+  cpu: 500m
+  memory: 128Mi
+
+extraEnv:
+  - name: TS_HOSTNAME
+    value: cpln-test-new
+  # - name: TS_EXTRA_ARGS
+  #   value: --advertise-exit-node
+
+locationDNS:
+  aws-us-west-2: 172.20.0.10
+  aws-us-east-1: 172.20.0.10
+  aws-us-east-2: 172.20.0.10
+  aws-sa-east-1: 172.20.0.10
+  aws-eu-west-2: 172.20.0.10
+  aws-eu-central-1: 172.20.0.10
+  aws-il-central-1: 172.20.0.10
+  gcp-us-west1: 10.67.224.10
+  gcp-us-east1: 10.194.112.10
+  gcp-us-central1: 10.228.48.10
+  gcp-me-west1: 10.110.48.10
+  azure-centralus: 10.1.0.10
+  azure-eastus2: 10.1.0.10
+
+deployHttpbinExample: true
+
+AuthKey: replaceWithYourTailscaleAuthKey

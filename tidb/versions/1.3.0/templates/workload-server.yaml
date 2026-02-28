@@ -1,0 +1,126 @@
+---
+kind: workload
+name: {{ include "tidb.server.name" . }}
+description: tidb server
+tags: {{- include "tidb.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: tidb-server
+      cpu: "{{ .Values.resources.server.cpu }}"
+      image: pingcap/tidb:v8.5.3
+      command: "/bin/bash"
+      args:
+        - "/scripts/server-startup.sh"
+      inheritEnv: false
+      {{- if .Values.autoCreateDatabase.enabled }}
+      env:
+        - name: ROOT_PW
+          value: cpln://secret/{{ include "tidb.userSecret.name" . }}.rootPassword
+        - name: APP_DB
+          value: cpln://secret/{{ include "tidb.userSecret.name" . }}.db
+        - name: APP_USER
+          value: cpln://secret/{{ include "tidb.userSecret.name" . }}.user
+        - name: APP_PW
+          value: cpln://secret/{{ include "tidb.userSecret.name" . }}.password
+      {{- end }}
+      memory: {{ .Values.resources.server.memory }}
+      ports:
+        - number: 10080
+          protocol: http
+        - number: 4000
+          protocol: tcp
+      readinessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - '-c'
+            - >-
+              for loc in {{ range .Values.gvc.locations }}{{ .name }} {{ end }};
+              do
+                pd_endpoint="replica-0.{{ include "tidb.pd.name" . }}.${loc}.{{ .Values.gvc.name }}.cpln.local:2379"
+                stores=$(curl -sf "http://${pd_endpoint}/pd/api/v1/stores" 2>/dev/null || echo "")
+                if [ -z "$stores" ]; then
+                  echo "No stores found at $pd_endpoint yet. Retrying..."
+                  continue
+                fi
+
+                # Normalize JSON to avoid spacing issues
+                stores_clean=$(echo "$stores" | sed 's/"state_name":[[:space:]]*"/"state_name":"/g')
+                up_count=$(echo "$stores_clean" | grep -o '"state_name":"Up"' | wc -l | tr -d ' ')
+                total_count=$(echo "$stores_clean" | grep -o '"state_name":' | wc -l | tr -d ' ')
+
+                echo "$up_count / $total_count TiKV stores Up at $pd_endpoint"
+
+                # Loosened condition to allow 2 or more healthy TiKV stores
+                if [ "$up_count" -ge 2 ]; then
+                  echo "Sufficient TiKV stores are healthy."
+                  exit 0
+                fi
+              done
+
+              echo "TiKV not ready yet"
+              exit 1
+        failureThreshold: 3
+        initialDelaySeconds: 15
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 3
+      volumes:
+        - path: /scripts/server-startup.sh
+          uri: cpln://secret/{{ include "tidb.serverSecret.name" . }}.payload
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "tidb.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      keda: {}
+      maxConcurrency: 0
+      maxScale: 5
+      metric: cpu
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: true
+    suspend: false
+    timeoutSeconds: 5
+  localOptions:
+    {{- range $location := .Values.gvc.locations }}
+    - autoscaling:
+        maxConcurrency: 0
+        maxScale: {{ if eq ($location.replicas | int) 0 }}1{{ else }}{{ $location.replicas | int }}{{ end }}
+        metric: disabled
+        minScale: {{ if eq ($location.replicas | int) 0 }}0{{ else }}{{ $location.replicas | int }}{{ end }}
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      location: //location/{{ $location.name }}
+      suspend: {{ if eq ($location.replicas | int) 0 }}true{{ else }}false{{ end }}
+      timeoutSeconds: 10
+    {{- end }}
+  firewallConfig:
+    external:
+      {{- if .Values.exposeServer }}
+      inboundAllowCIDR:
+        - "0.0.0.0/0"
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: {{ .Values.external_access.server_outboundAllowCIDR }}
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internal_access.server.type }}
+      {{- if .Values.internal_access.server.workloads }}
+      inboundAllowWorkload: {{ .Values.internal_access.server.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

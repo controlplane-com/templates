@@ -1,0 +1,13 @@
+apiVersion: v2
+name: tidb
+description: Distributed MySQL-compatible database for Control Plane
+
+type: application
+version: 1.2.0
+appVersion: "8.5.3"
+
+annotations:
+  created: "2025-09-04"
+  lastModified: "2025-12-22"
+  category: "database"
+  createsGvc: true

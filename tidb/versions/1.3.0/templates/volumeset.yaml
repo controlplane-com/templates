@@ -1,0 +1,28 @@
+kind: volumeset
+name: {{ include "tidb.pdVolume.name" . }}
+gvc: {{ .Values.gvc.name }}
+tags:
+  {{- include "tidb.tags" . | nindent 2 }}
+  workload: {{ include "tidb.pd.name" . }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.pd.capacity }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d
+    
+---
+kind: volumeset
+name: {{ include "tidb.tikvVolume.name" . }}
+gvc: {{ .Values.gvc.name }}
+tags:
+  {{- include "tidb.tags" . | nindent 2 }}
+  workload: {{ include "tidb.tikv.name" . }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.tikv.capacity }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d

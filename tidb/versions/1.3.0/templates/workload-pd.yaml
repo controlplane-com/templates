@@ -1,0 +1,96 @@
+{{- include "tidb.validateLocations" . -}}
+{{- include "tidb.validatePdReplicas" . -}}
+{{- include "tidb.validatePdReplicasLocations" . -}}
+kind: workload
+name: {{ include "tidb.pd.name" . }}
+description: tidb placement driver
+tags: {{- include "tidb.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  containers:
+    - name: tidb-pd
+      cpu: {{ .Values.resources.pd.cpu | quote }}
+      image: pingcap/pd:v8.5.3
+      inheritEnv: false
+      memory: {{ .Values.resources.pd.memory | quote }}
+      command: "/bin/bash"
+      args:
+        - "/scripts/pd-startup.sh"
+      ports:
+        - number: 2379
+          protocol: tcp
+        - number: 2380
+          protocol: tcp
+      env:
+       - name: LOCATIONS
+         value: "{{- range $i, $loc := .Values.gvc.locations }}{{ if $i }},{{ end }}{{ $loc.name }}{{- end }}"
+      volumes:
+        - path: /data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "tidb.pdVolume.name" . }}
+        - path: /scripts/pd-startup.sh
+          uri: cpln://secret/{{ include "tidb.pdSecret.name" . }}.payload
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "tidb.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      metric: disabled
+      maxScale: 0
+      minScale: 0
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  {{- $locs := .Values.gvc.locations }}
+  {{- $numLocs := len $locs }}
+  {{- $pdReplicas := .Values.gvc.pdReplicas }}
+  {{- $baseReplicas := div $pdReplicas $numLocs }}
+  {{- $remainder := mod $pdReplicas $numLocs }}
+  localOptions:
+  {{- range $i, $loc := $locs }}
+    {{- /*
+        Replica distribution logic:
+        - Distributes pdReplicas evenly across locations
+        - Extra replicas (remainder) go to the first locations
+        Example with 3 locations:
+          pdReplicas=3: 1,1,1  |  pdReplicas=5: 2,2,1  |  pdReplicas=7: 3,2,2
+    */ -}}
+    {{- $replicas := $baseReplicas }}
+    {{- if lt $i $remainder }}
+      {{- $replicas = add $baseReplicas 1 }}
+    {{- end }}
+    - autoscaling:
+        metric: disabled
+        maxConcurrency: 0
+        minScale: {{ $replicas }}
+        maxScale: {{ $replicas }}
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      location: //location/{{ $loc.name }}
+      suspend: false
+      timeoutSeconds: 5
+  {{- end }}
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: {{ .Values.external_access.pd_outboundAllowCIDR }}
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internal_access.pd.type }}
+      {{- if .Values.internal_access.pd.workloads }}
+      inboundAllowWorkload: {{ .Values.internal_access.pd.workloads | toYaml | nindent 8 }}
+      {{- end }}
+      inboundAllowWorkload: []
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: true
+  supportDynamicTags: false

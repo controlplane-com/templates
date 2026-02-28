@@ -1,0 +1,66 @@
+gvc:
+  name: tidb-gvc
+  locations:
+  # Location's replica count will only affect storage (tikv) and server workloads
+    - name: aws-us-east-2
+      replicas: 1
+    - name: aws-us-west-2
+      replicas: 1
+    - name: aws-us-east-1
+      replicas: 1
+  pdReplicas: 3 # options: 3, 5, 7
+
+resources:
+  pd:
+    cpu: 2
+    memory: 4Gi
+  server:
+    cpu: 2
+    memory: 2Gi
+  tikv:
+    cpu: 2
+    memory: 4Gi
+
+autoCreateDatabase: # Enable to automatically create the database on initialization
+  enabled: true
+  deployInitWorkload: true # Set to false after the DB has been initialized to remove the init workload and save resources
+  database: # Set database values
+    rootPassword: myrootpw
+    user: myuser
+    password: mypw
+    db: mydb
+
+volumeset:
+  tikv:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+    autoscaling:
+      enabled: false # Set to true to enable autoscaling
+      maxCapacity: 100 # Maximum capacity in GiB
+      minFreePercentage: 10 # Minimum free percentage before scaling triggers
+      scalingFactor: 1.2 # Multiplier applied to current capacity when scaling
+  pd:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+exposeServer: false # Set to true to expose TIDB server publicly
+
+external_access: # Set if client is outside the GVC or in another location
+  server_outboundAllowCIDR: []
+  tikv_outboundAllowCIDR: []
+  pd_outboundAllowCIDR: []
+
+internal_access:
+  server:
+    type: same-gvc # options: same-gvc, same-org, workload-list
+    workloads:  # Note: can only be used if type is same-gvc or workload-list
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+  tikv:
+    type: same-gvc # options: same-gvc, same-org, workload-list
+    workloads:  # Note: can only be used if type is same-gvc or workload-list
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+  pd:
+    type: same-gvc # options: same-gvc, same-org, workload-list
+    workloads:  # Note: can only be used if type is same-gvc or workload-list
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME

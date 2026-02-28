@@ -1,0 +1,91 @@
+---
+kind: workload
+name: {{ include "tidb.tikv.name" . }}
+description: tikv storage
+tags: {{- include "tidb.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  containers:
+    - name: tidb-tikv
+      cpu: {{ .Values.resources.tikv.cpu | quote }}
+      image: pingcap/tikv:v8.5.3
+      command: "/bin/bash"
+      args:
+        - "/scripts/tikv-startup.sh"
+      inheritEnv: false
+      memory: {{ .Values.resources.tikv.memory | quote }}
+      ports:
+        - number: 20160
+          protocol: tcp
+        - number: 20180
+          protocol: tcp
+      readinessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - '-c'
+            - >-
+              for loc in {{ range .Values.gvc.locations }}{{ .name }} {{ end }};
+              do endpoint="replica-0.{{ include "tidb.pd.name" . }}.${loc}.{{ .Values.gvc.name }}.cpln.local:2379";
+              if curl -sf "http://$endpoint/pd/health" | grep -q '"health":[[:space:]]*true';
+              then exit 0; fi; done;
+              echo "no healthy PDs"; exit 1
+        failureThreshold: 3
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 2
+      volumes:
+        - path: /data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "tidb.tikvVolume.name" . }}
+        - path: /scripts/tikv-startup.sh
+          uri: cpln://secret/{{ include "tidb.tikvSecret.name" . }}.payload
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "tidb.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 3
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  localOptions:
+    {{- range $location := .Values.gvc.locations }}
+    - autoscaling:
+        maxConcurrency: 0
+        maxScale: {{ if eq ($location.replicas | int) 0 }}1{{ else }}{{ $location.replicas | int }}{{ end }}
+        metric: disabled
+        minScale: {{ if eq ($location.replicas | int) 0 }}0{{ else }}{{ $location.replicas | int }}{{ end }}
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      location: //location/{{ $location.name }}
+      suspend: {{ if eq ($location.replicas | int) 0 }}true{{ else }}false{{ end }}
+      timeoutSeconds: 10
+    {{- end }}
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: {{ .Values.external_access.tikv_outboundAllowCIDR }}
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internal_access.tikv.type }}
+      {{- if .Values.internal_access.tikv.workloads }}
+      inboundAllowWorkload: {{ .Values.internal_access.tikv.workloads | toYaml | nindent 8 }}
+      {{- end }}
+      inboundAllowWorkload: []
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: true
+  supportDynamicTags: false

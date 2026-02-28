@@ -10,6 +10,11 @@ gvc:
       replicas: 1
   pdReplicas: 3 # options: 3, 5, 7
 
+images:
+  server: pingcap/tidb:v8.5.3
+  tikv: pingcap/tikv:v8.5.3
+  pd: pingcap/pd:v8.5.3
+
 resources:
   pd:
     cpu: 2

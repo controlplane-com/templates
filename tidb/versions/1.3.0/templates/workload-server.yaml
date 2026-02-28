@@ -8,7 +8,7 @@ spec:
   containers:
     - name: tidb-server
       cpu: {{ .Values.resources.server.cpu | quote }}
-      image: pingcap/tidb:v8.5.3
+      image: {{ .Values.images.server }}
       command: "/bin/bash"
       args:
         - "/scripts/server-startup.sh"

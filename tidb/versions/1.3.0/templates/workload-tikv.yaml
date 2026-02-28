@@ -8,7 +8,7 @@ spec:
   containers:
     - name: tidb-tikv
       cpu: {{ .Values.resources.tikv.cpu | quote }}
-      image: pingcap/tikv:v8.5.3
+      image: {{ .Values.images.tikv }}
       command: "/bin/bash"
       args:
         - "/scripts/tikv-startup.sh"

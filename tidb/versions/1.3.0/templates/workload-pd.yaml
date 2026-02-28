@@ -10,7 +10,7 @@ spec:
   containers:
     - name: tidb-pd
       cpu: {{ .Values.resources.pd.cpu | quote }}
-      image: pingcap/pd:v8.5.3
+      image: {{ .Values.images.pd }}
       inheritEnv: false
       memory: {{ .Values.resources.pd.memory | quote }}
       command: "/bin/bash"

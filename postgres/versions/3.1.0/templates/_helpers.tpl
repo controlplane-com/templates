@@ -99,6 +99,9 @@ helm.sh/chart: {{ include "pg.chart" . }}
 app.cpln.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 app.cpln.io/managed-by: {{ .Release.Service }}
+cpln/marketplace: "true"
+cpln/marketplace-template: postgres
+cpln/marketplace-template-version: {{ .Chart.Version }}
 {{- end }}
 
 {{/*

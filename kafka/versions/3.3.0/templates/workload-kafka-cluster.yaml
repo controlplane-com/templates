@@ -14,14 +14,10 @@ kind: workload
 name: {{ include "kafka.clusterName" . }}
 gvc: {{ .Values.global.cpln.gvc }}
 tags:
-  {{- $hasTags := false }}
   {{- if .Values.kafka.deletionProtection }}
   cpln/protected: true
-  {{- $hasTags = true }}
   {{- end }}
-  {{- if not $hasTags }}
-  {}
-  {{- end }}
+  {{- include "kafka.tags" . | nindent 2 }}
 spec:
   type: stateful
   containers:

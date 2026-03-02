@@ -99,6 +99,9 @@ helm.sh/chart: {{ include "redis.chart" . }}
 app.cpln.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 app.cpln.io/managed-by: {{ .Release.Service }}
+cpln/marketplace: "true"
+cpln/marketplace-template: redis-multi-location
+cpln/marketplace-template-version: {{ .Chart.Version }}
 {{- end }}
 
 {{/*

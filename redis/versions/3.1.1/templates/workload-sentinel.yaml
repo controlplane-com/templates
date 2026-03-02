@@ -2,14 +2,10 @@
 kind: workload
 name: {{ include "redis.sentinel.name" . }}
 tags:
-  {{- $hasTags := false }}
   {{- if .Values.sentinel.tags }}
 {{ toYaml .Values.sentinel.tags | indent 2 }}
-    {{- $hasTags = true }}
   {{- end }}
-  {{- if not $hasTags }}
-  {}
-  {{- end }}
+  {{- include "redis.tags" . | nindent 2 }}
 spec:
   type: stateful
   containers:

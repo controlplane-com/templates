@@ -4,7 +4,7 @@
 kind: policy
 name: {{ include "kafka.name" $ }}-connect-{{ .name }}
 description: {{ include "kafka.name" $ }}-connect-{{ .name }}
-tags: {}
+tags: {{- include "kafka.tags" $ | nindent 2 }}
 bindings:
   - permissions:
       - reveal
@@ -70,7 +70,7 @@ data:
 kind: secret
 name: {{ include "kafka.name" $ }}-connect-{{ .name }}-props
 description: {{ include "kafka.name" $ }}-connect-{{ .name }}-props
-tags: {}
+tags: {{- include "kafka.tags" $ | nindent 2 }}
 type: opaque
 data:
   encoding: plain
@@ -90,7 +90,7 @@ gvc: {{ $.Values.global.cpln.gvc }}
 kind: volumeset
 name: {{ include "kafka.name" $ }}-connect-{{ .name }}
 description: {{ include "kafka.name" $ }}-connect-{{ .name }}
-tags: {}
+tags: {{- include "kafka.tags" $ | nindent 2 }}
 spec:
   fileSystemType: {{ dig "volumes" "fileSystemType" "ext4" . }}
   initialCapacity: {{ dig "volumes" "initialCapacity" 10 . }}
@@ -119,14 +119,10 @@ name: {{ include "kafka.name" $ }}-connect-{{ .name }}
 description: {{ include "kafka.name" $ }}-connect-{{ .name }}
 gvc: {{ $.Values.global.cpln.gvc }}
 tags:
-  {{- $hasTags := false }}
   {{- if .deletionProtection }}
   cpln/protected: true
-  {{- $hasTags = true }}
   {{- end }}
-  {{- if not $hasTags }}
-  {}
-  {{- end }}
+  {{- include "kafka.tags" $ | nindent 2 }}
 spec:
   type: stateful
   containers:

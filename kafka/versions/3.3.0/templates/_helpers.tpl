@@ -840,3 +840,36 @@ KAFKA_PID=$!
 # Wait for either process to finish
 wait $KAFKA_PID
 {{- end }}
+
+
+{{/* Labeling */}}
+
+{{/*
+Create chart name and version as used by the chart label.
+*/}}
+{{- define "kafka.chart" -}}
+{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Common labels
+*/}}
+{{- define "kafka.tags" -}}
+helm.sh/chart: {{ include "kafka.chart" . }}
+{{ include "kafka.selectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.cpln.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.cpln.io/managed-by: {{ .Release.Service }}
+cpln/marketplace: "true"
+cpln/marketplace-template: kafka
+cpln/marketplace-template-version: {{ .Chart.Version }}
+{{- end }}
+
+{{/*
+Selector labels
+*/}}
+{{- define "kafka.selectorLabels" -}}
+app.cpln.io/name: {{ .Release.Name }}
+app.cpln.io/instance: {{ .Release.Name }}
+{{- end }}

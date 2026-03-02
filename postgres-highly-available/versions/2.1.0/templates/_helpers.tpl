@@ -142,6 +142,9 @@ helm.sh/chart: {{ include "pg-ha.chart" . }}
 app.cpln.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 app.cpln.io/managed-by: {{ .Release.Service }}
+cpln/marketplace: "true"
+cpln/marketplace-template: postgres-highly-available
+cpln/marketplace-template-version: {{ .Chart.Version }}
 {{- end }}
 
 {{/*

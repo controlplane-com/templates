@@ -138,6 +138,9 @@ helm.sh/chart: {{ include "clickhouse.chart" . }}
 app.cpln.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 app.cpln.io/managed-by: {{ .Release.Service }}
+cpln/marketplace: "true"
+cpln/marketplace-template: clickhouse
+cpln/marketplace-template-version: {{ .Chart.Version }}
 {{- end }}
 
 {{/*

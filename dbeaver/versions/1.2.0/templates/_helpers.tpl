@@ -55,6 +55,9 @@ helm.sh/chart: {{ include "dbeaver.chart" . }}
 app.cpln.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 app.cpln.io/managed-by: {{ .Release.Service }}
+cpln/marketplace: "true"
+cpln/marketplace-template: dbeaver
+cpln/marketplace-template-version: {{ .Chart.Version }}
 {{- end }}
 
 {{/*

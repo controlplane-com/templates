@@ -62,6 +62,9 @@ helm.sh/chart: {{ include "fusionauth.chart" . }}
 app.cpln.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 app.cpln.io/managed-by: {{ .Release.Service }}
+cpln/marketplace: "true"
+cpln/marketplace-template: fusionauth
+cpln/marketplace-template-version: {{ .Chart.Version }}
 {{- end }}
 
 {{/*

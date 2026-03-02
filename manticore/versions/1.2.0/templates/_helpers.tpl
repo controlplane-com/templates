@@ -251,6 +251,9 @@ helm.sh/chart: {{ include "manticore.chart" . }}
 app.cpln.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 app.cpln.io/managed-by: {{ .Release.Service }}
+cpln/marketplace: "true"
+cpln/marketplace-template: manticore
+cpln/marketplace-template-version: {{ .Chart.Version }}
 {{- end }}
 
 {{/*

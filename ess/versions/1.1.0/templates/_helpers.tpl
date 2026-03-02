@@ -48,6 +48,9 @@ helm.sh/chart: {{ include "ess.chart" . }}
 app.cpln.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 app.cpln.io/managed-by: {{ .Release.Service }}
+cpln/marketplace: "true"
+cpln/marketplace-template: ess
+cpln/marketplace-template-version: {{ .Chart.Version }}
 {{- end }}
 
 {{/*

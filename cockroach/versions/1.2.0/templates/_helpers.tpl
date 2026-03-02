@@ -74,6 +74,9 @@ helm.sh/chart: {{ include "cockroach.chart" . }}
 app.cpln.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 app.cpln.io/managed-by: {{ .Release.Service }}
+cpln/marketplace: "true"
+cpln/marketplace-template: cockroach
+cpln/marketplace-template-version: {{ .Chart.Version }}
 {{- end }}
 
 {{/*

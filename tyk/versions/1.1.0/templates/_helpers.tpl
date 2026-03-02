@@ -62,6 +62,9 @@ helm.sh/chart: {{ include "tyk.chart" . }}
 app.cpln.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 app.cpln.io/managed-by: {{ .Release.Service }}
+cpln/marketplace: "true"
+cpln/marketplace-template: tyk
+cpln/marketplace-template-version: {{ .Chart.Version }}
 {{- end }}
 
 {{/*

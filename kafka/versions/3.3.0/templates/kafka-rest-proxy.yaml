@@ -3,7 +3,7 @@
 kind: secret
 name: {{ include "kafka.name" . }}-rest-password-properties
 description: {{ include "kafka.name" . }}-rest-password-properties
-tags: {}
+tags: {{- include "kafka.tags" . | nindent 2 }}
 type: opaque
 data:
   encoding: plain
@@ -16,7 +16,7 @@ data:
 kind: secret
 name: {{ include "kafka.name" . }}-rest-properties
 description: {{ include "kafka.name" . }}-rest-properties
-tags: {}
+tags: {{- include "kafka.tags" . | nindent 2 }}
 type: opaque
 data:
   encoding: plain
@@ -28,7 +28,7 @@ data:
 kind: secret
 name: {{ include "kafka.name" . }}-rest-jaas-conf
 description: {{ include "kafka.name" . }}-rest-jaas-conf
-tags: {}
+tags: {{- include "kafka.tags" . | nindent 2 }}
 type: opaque
 data:
   encoding: plain
@@ -61,14 +61,12 @@ name: {{ include "kafka.name" . }}-{{ .Values.kafka_rest_proxy.name }}
 description: Kafka Rest Proxy
 gvc: {{ .Values.global.cpln.gvc }}
 tags:
-  {{- $hasTags := false }}
   {{- if .Values.kafka_rest_proxy.deletionProtection }}
   cpln/protected: true
-  {{- $hasTags = true }}
   {{- end }}
-  {{- if not $hasTags }}
-  {}
-  {{- end }}
+  cpln/marketplace: "true"
+  cpln/marketplace-template: kafka
+  cpln/marketplace-template-version: {{ .Chart.Version }}
 spec:
   type: standard
   containers:

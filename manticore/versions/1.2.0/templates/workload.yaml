@@ -45,8 +45,8 @@ spec:
         - number: 9320
           protocol: tcp
       readinessProbe:
-        failureThreshold: 6
-        initialDelaySeconds: 30
+        failureThreshold: 20
+        initialDelaySeconds: 300
         periodSeconds: 15
         successThreshold: 1
         tcpSocket:
@@ -139,7 +139,7 @@ spec:
     capacityAI: false
     debug: false
     suspend: false
-    timeoutSeconds: 5
+    timeoutSeconds: 30
   firewallConfig:
     external:
       inboundAllowCIDR: {{ if .Values.manticore.allowExternalAccess }}[ "0.0.0.0/0" ]{{ else }}[ ]{{ end }}

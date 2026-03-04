@@ -6,9 +6,9 @@ FusionAuth is a modern, self-hosted identity and access management platform that
 ### Getting Started
 1. **Automatic Database Setup**: A PostgreSQL database is automatically created and connected to FusionAuth. No manual database configuration required.
 
-2. **Identity Provider Configuration**: FusionAuth allows easy integration for Identity Providers (IdP) to your login interface. To allow sign in with Google, enable Google OAuth integration by setting `identityProviders.google.enabled: true`
+2. **Firewall Configuration**: By default, inbound traffic is open to all (`0.0.0.0/0`). If FusionAuth needs to communicate with external Identity Providers (e.g. Google OAuth), set `firewall.external.outboundAllowCIDR` to `0.0.0.0/0` or the specific CIDRs required by your IdP.
 
-    - This will automatically configure the necessary firewall rules for Google OAuth services. Use the FusionAuth admin panel to configure your IdP.
+    - Use the FusionAuth admin panel to configure your IdP after deployment.
 
 3. **Setup and Integration**: Follow the setup wizard in the FusionAuth admin panel to create your app.
     - Configure your application with the corresponding `origin`, `redirect`, and `logout` URLs to your code

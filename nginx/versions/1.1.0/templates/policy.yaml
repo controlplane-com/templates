@@ -1,0 +1,11 @@
+kind: policy
+name: {{ include "nginx.policy.name" . }}
+description: Nginx policy
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "nginx.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "nginx.secretConfig.name" . }}

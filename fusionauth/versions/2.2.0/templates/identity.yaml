@@ -1,0 +1,6 @@
+kind: identity
+name: {{ include "fusionauth.identity.name" . }}
+description: FusionAuth identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "fusionauth.tags" . | nindent 4 }}

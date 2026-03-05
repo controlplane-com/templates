@@ -1,0 +1,37 @@
+{{- if .Values.enablePhpMyAdmin }}
+kind: workload
+name: {{ include "maria.phpAdmin.name" . }}
+description: phpMyAdmin for MariaDB database management
+tags:
+  {{- include "maria.tags" . | nindent 2 }}
+spec:
+  type: serverless
+  containers:
+    - name: phpmyadmin
+      env:
+        - name: PMA_HOST
+          value: '{{ include "maria.phpAdmin.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local'
+        - name: PMA_PORT
+          value: '3306'
+        - name: MYSQL_ROOT_PASSWORD
+          value: 'cpln://secret/{{ include "maria.secretDatabase.name" . }}.MYSQL_ROOT_PASSWORD'
+      image: 'phpmyadmin/phpmyadmin:latest'
+      inheritEnv: false
+      cpu: 100m
+      memory: 128Mi
+      ports:
+        - number: 80
+          protocol: http
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+  firewallConfig:
+    external:
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: same-gvc
+  identityLink: //identity/{{ include "maria.identity.name" . }}
+{{- end }}

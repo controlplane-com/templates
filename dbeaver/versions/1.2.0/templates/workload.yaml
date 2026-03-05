@@ -1,0 +1,59 @@
+kind: workload
+name: {{ include "dbeaver.name" . }}
+description: DBeaver Database GUI
+tags: {{- include "dbeaver.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  containers:
+    - name: dbeaver
+      cpu: {{ .Values.resources.cpu | quote }}
+      image: {{ .Values.image }}
+      inheritEnv: false
+      env:
+        - name: CB_ADMIN_NAME
+          value: cpln://secret/{{ include "dbeaver.secret.name" . }}.admin_name
+        - name: CB_ADMIN_PASSWORD
+          value: cpln://secret/{{ include "dbeaver.secret.name" . }}.admin_password
+        - name: CB_SERVER_NAME
+          value: {{ include "dbeaver.name" . }}
+        - name: CB_SERVER_URL
+          value: http://{{ include "dbeaver.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:8978
+      memory: {{ .Values.resources.memory | quote }}
+      ports:
+        - number: 8978
+          protocol: http
+      volumes:
+        - path: /opt/cloudbeaver/workspace
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "dbeaver.volumeset.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 3
+      metric: cpu
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: none
+      inboundAllowWorkload: []
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "dbeaver.identity.name" . }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

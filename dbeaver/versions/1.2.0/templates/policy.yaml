@@ -1,0 +1,13 @@
+---
+kind: policy
+name: {{ include "dbeaver.policy.name" . }}
+description: DBeaver policy
+tags: {{- include "dbeaver.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "dbeaver.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "dbeaver.secret.name" . }}

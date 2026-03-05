@@ -1,0 +1,13 @@
+apiVersion: v2
+name: dbeaver
+description: DBeaver database GUI for Control Plane
+
+type: application
+version: 1.2.0
+appVersion: "25.2.0"
+
+annotations:
+  created: "2025-09-17"
+  lastModified: "2026-02-24"
+  category: "database gui"
+  createsGvc: false

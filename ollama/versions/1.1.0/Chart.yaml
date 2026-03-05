@@ -1,0 +1,13 @@
+apiVersion: v2
+name: ollama
+description: An Ollama app for Control Plane
+
+type: application
+version: 1.1.0
+appVersion: "0.4"
+
+annotations:
+  created: "2024-12-03"
+  lastModified: "2026-02-25"
+  category: "llm"
+  createsGvc: false

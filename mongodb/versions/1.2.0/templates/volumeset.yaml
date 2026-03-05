@@ -1,0 +1,18 @@
+kind: volumeset
+name: {{ include "mongo.volume.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "mongo.tags" . | nindent 4 }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.capacity }}
+  {{- if .Values.volumeset.autoscaling.enabled }}
+  autoscaling:
+    maxCapacity: {{ .Values.volumeset.autoscaling.maxCapacity }}
+    minFreePercentage: {{ .Values.volumeset.autoscaling.minFreePercentage }}
+    scalingFactor: {{ .Values.volumeset.autoscaling.scalingFactor }}
+  {{- end }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d

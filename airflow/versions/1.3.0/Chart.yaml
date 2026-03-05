@@ -1,0 +1,12 @@
+apiVersion: v3
+name: airflow
+description: Airflow with Celery using Keda, Redis and Postgres
+type: application
+version: 1.3.0
+appVersion: "1.0.0"
+
+annotations:
+  created: "2025-08-14"
+  lastModified: "2026-02-24"
+  category: "app"
+  createsGvc: true

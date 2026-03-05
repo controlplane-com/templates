@@ -1,0 +1,78 @@
+{{ include "clickhouse.validateLocations" . }}
+kind: workload
+name: {{ include "clickhouse.keeper.name" . }}
+description: clickhouse keeper
+tags: {{- include "clickhouse.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  containers:
+    - name: keeper
+      cpu: {{ .Values.keeper.resources.cpu | quote }}
+      image: clickhouse/clickhouse-keeper:25.10
+      inheritEnv: false
+      env:
+      - name: LOCATIONS_STR
+        value: "{{- range $i, $loc := .Values.gvc.locations -}}{{ $loc.name }}:{{ $loc.replicas }}{{ if lt $i (sub (len $.Values.gvc.locations) 1) }},{{ end }}{{- end }}"
+      memory: {{ .Values.keeper.resources.memory | quote }}
+      command: "/bin/bash"
+      args:
+        - "/scripts/keeper-startup.sh"
+      ports:
+        - number: 9181
+          protocol: tcp
+        - number: 9234
+          protocol: tcp
+      volumes:
+        - path: /var/lib/clickhouse
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "clickhouse.volumeKeeper.name" . }}
+        - path: /scripts/keeper-startup.sh
+          uri: cpln://secret/{{ include "clickhouse.secretKeeper.name" . }}
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "clickhouse.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      keda: {}
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  {{- $locs := .Values.gvc.locations }}
+  localOptions:
+  {{- range $i, $loc := $locs }}
+    - autoscaling:
+        maxConcurrency: 0
+        metric: disabled
+        minScale: 1
+        maxScale: 1
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      location: //location/{{ $loc.name }}
+      suspend: {{ if ge $i 3 }}true{{ else }}false{{ end }}
+      timeoutSeconds: 5
+  {{- end }}
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: 
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.keeper.internal_access.type }}
+      inboundAllowWorkload: []
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: true
+  supportDynamicTags: false

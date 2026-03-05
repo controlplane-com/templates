@@ -29,7 +29,7 @@ spec:
 kind: policy
 name: {{ include "kafka.name" $ }}-{{ .Values.kafbat_ui.name }}
 description: {{ include "kafka.name" $ }}-{{ .Values.kafbat_ui.name }}
-tags: {}
+tags: {{- include "kafka.tags" . | nindent 2 }}
 bindings:
   - permissions:
       - reveal
@@ -48,14 +48,10 @@ kind: workload
 name: {{ include "kafka.name" $ }}-{{ .Values.kafbat_ui.name }}
 description: {{ include "kafka.name" $ }}-{{ .Values.kafbat_ui.name }}
 tags:
-  {{- $hasTags := false }}
   {{- if .Values.kafbat_ui.deletionProtection }}
   cpln/protected: true
-  {{- $hasTags = true }}
   {{- end }}
-  {{- if not $hasTags }}
-  {}
-  {{- end }}
+  {{- include "kafka.tags" . | nindent 2 }}
 spec:
   type: standard
   containers:

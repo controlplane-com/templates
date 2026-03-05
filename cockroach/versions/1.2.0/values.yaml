@@ -1,0 +1,31 @@
+gvc:
+  name: cockroach-gvc
+  locations:
+    - name: aws-us-east-2
+      replicas: 3
+    - name: aws-eu-central-1
+      replicas: 3
+    - name: aws-us-west-2
+      replicas: 3
+
+resources:
+  cpu: 2
+  memory: 4Gi
+
+database:
+  name: mydb
+  user: myuser
+
+volumeset:
+  capacity: 10 # Initial capacity in GiB (minimum is 10)
+  autoscaling:
+    enabled: false # Set to true to enable autoscaling
+    maxCapacity: 100 # Maximum capacity in GiB when autoscaling is enabled
+    minFreePercentage: 10 # Minimum free percentage to trigger scaling when autoscaling is enabled
+    scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
+
+internal_access:
+  type: same-gvc # options: same-gvc, same-org, workload-list
+  workloads:  # Note: can only be used if type is same-gvc or workload-list
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME

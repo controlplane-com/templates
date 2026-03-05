@@ -1,0 +1,170 @@
+{{ include "validateAuth" (dict "auth" .Values.redis.auth) }}
+kind: workload
+name: {{ .Release.Name }}-redis
+tags:
+  {{- $hasTags := false }}
+  {{- if .Values.redis.tags }}
+{{ toYaml .Values.redis.tags | indent 2 }}
+    {{- $hasTags = true }}
+  {{- end }}
+  {{- if not $hasTags }}
+  {}
+  {{- end }}
+spec:
+  type: stateful
+  containers:
+    - name: redis
+      env:
+      {{- if .Values.redis.env }}
+{{ toYaml .Values.redis.env | indent 8 }}
+      {{- end }}
+      {{- if and (hasKey .Values.redis "replicaDirect") .Values.redis.replicaDirect }}
+        - name: REPLICA_DIRECT
+          value: "true"
+      {{- end }}
+      {{- if and (hasKey .Values.redis "auth") (hasKey .Values.redis.auth "fromSecret") .Values.redis.auth.fromSecret.enabled }}
+        - name: CUSTOM_REDIS_PASSWORD
+          value: cpln://secret/{{ .Values.redis.auth.fromSecret.name }}.{{ .Values.redis.auth.fromSecret.passwordKey }}
+      {{- else if and (hasKey .Values.redis "auth") (hasKey .Values.redis.auth "password") .Values.redis.auth.password.enabled }}
+        - name: CUSTOM_REDIS_PASSWORD
+          value: cpln://secret/{{ .Release.Name }}-redis-auth-password.password
+      {{- end }}
+      {{- if not (or .Values.redis.env .Values.redis.replicaDirect (and (hasKey .Values.redis "auth") (or (and (hasKey .Values.redis.auth "fromSecret") .Values.redis.auth.fromSecret.enabled) (and (hasKey .Values.redis.auth "password") .Values.redis.auth.password.enabled)))) }}
+        []
+      {{- end }}
+      args:
+        - '-c'
+        - |-
+          mkdir /etc/redis
+
+          cp /config/redis.conf /etc/redis/redis.conf
+
+          if [ -n "$CUSTOM_REDIS_PASSWORD" ]; then
+            echo "\nrequirepass $CUSTOM_REDIS_PASSWORD" >> /etc/redis/redis.conf
+            echo "\nmasterauth $CUSTOM_REDIS_PASSWORD" >> /etc/redis/redis.conf
+          fi
+          {{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
+          POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev)
+          PORT=$((6380 + POD_ID))
+          echo "\nport $PORT" >> /etc/redis/redis.conf
+          echo "\nreplica-announce-ip {{ .Values.redis.publicAccess.address }}" >> /etc/redis/redis.conf
+          echo "\nreplica-announce-port $PORT" >> /etc/redis/redis.conf
+          {{ else }}
+          echo "\nport 6379" >> /etc/redis/redis.conf
+          POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev)
+          LOCATION=${CPLN_LOCATION##*/}
+          CPLN_WORKLOAD_NAME="${CPLN_WORKLOAD##*/}"
+          if [ -n "$REPLICA_DIRECT" ]; then
+            echo "\nreplica-announce-ip replica-${POD_ID}.${CPLN_WORKLOAD_NAME}.${LOCATION}.${CPLN_GVC}.cpln.local" >> /etc/redis/redis.conf
+          else
+            echo "\nreplica-announce-ip ${HOSTNAME}.{{ .Release.Name }}-redis" >> /etc/redis/redis.conf
+          fi
+          echo "\nreplica-announce-port 6379" >> /etc/redis/redis.conf
+          {{ end }}
+
+          if [ "$(hostname)" = "{{ .Release.Name }}-redis-0" ]; then
+            {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }}
+          else
+            {{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
+            {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof {{ .Values.redis.publicAccess.address }} 6380
+            {{- else if and (hasKey .Values.redis "replicaDirect") .Values.redis.replicaDirect }}
+            {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof replica-0.${CPLN_WORKLOAD_NAME}.${LOCATION}.${CPLN_GVC}.cpln.local 6379
+            {{- else }}
+            {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof {{ .Release.Name }}-redis-0.{{ .Release.Name }}-redis 6379
+            {{- end }}
+          fi
+      command: /bin/sh
+      cpu: {{ .Values.redis.resources.cpu }}
+      memory: {{ .Values.redis.resources.memory }}
+      minCpu: {{ .Values.redis.resources.minCpu }}
+      minMemory: {{ .Values.redis.resources.minMemory }}
+      image: {{ .Values.redis.image }}
+      readinessProbe:
+        exec:
+          command:
+            - /bin/bash
+            - "-c"
+            - |-
+                {{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
+                POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev)
+                PORT=$((6380 + POD_ID))
+                {{- else }}
+                PORT=6379
+                {{- end }}
+                if [ ! -z "$CUSTOM_REDIS_PASSWORD" ]; then
+                  redis-cli -p $PORT --no-auth-warning -a "$CUSTOM_REDIS_PASSWORD" ping;
+                else
+                  redis-cli -p $PORT ping;
+                fi
+        failureThreshold: 10
+        initialDelaySeconds: 10
+        periodSeconds: 5
+        successThreshold: 1
+        timeoutSeconds: 4
+      inheritEnv: false
+      ports:
+{{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled (gt (.Values.redis.replicas | int) 0) }}
+    {{- $startPort := 6380 }}
+    {{- $replicas := $.Values.redis.replicas | int }}
+    {{- range $replicaIndex := until $replicas }}
+        - number: {{ add $startPort $replicaIndex }}
+          protocol: tcp
+    {{- end }}
+{{- else }}
+        - number: 6379
+          protocol: tcp
+{{- end }}
+      volumes:
+        - path: /config/redis.conf
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ .Release.Name }}-redis-config
+        {{- if and (hasKey .Values.redis "persistence") .Values.redis.persistence.enabled }}
+        - path: {{ .Values.redis.dataDir }}
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ .Release.Name }}-redis
+        {{- end }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      metric: disabled
+      minScale: {{ .Values.redis.replicas }}
+      maxScale: {{ .Values.redis.replicas }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: {{ .Values.redis.timeoutSeconds }}
+    {{- if .Values.redis.multiZone }}
+    multiZone:
+      enabled: true
+    {{- else }}
+    multiZone:
+      enabled: false
+    {{- end }}
+{{- if .Values.redis.firewall }}
+  firewallConfig:
+    {{- if or (hasKey .Values.redis.firewall "external_inboundAllowCIDR") (hasKey .Values.redis.firewall "external_outboundAllowCIDR") }}
+    external:
+      inboundAllowCIDR: {{- if .Values.redis.firewall.external_inboundAllowCIDR }}{{ .Values.redis.firewall.external_inboundAllowCIDR | splitList "," | toYaml | nindent 8 }}{{- else }} []{{- end }}
+      outboundAllowCIDR: {{- if .Values.redis.firewall.external_outboundAllowCIDR }}{{ .Values.redis.firewall.external_outboundAllowCIDR | splitList "," | toYaml | nindent 8 }}{{- else }} []{{- end }}
+    {{- end }}
+    {{- if hasKey .Values.redis.firewall "internal_inboundAllowType" }}
+    internal:
+      inboundAllowType: {{ default "[]" .Values.redis.firewall.internal_inboundAllowType }}
+      {{- if .Values.redis.firewall.inboundAllowWorkload }}
+      inboundAllowWorkload: {{ .Values.redis.firewall.inboundAllowWorkload | toYaml | nindent 8 }}
+      {{- end }}
+    {{- end }}
+{{- end }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ .Release.Name }}-redis
+{{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
+  loadBalancer:
+    replicaDirect: true
+{{- else if and (hasKey .Values.redis "replicaDirect") .Values.redis.replicaDirect }}
+  loadBalancer:
+    replicaDirect: true
+{{- else }}
+  loadBalancer:
+    replicaDirect: false
+{{- end }}

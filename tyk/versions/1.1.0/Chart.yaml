@@ -1,0 +1,18 @@
+apiVersion: v2
+name: tyk
+description: Tyk API Gateway for Control Plane
+
+type: application
+version: 1.1.0
+appVersion: "5.10.0"
+
+dependencies:
+  - name: redis
+    version: 3.1.1
+    repository: "https://controlplane-com.github.io/helm-packages"
+
+annotations:
+  created: "2025-10-30"
+  lastModified: "2026-02-27"
+  category: "api-gateway"
+  createsGvc: false

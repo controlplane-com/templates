@@ -1,0 +1,13 @@
+apiVersion: v2
+name: nginx
+description: Nginx app for Control Plane
+type: application
+version: 1.1.0
+appVersion: "1.16.0"
+
+annotations:
+  created: "2024-07-17"
+  lastModified: "2026-02-25"
+  category: "proxy"
+  file-nginxConf: "Nginx Configuration File"
+  createsGvc: false

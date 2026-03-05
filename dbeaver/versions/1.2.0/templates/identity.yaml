@@ -1,0 +1,7 @@
+---
+kind: identity
+gvc: {{ .Values.global.cpln.gvc }}
+name: {{ include "dbeaver.identity.name" . }}
+description: DBeaver identity
+tags:
+  {{- include "dbeaver.tags" . | nindent 4 }}

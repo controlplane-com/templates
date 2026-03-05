@@ -1,0 +1,65 @@
+image: ghcr.io/controlplane-com/cpln-build/external-secret-syncer:v1.2.4
+
+resources:
+  cpu: 200m
+  memory: 256Mi
+
+port: 3004
+
+allowedIp:
+  - 1.2.3.4 # Replace with your IP
+
+essConfig:
+  providers:
+    - name: my-vault
+      vault:
+        address: https://my-vault.com:8200
+        token: <TOKEN>
+      syncInterval: 1m
+    - name: my-aws-ssm
+      awsParameterStore:
+        region: us-east-1
+        accessKeyId: <ACCESS_KEY> # alternatively configure identity to natively use AWS permissions
+        secretAccessKey: <SECRET_ACCESS_KEY> # alternatively configure identity to natively use AWS permissions
+    # - name: my-aws-secrets-manager
+    #   awsSecretsManager:
+    #     region: us-east-1
+    #     accessKeyId: <ACCESS_KEY>
+    #     secretAccessKey: <SECRET_ACCESS_KEY>
+    # - name: my-1password
+    #   onePassword:
+    #     serviceAccountToken: <TOKEN>
+    #     integrationName: my-ess <optional - defaults to syncer.cpln.io>
+    #     integrationVersion: 1.0.0 <optional - defaults to image tag>
+    # - name: my-doppler
+    #   doppler:
+    #     accessToken: <TOKEN>
+  secrets:
+    - name: auth
+      provider: my-vault
+      syncInterval: 20s
+      dictionary:
+        PORT:
+          path: /v1/secret/data/app
+          parse: data.port
+          default: 5432
+        PASSWORD:
+          path: /v1/secret/data/app
+          parse: data.password
+        USERNAME:
+          default: "no username"
+          path: /v1/secret/data/app
+          parse: data.username
+    - name: ssm
+      provider: my-aws
+      syncInterval: 20s
+      opaque: /example/app
+    # - name: secrets-manager
+    #   provider: my-aws-secrets-manager
+    #   dictionary:
+    #     PASSWORD:
+    #       path: /example/app
+    #       parse: password
+    # - name: doppler
+    #   provider: my-doppler
+    #   opaque: /project/config/secret

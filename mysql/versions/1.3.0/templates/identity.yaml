@@ -1,0 +1,24 @@
+kind: identity
+name: {{ include "mysql.identity.name" . }}
+description: MySQL identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "mysql.tags" . | nindent 4 }}
+{{- if eq .Values.backup.provider "aws" }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.backup.aws.cloudAccountName }}
+  policyRefs:
+    - cpln-connector
+    - aws::ReadOnlyAccess
+    - "{{ .Values.backup.aws.policyName }}"
+{{- end }}
+{{- if eq .Values.backup.provider "gcp" }}
+gcp:
+  bindings:
+    - resource: //storage.googleapis.com/projects/_/buckets/{{ .Values.backup.gcp.bucket }}
+      roles:
+        - roles/storage.objectAdmin
+  cloudAccountLink: //cloudaccount/{{ .Values.backup.gcp.cloudAccountName }}
+  scopes:
+    - https://www.googleapis.com/auth/cloud-platform
+{{- end }}

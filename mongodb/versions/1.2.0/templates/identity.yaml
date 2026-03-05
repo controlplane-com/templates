@@ -1,0 +1,5 @@
+kind: identity
+name: {{ include "mongo.identity.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "mongo.tags" . | nindent 4 }}

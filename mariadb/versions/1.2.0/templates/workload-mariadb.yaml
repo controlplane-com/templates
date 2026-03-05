@@ -1,0 +1,70 @@
+kind: workload
+name: {{ include "maria.name" . }}
+description: MariaDB database
+tags:
+  {{- include "maria.tags" . | nindent 2 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "maria.identity.name" . }}
+  containers:
+    - name: mariadb
+      env:
+        - name: MYSQL_DATABASE
+          value: 'cpln://secret/{{ include "maria.secretDatabase.name" . }}.MYSQL_DATABASE'
+        - name: MYSQL_PASSWORD
+          value: 'cpln://secret/{{ include "maria.secretDatabase.name" . }}.MYSQL_PASSWORD'
+        - name: MYSQL_ROOT_PASSWORD
+          value: 'cpln://secret/{{ include "maria.secretDatabase.name" . }}.MYSQL_ROOT_PASSWORD'
+        - name: MYSQL_USER
+          value: 'cpln://secret/{{ include "maria.secretDatabase.name" . }}.MYSQL_USER'
+      image: {{ .Values.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      ports:
+        - number: 3306
+          protocol: tcp
+      readinessProbe:
+        exec:
+          command:
+            - sh
+            - '-c'
+            - 'mariadb-admin ping -u root -p${MYSQL_ROOT_PASSWORD}'
+        failureThreshold: 10
+        initialDelaySeconds: 17
+        periodSeconds: 5
+        successThreshold: 1
+        timeoutSeconds: 3
+      livenessProbe:
+        exec:
+          command:
+            - sh
+            - '-c'
+            - 'mariadb-admin ping -u root -p${MYSQL_ROOT_PASSWORD}'
+        failureThreshold: 10
+        initialDelaySeconds: 17
+        periodSeconds: 5
+        successThreshold: 1
+        timeoutSeconds: 3
+      volumes:
+        - path: /var/lib/mysql
+          recoveryPolicy: retain
+          uri: 'cpln://volumeset/{{ include "maria.volume.name" . }}'
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+    capacityAI: false
+    timeoutSeconds: {{ .Values.timeoutSeconds | int }}
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}

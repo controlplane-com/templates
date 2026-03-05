@@ -1,0 +1,13 @@
+apiVersion: v2
+name: etcd
+description: Etcd distributed coordination system for Control Plane
+
+type: application
+version: 1.4.0
+appVersion: "3.6.5"
+
+annotations:
+  created: "2025-09-30"
+  lastModified: "2026-02-24"
+  category: "key-value store"
+  createsGvc: false

@@ -1,0 +1,72 @@
+kind: workload
+name: {{ include "redis.name" . }}
+description: Redis
+tags: {{- include "redis.tags" . | nindent 4 }}
+gvc: {{ .Values.gvc.name }}
+spec:
+  type: stateful
+  containers:
+    - name: valkey
+      args:
+        - '-c'
+        - >-
+          mkdir /etc/redis
+
+          cp /config/redis.conf /etc/redis/redis.conf
+
+          echo "\nreplica-announce-ip ${HOSTNAME}.{{ include "redis.name" . }}" >>
+          /etc/redis/redis.conf
+
+          if [ "$(hostname)" = "{{ include "redis.name" . }}-0" ]; then
+            {{ .Values.redis.serverCommand | default "redis-server" }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }}
+          else
+            {{ .Values.redis.serverCommand | default "redis-server" }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --replicaof {{ include "redis.name" . }}-0.{{ include "redis.name" . }} 6379
+          fi
+      command: /bin/sh
+      cpu: {{ .Values.redis.resources.cpu | quote }}
+      memory: {{ .Values.redis.resources.memory | quote }}
+      image: {{ .Values.redis.image | default "redis:7.2" }}
+      inheritEnv: false
+      ports:
+        - number: 6379
+          protocol: tcp
+      volumes:
+        - path: /data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "redis.volume.name" . }}
+        - path: /config/redis.conf
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "redis.secretConfig.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      metric: disabled
+      minScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      maxScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: {{ .Values.firewall.internalAllowType }}
+      {{- if .Values.firewall.workloads }}
+      inboundAllowWorkload: {{ .Values.firewall.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "redis.identity.name" . }}
+  localOptions:
+    {{- range $location := .Values.gvc.locations }}
+    - location: //location/{{ $location.name }}
+      autoscaling:
+        maxConcurrency: 0
+        metric: disabled
+        minScale: {{ $location.replicas | int }}
+        maxScale: {{ $location.replicas | int }}
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      timeoutSeconds: 5
+    {{- end }}

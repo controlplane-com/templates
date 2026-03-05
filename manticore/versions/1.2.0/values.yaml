@@ -72,7 +72,7 @@ manticore:
   allowExternalAccess: true       # true = Manticore HTTP/MySQL ports reachable externally; false = internal only
   resources:
     cpu: 4
-    memory: 8Gi
+    memory: 12Gi
   volumeset:
     capacity: 200                 # GB per replica
   sharedVolumeset:

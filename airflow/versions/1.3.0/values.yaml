@@ -25,6 +25,8 @@ redis:
   resources:
     cpu: 250m
     memory: 512Mi
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
 
 # Apache Airflow configuration   
 airflow:

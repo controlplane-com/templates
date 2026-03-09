@@ -36,6 +36,13 @@ Airflow Redis Workload Name
 {{- end }}
 
 {{/*
+Redis Volume Set Name
+*/}}
+{{- define "airflow.redisVolume.name" -}}
+{{- printf "%s-airflow-redis-vs" .Release.Name }}
+{{- end }}
+
+{{/*
 Airflow Secret Name
 */}}
 {{- define "airflow.secret.name" -}}

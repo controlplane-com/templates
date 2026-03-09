@@ -49,9 +49,6 @@ airflow:
 
   admin:
     username: admin
-    firstname: Admin
-    lastname: User
-    email: admin@example.com
     password: admin # Change before deploying to production
 
   scheduler:

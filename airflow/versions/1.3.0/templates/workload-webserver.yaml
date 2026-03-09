@@ -14,8 +14,8 @@ spec:
         - '-c'
         - |-
           mkdir -p /opt/airflow/dags;
+          printf 'users:\n  - username: %s\n    password: %s\n    role: Admin\n' "${AIRFLOW_ADMIN_USERNAME}" "${AIRFLOW_ADMIN_PASSWORD}" > /opt/airflow/admin_passwords.yaml;
           airflow db migrate;
-          airflow users create --username $AIRFLOW_ADMIN_USERNAME --password $AIRFLOW_ADMIN_PASSWORD --firstname $AIRFLOW_ADMIN_FIRSTNAME --lastname $AIRFLOW_ADMIN_LASTNAME --role Admin --email $AIRFLOW_ADMIN_EMAIL || true;
           airflow dag-processor &
           airflow scheduler &
           airflow triggerer &
@@ -64,14 +64,10 @@ spec:
           value: "{{ .Values.airflow.scheduler.minFileProcessInterval }}"
         - name: AIRFLOW_ADMIN_USERNAME
           value: {{ .Values.airflow.admin.username | quote }}
-        - name: AIRFLOW_ADMIN_FIRSTNAME
-          value: {{ .Values.airflow.admin.firstname | quote }}
-        - name: AIRFLOW_ADMIN_LASTNAME
-          value: {{ .Values.airflow.admin.lastname | quote }}
-        - name: AIRFLOW_ADMIN_EMAIL
-          value: {{ .Values.airflow.admin.email | quote }}
         - name: AIRFLOW_ADMIN_PASSWORD
           value: cpln://secret/{{ include "airflow.secret.name" . }}.adminPassword
+        - name: AIRFLOW__SIMPLE_AUTH_MANAGER__PASSWORDS_YAML_SECRET_PATH
+          value: /opt/airflow/admin_passwords.yaml
         - name: AIRFLOW__WEBSERVER__WEB_SERVER_HOST
           value: 0.0.0.0
         - name: AIRFLOW__WEBSERVER__WEB_SERVER_PORT

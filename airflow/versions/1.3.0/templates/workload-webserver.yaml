@@ -14,7 +14,8 @@ spec:
         - '-c'
         - |-
           mkdir -p /opt/airflow/dags;
-          printf 'users:\n  - username: %s\n    password: %s\n    role: Admin\n' "${AIRFLOW_ADMIN_USERNAME}" "${AIRFLOW_ADMIN_PASSWORD}" > /opt/airflow/admin_passwords.yaml;
+          HASHED_PASSWORD=$(python3 -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('${AIRFLOW_ADMIN_PASSWORD}'))");
+          printf 'users:\n  - username: %s\n    password: %s\n    role: Admin\n' "${AIRFLOW_ADMIN_USERNAME}" "${HASHED_PASSWORD}" > /opt/airflow/admin_passwords.yaml;
           airflow db migrate;
           airflow dag-processor &
           airflow scheduler &

@@ -49,7 +49,7 @@ airflow:
 
   admin:
     username: admin
-    password: admin # Change before deploying to production
+    password: password # Change before deploying to production
 
   scheduler:
     dagDirListInterval: 10  # How often to check DAG folder (seconds)

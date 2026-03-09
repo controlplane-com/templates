@@ -14,8 +14,7 @@ spec:
         - '-c'
         - |-
           mkdir -p /opt/airflow/dags;
-          HASHED_PASSWORD=$(python3 -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('${AIRFLOW_ADMIN_PASSWORD}'))");
-          printf 'users:\n  - username: %s\n    password: %s\n    role: Admin\n' "${AIRFLOW_ADMIN_USERNAME}" "${HASHED_PASSWORD}" > /opt/airflow/admin_passwords.yaml;
+          python3 -c "import json,os; print(json.dumps({os.environ['AIRFLOW_ADMIN_USERNAME']:os.environ['AIRFLOW_ADMIN_PASSWORD']}))" > /opt/airflow/simple_auth_manager_passwords.json.generated;
           airflow db migrate;
           airflow dag-processor &
           airflow scheduler &
@@ -67,11 +66,11 @@ spec:
           value: {{ .Values.airflow.admin.username | quote }}
         - name: AIRFLOW_ADMIN_PASSWORD
           value: cpln://secret/{{ include "airflow.secret.name" . }}.adminPassword
-        - name: AIRFLOW__SIMPLE_AUTH_MANAGER__PASSWORDS_YAML_SECRET_PATH
-          value: /opt/airflow/admin_passwords.yaml
-        - name: AIRFLOW__WEBSERVER__WEB_SERVER_HOST
+        - name: AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS
+          value: {{ printf "%s:ADMIN" .Values.airflow.admin.username | quote }}
+        - name: AIRFLOW__API__HOST
           value: 0.0.0.0
-        - name: AIRFLOW__WEBSERVER__WEB_SERVER_PORT
+        - name: AIRFLOW__API__PORT
           value: "{{ .Values.airflow.webPort }}"
       ports:
         - number: {{ .Values.airflow.webPort }}

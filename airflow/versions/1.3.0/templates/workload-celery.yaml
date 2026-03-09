@@ -18,9 +18,9 @@ spec:
         - name: AIRFLOW__API_AUTH__JWT_REFRESH_THRESHOLD
           value: "{{ .Values.airflow.auth.jwtRefreshThreshold }}"
         - name: POSTGRES_USERNAME
-          value: cpln://secret/{{ include "airflow.postgres.secret.name" . }}.username
+          value: cpln://secret/{{ include "airflow.secret.name" . }}.username
         - name: POSTGRES_PASSWORD
-          value: cpln://secret/{{ include "airflow.postgres.secret.name" . }}.password
+          value: cpln://secret/{{ include "airflow.secret.name" . }}.password
         - name: AIRFLOW__API_AUTH__JWT_SECRET
           value: cpln://secret/{{ include "airflow.secret.name" . }}.jwtSecret
         - name: AIRFLOW__API__BASE_URL

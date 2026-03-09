@@ -15,10 +15,17 @@ Airflow Webserver Workload Name
 {{- end }}
 
 {{/*
-Airflow Postgres Workload Name
+Airflow Postgres Workload Name (matches postgres subchart naming)
 */}}
 {{- define "airflow.postgres.name" -}}
-{{- printf "%s-airflow-postgres" .Release.Name }}
+{{- printf "%s-postgres" .Release.Name }}
+{{- end }}
+
+{{/*
+Airflow Postgres Secret Name (matches postgres subchart naming)
+*/}}
+{{- define "airflow.postgres.secret.name" -}}
+{{- printf "%s-pg-config" .Release.Name }}
 {{- end }}
 
 {{/*
@@ -54,13 +61,6 @@ Airflow Volume Set Name
 */}}
 {{- define "airflow.volume.name" -}}
 {{- printf "%s-airflow-vs" .Release.Name }}
-{{- end }}
-
-{{/*
-Postgres Volume Set Name
-*/}}
-{{- define "airflow.postgresVolume.name" -}}
-{{- printf "%s-airflow-postgres-vs" .Release.Name }}
 {{- end }}
 
 

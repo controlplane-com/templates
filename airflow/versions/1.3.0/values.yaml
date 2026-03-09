@@ -4,15 +4,20 @@ gvc:
   locations:
     - name: aws-eu-central-1
 
-# PostgreSQL database configuration  
+# Postgres database configuration
 postgres:
   image: postgres:18
   resources:
-    cpu: 500m
-    memory: 1024Mi
+    minCpu: 250m
+    maxCpu: 500m
+    minMemory: 512Mi
+    maxMemory: 1024Mi
   config:
     username: username
     password: password
+    database: airflow
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
 
 # Redis cache configuration
 redis:
@@ -49,8 +54,6 @@ airflow:
 
 volumeset:
   airflow:
-    capacity: 10 # initial capacity in GiB (minimum is 10)
-  postgres:
     capacity: 10 # initial capacity in GiB (minimum is 10)
 
 # KEDA (Kubernetes Event-driven Autoscaling) configuration 

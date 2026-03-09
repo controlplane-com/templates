@@ -18,9 +18,9 @@ spec:
         - name: AIRFLOW__API_AUTH__JWT_REFRESH_THRESHOLD
           value: "{{ .Values.airflow.auth.jwtRefreshThreshold }}"
         - name: POSTGRES_USERNAME
-          value: cpln://secret/{{ include "airflow.secret.name" . }}.username         
-        - name: POSTGRES_PASSWORD 
-          value: cpln://secret/{{ include "airflow.secret.name" . }}.password          
+          value: cpln://secret/{{ include "airflow.postgres.secret.name" . }}.username
+        - name: POSTGRES_PASSWORD
+          value: cpln://secret/{{ include "airflow.postgres.secret.name" . }}.password
         - name: AIRFLOW__API_AUTH__JWT_SECRET
           value: cpln://secret/{{ include "airflow.secret.name" . }}.jwtSecret
         - name: AIRFLOW__API__BASE_URL
@@ -28,7 +28,7 @@ spec:
         - name: AIRFLOW__CELERY__BROKER_URL
           value: redis://{{ include "airflow.redis.name" . }}.{{ .Values.gvc.name }}.cpln.local
         - name: AIRFLOW__CELERY__RESULT_BACKEND
-          value: db+postgresql://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ include "airflow.postgres.name" . }}:5432/test
+          value: db+postgresql://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ include "airflow.postgres.name" . }}:5432/{{ .Values.postgres.config.database }}
         {{- if .Values.keda.enabled }}
         - name: AIRFLOW__CELERY__WORKER_CONCURRENCY
           value: "{{ .Values.airflow.celery.workerConcurrency }}"
@@ -38,7 +38,7 @@ spec:
         - name: AIRFLOW__CORE__EXECUTOR
           value: CeleryExecutor
         - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
-          value: postgresql+psycopg2://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ include "airflow.postgres.name" . }}:5432/test
+          value: postgresql+psycopg2://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ include "airflow.postgres.name" . }}:5432/{{ .Values.postgres.config.database }}
         - name: AIRFLOW__LOGGING__REMOTE_LOGGING
           value: 'False'
       image: {{ .Values.airflow.celeryWorker.image }}

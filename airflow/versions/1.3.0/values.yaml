@@ -42,10 +42,17 @@ airflow:
       memory: 512Mi
   webPort: 8080   # Port for accessing the Airflow web interface
 
-  auth:        
+  auth:
     jwtSecret: 1234567890 # Secret key used to sign JWT tokens, generate in terminal using "openssl rand -base64 48"
-    jwtExpirationDelta: 3600  # JWT token expiration time in seconds 
+    jwtExpirationDelta: 3600  # JWT token expiration time in seconds
     jwtRefreshThreshold: 300 # Threshold before token expires to allow refresh in seconds
+
+  admin:
+    username: admin
+    firstname: Admin
+    lastname: User
+    email: admin@example.com
+    password: admin # Change before deploying to production
 
   scheduler:
     dagDirListInterval: 10  # How often to check DAG folder (seconds)

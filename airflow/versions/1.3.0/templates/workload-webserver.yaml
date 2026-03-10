@@ -14,6 +14,7 @@ spec:
         - '-c'
         - |-
           mkdir -p /opt/airflow/dags;
+          python3 -c "import json,os; print(json.dumps({os.environ['AIRFLOW_ADMIN_USERNAME']:os.environ['AIRFLOW_ADMIN_PASSWORD']}))" > /opt/airflow/simple_auth_manager_passwords.json.generated;
           airflow db migrate;
           airflow dag-processor &
           airflow scheduler &
@@ -38,44 +39,94 @@ spec:
         - name: AIRFLOW__API_AUTH__JWT_REFRESH_THRESHOLD
           value: {{ .Values.airflow.auth.jwtRefreshThreshold | quote }}
         - name: POSTGRES_USERNAME
-          value: cpln://secret/{{ include "airflow.secret.name" . }}.username         
-        - name: POSTGRES_PASSWORD 
-          value: cpln://secret/{{ include "airflow.secret.name" . }}.password          
+          value: cpln://secret/{{ include "airflow.secret.name" . }}.username
+        - name: POSTGRES_PASSWORD
+          value: cpln://secret/{{ include "airflow.secret.name" . }}.password
         - name: AIRFLOW__API_AUTH__JWT_SECRET
           value: cpln://secret/{{ include "airflow.secret.name" . }}.jwtSecret
+        - name: AIRFLOW__CORE__FERNET_KEY
+          value: cpln://secret/{{ include "airflow.secret.name" . }}.fernetKey
         - name: AIRFLOW__API__BASE_URL
           value: http://{{ include "airflow.webserver.name" . }}:{{ .Values.airflow.webPort }}
         - name: AIRFLOW__CELERY__BROKER_URL
           value: redis://{{ include "airflow.redis.name" . }}.{{ .Values.gvc.name }}.cpln.local
         - name: AIRFLOW__CELERY__RESULT_BACKEND
-          value: db+postgresql://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ include "airflow.postgres.name" . }}:5432/test
+          value: db+postgresql://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ include "airflow.postgres.name" . }}:5432/{{ .Values.postgres.config.database }}
+        {{- if .Values.gitSync.enabled }}
+        - name: AIRFLOW__CORE__DAGS_FOLDER
+          value: /opt/airflow/dags-sync/current{{ if .Values.gitSync.subPath }}/{{ .Values.gitSync.subPath }}{{ end }}
+        {{- else }}
         - name: AIRFLOW__CORE__DAGS_FOLDER
           value: /opt/airflow/dags
+        {{- end }}
         - name: AIRFLOW__CORE__EXECUTOR
           value: CeleryExecutor
         - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
-          value: postgresql+psycopg2://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ include "airflow.postgres.name" . }}:5432/test
+          value: postgresql+psycopg2://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ include "airflow.postgres.name" . }}:5432/{{ .Values.postgres.config.database }}
         - name: AIRFLOW__LOGGING__REMOTE_LOGGING
           value: 'False'
         - name: AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL
           value: "{{ .Values.airflow.scheduler.dagDirListInterval }}"
         - name: AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL
           value: "{{ .Values.airflow.scheduler.minFileProcessInterval }}"
-        - name: AIRFLOW__WEBSERVER__WEB_SERVER_HOST
+        - name: AIRFLOW_ADMIN_USERNAME
+          value: {{ .Values.airflow.admin.username | quote }}
+        - name: AIRFLOW_ADMIN_PASSWORD
+          value: cpln://secret/{{ include "airflow.secret.name" . }}.adminPassword
+        - name: AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS
+          value: {{ printf "%s:ADMIN" .Values.airflow.admin.username | quote }}
+        - name: AIRFLOW__API__HOST
           value: 0.0.0.0
-        - name: AIRFLOW__WEBSERVER__WEB_SERVER_PORT
+        - name: AIRFLOW__API__PORT
           value: "{{ .Values.airflow.webPort }}"
       ports:
         - number: {{ .Values.airflow.webPort }}
           protocol: http
+      readinessProbe:
+        httpGet:
+          path: /api/v2/monitor/health
+          port: {{ .Values.airflow.webPort }}
+        failureThreshold: 5
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 5
       volumes:
         - path: /opt/airflow
           recoveryPolicy: retain
           uri: cpln://volumeset/{{ include "airflow.volume.name" . }}
+    {{- if .Values.gitSync.enabled }}
+    - name: git-sync
+      image: registry.k8s.io/git-sync/git-sync:v4.4.0
+      cpu: 100m
+      memory: 128Mi
+      inheritEnv: false
+      env:
+        - name: GITSYNC_REPO
+          value: {{ .Values.gitSync.repo | quote }}
+        - name: GITSYNC_BRANCH
+          value: {{ .Values.gitSync.branch | quote }}
+        - name: GITSYNC_ROOT
+          value: /opt/airflow/dags-sync
+        - name: GITSYNC_LINK
+          value: current
+        - name: GITSYNC_PERIOD
+          value: {{ .Values.gitSync.period | quote }}
+        {{- if .Values.gitSync.auth.token }}
+        - name: GITSYNC_USERNAME
+          value: git
+        - name: GITSYNC_PASSWORD
+          value: cpln://secret/{{ include "airflow.secret.name" . }}.gitSyncToken
+        {{- end }}
+      volumes:
+        - path: /opt/airflow
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "airflow.volume.name" . }}
+    {{- end }}
   firewallConfig:
     external:
       inboundAllowCIDR:
-        - 0.0.0.0/0
+        {{- toYaml .Values.firewallConfig.inboundAllowCIDR | nindent 8 }}
       inboundBlockedCIDR: []
       outboundAllowCIDR:
         - 0.0.0.0/0

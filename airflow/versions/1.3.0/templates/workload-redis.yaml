@@ -5,7 +5,7 @@ gvc: {{ .Values.gvc.name }}
 tags:
   {{- include "airflow.tags" . | nindent 2 }}
 spec:
-  type: standard
+  type: stateful
   containers:
     - name: redis
       cpu: {{ .Values.redis.resources.cpu | quote }}
@@ -15,6 +15,9 @@ spec:
       ports:
         - number: 6379
           protocol: tcp
+      volumes:
+        - path: /data
+          uri: cpln://volumeset/{{ include "airflow.redisVolume.name" . }}
   firewallConfig:
     external:
       inboundAllowCIDR: []

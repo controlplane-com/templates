@@ -22,10 +22,24 @@ Airflow Postgres Workload Name
 {{- end }}
 
 {{/*
+Postgres Volume Set Name
+*/}}
+{{- define "airflow.postgresVolume.name" -}}
+{{- printf "%s-airflow-postgres-vs" .Release.Name }}
+{{- end }}
+
+{{/*
 Airflow Redis Workload Name
 */}}
 {{- define "airflow.redis.name" -}}
 {{- printf "%s-airflow-redis" .Release.Name }}
+{{- end }}
+
+{{/*
+Redis Volume Set Name
+*/}}
+{{- define "airflow.redisVolume.name" -}}
+{{- printf "%s-airflow-redis-vs" .Release.Name }}
 {{- end }}
 
 {{/*
@@ -54,13 +68,6 @@ Airflow Volume Set Name
 */}}
 {{- define "airflow.volume.name" -}}
 {{- printf "%s-airflow-vs" .Release.Name }}
-{{- end }}
-
-{{/*
-Postgres Volume Set Name
-*/}}
-{{- define "airflow.postgresVolume.name" -}}
-{{- printf "%s-airflow-postgres-vs" .Release.Name }}
 {{- end }}
 
 

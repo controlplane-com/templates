@@ -1,10 +1,10 @@
 kind: volumeset
-name: {{ include "airflow.postgresVolume.name" . }}
-description: Airflow Postgres volume set
+name: {{ include "airflow.redisVolume.name" . }}
+description: Airflow Redis volume set
 gvc: {{ .Values.gvc.name }}
 tags:
   {{- include "airflow.tags" . | nindent 4 }}
 spec:
   fileSystemType: ext4
-  initialCapacity: {{ .Values.postgres.volumeset.capacity }}
+  initialCapacity: {{ .Values.redis.volumeset.capacity }}
   performanceClass: general-purpose-ssd

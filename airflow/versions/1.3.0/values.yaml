@@ -43,13 +43,14 @@ airflow:
   webPort: 8080   # Port for accessing the Airflow web interface
 
   auth:
-    jwtSecret: 1234567890 # Secret key used to sign JWT tokens, generate in terminal using "openssl rand -base64 48"
+    jwtSecret: CHANGE_ME # REQUIRED: generate with "openssl rand -base64 48"
     jwtExpirationDelta: 3600  # JWT token expiration time in seconds
     jwtRefreshThreshold: 300 # Threshold before token expires to allow refresh in seconds
+    fernetKey: CHANGE_ME # REQUIRED: generate with "python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"
 
   admin:
     username: admin
-    password: password # Change before deploying to production
+    password: CHANGE_ME # REQUIRED: change before deploying to production
 
   scheduler:
     dagDirListInterval: 10  # How often to check DAG folder (seconds)
@@ -61,6 +62,11 @@ airflow:
 volumeset:
   airflow:
     capacity: 10 # initial capacity in GiB (minimum is 10)
+
+# Firewall configuration
+firewallConfig:
+  inboundAllowCIDR:
+    - 0.0.0.0/0  # Restrict to specific IPs in production (e.g. - 203.0.113.0/24)
 
 # Git-sync configuration for DAG delivery
 gitSync:

@@ -23,6 +23,8 @@ spec:
           value: cpln://secret/{{ include "airflow.secret.name" . }}.password
         - name: AIRFLOW__API_AUTH__JWT_SECRET
           value: cpln://secret/{{ include "airflow.secret.name" . }}.jwtSecret
+        - name: AIRFLOW__CORE__FERNET_KEY
+          value: cpln://secret/{{ include "airflow.secret.name" . }}.fernetKey
         - name: AIRFLOW__API__BASE_URL
           value: http://{{ include "airflow.webserver.name" . }}:{{ .Values.airflow.webPort }}
         - name: AIRFLOW__CELERY__BROKER_URL

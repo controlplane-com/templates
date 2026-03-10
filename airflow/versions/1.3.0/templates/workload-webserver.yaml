@@ -44,6 +44,8 @@ spec:
           value: cpln://secret/{{ include "airflow.secret.name" . }}.password
         - name: AIRFLOW__API_AUTH__JWT_SECRET
           value: cpln://secret/{{ include "airflow.secret.name" . }}.jwtSecret
+        - name: AIRFLOW__CORE__FERNET_KEY
+          value: cpln://secret/{{ include "airflow.secret.name" . }}.fernetKey
         - name: AIRFLOW__API__BASE_URL
           value: http://{{ include "airflow.webserver.name" . }}:{{ .Values.airflow.webPort }}
         - name: AIRFLOW__CELERY__BROKER_URL
@@ -80,6 +82,15 @@ spec:
       ports:
         - number: {{ .Values.airflow.webPort }}
           protocol: http
+      readinessProbe:
+        httpGet:
+          path: /api/v2/monitor/health
+          port: {{ .Values.airflow.webPort }}
+        failureThreshold: 5
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 5
       volumes:
         - path: /opt/airflow
           recoveryPolicy: retain
@@ -115,7 +126,7 @@ spec:
   firewallConfig:
     external:
       inboundAllowCIDR:
-        - 0.0.0.0/0
+        {{- toYaml .Values.firewallConfig.inboundAllowCIDR | nindent 8 }}
       inboundBlockedCIDR: []
       outboundAllowCIDR:
         - 0.0.0.0/0

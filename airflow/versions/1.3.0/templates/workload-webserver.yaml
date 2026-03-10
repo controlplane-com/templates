@@ -50,8 +50,13 @@ spec:
           value: redis://{{ include "airflow.redis.name" . }}.{{ .Values.gvc.name }}.cpln.local
         - name: AIRFLOW__CELERY__RESULT_BACKEND
           value: db+postgresql://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ include "airflow.postgres.name" . }}:5432/{{ .Values.postgres.config.database }}
+        {{- if .Values.gitSync.enabled }}
+        - name: AIRFLOW__CORE__DAGS_FOLDER
+          value: /opt/airflow/dags-sync/current{{ if .Values.gitSync.subPath }}/{{ .Values.gitSync.subPath }}{{ end }}
+        {{- else }}
         - name: AIRFLOW__CORE__DAGS_FOLDER
           value: /opt/airflow/dags
+        {{- end }}
         - name: AIRFLOW__CORE__EXECUTOR
           value: CeleryExecutor
         - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
@@ -79,6 +84,34 @@ spec:
         - path: /opt/airflow
           recoveryPolicy: retain
           uri: cpln://volumeset/{{ include "airflow.volume.name" . }}
+    {{- if .Values.gitSync.enabled }}
+    - name: git-sync
+      image: registry.k8s.io/git-sync/git-sync:v4.4.0
+      cpu: 100m
+      memory: 128Mi
+      inheritEnv: false
+      env:
+        - name: GITSYNC_REPO
+          value: {{ .Values.gitSync.repo | quote }}
+        - name: GITSYNC_BRANCH
+          value: {{ .Values.gitSync.branch | quote }}
+        - name: GITSYNC_ROOT
+          value: /opt/airflow/dags-sync
+        - name: GITSYNC_LINK
+          value: current
+        - name: GITSYNC_PERIOD
+          value: {{ .Values.gitSync.period | quote }}
+        {{- if .Values.gitSync.auth.token }}
+        - name: GITSYNC_USERNAME
+          value: git
+        - name: GITSYNC_PASSWORD
+          value: cpln://secret/{{ include "airflow.secret.name" . }}.gitSyncToken
+        {{- end }}
+      volumes:
+        - path: /opt/airflow
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "airflow.volume.name" . }}
+    {{- end }}
   firewallConfig:
     external:
       inboundAllowCIDR:

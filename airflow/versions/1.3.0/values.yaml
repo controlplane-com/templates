@@ -62,7 +62,17 @@ volumeset:
   airflow:
     capacity: 10 # initial capacity in GiB (minimum is 10)
 
-# KEDA (Kubernetes Event-driven Autoscaling) configuration 
+# Git-sync configuration for DAG delivery
+gitSync:
+  enabled: false
+  repo: ""       # Git repository URL (e.g. https://github.com/org/dags)
+  branch: main   # Branch to sync
+  period: 60s    # How often to sync
+  subPath: ""    # Optional subfolder within the repo containing DAGs
+  auth:
+    token: ""    # Personal access token for private repos (leave empty for public repos)
+
+# KEDA (Kubernetes Event-driven Autoscaling) configuration
 # NOT SUPPORTED in gcp/us-central1
 keda:
   enabled: true # Enable or disable KEDA autoscaling

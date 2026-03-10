@@ -33,8 +33,13 @@ spec:
         - name: AIRFLOW__CELERY__WORKER_CONCURRENCY
           value: "{{ .Values.airflow.celery.workerConcurrency }}"
         {{- end }}
+        {{- if .Values.gitSync.enabled }}
+        - name: AIRFLOW__CORE__DAGS_FOLDER
+          value: /opt/airflow/dags-sync/current{{ if .Values.gitSync.subPath }}/{{ .Values.gitSync.subPath }}{{ end }}
+        {{- else }}
         - name: AIRFLOW__CORE__DAGS_FOLDER
           value: /opt/airflow/dags
+        {{- end }}
         - name: AIRFLOW__CORE__EXECUTOR
           value: CeleryExecutor
         - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN

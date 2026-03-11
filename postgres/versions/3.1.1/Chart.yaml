@@ -3,12 +3,12 @@ name: postgres
 description: PostgreSQL database app for Control Plane
 
 type: application
-version: 3.1.0
+version: 3.1.1
 appVersion: "18"
 
 annotations:
   created: "2025-12-23"
-  lastModified: "2025-12-24"
+  lastModified: "2026-03-11"
   category: "database"
   postgresVersion: "18"
   createsGvc: false

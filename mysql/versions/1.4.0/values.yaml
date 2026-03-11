@@ -42,13 +42,13 @@ backup:
   provider: aws # Options: aws or gcp
 
   aws:
-    bucket: mysql-backup-bucket
+    bucket: my-backup-bucket
     region: us-east-1
-    cloudAccountName: mysql-backup-cloudaccount
-    policyName: mysql-backup-policy
+    cloudAccountName: my-backup-cloudaccount
+    policyName: my-backup-policy
     prefix: mysql/backups # folder name where your backups will be stored
 
   gcp:
-    bucket: mysql-backup-bucket
-    cloudAccountName: mysql-backup-cloudaccount
+    bucket: my-backup-bucket
+    cloudAccountName: my-backup-cloudaccount
     prefix: mysql/backups # folder name where your backups will be stored

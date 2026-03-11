@@ -99,6 +99,13 @@ Redis Backup Secret Config Name
 {{- printf "%s-redis-backup-config" .Release.Name }}
 {{- end }}
 
+{{/*
+Redis Backup Policy Name
+*/}}
+{{- define "redis.backupPolicy.name" -}}
+{{- printf "%s-redis-backup-policy" .Release.Name }}
+{{- end }}
+
 
 {{/* Validation */}}
 

@@ -1,6 +1,7 @@
 {{ include "validateAuth" (dict "auth" .Values.sentinel.auth) }}
 kind: workload
 name: {{ include "redis.sentinel.name" . }}
+description: Redis Sentinel
 tags:
   {{- if .Values.sentinel.tags }}
 {{ toYaml .Values.sentinel.tags | indent 2 }}

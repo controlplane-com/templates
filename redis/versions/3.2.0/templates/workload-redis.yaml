@@ -1,6 +1,7 @@
 {{ include "validateAuth" (dict "auth" .Values.redis.auth) }}
 kind: workload
 name: {{ include "redis.name" . }}
+description: Redis
 tags:
   {{- if .Values.redis.tags }}
 {{ toYaml .Values.redis.tags | indent 2 }}

@@ -1,0 +1,92 @@
+kind: workload
+name: {{ include "redis-cluster.name" . }}
+description: Redis Cluster
+tags: {{- include "redis-cluster.tags" . | nindent 4 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  type: stateful
+  containers:
+    - name: redis-cluster
+      args:
+        - "-c"
+        - /scripts/redis-start.sh
+      command: /bin/sh
+      cpu: {{ .Values.cpu | quote }}
+      env:
+        - name: NUM_SHARDS
+          value: "3"
+        - name: CUSTOM_NUM_NODES
+          value: "{{ .Values.replicas }}"
+        - name: CUSTOM_REDIS_PORT
+          value: "{{ .Values.port }}"
+        {{- if .Values.redis.password }}
+        - name: REDIS_PASSWORD
+          value: 'cpln://secret/{{ include "redis-cluster.secretAuthPassword.name" . }}.REDIS_PASSWORD'
+        {{- end }}
+      image: docker.io/redis:7.2
+      readinessProbe:
+        exec:
+          command:
+            - /bin/bash
+            - "-c"
+            - >-
+                if [ ! -z "$REDIS_PASSWORD" ]; then
+                  redis-cli --no-auth-warning -a "$REDIS_PASSWORD" ping;
+                else
+                  redis-cli ping;
+                fi
+        failureThreshold: 10
+        initialDelaySeconds: 20
+        periodSeconds: 5
+        successThreshold: 1
+        timeoutSeconds: 4
+      inheritEnv: false
+      memory: {{ .Values.memory | quote }}
+      ports:
+        - number: {{ .Values.port }}
+          protocol: tcp
+        - number: 16379
+          protocol: tcp
+      volumes:
+        - path: /data
+          recoveryPolicy: retain
+          uri: "cpln://volumeset/{{ include "redis-cluster.volume.name" . }}"
+        - path: /scripts/redis-start.sh
+          recoveryPolicy: retain
+          uri: "cpln://secret/{{ include "redis-cluster.secretStartup.name" . }}"
+        - path: /usr/local/etc/redis/redis-default.conf
+          recoveryPolicy: retain
+          uri: "cpln://secret/{{ include "redis-cluster.secretConfig.name" . }}"
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.replicas }}
+      metric: disabled
+      minScale: {{ .Values.replicas }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  identityLink: //identity/{{ include "redis-cluster.identity.name" . }}
+  rolloutOptions:
+    maxSurgeReplicas: 25%
+    maxUnavailableReplicas: "1"
+    minReadySeconds: 0
+    scalingPolicy: OrderedReady
+  securityOptions:
+    filesystemGroupId: 1001
+  supportDynamicTags: false

@@ -1,3 +1,10 @@
+# Release Notes - Version 3.2.0
+
+## What's New
+
+- **Backup Support**: Added optional scheduled backup to AWS S3 or GCS via a dedicated cron workload. Configure with `backup.enabled`, `backup.provider`, and your cloud provider settings. Supports Redis password authentication (inline or from secret). See the README for full setup instructions.
+
+
 # Release Notes - Version 3.1.0
 
 ## What's New

@@ -1,6 +1,7 @@
 {{- include "mongo.validateBackupConfig" . -}}
 kind: identity
 name: {{ include "mongo.identity.name" . }}
+description: MongoDB identity
 gvc: {{ .Values.global.cpln.gvc }}
 tags:
   {{- include "mongo.tags" . | nindent 4 }}

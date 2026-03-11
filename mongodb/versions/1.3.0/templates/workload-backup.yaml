@@ -32,6 +32,10 @@ spec:
       {{- end }}
         - name: MONGO_HOST
           value: {{ include "mongo.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local
+        - name: MONGO_USER
+          value: cpln://secret/{{ include "mongo.secretDatabase.name" . }}.username
+        - name: MONGO_PASSWORD
+          value: cpln://secret/{{ include "mongo.secretDatabase.name" . }}.password
       image: {{ .Values.backup.image }}
       inheritEnv: false
   defaultOptions:

@@ -1,5 +1,6 @@
 kind: volumeset
 name: {{ include "mongo.volume.name" . }}
+description: Volume set for MongoDB data storage
 gvc: {{ .Values.global.cpln.gvc }}
 tags:
   {{- include "mongo.tags" . | nindent 4 }}

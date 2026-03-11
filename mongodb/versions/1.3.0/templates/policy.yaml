@@ -1,5 +1,6 @@
 kind: policy
 name: {{ include "mongo.policy.name" . }}
+description: Policy granting MongoDB identity access to its database credentials
 tags:
   {{- include "mongo.tags" . | nindent 4 }}
 bindings:

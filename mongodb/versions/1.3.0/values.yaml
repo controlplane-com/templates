@@ -1,14 +1,15 @@
 image: mongo:8.2.3
 
 resources:
-  minCpu: 100m
-  minMemory: 128Mi
-  maxCpu: 250m
-  maxMemory: 264Mi
+  minCpu: 200m
+  minMemory: 256Mi
+  maxCpu: 500m
+  maxMemory: 512Mi
 
-config:
+config: # initdb credentials and database name
   username: username
   password: password
+  database: test
 
 volumeset:
   capacity: 10 # initial capacity in GiB (minimum is 10)

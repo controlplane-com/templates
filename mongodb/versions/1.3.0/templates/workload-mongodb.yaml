@@ -1,5 +1,6 @@
 kind: workload
 name: {{ include "mongo.name" . }}
+description: MongoDB database
 gvc: {{ .Values.global.cpln.gvc }}
 tags:
   {{- include "mongo.tags" . | nindent 2 }}
@@ -10,14 +11,10 @@ spec:
     - name: mongo
       env:
         - name: MONGO_INITDB_DATABASE
-          value: test
-        - name: MONGO_INITDB_PWD
-          value: 'cpln://secret/{{ include "mongo.secretDatabase.name" . }}.password'
+          value: {{ .Values.config.database | quote }}
         - name: MONGO_INITDB_ROOT_PASSWORD
           value: 'cpln://secret/{{ include "mongo.secretDatabase.name" . }}.password'
         - name: MONGO_INITDB_ROOT_USERNAME
-          value: 'cpln://secret/{{ include "mongo.secretDatabase.name" . }}.username'
-        - name: MONGO_INITDB_USER
           value: 'cpln://secret/{{ include "mongo.secretDatabase.name" . }}.username'
       image: {{ .Values.image }}
       inheritEnv: false

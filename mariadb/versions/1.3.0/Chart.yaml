@@ -1,6 +1,6 @@
 apiVersion: v2
 name: mariadb
-description: MariaDB app for Control Plane
+description: MariaDB database app for Control Plane
 
 type: application
 version: 1.3.0

@@ -26,3 +26,26 @@ internalAccess: # Sets the internal firewall scope - if set to none, replicas wi
 
 directLoadBalancer:
   enabled: false
+
+backup:
+  enabled: false
+  image: jacob-cox.registry.cpln.io/mongo-backup:1.0 # REPLACE ME WITH OFFICIAL BACKUP IMAGE
+  schedule: "0 2 * * *"   # daily at 2am UTC
+
+  resources:
+    cpu: 100m
+    memory: 128Mi
+
+  provider: aws # Options: aws or gcp
+
+  aws:
+    bucket: my-backup-bucket
+    region: us-east-1
+    cloudAccountName: my-backup-cloudaccount
+    policyName: my-backup-policy
+    prefix: mongodb/backups # folder name where your backups will be stored
+
+  gcp:
+    bucket: my-backup-bucket
+    cloudAccountName: my-backup-cloudaccount
+    prefix: mongodb/backups # folder name where your backups will be stored

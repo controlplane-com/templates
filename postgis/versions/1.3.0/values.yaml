@@ -1,4 +1,4 @@
-image: postgis/postgis:17-3.5
+image: postgis/postgis:18-3.6
 
 resources:
   minCpu: 200m
@@ -20,6 +20,29 @@ volumeset:
     maxCapacity: 100 # Maximum capacity in GiB when autoscaling is enabled
     minFreePercentage: 10 # Minimum free percentage to trigger scaling when autoscaling is enabled
     scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
+
+backup: # compatible with Postgis 17+
+  enabled: false
+  image: controlplanecorporation/pg-backup:18.1.0 # tag 18.1.0 = Postgres 18, 17.1.0 = Postgres 17
+  schedule: "0 2 * * *"   # daily at 2am UTC
+
+  resources:
+    cpu: 100m
+    memory: 128Mi
+
+  provider: aws # Options: aws or gcp
+
+  aws:
+    bucket: my-backup-bucket
+    region: us-east-1
+    cloudAccountName: my-backup-cloudaccount
+    policyName: my-backup-policy
+    prefix: postgis/backups # folder name where your backups will be stored
+
+  gcp:
+    bucket: my-backup-bucket
+    cloudAccountName: my-backup-cloudaccount
+    prefix: postgis/backups # folder name where your backups will be stored
 
 internalAccess: # Sets the internal firewall scope - if set to none, replicas will not be able to reach each other
   type: same-gvc # options: none, same-gvc, same-org, workload-list

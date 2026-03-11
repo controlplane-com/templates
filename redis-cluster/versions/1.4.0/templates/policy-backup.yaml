@@ -1,0 +1,18 @@
+{{- if .Values.backup.enabled }}
+kind: policy
+name: {{ include "redis-cluster.backupPolicy.name" . }}
+description: Redis Cluster Backup Policy
+tags: {{- include "redis-cluster.tags" . | nindent 4 }}
+origin: default
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "redis-cluster.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "redis-cluster.secretBackup.name" . }}
+  {{- if .Values.redis.password }}
+  - //secret/{{ include "redis-cluster.secretAuthPassword.name" . }}
+  {{- end }}
+{{- end }}

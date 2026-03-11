@@ -50,6 +50,65 @@ Redis Cluster Volume Set Name
 {{- end }}
 
 
+{{/*
+Redis Cluster Backup Workload Name
+*/}}
+{{- define "redis-cluster.backup.name" -}}
+{{- printf "%s-redis-cluster-backup" .Release.Name }}
+{{- end }}
+
+{{/*
+Redis Cluster Backup Secret Config Name
+*/}}
+{{- define "redis-cluster.secretBackup.name" -}}
+{{- printf "%s-redis-cluster-backup-config" .Release.Name }}
+{{- end }}
+
+{{/*
+Redis Cluster Backup Policy Name
+*/}}
+{{- define "redis-cluster.backupPolicy.name" -}}
+{{- printf "%s-redis-cluster-backup-policy" .Release.Name }}
+{{- end }}
+
+
+{{/* Validation */}}
+
+{{/*
+Validate backup configuration - when backup is enabled, backup.provider must be set to 'aws' or 'gcp'
+*/}}
+{{- define "redis-cluster.validateBackupConfig" -}}
+{{- if .Values.backup.enabled -}}
+  {{- $provider := .Values.backup.provider -}}
+  {{- if not (or (eq $provider "aws") (eq $provider "gcp")) -}}
+    {{- fail "Invalid backup configuration: backup.provider must be set to 'aws' or 'gcp'." -}}
+  {{- end -}}
+  {{- if eq $provider "aws" -}}
+    {{- if not .Values.backup.aws.bucket -}}
+      {{- fail "All fields are required for AWS backup. Missing: backup.aws.bucket" -}}
+    {{- end -}}
+    {{- if not .Values.backup.aws.region -}}
+      {{- fail "All fields are required for AWS backup. Missing: backup.aws.region" -}}
+    {{- end -}}
+    {{- if not .Values.backup.aws.cloudAccountName -}}
+      {{- fail "All fields are required for AWS backup. Missing: backup.aws.cloudAccountName" -}}
+    {{- end -}}
+    {{- if not .Values.backup.aws.policyName -}}
+      {{- fail "All fields are required for AWS backup. Missing: backup.aws.policyName" -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if eq $provider "gcp" -}}
+    {{- if not .Values.backup.gcp.bucket -}}
+      {{- fail "All fields are required for GCP backup. Missing: backup.gcp.bucket" -}}
+    {{- end -}}
+    {{- if not .Values.backup.gcp.cloudAccountName -}}
+      {{- fail "All fields are required for GCP backup. Missing: backup.gcp.cloudAccountName" -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- end }}
+
+
 {{/* Labeling */}}
 
 {{/*

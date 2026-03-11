@@ -1,0 +1,12 @@
+kind: policy
+name: {{ include "maria.policy.name" . }}
+tags:
+  {{- include "maria.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "maria.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "maria.secretDatabase.name" . }}

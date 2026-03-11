@@ -60,7 +60,7 @@ RELEASE_NAME-mysql.GVC_NAME.cpln.local:3306
 
 ### Backing Up
 
-Set `backup.enabled` to `true`, configure your provider, and set your desired schedule. Backup is compatible with MySQL 9+.
+Set `backup.enabled` to `true`, configure your provider, and set your desired schedule. The backup image is compatible with all MySQL versions.
 
 ```yaml
 backup:

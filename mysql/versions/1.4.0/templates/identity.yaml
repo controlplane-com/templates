@@ -4,7 +4,7 @@ description: MySQL identity
 gvc: {{ .Values.global.cpln.gvc }}
 tags:
   {{- include "mysql.tags" . | nindent 4 }}
-{{- if eq .Values.backup.provider "aws" }}
+{{- if and .Values.backup.enabled (eq .Values.backup.provider "aws") }}
 aws:
   cloudAccountLink: //cloudaccount/{{ .Values.backup.aws.cloudAccountName }}
   policyRefs:
@@ -12,7 +12,7 @@ aws:
     - aws::ReadOnlyAccess
     - "{{ .Values.backup.aws.policyName }}"
 {{- end }}
-{{- if eq .Values.backup.provider "gcp" }}
+{{- if and .Values.backup.enabled (eq .Values.backup.provider "gcp") }}
 gcp:
   bindings:
     - resource: //storage.googleapis.com/projects/_/buckets/{{ .Values.backup.gcp.bucket }}

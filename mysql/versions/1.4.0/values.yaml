@@ -30,9 +30,9 @@ volumeset:
 
 enablePhpMyAdmin: false # set to true to enable PhpMyAdmin as an admin interface
 
-backup: # compatible with MySQL 9+
-  enabled: true
-  image: controlplanecorporation/mysql-backup:9.1 # tag 9.1 = MySQL 9 compatible
+backup:
+  enabled: false
+  image: controlplanecorporation/mysql-backup:1.0 # compatible with all MySQL image versions
   schedule: "0 2 * * *"   # daily at 2am UTC
 
   resources:

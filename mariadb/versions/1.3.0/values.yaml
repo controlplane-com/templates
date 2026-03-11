@@ -1,4 +1,4 @@
-image: mariadb:10
+image: mariadb:11
 
 resources:
   minCpu: 100m
@@ -9,10 +9,10 @@ resources:
 timeoutSeconds: 15
 
 config:
-  db: db
-  rootPassword: root-pw
-  user: user
-  password: pw
+  user: username
+  password: password
+  rootPassword: root-password
+  db: test
 
 volumeset:
   capacity: 10 # initial capacity in GiB (minimum is 10)
@@ -32,7 +32,7 @@ enablePhpMyAdmin: true
 
 backup:
   enabled: false
-  image: controlplanecorporation/mysql-backup:9.1 # tag 9.1 = MySQL 9 compatible (also supports MariaDB)
+  image: controlplanecorporation/mysql-backup:9.1 # compatible with all MariaDB versions
   schedule: "0 2 * * *"   # daily at 2am UTC
 
   resources:

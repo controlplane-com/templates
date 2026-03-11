@@ -9,9 +9,7 @@ resources:
 config:
   username: username
   password: password
-
-postgres:
-  database: database
+  database: test
 
 volumeset:
   capacity: 10 # initial capacity in GiB (minimum is 10)
@@ -22,7 +20,7 @@ volumeset:
     scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
 
 backup: # compatible with Postgis 17+
-  enabled: false
+  enabled: true
   image: controlplanecorporation/pg-backup:18.1.0 # tag 18.1.0 = Postgres 18, 17.1.0 = Postgres 17
   schedule: "0 2 * * *"   # daily at 2am UTC
 
@@ -33,9 +31,9 @@ backup: # compatible with Postgis 17+
   provider: aws # Options: aws or gcp
 
   aws:
-    bucket: my-backup-bucket
+    bucket: cpln-backup-bucket
     region: us-east-1
-    cloudAccountName: my-backup-cloudaccount
+    cloudAccountName: my-s3-cloud-account
     policyName: my-backup-policy
     prefix: postgis/backups # folder name where your backups will be stored
 

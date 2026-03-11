@@ -10,7 +10,7 @@ spec:
     - name: phpmyadmin
       env:
         - name: PMA_HOST
-          value: '{{ include "maria.phpAdmin.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local'
+          value: '{{ include "maria.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local'
         - name: PMA_PORT
           value: '3306'
         - name: MYSQL_ROOT_PASSWORD

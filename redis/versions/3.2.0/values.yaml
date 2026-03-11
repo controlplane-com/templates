@@ -104,3 +104,26 @@ sentinel:
         #   enabled: true
         #   region: aws-us-east-1 # Replace with the appropriate region
         #   keyId: arn:aws:kms:us-east-1:1234567890:key/d411f35a-1d31-4515-9934-4f193e042d80 # Replace with your AWS KMS key ARN
+
+backup:
+  enabled: false
+  image: jacob-cox.registry.cpln.io/redis-backup:1.0 # REPLACE ME WITH OFFICIAL BACKUP IMAGE
+  schedule: "0 2 * * *"   # daily at 2am UTC
+
+  resources:
+    cpu: 100m
+    memory: 128Mi
+
+  provider: aws # Options: aws or gcp
+
+  aws:
+    bucket: my-backup-bucket
+    region: us-east-1
+    cloudAccountName: my-backup-cloudaccount
+    policyName: my-backup-policy
+    prefix: redis/backups # folder name where your backups will be stored
+
+  gcp:
+    bucket: my-backup-bucket
+    cloudAccountName: my-backup-cloudaccount
+    prefix: redis/backups # folder name where your backups will be stored

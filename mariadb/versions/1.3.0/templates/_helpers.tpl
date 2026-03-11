@@ -8,6 +8,13 @@ MariaDB Workload Name
 {{- end }}
 
 {{/*
+MariaDB Backup Workload Name
+*/}}
+{{- define "maria.backup.name" -}}
+{{- printf "%s-maria-backup" .Release.Name }}
+{{- end }}
+
+{{/*
 MariaDB Admin Workload Name
 */}}
 {{- define "maria.phpAdmin.name" -}}
@@ -40,6 +47,43 @@ MariaDB Volume Set Name
 */}}
 {{- define "maria.volume.name" -}}
 {{- printf "%s-maria-vs" .Release.Name }}
+{{- end }}
+
+
+{{/* Validation */}}
+
+{{/*
+Validate backup configuration - when backup is enabled, backup.provider must be set to 'aws' or 'gcp'
+*/}}
+{{- define "maria.validateBackupConfig" -}}
+{{- if .Values.backup.enabled -}}
+  {{- $provider := .Values.backup.provider -}}
+  {{- if not (or (eq $provider "aws") (eq $provider "gcp")) -}}
+    {{- fail "Invalid backup configuration: backup.provider must be set to 'aws' or 'gcp'." -}}
+  {{- end -}}
+  {{- if eq $provider "aws" -}}
+    {{- if not .Values.backup.aws.bucket -}}
+      {{- fail "All fields are required for AWS backup. Missing: backup.aws.bucket" -}}
+    {{- end -}}
+    {{- if not .Values.backup.aws.region -}}
+      {{- fail "All fields are required for AWS backup. Missing: backup.aws.region" -}}
+    {{- end -}}
+    {{- if not .Values.backup.aws.cloudAccountName -}}
+      {{- fail "All fields are required for AWS backup. Missing: backup.aws.cloudAccountName" -}}
+    {{- end -}}
+    {{- if not .Values.backup.aws.policyName -}}
+      {{- fail "All fields are required for AWS backup. Missing: backup.aws.policyName" -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if eq $provider "gcp" -}}
+    {{- if not .Values.backup.gcp.bucket -}}
+      {{- fail "All fields are required for GCP backup. Missing: backup.gcp.bucket" -}}
+    {{- end -}}
+    {{- if not .Values.backup.gcp.cloudAccountName -}}
+      {{- fail "All fields are required for GCP backup. Missing: backup.gcp.cloudAccountName" -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
 {{- end }}
 
 

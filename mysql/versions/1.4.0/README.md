@@ -47,7 +47,7 @@ internalAccess:
 
 **phpMyAdmin** — set to `true` to deploy a phpMyAdmin management interface alongside MySQL:
 ```yaml
-enablePhpMyAdmin: false
+enablePhpMyAdmin: true
 ```
 
 ### Connecting

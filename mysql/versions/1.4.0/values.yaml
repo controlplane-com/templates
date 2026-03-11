@@ -28,7 +28,7 @@ volumeset:
     minFreePercentage: 10 # Minimum free percentage to trigger scaling when autoscaling is enabled
     scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
 
-enablePhpMyAdmin: false # set to true to enable PhpMyAdmin as an admin interface
+enablePhpMyAdmin: true # set to true to enable PhpMyAdmin as an admin interface
 
 backup:
   enabled: false

@@ -10,8 +10,10 @@ PET_ORDINAL=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev)
 WORKLOAD_NAME=$(echo $CPLN_WORKLOAD | sed 's|.*/workload/\([^/]*\)$|\1|')
 NODE_LIST=""
 
+LOCATION=${CPLN_LOCATION##*/}
+
 echo "" >> /usr/local/etc/redis/redis.conf
-echo "cluster-announce-ip $WORKLOAD_NAME-$PET_ORDINAL.$WORKLOAD_NAME" >> /usr/local/etc/redis/redis.conf
+echo "cluster-announce-ip replica-${PET_ORDINAL}.${WORKLOAD_NAME}.${LOCATION}.${CPLN_GVC}.cpln.local" >> /usr/local/etc/redis/redis.conf
 redis-server /usr/local/etc/redis/redis.conf > /dev/null 2>&1 &
 sleep 10
 

@@ -29,8 +29,14 @@ spec:
         - name: BACKUP_PREFIX
           value: {{ .Values.backup.gcp.prefix | quote }}
       {{- end }}
+        - name: NUM_PRIMARIES
+          value: "{{ div .Values.replicas 2 }}"
         - name: REDIS_HOST
-          value: {{ include "redis-cluster.name" . }}-0.{{ include "redis-cluster.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local
+          value: {{ include "redis-cluster.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local
+        - name: REDIS_WORKLOAD_NAME
+          value: {{ include "redis-cluster.name" . }}
+        - name: REDIS_GVC
+          value: {{ .Values.global.cpln.gvc }}
       {{- if .Values.redis.password }}
         - name: REDIS_PASSWORD
           value: cpln://secret/{{ include "redis-cluster.secretAuthPassword.name" . }}.REDIS_PASSWORD
@@ -48,7 +54,7 @@ spec:
     capacityAI: false
     debug: false
     suspend: false
-    timeoutSeconds: 5
+    timeoutSeconds: 3600
   firewallConfig:
     external:
       inboundAllowCIDR: []

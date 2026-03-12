@@ -23,7 +23,7 @@ spec:
         - name: REDIS_PASSWORD
           value: 'cpln://secret/{{ include "redis-cluster.secretAuthPassword.name" . }}.REDIS_PASSWORD'
         {{- end }}
-      image: docker.io/redis:7.2
+      image: {{ .Values.image }}
       readinessProbe:
         exec:
           command:
@@ -82,6 +82,8 @@ spec:
       inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
       {{- end }}
   identityLink: //identity/{{ include "redis-cluster.identity.name" . }}
+  loadBalancer:
+    replicaDirect: true
   rolloutOptions:
     maxSurgeReplicas: 25%
     maxUnavailableReplicas: "1"

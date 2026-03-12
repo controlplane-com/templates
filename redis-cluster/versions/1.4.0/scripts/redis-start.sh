@@ -36,9 +36,9 @@ while true; do
     sleep 5
 done
 
-# Construct NODE_LIST
+# Construct NODE_LIST using replica-direct hostnames
 for (( i=0; i<CUSTOM_NUM_NODES; i++ )); do
-    NODE_LIST+="$WORKLOAD_NAME-$i.$WORKLOAD_NAME:$CUSTOM_REDIS_PORT "
+    NODE_LIST+="replica-${i}.${WORKLOAD_NAME}.${LOCATION}.${CPLN_GVC}.cpln.local:$CUSTOM_REDIS_PORT "
 done
 
 # Trim the trailing space
@@ -56,7 +56,7 @@ else
         all_nodes_healthy=true
         for (( i=0; i<CUSTOM_NUM_NODES; i++ )); do
             # Attempt to ping the current Redis node
-            response=$(redis-cli $AUTH_PARAMS -h "$WORKLOAD_NAME-$i.$WORKLOAD_NAME" -p $CUSTOM_REDIS_PORT ping 2>&1) || true
+            response=$(redis-cli $AUTH_PARAMS -h "replica-${i}.${WORKLOAD_NAME}.${LOCATION}.${CPLN_GVC}.cpln.local" -p $CUSTOM_REDIS_PORT ping 2>&1) || true
             # Check if the response is "PONG"
             if [[ "$response" == *"PONG"* ]]; then
                 echo "Node $i is HEALTHY. Received PONG."

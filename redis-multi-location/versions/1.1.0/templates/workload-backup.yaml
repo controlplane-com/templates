@@ -48,8 +48,11 @@ spec:
       target: 95
     capacityAI: false
     debug: false
-    suspend: false
+    suspend: true
     timeoutSeconds: 3600
+  localOptions:
+    - location: //location/{{ (index .Values.gvc.locations 0).name }}
+      suspend: false
   firewallConfig:
     external:
       inboundAllowCIDR: []

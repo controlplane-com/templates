@@ -30,7 +30,7 @@ directLoadBalancer:
 
 backup:
   enabled: false
-  image: jacob-cox.registry.cpln.io/mongo-backup:1.0 # REPLACE ME WITH OFFICIAL BACKUP IMAGE
+  image: controlplanecorporation/mongo-backup:1.0
   schedule: "0 2 * * *"   # daily at 2am UTC
 
   resources:

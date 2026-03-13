@@ -40,8 +40,8 @@ firewall:
   #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
 backup:
-  enabled: false
-  image: "" # Set to your backup image
+  enabled: true
+  image: controlplanecorporation/redis-backup:1.0
   schedule: "0 2 * * *"  # daily at 2am UTC
 
   resources:
@@ -51,13 +51,13 @@ backup:
   provider: aws # Options: aws or gcp
 
   aws:
-    bucket: ""
-    region: ""
-    cloudAccountName: ""
-    policyName: ""
+    bucket: cpln-backup-bucket
+    region: us-east-1
+    cloudAccountName: my-s3-cloudaccount
+    policyName: my-backup-policy
     prefix: "redis/backups"
 
   gcp:
-    bucket: ""
-    cloudAccountName: ""
+    bucket: my-backup-bucket
+    cloudAccountName: my-backup-cloudaccount
     prefix: "redis/backups"

@@ -1,7 +1,5 @@
-image: docker.io/redis:7.2
 replicas: 6 # minimum value is 6
 port: 6379
-
 memory: 250Mi
 cpu: 200m
 
@@ -22,26 +20,3 @@ volumeset:
 # Configure Redis authentication by uncommenting and setting the password field
 redis: {}
   # password: "your-secure-password-here"
-
-backup:
-  enabled: true
-  image: jacob-cox.registry.cpln.io/redis-backup:3.0 # REPLACE ME WITH OFFICIAL BACKUP IMAGE
-  schedule: "0 2 * * *"   # daily at 2am UTC
-
-  resources:
-    cpu: 100m
-    memory: 128Mi
-
-  provider: aws # Options: aws or gcp
-
-  aws:
-    bucket: cpln-backup-bucket
-    region: us-east-1
-    cloudAccountName: my-s3-cloudaccount
-    policyName: my-backup-policy
-    prefix: redis-cluster/backups # folder name where your backups will be stored
-
-  gcp:
-    bucket: my-backup-bucket
-    cloudAccountName: my-backup-cloudaccount
-    prefix: redis-cluster/backups # folder name where your backups will be stored

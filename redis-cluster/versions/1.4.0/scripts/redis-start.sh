@@ -12,12 +12,6 @@ NODE_LIST=""
 
 echo "" >> /usr/local/etc/redis/redis.conf
 echo "cluster-announce-ip $WORKLOAD_NAME-$PET_ORDINAL.$WORKLOAD_NAME" >> /usr/local/etc/redis/redis.conf
-
-# Clear stale cluster topology so Redis starts fresh each time.
-# Without this, a failed cluster formation writes broken state to nodes.conf,
-# which persists across pod restarts and prevents a clean re-formation.
-rm -f /data/nodes.conf
-
 redis-server /usr/local/etc/redis/redis.conf > /dev/null 2>&1 &
 sleep 10
 
@@ -40,7 +34,7 @@ while true; do
     sleep 5
 done
 
-# Construct NODE_LIST using internal headless service hostnames
+# Construct NODE_LIST
 for (( i=0; i<CUSTOM_NUM_NODES; i++ )); do
     NODE_LIST+="$WORKLOAD_NAME-$i.$WORKLOAD_NAME:$CUSTOM_REDIS_PORT "
 done
@@ -49,13 +43,12 @@ done
 NODE_LIST=$(echo $NODE_LIST | sed 's/ $//')
 
 # Cluster init
-# Check slots_assigned rather than cluster_state: a fresh node with no cluster
-# reports cluster_state:ok but has 0 slots — only treat as healthy when fully formed.
-cluster_slots=$(redis-cli $AUTH_PARAMS cluster info | grep "cluster_slots_assigned" | cut -d':' -f2 | tr -d '\r')
+cluster_status=$(redis-cli $AUTH_PARAMS cluster info | grep "cluster_state" | cut -d':' -f2 | tr -d '\r')
 
-if [[ "$cluster_slots" == "16384" ]]; then
+if [[ "$cluster_status" == "ok" ]]; then
     echo "Redis cluster is HEALTHY"
-    redis-cli $AUTH_PARAMS cluster info
+    cluster_status=$(redis-cli $AUTH_PARAMS cluster info)
+    echo "$cluster_status"
 else
     while true; do
         all_nodes_healthy=true
@@ -74,8 +67,8 @@ else
 
         # If this is replica *-0, all nodes are healthy, and the cluster is not initiated, create the cluster
         if [[ $PET_ORDINAL == 0 && "$all_nodes_healthy" == true ]]; then
-            cluster_slots=$(redis-cli $AUTH_PARAMS cluster info | grep "cluster_slots_assigned" | cut -d':' -f2 | tr -d '\r')
-            if [[ "$cluster_slots" == "16384" ]]; then
+            cluster_status=$(redis-cli $AUTH_PARAMS cluster info | grep "cluster_state" | cut -d':' -f2 | tr -d '\r')
+            if [ "$cluster_status" = "ok" ]; then
                 echo "All nodes are healthy and cluster status is OK."
                 break
             else

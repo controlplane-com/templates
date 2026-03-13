@@ -1,0 +1,11 @@
+{{- include "redis.validateLocations" . }}
+kind: gvc
+name: {{ .Values.gvc.name }}
+description: Redis GVC
+tags: {{- include "redis.tags" . | nindent 4 }}
+spec:
+  staticPlacement:
+    locationLinks:
+    {{- range .Values.gvc.locations }}
+      - //location/{{ .name }}
+    {{- end }}

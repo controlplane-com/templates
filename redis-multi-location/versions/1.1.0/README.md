@@ -59,6 +59,14 @@ firewall:
   #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
 ```
 
+**Backup** — set `backup.enabled` to `true` to enable scheduled backups to AWS S3 or GCS. The backup runs in the first configured location only:
+```yaml
+backup:
+  enabled: true
+  schedule: "0 2 * * *"
+  provider: aws  # Options: aws or gcp
+```
+
 **Sentinel quorum** — must be less than the total number of sentinel instances (one per location). For 3 locations a quorum of 2 is recommended:
 ```yaml
 sentinel:
@@ -93,6 +101,71 @@ redis-cli -h $MASTER_HOST -p $MASTER_PORT SET my-key "Hello world"
 
 # Read from any replica
 redis-cli -h {release-name}-redis -p 6379 GET my-key
+```
+
+## Backing Up
+
+Set your desired backup schedule in the values file and configure your AWS S3 or GCS bucket. You can also set a prefix where your backups will be stored in the bucket. The backup job runs in one location only and produces a single `.rdb.gz` file.
+
+### AWS S3
+
+For the cron job to have access to an S3 bucket, ensure the following prerequisites are completed in your AWS account before installing:
+
+1. Create your bucket. Update the value `bucket` to include its name and `region` to include its region.
+
+2. If you do not have a Cloud Account set up, refer to the docs to [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account). Update the value `cloudAccountName`.
+
+3. Create a new AWS IAM policy with the following JSON (replace `YOUR_BUCKET_NAME`):
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:ListBucket",
+                "s3:GetObjectVersion",
+                "s3:DeleteObjectVersion"
+            ],
+            "Resource": [
+                "arn:aws:s3:::YOUR_BUCKET_NAME",
+                "arn:aws:s3:::YOUR_BUCKET_NAME/*"
+            ]
+        }
+    ]
+}
+```
+
+4. Set `policyName` to match the policy created in step 3.
+
+### GCS
+
+For the cron job to have access to a GCS bucket, ensure the following prerequisites are completed in your GCP account before installing:
+
+1. Create your bucket. Update the value `bucket` to include its name.
+
+2. If you do not have a Cloud Account set up, refer to the docs to [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account). Update the value `cloudAccountName`.
+
+**Important**: You must add the `Storage Admin` role to the created GCP service account.
+
+### Restoring a Backup
+
+The backup job produces a single file (`redis-<timestamp>.rdb.gz`). Download and decompress the file, then copy it to `/data/dump.rdb` on the replica you want to restore and restart that replica.
+
+S3
+```sh
+aws s3 cp s3://BUCKET_NAME/PREFIX/BACKUP_FILE.rdb.gz - \
+  | gunzip > /tmp/dump.rdb
+```
+
+GCS
+```sh
+gsutil cp gs://BUCKET_NAME/PREFIX/BACKUP_FILE.rdb.gz - \
+  | gunzip > /tmp/dump.rdb
 ```
 
 ### Supported External Services

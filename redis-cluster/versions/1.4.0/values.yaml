@@ -22,8 +22,8 @@ redis: {}
   # password: "your-secure-password-here"
 
 backup:
-  enabled: true
-  image: jacob-cox.registry.cpln.io/redis-backup:3.0 # CHANGE ME TO OFFICIAL BACKUP IMAGE
+  enabled: false
+  image: jacob-cox.registry.cpln.io/redis-backup:4.0 # CHANGE ME TO OFFICIAL BACKUP IMAGE
   schedule: "0 2 * * *"  # daily at 2am UTC
 
   resources:
@@ -33,10 +33,13 @@ backup:
   provider: aws # Options: aws or gcp
 
   aws:
-    bucket: cpln-backup-bucket
-    region: aws-us-east-1
+    bucket: my-backup-bucket
+    region: us-east-1
+    cloudAccountName: my-backup-cloudaccount
+    policyName: my-backup-policy
     prefix: "redis-cluster/backups"
 
   gcp:
     bucket: ""
+    cloudAccountName: ""
     prefix: "redis-cluster/backups"

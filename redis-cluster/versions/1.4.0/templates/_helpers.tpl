@@ -104,10 +104,19 @@ Validate backup config
 {{- if not .Values.backup.aws.region }}
 {{- fail "backup.aws.region is required when backup.provider is \"aws\"" }}
 {{- end }}
+{{- if not .Values.backup.aws.cloudAccountName }}
+{{- fail "backup.aws.cloudAccountName is required when backup.provider is \"aws\"" }}
+{{- end }}
+{{- if not .Values.backup.aws.policyName }}
+{{- fail "backup.aws.policyName is required when backup.provider is \"aws\"" }}
+{{- end }}
 {{- end }}
 {{- if eq .Values.backup.provider "gcp" }}
 {{- if not .Values.backup.gcp.bucket }}
 {{- fail "backup.gcp.bucket is required when backup.provider is \"gcp\"" }}
+{{- end }}
+{{- if not .Values.backup.gcp.cloudAccountName }}
+{{- fail "backup.gcp.cloudAccountName is required when backup.provider is \"gcp\"" }}
 {{- end }}
 {{- end }}
 {{- end }}

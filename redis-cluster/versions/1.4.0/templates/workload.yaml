@@ -82,6 +82,8 @@ spec:
       inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
       {{- end }}
   identityLink: //identity/{{ include "redis-cluster.identity.name" . }}
+  loadBalancer:
+    replicaDirect: true
   rolloutOptions:
     maxSurgeReplicas: 25%
     maxUnavailableReplicas: "1"

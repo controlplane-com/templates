@@ -125,8 +125,6 @@ When git-sync is disabled, DAGs can be placed manually in the `/opt/airflow/dags
 
 ### KEDA Autoscaling
 
-> **Note:** KEDA is not supported in `gcp/us-central1`.
-
 | Property | Description |
 |----------|-------------|
 | `keda.enabled` | Enable KEDA autoscaling (default `true`) |

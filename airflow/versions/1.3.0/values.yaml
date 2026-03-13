@@ -79,7 +79,6 @@ gitSync:
     token: ""    # Personal access token for private repos (leave empty for public repos)
 
 # KEDA (Kubernetes Event-driven Autoscaling) configuration
-# NOT SUPPORTED in gcp/us-central1
 keda:
   enabled: true # Enable or disable KEDA autoscaling
   minScale: 1  # Minimum number of Celery workers

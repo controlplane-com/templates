@@ -1,0 +1,75 @@
+{{- include "redis.validateBackupConfig" . }}
+{{- if .Values.backup.enabled }}
+kind: workload
+name: {{ include "redis.backup.name" . }}
+description: Redis Backup
+tags: {{- include "redis.tags" . | nindent 4 }}
+gvc: {{ .Values.gvc.name }}
+spec:
+  type: cron
+  containers:
+    - name: backup-redis
+      cpu: {{ .Values.backup.resources.cpu | quote }}
+      memory: {{ .Values.backup.resources.memory | quote }}
+      env:
+        - name: BACKUP_PROVIDER
+          value: {{ .Values.backup.provider }}
+      {{- if eq .Values.backup.provider "aws" }}
+        - name: AWS_REGION
+          value: {{ .Values.backup.aws.region | trimPrefix "aws-" }}
+        - name: BACKUP_BUCKET
+          value: {{ .Values.backup.aws.bucket }}
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.aws.prefix | quote }}
+      {{- end }}
+      {{- if eq .Values.backup.provider "gcp" }}
+        - name: BACKUP_BUCKET
+          value: {{ .Values.backup.gcp.bucket }}
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.gcp.prefix | quote }}
+      {{- end }}
+        - name: REDIS_HOST
+          value: {{ include "redis.name" . }}.{{ .Values.gvc.name }}.cpln.local
+        - name: REDIS_PORT
+          value: "6379"
+      {{- if .Values.redis.password }}
+        - name: REDIS_PASSWORD
+          value: {{ .Values.redis.password | quote }}
+      {{- end }}
+      image: {{ .Values.backup.image }}
+      inheritEnv: false
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: true
+    timeoutSeconds: 3600
+  localOptions:
+    - location: //location/{{ (index .Values.gvc.locations 0).name }}
+      suspend: false
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: none
+      inboundAllowWorkload: []
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "redis.identity.name" . }}
+  job:
+    concurrencyPolicy: Forbid
+    historyLimit: 5
+    restartPolicy: Never
+    schedule: {{ .Values.backup.schedule }}
+  supportDynamicTags: false
+{{- end }}

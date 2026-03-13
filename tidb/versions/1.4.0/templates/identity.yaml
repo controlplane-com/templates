@@ -1,0 +1,6 @@
+---
+kind: identity
+gvc: {{ .Values.gvc.name }}
+name: {{ include "tidb.identity.name" . }}
+description: tidb-identity
+tags: {{- include "tidb.tags" . | nindent 4 }}

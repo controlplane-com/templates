@@ -4,7 +4,7 @@ description: PostGIS database app running on Control Plane
 
 type: application
 version: 1.3.0
-appVersion: "17-3.5"
+appVersion: "18-3.6"
 
 annotations:
   created: "2024-11-19"

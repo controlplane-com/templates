@@ -69,3 +69,26 @@ internal_access:
     workloads:  # Note: can only be used if type is same-gvc or workload-list
       #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
       #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+backup:
+  enabled: false
+  image: jacob-cox.registry.cpln.io/tidb-backup:v8.5.5 # CHANGE ME
+  schedule: "0 2 * * *"  # daily at 2am UTC
+
+  resources:
+    cpu: 1
+    memory: 1Gi
+
+  provider: aws # Options: aws or gcp
+
+  aws:
+    bucket: my-backup-bucket
+    region: us-east-1
+    cloudAccountName: my-backup-cloudaccount
+    policyName: my-backup-policy
+    prefix: "tidb/backups"
+
+  gcp:
+    bucket: my-backup-bucket
+    cloudAccountName: my-backup-cloudaccount
+    prefix: "tidb/backups"

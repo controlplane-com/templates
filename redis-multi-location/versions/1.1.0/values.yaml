@@ -38,3 +38,26 @@ firewall:
   internalAllowType: same-gvc # options: same-gvc, same-org, workload-list
   # workloads:
   #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+backup:
+  enabled: false
+  image: "" # Set to your backup image
+  schedule: "0 2 * * *"  # daily at 2am UTC
+
+  resources:
+    cpu: 100m
+    memory: 128Mi
+
+  provider: aws # Options: aws or gcp
+
+  aws:
+    bucket: ""
+    region: ""
+    cloudAccountName: ""
+    policyName: ""
+    prefix: "redis/backups"
+
+  gcp:
+    bucket: ""
+    cloudAccountName: ""
+    prefix: "redis/backups"

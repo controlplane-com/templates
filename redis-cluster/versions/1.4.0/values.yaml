@@ -20,3 +20,23 @@ volumeset:
 # Configure Redis authentication by uncommenting and setting the password field
 redis: {}
   # password: "your-secure-password-here"
+
+backup:
+  enabled: true
+  image: jacob-cox.registry.cpln.io/redis-backup:3.0 # CHANGE ME TO OFFICIAL BACKUP IMAGE
+  schedule: "0 2 * * *"  # daily at 2am UTC
+
+  resources:
+    cpu: 100m
+    memory: 128Mi
+
+  provider: aws # Options: aws or gcp
+
+  aws:
+    bucket: cpln-backup-bucket
+    region: aws-us-east-1
+    prefix: "redis-cluster/backups"
+
+  gcp:
+    bucket: ""
+    prefix: "redis-cluster/backups"

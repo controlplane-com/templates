@@ -1,8 +1,8 @@
 gvc:
-  name: tidb-gvc
+  name: this-gvc
   locations:
   # Location's replica count will only affect storage (tikv) and server workloads
-    - name: aws-us-east-2
+    - name: aws-eu-central-1
       replicas: 1
     - name: aws-us-west-2
       replicas: 1
@@ -11,9 +11,9 @@ gvc:
   pdReplicas: 3 # options: 3, 5, 7
 
 images:
-  server: pingcap/tidb:v8.5.5
-  tikv: pingcap/tikv:v8.5.5
-  pd: pingcap/pd:v8.5.5
+  server: pingcap/tidb:v8.5.3
+  tikv: pingcap/tikv:v8.5.3
+  pd: pingcap/pd:v8.5.3
 
 resources:
   pd:
@@ -46,7 +46,7 @@ volumeset:
   pd:
     capacity: 10 # initial capacity in GiB (minimum is 10)
 
-exposeServer: false # Set to true to expose TIDB server publicly
+exposeServer: true # Set to true to expose TIDB server publicly
 
 external_access: # Set if client is outside the GVC or in another location
   server_outboundAllowCIDR: []
@@ -71,8 +71,8 @@ internal_access:
       #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
 backup:
-  enabled: false
-  image: jacob-cox.registry.cpln.io/tidb-backup:v8.5.5 # CHANGE ME
+  enabled: true
+  image: jacob-cox.registry.cpln.io/tidb-backup:v8.5.3 # CHANGE ME
   schedule: "0 2 * * *"  # daily at 2am UTC
 
   resources:
@@ -82,13 +82,13 @@ backup:
   provider: aws # Options: aws or gcp
 
   aws:
-    bucket: my-backup-bucket
+    bucket: cpln-backup-bucket
     region: us-east-1
-    cloudAccountName: my-backup-cloudaccount
+    cloudAccountName: my-s3-cloudaccount
     policyName: my-backup-policy
-    prefix: "tidb/backups"
+    prefix: tidb/backups
 
   gcp:
     bucket: my-backup-bucket
     cloudAccountName: my-backup-cloudaccount
-    prefix: "tidb/backups"
+    prefix: tidb/backups

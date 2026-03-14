@@ -3,7 +3,7 @@
 {{- include "tidb.validatePdReplicasLocations" . -}}
 kind: workload
 name: {{ include "tidb.pd.name" . }}
-description: tidb placement driver
+description: TiDB placement driver
 tags: {{- include "tidb.tags" . | nindent 4 }}
 spec:
   type: stateful

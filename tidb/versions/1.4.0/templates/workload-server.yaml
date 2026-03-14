@@ -1,7 +1,7 @@
 ---
 kind: workload
 name: {{ include "tidb.server.name" . }}
-description: tidb server
+description: TiDB server
 tags: {{- include "tidb.tags" . | nindent 4 }}
 spec:
   type: standard

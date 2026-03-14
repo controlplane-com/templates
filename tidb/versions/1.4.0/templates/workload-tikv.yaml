@@ -1,7 +1,7 @@
 ---
 kind: workload
 name: {{ include "tidb.tikv.name" . }}
-description: tikv storage
+description: TiKV storage
 tags: {{- include "tidb.tags" . | nindent 4 }}
 spec:
   type: stateful

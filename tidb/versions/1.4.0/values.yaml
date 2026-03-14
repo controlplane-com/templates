@@ -1,8 +1,8 @@
 gvc:
-  name: this-gvc
+  name: tidb-gvc
   locations:
   # Location's replica count will only affect storage (tikv) and server workloads
-    - name: aws-eu-central-1
+    - name: aws-us-east-2
       replicas: 1
     - name: aws-us-west-2
       replicas: 1
@@ -72,7 +72,7 @@ internal_access:
 
 backup:
   enabled: true
-  image: jacob-cox.registry.cpln.io/tidb-backup:v8.5.3 # CHANGE ME
+  image: controlplanecorporation/tidb-backup:v8.5.3
   schedule: "0 2 * * *"  # daily at 2am UTC
 
   resources:
@@ -82,9 +82,9 @@ backup:
   provider: aws # Options: aws or gcp
 
   aws:
-    bucket: cpln-backup-bucket
+    bucket: my-backup-bucket
     region: us-east-1
-    cloudAccountName: my-s3-cloudaccount
+    cloudAccountName: my-backup-cloudaccount
     policyName: my-backup-policy
     prefix: tidb/backups
 

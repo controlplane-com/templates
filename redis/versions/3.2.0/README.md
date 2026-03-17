@@ -50,6 +50,69 @@ firewall:
   internal_inboundAllowType: same-gvc  # same-gvc, same-org, or workload-list
 ```
 
+### Public Access (External TCP)
+
+Redis and Sentinel can be exposed over the internet via TCP using Control Plane's domain resource with per-replica port routing.
+
+#### Prerequisites
+
+1. **A domain you control** with DNS managed by your registrar (e.g. Cloudflare)
+2. **Dedicated Load Balancer** enabled on your GVC — required for arbitrary TCP port routing. Enable this under your GVC settings in the Control Plane console.
+3. **DNS records added before deploying** — Control Plane will reject the domain resource on first deploy if ownership has not been proven. Add the following records in your DNS provider for each address before running the deployment. **Disable proxying** (e.g. Cloudflare's orange cloud) — TCP traffic must pass through directly:
+
+| Type | Name | Value |
+|------|------|-------|
+| TXT | `_cpln-<subdomain>` | your Control Plane org name or org ID (either is accepted) |
+| CNAME | `<subdomain>` | `<gvc-alias>.cpln.app` |
+
+Your GVC alias is visible in the Control Plane console under GVC settings. The TXT record proves domain ownership — without it, the first deploy will fail with an `Unable to apply domain` error.
+
+#### Configuration
+
+Enable `publicAccess` for Redis and/or Sentinel and set a subdomain you own:
+
+```yaml
+redis:
+  publicAccess:
+    enabled: true
+    address: redis.your-domain.com
+  firewall:
+    internal_inboundAllowType: same-gvc
+    external_inboundAllowCIDR: "0.0.0.0/0"  # or restrict to specific CIDRs
+
+sentinel:
+  publicAccess:
+    enabled: true
+    address: redis-sentinel.your-domain.com
+  firewall:
+    internal_inboundAllowType: same-gvc
+    external_inboundAllowCIDR: "0.0.0.0/0"
+```
+
+When enabled, a Control Plane `domain` resource is created for each address. Port mapping is one port per replica:
+- **Redis**: ports `6380`, `6381`, ... (replica 0, 1, ...)
+- **Sentinel**: ports `26380`, `26381`, `26382`, ... (replica 0, 1, 2, ...)
+
+After DNS propagates, the domain status in Control Plane will show **Ready**. You can verify the full DNS chain resolves correctly with:
+
+```bash
+dig <subdomain>.your-domain.com CNAME   # should return <gvc-alias>.cpln.app
+dig <gvc-alias>.cpln.app               # should return an IP address
+```
+
+#### Connecting Externally
+
+```bash
+# Redis replica 0
+redis-cli -h redis.your-domain.com -p 6380 ping
+
+# Redis replica 1
+redis-cli -h redis.your-domain.com -p 6381 ping
+
+# Sentinel replica 0
+redis-cli -h redis-sentinel.your-domain.com -p 26380 ping
+```
+
 ### Connecting
 
 Redis is accessible internally on port 6379:

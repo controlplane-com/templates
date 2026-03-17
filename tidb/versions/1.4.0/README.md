@@ -108,34 +108,77 @@ The cluster automatically handles data distribution and replication across your 
 
 This template creates a GVC with a default name defined in the `values.yaml`. If you plan to deploy multiple instances of this template, you **must assign a unique GVC name** for each deployment.
 
-### Backup
+## Backing Up
 
-This template includes a scheduled backup workload that uses [BR (Backup & Restore)](https://docs.pingcap.com/tidb/stable/backup-and-restore-overview) to back up your TiDB cluster to cloud storage.
+Set your desired backup schedule in the values file and configure your AWS S3 or GCS bucket. You can also set a prefix where your backups will be stored in the bucket.
 
-**How it works:** BR coordinates with TiKV to back up SST files. TiKV nodes upload their data **directly** to cloud storage — meaning every TiKV replica in every location needs outbound internet access to your storage bucket. When `backup.enabled` is set to `true`, the template automatically grants TiKV outbound internet access.
+Set `backup.location` to the region closest to your storage bucket to minimize cross-region transfer latency and costs. When `backup.enabled` is `true`, the template automatically grants TiKV outbound internet access so nodes can upload directly to cloud storage.
 
-**To enable backup**, configure the backup section in `values.yaml`:
-```yaml
-backup:
-  enabled: true
-  schedule: "0 2 * * *"        # cron schedule (daily at 2am UTC)
-  activeDeadlineSeconds: 14400  # hard kill after 4 hours if backup hangs
-  location: aws-us-east-1       # run the backup job in the same region as your storage bucket
+### AWS S3
 
-  provider: aws  # Options: aws or gcp
+For the backup job to have access to an S3 bucket, ensure the following prerequisites are completed in your AWS account before installing:
 
-  aws:
-    bucket: my-backup-bucket
-    region: us-east-1
-    cloudAccountName: my-backup-cloudaccount
-    policyName: my-backup-policy
-    prefix: tidb/backups
+1. Create your bucket. Update `aws.bucket` to include its name and `aws.region` to include its region.
+
+2. If you do not have a Cloud Account set up, refer to the docs to [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account). Update `aws.cloudAccountName`.
+
+3. Create a new AWS IAM policy with the following JSON (replace `YOUR_BUCKET_NAME`):
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:ListBucket",
+                "s3:GetObjectVersion",
+                "s3:DeleteObjectVersion"
+            ],
+            "Resource": [
+                "arn:aws:s3:::YOUR_BUCKET_NAME",
+                "arn:aws:s3:::YOUR_BUCKET_NAME/*"
+            ]
+        }
+    ]
+}
 ```
 
-**Tips:**
-- Set `location` to the region closest to your storage bucket to minimize cross-region transfer latency.
-- `activeDeadlineSeconds` acts as a safety net — if a backup hangs, the job will be killed after this duration rather than running forever.
-- For GCP, set `provider: gcp` and configure the `gcp` section instead.
+4. Set `aws.policyName` to match the policy created in step 3.
+
+### GCS
+
+For the backup job to have access to a GCS bucket, ensure the following prerequisites are completed in your GCP account before installing:
+
+1. Create your bucket. Update `gcp.bucket` to include its name.
+
+2. If you do not have a Cloud Account set up, refer to the docs to [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account). Update `gcp.cloudAccountName`.
+
+**Important**: You must add the `Storage Admin` role to the created GCP service account.
+
+### Restoring a Backup
+
+Backups are stored at `BUCKET/PREFIX/tidb-TIMESTAMP/`. To restore, run `br restore full` from a machine with access to the bucket and network access to the PD endpoint.
+
+**AWS S3**
+```sh
+br restore full \
+  --pd="PD_WORKLOAD_INTERNAL_NAME:2379" \
+  --storage="s3://BUCKET_NAME/PREFIX/tidb-TIMESTAMP" \
+  --s3.region="BUCKET_REGION"
+```
+
+**GCS**
+```sh
+br restore full \
+  --pd="PD_WORKLOAD_INTERNAL_NAME:2379" \
+  --storage="gcs://BUCKET_NAME/PREFIX/tidb-TIMESTAMP"
+```
+
+**Note:** `br` must be the same version as your TiDB cluster. Download it from the [TiDB Community Toolkit](https://docs.pingcap.com/tidb/stable/download-ecosystem-tools).
 
 ### Supported External Services
 - [TiDB Documentation](https://docs.pingcap.com/tidb/stable/)

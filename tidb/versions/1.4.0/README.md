@@ -108,5 +108,34 @@ The cluster automatically handles data distribution and replication across your 
 
 This template creates a GVC with a default name defined in the `values.yaml`. If you plan to deploy multiple instances of this template, you **must assign a unique GVC name** for each deployment.
 
+### Backup
+
+This template includes a scheduled backup workload that uses [BR (Backup & Restore)](https://docs.pingcap.com/tidb/stable/backup-and-restore-overview) to back up your TiDB cluster to cloud storage.
+
+**How it works:** BR coordinates with TiKV to back up SST files. TiKV nodes upload their data **directly** to cloud storage — meaning every TiKV replica in every location needs outbound internet access to your storage bucket. When `backup.enabled` is set to `true`, the template automatically grants TiKV outbound internet access.
+
+**To enable backup**, configure the backup section in `values.yaml`:
+```yaml
+backup:
+  enabled: true
+  schedule: "0 2 * * *"        # cron schedule (daily at 2am UTC)
+  activeDeadlineSeconds: 14400  # hard kill after 4 hours if backup hangs
+  location: aws-us-east-1       # run the backup job in the same region as your storage bucket
+
+  provider: aws  # Options: aws or gcp
+
+  aws:
+    bucket: my-backup-bucket
+    region: us-east-1
+    cloudAccountName: my-backup-cloudaccount
+    policyName: my-backup-policy
+    prefix: tidb/backups
+```
+
+**Tips:**
+- Set `location` to the region closest to your storage bucket to minimize cross-region transfer latency.
+- `activeDeadlineSeconds` acts as a safety net — if a backup hangs, the job will be killed after this duration rather than running forever.
+- For GCP, set `provider: gcp` and configure the `gcp` section instead.
+
 ### Supported External Services
 - [TiDB Documentation](https://docs.pingcap.com/tidb/stable/)

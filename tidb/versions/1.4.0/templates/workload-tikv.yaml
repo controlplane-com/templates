@@ -73,7 +73,7 @@ spec:
     external:
       inboundAllowCIDR: []
       inboundBlockedCIDR: []
-      outboundAllowCIDR: {{ .Values.external_access.tikv_outboundAllowCIDR }}
+      outboundAllowCIDR: {{ if .Values.backup.enabled }}["0.0.0.0/0"]{{ else }}{{ .Values.external_access.tikv_outboundAllowCIDR }}{{ end }}
       outboundAllowHostname: []
       outboundAllowPort: []
       outboundBlockedCIDR: []

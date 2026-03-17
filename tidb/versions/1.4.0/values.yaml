@@ -24,7 +24,7 @@ resources:
     memory: 2Gi
   tikv:
     cpu: 2
-    memory: 6Gi
+    memory: 4Gi
 
 autoCreateDatabase: # Enable to automatically create the database on initialization
   enabled: true
@@ -50,7 +50,7 @@ exposeServer: true # Set to true to expose TIDB server publicly
 
 external_access: # Set if client is outside the GVC or in another location
   server_outboundAllowCIDR: []
-  tikv_outboundAllowCIDR: []
+  tikv_outboundAllowCIDR: [] # Note: when backup.enabled is true, the template automatically allows outbound access (0.0.0.0/0) regardless of this value.
   pd_outboundAllowCIDR: []
 
 internal_access:
@@ -71,7 +71,7 @@ internal_access:
       #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
 backup:
-  enabled: true
+  enabled: false
   image: controlplanecorporation/tidb-backup:v8.5.3
   schedule: "0 2 * * *"  # daily at 2am UTC
   activeDeadlineSeconds: 14400  # 4 hours max per backup job
@@ -84,9 +84,9 @@ backup:
   provider: aws # Options: aws or gcp
 
   aws:
-    bucket: cpln-backup-bucket
+    bucket: my-backup-bucket
     region: us-east-1
-    cloudAccountName: my-s3-cloudaccount
+    cloudAccountName: my-backup-cloudaccount
     policyName: my-backup-policy
     prefix: tidb/backups
 

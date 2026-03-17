@@ -57,7 +57,7 @@ spec:
       outboundAllowPort: []
       outboundBlockedCIDR: []
     internal:
-      inboundAllowType: none
+      inboundAllowType: same-gvc
       inboundAllowWorkload: []
   identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "tidb.identity.name" . }}
   job:

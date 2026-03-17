@@ -1,0 +1,96 @@
+gvc:
+  name: tidb-gvc
+  locations:
+  # Location's replica count will only affect storage (tikv) and server workloads
+    - name: aws-us-east-2
+      replicas: 1
+    - name: aws-eu-central-1
+      replicas: 1
+    - name: aws-us-east-1
+      replicas: 1
+  pdReplicas: 3 # options: 3, 5, 7
+
+images:
+  server: pingcap/tidb:v8.5.3
+  tikv: pingcap/tikv:v8.5.3
+  pd: pingcap/pd:v8.5.3
+
+resources:
+  pd:
+    cpu: 2
+    memory: 4Gi
+  server:
+    cpu: 2
+    memory: 2Gi
+  tikv:
+    cpu: 2
+    memory: 4Gi
+
+autoCreateDatabase: # Enable to automatically create the database on initialization
+  enabled: true
+  deployInitWorkload: true # Set to false after the DB has been initialized to remove the init workload and save resources
+  database: # Set database values
+    rootPassword: myrootpw
+    user: myuser
+    password: mypw
+    db: mydb
+
+volumeset:
+  tikv:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+    autoscaling:
+      enabled: false # Set to true to enable autoscaling
+      maxCapacity: 100 # Maximum capacity in GiB
+      minFreePercentage: 10 # Minimum free percentage before scaling triggers
+      scalingFactor: 1.2 # Multiplier applied to current capacity when scaling
+  pd:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+exposeServer: true # Set to true to expose TIDB server publicly
+
+external_access: # Set if client is outside the GVC or in another location
+  server_outboundAllowCIDR: []
+  tikv_outboundAllowCIDR: [] # Note: when backup.enabled is true, the template automatically allows outbound access (0.0.0.0/0) regardless of this value.
+  pd_outboundAllowCIDR: []
+
+internal_access:
+  server:
+    type: same-gvc # options: same-gvc, same-org, workload-list
+    workloads:  # Note: can only be used if type is same-gvc or workload-list
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+  tikv:
+    type: same-gvc # options: same-gvc, same-org, workload-list
+    workloads:  # Note: can only be used if type is same-gvc or workload-list
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+  pd:
+    type: same-gvc # options: same-gvc, same-org, workload-list
+    workloads:  # Note: can only be used if type is same-gvc or workload-list
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+backup:
+  enabled: false
+  image: controlplanecorporation/tidb-backup:v8.5.3
+  schedule: "0 2 * * *"  # daily at 2am UTC
+  activeDeadlineSeconds: 14400  # 4 hours max per backup job
+  location: aws-us-east-1  # Run backup in the location closest to your storage bucket/region
+
+  resources:
+    cpu: 1
+    memory: 1Gi
+
+  provider: aws # Options: aws or gcp
+
+  aws:
+    bucket: my-backup-bucket
+    region: us-east-1
+    cloudAccountName: my-backup-cloudaccount
+    policyName: my-backup-policy
+    prefix: tidb/backups
+
+  gcp:
+    bucket: my-backup-bucket
+    cloudAccountName: my-backup-cloudaccount
+    prefix: tidb/backups

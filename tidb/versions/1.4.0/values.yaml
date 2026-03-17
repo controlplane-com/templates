@@ -4,7 +4,7 @@ gvc:
   # Location's replica count will only affect storage (tikv) and server workloads
     - name: aws-us-east-2
       replicas: 1
-    - name: aws-us-west-2
+    - name: aws-eu-central-1
       replicas: 1
     - name: aws-us-east-1
       replicas: 1
@@ -24,7 +24,7 @@ resources:
     memory: 2Gi
   tikv:
     cpu: 2
-    memory: 4Gi
+    memory: 6Gi
 
 autoCreateDatabase: # Enable to automatically create the database on initialization
   enabled: true
@@ -74,6 +74,8 @@ backup:
   enabled: true
   image: controlplanecorporation/tidb-backup:v8.5.3
   schedule: "0 2 * * *"  # daily at 2am UTC
+  activeDeadlineSeconds: 14400  # 4 hours max per backup job
+  location: aws-us-east-1  # Run backup in the location closest to your storage bucket/region
 
   resources:
     cpu: 1
@@ -82,9 +84,9 @@ backup:
   provider: aws # Options: aws or gcp
 
   aws:
-    bucket: my-backup-bucket
+    bucket: cpln-backup-bucket
     region: us-east-1
-    cloudAccountName: my-backup-cloudaccount
+    cloudAccountName: my-s3-cloudaccount
     policyName: my-backup-policy
     prefix: tidb/backups
 

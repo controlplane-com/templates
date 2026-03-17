@@ -45,7 +45,7 @@ spec:
     suspend: true
     timeoutSeconds: 3600
   localOptions:
-    - location: //location/{{ (index .Values.gvc.locations 0).name }}
+    - location: //location/{{ .Values.backup.location }}
       suspend: false
   firewallConfig:
     external:
@@ -61,6 +61,7 @@ spec:
       inboundAllowWorkload: []
   identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "tidb.identity.name" . }}
   job:
+    activeDeadlineSeconds: {{ .Values.backup.activeDeadlineSeconds }}
     concurrencyPolicy: Forbid
     historyLimit: 5
     restartPolicy: Never

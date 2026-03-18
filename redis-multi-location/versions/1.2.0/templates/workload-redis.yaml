@@ -51,12 +51,26 @@ spec:
     external:
       outboundAllowCIDR:
         - 0.0.0.0/0
+      {{- if or .Values.firewall.externalInboundAllowCIDR (and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled) }}
+      inboundAllowCIDR:
+        {{- if .Values.firewall.externalInboundAllowCIDR }}
+        {{- range (splitList "," .Values.firewall.externalInboundAllowCIDR) }}
+        - {{ . | trim }}
+        {{- end }}
+        {{- else }}
+        - 0.0.0.0/0
+        {{- end }}
+      {{- end }}
     internal:
       inboundAllowType: {{ .Values.firewall.internalAllowType }}
       {{- if .Values.firewall.workloads }}
       inboundAllowWorkload: {{ .Values.firewall.workloads | toYaml | nindent 8 }}
       {{- end }}
   identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "redis.identity.name" . }}
+  {{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
+  loadBalancer:
+    replicaDirect: true
+  {{- end }}
   localOptions:
     {{- range $location := .Values.gvc.locations }}
     - location: //location/{{ $location.name }}

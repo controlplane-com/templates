@@ -73,6 +73,24 @@ Redis Sentinel Volume Set Name
 
 {{/* Validation */}}
 
+{{/*
+Total Redis Replica Count (sum of all location replicas)
+*/}}
+{{- define "redis.totalReplicas" -}}
+{{- $total := 0 -}}
+{{- range .Values.gvc.locations -}}
+  {{- $total = add $total (int .replicas) -}}
+{{- end -}}
+{{- $total -}}
+{{- end }}
+
+{{/*
+Total Sentinel Replica Count (1 per location)
+*/}}
+{{- define "redis.sentinel.totalReplicas" -}}
+{{- len .Values.gvc.locations -}}
+{{- end }}
+
 {{- define "redis.validateLocations" -}}
 {{- if lt (len .Values.gvc.locations) 2 }}
   {{- fail "redis-multi-location requires at least 2 locations. For a single-location setup, use the redis template instead." }}

@@ -4,6 +4,10 @@ name: {{ .Values.gvc.name }}
 description: Redis GVC
 tags: {{- include "redis.tags" . | nindent 4 }}
 spec:
+  {{- if or (and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled) (and (hasKey .Values.sentinel "publicAccess") .Values.sentinel.publicAccess.enabled) }}
+  loadBalancer:
+    dedicated: true
+  {{- end }}
   staticPlacement:
     locationLinks:
     {{- range .Values.gvc.locations }}

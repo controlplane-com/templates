@@ -59,6 +59,59 @@ firewall:
   #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
 ```
 
+### Public Access (External TCP)
+
+Redis and Sentinel can be exposed over the internet via TCP using Control Plane's domain resource with per-replica port routing.
+
+#### Prerequisites
+
+1. **A domain you control** with DNS managed by your registrar
+2. **DNS records added before deploying** — Control Plane will reject the domain resource on first deploy if ownership has not been proven. The deployment error will list the exact TXT and CNAME records required. Add those records in your DNS provider, then upgrade the release to complete the deployment. **Disable DNS proxying if your registrar offers it** — TCP traffic must pass through directly.
+
+Your GVC alias is visible in the Control Plane console under GVC settings.
+
+> **Note:** When `publicAccess` is enabled, a Dedicated Load Balancer is automatically enabled on the GVC. This is required for arbitrary TCP port routing and is a paid Control Plane feature.
+
+#### Configuration
+
+Enable `publicAccess` for Redis and/or Sentinel and set a subdomain you own:
+
+```yaml
+redis:
+  publicAccess:
+    enabled: true
+    address: redis.your-domain.com
+
+sentinel:
+  publicAccess:
+    enabled: true
+    address: redis-sentinel.your-domain.com
+```
+
+When enabled, a Control Plane `domain` resource is created for each address. Port mapping is one port per replica, based on total replicas across all locations:
+- **Redis**: ports `6380`, `6381`, ... (one per replica across all locations)
+- **Sentinel**: ports `26380`, `26381`, `26382`, ... (one per location)
+
+After DNS propagates, the domain status in Control Plane will show **Ready**. Propagation can take several minutes depending on your DNS provider. You can verify the full DNS chain resolves correctly with:
+
+```bash
+dig redis.your-domain.com CNAME   # should return <gvc-alias>.cpln.app
+dig <gvc-alias>.cpln.app          # should return an IP address
+```
+
+#### Connecting Externally
+
+```bash
+# Redis replica 0
+redis-cli -h redis.your-domain.com -p 6380 ping
+
+# Redis replica 1
+redis-cli -h redis.your-domain.com -p 6381 ping
+
+# Sentinel replica 0 (location 0)
+redis-cli -h redis-sentinel.your-domain.com -p 26380 ping
+```
+
 **Backup** — set `backup.enabled` to `true` to enable scheduled backups to AWS S3 or GCS. The backup runs in the first configured location only:
 ```yaml
 backup:

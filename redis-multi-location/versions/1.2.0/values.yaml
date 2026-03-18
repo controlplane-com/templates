@@ -43,6 +43,7 @@ sentinel:
 firewall:
   internalAllowType: same-gvc # options: same-gvc, same-org, workload-list
   # externalInboundAllowCIDR: "0.0.0.0/0" # Required when publicAccess is enabled. Provide a comma-separated list
+  # externalOutboundAllowCIDR: "0.0.0.0/0" # Provide a comma-separated list
   # workloads:
   #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
 

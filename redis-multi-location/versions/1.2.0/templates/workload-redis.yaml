@@ -49,8 +49,12 @@ spec:
     timeoutSeconds: 5
   firewallConfig:
     external:
+      {{- if .Values.firewall.externalOutboundAllowCIDR }}
       outboundAllowCIDR:
-        - 0.0.0.0/0
+        {{- range (splitList "," .Values.firewall.externalOutboundAllowCIDR) }}
+        - {{ . | trim }}
+        {{- end }}
+      {{- end }}
       {{- if or .Values.firewall.externalInboundAllowCIDR (and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled) }}
       inboundAllowCIDR:
         {{- if .Values.firewall.externalInboundAllowCIDR }}

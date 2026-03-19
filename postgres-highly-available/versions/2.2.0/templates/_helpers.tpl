@@ -77,8 +77,24 @@ Postgres HA Volume Set Name
 {{- printf "%s-postgres-ha-vs" .Release.Name }}
 {{- end }}
 
+{{/*
+PgBouncer Workload Name
+*/}}
+{{- define "pg-ha.pgbouncer.name" -}}
+{{- printf "%s-pgbouncer" .Release.Name }}
+{{- end }}
+
 
 {{/* Validation */}}
+
+{{/*
+Validate pgbouncer configuration - proxy must be enabled when pgbouncer is enabled
+*/}}
+{{- define "pg-ha.validatePgBouncerConfig" -}}
+{{- if and .Values.pgbouncer.enabled (not .Values.proxy.enabled) -}}
+  {{- fail "pgbouncer requires proxy.enabled to be true. HAProxy must be enabled for PgBouncer to route correctly in an HA setup." -}}
+{{- end -}}
+{{- end }}
 
 {{/*
 Validate backup mode - must be "logical" or "wal-g"

@@ -57,7 +57,7 @@ pgbouncer:
     cpu: 200m
     memory: 128Mi
 
-proxy: # HA Proxy endpoint to write to leader replica
+proxy: # HA Proxy endpoint to write to leader replica. Automatically enabled when pgbouncer is enabled.
   enabled: true
   image: haproxy:2.9
   resources:

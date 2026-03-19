@@ -96,7 +96,7 @@ When enabled, connect to the proxy workload on port 5432 for write operations.
 
 PgBouncer multiplexes application connections into a smaller pool of real database connections, reducing overhead and protecting Postgres from connection exhaustion under high concurrency. It sits in front of HAProxy so leader routing and failover are handled transparently.
 
-**HAProxy must be enabled** when PgBouncer is enabled. A validation error will be thrown at render time if this requirement is not met.
+HAProxy is automatically enabled when PgBouncer is enabled, as it is required for leader-aware routing in the HA cluster.
 
 When enabled, PgBouncer becomes the primary connection endpoint. Connect to `{release-name}-pgbouncer.{gvc}.cpln.local:5432` instead of the proxy workload directly.
 

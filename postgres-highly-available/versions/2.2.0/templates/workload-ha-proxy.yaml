@@ -1,4 +1,4 @@
-{{- if .Values.proxy.enabled }}
+{{- if or .Values.proxy.enabled .Values.pgbouncer.enabled }}
 kind: workload
 name: {{ include "pg-ha.proxy.name" . }}
 description: HAProxy leader-only endpoint for Patroni Postgres

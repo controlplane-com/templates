@@ -42,6 +42,13 @@ Postgres Volume Set Name
 {{- printf "%s-pg-vs" .Release.Name }}
 {{- end }}
 
+{{/*
+PgBouncer Workload Name
+*/}}
+{{- define "postgres.pgbouncer.name" -}}
+{{- printf "%s-pgbouncer" .Release.Name }}
+{{- end }}
+
 
 {{/* Validation */}}
 

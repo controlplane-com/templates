@@ -48,3 +48,15 @@ backup: # compatible with Postgres 17+
     bucket: my-backup-bucket
     cloudAccountName: my-backup-cloudaccount
     prefix: postgres/backups # folder name where your backups will be stored
+
+pgbouncer:
+  enabled: false
+  image: bitnami/pgbouncer:1.23.1
+  poolMode: transaction # options: session, transaction, statement
+  defaultPoolSize: 25   # number of real Postgres connections PgBouncer maintains
+  maxClientConn: 1000   # maximum number of client connections PgBouncer accepts
+  replicas: 1
+
+  resources:
+    cpu: 200m
+    memory: 128Mi

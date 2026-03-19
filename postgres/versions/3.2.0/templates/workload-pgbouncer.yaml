@@ -1,0 +1,52 @@
+{{- if .Values.pgbouncer.enabled }}
+kind: workload
+name: {{ include "postgres.pgbouncer.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: PgBouncer Connection Pooler
+tags: {{- include "pg.tags" . | nindent 4 }}
+spec:
+  type: serverless
+  identityLink: //identity/{{ include "postgres.identity.name" . }}
+  containers:
+    - name: pgbouncer
+      image: {{ .Values.pgbouncer.image }}
+      cpu: {{ .Values.pgbouncer.resources.cpu | quote }}
+      memory: {{ .Values.pgbouncer.resources.memory | quote }}
+      inheritEnv: false
+      env:
+        - name: DB_HOST
+          value: {{ include "postgres.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local
+        - name: DB_PORT
+          value: '5432'
+        - name: DB_USER
+          value: 'cpln://secret/{{ include "postgres.secretDatabase.name" . }}.username'
+        - name: DB_PASSWORD
+          value: 'cpln://secret/{{ include "postgres.secretDatabase.name" . }}.password'
+        - name: DB_NAME
+          value: {{ .Values.config.database | quote }}
+        - name: POOL_MODE
+          value: {{ .Values.pgbouncer.poolMode | quote }}
+        - name: DEFAULT_POOL_SIZE
+          value: {{ .Values.pgbouncer.defaultPoolSize | quote }}
+        - name: MAX_CLIENT_CONN
+          value: {{ .Values.pgbouncer.maxClientConn | quote }}
+        - name: AUTH_TYPE
+          value: plain
+      ports:
+        - number: 5432
+          protocol: tcp
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: {{ .Values.pgbouncer.replicas }}
+      maxScale: {{ .Values.pgbouncer.replicas }}
+    capacityAI: false
+  firewallConfig:
+    external:
+      outboundAllowCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
+{{- end }}

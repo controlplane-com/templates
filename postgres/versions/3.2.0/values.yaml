@@ -26,6 +26,18 @@ internalAccess: # Sets the internal firewall scope - if set to none, replicas wi
     #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
     #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
+pgbouncer:
+  enabled: false
+  image: edoburu/pgbouncer:v1.25.1-p0
+  poolMode: transaction # options: session, transaction, statement
+  defaultPoolSize: 25   # number of real Postgres connections PgBouncer maintains
+  maxClientConn: 1000   # maximum number of client connections PgBouncer accepts
+  replicas: 1
+
+  resources:
+    cpu: 200m
+    memory: 128Mi
+
 backup: # compatible with Postgres 17+
   enabled: false
   image: controlplanecorporation/pg-backup:18.1.0 # tag 18.1.0 = Postgres 18, 17.1.0 = Postgres 17
@@ -48,15 +60,3 @@ backup: # compatible with Postgres 17+
     bucket: my-backup-bucket
     cloudAccountName: my-backup-cloudaccount
     prefix: postgres/backups # folder name where your backups will be stored
-
-pgbouncer:
-  enabled: false
-  image: edoburu/pgbouncer:v1.25.1-p0
-  poolMode: transaction # options: session, transaction, statement
-  defaultPoolSize: 25   # number of real Postgres connections PgBouncer maintains
-  maxClientConn: 1000   # maximum number of client connections PgBouncer accepts
-  replicas: 1
-
-  resources:
-    cpu: 200m
-    memory: 128Mi

@@ -6,6 +6,36 @@ Creates a PostgreSQL server with dedicated volume.
 
 This application works only with a single replica, do not scale up the replicas.
 
+## PgBouncer Connection Pooling
+
+PgBouncer is an optional connection pooler that sits in front of Postgres and multiplexes application connections into a smaller pool of real database connections. This reduces the overhead of maintaining many persistent connections and protects Postgres from connection exhaustion under high concurrency.
+
+When enabled, PgBouncer is deployed as a separate workload and becomes the primary connection endpoint for your applications. Connect to `{release-name}-pgbouncer.{gvc}.cpln.local:5432` instead of the Postgres workload directly.
+
+### Configuration
+
+Enable PgBouncer in your values file:
+
+```yaml
+pgbouncer:
+  enabled: true
+  poolMode: transaction  # options: session, transaction, statement
+  defaultPoolSize: 25    # number of real Postgres connections PgBouncer maintains
+  maxClientConn: 1000    # maximum number of client connections PgBouncer accepts
+  replicas: 1
+```
+
+**Pool modes:**
+- `transaction` — a real Postgres connection is held only for the duration of a transaction, then returned to the pool. Best for most web and API workloads. Not compatible with session-level features like `SET` variables, temporary tables, or advisory locks.
+- `session` — a real Postgres connection is held for the entire client session. Compatible with all Postgres features but provides less connection reuse. Increase `defaultPoolSize` to match your expected concurrent client count when using this mode.
+- `statement` — connection is returned after every statement. Transactions are not supported. Rarely used.
+
+**Scaling:** PgBouncer is stateless and can be scaled horizontally by increasing `replicas`. This is useful for high-throughput workloads where a single PgBouncer instance becomes a bottleneck.
+
+### How It Works
+
+PgBouncer shares the same credentials and identity as the Postgres workload — no additional secrets or IAM configuration is required. The `userlist.txt` and `pgbouncer.ini` are generated automatically from your `config.username`, `config.password`, and `config.database` values at startup.
+
 ## Backing Up
 
 Set your desired backup schedule in the values file and configure your AWS S3 or GCS bucket. You can also set a prefix where your backups will be stored in the bucket.
@@ -92,3 +122,4 @@ unset PGPASSWORD
 
 ### Supported External Services
 - [PostgresSQL Docs](https://www.postgresql.org/docs/)
+- [PgBouncer Docs](https://www.pgbouncer.org/config.html)

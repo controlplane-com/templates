@@ -7,6 +7,7 @@ This app deploys a highly available PostgreSQL 17 cluster using Patroni for auto
 - **PostgreSQL with Patroni**: Multi-replica PostgreSQL cluster managed by Patroni
 - **etcd**: Distributed key-value store for consensus and configuration allowing high availability
 - **HA Proxy** (optional): Leader-routing proxy that directs write traffic to the current primary replica
+- **PgBouncer** (optional): Connection pooler that sits in front of HAProxy, multiplexing application connections into a smaller pool of real database connections
 - **Backup**: (optional): Logical or native WAL-G backup
 
 ## Configuration
@@ -91,12 +92,44 @@ proxy:
 
 When enabled, connect to the proxy workload on port 5432 for write operations.
 
+### PgBouncer Connection Pooling (Optional)
+
+PgBouncer multiplexes application connections into a smaller pool of real database connections, reducing overhead and protecting Postgres from connection exhaustion under high concurrency. It sits in front of HAProxy so leader routing and failover are handled transparently.
+
+**HAProxy must be enabled** when PgBouncer is enabled. A validation error will be thrown at render time if this requirement is not met.
+
+When enabled, PgBouncer becomes the primary connection endpoint. Connect to `{release-name}-pgbouncer.{gvc}.cpln.local:5432` instead of the proxy workload directly.
+
+```yaml
+pgbouncer:
+  enabled: true
+  poolMode: transaction  # options: session, transaction, statement
+  defaultPoolSize: 25    # real Postgres connections per PgBouncer pod
+  maxClientConn: 1000    # max app connections per PgBouncer pod
+  maxDbConnections: 100  # hard cap on total Postgres connections regardless of how many PgBouncer pods are running
+  minReplicas: 2
+  maxReplicas: 4
+```
+
+**Pool modes:**
+- `transaction` — connection held only for the duration of a transaction. Best for most web and API workloads. Not compatible with session-level features like `SET` variables, temporary tables, or advisory locks.
+- `session` — connection held for the entire client session. Compatible with all Postgres features but provides less connection reuse. Increase `defaultPoolSize` to match your expected concurrent client count.
+- `statement` — connection returned after every statement. Transactions are not supported. Rarely used.
+
+**`maxDbConnections`** is a hard cap on the total number of real Postgres connections PgBouncer will open, shared across all PgBouncer pods. This prevents connection blowout when PgBouncer scales up — set it to a value your Postgres primary can safely handle.
+
+**Scaling:** PgBouncer autoscales on RPS between `minReplicas` and `maxReplicas`. Increase `maxReplicas` for high-throughput workloads where PgBouncer becomes the bottleneck before Postgres does.
+
 ## Connecting to PostgreSQL
 
-Connect to the PostgreSQL cluster using the proxy workload name:
+Connect to the PostgreSQL cluster using the appropriate endpoint:
+
+| Setup | Host |
+|---|---|
+| PgBouncer enabled | `{release-name}-pgbouncer.{gvc}.cpln.local` |
+| Proxy only | `{release-name}-postgres-ha-proxy.{gvc}.cpln.local` |
 
 ```
-Host: {proxy-workload-name}
 Port: 5432
 Database: {postgres.database}
 Username: {postgres.username}

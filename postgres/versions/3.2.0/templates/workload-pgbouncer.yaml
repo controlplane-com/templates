@@ -14,25 +14,23 @@ spec:
       memory: {{ .Values.pgbouncer.resources.memory | quote }}
       inheritEnv: false
       env:
-        - name: POSTGRESQL_HOST
+        - name: DB_HOST
           value: {{ include "postgres.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local
-        - name: POSTGRESQL_PORT
+        - name: DB_PORT
           value: '5432'
-        - name: POSTGRESQL_USERNAME
+        - name: DB_USER
           value: 'cpln://secret/{{ include "postgres.secretDatabase.name" . }}.username'
-        - name: POSTGRESQL_PASSWORD
+        - name: DB_PASSWORD
           value: 'cpln://secret/{{ include "postgres.secretDatabase.name" . }}.password'
-        - name: PGBOUNCER_DATABASE
+        - name: DB_NAME
           value: {{ .Values.config.database | quote }}
-        - name: PGBOUNCER_PORT
-          value: '5432'
-        - name: PGBOUNCER_POOL_MODE
+        - name: POOL_MODE
           value: {{ .Values.pgbouncer.poolMode | quote }}
-        - name: PGBOUNCER_DEFAULT_POOL_SIZE
+        - name: DEFAULT_POOL_SIZE
           value: {{ .Values.pgbouncer.defaultPoolSize | quote }}
-        - name: PGBOUNCER_MAX_CLIENT_CONN
+        - name: MAX_CLIENT_CONN
           value: {{ .Values.pgbouncer.maxClientConn | quote }}
-        - name: PGBOUNCER_AUTH_TYPE
+        - name: AUTH_TYPE
           value: plain
       ports:
         - number: 5432

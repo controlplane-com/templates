@@ -51,7 +51,7 @@ backup: # compatible with Postgres 17+
 
 pgbouncer:
   enabled: false
-  image: bitnami/pgbouncer:1.23.1
+  image: edoburu/pgbouncer:v1.25.1-p0
   poolMode: transaction # options: session, transaction, statement
   defaultPoolSize: 25   # number of real Postgres connections PgBouncer maintains
   maxClientConn: 1000   # maximum number of client connections PgBouncer accepts

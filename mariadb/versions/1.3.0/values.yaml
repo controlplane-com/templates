@@ -32,7 +32,7 @@ enablePhpMyAdmin: true
 
 backup:
   enabled: false
-  image: controlplanecorporation/mysql-backup:9.1 # compatible with all MariaDB versions
+  image: controlplanecorporation/mysql-backup:1.0 # compatible with all MariaDB versions
   schedule: "0 2 * * *"   # daily at 2am UTC
 
   resources:

@@ -44,14 +44,23 @@ spec:
           protocol: tcp
         - number: 9320
           protocol: tcp
+      livenessProbe:
+        httpGet:
+          path: /
+          port: 9308
+        initialDelaySeconds: 300
+        periodSeconds: 30
+        failureThreshold: 5
+        timeoutSeconds: 10
       readinessProbe:
-        failureThreshold: 20
+        httpGet:
+          path: /
+          port: 9308
         initialDelaySeconds: 300
         periodSeconds: 15
         successThreshold: 1
-        tcpSocket:
-          port: 9306
-        timeoutSeconds: 10
+        failureThreshold: 20
+        timeoutSeconds: 30
       volumes:
         - path: /var/lib/manticore
           recoveryPolicy: retain

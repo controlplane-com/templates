@@ -31,3 +31,24 @@ internal_access:
   workloads:  # Note: can only be used if type is same-gvc or workload-list
     #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
     #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+backup:
+  enabled: false
+  image: controlplanecorporation/cockroach-backup:1.0
+  schedule: "0 2 * * *"
+  activeDeadlineSeconds: 14400   # hard kill after 4 hours if backup hangs
+  location: aws-us-east-1        # run the backup job in the same region as your storage bucket
+  resources:
+    cpu: 500m
+    memory: 512Mi
+  provider: aws  # options: aws, gcp
+  aws:
+    bucket: my-backup-bucket
+    region: us-east-1
+    cloudAccountName: my-backup-cloudaccount
+    policyName: my-backup-policy
+    prefix: cockroach/backups
+  gcp:
+    bucket: my-backup-bucket
+    cloudAccountName: my-backup-cloudaccount
+    prefix: cockroach/backups

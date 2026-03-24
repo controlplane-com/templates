@@ -1,0 +1,64 @@
+{{- if .Values.backup.enabled }}
+---
+kind: workload
+name: {{ include "cockroach.backup.name" . }}
+description: CockroachDB Backup
+tags: {{- include "cockroach.tags" . | nindent 4 }}
+gvc: {{ .Values.gvc.name }}
+spec:
+  type: cron
+  containers:
+    - name: backup-cockroach
+      cpu: {{ .Values.backup.resources.cpu | quote }}
+      memory: {{ .Values.backup.resources.memory | quote }}
+      image: {{ .Values.backup.image }}
+      inheritEnv: false
+      env:
+        - name: BACKUP_PROVIDER
+          value: {{ .Values.backup.provider }}
+        - name: COCKROACH_HOST
+          value: {{ include "cockroach.name" . }}.{{ .Values.gvc.name }}.cpln.local
+      {{- if eq .Values.backup.provider "aws" }}
+        - name: AWS_BUCKET
+          value: {{ .Values.backup.aws.bucket }}
+        - name: AWS_REGION
+          value: {{ .Values.backup.aws.region }}
+        - name: AWS_PREFIX
+          value: {{ .Values.backup.aws.prefix | quote }}
+      {{- end }}
+      {{- if eq .Values.backup.provider "gcp" }}
+        - name: GCP_BUCKET
+          value: {{ .Values.backup.gcp.bucket }}
+        - name: GCP_PREFIX
+          value: {{ .Values.backup.gcp.prefix | quote }}
+      {{- end }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: true
+    timeoutSeconds: 3600
+  localOptions:
+    - location: //location/{{ .Values.backup.location }}
+      suspend: false
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      outboundAllowCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+      inboundAllowWorkload: []
+  job:
+    activeDeadlineSeconds: {{ .Values.backup.activeDeadlineSeconds }}
+    concurrencyPolicy: Forbid
+    historyLimit: 5
+    restartPolicy: Never
+    schedule: {{ .Values.backup.schedule }}
+  supportDynamicTags: false
+{{- end }}

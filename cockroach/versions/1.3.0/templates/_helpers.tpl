@@ -42,6 +42,13 @@ Cockroach Volume Set Name
 {{- printf "%s-cockroach-vs" .Release.Name }}
 {{- end }}
 
+{{/*
+Cockroach Backup Workload Name
+*/}}
+{{- define "cockroach.backup.name" -}}
+{{- printf "%s-cockroach-backup" .Release.Name }}
+{{- end }}
+
 
 {{/* Validation */}}
 

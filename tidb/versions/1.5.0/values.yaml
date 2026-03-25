@@ -1,3 +1,5 @@
+devMode: false # WARNING: For development/testing only. Bypasses the 3-location HA requirement. Do NOT enable in production.
+
 gvc:
   name: tidb-gvc
   locations:
@@ -46,7 +48,7 @@ volumeset:
   pd:
     capacity: 10 # initial capacity in GiB (minimum is 10)
 
-exposeServer: true # Set to true to expose TIDB server publicly
+exposeServer: false # Set to true to expose TIDB server publicly
 
 external_access: # Set if client is outside the GVC or in another location
   server_outboundAllowCIDR: []

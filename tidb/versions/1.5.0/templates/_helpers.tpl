@@ -95,12 +95,12 @@ Create chart name and version as used by the chart label.
 {{- end }}
 
 {{/*
-Validation: Ensure minimum 3 locations are defined
+Validation: Ensure minimum 3 locations are defined (skipped in devMode)
 */}}
 {{- define "tidb.validateLocations" -}}
 {{- $numLocs := len .Values.gvc.locations -}}
-{{- if lt $numLocs 3 -}}
-{{- fail (printf "TiDB requires at least 3 locations for high availability. Found %d location(s)." $numLocs) -}}
+{{- if and (not .Values.devMode) (lt $numLocs 3) -}}
+{{- fail (printf "TiDB requires at least 3 locations for high availability. Found %d location(s). Set devMode: true to bypass this for development/testing only." $numLocs) -}}
 {{- end -}}
 {{- end -}}
 
@@ -115,13 +115,13 @@ Validation: Ensure pdReplicas is 3, 5, or 7
 {{- end -}}
 
 {{/*
-Validation: Ensure pdReplicas=3 requires exactly 3 locations
+Validation: Ensure pdReplicas=3 requires exactly 3 locations (skipped in devMode)
 */}}
 {{- define "tidb.validatePdReplicasLocations" -}}
 {{- $pdReplicas := int .Values.gvc.pdReplicas -}}
 {{- $numLocs := len .Values.gvc.locations -}}
-{{- if and (eq $pdReplicas 3) (ne $numLocs 3) -}}
-{{- fail (printf "When pdReplicas is 3, exactly 3 locations are required. Found %d location(s)." $numLocs) -}}
+{{- if and (not .Values.devMode) (eq $pdReplicas 3) (ne $numLocs 3) -}}
+{{- fail (printf "When pdReplicas is 3, exactly 3 locations are required. Found %d location(s). Set devMode: true to bypass this for development/testing only." $numLocs) -}}
 {{- end -}}
 {{- end -}}
 

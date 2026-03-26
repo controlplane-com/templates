@@ -47,9 +47,6 @@ otelCollector:
             - context: span
               statements:
                 - replace_pattern(span.attributes["http.url"], "^.*(PLACEHOLDER).*$", "/PLACEHOLDER")
-                - replace_pattern(span.attributes["http.url"], "^.*(PLACEHOLDER).*$", "/PLACEHOLDER")
-                - replace_pattern(span.attributes["http.url"], "^.*(PLACEHOLDER).*$", "/PLACEHOLDER")
-                - replace_pattern(span.attributes["http.url"], "^.*(PLACEHOLDER).*$", "/PLACEHOLDER")
 
       connectors:
         spanmetrics:

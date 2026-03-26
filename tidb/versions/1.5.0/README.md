@@ -23,6 +23,40 @@ The `replicas` value per location controls how many TiDB Server and TiKV replica
 
 **Important:** TiDB's PD and TiKV components rely on Raft quorum for high availability. Deploy across a minimum of 3 locations to maintain quorum if one location becomes unavailable.
 
+## Development Mode
+
+For development and testing purposes, you can enable `devMode` to bypass the 3-location requirement and deploy with fewer locations:
+
+```yaml
+devMode: true # WARNING: For development/testing only. Do NOT enable in production.
+```
+
+When `devMode` is enabled, 1 or 2 locations are permitted. However, PD still requires 3 replicas (`pdReplicas: 3`) and TiKV still needs at least 3 total instances across all locations to satisfy its internal replication requirements. Configure `replicas` per location accordingly:
+
+**1 location:**
+```yaml
+devMode: true
+gvc:
+  locations:
+    - name: aws-us-east-2
+      replicas: 3  # 3 TiKV instances in a single location
+  pdReplicas: 3
+```
+
+**2 locations:**
+```yaml
+devMode: true
+gvc:
+  locations:
+    - name: aws-us-east-2
+      replicas: 2  # total across both locations must be >= 3
+    - name: aws-us-east-1
+      replicas: 1
+  pdReplicas: 3
+```
+
+> **Warning:** A single-location or two-location deployment provides no fault tolerance. If the location(s) become unavailable, the cluster will halt. This mode is intended for local testing and development only.
+
 ### Resource Configuration
 
 The default resource configuration in `values.yaml` is designed for **testing and development environments**. For production deployments, resources should be increased based on the following:

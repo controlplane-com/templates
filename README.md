@@ -120,6 +120,32 @@ Always build connection strings using the naming helpers from `_helpers.tpl` rat
 
 ---
 
+## Packaging and Publishing
+
+Each template version is packaged as a Helm chart and published to the GitHub Container Registry (GHCR) as an OCI artifact. Published packages are visible in the **Packages** tab of this repository, and each one can be referenced directly when installing via the Control Plane CLI — no need to clone the repo.
+
+### Automatic publishing
+
+A GitHub Actions workflow (`.github/workflows/publish-charts.yml`) runs on every push to `main`. It detects which `Chart.yaml` files changed in that commit and packages and pushes only those template versions to:
+
+```
+oci://ghcr.io/controlplane-com/templates
+```
+
+This means **adding a new template version to `main` is all that is needed** — it will be packaged automatically and immediately available via OCI.
+
+### Manual publishing (migration)
+
+The workflow can also be triggered manually via **Actions → Publish Helm Charts → Run workflow** with the **"Package all charts (migration mode)"** option enabled. This packages and pushes **every version of every template** and is intended only for bulk migration of existing templates — not for re-publishing a single changed version.
+
+> **Important:** If a template version that was already published needs to be corrected, do **not** use migration mode (it would re-push all templates). Instead, package and push that specific chart manually using `helm package` and `helm push`, then ensure the resulting package is set to **public** and attached to this repository in the Packages tab.
+
+### Installing a template via OCI
+
+Each published template version is available in the **Packages** tab of this repository and can be installed directly via the Control Plane CLI without cloning the repo. For detailed installation instructions, see the [CLI install guide](https://docs.controlplane.com/template-catalog/install-manage/cli).
+
+---
+
 ## Checklist for Creating a New Template
 
 - [ ] `icon.png` — square, transparent background

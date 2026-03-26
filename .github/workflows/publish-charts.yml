@@ -45,6 +45,7 @@ jobs:
           echo "charts=$charts" >> $GITHUB_OUTPUT
 
       - name: Package and push
+        if: steps.charts.outputs.charts != ''
         run: |
           mkdir -p .packaged
           for template in ${{ steps.charts.outputs.charts }}; do

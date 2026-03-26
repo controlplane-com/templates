@@ -20,9 +20,9 @@ jobs:
           fetch-depth: 2
 
       - name: Install Helm
-              uses: azure/setup-helm@v3
-              with:
-                token: ${{ secrets.GITHUB_TOKEN }}
+        uses: azure/setup-helm@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Login to GHCR
         run: |

@@ -35,11 +35,13 @@ jobs:
         run: |
           if [ "${{ github.event.inputs.migrate }}" = "true" ]; then
             charts=$(find . -name "Chart.yaml" -path "*/versions/*" \
-              | sed 's|/versions/.*||' | sed 's|^\./||' | sort -u)
+              | sed 's|/versions/.*||' | sed 's|^\./||' | sort -u \
+              | tr '\n' ' ')
           else
             charts=$(git diff --name-only HEAD^ HEAD \
               | grep -E '^[^/]+/versions/[^/]+/Chart\.yaml' \
-              | cut -d/ -f1 | sort -u)
+              | cut -d/ -f1 | sort -u \
+              | tr '\n' ' ')
           fi
           echo "charts=$charts" >> $GITHUB_OUTPUT
 

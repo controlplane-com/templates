@@ -54,19 +54,21 @@ jobs:
               if [ -f "$version_dir/Chart.yaml" ]; then
                 version=$(grep '^version:' "$version_dir/Chart.yaml" | awk '{print $2}')
                 echo "Packaging $template @ $version..."
-                helm package "$version_dir" -d .packaged/
+                # Pull dependencies if any exist
+                helm dependency update "$version_dir" || true
+                helm package "$version_dir" -d .packaged/ || { echo "Skipping $template @ $version - package error"; continue; }
                 helm push ".packaged/$template-$version.tgz" \
-                  oci://ghcr.io/controlplane-com/templates
+                  oci://ghcr.io/controlplane-com/templates || { echo "Skipping push $template @ $version"; continue; }
                 echo "Done: $template @ $version"
               fi
             done
-
-            # Set public via PAT (GITHUB_TOKEN handles linking automatically)
-            sleep 3
+            sleep 10
             pkg="templates%2F$template"
-            curl -s -X PATCH \
+            echo "Setting visibility for: $pkg"
+            response=$(curl -s -X PATCH \
               -H "Authorization: Bearer ${{ secrets.GHCR_PAT }}" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/orgs/controlplane-com/packages/container/$pkg" \
-              -d '{"visibility":"public"}'
+              -d '{"visibility":"public"}')
+            echo "Response: $response"
           done

@@ -1,0 +1,68 @@
+# .github/workflows/publish-charts.yml
+name: Publish Helm Charts
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      migrate:
+        description: 'Package all charts (migration mode)'
+        type: boolean
+        default: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+
+      - name: Login to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io \
+            --username ${{ github.actor }} \
+            --password-stdin
+
+      - name: Determine charts to package
+        id: charts
+        run: |
+          if [ "${{ github.event.inputs.migrate }}" = "true" ]; then
+            charts=$(find . -name "Chart.yaml" -path "*/versions/*" \
+              | sed 's|/versions/.*||' | sed 's|^\./||' | sort -u)
+          else
+            charts=$(git diff --name-only HEAD^ HEAD \
+              | grep -E '^[^/]+/versions/[^/]+/Chart\.yaml' \
+              | cut -d/ -f1 | sort -u)
+          fi
+          echo "charts=$charts" >> $GITHUB_OUTPUT
+
+      - name: Package and push
+        run: |
+          mkdir -p .packaged
+          for template in ${{ steps.charts.outputs.charts }}; do
+            for version_dir in "$template"/versions/*/; do
+              version_dir="${version_dir%/}"
+              if [ -f "$version_dir/Chart.yaml" ]; then
+                version=$(grep '^version:' "$version_dir/Chart.yaml" | awk '{print $2}')
+                echo "Packaging $template @ $version..."
+                helm package "$version_dir" -d .packaged/
+                helm push ".packaged/$template-$version.tgz" \
+                  oci://ghcr.io/controlplane-com/templates
+                echo "Done: $template @ $version"
+              fi
+            done
+
+            # Set public via PAT (GITHUB_TOKEN handles linking automatically)
+            sleep 3
+            pkg="templates%2F$template"
+            curl -s -X PATCH \
+              -H "Authorization: Bearer ${{ secrets.GHCR_PAT }}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/orgs/controlplane-com/packages/container/$pkg" \
+              -d '{"visibility":"public"}'
+          done

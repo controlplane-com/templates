@@ -1,0 +1,90 @@
+# IMPORTANT:
+# After installing the collector, you must enable tracing at the GVC level which will trigger a restart on all workloads.
+otelCollector:
+  mode: advanced # controls which config is used:
+               # - simple: minimal setup for quick deployment.
+               # - advanced: fully customizable configuration.
+  resources:
+    cpu: 200m
+    memory: 256Mi
+
+  # Simple Mode
+  simple:
+    processors:
+      transform:
+        traceStatements: # Simplifies spans by replacing dynamic data with a fixed value. Subsitute Placeholder with the url you want to normalize ex. 'user/profile'
+          - replace_pattern(span.attributes["http.url"], "^.*(PLACEHOLDER).*$", "/PLACEHOLDER")
+
+    spanmetrics:
+      histogram: # Histogram bucket boundaries in ms (default) for span duration distribution — tune to match your SLO thresholds
+        buckets: [1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000]
+        unit: ms # Bucket values are interpreted in milliseconds (Choose: ms or s) 
+
+
+  # Advanced Mode
+  advanced:
+    config: |
+      extensions:
+        health_check:
+        pprof:
+          endpoint: 0.0.0.0:8180
+
+      receivers:
+        otlp:
+          protocols:
+            grpc:
+              endpoint: 0.0.0.0:4317
+
+      processors:
+        batch:
+        resource:
+          attributes:
+            - key: workload
+              from_attribute: service.name
+              action: insert
+        transform:
+          trace_statements:
+            - context: span
+              statements:
+                - replace_pattern(span.attributes["http.url"], "^.*(PLACEHOLDER).*$", "/PLACEHOLDER")
+                - replace_pattern(span.attributes["http.url"], "^.*(PLACEHOLDER).*$", "/PLACEHOLDER")
+                - replace_pattern(span.attributes["http.url"], "^.*(PLACEHOLDER).*$", "/PLACEHOLDER")
+                - replace_pattern(span.attributes["http.url"], "^.*(PLACEHOLDER).*$", "/PLACEHOLDER")
+
+      connectors:
+        spanmetrics:
+          dimensions:
+            - name: http.url
+            - name: http.method
+            - name: http.status_code
+          histogram:
+            explicit:
+              buckets: [1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000]
+            unit: ms
+
+      exporters:
+        debug:
+          verbosity: detailed
+        otlp:
+          endpoint: http://tracing.controlplane:80
+          tls:
+            insecure: true
+        prometheus:
+          endpoint: 0.0.0.0:8889
+
+      service:
+        pipelines:
+          traces:
+            receivers: [otlp]
+            processors: [resource, transform, batch]
+            exporters: [otlp, debug, spanmetrics]
+          metrics:
+            receivers: [spanmetrics]
+            processors: [batch]
+            exporters: [prometheus]
+
+        extensions: [pprof, health_check]
+
+        telemetry:
+          logs:
+            level: INFO

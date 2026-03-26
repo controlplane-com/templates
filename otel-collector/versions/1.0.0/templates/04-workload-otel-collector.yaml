@@ -1,0 +1,80 @@
+{{- $otel := dict -}}
+{{- $mode := .Values.otelCollector.mode | default "simple" -}}
+{{- if eq $mode "advanced" -}}
+  {{- $otel = fromYaml .Values.otelCollector.advanced.config -}}
+{{- else -}}
+  {{- $otel = .Values.otelCollector.simple -}}
+{{- end }}
+
+{{- $grpcEndpoint := "" -}}
+{{- if eq $mode "advanced" -}}
+  {{- $grpcEndpoint = dig "receivers" "otlp" "protocols" "grpc" "endpoint" "" $otel -}}
+{{- else -}}
+  {{- $grpcEndpoint = "0.0.0.0:4317" -}}
+{{- end -}}
+
+{{- $grpcPort := "" -}}
+{{- if $grpcEndpoint -}}
+  {{- $grpcPort = (split ":" $grpcEndpoint)._1 -}}
+{{- end -}}
+
+kind: workload
+name: {{ include "oc.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "oc.tags" . | nindent 2 }}
+spec:
+  type: standard
+  identityLink: //identity/{{ include "oc.name" . }}
+  containers:
+    - name: opentelemetry-collector-contrib
+      cpu: {{ .Values.otelCollector.resources.cpu }}
+      memory: {{ .Values.otelCollector.resources.memory }}
+      image: otel/opentelemetry-collector-contrib:0.148.0
+      inheritEnv: false
+      args:
+        - '--config=/etc/otel-collector/otlp-forwarder.yaml'
+      ports:
+{{- if $grpcPort }}
+        - number: {{ $grpcPort }}
+          protocol: grpc
+{{- end }}
+        - number: 8889
+          protocol: http
+      volumes:
+        - path: /etc/otel-collector/otlp-forwarder.yaml
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "oc.secretName" . }}.payload
+      metrics:
+        path: /metrics
+        port: 8889
+        dropMetrics: []
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      minScale: 1
+      metric: disabled
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 150
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+      inboundAllowWorkload: []
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

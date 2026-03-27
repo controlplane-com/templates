@@ -1,12 +1,14 @@
 # IMPORTANT:
 # After installing the collector, you must enable tracing at the GVC level which will trigger a restart on all workloads.
 otelCollector:
+  image: otel/opentelemetry-collector-contrib:0.148.0
   mode: advanced # controls which config is used:
                # - simple: minimal setup for quick deployment.
                # - advanced: fully customizable configuration.
   resources:
     cpu: 200m
     memory: 256Mi
+
 
   # Simple Mode
   simple:
@@ -19,7 +21,6 @@ otelCollector:
       histogram: # Histogram bucket boundaries in ms (default) for span duration distribution — tune to match your SLO thresholds
         buckets: [1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000]
         unit: ms # Bucket values are interpreted in milliseconds (Choose: ms or s) 
-
 
   # Advanced Mode
   advanced:

@@ -28,9 +28,9 @@ spec:
   identityLink: //identity/{{ include "oc.name" . }}
   containers:
     - name: opentelemetry-collector-contrib
-      cpu: {{ .Values.otelCollector.resources.cpu }}
-      memory: {{ .Values.otelCollector.resources.memory }}
-      image: otel/opentelemetry-collector-contrib:0.148.0
+      cpu: {{ .Values.otelCollector.resources.cpu | quote  }}
+      memory: {{ .Values.otelCollector.resources.memory | quote }}
+      image: {{ .Values.otelCollector.image }}
       inheritEnv: false
       args:
         - '--config=/etc/otel-collector/otlp-forwarder.yaml'

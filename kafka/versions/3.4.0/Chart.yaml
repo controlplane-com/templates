@@ -1,0 +1,12 @@
+apiVersion: v2
+name: kafka
+description: Kafka cluster app for Control Plane
+type: application
+version: 3.4.0
+appVersion: "3.9"
+
+annotations:
+  created: "2026-03-27"
+  lastModified: "2026-03-27"
+  category: "event-streaming"
+  createsGvc: false

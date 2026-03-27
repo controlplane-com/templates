@@ -1,0 +1,12 @@
+apiVersion: v2
+name: otel-collector
+description: OpenTelemetry Collector
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+
+annotations:
+  created: "2026-03-26"
+  lastModified: "2026-03-26"
+  category: "observability"
+  createsGvc: false

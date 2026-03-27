@@ -1,0 +1,99 @@
+# =============================================================================
+# Access Policies
+# =============================================================================
+# Secret access policy - grants reveal on config secrets
+kind: policy
+name: {{ include "manticore.configPolicyName" . }}
+description: Secret access for manticore and orchestrator workloads
+tags: {{- include "manticore.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.identityName" . }}
+      - /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.orchestratorIdentityName" . }}
+      - /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.orchestratorJobIdentityName" . }}
+      - /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.backupIdentityName" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "manticore.secretConfigName" . }}
+  - //secret/{{ include "manticore.secretStartupName" . }}
+  - //secret/{{ include "manticore.secretSchemaConfigName" . }}
+  - //secret/{{ include "manticore.secretAgentTokenName" . }}
+targetQuery:
+  kind: secret
+  fetch: items
+  spec:
+    match: all
+    terms: []
+---
+# Cron execution policy - allows triggering orchestrator jobs
+kind: policy
+name: {{ include "manticore.execPolicyName" . }}
+description: Permission to trigger orchestrator cron workload executions
+tags: {{- include "manticore.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - view
+      - edit
+      - exec.runCronWorkload
+    principalLinks:
+      - /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.identityName" . }}
+      - /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.orchestratorIdentityName" . }}
+targetKind: workload
+targetLinks:
+  - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "manticore.orchestratorJobName" . }}
+  - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "manticore.name" . }}
+  {{- if .Values.orchestrator.backup.enabled }}
+  - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "manticore.backupName" . }}
+  {{- end }}
+
+---
+# Workload view policy - allows orchestrator to read Manticore workload config
+kind: policy
+name: {{ include "manticore.orchestratorPolicyName" . }}
+description: Permission to view Manticore workload configuration
+tags: {{- include "manticore.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - view
+      - edit
+    principalLinks:
+      - /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.orchestratorJobIdentityName" . }}
+      - /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.backupIdentityName" . }}
+targetKind: workload
+targetLinks:
+  - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "manticore.name" . }}
+
+{{- if .Values.loadTest.enabled }}
+---
+# Load test script access
+kind: policy
+name: {{ include "manticore.loadTestPolicyName" . }}
+description: K6 workload access to load test script secret
+tags: {{- include "manticore.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - use
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.loadTestIdentityName" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "manticore.secretK6ScriptName" . }}
+---
+# Load test controller policy - allows scaling k6 workload
+kind: policy
+name: {{ include "manticore.loadTestControllerPolicyName" . }}
+description: Controller permission to scale load-test workload
+tags: {{- include "manticore.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - manage
+      - edit
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.loadTestControllerIdentityName" . }}
+targetKind: workload
+targetLinks:
+  - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "manticore.loadTestName" . }}
+{{- end }}

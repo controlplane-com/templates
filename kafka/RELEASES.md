@@ -1,3 +1,20 @@
+# Release Notes - Version 3.4.0
+
+## What's New
+
+- **Kafka Connect Init Script: Bulletproof TLS/Truststore Handling**: The connector init script no longer crashes when TLS certificate download fails (e.g. ClickHouse Cloud IP allowlist blocking the TLS handshake)
+  - Certificate download failure (`openssl s_client`) is now non-fatal — logs a visible WARNING and continues
+  - Truststore creation (`cp cacerts`) is guarded: skipped gracefully if the Java `cacerts` file is missing
+  - Truststore password change (`keytool -storepasswd`) failure is non-fatal — logs a WARNING and continues
+  - Certificate import (`keytool -import`) is skipped if the downloaded cert file is empty, preventing a hard crash from an invalid X.509 input
+  - All failure paths log a clearly visible WARNING to stdout for easier future troubleshooting
+  - **Impact**: Previously, a single TLS failure in any connector's truststore setup would kill the entire `setup_connectors` process, preventing all subsequent connectors from being created or updated
+
+- **Kafka Connect Init Script: Reliable Connector Update via PUT**: Fixed connector config updates silently failing
+  - `Content-Length` header now correctly trimmed of whitespace (`wc -c | xargs`) to prevent malformed HTTP requests
+  - HTTP response is captured and logged; non-2xx responses are reported as ERROR to stdout
+  - **Impact**: Connector configuration updates (e.g. `flush.size`) were silently dropped due to a malformed PUT request
+
 # Release Notes - Version 3.3.0
 
 ## What's New

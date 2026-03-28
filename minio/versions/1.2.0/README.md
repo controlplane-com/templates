@@ -25,4 +25,3 @@ mc alias set minio http://WORKLOAD_NAME:9000 $USERNAME $PASSWORD
 ## Additional Resources
 
 - [MinIO README](https://github.com/minio/minio?tab=readme-ov-file#minio-quickstart-guide)
-- [MinIO Distributed Quickstart Guide](https://fossies.org/linux/minio-RELEASE/docs/distributed/README.md)

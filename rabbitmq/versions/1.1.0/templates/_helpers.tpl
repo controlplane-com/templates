@@ -58,6 +58,7 @@ app.cpln.io/managed-by: {{ .Release.Service }}
 cpln/marketplace: "true"
 cpln/marketplace-template: rabbitmq
 cpln/marketplace-template-version: {{ .Chart.Version }}
+cpln/marketplace-gvc: {{ .Values.global.cpln.gvc }}
 {{- end }}
 
 {{/*

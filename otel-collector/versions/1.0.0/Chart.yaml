@@ -7,6 +7,6 @@ appVersion: "1.0.0"
 
 annotations:
   created: "2026-03-26"
-  lastModified: "2026-03-26"
+  lastModified: "2026-03-30"
   category: "observability"
   createsGvc: false

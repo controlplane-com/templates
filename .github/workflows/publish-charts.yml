@@ -29,6 +29,15 @@ jobs:
             --username ${{ github.actor }} \
             --password-stdin
 
+      - name: Determine registry
+        id: registry
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "path=oci://ghcr.io/controlplane-com/templates" >> $GITHUB_OUTPUT
+          else
+            echo "path=oci://ghcr.io/controlplane-com/templates/test" >> $GITHUB_OUTPUT
+          fi
+
       - name: Determine charts to package
         id: charts
         run: |
@@ -57,7 +66,7 @@ jobs:
                 helm dependency update "$version_dir" || true
                 helm package "$version_dir" -d .packaged/ || { echo "Skipping $template @ $version - package error"; continue; }
                 helm push ".packaged/$template-$version.tgz" \
-                  oci://ghcr.io/controlplane-com/templates || { echo "Skipping push $template @ $version"; continue; }
+                  ${{ steps.registry.outputs.path }} || { echo "Skipping push $template @ $version"; continue; }
                 echo "Done: $template @ $version"
               fi
             done

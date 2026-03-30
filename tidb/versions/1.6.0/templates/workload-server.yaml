@@ -36,36 +36,34 @@ spec:
             - /bin/sh
             - '-c'
             - >-
-              for loc in {{ range .Values.gvc.locations }}{{ .name }} {{ end }};
+              for endpoint in
+              {{- $pdName := include "tidb.pd.name" . -}}
+              {{- $gvcName := .Values.gvc.name -}}
+              {{- $locs := .Values.gvc.locations -}}
+              {{- $numLocs := len $locs -}}
+              {{- $pdReplicas := .Values.gvc.pdReplicas | int -}}
+              {{- $baseReplicas := div $pdReplicas $numLocs -}}
+              {{- $remainder := mod $pdReplicas $numLocs -}}
+              {{- range $i, $loc := $locs -}}
+                {{- $locReplicas := $baseReplicas -}}
+                {{- if lt $i $remainder -}}{{- $locReplicas = add $baseReplicas 1 -}}{{- end -}}
+                {{- range $r := until ($locReplicas | int) }} replica-{{ $r }}.{{ $pdName }}.{{ $loc.name }}.{{ $gvcName }}.cpln.local:2379{{ end -}}
+              {{- end }};
               do
-                pd_endpoint="replica-0.{{ include "tidb.pd.name" . }}.${loc}.{{ .Values.gvc.name }}.cpln.local:2379"
-                stores=$(curl -sf "http://${pd_endpoint}/pd/api/v1/stores" 2>/dev/null || echo "")
-                if [ -z "$stores" ]; then
-                  echo "No stores found at $pd_endpoint yet. Retrying..."
-                  continue
-                fi
-
-                # Normalize JSON to avoid spacing issues
-                stores_clean=$(echo "$stores" | sed 's/"state_name":[[:space:]]*"/"state_name":"/g')
-                up_count=$(echo "$stores_clean" | grep -o '"state_name":"Up"' | wc -l | tr -d ' ')
-                total_count=$(echo "$stores_clean" | grep -o '"state_name":' | wc -l | tr -d ' ')
-
-                echo "$up_count / $total_count TiKV stores Up at $pd_endpoint"
-
-                # Loosened condition to allow 2 or more healthy TiKV stores
-                if [ "$up_count" -ge 2 ]; then
-                  echo "Sufficient TiKV stores are healthy."
-                  exit 0
-                fi
-              done
-
-              echo "TiKV not ready yet"
-              exit 1
-        failureThreshold: 3
+                stores=$(curl -sf --max-time 4 "http://${endpoint}/pd/api/v1/stores" 2>/dev/null || echo "");
+                if [ -z "$stores" ]; then continue; fi;
+                stores_clean=$(echo "$stores" | sed 's/"state_name":[[:space:]]*"/"state_name":"/g');
+                up_count=$(echo "$stores_clean" | grep -o '"state_name":"Up"' | wc -l | tr -d ' ');
+                total_count=$(echo "$stores_clean" | grep -o '"state_name":' | wc -l | tr -d ' ');
+                echo "$up_count / $total_count TiKV stores Up at $endpoint";
+                if [ "$up_count" -ge 2 ]; then echo "Sufficient TiKV stores healthy."; exit 0; fi;
+              done;
+              echo "TiKV not ready yet"; exit 1
+        failureThreshold: 12
         initialDelaySeconds: 15
         periodSeconds: 10
         successThreshold: 1
-        timeoutSeconds: 3
+        timeoutSeconds: 5
       volumes:
         - path: /scripts/server-startup.sh
           uri: cpln://secret/{{ include "tidb.serverSecret.name" . }}.payload

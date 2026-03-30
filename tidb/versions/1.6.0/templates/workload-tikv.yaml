@@ -25,16 +25,27 @@ spec:
             - /bin/sh
             - '-c'
             - >-
-              for loc in {{ range .Values.gvc.locations }}{{ .name }} {{ end }};
-              do endpoint="replica-0.{{ include "tidb.pd.name" . }}.${loc}.{{ .Values.gvc.name }}.cpln.local:2379";
-              if curl -sf "http://$endpoint/pd/health" | grep -q '"health":[[:space:]]*true';
+              for endpoint in
+              {{- $pdName := include "tidb.pd.name" . -}}
+              {{- $gvcName := .Values.gvc.name -}}
+              {{- $locs := .Values.gvc.locations -}}
+              {{- $numLocs := len $locs -}}
+              {{- $pdReplicas := .Values.gvc.pdReplicas | int -}}
+              {{- $baseReplicas := div $pdReplicas $numLocs -}}
+              {{- $remainder := mod $pdReplicas $numLocs -}}
+              {{- range $i, $loc := $locs -}}
+                {{- $locReplicas := $baseReplicas -}}
+                {{- if lt $i $remainder -}}{{- $locReplicas = add $baseReplicas 1 -}}{{- end -}}
+                {{- range $r := until ($locReplicas | int) }} replica-{{ $r }}.{{ $pdName }}.{{ $loc.name }}.{{ $gvcName }}.cpln.local:2379{{ end -}}
+              {{- end }};
+              do if curl -sf --max-time 4 "http://$endpoint/pd/health" | grep -q '"health":[[:space:]]*true';
               then exit 0; fi; done;
               echo "no healthy PDs"; exit 1
-        failureThreshold: 3
+        failureThreshold: 10
         initialDelaySeconds: 10
         periodSeconds: 10
         successThreshold: 1
-        timeoutSeconds: 2
+        timeoutSeconds: 5
       volumes:
         - path: /data
           recoveryPolicy: retain

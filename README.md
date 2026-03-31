@@ -132,13 +132,28 @@ A GitHub Actions workflow (`.github/workflows/publish-charts.yml`) runs on every
 oci://ghcr.io/controlplane-com/templates
 ```
 
-This means **adding a new template version to `main` is all that is needed** — it will be packaged automatically and immediately available via OCI.
+This means **adding a new template version to `main` is all that is needed** — it will be packaged automatically and immediately available via OCI. Only `Chart.yaml` changes are detected, so always update `lastModified` (or bump the version) when modifying an existing version.
 
-### Manual publishing (migration)
+### Manual publishing
 
-The workflow can also be triggered manually via **Actions → Publish Helm Charts → Run workflow** with the **"Package all charts (migration mode)"** option enabled. This packages and pushes **every version of every template** and is intended only for bulk migration of existing templates — not for re-publishing a single changed version.
+The workflow can also be triggered manually via **Actions → Publish Helm Charts → Run workflow** with the following inputs:
 
-> **Important:** If a template version that was already published needs to be corrected, do **not** use migration mode (it would re-push all templates). Instead, package and push that specific chart manually using `helm package` and `helm push`, then ensure the resulting package is set to **public** and attached to this repository in the Packages tab.
+| Input | Description |
+|---|---|
+| Branch | The branch to run the workflow from. Non-`main` branches push to the test registry. |
+| `template` | Package a specific template (e.g. `nginx`). If omitted, falls back to diff-based detection. |
+| `version` | Package a specific version of the template (e.g. `1.4.0`). If omitted, all versions of the template are packaged. |
+| `migrate` | Package **every version of every template**. Only works on `main`. Use only for bulk migrations. |
+
+### Test publishing (non-main branches)
+
+When the workflow is triggered manually from any branch other than `main`, charts are pushed to a separate test registry:
+
+```
+oci://ghcr.io/controlplane-com/templates/test
+```
+
+This allows you to validate packaging and chart rendering on a feature branch before merging. Use `template` + `version` inputs to target exactly what you want to test.
 
 ### Installing a template via OCI
 

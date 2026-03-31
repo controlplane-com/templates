@@ -1,3 +1,4 @@
+# .github/workflows/publish-charts.yml
 name: Publish Helm Charts
 
 on:
@@ -9,6 +10,14 @@ on:
         description: 'Package all charts (migration mode)'
         type: boolean
         default: false
+      template:
+        description: 'Specific template to package e.g. nginx (leave empty for diff-based)'
+        type: string
+        default: ''
+      version:
+        description: 'Specific version to package e.g. 1.4.0 (leave empty for all versions)'
+        type: string
+        default: ''
 
 jobs:
   publish:
@@ -41,10 +50,12 @@ jobs:
       - name: Determine charts to package
         id: charts
         run: |
-          if [ "${{ github.event.inputs.migrate }}" = "true" ]; then
+          if [ "${{ github.event.inputs.migrate }}" = "true" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
             charts=$(find . -name "Chart.yaml" -path "*/versions/*" \
               | sed 's|/versions/.*||' | sed 's|^\./||' | sort -u \
               | tr '\n' ' ')
+          elif [ -n "${{ github.event.inputs.template }}" ]; then
+            charts="${{ github.event.inputs.template }}"
           else
             charts=$(git diff --name-only HEAD^ HEAD \
               | grep -E '^[^/]+/versions/[^/]+/Chart\.yaml' \
@@ -60,6 +71,10 @@ jobs:
           for template in ${{ steps.charts.outputs.charts }}; do
             for version_dir in "$template"/versions/*/; do
               version_dir="${version_dir%/}"
+              if [ -n "${{ github.event.inputs.version }}" ] && \
+                 [ "$version_dir" != "$template/versions/${{ github.event.inputs.version }}" ]; then
+                continue
+              fi
               if [ -f "$version_dir/Chart.yaml" ]; then
                 version=$(grep '^version:' "$version_dir/Chart.yaml" | awk '{print $2}')
                 echo "Packaging $template @ $version..."

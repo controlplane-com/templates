@@ -20,7 +20,44 @@ on:
         default: ''
 
 jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      version_dirs: ${{ steps.charts.outputs.version_dirs }}
+      charts: ${{ steps.charts.outputs.charts }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Determine charts to package
+        id: charts
+        run: |
+          if [ "${{ github.event.inputs.migrate }}" = "true" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            charts=$(find . -name "Chart.yaml" -path "*/versions/*" \
+              | sed 's|/versions/.*||' | sed 's|^\./||' | sort -u \
+              | tr '\n' ' ')
+            echo "charts=$charts" >> $GITHUB_OUTPUT
+          elif [ -n "${{ github.event.inputs.template }}" ]; then
+            echo "charts=${{ github.event.inputs.template }}" >> $GITHUB_OUTPUT
+          else
+            version_dirs=$(git diff --name-only HEAD^ HEAD \
+              | grep -E '^[^/]+/versions/[^/]+/' \
+              | sed -E 's|^([^/]+/versions/[^/]+)/.*|\1|' | sort -u \
+              | tr '\n' ' ')
+            echo "version_dirs=$version_dirs" >> $GITHUB_OUTPUT
+          fi
+
+  validate:
+    needs: [setup]
+    if: needs.setup.outputs.version_dirs != '' || needs.setup.outputs.charts != ''
+    uses: ./.github/workflows/validate-charts.yml
+    with:
+      version_dirs: ${{ needs.setup.outputs.version_dirs }}
+      charts: ${{ needs.setup.outputs.charts }}
+
   publish:
+    needs: [validate]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,31 +84,12 @@ jobs:
             echo "path=oci://ghcr.io/controlplane-com/templates/test" >> $GITHUB_OUTPUT
           fi
 
-      - name: Determine charts to package
-        id: charts
-        run: |
-          if [ "${{ github.event.inputs.migrate }}" = "true" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            charts=$(find . -name "Chart.yaml" -path "*/versions/*" \
-              | sed 's|/versions/.*||' | sed 's|^\./||' | sort -u \
-              | tr '\n' ' ')
-            echo "charts=$charts" >> $GITHUB_OUTPUT
-          elif [ -n "${{ github.event.inputs.template }}" ]; then
-            echo "charts=${{ github.event.inputs.template }}" >> $GITHUB_OUTPUT
-          else
-            version_dirs=$(git diff --name-only HEAD^ HEAD \
-              | grep -E '^[^/]+/versions/[^/]+/' \
-              | sed -E 's|^([^/]+/versions/[^/]+)/.*|\1|' | sort -u \
-              | tr '\n' ' ')
-            echo "version_dirs=$version_dirs" >> $GITHUB_OUTPUT
-          fi
-
       - name: Package and push
-        if: steps.charts.outputs.charts != '' || steps.charts.outputs.version_dirs != ''
         run: |
           mkdir -p .packaged
 
           package_and_push() {
-            local version_dir="$1"
+            local version_dir="${1%/}"
             if [ -f "$version_dir/Chart.yaml" ]; then
               local template=$(echo "$version_dir" | cut -d/ -f1)
               local version=$(grep '^version:' "$version_dir/Chart.yaml" | awk '{print $2}')
@@ -88,14 +106,14 @@ jobs:
             fi
           }
 
-          if [ -n "${{ steps.charts.outputs.version_dirs }}" ]; then
-            for version_dir in ${{ steps.charts.outputs.version_dirs }}; do
-              package_and_push "${version_dir%/}"
+          if [ -n "${{ needs.setup.outputs.version_dirs }}" ]; then
+            for version_dir in ${{ needs.setup.outputs.version_dirs }}; do
+              package_and_push "$version_dir"
             done
           else
-            for template in ${{ steps.charts.outputs.charts }}; do
+            for template in ${{ needs.setup.outputs.charts }}; do
               for version_dir in "$template"/versions/*/; do
-                package_and_push "${version_dir%/}"
+                package_and_push "$version_dir"
               done
             done
           fi

@@ -54,35 +54,48 @@ jobs:
             charts=$(find . -name "Chart.yaml" -path "*/versions/*" \
               | sed 's|/versions/.*||' | sed 's|^\./||' | sort -u \
               | tr '\n' ' ')
+            echo "charts=$charts" >> $GITHUB_OUTPUT
           elif [ -n "${{ github.event.inputs.template }}" ]; then
-            charts="${{ github.event.inputs.template }}"
+            echo "charts=${{ github.event.inputs.template }}" >> $GITHUB_OUTPUT
           else
-            charts=$(git diff --name-only HEAD^ HEAD \
-              | grep -E '^[^/]+/versions/[^/]+/Chart\.yaml' \
-              | cut -d/ -f1 | sort -u \
+            version_dirs=$(git diff --name-only HEAD^ HEAD \
+              | grep -E '^[^/]+/versions/[^/]+/' \
+              | sed -E 's|^([^/]+/versions/[^/]+)/.*|\1|' | sort -u \
               | tr '\n' ' ')
+            echo "version_dirs=$version_dirs" >> $GITHUB_OUTPUT
           fi
-          echo "charts=$charts" >> $GITHUB_OUTPUT
 
       - name: Package and push
-        if: steps.charts.outputs.charts != ''
+        if: steps.charts.outputs.charts != '' || steps.charts.outputs.version_dirs != ''
         run: |
           mkdir -p .packaged
-          for template in ${{ steps.charts.outputs.charts }}; do
-            for version_dir in "$template"/versions/*/; do
-              version_dir="${version_dir%/}"
+
+          package_and_push() {
+            local version_dir="$1"
+            if [ -f "$version_dir/Chart.yaml" ]; then
+              local template=$(echo "$version_dir" | cut -d/ -f1)
+              local version=$(grep '^version:' "$version_dir/Chart.yaml" | awk '{print $2}')
               if [ -n "${{ github.event.inputs.version }}" ] && \
-                 [ "$version_dir" != "$template/versions/${{ github.event.inputs.version }}" ]; then
-                continue
+                 [ "$version" != "${{ github.event.inputs.version }}" ]; then
+                return
               fi
-              if [ -f "$version_dir/Chart.yaml" ]; then
-                version=$(grep '^version:' "$version_dir/Chart.yaml" | awk '{print $2}')
-                echo "Packaging $template @ $version..."
-                helm dependency update "$version_dir" || true
-                helm package "$version_dir" -d .packaged/ || { echo "Skipping $template @ $version - package error"; continue; }
-                helm push ".packaged/$template-$version.tgz" \
-                  ${{ steps.registry.outputs.path }} || { echo "Skipping push $template @ $version"; continue; }
-                echo "Done: $template @ $version"
-              fi
+              echo "Packaging $template @ $version..."
+              helm dependency update "$version_dir" || true
+              helm package "$version_dir" -d .packaged/ || { echo "Skipping $template @ $version - package error"; return; }
+              helm push ".packaged/$template-$version.tgz" \
+                ${{ steps.registry.outputs.path }} || { echo "Skipping push $template @ $version"; return; }
+              echo "Done: $template @ $version"
+            fi
+          }
+
+          if [ -n "${{ steps.charts.outputs.version_dirs }}" ]; then
+            for version_dir in ${{ steps.charts.outputs.version_dirs }}; do
+              package_and_push "${version_dir%/}"
             done
-          done
+          else
+            for template in ${{ steps.charts.outputs.charts }}; do
+              for version_dir in "$template"/versions/*/; do
+                package_and_push "${version_dir%/}"
+              done
+            done
+          fi

@@ -66,9 +66,13 @@ essConfig:
     #     PASSWORD:
     #       path: /example/app
     #       parse: password
-    # - name: doppler
+    # - name: doppler-secret
     #   provider: my-doppler
-    #   opaque: /project/config/secret
+    #   opaque: /project/config/SECRET_NAME
+    # - name: doppler-project
+    #   provider: my-doppler
+    #   dictionaryFromProject:
+    #     path: project/config   # syncs all secrets from a Doppler project+config
     # - name: gcp
     #   provider: my-gcp
     #   opaque: database-password

@@ -4,6 +4,18 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      version_dirs:
+        description: 'Space-separated version dirs to validate (e.g. "redis/versions/3.0.0 nginx/versions/1.1.1")'
+        type: string
+        required: false
+        default: ''
+      charts:
+        description: 'Space-separated template names to validate all versions of'
+        type: string
+        required: false
+        default: ''
 
 jobs:
   validate:
@@ -21,6 +33,14 @@ jobs:
       - name: Determine changed version directories
         id: versions
         run: |
+          # When called as a reusable workflow, use the provided inputs directly
+          if [ -n "${{ inputs.version_dirs }}" ] || [ -n "${{ inputs.charts }}" ]; then
+            echo "version_dirs=${{ inputs.version_dirs }}" >> $GITHUB_OUTPUT
+            echo "charts=${{ inputs.charts }}" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Otherwise detect from git diff (pull_request / workflow_dispatch)
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             base_sha="${{ github.event.pull_request.base.sha }}"
           else
@@ -30,45 +50,45 @@ jobs:
           version_dirs=$(git diff --name-only "$base_sha" HEAD \
             | grep -E '^[^/]+/versions/[^/]+/' \
             | sed -E 's|^([^/]+/versions/[^/]+)/.*|\1|' \
-            | sort -u)
+            | sort -u | tr '\n' ' ')
 
           echo "base_sha=$base_sha" >> $GITHUB_OUTPUT
-          {
-            echo "version_dirs<<EOF"
-            echo "$version_dirs"
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
+          echo "version_dirs=$version_dirs" >> $GITHUB_OUTPUT
 
       - name: Validate charts
-        if: steps.versions.outputs.version_dirs != ''
+        if: steps.versions.outputs.version_dirs != '' || steps.versions.outputs.charts != ''
         run: |
           base_sha="${{ steps.versions.outputs.base_sha }}"
           failed=0
 
-          while IFS= read -r version_dir; do
-            [ -z "$version_dir" ] && continue
-            [ ! -f "$version_dir/Chart.yaml" ] && continue
+          validate_version_dir() {
+            local version_dir="${1%/}"
+            [ ! -f "$version_dir/Chart.yaml" ] && return
 
-            template=$(echo "$version_dir" | cut -d/ -f1)
-            version=$(grep '^version:' "$version_dir/Chart.yaml" | awk '{print $2}')
+            local template=$(echo "$version_dir" | cut -d/ -f1)
+            local version=$(grep '^version:' "$version_dir/Chart.yaml" | awk '{print $2}')
 
             echo ""
             echo "=== Validating $template @ $version ==="
 
             # 1. helm template with default values
+            # charts with createsGvc:false expect global.cpln.gvc at runtime — pass a dummy value
+            local creates_gvc=$(grep -E '^\s+createsGvc:' "$version_dir/Chart.yaml" | awk '{print $2}')
+            local helm_flags=""
+            if [ "$creates_gvc" = "false" ]; then
+              helm_flags="--set global.cpln.gvc=validation-gvc"
+            fi
+
             helm dependency update "$version_dir" 2>/dev/null || true
-            if ! rendered=$(helm template "validation" "$version_dir" 2>&1); then
+            if ! rendered=$(helm template "validation" "$version_dir" $helm_flags 2>&1); then
               echo "FAIL [$template @ $version]: helm template failed with default values"
               echo "$rendered"
               failed=1
-              continue
+              return
             fi
 
             # 2. Required marketplace tags in rendered output
-            for tag in \
-              'cpln/marketplace:' \
-              'cpln/marketplace-template:' \
-              'cpln/marketplace-template-version:'; do
+            for tag in 'cpln/marketplace:' 'cpln/marketplace-template:' 'cpln/marketplace-template-version:'; do
               if ! echo "$rendered" | grep -q "$tag"; then
                 echo "FAIL [$template @ $version]: Missing required tag '$tag' in rendered templates"
                 failed=1
@@ -80,7 +100,6 @@ jobs:
             fi
 
             # cpln/marketplace-gvc is required when createsGvc is false
-            creates_gvc=$(grep -E '^\s+createsGvc:' "$version_dir/Chart.yaml" | awk '{print $2}')
             if [ "$creates_gvc" = "false" ]; then
               if ! echo "$rendered" | grep -q 'cpln/marketplace-gvc:'; then
                 echo "FAIL [$template @ $version]: Missing required tag 'cpln/marketplace-gvc' (required when createsGvc is false)"
@@ -97,21 +116,34 @@ jobs:
             done
 
             # 4. New template: require README.md and icon.png at the template root
-            if ! git ls-tree -r "$base_sha" --name-only 2>/dev/null | grep -q "^${template}/versions/"; then
-              echo "New template detected: $template — checking required files..."
-              if [ ! -f "$template/README.md" ]; then
-                echo "FAIL [$template]: Missing README.md (required for new templates)"
-                failed=1
-              fi
-              if [ ! -f "$template/icon.png" ]; then
-                echo "FAIL [$template]: Missing icon.png (required for new templates)"
-                failed=1
+            # (only checked when base_sha is available, i.e. PR / workflow_dispatch)
+            if [ -n "$base_sha" ]; then
+              if ! git ls-tree -r "$base_sha" --name-only 2>/dev/null | grep -q "^${template}/versions/"; then
+                echo "New template detected: $template — checking required files..."
+                if [ ! -f "$template/README.md" ]; then
+                  echo "FAIL [$template]: Missing README.md (required for new templates)"
+                  failed=1
+                fi
+                if [ ! -f "$template/icon.png" ]; then
+                  echo "FAIL [$template]: Missing icon.png (required for new templates)"
+                  failed=1
+                fi
               fi
             fi
 
             if [ "$failed" -eq 0 ]; then
               echo "OK: $template @ $version"
             fi
-          done <<< "${{ steps.versions.outputs.version_dirs }}"
+          }
+
+          for version_dir in ${{ steps.versions.outputs.version_dirs }}; do
+            validate_version_dir "$version_dir"
+          done
+
+          for template in ${{ steps.versions.outputs.charts }}; do
+            for version_dir in "$template"/versions/*/; do
+              validate_version_dir "$version_dir"
+            done
+          done
 
           exit $failed

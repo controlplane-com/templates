@@ -79,6 +79,15 @@ jobs:
               failed=1
             fi
 
+            # cpln/marketplace-gvc is required when createsGvc is false
+            creates_gvc=$(grep -E '^\s+createsGvc:' "$version_dir/Chart.yaml" | awk '{print $2}')
+            if [ "$creates_gvc" = "false" ]; then
+              if ! echo "$rendered" | grep -q 'cpln/marketplace-gvc:'; then
+                echo "FAIL [$template @ $version]: Missing required tag 'cpln/marketplace-gvc' (required when createsGvc is false)"
+                failed=1
+              fi
+            fi
+
             # 3. Required Chart.yaml annotations
             for annotation in category created lastModified createsGvc; do
               if ! grep -qE "^\s+${annotation}:" "$version_dir/Chart.yaml"; then

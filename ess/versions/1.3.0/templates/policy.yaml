@@ -1,0 +1,10 @@
+kind: policy
+name: {{ include "ess.policy.name" . }}
+description: ESS policy
+bindings:
+  - permissions:
+      - manage
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "ess.identity.name" . }}
+target: all
+targetKind: secret

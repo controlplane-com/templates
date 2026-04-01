@@ -1,0 +1,117 @@
+name: Validate Helm Charts
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine changed version directories
+        id: versions
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base_sha="${{ github.event.pull_request.base.sha }}"
+          else
+            base_sha="$(git rev-parse HEAD^)"
+          fi
+
+          version_dirs=$(git diff --name-only "$base_sha" HEAD \
+            | grep -E '^[^/]+/versions/[^/]+/' \
+            | sed -E 's|^([^/]+/versions/[^/]+)/.*|\1|' \
+            | sort -u)
+
+          echo "base_sha=$base_sha" >> $GITHUB_OUTPUT
+          {
+            echo "version_dirs<<EOF"
+            echo "$version_dirs"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Validate charts
+        if: steps.versions.outputs.version_dirs != ''
+        run: |
+          base_sha="${{ steps.versions.outputs.base_sha }}"
+          failed=0
+
+          while IFS= read -r version_dir; do
+            [ -z "$version_dir" ] && continue
+            [ ! -f "$version_dir/Chart.yaml" ] && continue
+
+            template=$(echo "$version_dir" | cut -d/ -f1)
+            version=$(grep '^version:' "$version_dir/Chart.yaml" | awk '{print $2}')
+
+            echo ""
+            echo "=== Validating $template @ $version ==="
+
+            # 1. helm template with default values
+            helm dependency update "$version_dir" 2>/dev/null || true
+            if ! rendered=$(helm template "validation" "$version_dir" 2>&1); then
+              echo "FAIL [$template @ $version]: helm template failed with default values"
+              echo "$rendered"
+              failed=1
+              continue
+            fi
+
+            # 2. Required marketplace tags in rendered output
+            for tag in \
+              'cpln/marketplace:' \
+              'cpln/marketplace-template:' \
+              'cpln/marketplace-template-version:'; do
+              if ! echo "$rendered" | grep -q "$tag"; then
+                echo "FAIL [$template @ $version]: Missing required tag '$tag' in rendered templates"
+                failed=1
+              fi
+            done
+            if ! echo "$rendered" | grep -q 'cpln/marketplace: "true"'; then
+              echo "FAIL [$template @ $version]: Tag 'cpln/marketplace' must equal \"true\""
+              failed=1
+            fi
+
+            # cpln/marketplace-gvc is required when createsGvc is false
+            creates_gvc=$(grep -E '^\s+createsGvc:' "$version_dir/Chart.yaml" | awk '{print $2}')
+            if [ "$creates_gvc" = "false" ]; then
+              if ! echo "$rendered" | grep -q 'cpln/marketplace-gvc:'; then
+                echo "FAIL [$template @ $version]: Missing required tag 'cpln/marketplace-gvc' (required when createsGvc is false)"
+                failed=1
+              fi
+            fi
+
+            # 3. Required Chart.yaml annotations
+            for annotation in category created lastModified createsGvc; do
+              if ! grep -qE "^\s+${annotation}:" "$version_dir/Chart.yaml"; then
+                echo "FAIL [$template @ $version]: Missing annotation '$annotation' in Chart.yaml"
+                failed=1
+              fi
+            done
+
+            # 4. New template: require README.md and icon.png at the template root
+            if ! git ls-tree -r "$base_sha" --name-only 2>/dev/null | grep -q "^${template}/versions/"; then
+              echo "New template detected: $template — checking required files..."
+              if [ ! -f "$template/README.md" ]; then
+                echo "FAIL [$template]: Missing README.md (required for new templates)"
+                failed=1
+              fi
+              if [ ! -f "$template/icon.png" ]; then
+                echo "FAIL [$template]: Missing icon.png (required for new templates)"
+                failed=1
+              fi
+            fi
+
+            if [ "$failed" -eq 0 ]; then
+              echo "OK: $template @ $version"
+            fi
+          done <<< "${{ steps.versions.outputs.version_dirs }}"
+
+          exit $failed

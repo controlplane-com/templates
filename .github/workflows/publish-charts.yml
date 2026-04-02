@@ -57,7 +57,7 @@ jobs:
       charts: ${{ needs.setup.outputs.charts }}
 
   publish:
-    needs: [validate]
+    needs: [setup, validate]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -120,7 +120,7 @@ jobs:
             if [ -n "$base_sha" ]; then
               if ! git ls-tree -r "$base_sha" --name-only 2>/dev/null | grep -q "^${template}/versions/"; then
                 echo "New template detected: $template — checking required files..."
-                if [ ! -f "$template/README.md" ]; then
+                if [ ! -f "$version_dir/README.md" ]; then
                   echo "FAIL [$template]: Missing README.md (required for new templates)"
                   failed=1
                 fi

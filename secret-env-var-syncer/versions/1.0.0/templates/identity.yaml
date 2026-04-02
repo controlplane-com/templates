@@ -1,0 +1,5 @@
+kind: identity
+gvc: {{ .Values.global.cpln.gvc }}
+name: {{ include "sevs.identity.name" . }}
+description: SEVS identity
+tags: {{- include "sevs.tags" . | nindent 4 }}

@@ -1,0 +1,12 @@
+apiVersion: v2
+name: secret-env-var-syncer
+description: Syncs keys from Control Plane dictionary secrets into environment variables on GVCs and workload containers
+type: application
+version: 1.0.0
+appVersion: "1.3.1"
+
+annotations:
+  created: "2026-04-01"
+  lastModified: "2026-04-01"
+  category: "secrets"
+  createsGvc: false

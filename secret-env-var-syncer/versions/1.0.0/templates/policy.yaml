@@ -1,0 +1,32 @@
+kind: policy
+name: {{ include "sevs.policy.name" . }}-secret
+description: SEVS secret policy
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "sevs.identity.name" . }}
+target: all
+targetKind: secret
+---
+kind: policy
+name: {{ include "sevs.policy.name" . }}-gvc
+description: SEVS gvc policy
+bindings:
+  - permissions:
+      - edit
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "sevs.identity.name" . }}
+target: all
+targetKind: gvc
+---
+kind: policy
+name: {{ include "sevs.policy.name" . }}-workload
+description: SEVS workload policy
+bindings:
+  - permissions:
+      - edit
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "sevs.identity.name" . }}
+target: all
+targetKind: workload

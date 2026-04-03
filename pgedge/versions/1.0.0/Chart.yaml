@@ -1,13 +1,13 @@
 apiVersion: v2
 name: pgedge
-description: 
+description: Active-active distributed PostgreSQL with Spock multi-master replication across global locations
 
 type: application
 version: 1.0.0
-appVersion: "1.0.0"
+appVersion: "17"
 
 annotations:
-  created: "2026-04-02"
-  lastModified: "2026-04-02"
+  created: "2026-04-03"
+  lastModified: "2026-04-03"
   category: "database"
   createsGvc: true

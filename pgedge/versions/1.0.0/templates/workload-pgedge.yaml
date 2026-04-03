@@ -18,7 +18,7 @@ spec:
       inheritEnv: false
       env:
         - name: PGDATA
-          value: /var/lib/postgresql/data/pgdata
+          value: /var/lib/pgsql/17/data
         - name: PG_USERNAME
           value: cpln://secret/{{ include "pgedge.secretConfig.name" . }}.username
         - name: PG_PASSWORD
@@ -29,7 +29,7 @@ spec:
         - number: 5432
           protocol: tcp
       volumes:
-        - path: /var/lib/postgresql/data
+        - path: /var/lib/pgsql/17/data
           recoveryPolicy: retain
           uri: cpln://volumeset/{{ include "pgedge.volume.name" . }}
         - path: /pgedge/start.sh

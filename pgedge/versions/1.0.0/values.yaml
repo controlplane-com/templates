@@ -1,8 +1,8 @@
 gvc:
   name: pgedge-gvc
-  locations:
+  locations: # For replicas: use 1 for dev/testing, 3 for production
     - name: aws-us-west-2
-      replicas: 3  # Use 1 for dev/testing, 3 for production
+      replicas: 3
     - name: aws-us-east-2
       replicas: 3
     - name: aws-eu-central-1
@@ -42,7 +42,7 @@ pgcat:
   minReplicas: 2
   maxReplicas: 4
 
-internal_access:
+internal_access: # Sets both pgedge and pgcat workloads
   type: same-gvc  # options: same-gvc, same-org, workload-list
   workloads:  # Only used when type is workload-list
     #- //gvc/GVC_NAME/workload/WORKLOAD_NAME

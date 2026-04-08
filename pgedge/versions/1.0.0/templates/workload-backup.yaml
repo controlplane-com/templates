@@ -53,6 +53,11 @@ spec:
     debug: false
     suspend: false
     timeoutSeconds: 5
+  localOptions:
+  {{- range $i, $loc := .Values.gvc.locations }}
+    - location: //location/{{ $loc.name }}
+      suspend: {{ if eq $i 0 }}false{{ else }}true{{ end }}
+  {{- end }}
   firewallConfig:
     external:
       inboundAllowCIDR: []

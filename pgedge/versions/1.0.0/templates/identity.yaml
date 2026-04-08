@@ -1,0 +1,6 @@
+---
+kind: identity
+gvc: {{ .Values.gvc.name }}
+name: {{ include "pgedge.identity.name" . }}
+description: pgEdge identity
+tags: {{- include "pgedge.tags" . | nindent 2 }}

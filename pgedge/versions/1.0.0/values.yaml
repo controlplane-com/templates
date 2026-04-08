@@ -1,0 +1,48 @@
+gvc:
+  name: pgedge-gvc
+  locations: # For replicas: use 1 for dev/testing, 3 for production
+    - name: aws-us-west-2
+      replicas: 3
+    - name: aws-us-east-2
+      replicas: 3
+    - name: aws-eu-central-1
+      replicas: 3
+
+image: ghcr.io/pgedge/pgedge-postgres:17-spock5-standard
+
+resources:
+  minCpu: 500m
+  minMemory: 1Gi
+  maxCpu: 2
+  maxMemory: 4Gi
+
+postgres:
+  username: postgres
+  password: password
+  database: mydb
+
+multiZone: false  # Set to true to spread replicas across availability zones within each location
+
+volumeset:
+  capacity: 10  # Initial capacity in GiB (minimum is 10)
+  autoscaling:
+    enabled: false  # Set to true to enable autoscaling
+    maxCapacity: 100  # Maximum capacity in GiB when autoscaling is enabled
+    minFreePercentage: 10  # Minimum free percentage to trigger scaling
+    scalingFactor: 1.2  # How much to scale up when triggered
+
+pgcat:
+  image: ghcr.io/postgresml/pgcat:latest
+  poolMode: transaction  # options: session, transaction, statement
+  defaultPoolSize: 25    # Real Postgres connections pgcat maintains per pool
+  maxClientConn: 1000    # Maximum client connections pgcat accepts
+  resources:
+    cpu: 500m
+    memory: 256Mi
+  minReplicas: 2
+  maxReplicas: 4
+
+internal_access: # Sets both pgedge and pgcat workloads
+  type: same-gvc  # options: same-gvc, same-org, workload-list
+  workloads:  # Only used when type is workload-list
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME

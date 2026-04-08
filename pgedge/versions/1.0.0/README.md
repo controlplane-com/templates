@@ -107,15 +107,44 @@ Password: {postgres.password}
 
 ## Schema Changes (DDL)
 
-Spock replicates row-level changes (`INSERT`, `UPDATE`, `DELETE`) automatically. DDL (`CREATE TABLE`, `ALTER TABLE`, etc.) must be broadcast using `spock.replicate_ddl()` so it executes on all nodes. Run this once on any single node and it propagates to all others:
+Spock replicates row-level changes (`INSERT`, `UPDATE`, `DELETE`) automatically. DDL (`CREATE TABLE`, `ALTER TABLE`, etc.) must be broadcast using `spock.replicate_ddl()` so it executes on all nodes.
+
+### Creating a table
+
+Run `spock.replicate_ddl()` once on any single node to create the table on all nodes, then add it to the replication set on every node so DML replicates in all directions:
 
 ```sql
-SELECT spock.replicate_ddl('CREATE TABLE orders (id serial PRIMARY KEY, amount numeric, created_at timestamptz DEFAULT now());');
+-- Step 1: Run on ONE node only -- creates the table on all nodes
+SELECT spock.replicate_ddl('CREATE TABLE orders (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  amount numeric,
+  created_at timestamptz DEFAULT now()
+);');
+
+-- Step 2: Run on ONE node -- adds the table to the replication set on all nodes
+SELECT spock.repset_add_table('default', 'orders'::regclass);
+```
+
+Step 2 is required because Spock suppresses event triggers during replication apply to prevent loops, so the auto-add trigger only fires on the node where `replicate_ddl` was called. The `repset_add_table` call itself replicates to all other nodes automatically.
+
+### Other DDL
+
+```sql
 SELECT spock.replicate_ddl('ALTER TABLE orders ADD COLUMN status text DEFAULT ''pending'';');
 SELECT spock.replicate_ddl('DROP TABLE orders;');
 ```
 
-Once a table is created via `spock.replicate_ddl()`, row-level replication for that table is enabled automatically — no additional steps required.
+### Primary keys
+
+Use `uuid` primary keys instead of `serial`/`bigserial`. Each node maintains its own sequence, so auto-increment integers will collide when the same ID is generated on multiple nodes simultaneously. UUIDs are globally unique by design:
+
+```sql
+-- Good: no conflicts
+id uuid PRIMARY KEY DEFAULT gen_random_uuid()
+
+-- Avoid: causes duplicate key conflicts under concurrent multi-node writes
+id serial PRIMARY KEY
+```
 
 ## Important Notes
 

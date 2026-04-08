@@ -43,6 +43,13 @@ pgEdge Identity Name
 {{- end }}
 
 {{/*
+pgEdge Backup Workload Name
+*/}}
+{{- define "pgedge.backup.name" -}}
+{{- printf "%s-pgedge-backup" .Release.Name }}
+{{- end }}
+
+{{/*
 pgEdge Policy Name
 */}}
 {{- define "pgedge.policy.name" -}}
@@ -58,6 +65,40 @@ pgEdge Volume Set Name
 
 
 {{/* Validation */}}
+
+{{/*
+Validate backup configuration - when backup is enabled, backup.provider must be set to 'aws' or 'gcp'
+*/}}
+{{- define "pgedge.validateBackupConfig" -}}
+{{- if .Values.backup.enabled -}}
+  {{- $provider := .Values.backup.provider -}}
+  {{- if not (or (eq $provider "aws") (eq $provider "gcp")) -}}
+    {{- fail "Invalid backup configuration: backup.provider must be set to 'aws' or 'gcp'." -}}
+  {{- end -}}
+  {{- if eq $provider "aws" -}}
+    {{- if not .Values.backup.aws.bucket -}}
+      {{- fail "All fields are required for AWS backup. Missing: backup.aws.bucket" -}}
+    {{- end -}}
+    {{- if not .Values.backup.aws.region -}}
+      {{- fail "All fields are required for AWS backup. Missing: backup.aws.region" -}}
+    {{- end -}}
+    {{- if not .Values.backup.aws.cloudAccountName -}}
+      {{- fail "All fields are required for AWS backup. Missing: backup.aws.cloudAccountName" -}}
+    {{- end -}}
+    {{- if not .Values.backup.aws.policyName -}}
+      {{- fail "All fields are required for AWS backup. Missing: backup.aws.policyName" -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if eq $provider "gcp" -}}
+    {{- if not .Values.backup.gcp.bucket -}}
+      {{- fail "All fields are required for GCP backup. Missing: backup.gcp.bucket" -}}
+    {{- end -}}
+    {{- if not .Values.backup.gcp.cloudAccountName -}}
+      {{- fail "All fields are required for GCP backup. Missing: backup.gcp.cloudAccountName" -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- end }}
 
 {{/*
 Validate that gvc.locations has at least 1 entry

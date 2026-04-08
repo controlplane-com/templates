@@ -46,3 +46,26 @@ internal_access: # Sets both pgedge and pgcat workloads
   type: same-gvc  # options: same-gvc, same-org, workload-list
   workloads:  # Only used when type is workload-list
     #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+backup:
+  enabled: false
+  image: controlplanecorporation/pg-backup:17.1.0
+  schedule: "0 2 * * *"   # daily at 2am UTC
+
+  resources:
+    cpu: 100m
+    memory: 128Mi
+
+  provider: aws  # Options: aws or gcp
+
+  aws:
+    bucket: my-backup-bucket
+    region: us-east-1
+    cloudAccountName: my-backup-cloudaccount
+    policyName: my-backup-policy
+    prefix: pgedge/backups  # folder where backups will be stored
+
+  gcp:
+    bucket: my-backup-bucket
+    cloudAccountName: my-backup-cloudaccount
+    prefix: pgedge/backups  # folder where backups will be stored

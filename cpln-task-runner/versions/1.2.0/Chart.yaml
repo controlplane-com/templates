@@ -1,0 +1,17 @@
+apiVersion: v2
+name: cpln-task-runner
+description: A self-hosted task queue and scheduler service similar to Google Cloud Tasks
+type: application
+version: 1.2.0
+appVersion: "1.0.0"
+
+dependencies:
+  - name: redis
+    version: 3.2.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+
+annotations:
+  created: "2025-12-03"
+  lastModified: "2026-04-09"
+  category: "queue"
+  createsGvc: false

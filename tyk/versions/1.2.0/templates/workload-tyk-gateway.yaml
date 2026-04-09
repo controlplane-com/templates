@@ -1,0 +1,90 @@
+kind: workload
+name: {{ include "tyk.gateway.name" . }}
+description: Tyk API Gateway
+tags: {{- include "tyk.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: tyk-gateway
+      cpu: {{ .Values.resources.cpu | quote }}
+      env:
+        - name: TYK_GW_LISTENPORT
+          value: '{{ .Values.listenPort }}'
+        - name: TYK_GW_STORAGE_ADDRS
+          value: {{ .Release.Name }}-sentinel.{{ .Values.global.cpln.gvc }}.cpln.local:26379
+        - name: TYK_GW_STORAGE_ENABLECLUSTER
+          value: 'false'
+        - name: TYK_GW_STORAGE_MASTERNAME
+          value: mymaster
+        - name: TYK_GW_STORAGE_PASSWORD
+          value: cpln://secret/{{ include "tyk.redisAuthSecret.name" . }}.password
+        - name: TYK_GW_STORAGE_SENTINELPASSWORD
+          value: cpln://secret/{{ include "tyk.sentinelAuthSecret.name" . }}.password
+        - name: TYK_GW_STORAGE_TYPE
+          value: redis
+        - name: TYK_GW_ALLOWMASTERKEYS
+          value: 'true'
+        - name: TYK_GW_LOGLEVEL
+          value: 'info'
+        - name: TYK_GW_POLICIES_POLICYSOURCE
+          value: 'file'
+        - name: TYK_GW_POLICIES_POLICYRECORDNAME
+          value: /opt/tyk-gateway/policies/policies.json
+        - name: TYK_GW_SECRET
+          value: cpln://secret/{{ include "tyk.gatewaySecret.name" . }}.admin-secret
+      volumes:
+{{- if and .Values.apiSecretName (ne .Values.apiSecretName "") }}
+        - path: /opt/tyk-gateway/apps
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ .Values.apiSecretName }}
+{{- end }}
+{{- if and .Values.policySecretName (ne .Values.policySecretName "") }}
+        - path: /opt/tyk-gateway/policies/policies.json
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ .Values.policySecretName }}.payload
+{{- end }}
+      image: {{ .Values.image }}
+      inheritEnv: false
+      memory: {{ .Values.resources.memory | quote }}
+      ports:
+        - number: {{ .Values.listenPort }}
+          protocol: http
+  defaultOptions:
+    multiZone:
+      enabled: {{ .Values.multiZone }}
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.autoscaling.maxScale }}
+      metric: {{ .Values.autoscaling.metric }}
+      minScale: {{ .Values.autoscaling.minScale }}
+      scaleToZeroDelay: {{ .Values.autoscaling.scaleToZeroDelay }}
+      target: {{ .Values.autoscaling.target }}
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      {{- if .Values.externalAccess }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "tyk.identity.name" . }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

@@ -1,0 +1,18 @@
+apiVersion: v2
+name: tyk
+description: Tyk API Gateway for Control Plane
+
+type: application
+version: 1.2.0
+appVersion: "5.10.0"
+
+dependencies:
+  - name: redis
+    version: 3.2.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+
+annotations:
+  created: "2025-10-30"
+  lastModified: "2026-04-09"
+  category: "api-gateway"
+  createsGvc: false

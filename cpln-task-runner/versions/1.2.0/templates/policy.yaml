@@ -1,0 +1,18 @@
+kind: policy
+name: {{ include "task-runner.policy.name" . }}
+description: Task Runner policy
+tags: {{- include "cpln-task-runner.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "task-runner.identity.name" . }}
+targetKind: secret
+targetLinks:
+{{- if .Values.createSecret }}
+  - //secret/{{ .Values.secretName }}
+{{- else }}
+  - //secret/{{ .Values.redis.admin.fromSecret.name }}
+  - //secret/{{ .Values.redis.redis.auth.fromSecret.name }}
+  - //secret/{{ .Values.redis.sentinel.auth.fromSecret.name }}
+{{- end }}

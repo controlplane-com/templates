@@ -1,0 +1,11 @@
+apiVersion: v2
+name: cpln-common
+description: Shared Helm library for Control Plane marketplace templates
+type: library
+version: 1.0.0
+
+annotations:
+  created: "2026-04-13"
+  lastModified: "2026-04-13"
+  category: "library"
+  createsGvc: false

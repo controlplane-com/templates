@@ -28,7 +28,7 @@ app.cpln.io/managed-by: {{ .Release.Service }}
 cpln/marketplace: "true"
 cpln/marketplace-template: {{ .Chart.Name }}
 cpln/marketplace-template-version: {{ .Chart.Version }}
-{{- if .Values.global.cpln.gvc }}
+{{- if dig "global" "cpln" "gvc" "" .Values }}
 cpln/marketplace-gvc: {{ .Values.global.cpln.gvc }}
 {{- end }}
 {{- end }}

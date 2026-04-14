@@ -68,6 +68,12 @@ jobs:
             local template=$(echo "$version_dir" | cut -d/ -f1)
             local version=$(grep '^version:' "$version_dir/Chart.yaml" | awk '{print $2}')
 
+            # Library charts cannot be rendered standalone — skip helm template validation
+            if grep -qE '^\s*type:\s*library' "$version_dir/Chart.yaml"; then
+              echo "Skipping $template @ $version (library chart)"
+              return
+            fi
+
             echo ""
             echo "=== Validating $template @ $version ==="
 

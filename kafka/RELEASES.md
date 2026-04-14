@@ -1,3 +1,9 @@
+# Release Notes - Version 3.5.0
+
+## What's New
+
+- **Kafka Cluster Parallel Scaling Policy**: Changed the default `scalingPolicy` for the Kafka cluster stateful workload from `OrderedReady` to `Parallel`
+
 # Release Notes - Version 3.4.0
 
 ## What's New

@@ -1,0 +1,31 @@
+{{- $root := . -}}
+{{- $logDirs := split "," $root.Values.kafka.logDirs }}
+{{- $counter := 0 }}
+{{- range $index, $path := $logDirs }}
+kind: volumeset
+name: {{ include "kafka.name" $root }}-logs-{{ $counter }}
+description: {{ include "kafka.name" $root }} logs {{ $counter }}
+gvc: {{ $root.Values.global.cpln.gvc }}
+spec:
+  initialCapacity: {{ $root.Values.kafka.volumes.logs.initialCapacity }}
+  performanceClass: {{ $root.Values.kafka.volumes.logs.performanceClass }}
+  fileSystemType: {{ $root.Values.kafka.volumes.logs.fileSystemType }}
+  {{- if and $root.Values.kafka.volumes.logs.customEncryption $root.Values.kafka.volumes.logs.customEncryption.enabled }}
+  customEncryption:
+    regions:
+      {{ $root.Values.kafka.volumes.logs.customEncryption.region }}:
+        keyId: '{{ $root.Values.kafka.volumes.logs.customEncryption.keyId }}'
+  {{- end }}
+  autoscaling:
+    maxCapacity: {{ $root.Values.kafka.volumes.logs.autoscaling.maxCapacity }}
+    minFreePercentage: {{ $root.Values.kafka.volumes.logs.autoscaling.minFreePercentage }}
+    scalingFactor: {{ $root.Values.kafka.volumes.logs.autoscaling.scalingFactor }}
+{{- if $root.Values.kafka.volumes.logs.snapshots }}
+  snapshots:
+    createFinalSnapshot: {{ $root.Values.kafka.volumes.logs.snapshots.createFinalSnapshot }}
+    retentionDuration: {{ $root.Values.kafka.volumes.logs.snapshots.retentionDuration }}
+    schedule: {{ $root.Values.kafka.volumes.logs.snapshots.schedule }}
+{{- end }}
+---
+{{- $counter = add $counter 1 }}
+{{- end }}

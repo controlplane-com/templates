@@ -1,0 +1,90 @@
+# Global Virtual Cloud (GVC) settings
+gvc:
+  name: airflow
+  locations:
+    - name: aws-eu-central-1
+
+# Postgres database configuration
+postgres:
+  image: postgres:18
+  resources:
+    minCpu: 250m
+    maxCpu: 500m
+    minMemory: 512Mi
+    maxMemory: 1024Mi
+  config:
+    username: username
+    password: password
+    database: airflow
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+# Redis cache configuration
+redis:
+  image: redis:7.4
+  resources:
+    cpu: 250m
+    memory: 512Mi
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+# Apache Airflow configuration   
+airflow:
+  webserver:
+    image: apache/airflow:3.0.3
+    resources:
+      cpu: 2000m
+      memory: 3Gi
+  celeryWorker:
+    image: controlplanecorporation/celery:v1
+    resources:
+      cpu: 256m
+      memory: 512Mi
+  webPort: 8080   # Port for accessing the Airflow web interface
+
+  auth:
+    jwtSecret: CHANGE_ME # REQUIRED: generate with "openssl rand -base64 48"
+    jwtExpirationDelta: 3600  # JWT token expiration time in seconds
+    jwtRefreshThreshold: 300 # Threshold before token expires to allow refresh in seconds
+    fernetKey: CHANGE_ME # REQUIRED: generate with "python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"
+
+  admin:
+    username: admin
+    password: CHANGE_ME # REQUIRED: change before deploying to production
+
+  scheduler:
+    dagDirListInterval: 10  # How often to check DAG folder (seconds)
+    minFileProcessInterval: 10 # Minimum interval to process DAG files (seconds)
+
+  celery:
+    workerConcurrency: 1 # Number of tasks each worker can run concurrently when KEDA is enabled.
+
+volumeset:
+  airflow:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+# Firewall configuration
+firewallConfig:
+  inboundAllowCIDR:
+    - 0.0.0.0/0  # Restrict to specific IPs in production (e.g. - 203.0.113.0/24)
+
+# Git-sync configuration for DAG delivery
+gitSync:
+  enabled: false
+  repo: ""       # Git repository URL (e.g. https://github.com/org/dags)
+  branch: main   # Branch to sync
+  period: 60s    # How often to sync
+  subPath: ""    # Optional subfolder within the repo containing DAGs
+  auth:
+    token: ""    # Personal access token for private repos (leave empty for public repos)
+
+# KEDA (Kubernetes Event-driven Autoscaling) configuration
+keda:
+  enabled: true # Enable or disable KEDA autoscaling
+  minScale: 1  # Minimum number of Celery workers
+  maxScale: 3  # Maximum number of Celery workers
+  scaleToZeroDelay: 300 # Time before scaling to zero (seconds)
+  listLength: 3   # Queue length threshold to trigger scaling
+  cooldownPeriod: 1 # Cooldown between scaling events (seconds)
+  initialCooldownPeriod: 1 # Cooldown after startup before scaling (seconds)
+  pollingInterval: 4  # Interval at which KEDA queries metrics for scaling(seconds)

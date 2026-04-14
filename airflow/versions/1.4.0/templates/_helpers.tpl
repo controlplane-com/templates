@@ -74,31 +74,8 @@ Airflow Volume Set Name
 {{/* Labeling */}}
 
 {{/*
-Create chart name and version as used by the chart label.
-*/}}
-{{- define "airflow.chart" -}}
-{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
-{{- end }}
-
-{{/*
-Common labels
+Common labels - delegated to cpln-common
 */}}
 {{- define "airflow.tags" -}}
-helm.sh/chart: {{ include "airflow.chart" . }}
-{{ include "airflow.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.cpln.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.cpln.io/managed-by: {{ .Release.Service }}
-cpln/marketplace: "true"
-cpln/marketplace-template: airflow
-cpln/marketplace-template-version: {{ .Chart.Version }}
-{{- end }}
-
-{{/*
-Selector labels
-*/}}
-{{- define "airflow.selectorLabels" -}}
-app.cpln.io/name: {{ .Release.Name }}
-app.cpln.io/instance: {{ .Release.Name }}
+{{- include "cpln-common.tags" . }}
 {{- end }}

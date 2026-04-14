@@ -50,7 +50,7 @@ jobs:
 
   validate:
     needs: [setup]
-    if: needs.setup.outputs.version_dirs != '' || needs.setup.outputs.charts != ''
+    if: github.event_name != 'workflow_dispatch' && (needs.setup.outputs.version_dirs != '' || needs.setup.outputs.charts != '')
     uses: ./.github/workflows/validate-charts.yml
     with:
       version_dirs: ${{ needs.setup.outputs.version_dirs }}
@@ -58,6 +58,7 @@ jobs:
 
   publish:
     needs: [setup, validate]
+    if: always() && (needs.setup.outputs.version_dirs != '' || needs.setup.outputs.charts != '') && (needs.validate.result == 'success' || needs.validate.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -1,3 +1,4 @@
+{{- if not (include "clickhouse.isSingleNode" .) }}
 {{ include "clickhouse.validateLocations" . }}
 kind: workload
 name: {{ include "clickhouse.keeper.name" . }}
@@ -8,7 +9,7 @@ spec:
   containers:
     - name: keeper
       cpu: {{ .Values.keeper.resources.cpu | quote }}
-      image: clickhouse/clickhouse-keeper:25.10
+      image: {{ .Values.keeper.image }}
       inheritEnv: false
       env:
       - name: LOCATIONS_STR
@@ -62,7 +63,7 @@ spec:
     external:
       inboundAllowCIDR: []
       inboundBlockedCIDR: []
-      outboundAllowCIDR: 
+      outboundAllowCIDR:
         - 0.0.0.0/0
       outboundAllowHostname: []
       outboundAllowPort: []
@@ -76,3 +77,4 @@ spec:
       ports: []
     replicaDirect: true
   supportDynamicTags: false
+{{- end }}

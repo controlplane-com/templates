@@ -9,7 +9,7 @@ spec:
   containers:
     - name: server
       cpu: {{ .Values.server.resources.cpu | quote }}
-      image: clickhouse/clickhouse-server:25.10
+      image: {{ .Values.server.image }}
       inheritEnv: false
       env:
       - name: LOCATIONS_STR

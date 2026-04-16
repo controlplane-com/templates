@@ -12,6 +12,7 @@ spec:
     createFinalSnapshot: true
     retentionDuration: 7d
 
+{{- if not (include "clickhouse.isSingleNode" .) }}
 ---
 kind: volumeset
 name: {{ include "clickhouse.volumeKeeper.name" . }}
@@ -26,3 +27,4 @@ spec:
   snapshots:
     createFinalSnapshot: true
     retentionDuration: 7d
+{{- end }}

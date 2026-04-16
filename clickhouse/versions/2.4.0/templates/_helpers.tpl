@@ -80,6 +80,17 @@ Clickhouse Volume Set Keeper Name
 
 {{/* Validation */}}
 
+{{/*
+Determine if this is a single-node deployment.
+Requires exactly 1 location with exactly 1 replica.
+1 location with >1 replica is a single-shard cluster and still requires Keeper.
+*/}}
+{{- define "clickhouse.isSingleNode" -}}
+{{- if and (eq (len .Values.gvc.locations) 1) (eq ((index .Values.gvc.locations 0).replicas | int) 1) -}}
+true
+{{- end -}}
+{{- end -}}
+
 {{- define "clickhouse.validateStorage" -}}
 {{- $provider := .Values.provider -}}
 {{- if not (or (eq $provider "aws") (eq $provider "gcp")) -}}
@@ -113,8 +124,9 @@ Clickhouse Volume Set Keeper Name
 {{- end -}}
 
 {{- define "clickhouse.validateLocations" -}}
-{{- if lt (len .Values.gvc.locations) 3 -}}
-  {{- fail "3 or more locations must be specified." -}}
+{{- $count := len .Values.gvc.locations -}}
+{{- if eq $count 2 -}}
+  {{- fail "2 locations is not supported. Use 1 location for single-node mode or 3+ locations for cluster mode." -}}
 {{- end -}}
 {{- end -}}
 

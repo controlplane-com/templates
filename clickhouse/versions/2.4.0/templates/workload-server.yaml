@@ -15,9 +15,9 @@ spec:
       - name: LOCATIONS_STR
         value: "{{- range $i, $loc := .Values.gvc.locations -}}{{ $loc.name }}:{{ $loc.replicas }}{{ if lt $i (sub (len $.Values.gvc.locations) 1) }},{{ end }}{{- end }}"
       - name: CLICKHOUSE_PASSWORD
-        value: cpln://secret/{{ include "clickhouse.secretDatabase.name" . }}
+        value: cpln://secret/{{ include "clickhouse.secretDatabase.name" . }}.password
       - name: CLICKHOUSE_DATABASE
-        value: cpln://secret/{{ include "clickhouse.secretDatabase.name" . }}
+        value: cpln://secret/{{ include "clickhouse.secretDatabase.name" . }}.db
       memory: {{ .Values.server.resources.memory | quote }}
       command: "/bin/bash"
       args:

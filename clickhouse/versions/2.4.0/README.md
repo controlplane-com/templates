@@ -1,33 +1,43 @@
 # ClickHouse
 
-This template deploys a ClickHouse cluster with ClickHouse Keeper for coordination.
+This template deploys ClickHouse in either **single-node** or **cluster** mode depending on how locations are configured in `values.yaml`. All deployments use object storage (AWS S3 or GCS) as the primary data store.
 
 ClickHouse is a high-performance column-oriented analytical database designed for real-time querying and data warehousing at scale. Storage includes:
 
-- Primary object storage - long-term scalable storage (AWS S3 or GCS)
+- **Primary object storage** — long-term scalable storage (AWS S3 or GCS)
+- **Scratch volume** — fast local read cache for performance
+- **Volumeset** — persistent metadata, state, and system files
 
-- Scratch volume - fast local read cache for performance
+## Deployment Modes
 
-- Volumeset - persistent metadata, state, and system files
+### Single-Node
+Specify exactly **1 location with `replicas: 1`**. No ClickHouse Keeper is deployed. Ideal for development, staging, or lower-traffic workloads where high availability is not required.
 
-**Important**: To minimize network egress costs, deploy all locations in the same cloud provider and keep object storage in the same region(s). Using 1 replica per location for ClickHouse server is sufficient.
+### Single-Shard Cluster
+Specify **1 location with `replicas` > 1**. Deploys a single shard with multiple replicas in one location. ClickHouse Keeper is deployed for replication coordination.
+
+### Multi-Shard Cluster
+Specify **3 or more locations**. Deploys a shard per location with configurable replicas. ClickHouse Keeper is deployed across the first 3 locations for quorum. Recommended for production workloads requiring high availability and geographic distribution.
+
+> **Note:** 2 locations is not supported. Use 1 location (single-node or single-shard) or 3+.
+
+**Important**: To minimize network egress costs, deploy all locations in the same cloud provider and keep object storage in the same region(s). Using 1 replica per location for ClickHouse server is sufficient for most cluster deployments.
 
 ## Configuration
 
 Before installing, update `values.yaml` with the parameters relevant to your environment:
 
 - **GVC name**: Assign a name for the Global Virtual Cloud.
-
-- **Locations**: Define replica counts per location (affects server workload distribution).
-
-- **Cluster Name**: Assign a cluster name. Used in distributed DDL queries.
-
-- **Storage**: Choose AWS S3 or GCS and fill in configuration values under that section.
+- **Locations**: Set 1 location with `replicas: 1` for single-node, or configure 3+ locations for a cluster.
+- **Cluster Name**: Assign a cluster name. Used in distributed DDL queries (cluster mode only).
+- **Storage**: Choose AWS S3 or GCS and fill in the configuration values under that section.
 
 **Note on GVC Naming**
-  - This template creates a GVC automatically with a name defined in `values.yaml`. If deploying multiple independent ClickHouse clusters, **you must use a unique GVC name** for each deployment.
+  - This template creates a GVC automatically with a name defined in `values.yaml`. If deploying multiple independent ClickHouse instances, **you must use a unique GVC name** for each deployment.
 
 ## Setting Up Storage
+
+Object storage is required for all deployment modes.
 
 ### AWS S3
 
@@ -102,7 +112,7 @@ gsutil hmac create clickhouse-storage@$(gcloud config get-value project).iam.gse
 
 ## Connecting to ClickHouse
 
-To connect using the ClickHouse client:
+To connect using the ClickHouse client from within the same GVC:
 
 ```SH
 clickhouse-client --host $WORKLOAD_NAME --password $PASSWORD
@@ -110,7 +120,7 @@ clickhouse-client --host $WORKLOAD_NAME --password $PASSWORD
 
 ### Supported External Services
 
-- [ClickHouse Documentation](https://clickhouse.com/docs/).
+- [ClickHouse Documentation](https://clickhouse.com/docs/)
 - [Cloud Accounts Documentation](https://docs.controlplane.com/guides/create-cloud-account#overview)
-- [Clickhouse with S3](https://clickhouse.com/docs/integrations/s3)
-- [Clickhouse with GCS](https://clickhouse.com/docs/integrations/gcs)
+- [ClickHouse with S3](https://clickhouse.com/docs/integrations/s3)
+- [ClickHouse with GCS](https://clickhouse.com/docs/integrations/gcs)

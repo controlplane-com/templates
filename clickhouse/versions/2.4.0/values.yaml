@@ -7,13 +7,10 @@ gvc:
   locations:
     - name: aws-us-east-2
       replicas: 1
-  # Cluster mode example (remove the single location above and uncomment below):
-  # - name: aws-us-west-2
-  #   replicas: 1
-  # - name: aws-us-east-2
-  #   replicas: 1
-  # - name: aws-us-east-1
-  #   replicas: 1
+    - name: aws-us-west-2
+      replicas: 1
+    - name: aws-us-east-1
+      replicas: 1
 
 provider: aws # Options: aws or gcp
 

@@ -1,0 +1,18 @@
+apiVersion: v2
+name: clickhouse
+description: Fast, open source column-oriented database management system for Control Plane
+
+type: application
+version: 2.4.0
+appVersion: "25.10"
+
+annotations:
+  created: "2025-11-21"
+  lastModified: "2026-04-16"
+  category: "database"
+  createsGvc: true
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

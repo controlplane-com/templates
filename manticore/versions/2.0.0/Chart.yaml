@@ -1,0 +1,13 @@
+apiVersion: v2
+name: manticore
+description: Distributed Manticore Search cluster with intelligent orchestration.
+
+type: application
+version: 2.0.0
+appVersion: "25.0.0"
+
+annotations:
+  created: "2026-01-05"
+  lastModified: "2026-04-17"
+  category: "search"
+  createsGvc: false

@@ -235,32 +235,8 @@ Parses duration strings like "5m", "1h", "30s"
 {{/* Labeling */}}
 
 {{/*
-Create chart name and version as used by the chart label.
-*/}}
-{{- define "manticore.chart" -}}
-{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
-{{- end }}
-
-{{/*
-Common labels
+Common labels - delegated to cpln-common
 */}}
 {{- define "manticore.tags" -}}
-helm.sh/chart: {{ include "manticore.chart" . }}
-{{ include "manticore.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.cpln.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.cpln.io/managed-by: {{ .Release.Service }}
-cpln/marketplace: "true"
-cpln/marketplace-template: manticore
-cpln/marketplace-template-version: {{ .Chart.Version }}
-cpln/marketplace-gvc: {{ .Values.global.cpln.gvc }}
-{{- end }}
-
-{{/*
-Selector labels
-*/}}
-{{- define "manticore.selectorLabels" -}}
-app.cpln.io/name: {{ .Release.Name }}
-app.cpln.io/instance: {{ .Release.Name }}
+{{- include "cpln-common.tags" . }}
 {{- end }}

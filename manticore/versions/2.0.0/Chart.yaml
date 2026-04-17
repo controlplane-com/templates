@@ -11,3 +11,8 @@ annotations:
   lastModified: "2026-04-17"
   category: "search"
   createsGvc: false
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

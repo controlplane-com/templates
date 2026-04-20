@@ -27,22 +27,10 @@ spec:
           protocol: http
         - number: 9312
           protocol: tcp
-        # Galera replication ports
-        - number: 9313
+        # Galera gcomm + IST ports
+        - number: 9322
           protocol: tcp
-        - number: 9314
-          protocol: tcp
-        - number: 9315
-          protocol: tcp
-        - number: 9316
-          protocol: tcp
-        - number: 9317
-          protocol: tcp
-        - number: 9318
-          protocol: tcp
-        - number: 9319
-          protocol: tcp
-        - number: 9320
+        - number: 9323
           protocol: tcp
       readinessProbe:
         failureThreshold: 6

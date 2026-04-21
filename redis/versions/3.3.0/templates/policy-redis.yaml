@@ -13,3 +13,8 @@ targetLinks:
   {{- else if and (hasKey .Values.redis "auth") (hasKey .Values.redis.auth "password") .Values.redis.auth.password.enabled }}
   - //secret/{{ include "redis.secretPassword.name" . }}
   {{- end }}
+  {{- if and (hasKey .Values.sentinel "auth") (hasKey .Values.sentinel.auth "fromSecret") .Values.sentinel.auth.fromSecret.enabled }}
+  - //secret/{{ .Values.sentinel.auth.fromSecret.name }}
+  {{- else if and (hasKey .Values.sentinel "auth") (hasKey .Values.sentinel.auth "password") .Values.sentinel.auth.password.enabled }}
+  - //secret/{{ include "redis.sentinelSecretPassword.name" . }}
+  {{- end }}

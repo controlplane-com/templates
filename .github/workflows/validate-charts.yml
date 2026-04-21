@@ -66,7 +66,14 @@ jobs:
             [ ! -f "$version_dir/Chart.yaml" ] && return
 
             local template=$(echo "$version_dir" | cut -d/ -f1)
+            local folder_version=$(echo "$version_dir" | cut -d/ -f3)
             local version=$(grep '^version:' "$version_dir/Chart.yaml" | awk '{print $2}')
+
+            if [ "$version" != "$folder_version" ]; then
+              echo "FAIL [$template]: Chart.yaml version '$version' does not match folder name '$folder_version'"
+              failed=1
+              return
+            fi
 
             # Library charts cannot be rendered standalone — skip helm template validation
             if grep -qE '^\s*type:\s*library' "$version_dir/Chart.yaml"; then

@@ -1,0 +1,12 @@
+kind: policy
+name: {{ include "cassandra.name" . }}
+origin: default
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "cassandra.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "cassandra.name" . }}-init
+  - //secret/{{ include "cassandra.name" . }}-config

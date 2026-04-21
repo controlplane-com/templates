@@ -1,0 +1,4 @@
+kind: identity
+name: {{ include "cassandra.name" . }}
+description: {{ include "cassandra.name" . }} identity
+gvc: {{ .Values.global.cpln.gvc }}

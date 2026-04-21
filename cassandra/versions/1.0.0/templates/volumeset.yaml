@@ -1,0 +1,12 @@
+kind: volumeset
+name: {{ include "cassandra.name" . }}-data
+description: {{ include "cassandra.name" . }} data
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  initialCapacity: {{ .Values.cassandra.volumes.data.initialCapacity }}
+  performanceClass: {{ .Values.cassandra.volumes.data.performanceClass }}
+  fileSystemType: {{ .Values.cassandra.volumes.data.fileSystemType }}
+  autoscaling:
+    maxCapacity: {{ .Values.cassandra.volumes.data.autoscaling.maxCapacity }}
+    minFreePercentage: {{ .Values.cassandra.volumes.data.autoscaling.minFreePercentage }}
+    scalingFactor: {{ .Values.cassandra.volumes.data.autoscaling.scalingFactor }}

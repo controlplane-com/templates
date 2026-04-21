@@ -1,0 +1,85 @@
+kind: workload
+name: {{ include "cassandra.name" . }}
+description: Cassandra cluster
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  type: stateful
+  containers:
+    - name: cassandra
+      command: /bin/bash
+      args:
+        - '-c'
+        - >-
+          cp /scripts/cassandra-init.sh /tmp/cassandra-init.sh &&
+          chmod +x /tmp/cassandra-init.sh &&
+          /tmp/cassandra-init.sh
+      env:
+        - name: MAX_HEAP_SIZE
+          value: {{ .Values.cassandra.jvmHeapSize | quote }}
+      image: {{ .Values.cassandra.image }}
+      cpu: '{{ .Values.cassandra.cpu }}'
+      memory: {{ .Values.cassandra.memory }}
+      inheritEnv: false
+      ports:
+        - number: 9042
+          protocol: tcp
+        - number: 7000
+          protocol: tcp
+      livenessProbe:
+        failureThreshold: 10
+        initialDelaySeconds: 120
+        periodSeconds: 30
+        successThreshold: 1
+        tcpSocket:
+          port: 9042
+        timeoutSeconds: 10
+      readinessProbe:
+        failureThreshold: 20
+        initialDelaySeconds: 60
+        periodSeconds: 15
+        successThreshold: 3
+        tcpSocket:
+          port: 9042
+        timeoutSeconds: 5
+      volumes:
+        - path: /var/lib/cassandra
+          recoveryPolicy: retain
+          uri: 'cpln://volumeset/{{ include "cassandra.name" . }}-data'
+        - path: /config-template/cassandra-template.yaml
+          recoveryPolicy: retain
+          uri: 'cpln://secret/{{ include "cassandra.name" . }}-config'
+        - path: /scripts/cassandra-init.sh
+          recoveryPolicy: retain
+          uri: 'cpln://secret/{{ include "cassandra.name" . }}-init'
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.cassandra.replicas }}
+      metric: disabled
+      minScale: {{ .Values.cassandra.replicas }}
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: {{ .Values.cassandra.suspend }}
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: same-gvc
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: true
+  identityLink: //identity/{{ include "cassandra.name" . }}
+  rolloutOptions:
+    maxSurgeReplicas: 0%
+    maxUnavailableReplicas: '1'
+    minReadySeconds: 60
+    scalingPolicy: OrderedReady
+  securityOptions:
+    filesystemGroupId: 999
+  supportDynamicTags: false

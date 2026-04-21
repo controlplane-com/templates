@@ -1,0 +1,21 @@
+cassandra:
+  # Must match minScale/maxScale below. Use odd numbers: 3, 5, 7.
+  replicas: 3
+  image: cassandra:5.0
+  cpu: 2
+  memory: 8Gi
+  # JVM heap: leave ~50% of container memory for off-heap (bloom filters, page cache, etc.)
+  # Cassandra 5.x uses G1GC — only MAX_HEAP_SIZE is valid; HEAP_NEWSIZE is ignored.
+  jvmHeapSize: 2G
+  clusterName: cp-cassandra
+  suspend: false
+
+  volumes:
+    data:
+      initialCapacity: 10
+      performanceClass: general-purpose-ssd
+      fileSystemType: ext4
+      autoscaling:
+        maxCapacity: 100
+        minFreePercentage: 20
+        scalingFactor: 1.5

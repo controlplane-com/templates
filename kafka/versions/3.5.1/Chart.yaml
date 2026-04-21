@@ -1,0 +1,17 @@
+apiVersion: v2
+name: kafka
+description: Kafka cluster app for Control Plane
+type: application
+version: 3.5.1
+appVersion: "3.9"
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+
+annotations:
+  created: "2026-04-13"
+  lastModified: "2026-04-13"
+  category: "event-streaming"
+  createsGvc: false

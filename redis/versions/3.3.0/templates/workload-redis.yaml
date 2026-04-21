@@ -26,7 +26,15 @@ spec:
         - name: CUSTOM_REDIS_PASSWORD
           value: cpln://secret/{{ include "redis.secretPassword.name" . }}.password
       {{- end }}
-      {{- if not (or .Values.redis.env .Values.redis.replicaDirect (and (hasKey .Values.redis "auth") (or (and (hasKey .Values.redis.auth "fromSecret") .Values.redis.auth.fromSecret.enabled) (and (hasKey .Values.redis.auth "password") .Values.redis.auth.password.enabled)))) }}
+      {{- if and (hasKey .Values.sentinel "auth") (hasKey .Values.sentinel.auth "fromSecret") .Values.sentinel.auth.fromSecret.enabled }}
+        - name: CUSTOM_SENTINEL_PASSWORD
+          value: cpln://secret/{{ .Values.sentinel.auth.fromSecret.name }}.{{ .Values.sentinel.auth.fromSecret.passwordKey }}
+      {{- else if and (hasKey .Values.sentinel "auth") (hasKey .Values.sentinel.auth "password") .Values.sentinel.auth.password.enabled }}
+        - name: CUSTOM_SENTINEL_PASSWORD
+          value: cpln://secret/{{ include "redis.sentinelSecretPassword.name" . }}.password
+      {{- end }}
+      {{- $hasSentinelAuth := or (and (hasKey .Values.sentinel "auth") (hasKey .Values.sentinel.auth "fromSecret") .Values.sentinel.auth.fromSecret.enabled) (and (hasKey .Values.sentinel "auth") (hasKey .Values.sentinel.auth "password") .Values.sentinel.auth.password.enabled) }}
+      {{- if not (or .Values.redis.env .Values.redis.replicaDirect (and (hasKey .Values.redis "auth") (or (and (hasKey .Values.redis.auth "fromSecret") .Values.redis.auth.fromSecret.enabled) (and (hasKey .Values.redis.auth "password") .Values.redis.auth.password.enabled))) $hasSentinelAuth) }}
         []
       {{- end }}
       args:
@@ -65,9 +73,33 @@ spec:
             {{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
             {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof {{ .Values.redis.publicAccess.address }} 6380
             {{- else if and (hasKey .Values.redis "replicaDirect") .Values.redis.replicaDirect }}
-            {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof replica-0.${CPLN_WORKLOAD_NAME}.${LOCATION}.${CPLN_GVC}.cpln.local 6379
+            SENTINEL_HOST="replica-0.{{ include "redis.sentinel.name" . }}.${LOCATION}.${CPLN_GVC}.cpln.local"
+            if [ -n "$CUSTOM_SENTINEL_PASSWORD" ]; then
+              MASTER_INFO=$(redis-cli -h $SENTINEL_HOST -p 26379 --no-auth-warning -a "$CUSTOM_SENTINEL_PASSWORD" SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
+            else
+              MASTER_INFO=$(redis-cli -h $SENTINEL_HOST -p 26379 SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
+            fi
+            MASTER_HOST=$(echo "$MASTER_INFO" | head -1)
+            MASTER_PORT=$(echo "$MASTER_INFO" | tail -1)
+            if [ -z "$MASTER_HOST" ]; then
+              MASTER_HOST="replica-0.${CPLN_WORKLOAD_NAME}.${LOCATION}.${CPLN_GVC}.cpln.local"
+              MASTER_PORT=6379
+            fi
+            {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof $MASTER_HOST $MASTER_PORT
             {{- else }}
-            {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof {{ include "redis.name" . }}-0.{{ include "redis.name" . }} 6379
+            SENTINEL_HOST="{{ include "redis.sentinel.name" . }}-0.{{ include "redis.sentinel.name" . }}"
+            if [ -n "$CUSTOM_SENTINEL_PASSWORD" ]; then
+              MASTER_INFO=$(redis-cli -h $SENTINEL_HOST -p 26379 --no-auth-warning -a "$CUSTOM_SENTINEL_PASSWORD" SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
+            else
+              MASTER_INFO=$(redis-cli -h $SENTINEL_HOST -p 26379 SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
+            fi
+            MASTER_HOST=$(echo "$MASTER_INFO" | head -1)
+            MASTER_PORT=$(echo "$MASTER_INFO" | tail -1)
+            if [ -z "$MASTER_HOST" ]; then
+              MASTER_HOST="{{ include "redis.name" . }}-0.{{ include "redis.name" . }}"
+              MASTER_PORT=6379
+            fi
+            {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof $MASTER_HOST $MASTER_PORT
             {{- end }}
           fi
       command: /bin/sh

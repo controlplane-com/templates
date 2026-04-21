@@ -1,0 +1,60 @@
+gvc:
+  name: clickhouse-gvc
+  # Single-node mode: exactly 1 location with replicas: 1 — no Keeper, uses S3/GCS for storage
+  # Single-shard cluster: 1 location with replicas > 1 — Keeper required
+  # Multi-shard cluster: 3 or more locations — Keeper required
+  # Note: 2 locations is not supported
+  locations:
+    - name: aws-us-east-2
+      replicas: 1
+    - name: aws-us-west-2
+      replicas: 1
+    - name: aws-us-east-1
+      replicas: 1
+
+provider: aws # Options: aws or gcp
+
+aws: # If enabled, all fields below are required - See README for guidance
+  bucket: clickhouse-s3-bucket # Name of your S3 bucket
+  region: us-east-1 # Region of your S3 bucket
+  cloudAccountName: clickhouse-s3-cloudaccount # Name of your Cloud Account
+  policyName: clickhouse-s3-policy # Name of your pre-created policy to allow access to the S3 bucket
+
+gcp: # If enabled, all fields below are required - See README for guidance
+  bucket: clickhouse-gcs-bucket # Name of your GCS bucket
+  accessKeyId: gcs-access-key-id # Access key ID for your GCS service account
+  secretAccessKey: gcs-secret-access-key # Secret access key for your GCS service account
+
+clusterName: my_cluster # Used in cluster mode only
+
+database: # Automatically create a database on initialization using the default user
+  name: mydatabase
+  password: mypassword
+
+volumeset:
+  server:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+  keeper:
+    capacity: 10 # initial capacity in GiB (minimum is 10) - cluster mode only
+
+server:
+  image: clickhouse/clickhouse-server:25.10
+  resources:
+    cpu: 2
+    memory: 2Gi
+  internal_access:
+    type: same-gvc # options: same-gvc, same-org, workload-list
+    workloads:  # Note: can only be used if type is same-gvc or workload-list
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+keeper: # cluster mode only
+  image: clickhouse/clickhouse-keeper:25.10
+  resources:
+    cpu: 2
+    memory: 2Gi
+  internal_access:
+    type: same-gvc # options: same-gvc, same-org, workload-list
+    workloads:  # Note: can only be used if type is same-gvc or workload-list
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME

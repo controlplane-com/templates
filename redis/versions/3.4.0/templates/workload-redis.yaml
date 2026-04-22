@@ -49,11 +49,9 @@ spec:
             echo "\nmasterauth $CUSTOM_REDIS_PASSWORD" >> /etc/redis/redis.conf
           fi
           {{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
-          POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev)
-          PORT=$((6380 + POD_ID))
-          echo "\nport $PORT" >> /etc/redis/redis.conf
-          echo "\nreplica-announce-ip {{ .Values.redis.publicAccess.address }}" >> /etc/redis/redis.conf
-          echo "\nreplica-announce-port $PORT" >> /etc/redis/redis.conf
+          echo "\nport 6379" >> /etc/redis/redis.conf
+          echo "\nreplica-announce-ip ${HOSTNAME}.{{ include "redis.name" . }}" >> /etc/redis/redis.conf
+          echo "\nreplica-announce-port 6379" >> /etc/redis/redis.conf
           {{ else }}
           echo "\nport 6379" >> /etc/redis/redis.conf
           POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev)
@@ -73,15 +71,15 @@ spec:
             {{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
             SENTINEL_HOST="{{ include "redis.sentinel.name" . }}-0.{{ include "redis.sentinel.name" . }}"
             if [ -n "$CUSTOM_SENTINEL_PASSWORD" ]; then
-              MASTER_INFO=$(redis-cli -h $SENTINEL_HOST -p 26380 --no-auth-warning -a "$CUSTOM_SENTINEL_PASSWORD" SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
+              MASTER_INFO=$(redis-cli -h $SENTINEL_HOST -p 26379 --no-auth-warning -a "$CUSTOM_SENTINEL_PASSWORD" SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
             else
-              MASTER_INFO=$(redis-cli -h $SENTINEL_HOST -p 26380 SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
+              MASTER_INFO=$(redis-cli -h $SENTINEL_HOST -p 26379 SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
             fi
             MASTER_HOST=$(echo "$MASTER_INFO" | head -1)
             MASTER_PORT=$(echo "$MASTER_INFO" | tail -1)
             if [ -z "$MASTER_HOST" ]; then
-              MASTER_HOST="{{ .Values.redis.publicAccess.address }}"
-              MASTER_PORT=6380
+              MASTER_HOST="{{ include "redis.name" . }}-0.{{ include "redis.name" . }}"
+              MASTER_PORT=6379
             fi
             {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof $MASTER_HOST $MASTER_PORT
             {{- else if and (hasKey .Values.redis "replicaDirect") .Values.redis.replicaDirect }}
@@ -126,12 +124,7 @@ spec:
             - /bin/bash
             - "-c"
             - |-
-                {{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
-                POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev)
-                PORT=$((6380 + POD_ID))
-                {{- else }}
                 PORT=6379
-                {{- end }}
                 if [ ! -z "$CUSTOM_REDIS_PASSWORD" ]; then
                   redis-cli -p $PORT --no-auth-warning -a "$CUSTOM_REDIS_PASSWORD" ping;
                 else
@@ -144,17 +137,8 @@ spec:
         timeoutSeconds: 4
       inheritEnv: false
       ports:
-{{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled (gt (.Values.redis.replicas | int) 0) }}
-    {{- $startPort := 6380 }}
-    {{- $replicas := $.Values.redis.replicas | int }}
-    {{- range $replicaIndex := until $replicas }}
-        - number: {{ add $startPort $replicaIndex }}
-          protocol: tcp
-    {{- end }}
-{{- else }}
         - number: 6379
           protocol: tcp
-{{- end }}
       volumes:
         - path: /config/redis.conf
           recoveryPolicy: retain

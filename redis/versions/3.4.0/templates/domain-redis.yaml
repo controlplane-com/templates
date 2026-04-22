@@ -11,7 +11,7 @@ spec:
     - number: {{ add 6380 $i }}
       protocol: tcp
       routes:
-        - port: {{ add 6380 $i }}
+        - port: 6379
           prefix: /
           replica: {{ $i }}
           workloadLink: //gvc/{{ $.Values.global.cpln.gvc }}/workload/{{ include "redis.name" $ }}

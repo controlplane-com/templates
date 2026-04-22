@@ -11,7 +11,7 @@ spec:
     - number: {{ add 26380 $i }}
       protocol: tcp
       routes:
-        - port: {{ add 26380 $i }}
+        - port: 26379
           prefix: /
           replica: {{ $i }}
           workloadLink: //gvc/{{ $.Values.global.cpln.gvc }}/workload/{{ include "redis.sentinel.name" $ }}

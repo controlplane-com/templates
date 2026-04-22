@@ -30,11 +30,9 @@ spec:
           fi
 
           {{- if and (hasKey .Values.sentinel "publicAccess") .Values.sentinel.publicAccess.enabled }}
-          POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev)
-          PORT=$((26380 + POD_ID))
-          echo "\nport $PORT" >> /etc/sentinel/sentinel.conf
-          echo "\nsentinel announce-ip {{ .Values.sentinel.publicAccess.address }}" >> /etc/sentinel/sentinel.conf
-          echo "\nsentinel announce-port $PORT" >> /etc/sentinel/sentinel.conf
+          echo "\nport 26379" >> /etc/sentinel/sentinel.conf
+          echo "\nsentinel announce-ip ${HOSTNAME}.{{ include "redis.sentinel.name" . }}" >> /etc/sentinel/sentinel.conf
+          echo "\nsentinel announce-port 26379" >> /etc/sentinel/sentinel.conf
           {{ else }}
           echo "\nport 26379" >> /etc/sentinel/sentinel.conf
           POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev)
@@ -48,7 +46,7 @@ spec:
           echo "\nsentinel announce-port 26379" >> /etc/sentinel/sentinel.conf
           {{ end }}
           {{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
-          echo "sentinel monitor mymaster {{ .Values.redis.publicAccess.address }} 6380 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
+          echo "sentinel monitor mymaster {{ include "redis.name" . }}-0.{{ include "redis.name" . }} 6379 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
           {{- else if and (hasKey .Values.redis "replicaDirect") .Values.redis.replicaDirect }}
           echo "sentinel monitor mymaster replica-0.{{ include "redis.name" . }}.${LOCATION}.${CPLN_GVC}.cpln.local 6379 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
           {{- else }}
@@ -94,12 +92,7 @@ spec:
             - /bin/bash
             - "-c"
             - |-
-                {{- if and (hasKey .Values.sentinel "publicAccess") .Values.sentinel.publicAccess.enabled }}
-                POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev)
-                PORT=$((26380 + POD_ID))
-                {{- else }}
                 PORT=26379
-                {{- end }}
                 if [ ! -z "$CUSTOM_SENTINEL_PASSWORD" ]; then
                   redis-cli -p $PORT --no-auth-warning -a "$CUSTOM_SENTINEL_PASSWORD" ping;
                 else
@@ -112,17 +105,8 @@ spec:
         timeoutSeconds: 4
       inheritEnv: false
       ports:
-{{- if and (hasKey .Values.sentinel "publicAccess") .Values.sentinel.publicAccess.enabled (gt (.Values.sentinel.replicas | int) 0) }}
-    {{- $startPort := 26380 }}
-    {{- $replicas := $.Values.sentinel.replicas | int }}
-    {{- range $replicaIndex := until $replicas }}
-        - number: {{ add $startPort $replicaIndex }}
-          protocol: tcp
-    {{- end }}
-{{- else }}
         - number: 26379
           protocol: tcp
-{{- end }}
       volumes:
         - path: /config/sentinel.conf
           recoveryPolicy: retain

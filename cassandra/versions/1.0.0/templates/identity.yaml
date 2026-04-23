@@ -1,4 +1,5 @@
 kind: identity
-name: {{ include "cassandra.name" . }}
-description: {{ include "cassandra.name" . }} identity
+name: {{ include "cassandra.identity.name" . }}
+description: {{ include "cassandra.workload.name" . }} identity
 gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "cassandra.tags" . | nindent 2 }}

@@ -1,7 +1,8 @@
 kind: workload
-name: {{ include "cassandra.name" . }}
+name: {{ include "cassandra.workload.name" . }}
 description: Cassandra cluster
 gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "cassandra.tags" . | nindent 2 }}
 spec:
   type: stateful
   containers:
@@ -27,7 +28,7 @@ spec:
           protocol: tcp
       livenessProbe:
         failureThreshold: 5
-        initialDelaySeconds: 60
+        initialDelaySeconds: 120
         periodSeconds: 30
         successThreshold: 1
         tcpSocket:
@@ -44,13 +45,13 @@ spec:
       volumes:
         - path: /var/lib/cassandra
           recoveryPolicy: retain
-          uri: 'cpln://volumeset/{{ include "cassandra.name" . }}-data'
+          uri: 'cpln://volumeset/{{ include "cassandra.volumeset.name" . }}'
         - path: /config-template/cassandra-template.yaml
           recoveryPolicy: retain
-          uri: 'cpln://secret/{{ include "cassandra.name" . }}-config'
+          uri: 'cpln://secret/{{ include "cassandra.secret.config.name" . }}'
         - path: /scripts/cassandra-init.sh
           recoveryPolicy: retain
-          uri: 'cpln://secret/{{ include "cassandra.name" . }}-init'
+          uri: 'cpln://secret/{{ include "cassandra.secret.init.name" . }}'
   defaultOptions:
     autoscaling:
       maxConcurrency: 0
@@ -62,7 +63,7 @@ spec:
     capacityAI: false
     debug: false
     suspend: {{ .Values.cassandra.suspend }}
-    timeoutSeconds: 30
+    timeoutSeconds: 90
   firewallConfig:
     external:
       outboundAllowCIDR:
@@ -74,7 +75,7 @@ spec:
       enabled: false
       ports: []
     replicaDirect: true
-  identityLink: //identity/{{ include "cassandra.name" . }}
+  identityLink: //identity/{{ include "cassandra.identity.name" . }}
   rolloutOptions:
     maxSurgeReplicas: 0%
     maxUnavailableReplicas: '1'

@@ -26,18 +26,18 @@ spec:
         - number: 7000
           protocol: tcp
       livenessProbe:
-        failureThreshold: 10
-        initialDelaySeconds: 120
+        failureThreshold: 5
+        initialDelaySeconds: 60
         periodSeconds: 30
         successThreshold: 1
         tcpSocket:
           port: 9042
         timeoutSeconds: 10
       readinessProbe:
-        failureThreshold: 20
-        initialDelaySeconds: 60
-        periodSeconds: 15
-        successThreshold: 3
+        failureThreshold: 10
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        successThreshold: 1
         tcpSocket:
           port: 9042
         timeoutSeconds: 5

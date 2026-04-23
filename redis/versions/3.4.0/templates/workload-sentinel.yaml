@@ -29,20 +29,11 @@ spec:
             echo "\nrequirepass $CUSTOM_SENTINEL_PASSWORD" >> /etc/sentinel/sentinel.conf
           fi
 
-          echo "\nport 26379" >> /etc/sentinel/sentinel.conf
-          POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev)
-          LOCATION=${CPLN_LOCATION##*/}
-          CPLN_WORKLOAD_NAME="${CPLN_WORKLOAD##*/}"
-          {{- if or (and (hasKey .Values.sentinel "publicAccess") .Values.sentinel.publicAccess.enabled) (and (hasKey .Values.sentinel "replicaDirect") .Values.sentinel.replicaDirect) }}
-          echo "\nsentinel announce-ip replica-${POD_ID}.${CPLN_WORKLOAD_NAME}.${LOCATION}.${CPLN_GVC}.cpln.local" >> /etc/sentinel/sentinel.conf
-          {{- else }}
           echo "\nsentinel announce-ip ${HOSTNAME}.{{ include "redis.sentinel.name" . }}" >> /etc/sentinel/sentinel.conf
-          {{- end }}
-          echo "\nsentinel announce-port 26379" >> /etc/sentinel/sentinel.conf
           {{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
           echo "sentinel monitor mymaster {{ include "redis.name" . }}-0.{{ include "redis.name" . }} 6379 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
           {{- else if and (hasKey .Values.redis "replicaDirect") .Values.redis.replicaDirect }}
-          echo "sentinel monitor mymaster replica-0.{{ include "redis.name" . }}.${LOCATION}.${CPLN_GVC}.cpln.local 6379 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
+          echo "sentinel monitor mymaster {{ include "redis.name" . }}-0.{{ include "redis.name" . }} 6379 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
           {{- else }}
           echo "sentinel monitor mymaster {{ include "redis.name" . }}-0.{{ include "redis.name" . }} 6379 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
           {{- end }}

@@ -1,0 +1,148 @@
+kind: workload
+name: {{ include "pg-ha.name" . }}
+description: Postgres Highly Available
+tags:
+  {{- include "pg-ha.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  containers:
+    - name: patroni-postgres
+      command: "/bin/bash"
+      args:
+        - "/patroni/start.sh"
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      env:
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+      {{- if and .Values.backup.enabled (eq .Values.backup.mode "wal-g") }}
+        - name: WALG_COMPRESSION_METHOD
+          value: zstd
+        {{- if .Values.backup.aws.enabled }}
+        - name: WALG_S3_PREFIX
+          value: s3://{{ .Values.backup.aws.s3.bucket }}/{{ .Values.backup.aws.s3.prefix }}
+        - name: AWS_REGION
+          value: {{ .Values.backup.aws.s3.region | quote }}
+        - name: AWS_S3_FORCE_PATH_STYLE
+          value: "true"
+        {{- end }}
+        {{- if .Values.backup.gcp.enabled }}
+        - name: WALG_GS_PREFIX
+          value: gs://{{ .Values.backup.gcp.gcs.bucket }}/{{ .Values.backup.gcp.gcs.prefix }}
+        {{- end }}
+      {{- end }}
+      image: {{ .Values.image }}
+      inheritEnv: false
+      ports:
+        - number: 8008
+          protocol: tcp
+        - number: 5432
+          protocol: tcp
+      volumes:
+        - path: /var/lib/postgresql/data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "pg-ha.volume.name" . }}
+        - path: /patroni/start.sh
+          uri: cpln://secret/{{ include "pg-ha.secretStartup.name" . }}.payload
+      # WAL-G backup sidecar
+    {{- if and .Values.backup.enabled (eq .Values.backup.mode "wal-g") }}
+    - name: wal-g-backup
+      image: {{ .Values.image }}
+      command: "/bin/bash"
+      args:
+        - "/walg/backup.sh"
+      cpu: {{ .Values.backup.resources.cpu | quote }}
+      memory: {{ .Values.backup.resources.memory | quote }}
+      inheritEnv: false
+      env:
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        - name: PATRONI_API
+          value: http://127.0.0.1:8008
+        - name: WALG_BACKUP_INTERVAL_SECONDS
+          value: {{ .Values.backup.walg.intervalSeconds | quote }}
+        - name: WALG_COMPRESSION_METHOD
+          value: zstd
+        - name: PGHOST
+          value: 127.0.0.1
+        - name: PGPORT
+          value: "5432"
+        - name: PGUSER
+          value: cpln://secret/{{ include "pg-ha.secretDatabase.name" . }}.username
+        - name: PGPASSWORD
+          value: cpln://secret/{{ include "pg-ha.secretDatabase.name" . }}.password
+        - name: PGDATABASE
+          value: postgres
+        {{- if .Values.backup.aws.enabled }}
+        - name: WALG_S3_PREFIX
+          value: s3://{{ .Values.backup.aws.s3.bucket }}/{{ .Values.backup.aws.s3.prefix }}
+        - name: AWS_REGION
+          value: {{ .Values.backup.aws.s3.region | quote }}
+        - name: AWS_S3_FORCE_PATH_STYLE
+          value: "true"
+        {{- end }}
+        {{- if .Values.backup.gcp.enabled }}
+        - name: WALG_GS_PREFIX
+          value: gs://{{ .Values.backup.gcp.gcs.bucket }}/{{ .Values.backup.gcp.gcs.prefix }}
+        {{- end }}
+      volumes:
+        - path: /var/lib/postgresql/data
+          uri: cpln://volumeset/{{ include "pg-ha.volume.name" . }}
+          recoveryPolicy: retain
+        - path: /walg/backup.sh
+          uri: cpln://secret/{{ include "pg-ha.secretWALGStartup.name" . }}.payload
+    {{- end }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pg-ha.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      keda:
+        cooldownPeriod: 1
+        initialCooldownPeriod: 1
+        pollingInterval: 1
+        triggers: []
+      maxConcurrency: 0
+      maxScale: {{ .Values.replicas }}
+      metric: disabled
+      minScale: {{ .Values.replicas }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: {{ .Values.multiZone }}
+    suspend: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowPort: []
+      {{- if and .Values.backup.enabled (eq .Values.backup.mode "wal-g") }}
+      {{- if .Values.backup.aws.enabled }}
+      outboundAllowHostname:
+        - s3.{{ .Values.backup.aws.s3.region }}.amazonaws.com
+        - s3.amazonaws.com
+      {{- end }}
+      {{- end }}
+      {{- if and .Values.backup.enabled (eq .Values.backup.mode "wal-g") }}
+      {{- if .Values.backup.gcp.enabled }}
+      outboundAllowHostname:
+        - storage.googleapis.com
+      {{- end }}
+      {{- end }}
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internal_access.type }}
+      {{- if .Values.internal_access.workloads }}
+      inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: true
+  securityOptions:
+    filesystemGroupId: 999
+  supportDynamicTags: false

@@ -26,7 +26,7 @@ tables:
       charsetTable: non_cont
       memLimit: 2G
       hasHeader: true
-      secondaryIndexes: false
+      secondaryIndexes: true
     schema:
       columns:
         - name: address_id

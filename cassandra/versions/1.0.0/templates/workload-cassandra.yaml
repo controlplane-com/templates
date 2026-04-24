@@ -17,6 +17,13 @@ spec:
       env:
         - name: MAX_HEAP_SIZE
           value: {{ .Values.cassandra.jvmHeapSize | quote }}
+      lifecycle:
+        preStop:
+          exec:
+            command:
+              - bash
+              - '-c'
+              - nodetool drain
       image: {{ .Values.cassandra.image }}
       cpu: '{{ .Values.cassandra.cpu }}'
       memory: {{ .Values.cassandra.memory }}
@@ -63,7 +70,7 @@ spec:
     capacityAI: false
     debug: false
     suspend: {{ .Values.cassandra.suspend }}
-    timeoutSeconds: 90
+    timeoutSeconds: 60
   firewallConfig:
     external:
       outboundAllowCIDR:

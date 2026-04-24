@@ -1,7 +1,8 @@
+{{- include "cassandra.validateLocations" . -}}
 kind: workload
 name: {{ include "cassandra.workload.name" . }}
 description: Cassandra cluster
-gvc: {{ .Values.global.cpln.gvc }}
+gvc: {{ .Values.gvc.name }}
 tags: {{- include "cassandra.tags" . | nindent 2 }}
 spec:
   type: stateful
@@ -17,6 +18,10 @@ spec:
       env:
         - name: MAX_HEAP_SIZE
           value: {{ .Values.cassandra.jvmHeapSize | quote }}
+        - name: CASSANDRA_GVC
+          value: {{ .Values.gvc.name | quote }}
+        - name: CASSANDRA_WORKLOAD
+          value: {{ include "cassandra.workload.name" . | quote }}
       lifecycle:
         preStop:
           exec:
@@ -62,9 +67,9 @@ spec:
   defaultOptions:
     autoscaling:
       maxConcurrency: 0
-      maxScale: {{ .Values.cassandra.replicas }}
+      maxScale: {{ (index .Values.gvc.locations 0).replicas | int }}
       metric: disabled
-      minScale: {{ .Values.cassandra.replicas }}
+      minScale: {{ (index .Values.gvc.locations 0).replicas | int }}
       scaleToZeroDelay: 300
       target: 95
     capacityAI: false
@@ -76,13 +81,31 @@ spec:
       outboundAllowCIDR:
         - 0.0.0.0/0
     internal:
-      inboundAllowType: same-gvc
+      inboundAllowType: {{ .Values.internal_access.type }}
+      {{- if .Values.internal_access.workloads }}
+      inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "cassandra.identity.name" . }}
   loadBalancer:
     direct:
       enabled: false
       ports: []
     replicaDirect: true
-  identityLink: //identity/{{ include "cassandra.identity.name" . }}
+  localOptions:
+    {{- range $location := .Values.gvc.locations }}
+    - autoscaling:
+        maxConcurrency: 0
+        maxScale: {{ if eq ($location.replicas | int) 0 }}1{{ else }}{{ $location.replicas | int }}{{ end }}
+        metric: disabled
+        minScale: {{ if eq ($location.replicas | int) 0 }}0{{ else }}{{ $location.replicas | int }}{{ end }}
+        scaleToZeroDelay: 300
+        target: 95
+      capacityAI: false
+      debug: false
+      location: //location/{{ $location.name }}
+      suspend: {{ if eq ($location.replicas | int) 0 }}true{{ else }}false{{ end }}
+      timeoutSeconds: 60
+    {{- end }}
   rolloutOptions:
     maxSurgeReplicas: 0%
     maxUnavailableReplicas: '1'

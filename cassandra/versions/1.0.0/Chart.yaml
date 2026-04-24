@@ -9,7 +9,7 @@ annotations:
   created: "2026-04-21"
   lastModified: "2026-04-23"
   category: "database"
-  createsGvc: false
+  createsGvc: true
 
 dependencies:
   - name: cpln-common

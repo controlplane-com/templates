@@ -1,7 +1,7 @@
 kind: volumeset
 name: {{ include "cassandra.volumeset.name" . }}
 description: {{ include "cassandra.workload.name" . }} data
-gvc: {{ .Values.global.cpln.gvc }}
+gvc: {{ .Values.gvc.name }}
 tags: {{- include "cassandra.tags" . | nindent 2 }}
 spec:
   initialCapacity: {{ .Values.cassandra.volumes.data.initialCapacity }}

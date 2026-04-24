@@ -5,16 +5,11 @@ description: {{ .Values.sentinel.publicAccess.address }}
 spec:
   acceptAllHosts: false
   dnsMode: cname
-  {{- if gt (.Values.sentinel.replicas | int) 0 }}
   ports:
-    {{- range $i := until (int .Values.sentinel.replicas) }}
-    - number: {{ add 26380 $i }}
+    - number: 26379
       protocol: tcp
       routes:
         - port: 26379
           prefix: /
-          replica: {{ $i }}
-          workloadLink: //gvc/{{ $.Values.global.cpln.gvc }}/workload/{{ include "redis.sentinel.name" $ }}
-    {{- end }}
-  {{- end }}
+          workloadLink: //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "redis.sentinel.name" . }}
 {{- end }}

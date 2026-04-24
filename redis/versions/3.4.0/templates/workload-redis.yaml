@@ -183,10 +183,7 @@ spec:
     {{- end }}
 {{- end }}
   identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "redis.identity.name" . }}
-{{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
-  loadBalancer:
-    replicaDirect: true
-{{- else if and (hasKey .Values.redis "replicaDirect") .Values.redis.replicaDirect }}
+{{- if and (hasKey .Values.redis "replicaDirect") .Values.redis.replicaDirect }}
   loadBalancer:
     replicaDirect: true
 {{- else }}

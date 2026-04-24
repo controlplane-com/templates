@@ -5,16 +5,11 @@ description: {{ .Values.redis.publicAccess.address }}
 spec:
   acceptAllHosts: false
   dnsMode: cname
-  {{- if gt (.Values.redis.replicas | int) 0 }}
   ports:
-    {{- range $i := until (int .Values.redis.replicas) }}
-    - number: {{ add 6380 $i }}
+    - number: 6379
       protocol: tcp
       routes:
         - port: 6379
           prefix: /
-          replica: {{ $i }}
-          workloadLink: //gvc/{{ $.Values.global.cpln.gvc }}/workload/{{ include "redis.name" $ }}
-    {{- end }}
-  {{- end }}
+          workloadLink: //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "redis.name" . }}
 {{- end }}

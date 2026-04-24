@@ -29,14 +29,16 @@ spec:
             echo "\nrequirepass $CUSTOM_SENTINEL_PASSWORD" >> /etc/sentinel/sentinel.conf
           fi
 
-          echo "\nsentinel announce-ip ${HOSTNAME}.{{ include "redis.sentinel.name" . }}" >> /etc/sentinel/sentinel.conf
-          {{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
-          echo "sentinel monitor mymaster {{ include "redis.name" . }}-0.{{ include "redis.name" . }} 6379 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
-          {{- else if and (hasKey .Values.redis "replicaDirect") .Values.redis.replicaDirect }}
-          echo "sentinel monitor mymaster {{ include "redis.name" . }}-0.{{ include "redis.name" . }} 6379 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
+          {{- if or (and (hasKey .Values.sentinel "publicAccess") .Values.sentinel.publicAccess.enabled) (and (hasKey .Values.sentinel "replicaDirect") .Values.sentinel.replicaDirect) }}
+          POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev)
+          LOCATION=${CPLN_LOCATION##*/}
+          CPLN_WORKLOAD_NAME="${CPLN_WORKLOAD##*/}"
+          echo "\nsentinel announce-ip replica-${POD_ID}.${CPLN_WORKLOAD_NAME}.${LOCATION}.${CPLN_GVC}.cpln.local" >> /etc/sentinel/sentinel.conf
           {{- else }}
-          echo "sentinel monitor mymaster {{ include "redis.name" . }}-0.{{ include "redis.name" . }} 6379 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
+          echo "\nsentinel announce-ip ${HOSTNAME}.{{ include "redis.sentinel.name" . }}" >> /etc/sentinel/sentinel.conf
           {{- end }}
+          echo "\nsentinel announce-port 26379" >> /etc/sentinel/sentinel.conf
+          echo "sentinel monitor mymaster {{ include "redis.name" . }}-0.{{ include "redis.name" . }} 6379 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
 
           redis-sentinel /etc/sentinel/sentinel.conf
       command: /bin/sh
@@ -136,10 +138,7 @@ spec:
     {{- end }}
 {{- end }}
   identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "redis.sentinelIdentity.name" . }}
-{{- if and (hasKey .Values.sentinel "publicAccess") .Values.sentinel.publicAccess.enabled }}
-  loadBalancer:
-    replicaDirect: true
-{{- else if and (hasKey .Values.sentinel "replicaDirect") .Values.sentinel.replicaDirect }}
+{{- if and (hasKey .Values.sentinel "replicaDirect") .Values.sentinel.replicaDirect }}
   loadBalancer:
     replicaDirect: true
 {{- else }}

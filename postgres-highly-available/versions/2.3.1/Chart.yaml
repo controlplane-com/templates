@@ -13,6 +13,9 @@ annotations:
   createsGvc: false
 
 dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
   - name: etcd
     version: 1.4.0
     repository: "oci://ghcr.io/controlplane-com/templates"

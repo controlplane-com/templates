@@ -18,6 +18,10 @@ spec:
       ports:
         - number: 5432
           protocol: tcp
+        - number: 8404
+          protocol: http
+        - number: 8405
+          protocol: http
       volumes:
         - path: /proxy/start.sh
           uri: cpln://secret/{{ include "pg-ha.secretProxyStartup.name" . }}.payload

@@ -46,6 +46,37 @@ spec:
           uri: cpln://volumeset/{{ include "pg-ha.volume.name" . }}
         - path: /patroni/start.sh
           uri: cpln://secret/{{ include "pg-ha.secretStartup.name" . }}.payload
+      lifecycle:
+        preStop:
+          exec:
+            command:
+              - /bin/bash
+              - -c
+              - |
+                set -uo pipefail
+                ROLE=$(curl -fs --max-time 2 http://localhost:8008/patroni | python3 -c 'import sys,json; print(json.load(sys.stdin).get("role",""))' 2>/dev/null || echo "")
+                if [ "$ROLE" = "master" ] || [ "$ROLE" = "primary" ]; then
+                  curl -fs --max-time 10 -X POST http://localhost:8008/switchover -H 'Content-Type: application/json' -d "{\"leader\":\"${HOSTNAME}\"}" || true
+                  for i in $(seq 1 20); do
+                    R=$(curl -fs --max-time 1 http://localhost:8008/patroni | python3 -c 'import sys,json; print(json.load(sys.stdin).get("role",""))' 2>/dev/null)
+                    [ "$R" = "replica" ] && break
+                    sleep 1
+                  done
+                fi
+      livenessProbe:
+        httpGet:
+          path: /liveness
+          port: 8008
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 6
+      readinessProbe:
+        httpGet:
+          path: /readiness
+          port: 8008
+        periodSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 3
       # WAL-G backup sidecar
     {{- if and .Values.backup.enabled (eq .Values.backup.mode "wal-g") }}
     - name: wal-g-backup

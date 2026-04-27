@@ -6,6 +6,7 @@ kind: workload
 name: {{ include "manticore.name" . }}
 description: Manticore search cluster with agent sidecar
 tags: {{- include "manticore.tags" . | nindent 4 }}
+    cpln/publishNotReadyAddresses: "true"
 spec:
   type: stateful
   containers:

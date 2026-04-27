@@ -1,0 +1,4 @@
+kind: identity
+gvc: {{ .Values.global.cpln.gvc }}
+name: {{ include "ollama.name" . }}
+description: Auto-managed identity for the workload {{ include "ollama.name" . }}

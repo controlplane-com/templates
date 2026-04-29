@@ -30,8 +30,8 @@ spec:
               - '-c'
               - nodetool drain
       image: {{ .Values.cassandra.image }}
-      cpu: '{{ .Values.cassandra.cpu }}'
-      memory: {{ .Values.cassandra.memory }}
+      cpu: {{ .Values.cassandra.cpu | quote }}
+      memory: {{ .Values.cassandra.memory | quote }}
       inheritEnv: false
       ports:
         - number: 9042
@@ -58,7 +58,7 @@ spec:
         - path: /var/lib/cassandra
           recoveryPolicy: retain
           uri: 'cpln://volumeset/{{ include "cassandra.volumeset.name" . }}'
-        - path: /config-template/cassandra-template.yaml
+        - path: /cassandra-config/cassandra.yaml
           recoveryPolicy: retain
           uri: 'cpln://secret/{{ include "cassandra.secret.config.name" . }}'
         - path: /scripts/cassandra-init.sh
@@ -77,9 +77,6 @@ spec:
     suspend: {{ .Values.cassandra.suspend }}
     timeoutSeconds: 60
   firewallConfig:
-    external:
-      outboundAllowCIDR:
-        - 0.0.0.0/0
     internal:
       inboundAllowType: {{ .Values.internal_access.type }}
       {{- if .Values.internal_access.workloads }}
@@ -89,7 +86,6 @@ spec:
   loadBalancer:
     direct:
       enabled: false
-      ports: []
     replicaDirect: true
   localOptions:
     {{- range $location := .Values.gvc.locations }}

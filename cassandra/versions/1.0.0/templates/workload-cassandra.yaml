@@ -74,7 +74,7 @@ spec:
       target: 95
     capacityAI: false
     debug: false
-    suspend: {{ .Values.cassandra.suspend }}
+    suspend: false
     timeoutSeconds: 60
   firewallConfig:
     internal:

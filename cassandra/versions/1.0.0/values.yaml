@@ -1,14 +1,11 @@
 gvc:
   name: cassandra-gvc
-  locations:
-    - name: aws-us-east-2
-      replicas: 3
-    - name: aws-us-west-2
-      replicas: 3
-    - name: aws-eu-central-1
-      replicas: 3
 
 cassandra:
+  replicas: 3
+  # Set to true when deploying across multiple availability zones.
+  # Ensures Cassandra's rack awareness is enabled (dc=location, rack=rack1).
+  multiZone: false
   image: cassandra:5.0
   cpu: 2
   memory: 8Gi

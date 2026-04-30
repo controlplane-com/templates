@@ -1,4 +1,3 @@
-{{- include "cassandra.validateLocations" . -}}
 kind: workload
 name: {{ include "cassandra.workload.name" . }}
 description: Cassandra cluster
@@ -18,10 +17,8 @@ spec:
       env:
         - name: MAX_HEAP_SIZE
           value: {{ .Values.cassandra.jvmHeapSize | quote }}
-        - name: CASSANDRA_GVC
-          value: {{ .Values.gvc.name | quote }}
-        - name: CASSANDRA_WORKLOAD
-          value: {{ include "cassandra.workload.name" . | quote }}
+        - name: CASSANDRA_REPLICAS
+          value: {{ .Values.cassandra.replicas | quote }}
       lifecycle:
         preStop:
           exec:
@@ -35,8 +32,6 @@ spec:
       inheritEnv: false
       ports:
         - number: 9042
-          protocol: tcp
-        - number: 7000
           protocol: tcp
       livenessProbe:
         failureThreshold: 5
@@ -67,9 +62,9 @@ spec:
   defaultOptions:
     autoscaling:
       maxConcurrency: 0
-      maxScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      maxScale: {{ .Values.cassandra.replicas | int }}
       metric: disabled
-      minScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      minScale: {{ .Values.cassandra.replicas | int }}
       scaleToZeroDelay: 300
       target: 95
     capacityAI: false
@@ -87,21 +82,6 @@ spec:
     direct:
       enabled: false
     replicaDirect: true
-  localOptions:
-    {{- range $location := .Values.gvc.locations }}
-    - autoscaling:
-        maxConcurrency: 0
-        maxScale: {{ if eq ($location.replicas | int) 0 }}1{{ else }}{{ $location.replicas | int }}{{ end }}
-        metric: disabled
-        minScale: {{ if eq ($location.replicas | int) 0 }}0{{ else }}{{ $location.replicas | int }}{{ end }}
-        scaleToZeroDelay: 300
-        target: 95
-      capacityAI: false
-      debug: false
-      location: //location/{{ $location.name }}
-      suspend: {{ if eq ($location.replicas | int) 0 }}true{{ else }}false{{ end }}
-      timeoutSeconds: 60
-    {{- end }}
   rolloutOptions:
     maxSurgeReplicas: 0%
     maxUnavailableReplicas: '1'

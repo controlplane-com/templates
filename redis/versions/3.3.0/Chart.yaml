@@ -3,7 +3,7 @@ name: redis
 description: A master-replica Redis configuration with Redis Sentinel
 type: application
 version: 3.3.0
-appVersion: "custom"
+appVersion: "7.4"
 
 dependencies:
   - name: cpln-common
@@ -12,6 +12,6 @@ dependencies:
 
 annotations:
   created: "2026-01-29"
-  lastModified: "2026-04-21"
+  lastModified: "2026-04-30"
   category: "cache"
   createsGvc: false

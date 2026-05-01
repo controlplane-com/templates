@@ -3,7 +3,7 @@
 ## What's New
 
 - **Smart Master Discovery**: Non-primary replicas now query Sentinel at startup to find the current master rather than hardcoding replica-0, ensuring correct replication after any failover.
-- **Resilient Sentinel Targeting**: Standard and replicaDirect modes query the Sentinel service endpoint so any healthy Sentinel instance can respond, rather than always targeting replica-0.
+- **Resilient Sentinel Targeting**: All modes query the Sentinel service endpoint so any healthy Sentinel instance can respond, rather than always targeting replica-0.
 
 
 # Release Notes - Version 3.2.0

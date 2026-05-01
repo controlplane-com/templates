@@ -71,18 +71,26 @@ spec:
             {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }}
           else
             {{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
-            SENTINEL_HOST="{{ include "redis.sentinel.name" . }}-0.{{ include "redis.sentinel.name" . }}"
+            SENTINEL_BASE="{{ include "redis.sentinel.name" . }}"
+            SENTINEL_REPLICA_COUNT={{ .Values.sentinel.replicas }}
+            SENTINEL_INDEX=0
             MASTER_HOST=""
             MASTER_PORT=""
             until echo "$MASTER_PORT" | grep -qE '^[0-9]+$'; do
+              SENTINEL_HOST="${SENTINEL_BASE}-${SENTINEL_INDEX}.${SENTINEL_BASE}"
+              SENTINEL_PORT=$((26380 + SENTINEL_INDEX))
               if [ -n "$CUSTOM_SENTINEL_PASSWORD" ]; then
-                MASTER_INFO=$(redis-cli -h $SENTINEL_HOST -p 26380 --no-auth-warning -a "$CUSTOM_SENTINEL_PASSWORD" SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
+                MASTER_INFO=$(redis-cli -h $SENTINEL_HOST -p $SENTINEL_PORT --no-auth-warning -a "$CUSTOM_SENTINEL_PASSWORD" SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
               else
-                MASTER_INFO=$(redis-cli -h $SENTINEL_HOST -p 26380 SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
+                MASTER_INFO=$(redis-cli -h $SENTINEL_HOST -p $SENTINEL_PORT SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
               fi
               MASTER_HOST=$(echo "$MASTER_INFO" | head -1)
               MASTER_PORT=$(echo "$MASTER_INFO" | tail -1)
-              echo "$MASTER_PORT" | grep -qE '^[0-9]+$' || { echo "Waiting for sentinel at $SENTINEL_HOST to return master, retrying in 5s..."; sleep 5; }
+              if ! echo "$MASTER_PORT" | grep -qE '^[0-9]+$'; then
+                echo "Waiting for sentinel at $SENTINEL_HOST:$SENTINEL_PORT to return master, trying next..."
+                SENTINEL_INDEX=$(( (SENTINEL_INDEX + 1) % SENTINEL_REPLICA_COUNT ))
+                [ $SENTINEL_INDEX -eq 0 ] && sleep 5
+              fi
             done
             echo "Sentinel returned master: $MASTER_HOST:$MASTER_PORT"
             {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof $MASTER_HOST $MASTER_PORT

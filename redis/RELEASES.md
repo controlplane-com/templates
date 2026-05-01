@@ -1,8 +1,25 @@
+# Release Notes - Version 3.3.0
+
+## What's New
+
+- **Smart Master Discovery**: Non-primary replicas now query Sentinel at startup to find the current master rather than hardcoding replica-0, ensuring correct replication after any failover.
+- **Resilient Sentinel Targeting**: Standard and replicaDirect modes query the Sentinel service endpoint so any healthy Sentinel instance can respond, rather than always targeting replica-0.
+
+
 # Release Notes - Version 3.2.0
 
 ## What's New
 
 - **Backup Support**: Added optional scheduled backup to AWS S3 or GCS via a dedicated cron workload. Configure with `backup.enabled`, `backup.provider`, and your cloud provider settings. Supports Redis password authentication (inline or from secret). See the README for full setup instructions.
+
+
+# Release Notes - Version 3.1.1
+
+## What's New
+
+- **Template Refactoring**: Centralized all resource naming into helper functions, improving consistency across templates.
+- **Password Quoting Fix**: Secret password values are now properly quoted, preventing YAML parsing issues with special characters.
+- **README Rewrite**: Documentation updated with clearer configuration examples and internal endpoint reference.
 
 
 # Release Notes - Version 3.1.0

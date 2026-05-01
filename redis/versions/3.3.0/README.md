@@ -100,9 +100,11 @@ dig <subdomain>.your-domain.com CNAME   # should return <gvc-alias>.cpln.app
 dig <gvc-alias>.cpln.app               # should return an IP address
 ```
 
-#### Connecting Externally
+#### Connecting Externally (Public Access Enabled)
 
 ```bash
+# add -a <password> if auth is enabled
+
 # Redis replica 0
 redis-cli -h redis.your-domain.com -p 6380 ping
 

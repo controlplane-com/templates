@@ -72,45 +72,51 @@ spec:
           else
             {{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
             SENTINEL_HOST="{{ include "redis.sentinel.name" . }}-0.{{ include "redis.sentinel.name" . }}"
-            if [ -n "$CUSTOM_SENTINEL_PASSWORD" ]; then
-              MASTER_INFO=$(redis-cli -h $SENTINEL_HOST -p 26380 --no-auth-warning -a "$CUSTOM_SENTINEL_PASSWORD" SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
-            else
-              MASTER_INFO=$(redis-cli -h $SENTINEL_HOST -p 26380 SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
-            fi
-            MASTER_HOST=$(echo "$MASTER_INFO" | head -1)
-            MASTER_PORT=$(echo "$MASTER_INFO" | tail -1)
-            if [ -z "$MASTER_HOST" ]; then
-              MASTER_HOST="{{ .Values.redis.publicAccess.address }}"
-              MASTER_PORT=6380
-            fi
+            MASTER_HOST=""
+            MASTER_PORT=""
+            until echo "$MASTER_PORT" | grep -qE '^[0-9]+$'; do
+              if [ -n "$CUSTOM_SENTINEL_PASSWORD" ]; then
+                MASTER_INFO=$(redis-cli -h $SENTINEL_HOST -p 26380 --no-auth-warning -a "$CUSTOM_SENTINEL_PASSWORD" SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
+              else
+                MASTER_INFO=$(redis-cli -h $SENTINEL_HOST -p 26380 SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
+              fi
+              MASTER_HOST=$(echo "$MASTER_INFO" | head -1)
+              MASTER_PORT=$(echo "$MASTER_INFO" | tail -1)
+              echo "$MASTER_PORT" | grep -qE '^[0-9]+$' || { echo "Waiting for sentinel at $SENTINEL_HOST to return master, retrying in 5s..."; sleep 5; }
+            done
+            echo "Sentinel returned master: $MASTER_HOST:$MASTER_PORT"
             {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof $MASTER_HOST $MASTER_PORT
             {{- else if and (hasKey .Values.redis "replicaDirect") .Values.redis.replicaDirect }}
-            SENTINEL_HOST="replica-0.{{ include "redis.sentinel.name" . }}.${LOCATION}.${CPLN_GVC}.cpln.local"
-            if [ -n "$CUSTOM_SENTINEL_PASSWORD" ]; then
-              MASTER_INFO=$(redis-cli -h $SENTINEL_HOST -p 26379 --no-auth-warning -a "$CUSTOM_SENTINEL_PASSWORD" SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
-            else
-              MASTER_INFO=$(redis-cli -h $SENTINEL_HOST -p 26379 SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
-            fi
-            MASTER_HOST=$(echo "$MASTER_INFO" | head -1)
-            MASTER_PORT=$(echo "$MASTER_INFO" | tail -1)
-            if [ -z "$MASTER_HOST" ]; then
-              MASTER_HOST="replica-0.${CPLN_WORKLOAD_NAME}.${LOCATION}.${CPLN_GVC}.cpln.local"
-              MASTER_PORT=6379
-            fi
+            SENTINEL_HOST="{{ include "redis.sentinel.name" . }}.${LOCATION}.${CPLN_GVC}.cpln.local"
+            MASTER_HOST=""
+            MASTER_PORT=""
+            until echo "$MASTER_PORT" | grep -qE '^[0-9]+$'; do
+              if [ -n "$CUSTOM_SENTINEL_PASSWORD" ]; then
+                MASTER_INFO=$(redis-cli -h $SENTINEL_HOST -p 26379 --no-auth-warning -a "$CUSTOM_SENTINEL_PASSWORD" SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
+              else
+                MASTER_INFO=$(redis-cli -h $SENTINEL_HOST -p 26379 SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
+              fi
+              MASTER_HOST=$(echo "$MASTER_INFO" | head -1)
+              MASTER_PORT=$(echo "$MASTER_INFO" | tail -1)
+              echo "$MASTER_PORT" | grep -qE '^[0-9]+$' || { echo "Waiting for sentinel at $SENTINEL_HOST to return master, retrying in 5s..."; sleep 5; }
+            done
+            echo "Sentinel returned master: $MASTER_HOST:$MASTER_PORT"
             {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof $MASTER_HOST $MASTER_PORT
             {{- else }}
-            SENTINEL_HOST="{{ include "redis.sentinel.name" . }}-0.{{ include "redis.sentinel.name" . }}"
-            if [ -n "$CUSTOM_SENTINEL_PASSWORD" ]; then
-              MASTER_INFO=$(redis-cli -h $SENTINEL_HOST -p 26379 --no-auth-warning -a "$CUSTOM_SENTINEL_PASSWORD" SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
-            else
-              MASTER_INFO=$(redis-cli -h $SENTINEL_HOST -p 26379 SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
-            fi
-            MASTER_HOST=$(echo "$MASTER_INFO" | head -1)
-            MASTER_PORT=$(echo "$MASTER_INFO" | tail -1)
-            if [ -z "$MASTER_HOST" ]; then
-              MASTER_HOST="{{ include "redis.name" . }}-0.{{ include "redis.name" . }}"
-              MASTER_PORT=6379
-            fi
+            SENTINEL_HOST="{{ include "redis.sentinel.name" . }}"
+            MASTER_HOST=""
+            MASTER_PORT=""
+            until echo "$MASTER_PORT" | grep -qE '^[0-9]+$'; do
+              if [ -n "$CUSTOM_SENTINEL_PASSWORD" ]; then
+                MASTER_INFO=$(redis-cli -h $SENTINEL_HOST -p 26379 --no-auth-warning -a "$CUSTOM_SENTINEL_PASSWORD" SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
+              else
+                MASTER_INFO=$(redis-cli -h $SENTINEL_HOST -p 26379 SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
+              fi
+              MASTER_HOST=$(echo "$MASTER_INFO" | head -1)
+              MASTER_PORT=$(echo "$MASTER_INFO" | tail -1)
+              echo "$MASTER_PORT" | grep -qE '^[0-9]+$' || { echo "Waiting for sentinel at $SENTINEL_HOST to return master, retrying in 5s..."; sleep 5; }
+            done
+            echo "Sentinel returned master: $MASTER_HOST:$MASTER_PORT"
             {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof $MASTER_HOST $MASTER_PORT
             {{- end }}
           fi

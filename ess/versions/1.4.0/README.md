@@ -2,7 +2,7 @@
 
 ### Overview
 
-Creates an application that continuously syncs secrets from external providers into Control Plane secrets on a configurable schedule. Supported providers: **HashiCorp Vault**, **AWS Secrets Manager**, **AWS Parameter Store**, **Doppler**, **GCP Secret Manager**, and **1Password**.
+Creates an application that continuously syncs secrets from external providers into Control Plane secrets on a configurable schedule. Supported providers: **HashiCorp Vault**, **AWS Secrets Manager**, **AWS Parameter Store**, **Doppler**, **GCP Secret Manager**, **1Password**, and **1Password Connect**.
 
 ---
 
@@ -83,6 +83,14 @@ Each provider entry requires a unique `name` and exactly one provider block. An 
     serviceAccountToken: <TOKEN>
     integrationName: my-ess         # optional
     integrationVersion: 1.0.0       # optional
+```
+
+**1Password Connect**
+```yaml
+- name: my-1password-connect
+  onePasswordConnect:
+    serverURL: https://my-connect-server.example.com  # required
+    token: <TOKEN>                                     # required
 ```
 
 ---

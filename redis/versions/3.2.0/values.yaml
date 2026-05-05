@@ -32,6 +32,30 @@ redis:
     # external_outboundAllowCIDR: "0.0.0.0/0" # Provide a comma-separated list
   env: []
   tags: {}
+  # requestRetryPolicy:
+  #   attempts: 2
+  #   retryOn:
+  #     - connect-failure
+  #     - refused-stream
+  #     - unavailable
+  #     - cancelled
+  #     - resource-exhausted
+  #     - retriable-status-codes
+  requestRetryPolicy: {}
+  # Replication tuning. See secret-redis-config.yaml for how these are rendered.
+  # backlogSize: sized for (peak write throughput × tolerable disconnect window).
+  #   1mb (Redis default) escalates any brief disconnect to a full RDB resync. 1gb
+  #   covers ~5 minutes of disconnect at ~3MB/s of writes.
+  # timeout (seconds): bound on full-resync transfer + RDB load + heartbeat.
+  #   60s (Redis default) is too low for multi-GB datasets — master/slave drop the
+  #   link mid-sync. 300s covers ~30GB at typical 1Gbps + load throughput.
+  # slaveOutputBufferLimit: "<hard> <soft> <seconds>". Default
+  #   "256mb 64mb 60" can't sustain a full resync of a multi-GB dataset at high
+  #   write rate — master kills the replica mid-stream. Bump for production loads.
+  replication:
+    backlogSize: 1gb
+    timeout: 300
+    slaveOutputBufferLimit: "2gb 512mb 300"
   dataDir: /data
   persistence:
     enabled: false
@@ -86,6 +110,16 @@ sentinel:
     # external_outboundAllowCIDR: "0.0.0.0/0" # Provide a comma-separated list
   env: []
   tags: {}
+  # requestRetryPolicy:
+  #   attempts: 2
+  #   retryOn:
+  #     - connect-failure
+  #     - refused-stream
+  #     - unavailable
+  #     - cancelled
+  #     - resource-exhausted
+  #     - retriable-status-codes
+  requestRetryPolicy: {}
   persistence:
     enabled: false
     volumes:

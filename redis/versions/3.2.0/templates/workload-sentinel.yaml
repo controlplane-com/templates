@@ -6,6 +6,13 @@ tags:
   {{- if .Values.sentinel.tags }}
 {{ toYaml .Values.sentinel.tags | indent 2 }}
   {{- end }}
+  # Currently a no-op: the sentinel readiness probe is a plain `redis-cli ping`, so
+  # pods become Ready as soon as the port answers and the headless service exposes
+  # them anyway. Set here as a hedge — if the probe is ever tightened (e.g. to
+  # require quorum visibility or a known master), peers must still resolve each
+  # other via `<pod>.<workload>` during cold start to form the quorum, otherwise
+  # they deadlock: NotReady because no peers, no peers because NotReady.
+  cpln/publishNotReadyAddresses: "true"
   {{- include "redis.tags" . | nindent 2 }}
 spec:
   type: stateful
@@ -151,6 +158,10 @@ spec:
     multiZone:
       enabled: false
     {{- end }}
+{{- if .Values.sentinel.requestRetryPolicy }}
+  requestRetryPolicy:
+{{ toYaml .Values.sentinel.requestRetryPolicy | indent 4 }}
+{{- end }}
 {{- if .Values.sentinel.firewall }}
   firewallConfig:
     {{- if or (hasKey .Values.sentinel.firewall "external_inboundAllowCIDR") (hasKey .Values.sentinel.firewall "external_outboundAllowCIDR") }}

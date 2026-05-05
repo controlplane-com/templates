@@ -130,6 +130,18 @@ Validate backup configuration - when backup is enabled, backup.provider must be 
 {{- end }}
 
 
+{{/*
+Validate multi-location configuration
+*/}}
+{{- define "pg-ha.validateLocations" -}}
+{{- if .Values.global.locations }}
+  {{- if lt (len .Values.global.locations) 3 }}
+  {{- fail "at least 3 locations are required for multi-DC deployment (Patroni recommendation)" }}
+  {{- end }}
+{{- end }}
+{{- end }}
+
+
 {{/* Labeling */}}
 
 {{/*

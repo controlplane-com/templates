@@ -1,0 +1,379 @@
+# =============================================================================
+# CDC Pipeline Meta-Template
+# =============================================================================
+# Deploys a complete Change Data Capture pipeline:
+#   - PostgreSQL HA (Patroni + etcd + HAProxy)
+#   - Kafka (KRaft cluster + Kafbat UI)
+#   - Debezium Server (CDC connector: postgres -> kafka)
+#
+# Shared credentials are defined once here and wired to each component.
+# Internal DNS names are computed automatically from the release name:
+#   PostgreSQL: <release>-postgres-ha-proxy.<gvc>.cpln.local:5432
+#   Kafka:      <release>-cluster.<gvc>.cpln.local:9092
+#   Debezium:   <release>-debezium.<gvc>.cpln.local
+# =============================================================================
+
+# =============================================================================
+# PostgreSQL HA
+# =============================================================================
+postgres-highly-available:
+  replicas: 3
+
+  resources:
+    minCpu: 500m
+    minMemory: 1Gi
+    maxCpu: 1
+    maxMemory: 2Gi
+
+  image: controlplanecorporation/patroni-postgres:0.7
+
+  postgres:
+    username: cdc_user
+    password: "changeme-postgres-password"
+    database: cdcdb
+    walLevel: logical  # Required for CDC -- do not change
+
+  multiZone: false
+
+  volumeset:
+    capacity: 10
+    autoscaling:
+      enabled: false
+      maxCapacity: 100
+      minFreePercentage: 10
+      scalingFactor: 1.2
+
+  internal_access:
+    type: same-gvc
+
+  etcd:
+    replicas: 3
+    resources:
+      cpu: 500m
+      memory: 512Mi
+    multiZone: false
+    volumeset:
+      capacity: 10
+    internal_access:
+      type: same-gvc
+
+  pgbouncer:
+    enabled: false
+
+  proxy:
+    enabled: true
+    image: haproxy:2.9
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    minReplicas: 2
+    maxReplicas: 2
+
+  backup:
+    enabled: false
+
+# =============================================================================
+# Kafka
+# =============================================================================
+kafka:
+  kafka:
+    name: cluster
+    image: apache/kafka:3.9.1
+    suspend: false
+    deletionProtection: false
+    replicas: 3
+    minReadySeconds: 0
+    debug: false
+    multiZone: false
+    logDirs: /opt/kafka/logs-0,/opt/kafka/logs-1
+    env: []
+    volumes:
+      logs:
+        initialCapacity: 10
+        performanceClass: general-purpose-ssd
+        fileSystemType: ext4
+        snapshots:
+          createFinalSnapshot: true
+          retentionDuration: 7d
+          schedule: 0 0 * * *
+        autoscaling:
+          maxCapacity: 1000
+          minFreePercentage: 20
+          scalingFactor: 1.2
+    cpu: 1000m
+    memory: 2000Mi
+    minCpu: 250m
+    minMemory: 2000Mi
+    firewall:
+      internal_inboundAllowType: "same-gvc"
+    listeners:
+      client:
+        protocol: SASL_PLAINTEXT
+        name: CLIENT
+        containerPort: 9092
+        sasl:
+          admin:
+            username: admin
+            password: "changeme-kafka-admin-password"
+          users: "debezium"
+          passwords: "changeme-kafka-debezium-password"
+    acl:
+      superUsers: "User:admin"
+      allowEveryoneIfNoAclFound: false
+    secrets:
+      kraft_cluster_id: "changeme-kraft-cluster-id"
+      inter_broker_password: "changeme-inter-broker-password"
+      controller_password: "changeme-controller-password"
+    extra_configurations:
+      default.replication.factor: 3
+      auto.create.topics.enable: true
+      log.retention.hours: 168
+
+  kafka_exporter:
+    name: exporter
+    image: danielqsj/kafka-exporter:v1.9.0
+    debug: false
+    cpu: 50m
+    memory: 128Mi
+    listener: client
+    env: []
+    dropMetrics: []
+
+  jmx_exporter:
+    name: jmx-exporter
+    image: ghcr.io/controlplane-com/bitnami/jmx-exporter
+    kafkaJmxPort: 5557
+    exporterPort: 5556
+    debug: false
+    cpu: 250m
+    memory: 256Mi
+    minCpu: 80m
+    minMemory: 125Mi
+    listener: client
+    dropMetrics: []
+    config:
+      jmxUrl: service:jmx:rmi:///jndi/rmi://127.0.0.1:5557/jmxrmi
+      lowercaseOutputName: true
+      lowercaseOutputLabelNames: true
+      ssl: false
+      whitelistObjectNames:
+        - kafka.controller:*
+        - kafka.server:*
+        - java.lang:*
+        - kafka.network:*
+        - kafka.log:*
+        - kafka.producer:*
+        - kafka.consumer:*
+      rules:
+        - labels:
+            request: "$3"
+          name: kafka_request_count
+          pattern: kafka.network<type=(RequestMetrics), name=(.+), request=(.+)><>(Count)
+        - labels:
+            request: "$3"
+            stat: "$4"
+          name: kafka_request_metrics_totaltimems
+          pattern: kafka.network<type=(RequestMetrics), name=(TotalTimeMs), request=(.+)><>(.+)
+        - labels:
+            request: "$3"
+            component: "$2"
+            stat: "$4"
+          name: kafka_request_latency_ms
+          pattern: kafka.network<type=(RequestMetrics), name=(.+TimeMs), request=(.+)><>(.+)
+        - labels:
+            client_type: "$3"
+            metric: "$2"
+            stat: "$4"
+          name: kafka_client_metrics
+          pattern: kafka.network<type=(RequestMetrics), name=(.+), request=(Fetch|Produce)><>(.+)
+        - labels:
+            client_id: "$1"
+            metric: "$2"
+          name: kafka_consumer_metrics
+          pattern: kafka.consumer<type=consumer-fetch-manager-metrics, client-id=(.+)><>(.+)
+        - labels:
+            client_id: "$1"
+            metric: "$2"
+          name: kafka_producer_metrics
+          pattern: kafka.producer<type=producer-metrics, client-id=(.+)><>(.+)
+        - name: kafka_server_$1_$2_$3
+          pattern: kafka.server<type=(.+), name=(.+)><>(Count|Value)
+        - name: java_lang_$1_$2
+          pattern: java.lang<type=(.+)><>(.+)
+
+  kafbat_ui:
+    enabled: true
+    deletionProtection: false
+    name: kafbat-ui
+    image: ghcr.io/kafbat/kafka-ui
+    cpu: 300m
+    memory: 1000Mi
+    minCpu: 100m
+    minMemory: 400Mi
+    replicas: 1
+    timeoutSeconds: 30
+    configuration_secret: kafka-kafbat-ui-config
+    firewall:
+      external_inboundAllowCIDR: "0.0.0.0/0"
+      external_outboundAllowCIDR: "0.0.0.0/0"
+
+  kafka_rest_proxy:
+    enabled: false
+
+  kafka_client:
+    name: client
+    image: apache/kafka:3.9.1
+    cpu: 500m
+    memory: 1000Mi
+    firewall:
+      external_outboundAllowCIDR: "0.0.0.0/0"
+
+  kafka_ui:
+    enabled: false
+
+# =============================================================================
+# Debezium Server
+# =============================================================================
+# Database hostname and Kafka bootstrap servers are auto-computed from
+# the release name when left empty. Override only if connecting to
+# external instances not managed by this meta-template.
+debezium-server:
+  image: quay.io/debezium/server:3.0
+
+  resources:
+    cpu: 500m
+    memory: 512Mi
+
+  source:
+    type: postgres
+
+    database:
+      hostname: ""  # Auto-computed: <release>-postgres-ha-proxy.<gvc>.cpln.local
+      port: 5432
+      name: cdcdb                           # Must match postgres-highly-available.postgres.database
+      user: cdc_user                        # Must match postgres-highly-available.postgres.username
+      password: "changeme-postgres-password" # Must match postgres-highly-available.postgres.password
+
+    serverName: "dbserver1"
+    tableIncludeList: ""
+    tableExcludeList: ""
+
+    postgres:
+      slotName: "debezium"
+      publicationName: "dbz_publication"
+      pluginName: "pgoutput"
+      slotDropOnStop: false
+      heartbeatIntervalMs: 5000
+      heartbeatActionQuery: "UPDATE debezium_heartbeat SET ts = now() WHERE id = 1"
+
+    offset:
+      storage: file
+      flushIntervalMs: 10000
+      flushTimeoutMs: 60000
+      file:
+        filename: "/debezium/data/offsets.dat"
+      redis:
+        address: ""
+        key: "debezium:offsets"
+        password: ""
+        ssl: false
+      jdbc:
+        url: ""
+        user: ""
+        password: ""
+        tableName: "debezium_offsets"
+
+    schemaHistory:
+      storage: file
+      file:
+        filename: "/debezium/data/schema-history.dat"
+      redis:
+        address: ""
+        key: "debezium:schema-history"
+        password: ""
+        ssl: false
+      jdbc:
+        url: ""
+        user: ""
+        password: ""
+        tableName: "debezium_schema_history"
+
+    errors:
+      retryDelayInitialMs: 300
+      retryDelayMaxMs: 10000
+      maxRetries: -1
+
+  sink:
+    type: kafka
+    kafka:
+      bootstrapServers: ""                          # Auto-computed: <release>-cluster.<gvc>.cpln.local:9092
+      topic: ""
+      securityProtocol: "SASL_PLAINTEXT"
+      saslMechanism: "PLAIN"
+      saslUsername: "debezium"                       # Must match kafka.kafka.listeners.client.sasl.users
+      saslPassword: "changeme-kafka-debezium-password" # Must match kafka.kafka.listeners.client.sasl.passwords
+
+    redis:
+      address: ""
+      password: ""
+      ssl: false
+      streamName: ""
+
+    nats:
+      url: ""
+      subject: ""
+      username: ""
+      password: ""
+
+    http:
+      url: ""
+      headers: {}
+      authType: ""
+      username: ""
+      password: ""
+      bearerToken: ""
+
+    kinesis:
+      region: ""
+      streamName: ""
+      credentialsProvider: "default"
+      cloudAccount:
+        enabled: false
+        name: ""
+
+    pubsub:
+      projectId: ""
+      topic: ""
+      cloudAccount:
+        enabled: false
+        name: ""
+
+    pulsar:
+      serviceUrl: ""
+      topic: ""
+      authPluginClassName: ""
+      authToken: ""
+
+    eventhubs:
+      connectionString: ""
+      hubName: ""
+
+  format:
+    key: json
+    value: json
+    schemaRegistry:
+      url: ""
+      username: ""
+      password: ""
+
+  volumeset:
+    capacity: 10
+    performanceClass: general-purpose-ssd
+
+  firewall:
+    internal:
+      inboundAllowType: same-gvc
+      workloads: []
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0

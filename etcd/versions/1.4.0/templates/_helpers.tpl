@@ -39,14 +39,28 @@ etcd Volume Set Name
 {{/* Validation */}}
 
 {{/*
-Validate replicas value - must be minimum 3 and an odd number
+Validate replicas value - must be minimum 3 and odd (single-location),
+or 1 when multi-location is configured (1 per location, locations provide the count)
 */}}
 {{- define "etcd.validateReplicas" -}}
-{{- if lt (int .Values.replicas) 3 -}}
-{{- fail "Error: .Values.replicas must be at least 3" -}}
-{{- end -}}
-{{- if eq (mod (int .Values.replicas) 2) 0 -}}
-{{- fail "Error: .Values.replicas must be an odd number" -}}
+{{- if .Values.global.locations -}}
+  {{- if ne (int .Values.replicas) 1 -}}
+  {{- fail "Error: .Values.replicas must be 1 when global.locations is set (1 replica per location)" -}}
+  {{- end -}}
+  {{- $locCount := len .Values.global.locations -}}
+  {{- if lt $locCount 3 -}}
+  {{- fail "Error: global.locations must have at least 3 entries for etcd quorum" -}}
+  {{- end -}}
+  {{- if eq (mod $locCount 2) 0 -}}
+  {{- fail "Error: global.locations must have an odd number of entries for etcd quorum" -}}
+  {{- end -}}
+{{- else -}}
+  {{- if lt (int .Values.replicas) 3 -}}
+  {{- fail "Error: .Values.replicas must be at least 3" -}}
+  {{- end -}}
+  {{- if eq (mod (int .Values.replicas) 2) 0 -}}
+  {{- fail "Error: .Values.replicas must be an odd number" -}}
+  {{- end -}}
 {{- end -}}
 {{- end -}}
 
@@ -70,10 +84,6 @@ helm.sh/chart: {{ include "etcd.chart" . }}
 app.cpln.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 app.cpln.io/managed-by: {{ .Release.Service }}
-cpln/marketplace: "true"
-cpln/marketplace-template: etcd
-cpln/marketplace-template-version: {{ .Chart.Version }}
-cpln/marketplace-gvc: {{ .Values.global.cpln.gvc }}
 {{- end }}
 
 {{/*

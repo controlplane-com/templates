@@ -1,0 +1,12 @@
+apiVersion: v2
+name: debezium-server
+description: Debezium Server CDC app for Control Plane (standalone mode)
+type: application
+version: 1.1.0
+appVersion: "3.0"
+
+annotations:
+  created: "2026-04-03"
+  lastModified: "2026-04-13"
+  category: "event-streaming"
+  createsGvc: false

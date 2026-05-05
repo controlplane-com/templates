@@ -1,0 +1,37 @@
+source:
+  type: postgres
+  database:
+    hostname: data-postgres-ha-proxy.aws-us-east-2.cpln.local
+    port: 5432
+    name: test
+    user: username
+    password: password
+  serverName: dbserver1
+  postgres:
+    slotName: debezium
+    publicationName: dbz_publication
+    pluginName: pgoutput
+    slotDropOnStop: false
+    heartbeatIntervalMs: 5000
+    heartbeatActionQuery: "UPDATE debezium_heartbeat SET ts = now() WHERE id = 1"
+  offset:
+    storage: file
+    flushIntervalMs: 5000
+    flushTimeoutMs: 10000
+  errors:
+    retryDelayInitialMs: 300
+    retryDelayMaxMs: 10000
+    maxRetries: 10
+
+sink:
+  type: kafka
+  kafka:
+    bootstrapServers: "replica-0.etl-cluster.aws-us-east-2.aws-us-east-2.cpln.local:9092,replica-1.etl-cluster.aws-us-east-2.aws-us-east-2.cpln.local:9092,replica-2.etl-cluster.aws-us-east-2.aws-us-east-2.cpln.local:9092"
+    securityProtocol: SASL_PLAINTEXT
+    saslMechanism: PLAIN
+    saslUsername: admin
+    saslPassword: your-admin-password
+
+format:
+  key: json
+  value: json

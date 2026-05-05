@@ -1,0 +1,17 @@
+kind: policy
+name: {{ include "debezium.policy.name" . }}
+description: Debezium Server policy for secret access
+tags:
+  {{- include "debezium.tags" . | nindent 2 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "debezium.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "debezium.config.name" . }}
+  - //secret/{{ include "debezium.credentials.name" . }}
+  {{- if and (eq .Values.source.type "postgres") (gt (int .Values.source.postgres.heartbeatIntervalMs) 0) }}
+  - //secret/{{ include "debezium.entrypoint.name" . }}
+  {{- end }}

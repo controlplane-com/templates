@@ -1,0 +1,221 @@
+kind: workload
+name: {{ include "debezium.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: Debezium Server CDC workload
+tags:
+  {{- include "debezium.tags" . | nindent 2 }}
+spec:
+  {{- if eq (include "debezium.requiresVolumeset" .) "true" }}
+  type: stateful
+  {{- else }}
+  type: standard
+  {{- end }}
+  identityLink: //identity/{{ include "debezium.identity.name" . }}
+  containers:
+    - name: debezium-server
+      {{- if and (eq .Values.source.type "postgres") (gt (int .Values.source.postgres.heartbeatIntervalMs) 0) }}
+      command: /bin/bash
+      args:
+        - '-c'
+        - >-
+          cp /scripts/debezium-entrypoint.sh /tmp/ && chmod +x /tmp/debezium-entrypoint.sh &&
+          /tmp/debezium-entrypoint.sh
+      {{- end }}
+      image: {{ .Values.image }}
+      inheritEnv: false
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
+      ports:
+        - number: 8080
+          protocol: http
+      env:
+        # Database credentials from secret
+        - name: DB_HOSTNAME
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.db-hostname'
+        - name: DB_USER
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.db-user'
+        - name: DB_PASSWORD
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.db-password'
+
+        {{- /* MongoDB connection string */}}
+        {{- if and (eq .Values.source.type "mongodb") .Values.source.mongodb.connectionString }}
+        - name: MONGODB_CONNECTION_STRING
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.mongodb-connection-string'
+        {{- end }}
+
+        {{- /* Offset storage credentials */}}
+        {{- if eq .Values.source.offset.storage "redis" }}
+        - name: OFFSET_REDIS_ADDRESS
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.offset-redis-address'
+        {{- if .Values.source.offset.redis.password }}
+        - name: OFFSET_REDIS_PASSWORD
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.offset-redis-password'
+        {{- end }}
+        {{- end }}
+        {{- if eq .Values.source.offset.storage "jdbc" }}
+        - name: OFFSET_JDBC_URL
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.offset-jdbc-url'
+        - name: OFFSET_JDBC_USER
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.offset-jdbc-user'
+        - name: OFFSET_JDBC_PASSWORD
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.offset-jdbc-password'
+        {{- end }}
+
+        {{- /* Schema history storage credentials */}}
+        {{- if eq (include "debezium.requiresSchemaHistory" .) "true" }}
+        {{- if eq .Values.source.schemaHistory.storage "redis" }}
+        - name: SCHEMA_HISTORY_REDIS_ADDRESS
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.schema-history-redis-address'
+        {{- if .Values.source.schemaHistory.redis.password }}
+        - name: SCHEMA_HISTORY_REDIS_PASSWORD
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.schema-history-redis-password'
+        {{- end }}
+        {{- end }}
+        {{- if eq .Values.source.schemaHistory.storage "jdbc" }}
+        - name: SCHEMA_HISTORY_JDBC_URL
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.schema-history-jdbc-url'
+        - name: SCHEMA_HISTORY_JDBC_USER
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.schema-history-jdbc-user'
+        - name: SCHEMA_HISTORY_JDBC_PASSWORD
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.schema-history-jdbc-password'
+        {{- end }}
+        {{- end }}
+
+        {{- /* Sink credentials */}}
+        {{- if eq .Values.sink.type "kafka" }}
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.kafka-bootstrap-servers'
+        {{- if .Values.sink.kafka.saslUsername }}
+        - name: KAFKA_SASL_USERNAME
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.kafka-sasl-username'
+        - name: KAFKA_SASL_PASSWORD
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.kafka-sasl-password'
+        {{- end }}
+        {{- end }}
+
+        {{- if eq .Values.sink.type "redis" }}
+        - name: SINK_REDIS_ADDRESS
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.sink-redis-address'
+        {{- if .Values.sink.redis.password }}
+        - name: SINK_REDIS_PASSWORD
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.sink-redis-password'
+        {{- end }}
+        {{- end }}
+
+        {{- if eq .Values.sink.type "nats-jetstream" }}
+        - name: NATS_URL
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.nats-url'
+        {{- if .Values.sink.nats.username }}
+        - name: NATS_USERNAME
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.nats-username'
+        - name: NATS_PASSWORD
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.nats-password'
+        {{- end }}
+        {{- end }}
+
+        {{- if eq .Values.sink.type "http" }}
+        - name: HTTP_SINK_URL
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.http-sink-url'
+        {{- if eq .Values.sink.http.authType "basic" }}
+        - name: HTTP_SINK_USERNAME
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.http-sink-username'
+        - name: HTTP_SINK_PASSWORD
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.http-sink-password'
+        {{- end }}
+        {{- if eq .Values.sink.http.authType "bearer" }}
+        - name: HTTP_SINK_BEARER_TOKEN
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.http-sink-bearer-token'
+        {{- end }}
+        {{- end }}
+
+        {{- if eq .Values.sink.type "pulsar" }}
+        - name: PULSAR_SERVICE_URL
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.pulsar-service-url'
+        {{- if .Values.sink.pulsar.authToken }}
+        - name: PULSAR_AUTH_TOKEN
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.pulsar-auth-token'
+        {{- end }}
+        {{- end }}
+
+        {{- if eq .Values.sink.type "eventhubs" }}
+        - name: EVENTHUBS_CONNECTION_STRING
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.eventhubs-connection-string'
+        {{- end }}
+
+        {{- /* Schema registry credentials */}}
+        {{- if .Values.format.schemaRegistry.url }}
+        - name: SCHEMA_REGISTRY_URL
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.schema-registry-url'
+        {{- if .Values.format.schemaRegistry.username }}
+        - name: SCHEMA_REGISTRY_USERNAME
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.schema-registry-username'
+        - name: SCHEMA_REGISTRY_PASSWORD
+          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.schema-registry-password'
+        {{- end }}
+        {{- end }}
+
+      volumes:
+        # Mount application.properties from opaque secret
+        - path: /debezium/config/application.properties
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "debezium.config.name" . }}.payload
+        {{- if and (eq .Values.source.type "postgres") (gt (int .Values.source.postgres.heartbeatIntervalMs) 0) }}
+        # Mount entrypoint script for PostgreSQL prerequisites
+        - path: /scripts/debezium-entrypoint.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "debezium.entrypoint.name" . }}.payload
+        {{- end }}
+        {{- if eq (include "debezium.requiresVolumeset" .) "true" }}
+        # Mount data volume for offset and schema history storage
+        - path: /debezium/data
+          uri: cpln://volumeset/{{ include "debezium.volumeset.name" . }}
+        {{- end }}
+
+      readinessProbe:
+        httpGet:
+          path: /q/health/ready
+          port: 8080
+          scheme: HTTP
+        failureThreshold: 3
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+
+      livenessProbe:
+        httpGet:
+          path: /q/health/live
+          port: 8080
+          scheme: HTTP
+        failureThreshold: 3
+        initialDelaySeconds: 30
+        periodSeconds: 30
+        successThreshold: 1
+        timeoutSeconds: 5
+
+  defaultOptions:
+    # Debezium should run as a single instance for CDC consistency
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 60
+
+  {{- if eq (include "debezium.requiresVolumeset" .) "true" }}
+  securityOptions:
+    filesystemGroupId: 185
+  {{- end }}
+
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        {{- toYaml .Values.firewall.external.outboundAllowCIDR | nindent 8 }}
+    internal:
+      inboundAllowType: {{ .Values.firewall.internal.inboundAllowType }}
+      {{- if .Values.firewall.internal.workloads }}
+      inboundAllowWorkload:
+        {{- toYaml .Values.firewall.internal.workloads | nindent 8 }}
+      {{- end }}

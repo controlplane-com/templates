@@ -1,4 +1,4 @@
-image: ghcr.io/controlplane-com/cpln-build/external-secret-syncer:v1.3.3
+image: ghcr.io/controlplane-com/cpln-build/external-secret-syncer:v1.3.4
 
 resources:
   cpu: 200m
@@ -31,6 +31,10 @@ essConfig:
     #     serviceAccountToken: <TOKEN>
     #     integrationName: my-ess <optional - defaults to syncer.cpln.io>
     #     integrationVersion: 1.0.0 <optional - defaults to image tag>
+    # - name: my-1password-connect
+    #   onePasswordConnect:
+    #     serverURL: https://my-connect-server.example.com
+    #     token: <TOKEN>
     # - name: my-doppler
     #   doppler:
     #     accessToken: <TOKEN>

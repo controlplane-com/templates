@@ -1,0 +1,17 @@
+apiVersion: v2
+name: ess
+description: External Secret Syncer for Control Plane
+type: application
+version: 1.4.0
+appVersion: "v1.3.4"
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+
+annotations:
+  created: "2025-03-12"
+  lastModified: "2026-05-05"
+  category: "secrets"
+  createsGvc: false

@@ -1,0 +1,5 @@
+kind: identity
+gvc: {{ .Values.global.cpln.gvc }}
+name: {{ include "ess.identity.name" . }}
+description: ESS identity
+tags: {{- include "ess.tags" . | nindent 4 }}

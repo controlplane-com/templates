@@ -6,6 +6,11 @@ tags:
   {{- if .Values.redis.tags }}
 {{ toYaml .Values.redis.tags | indent 2 }}
   {{- end }}
+  # Sentinel discovery and replica startup must resolve `<pod>.<workload>:6379` even
+  # while the pod is still resyncing or marked NotReady by the replication-aware
+  # readiness probe. This tag exposes not-yet-Ready pods on the headless service so
+  # peers can reach them for replication and Sentinel can monitor them.
+  cpln/publishNotReadyAddresses: "true"
   {{- include "redis.tags" . | nindent 2 }}
 spec:
   type: stateful
@@ -93,6 +98,34 @@ spec:
               fi
             done
             echo "Sentinel returned master: $MASTER_HOST:$MASTER_PORT"
+            # Self-heal sentinel's view of the slave set. Without this, a
+            # scale-up race or a sentinel restart (which wipes CONFIG REWRITE
+            # state via the bootstrap config copy) can leave this replica
+            # invisible to sentinel and so orphaned at the next failover.
+            # SENTINEL RESET only refreshes sentinel's bookkeeping — no
+            # failover is triggered, no clients are disrupted.
+            (
+              while true; do
+                if [ -n "$CUSTOM_REDIS_PASSWORD" ]; then
+                  redis-cli -p $PORT --no-auth-warning -a "$CUSTOM_REDIS_PASSWORD" ping >/dev/null 2>&1 && break
+                else
+                  redis-cli -p $PORT ping >/dev/null 2>&1 && break
+                fi
+                sleep 2
+              done
+              sleep 3
+              IDX=0
+              while [ $IDX -lt $SENTINEL_REPLICA_COUNT ]; do
+                S_HOST="${SENTINEL_BASE}-${IDX}.${SENTINEL_BASE}"
+                S_PORT=$((26380 + IDX))
+                if [ -n "$CUSTOM_SENTINEL_PASSWORD" ]; then
+                  redis-cli -h $S_HOST -p $S_PORT --no-auth-warning -a "$CUSTOM_SENTINEL_PASSWORD" SENTINEL RESET mymaster >/dev/null 2>&1 || true
+                else
+                  redis-cli -h $S_HOST -p $S_PORT SENTINEL RESET mymaster >/dev/null 2>&1 || true
+                fi
+                IDX=$((IDX + 1))
+              done
+            ) &
             {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof $MASTER_HOST $MASTER_PORT
             {{- else if and (hasKey .Values.redis "replicaDirect") .Values.redis.replicaDirect }}
             SENTINEL_HOST="{{ include "redis.sentinel.name" . }}.${LOCATION}.${CPLN_GVC}.cpln.local"
@@ -109,6 +142,29 @@ spec:
               echo "$MASTER_PORT" | grep -qE '^[0-9]+$' || { echo "Waiting for sentinel at $SENTINEL_HOST to return master, retrying in 5s..."; sleep 5; }
             done
             echo "Sentinel returned master: $MASTER_HOST:$MASTER_PORT"
+            # Self-heal sentinel's view of the slave set (see notes in the
+            # publicAccess branch above for rationale).
+            (
+              while true; do
+                if [ -n "$CUSTOM_REDIS_PASSWORD" ]; then
+                  redis-cli -p 6379 --no-auth-warning -a "$CUSTOM_REDIS_PASSWORD" ping >/dev/null 2>&1 && break
+                else
+                  redis-cli -p 6379 ping >/dev/null 2>&1 && break
+                fi
+                sleep 2
+              done
+              sleep 3
+              IDX=0
+              while [ $IDX -lt {{ .Values.sentinel.replicas }} ]; do
+                S_HOST="replica-${IDX}.{{ include "redis.sentinel.name" . }}.${LOCATION}.${CPLN_GVC}.cpln.local"
+                if [ -n "$CUSTOM_SENTINEL_PASSWORD" ]; then
+                  redis-cli -h $S_HOST -p 26379 --no-auth-warning -a "$CUSTOM_SENTINEL_PASSWORD" SENTINEL RESET mymaster >/dev/null 2>&1 || true
+                else
+                  redis-cli -h $S_HOST -p 26379 SENTINEL RESET mymaster >/dev/null 2>&1 || true
+                fi
+                IDX=$((IDX + 1))
+              done
+            ) &
             {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof $MASTER_HOST $MASTER_PORT
             {{- else }}
             SENTINEL_HOST="{{ include "redis.sentinel.name" . }}"
@@ -125,6 +181,29 @@ spec:
               echo "$MASTER_PORT" | grep -qE '^[0-9]+$' || { echo "Waiting for sentinel at $SENTINEL_HOST to return master, retrying in 5s..."; sleep 5; }
             done
             echo "Sentinel returned master: $MASTER_HOST:$MASTER_PORT"
+            # Self-heal sentinel's view of the slave set (see notes in the
+            # publicAccess branch above for rationale).
+            (
+              while true; do
+                if [ -n "$CUSTOM_REDIS_PASSWORD" ]; then
+                  redis-cli -p 6379 --no-auth-warning -a "$CUSTOM_REDIS_PASSWORD" ping >/dev/null 2>&1 && break
+                else
+                  redis-cli -p 6379 ping >/dev/null 2>&1 && break
+                fi
+                sleep 2
+              done
+              sleep 3
+              IDX=0
+              while [ $IDX -lt {{ .Values.sentinel.replicas }} ]; do
+                S_HOST="{{ include "redis.sentinel.name" . }}-${IDX}.{{ include "redis.sentinel.name" . }}"
+                if [ -n "$CUSTOM_SENTINEL_PASSWORD" ]; then
+                  redis-cli -h $S_HOST -p 26379 --no-auth-warning -a "$CUSTOM_SENTINEL_PASSWORD" SENTINEL RESET mymaster >/dev/null 2>&1 || true
+                else
+                  redis-cli -h $S_HOST -p 26379 SENTINEL RESET mymaster >/dev/null 2>&1 || true
+                fi
+                IDX=$((IDX + 1))
+              done
+            ) &
             {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof $MASTER_HOST $MASTER_PORT
             {{- end }}
           fi
@@ -146,10 +225,17 @@ spec:
                 {{- else }}
                 PORT=6379
                 {{- end }}
-                if [ ! -z "$CUSTOM_REDIS_PASSWORD" ]; then
-                  redis-cli -p $PORT --no-auth-warning -a "$CUSTOM_REDIS_PASSWORD" ping;
-                else
-                  redis-cli -p $PORT ping;
+                rcli() {
+                  if [ -n "$CUSTOM_REDIS_PASSWORD" ]; then
+                    redis-cli -p $PORT --no-auth-warning -a "$CUSTOM_REDIS_PASSWORD" "$@"
+                  else
+                    redis-cli -p $PORT "$@"
+                  fi
+                }
+                rcli ping >/dev/null && \
+                if [ "$(rcli role | head -1)" = "slave" ]; then
+                  [ "$(rcli info replication | awk -F: '/master_link_status/{print $2}' | tr -d '\r')" = "up" ] && \
+                  [ "$(rcli info replication | awk -F: '/master_sync_in_progress/{print $2}' | tr -d '\r')" = "0" ]
                 fi
         failureThreshold: 10
         initialDelaySeconds: 10
@@ -197,6 +283,10 @@ spec:
     multiZone:
       enabled: false
     {{- end }}
+{{- if .Values.redis.requestRetryPolicy }}
+  requestRetryPolicy:
+{{ toYaml .Values.redis.requestRetryPolicy | indent 4 }}
+{{- end }}
 {{- if .Values.redis.firewall }}
   firewallConfig:
     {{- if or (hasKey .Values.redis.firewall "external_inboundAllowCIDR") (hasKey .Values.redis.firewall "external_outboundAllowCIDR") }}

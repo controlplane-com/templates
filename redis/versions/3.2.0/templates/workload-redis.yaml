@@ -6,6 +6,11 @@ tags:
   {{- if .Values.redis.tags }}
 {{ toYaml .Values.redis.tags | indent 2 }}
   {{- end }}
+  # Sentinel discovery and replica startup must resolve `<pod>.<workload>:6379` even
+  # while the pod is still resyncing or marked NotReady by the replication-aware
+  # readiness probe. This tag exposes not-yet-Ready pods on the headless service so
+  # peers can reach them for replication and Sentinel can monitor them.
+  cpln/publishNotReadyAddresses: "true"
   {{- include "redis.tags" . | nindent 2 }}
 spec:
   type: stateful
@@ -88,10 +93,17 @@ spec:
                 {{- else }}
                 PORT=6379
                 {{- end }}
-                if [ ! -z "$CUSTOM_REDIS_PASSWORD" ]; then
-                  redis-cli -p $PORT --no-auth-warning -a "$CUSTOM_REDIS_PASSWORD" ping;
-                else
-                  redis-cli -p $PORT ping;
+                rcli() {
+                  if [ -n "$CUSTOM_REDIS_PASSWORD" ]; then
+                    redis-cli -p $PORT --no-auth-warning -a "$CUSTOM_REDIS_PASSWORD" "$@"
+                  else
+                    redis-cli -p $PORT "$@"
+                  fi
+                }
+                rcli ping >/dev/null && \
+                if [ "$(rcli role | head -1)" = "slave" ]; then
+                  [ "$(rcli info replication | awk -F: '/master_link_status/{print $2}' | tr -d '\r')" = "up" ] && \
+                  [ "$(rcli info replication | awk -F: '/master_sync_in_progress/{print $2}' | tr -d '\r')" = "0" ]
                 fi
         failureThreshold: 10
         initialDelaySeconds: 10
@@ -139,6 +151,10 @@ spec:
     multiZone:
       enabled: false
     {{- end }}
+{{- if .Values.redis.requestRetryPolicy }}
+  requestRetryPolicy:
+{{ toYaml .Values.redis.requestRetryPolicy | indent 4 }}
+{{- end }}
 {{- if .Values.redis.firewall }}
   firewallConfig:
     {{- if or (hasKey .Values.redis.firewall "external_inboundAllowCIDR") (hasKey .Values.redis.firewall "external_outboundAllowCIDR") }}

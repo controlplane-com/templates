@@ -4,6 +4,33 @@
 
 - **Kafka Cluster Parallel Scaling Policy**: Changed the default `scalingPolicy` for the Kafka cluster stateful workload from `OrderedReady` to `Parallel`
 
+# Release Notes - Version 4.0.0
+
+## What's New
+
+- **kafka-orchestrator sidecar for accurate readiness**: The Kafka cluster workload now runs `ghcr.io/controlplane-com/kafka-orchestrator` as a sidecar container. The sidecar exposes an HTTP `/health/ready` endpoint that validates broker registration, controller election, under-replicated partition count, and log-directory health using franz-go — a much stronger readiness signal than the previous TCP-socket check on port 9093.
+  - Sidecar readiness probe: `httpGet /health/ready` on port 8080
+  - Prometheus metrics exposed at `/metrics` (cgroup memory and OOM-risk ratios)
+  - SASL credentials are wired automatically from the configured listener (default: `client`)
+  - The kafka container's existing TCP probes on port 9093 are preserved; workload readiness is now gated on both probes passing
+  - Configurable under the new `kafka_orchestrator:` section in `values.yaml`; set to `null` or comment out to disable the sidecar
+
+- **Graceful broker shutdown**: The kafka container's `terminationGracePeriodSeconds` is now exposed via `kafka.terminationGracePeriodSeconds` in `values.yaml` (default `600` seconds, up from the previous hardcoded `30`). Brokers carrying large amounts of data now have time to complete `controlled.shutdown` (leadership transfer + log flush) before SIGKILL.
+
+- **Init script signal propagation**: The kafka container's bash wrapper now `exec`s into `/tmp/kafka-init.sh`, which already `exec`s into the Kafka run script. PID 1 is now the Kafka JVM itself, so SIGTERM from Control Plane reaches the broker directly and triggers `controlled.shutdown` instead of being absorbed by the bash wrapper.
+
+- **Suppressed Control Plane's default preStop drain delay (all four containers)**: Control Plane's default container lifecycle injects a `preStop sleep $((terminationGracePeriodSeconds / 2))` on **every** container (the actuator's `getLifecycle` runs per-container in the `for...containers` loop in `workloadDeployment.ts:246-258`). For our 600s grace period that means a 300s idle preStop on each of `kafka`, `kafka-orchestrator`, `kafka-exporter`, and `jmx-exporter`. The drain delay is intended for L7 envoy/ingress connections, none of which apply to a kafka stateful workload — clients reconnect via Metadata refresh, inter-broker traffic is handled by `controlled.shutdown`'s leadership transfer, and the prometheus-scrape sidecars have no draining semantics. All four containers now declare an explicit no-op `preStop: exec: ['true']`, suppressing the default on each. Net effect: the entire pod terminates in seconds (bounded by the kafka container's `controlled.shutdown`), not 300s+ of useless sleep on three sidecars holding the pod hostage.
+
+- **`cpln/publishNotReadyAddresses=true` on the Kafka cluster workload**: Required so the headless Service exposes not-yet-Ready broker pods in DNS, which is what lets the KRaft controller quorum form on cold start (or after suspend/unsuspend). Earlier versions of the chart got away with this missing because the Kafka container's TCP probe on 9093 briefly flickered Ready every crash-loop iteration, just long enough to publish endpoints. The new kafka-orchestrator sidecar's `/health/ready` probe (correctly) requires actual cluster health, which closes that race — making the tag mandatory rather than optional. Without it, pods crash-loop with `UnknownHostException: etl-cluster-N.etl-cluster:9093`.
+
+- **Reliability and recovery defaults in `server.properties`**: The chart now emits the following defaults in the broker config (each can be overridden via `kafka.extra_configurations`):
+  - `default.replication.factor` — auto-derived as `min(3, kafka.replicas)`; clamps correctly when scaling below 3 replicas
+  - `min.insync.replicas` — auto-derived as `max(1, default.replication.factor - 1)`
+  - `controlled.shutdown.enable=true`, `controlled.shutdown.max.retries=3`, `controlled.shutdown.retry.backoff.ms=5000` — clean shutdown with retry on leadership-transfer failures
+  - `unclean.leader.election.enable=false` — never promote out-of-sync replicas; prevents data loss
+  - `num.recovery.threads.per.data.dir` — auto-derived as `8 * ceil(cores)` from `kafka.cpu` (e.g. `1000m` → 8, `2000m` → 16, `4` → 32). Recovery only runs after a *dirty* shutdown; a clean `controlled.shutdown` (now achievable thanks to the grace-period and signal-propagation fixes above) skips it entirely.
+  - `num.replica.fetchers=4` — faster follower replication so brokers rejoin the ISR quickly after transient outages
+
 # Release Notes - Version 3.4.0
 
 ## What's New

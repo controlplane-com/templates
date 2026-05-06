@@ -110,6 +110,31 @@ spec:
         periodSeconds: 5
         successThreshold: 1
         timeoutSeconds: 4
+      # Explicit liveness probe — keep it permissive (just "is the process up?")
+      # so the platform doesn't kill a pod mid-resync. cpln defaults the liveness
+      # probe to whatever the readiness probe is, and our readiness probe
+      # intentionally returns failure during full resync (master_link_status:up
+      # AND master_sync_in_progress:0). Without this override, a slave doing a
+      # full resync would be killed before it could finish.
+      livenessProbe:
+        {{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
+        exec:
+          command:
+            - /bin/bash
+            - "-c"
+            - |-
+                POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev)
+                PORT=$((6380 + POD_ID))
+                exec 3<>/dev/tcp/127.0.0.1/$PORT
+        {{- else }}
+        tcpSocket:
+          port: 6379
+        {{- end }}
+        failureThreshold: 5
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 5
       inheritEnv: false
       ports:
 {{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled (gt (.Values.redis.replicas | int) 0) }}

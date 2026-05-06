@@ -16,9 +16,11 @@ spec:
           /tmp/cassandra-init.sh
       env:
         - name: MAX_HEAP_SIZE
-          value: {{ .Values.cassandra.jvmHeapSize | quote }}
-        - name: CASSANDRA_REPLICAS
-          value: {{ .Values.cassandra.replicas | quote }}
+          value: {{ .Values.jvmHeapSize | quote }}
+        - name: CASSANDRA_WORKLOAD
+          value: {{ include "cassandra.workload.name" . | quote }}
+        - name: CASSANDRA_GVC
+          value: {{ .Values.gvc.name | quote }}
       lifecycle:
         preStop:
           exec:
@@ -26,12 +28,14 @@ spec:
               - bash
               - '-c'
               - nodetool drain
-      image: {{ .Values.cassandra.image }}
-      cpu: {{ .Values.cassandra.cpu | quote }}
-      memory: {{ .Values.cassandra.memory | quote }}
+      image: {{ .Values.image }}
+      cpu: {{ .Values.cpu | quote }}
+      memory: {{ .Values.memory | quote }}
       inheritEnv: false
       ports:
         - number: 9042
+          protocol: tcp
+        - number: 9043
           protocol: tcp
       livenessProbe:
         failureThreshold: 5
@@ -62,15 +66,30 @@ spec:
   defaultOptions:
     autoscaling:
       maxConcurrency: 0
-      maxScale: {{ .Values.cassandra.replicas | int }}
+      maxScale: {{ (index .Values.gvc.locations 0).replicas | int }}
       metric: disabled
-      minScale: {{ .Values.cassandra.replicas | int }}
+      minScale: {{ (index .Values.gvc.locations 0).replicas | int }}
       scaleToZeroDelay: 300
       target: 95
     capacityAI: false
     debug: false
     suspend: false
     timeoutSeconds: 60
+  localOptions:
+    {{- range .Values.gvc.locations }}
+    - location: //location/{{ .name }}
+      autoscaling:
+        maxConcurrency: 0
+        maxScale: {{ .replicas | int }}
+        metric: disabled
+        minScale: {{ .replicas | int }}
+        scaleToZeroDelay: 300
+        target: 95
+      capacityAI: false
+      debug: false
+      suspend: false
+      timeoutSeconds: 60
+    {{- end }}
   firewallConfig:
     internal:
       inboundAllowType: {{ .Values.internal_access.type }}

@@ -22,23 +22,16 @@ spec:
           value: cpln://secret/{{ include "cockroach.secretDatabase.name" . }}.user
       ports:
         - number: 8080
-          protocol: http
+          protocol: tcp
         - number: 26257
           protocol: tcp
-      livenessProbe:
-        httpGet:
-          path: /health
-          port: 8080
-        initialDelaySeconds: 30
-        periodSeconds: 10
-        failureThreshold: 3
-      readinessProbe:
-        httpGet:
-          path: /health?ready=1
-          port: 8080
-        initialDelaySeconds: 15
-        periodSeconds: 5
-        failureThreshold: 2
+      lifecycle:
+        preStop:
+          exec:
+            command:
+              - /bin/sh
+              - -c
+              - "cockroach node drain --insecure --host=localhost:26257 --self || true"
       volumes:
         - path: /cockroach/cockroach-data
           recoveryPolicy: retain

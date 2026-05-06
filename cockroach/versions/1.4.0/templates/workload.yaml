@@ -25,6 +25,20 @@ spec:
           protocol: http
         - number: 26257
           protocol: tcp
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: 8080
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        failureThreshold: 3
+      readinessProbe:
+        httpGet:
+          path: /health?ready=1
+          port: 8080
+        initialDelaySeconds: 15
+        periodSeconds: 5
+        failureThreshold: 2
       volumes:
         - path: /cockroach/cockroach-data
           recoveryPolicy: retain

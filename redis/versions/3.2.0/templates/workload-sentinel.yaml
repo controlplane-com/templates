@@ -158,6 +158,10 @@ spec:
     multiZone:
       enabled: false
     {{- end }}
+  # See workload-redis.yaml for rationale. Parallel boots all sentinels at
+  # once instead of waiting for each to be Ready in sequence.
+  rolloutOptions:
+    scalingPolicy: Parallel
 {{- if .Values.sentinel.requestRetryPolicy }}
   requestRetryPolicy:
 {{ toYaml .Values.sentinel.requestRetryPolicy | indent 4 }}

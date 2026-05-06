@@ -151,6 +151,13 @@ spec:
     multiZone:
       enabled: false
     {{- end }}
+  # Parallel pod management. Default OrderedReady serializes replica boots,
+  # which forces sentinels and redis pods to wait for each peer to be Ready
+  # before the next starts and produces extended cold-start +sdown noise.
+  # Parallel boots all replicas at once; publishNotReadyAddresses keeps peer
+  # DNS resolvable during the simultaneous cold start so the cluster can form.
+  rolloutOptions:
+    scalingPolicy: Parallel
 {{- if .Values.redis.requestRetryPolicy }}
   requestRetryPolicy:
 {{ toYaml .Values.redis.requestRetryPolicy | indent 4 }}

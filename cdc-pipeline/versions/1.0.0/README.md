@@ -82,5 +82,5 @@ INSERT INTO debezium_heartbeat VALUES (1, now());
 | Component | Version |
 |-----------|---------|
 | PostgreSQL HA | 2.2.0 (Patroni, PostgreSQL 17) |
-| Kafka | 3.4.0 (Apache Kafka 3.9.1, KRaft) |
+| Kafka | 4.0.0 (Apache Kafka 3.9.1, KRaft) |
 | Debezium Server | 1.1.0 (Debezium 3.0) |

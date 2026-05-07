@@ -49,6 +49,13 @@ Cockroach Backup Workload Name
 {{- printf "%s-cockroach-backup" .Release.Name }}
 {{- end }}
 
+{{/*
+Cockroach PgBouncer Workload Name
+*/}}
+{{- define "cockroach.pgbouncer.name" -}}
+{{- printf "%s-cockroach-pgbouncer" .Release.Name }}
+{{- end }}
+
 
 {{/* Validation */}}
 

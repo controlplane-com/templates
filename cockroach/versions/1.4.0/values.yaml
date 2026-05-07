@@ -32,6 +32,19 @@ internal_access:
     #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
     #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
+pgbouncer:
+  enabled: false
+  image: edoburu/pgbouncer:v1.25.1-p0
+  poolMode: transaction  # options: session, transaction, statement
+  defaultPoolSize: 25    # number of real CockroachDB connections PgBouncer maintains per pod
+  maxClientConn: 1000    # maximum number of client connections PgBouncer accepts per pod
+  maxDbConnections: 100  # hard cap on total CockroachDB connections regardless of how many PgBouncer pods are running
+  minReplicas: 2
+  maxReplicas: 4
+  resources:
+    cpu: 200m
+    memory: 128Mi
+
 backup:
   enabled: false
   image: controlplanecorporation/cockroach-backup:1.0

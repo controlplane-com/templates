@@ -64,15 +64,19 @@ spec:
           echo "\nreplica-announce-port 6379" >> /etc/redis/redis.conf
           {{ end }}
 
+          # exec replaces the shell with redis-server so SIGTERM from the
+          # platform routes directly to redis-server instead of being swallowed
+          # by /bin/sh. Without exec, shutdown waits the full grace period
+          # before SIGKILL since the shell doesn't forward signals to children.
           if [ "$(hostname)" = "{{ include "redis.name" . }}-0" ]; then
-            {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }}
+            exec {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }}
           else
             {{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
-            {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof {{ .Values.redis.publicAccess.address }} 6380
+            exec {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof {{ .Values.redis.publicAccess.address }} 6380
             {{- else if and (hasKey .Values.redis "replicaDirect") .Values.redis.replicaDirect }}
-            {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof replica-0.${CPLN_WORKLOAD_NAME}.${LOCATION}.${CPLN_GVC}.cpln.local 6379
+            exec {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof replica-0.${CPLN_WORKLOAD_NAME}.${LOCATION}.${CPLN_GVC}.cpln.local 6379
             {{- else }}
-            {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof {{ include "redis.name" . }}-0.{{ include "redis.name" . }} 6379
+            exec {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof {{ include "redis.name" . }}-0.{{ include "redis.name" . }} 6379
             {{- end }}
           fi
       command: /bin/sh

@@ -236,8 +236,32 @@ Validate auth configuration block
 {{/* Labeling */}}
 
 {{/*
-Common labels - delegated to cpln-common
+Create chart name and version as used by the chart label.
+*/}}
+{{- define "redis.chart" -}}
+{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Common labels
 */}}
 {{- define "redis.tags" -}}
-{{- include "cpln-common.tags" . }}
+helm.sh/chart: {{ include "redis.chart" . }}
+{{ include "redis.selectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.cpln.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.cpln.io/managed-by: {{ .Release.Service }}
+cpln/marketplace: "true"
+cpln/marketplace-template: redis
+cpln/marketplace-template-version: {{ .Chart.Version }}
+cpln/marketplace-gvc: {{ .Values.global.cpln.gvc }}
+{{- end }}
+
+{{/*
+Selector labels
+*/}}
+{{- define "redis.selectorLabels" -}}
+app.cpln.io/name: {{ .Release.Name }}
+app.cpln.io/instance: {{ .Release.Name }}
 {{- end }}

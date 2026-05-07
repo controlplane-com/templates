@@ -5,13 +5,8 @@ type: application
 version: 3.3.0
 appVersion: "7.4"
 
-dependencies:
-  - name: cpln-common
-    version: 1.0.0
-    repository: "oci://ghcr.io/controlplane-com/templates"
-
 annotations:
   created: "2026-01-29"
-  lastModified: "2026-05-01"
+  lastModified: "2026-05-07"
   category: "cache"
   createsGvc: false

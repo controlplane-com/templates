@@ -26,43 +26,72 @@ spec:
           {{- else }}
           mkdir -p /etc/sentinel
           {{- end }}
-          cp /config/sentinel.conf /etc/sentinel/sentinel.conf
 
-          if [ -n "$CUSTOM_REDIS_PASSWORD" ]; then
-            echo "\nsentinel auth-pass mymaster $CUSTOM_REDIS_PASSWORD" >> /etc/sentinel/sentinel.conf
-          fi
+          # bootstrap_sentinel_conf: write /etc/sentinel/sentinel.conf only if
+          # sentinel hasn't already taken ownership of the file. The marker we
+          # check is the `sentinel myid <hex>` directive — sentinel writes this
+          # via CONFIG REWRITE within milliseconds of its first successful
+          # startup, and the chart's static template never contains it. So:
+          #   - marker present  → previous boot got far enough that sentinel
+          #     owns the file. Preserve everything (current master after any
+          #     failover, known replicas, peer sentinels).
+          #   - marker absent   → file missing, empty, or written but sentinel
+          #     never reached its first CONFIG REWRITE. Re-run bootstrap;
+          #     idempotent against the static config so safe to re-run.
+          # When sentinel.persistence is disabled this still runs every boot
+          # (ephemeral filesystem, no marker survives) — same behavior as the
+          # pre-marker chart. The check only changes behavior when /etc/sentinel
+          # is backed by a persistent volume.
+          bootstrap_sentinel_conf() {
+            if [ -s /etc/sentinel/sentinel.conf ] && grep -q "^sentinel myid " /etc/sentinel/sentinel.conf; then
+              echo "sentinel.conf already bootstrapped; preserving sentinel-managed state"
+              return 0
+            fi
+            echo "Bootstrapping sentinel.conf from static config"
+            cp /config/sentinel.conf /etc/sentinel/sentinel.conf
 
-          if [ -n "$CUSTOM_SENTINEL_PASSWORD" ]; then
-            echo "\nrequirepass $CUSTOM_SENTINEL_PASSWORD" >> /etc/sentinel/sentinel.conf
-          fi
+            if [ -n "$CUSTOM_REDIS_PASSWORD" ]; then
+              echo "\nsentinel auth-pass mymaster $CUSTOM_REDIS_PASSWORD" >> /etc/sentinel/sentinel.conf
+            fi
 
-          {{- if and (hasKey .Values.sentinel "publicAccess") .Values.sentinel.publicAccess.enabled }}
-          POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev)
-          PORT=$((26380 + POD_ID))
-          echo "\nport $PORT" >> /etc/sentinel/sentinel.conf
-          echo "\nsentinel announce-ip {{ .Values.sentinel.publicAccess.address }}" >> /etc/sentinel/sentinel.conf
-          echo "\nsentinel announce-port $PORT" >> /etc/sentinel/sentinel.conf
-          {{ else }}
-          echo "\nport 26379" >> /etc/sentinel/sentinel.conf
-          POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev)
-          LOCATION=${CPLN_LOCATION##*/}
-          CPLN_WORKLOAD_NAME="${CPLN_WORKLOAD##*/}"
-          if [ -n "$REPLICA_DIRECT" ]; then
-            echo "\nsentinel announce-ip replica-${POD_ID}.${CPLN_WORKLOAD_NAME}.${LOCATION}.${CPLN_GVC}.cpln.local" >> /etc/sentinel/sentinel.conf
-          else
-            echo "\nsentinel announce-ip ${HOSTNAME}.{{ include "redis.sentinel.name" . }}" >> /etc/sentinel/sentinel.conf
-          fi
-          echo "\nsentinel announce-port 26379" >> /etc/sentinel/sentinel.conf
-          {{ end }}
-          {{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
-          echo "sentinel monitor mymaster {{ .Values.redis.publicAccess.address }} 6380 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
-          {{- else if and (hasKey .Values.redis "replicaDirect") .Values.redis.replicaDirect }}
-          echo "sentinel monitor mymaster replica-0.{{ include "redis.name" . }}.${LOCATION}.${CPLN_GVC}.cpln.local 6379 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
-          {{- else }}
-          echo "sentinel monitor mymaster {{ include "redis.name" . }}-0.{{ include "redis.name" . }} 6379 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
-          {{- end }}
+            if [ -n "$CUSTOM_SENTINEL_PASSWORD" ]; then
+              echo "\nrequirepass $CUSTOM_SENTINEL_PASSWORD" >> /etc/sentinel/sentinel.conf
+            fi
 
-          redis-sentinel /etc/sentinel/sentinel.conf
+            {{- if and (hasKey .Values.sentinel "publicAccess") .Values.sentinel.publicAccess.enabled }}
+            POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev)
+            PORT=$((26380 + POD_ID))
+            echo "\nport $PORT" >> /etc/sentinel/sentinel.conf
+            echo "\nsentinel announce-ip {{ .Values.sentinel.publicAccess.address }}" >> /etc/sentinel/sentinel.conf
+            echo "\nsentinel announce-port $PORT" >> /etc/sentinel/sentinel.conf
+            {{ else }}
+            echo "\nport 26379" >> /etc/sentinel/sentinel.conf
+            POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev)
+            LOCATION=${CPLN_LOCATION##*/}
+            CPLN_WORKLOAD_NAME="${CPLN_WORKLOAD##*/}"
+            if [ -n "$REPLICA_DIRECT" ]; then
+              echo "\nsentinel announce-ip replica-${POD_ID}.${CPLN_WORKLOAD_NAME}.${LOCATION}.${CPLN_GVC}.cpln.local" >> /etc/sentinel/sentinel.conf
+            else
+              echo "\nsentinel announce-ip ${HOSTNAME}.{{ include "redis.sentinel.name" . }}" >> /etc/sentinel/sentinel.conf
+            fi
+            echo "\nsentinel announce-port 26379" >> /etc/sentinel/sentinel.conf
+            {{ end }}
+            {{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
+            echo "sentinel monitor mymaster {{ .Values.redis.publicAccess.address }} 6380 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
+            {{- else if and (hasKey .Values.redis "replicaDirect") .Values.redis.replicaDirect }}
+            echo "sentinel monitor mymaster replica-0.{{ include "redis.name" . }}.${LOCATION}.${CPLN_GVC}.cpln.local 6379 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
+            {{- else }}
+            echo "sentinel monitor mymaster {{ include "redis.name" . }}-0.{{ include "redis.name" . }} 6379 ${REDIS_SENTINEL_QUORUM}" >> /etc/sentinel/sentinel.conf
+            {{- end }}
+          }
+
+          bootstrap_sentinel_conf
+
+          # exec replaces the shell with redis-sentinel so SIGTERM from the
+          # platform routes directly to redis-sentinel for clean shutdown.
+          # Without exec, the shell swallows the signal and sentinel only dies
+          # when the platform sends SIGKILL after the grace period expires.
+          exec redis-sentinel /etc/sentinel/sentinel.conf
       command: /bin/sh
       cpu: {{ .Values.sentinel.resources.cpu }}
       memory: {{ .Values.sentinel.resources.memory }}

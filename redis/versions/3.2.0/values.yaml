@@ -120,6 +120,9 @@ sentinel:
   #     - resource-exhausted
   #     - retriable-status-codes
   requestRetryPolicy: {}
+  # If all sentinels are lost AND the topology changed underfoot during the
+  # outage, persisted `mymaster` survives but disagrees with the chart's
+  # redis-0-as-default-master bootstrap, deadlocking recovery. Default OFF.
   persistence:
     enabled: false
     volumes:

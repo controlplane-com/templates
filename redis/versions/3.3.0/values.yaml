@@ -120,6 +120,9 @@ sentinel:
   #     - resource-exhausted
   #     - retriable-status-codes
   requestRetryPolicy: {}
+  # Sentinel persistence preserves the post-failover master across restarts via
+  # CONFIG REWRITE. Replicas query sentinel at startup, so persisted state lets
+  # them rejoin the real master rather than redis-0. Recommended ON in prod.
   persistence:
     enabled: false
     volumes:

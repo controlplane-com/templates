@@ -3,7 +3,8 @@
 kind: workload
 name: {{ include "cockroach.name" . }}
 description: CockroachDB cluster
-tags: {{- include "cockroach.tags" . | nindent 4 }}
+tags: {{- include "cockroach.tags" . | nindent 2 }}
+  cpln/publishNotReadyAddresses: "true"
 spec:
   type: stateful
   containers:
@@ -32,6 +33,20 @@ spec:
               - /bin/sh
               - -c
               - "cockroach node drain --insecure --host=localhost:26257 --self || true"
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: 8080
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 6
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 8080
+        periodSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 3
       volumes:
         - path: /cockroach/cockroach-data
           recoveryPolicy: retain

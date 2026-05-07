@@ -4,7 +4,6 @@ kind: workload
 name: {{ include "cockroach.name" . }}
 description: CockroachDB cluster
 tags: {{- include "cockroach.tags" . | nindent 2 }}
-  cpln/publishNotReadyAddresses: "true"
 spec:
   type: stateful
   containers:

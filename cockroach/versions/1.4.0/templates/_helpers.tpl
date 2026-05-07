@@ -72,31 +72,8 @@ Validate that gvc.locations has at least 2 entries
 {{/* Labeling */}}
 
 {{/*
-Create chart name and version as used by the chart label.
-*/}}
-{{- define "cockroach.chart" -}}
-{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
-{{- end }}
-
-{{/*
-Common labels
+Common labels - delegated to cpln-common
 */}}
 {{- define "cockroach.tags" -}}
-helm.sh/chart: {{ include "cockroach.chart" . }}
-{{ include "cockroach.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.cpln.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.cpln.io/managed-by: {{ .Release.Service }}
-cpln/marketplace: "true"
-cpln/marketplace-template: cockroach
-cpln/marketplace-template-version: {{ .Chart.Version }}
-{{- end }}
-
-{{/*
-Selector labels
-*/}}
-{{- define "cockroach.selectorLabels" -}}
-app.cpln.io/name: {{ .Release.Name }}
-app.cpln.io/instance: {{ .Release.Name }}
+{{- include "cpln-common.tags" . }}
 {{- end }}

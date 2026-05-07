@@ -12,6 +12,7 @@ postgres:
     username: username
     password: password
     database: test
+    walLevel: replica # options: replica, logical (use "logical" for CDC/Debezium)
 
 multiZone: false
 
@@ -94,3 +95,12 @@ backup:
     bucket: pg-ha-backup-bucket
     cloudAccountName: my-gcs-cloud-account
     prefix: postgres/backups # folder name where your backups will be stored
+
+# Multi-location deployment (shared with etcd subchart via global scope).
+# List all GVC locations for cross-DC Patroni. Requires 3+ locations.
+# When set, replicas and etcd.replicas should be 1 (1 per location).
+global:
+  locations: []
+    # - aws-us-east-2
+    # - aws-us-west-2
+    # - aws-eu-west-1

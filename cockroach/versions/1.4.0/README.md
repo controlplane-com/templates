@@ -59,6 +59,34 @@ On first deploy, the cluster automatically configures the database with all conf
 SHOW SURVIVAL GOAL FROM DATABASE mydb;
 ```
 
+**Note**: A production CockroachDB setup can survive a location outage cleanly, but rolling out or restarting replicas in the remaining locations during that outage exceeds the cluster's fault tolerance and will cause a brief period of downtime for ranges on those restarting nodes.
+
+## PgBouncer Connection Pooling (Optional)
+
+PgBouncer multiplexes application connections into a smaller pool of real database connections, reducing overhead and protecting CockroachDB from connection exhaustion under high concurrency. It connects to all CockroachDB nodes across all locations, so failover and load distribution are handled transparently.
+
+When enabled, PgBouncer becomes the primary connection endpoint. Connect to `{release-name}-pgbouncer.{gvc}.cpln.local:5432` instead of the CockroachDB workload directly.
+
+```yaml
+pgbouncer:
+  enabled: true
+  poolMode: transaction  # options: session, transaction, statement
+  defaultPoolSize: 25    # real CockroachDB connections per PgBouncer pod
+  maxClientConn: 250     # max app connections per PgBouncer pod
+  maxDbConnections: 100  # hard cap on total CockroachDB connections regardless of how many PgBouncer pods are running
+  minReplicas: 2
+  maxReplicas: 4
+```
+
+**Pool modes:**
+- `transaction` — connection held only for the duration of a transaction. Best for most web and API workloads. Not compatible with session-level features like `SET` variables, temporary tables, or advisory locks.
+- `session` — connection held for the entire client session. Compatible with all features but provides less connection reuse.
+- `statement` — connection returned after every statement. Transactions are not supported. Rarely used.
+
+**`maxDbConnections`** is a hard cap on the total number of real CockroachDB connections PgBouncer will open, shared across all PgBouncer pods. Set it to a value your cluster can safely handle regardless of how many PgBouncer pods are running.
+
+**Scaling:** PgBouncer autoscales on RPS between `minReplicas` and `maxReplicas`. Increase `maxReplicas` for high-throughput workloads where PgBouncer becomes the bottleneck before CockroachDB does.
+
 ## Application Retry Logic
 
 **Your application must implement retry logic on database connections.** PgBouncer routes around failed CockroachDB nodes, but transient errors are still surfaced to the application during failover events such as a location outage or rolling restarts — while PgBouncer cycles through backends and Raft leader elections complete. Without retries, these transient errors will propagate directly to the client.

@@ -1,0 +1,74 @@
+gvc:
+  name: cockroach-gvc
+  locations:
+    - name: aws-us-west-2
+      replicas: 3
+    - name: aws-us-east-2
+      replicas: 3
+    - name: aws-eu-central-1
+      replicas: 3
+
+image: cockroachdb/cockroach:v25.4.0
+
+resources:
+  cpu: 2
+  memory: 4Gi
+
+database:
+  name: mydb
+  user: myuser
+
+volumeset:
+  capacity: 10 # Initial capacity in GiB (minimum is 10)
+  autoscaling:
+    enabled: false # Set to true to enable autoscaling
+    maxCapacity: 100 # Maximum capacity in GiB when autoscaling is enabled
+    minFreePercentage: 10 # Minimum free percentage to trigger scaling when autoscaling is enabled
+    scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
+
+internal_access:
+  type: same-gvc # options: same-gvc, same-org, workload-list
+  workloads:  # Note: can only be used if type is same-gvc or workload-list
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+pgbouncer:
+  enabled: false
+  image: edoburu/pgbouncer:v1.25.1-p0
+  poolMode: transaction  # options: session, transaction, statement
+  defaultPoolSize: 25    # number of real CockroachDB connections PgBouncer maintains per pod
+  maxClientConn: 250     # maximum number of client connections PgBouncer accepts per pod
+  maxDbConnections: 100  # hard cap on total CockroachDB connections regardless of how many PgBouncer pods are running
+  minReplicas: 2
+  maxReplicas: 4
+  serverCheckDelay: 30      # seconds between idle server connection health checks (default 30)
+  serverConnectTimeout: 2   # seconds before giving up on a new server connection (default 15)
+  serverLoginRetry: 0       # seconds before retrying a failed server login; 0 = no caching of failures (default 15)
+  clientLoginTimeout: 10    # seconds before rejecting a client waiting for login (default 60)
+  queryWaitTimeout: 10      # seconds before rejecting a logged-in client waiting for a server connection (default 120)
+  resources:
+    cpu: 200m
+    minCpu: 100m
+    memory: 1Gi
+    minMemory: 128Mi
+
+backup:
+  enabled: false
+  image: controlplanecorporation/cockroach-backup:1.0
+  schedule: "0 2 * * *"
+  activeDeadlineSeconds: 14400   # hard kill after 4 hours if backup hangs
+  location: aws-us-east-2        # run the backup job in the same region as your storage bucket
+  resources:
+    cpu: 500m
+    memory: 512Mi
+  provider: aws  # options: aws, gcp
+  aws:
+    bucket: my-backup-bucket
+    region: us-east-1
+    cloudAccountName: my-backup-cloudaccount
+    policyName: my-backup-policy
+    prefix: cockroach/backups
+  gcp:
+    bucket: my-backup-bucket
+    cloudAccountName: my-backup-cloudaccount
+    prefix: cockroach/backups

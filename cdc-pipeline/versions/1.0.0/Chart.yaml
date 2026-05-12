@@ -1,9 +1,6 @@
 apiVersion: v2
 name: cdc-pipeline
-description: >-
-  Change Data Capture pipeline with PostgreSQL HA, Kafka, and Debezium Server.
-  Automatically coordinates database WAL settings, Kafka SASL credentials,
-  and cross-service DNS for a production-ready CDC streaming setup.
+description: CDC pipeline with PostgreSQL HA, Kafka, and Debezium. Auto-configured WAL, SASL credentials, and cross-service DNS.
 type: application
 version: 1.0.0
 appVersion: "1.0"

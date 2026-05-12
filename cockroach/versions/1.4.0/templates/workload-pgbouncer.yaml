@@ -11,27 +11,25 @@ spec:
     - name: pgbouncer
       image: {{ .Values.pgbouncer.image }}
       cpu: {{ .Values.pgbouncer.resources.cpu | quote }}
+      minCpu: {{ .Values.pgbouncer.resources.minCpu | quote }}
       memory: {{ .Values.pgbouncer.resources.memory | quote }}
+      minMemory: {{ .Values.pgbouncer.resources.minMemory | quote }}
       inheritEnv: false
-      env:
-        - name: DB_HOST
-          value: {{ include "cockroach.name" . }}.{{ .Values.gvc.name }}.cpln.local
-        - name: DB_PORT
-          value: '26257'
-        - name: DB_USER
-          value: cpln://secret/{{ include "cockroach.secretDatabase.name" . }}.user
-        - name: DB_NAME
-          value: cpln://secret/{{ include "cockroach.secretDatabase.name" . }}.db
-        - name: POOL_MODE
-          value: {{ .Values.pgbouncer.poolMode | quote }}
-        - name: DEFAULT_POOL_SIZE
-          value: {{ .Values.pgbouncer.defaultPoolSize | quote }}
-        - name: MAX_CLIENT_CONN
-          value: {{ .Values.pgbouncer.maxClientConn | quote }}
-        - name: MAX_DB_CONNECTIONS
-          value: {{ .Values.pgbouncer.maxDbConnections | quote }}
-        - name: AUTH_TYPE
-          value: trust
+      command: "/bin/sh"
+      args:
+        - "/pgbouncer/start.sh"
+      volumes:
+        - path: /pgbouncer/start.sh
+          uri: cpln://secret/{{ include "cockroach.pgbouncer.secretStartup.name" . }}
+      readinessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            - "psql -h 127.0.0.1 -p 5432 -U root -d {{ .Values.database.name }} -c 'SELECT 1' -q 2>/dev/null"
+        periodSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 4
       ports:
         - number: 5432
           protocol: tcp

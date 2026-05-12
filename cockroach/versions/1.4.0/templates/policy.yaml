@@ -12,3 +12,6 @@ targetKind: secret
 targetLinks:
   - //secret/{{ include "cockroach.secretStartup.name" . }}
   - //secret/{{ include "cockroach.secretDatabase.name" . }}
+  {{- if .Values.pgbouncer.enabled }}
+  - //secret/{{ include "cockroach.pgbouncer.secretStartup.name" . }}
+  {{- end }}

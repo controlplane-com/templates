@@ -56,15 +56,22 @@ Cockroach PgBouncer Workload Name
 {{- printf "%s-cockroach-pgbouncer" .Release.Name }}
 {{- end }}
 
+{{/*
+Cockroach PgBouncer Startup Secret Name
+*/}}
+{{- define "cockroach.pgbouncer.secretStartup.name" -}}
+{{- printf "%s-cockroach-pgbouncer-startup" .Release.Name }}
+{{- end }}
+
 
 {{/* Validation */}}
 
 {{/*
-Validate that gvc.locations has at least 2 entries
+Validate that gvc.locations has at least 1 entry
 */}}
 {{- define "cockroach.validateLocations" -}}
-{{- if lt (len .Values.gvc.locations) 2 -}}
-{{- fail "gvc.locations must contain at least 2 locations for CockroachDB multi-region deployment" -}}
+{{- if lt (len .Values.gvc.locations) 1 -}}
+{{- fail "gvc.locations must contain at least 1 location" -}}
 {{- end -}}
 {{- end -}}
 

@@ -6,7 +6,7 @@ CockroachDB is a distributed SQL database built on a transactional and strongly-
 
 To configure your CockroachDB cluster across multiple locations, update the `gvc.locations` section in the `values.yaml` file.
 
-**Note**: While CockroachDB can run on 2 locations, a minimum of 3 locations and 3 replicas per location is recommended for high resilience.
+**Note**: While CockroachDB can run on 1 location, a minimum of 3 locations and 3 replicas per location is recommended for high resilience.
 
 ### Volume Storage
 
@@ -58,6 +58,10 @@ On first deploy, the cluster automatically configures the database with all conf
 ```sql
 SHOW SURVIVAL GOAL FROM DATABASE mydb;
 ```
+
+## Application Retry Logic
+
+**Your application must implement retry logic on database connections.** PgBouncer routes around failed CockroachDB nodes, but transient errors are still surfaced to the application during failover events such as a location outage or rolling restarts — while PgBouncer cycles through backends and Raft leader elections complete. Without retries, these transient errors will propagate directly to the client.
 
 ## Backing Up
 

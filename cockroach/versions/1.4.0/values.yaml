@@ -37,13 +37,20 @@ pgbouncer:
   image: edoburu/pgbouncer:v1.25.1-p0
   poolMode: transaction  # options: session, transaction, statement
   defaultPoolSize: 25    # number of real CockroachDB connections PgBouncer maintains per pod
-  maxClientConn: 1000    # maximum number of client connections PgBouncer accepts per pod
+  maxClientConn: 250     # maximum number of client connections PgBouncer accepts per pod
   maxDbConnections: 100  # hard cap on total CockroachDB connections regardless of how many PgBouncer pods are running
   minReplicas: 2
   maxReplicas: 4
+  serverCheckDelay: 30      # seconds between idle server connection health checks (default 30)
+  serverConnectTimeout: 2   # seconds before giving up on a new server connection (default 15)
+  serverLoginRetry: 0       # seconds before retrying a failed server login; 0 = no caching of failures (default 15)
+  clientLoginTimeout: 10    # seconds before rejecting a client waiting for login (default 60)
+  queryWaitTimeout: 10      # seconds before rejecting a logged-in client waiting for a server connection (default 120)
   resources:
     cpu: 200m
-    memory: 128Mi
+    minCpu: 100m
+    memory: 1Gi
+    minMemory: 128Mi
 
 backup:
   enabled: false

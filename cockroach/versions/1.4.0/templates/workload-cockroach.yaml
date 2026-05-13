@@ -72,6 +72,7 @@ spec:
       {{- if .Values.pgbouncer.enabled }}
       inboundAllowType: workload-list
       inboundAllowWorkload:
+        - //gvc/{{ .Values.gvc.name }}/workload/{{ include "cockroach.name" . }}
         - //gvc/{{ .Values.gvc.name }}/workload/{{ include "cockroach.pgbouncer.name" . }}
       {{- else }}
       inboundAllowType: {{ .Values.internal_access.type }}

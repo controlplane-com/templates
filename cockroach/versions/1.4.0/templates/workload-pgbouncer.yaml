@@ -47,9 +47,9 @@ spec:
     timeoutSeconds: 5
   firewallConfig:
     internal:
-      inboundAllowType: {{ .Values.internal_access.type }}
-      {{- if .Values.internal_access.workloads }}
-      inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
+      inboundAllowType: {{ .Values.pgbouncer.internal_access.type }}
+      {{- if .Values.pgbouncer.internal_access.workloads }}
+      inboundAllowWorkload: {{ .Values.pgbouncer.internal_access.workloads | toYaml | nindent 8 }}
       {{- end }}
     external:
       inboundAllowCIDR: []

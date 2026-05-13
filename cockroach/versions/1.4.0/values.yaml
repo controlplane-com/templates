@@ -27,13 +27,12 @@ volumeset:
     scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
 
 internal_access:
-  type: same-gvc # options: same-gvc, same-org, workload-list
-  workloads:  # Note: can only be used if type is same-gvc or workload-list
-    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+  type: same-gvc # options: same-gvc, same-org, workload-list; used for CockroachDB when pgbouncer is disabled
+  workloads:  # Note: can only be used if type is workload-list
     #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
 pgbouncer:
-  enabled: false
+  enabled: true
   image: edoburu/pgbouncer:v1.25.1-p0
   poolMode: transaction  # options: session, transaction, statement
   defaultPoolSize: 25    # number of real CockroachDB connections PgBouncer maintains per pod
@@ -46,6 +45,10 @@ pgbouncer:
   serverLoginRetry: 0       # seconds before retrying a failed server login; 0 = no caching of failures (default 15)
   clientLoginTimeout: 10    # seconds before rejecting a client waiting for login (default 60)
   queryWaitTimeout: 10      # seconds before rejecting a logged-in client waiting for a server connection (default 120)
+  internal_access:
+    type: same-gvc # options: same-gvc, same-org, workload-list; controls who can connect to PgBouncer
+    workloads:  # Note: can only be used if type is workload-list
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
   resources:
     cpu: 200m
     minCpu: 100m

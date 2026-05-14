@@ -1,6 +1,6 @@
-replicas: 4
+replicas: 3
 # replicationFactor must not exceed replicas
-replicationFactor: 2
+replicationFactor: 1
 
 # IMPORTANT: Change all credentials before deploying to production
 superuserPassword: supersecretpassword
@@ -9,8 +9,8 @@ password: password
 keyspaceName: mydatabase
 
 image: cassandra:5.0
-cpu: 2
-memory: 8Gi
+cpu: 1
+memory: 4Gi
 # JVM heap: leave ~50% of container memory for off-heap (bloom filters, page cache, etc.)
 # Cassandra 5.x uses G1GC — only MAX_HEAP_SIZE is valid; HEAP_NEWSIZE is ignored.
 jvmHeapSize: 2G

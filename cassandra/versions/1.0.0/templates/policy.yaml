@@ -5,7 +5,7 @@ bindings:
   - permissions:
       - reveal
     principalLinks:
-      - //gvc/{{ .Values.gvc.name }}/identity/{{ include "cassandra.identity.name" . }}
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "cassandra.identity.name" . }}
 targetKind: secret
 targetLinks:
   - //secret/{{ include "cassandra.secret.init.name" . }}

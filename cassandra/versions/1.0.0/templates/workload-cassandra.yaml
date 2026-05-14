@@ -1,7 +1,6 @@
 kind: workload
 name: {{ include "cassandra.workload.name" . }}
 description: Cassandra cluster
-gvc: {{ .Values.gvc.name }}
 tags: {{- include "cassandra.tags" . | nindent 2 }}
 spec:
   type: stateful
@@ -17,10 +16,6 @@ spec:
       env:
         - name: MAX_HEAP_SIZE
           value: {{ .Values.jvmHeapSize | quote }}
-        - name: CASSANDRA_WORKLOAD
-          value: {{ include "cassandra.workload.name" . | quote }}
-        - name: CASSANDRA_GVC
-          value: {{ .Values.gvc.name | quote }}
       lifecycle:
         preStop:
           exec:
@@ -66,37 +61,22 @@ spec:
   defaultOptions:
     autoscaling:
       maxConcurrency: 0
-      maxScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      maxScale: {{ .Values.replicas | int }}
       metric: disabled
-      minScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      minScale: {{ .Values.replicas | int }}
       scaleToZeroDelay: 300
       target: 95
     capacityAI: false
     debug: false
     suspend: false
     timeoutSeconds: 60
-  localOptions:
-    {{- range .Values.gvc.locations }}
-    - location: //location/{{ .name }}
-      autoscaling:
-        maxConcurrency: 0
-        maxScale: {{ .replicas | int }}
-        metric: disabled
-        minScale: {{ .replicas | int }}
-        scaleToZeroDelay: 300
-        target: 95
-      capacityAI: false
-      debug: false
-      suspend: false
-      timeoutSeconds: 60
-    {{- end }}
   firewallConfig:
     internal:
       inboundAllowType: {{ .Values.internal_access.type }}
       {{- if .Values.internal_access.workloads }}
       inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
       {{- end }}
-  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "cassandra.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "cassandra.identity.name" . }}
   loadBalancer:
     direct:
       enabled: false

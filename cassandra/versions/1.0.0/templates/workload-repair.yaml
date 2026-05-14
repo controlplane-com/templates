@@ -1,7 +1,7 @@
 {{- if .Values.repair.enabled }}
 kind: workload
 name: {{ include "cassandra.workload.repair.name" . }}
-description: Scheduled full Cassandra cluster repair
+description: Scheduled Cassandra cluster repair job
 tags: {{- include "cassandra.tags" . | nindent 2 }}
 spec:
   type: cron
@@ -17,26 +17,26 @@ spec:
         - |
           set -euo pipefail
 
-          GVC_NAME=$(basename "${CPLN_GVC}")
-          # Cassandra workload name is baked in at render time so the repair job
-          # always targets the correct stateful workload within this release.
           CASSANDRA_WORKLOAD="{{ include "cassandra.workload.name" . }}"
 
-          # Per-replica CP internal DNS: {workload}-{n}.{workload}.{gvc}.cpln.local
-          FQDN_BASE="${CASSANDRA_WORKLOAD}.${GVC_NAME}.cpln.local"
+          # The svc.cluster.local hostnames resolve directly to pod IPs, bypassing
+          # the CP service mesh proxy that blocks JMX (port 7199) connections.
+          # The namespace hash is extracted from the pod's DNS search domain.
+          K8S_NAMESPACE=$(awk '/^search/{print $2}' /etc/resolv.conf | cut -d'.' -f1)
 
           echo "Starting full repair on all {{ .Values.replicas | int }} replicas..."
           FAILED=0
           for i in $(seq 0 $(( {{ .Values.replicas | int }} - 1 ))); do
-            HOST="${CASSANDRA_WORKLOAD}-${i}.${FQDN_BASE}"
+            HOST="${CASSANDRA_WORKLOAD}-${i}.${CASSANDRA_WORKLOAD}.${K8S_NAMESPACE}.svc.cluster.local"
             echo "--- Repairing replica ${i} (${HOST}) ---"
-            nodetool -h "${HOST}" -p 7199 repair \
+            nodetool -u cassandra -pw "{{ .Values.superuserPassword }}" -h "${HOST}" -p 7199 repair \
               && echo "Replica ${i} repair complete." \
               || { echo "WARN: Replica ${i} repair failed."; FAILED=$(( FAILED + 1 )); }
           done
 
           if [ "${FAILED}" -gt 0 ]; then
-            echo "WARN: ${FAILED} replica(s) failed repair — will retry on next scheduled run."
+            echo "ERROR: ${FAILED} replica(s) failed repair."
+            exit 1
           else
             echo "All replicas repaired successfully."
           fi

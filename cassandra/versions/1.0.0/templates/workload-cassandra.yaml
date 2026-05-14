@@ -31,6 +31,8 @@ spec:
       memory: {{ .Values.memory | quote }}
       inheritEnv: false
       ports:
+        - number: 7199
+          protocol: tcp
         - number: 9042
           protocol: tcp
         - number: 9043

@@ -1,3 +1,6 @@
+{{- if gt (.Values.replicationFactor | int) (.Values.replicas | int) }}
+{{- fail (printf "replicationFactor (%d) cannot exceed replicas (%d)" (.Values.replicationFactor | int) (.Values.replicas | int)) }}
+{{- end }}
 kind: workload
 name: {{ include "cassandra.workload.name" . }}
 description: Cassandra cluster

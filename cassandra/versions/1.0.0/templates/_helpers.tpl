@@ -24,6 +24,10 @@
 {{- printf "%s-cassandra-data" .Release.Name }}
 {{- end }}
 
+{{- define "cassandra.secret.credentials.name" -}}
+{{- printf "%s-cassandra-credentials" .Release.Name }}
+{{- end }}
+
 
 {{/* Labeling */}}
 

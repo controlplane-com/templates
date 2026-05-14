@@ -1,4 +1,12 @@
 replicas: 3
+# replicationFactor must not exceed replicas
+replicationFactor: 3
+
+# IMPORTANT: Change all credentials before deploying to production
+superuserPassword: supersecretpassword
+username: username
+password: password
+keyspaceName: mydatabase
 
 image: cassandra:5.0
 cpu: 2

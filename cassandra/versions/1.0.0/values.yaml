@@ -1,6 +1,6 @@
-replicas: 3
+replicas: 4
 # replicationFactor must not exceed replicas
-replicationFactor: 3
+replicationFactor: 2
 
 # IMPORTANT: Change all credentials before deploying to production
 superuserPassword: supersecretpassword

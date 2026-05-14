@@ -1,0 +1,63 @@
+{{- if .Values.repair.enabled }}
+kind: workload
+name: {{ include "cassandra.workload.repair.name" . }}
+description: Scheduled full Cassandra cluster repair
+tags: {{- include "cassandra.tags" . | nindent 2 }}
+spec:
+  type: cron
+  containers:
+    - name: repair
+      image: {{ .Values.image }}
+      cpu: 250m
+      memory: 256Mi
+      inheritEnv: false
+      command: /bin/bash
+      args:
+        - '-c'
+        - |
+          set -euo pipefail
+
+          GVC_NAME=$(basename "${CPLN_GVC}")
+          # Cassandra workload name is baked in at render time so the repair job
+          # always targets the correct stateful workload within this release.
+          CASSANDRA_WORKLOAD="{{ include "cassandra.workload.name" . }}"
+
+          # Per-replica CP internal DNS: {workload}-{n}.{workload}.{gvc}.cpln.local
+          FQDN_BASE="${CASSANDRA_WORKLOAD}.${GVC_NAME}.cpln.local"
+
+          echo "Starting full repair on all {{ .Values.replicas | int }} replicas..."
+          FAILED=0
+          for i in $(seq 0 $(( {{ .Values.replicas | int }} - 1 ))); do
+            HOST="${CASSANDRA_WORKLOAD}-${i}.${FQDN_BASE}"
+            echo "--- Repairing replica ${i} (${HOST}) ---"
+            nodetool -h "${HOST}" -p 7199 repair \
+              && echo "Replica ${i} repair complete." \
+              || { echo "WARN: Replica ${i} repair failed."; FAILED=$(( FAILED + 1 )); }
+          done
+
+          if [ "${FAILED}" -gt 0 ]; then
+            echo "WARN: ${FAILED} replica(s) failed repair — will retry on next scheduled run."
+          else
+            echo "All replicas repaired successfully."
+          fi
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "cassandra.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: false
+  firewallConfig:
+    internal:
+      inboundAllowType: {{ .Values.internal_access.type }}
+  job:
+    schedule: {{ .Values.repair.schedule | quote }}
+    concurrencyPolicy: Forbid
+    restartPolicy: Never
+    historyLimit: 5
+{{- end }}

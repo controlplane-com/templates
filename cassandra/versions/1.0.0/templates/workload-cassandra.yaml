@@ -1,6 +1,4 @@
-{{- if gt (.Values.replicationFactor | int) (.Values.replicas | int) }}
-{{- fail (printf "replicationFactor (%d) cannot exceed replicas (%d)" (.Values.replicationFactor | int) (.Values.replicas | int)) }}
-{{- end }}
+{{- include "cassandra.validate" . }}
 kind: workload
 name: {{ include "cassandra.workload.name" . }}
 description: Cassandra cluster
@@ -19,6 +17,8 @@ spec:
       env:
         - name: MAX_HEAP_SIZE
           value: {{ .Values.jvmHeapSize | quote }}
+        - name: LOCAL_JMX
+          value: "no"
       lifecycle:
         preStop:
           exec:

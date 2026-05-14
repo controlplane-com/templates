@@ -28,6 +28,19 @@
 {{- printf "%s-cassandra-credentials" .Release.Name }}
 {{- end }}
 
+{{- define "cassandra.workload.repair.name" -}}
+{{- printf "%s-cassandra-repair" .Release.Name }}
+{{- end }}
+
+
+{{/* Validation */}}
+
+{{- define "cassandra.validate" -}}
+{{- if gt (.Values.replicationFactor | int) (.Values.replicas | int) }}
+{{- fail (printf "replicationFactor (%d) cannot exceed replicas (%d)" (.Values.replicationFactor | int) (.Values.replicas | int)) }}
+{{- end }}
+{{- end }}
+
 
 {{/* Labeling */}}
 

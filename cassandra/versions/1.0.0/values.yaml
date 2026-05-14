@@ -26,3 +26,8 @@ volumes:
 internal_access:
   type: same-gvc
   workloads:
+
+repair:
+  enabled: true
+  # Cron schedule for full cluster repair (must run within gc_grace_seconds = 10 days)
+  schedule: "0 2 * * 0"

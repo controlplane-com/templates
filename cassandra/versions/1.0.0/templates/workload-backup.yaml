@@ -1,0 +1,65 @@
+{{- if and .Values.backup.enabled (eq .Values.backup.type "logical") }}
+kind: workload
+name: {{ include "cassandra.workload.backup.name" . }}
+description: Scheduled Cassandra logical backup job
+tags: {{- include "cassandra.tags" . | nindent 2 }}
+spec:
+  type: cron
+  containers:
+    - name: backup
+      image: {{ .Values.backup.image }}
+      cpu: {{ .Values.backup.resources.cpu | quote }}
+      memory: {{ .Values.backup.resources.memory | quote }}
+      inheritEnv: false
+      env:
+        - name: BACKUP_TYPE
+          value: logical
+        - name: BACKUP_PROVIDER
+          value: {{ .Values.backup.provider | quote }}
+        - name: BACKUP_BUCKET
+          value: cpln://secret/{{ include "cassandra.secret.credentials.name" . }}.backup-bucket
+        {{- if eq .Values.backup.provider "aws" }}
+        - name: AWS_REGION
+          value: cpln://secret/{{ include "cassandra.secret.credentials.name" . }}.aws-region
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.aws.prefix | quote }}
+        {{- end }}
+        {{- if eq .Values.backup.provider "gcp" }}
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.gcp.prefix | quote }}
+        {{- end }}
+        - name: CASSANDRA_HOST
+          value: {{ include "cassandra.workload.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local
+        - name: CASSANDRA_PORT
+          value: "9042"
+        - name: CASSANDRA_USER
+          value: cpln://secret/{{ include "cassandra.secret.credentials.name" . }}.username
+        - name: CASSANDRA_PASSWORD
+          value: cpln://secret/{{ include "cassandra.secret.credentials.name" . }}.password
+        - name: CASSANDRA_KEYSPACE
+          value: cpln://secret/{{ include "cassandra.secret.credentials.name" . }}.keyspace
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "cassandra.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: false
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: none
+  job:
+    schedule: {{ .Values.backup.schedule | quote }}
+    concurrencyPolicy: Forbid
+    restartPolicy: Never
+    historyLimit: 5
+{{- end }}

@@ -2,3 +2,21 @@ kind: identity
 name: {{ include "cassandra.identity.name" . }}
 description: {{ include "cassandra.workload.name" . }} identity
 tags: {{- include "cassandra.tags" . | nindent 2 }}
+{{- if and .Values.backup.enabled (eq .Values.backup.provider "aws") }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.backup.aws.cloudAccountName }}
+  policyRefs:
+    - cpln-connector
+    - aws::ReadOnlyAccess
+    - {{ .Values.backup.aws.policyName | quote }}
+{{- end }}
+{{- if and .Values.backup.enabled (eq .Values.backup.provider "gcp") }}
+gcp:
+  bindings:
+    - resource: //storage.googleapis.com/projects/_/buckets/{{ .Values.backup.gcp.bucket }}
+      roles:
+        - roles/storage.objectAdmin
+  cloudAccountLink: //cloudaccount/{{ .Values.backup.gcp.cloudAccountName }}
+  scopes:
+    - https://www.googleapis.com/auth/cloud-platform
+{{- end }}

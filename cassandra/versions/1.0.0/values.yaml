@@ -30,6 +30,30 @@ internal_access:
   type: same-gvc
   workloads:
 
+backup:
+  enabled: false
+  type: logical   # options: logical, physical
+  image: 
+  schedule: "0 2 * * *"   # daily at 2am UTC
+
+  resources:
+    cpu: 250m
+    memory: 256Mi
+
+  provider: aws   # options: aws, gcp
+
+  aws:
+    bucket: my-backup-bucket
+    region: us-east-1
+    cloudAccountName: my-cloud-account
+    policyName: my-s3-policy
+    prefix: cassandra/backups
+
+  gcp:
+    bucket: my-backup-bucket
+    cloudAccountName: my-cloud-account
+    prefix: cassandra/backups
+
 repair:
   enabled: true
   # Cron schedule for full cluster repair (must run within gc_grace_seconds = 10 days)

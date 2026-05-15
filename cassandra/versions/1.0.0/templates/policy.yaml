@@ -10,3 +10,4 @@ targetKind: secret
 targetLinks:
   - //secret/{{ include "cassandra.secret.init.name" . }}
   - //secret/{{ include "cassandra.secret.config.name" . }}
+  - //secret/{{ include "cassandra.secret.credentials.name" . }}

@@ -63,6 +63,38 @@ spec:
         - path: /scripts/cassandra-init.sh
           recoveryPolicy: retain
           uri: 'cpln://secret/{{ include "cassandra.secret.init.name" . }}'
+{{- if and .Values.backup.enabled (eq .Values.backup.type "physical") }}
+    - name: backup
+      image: {{ .Values.backup.image }}
+      cpu: {{ .Values.backup.resources.cpu | quote }}
+      memory: {{ .Values.backup.resources.memory | quote }}
+      inheritEnv: false
+      env:
+        - name: BACKUP_TYPE
+          value: physical
+        - name: BACKUP_SCHEDULE
+          value: {{ .Values.backup.schedule | quote }}
+        - name: BACKUP_PROVIDER
+          value: {{ .Values.backup.provider | quote }}
+        - name: BACKUP_BUCKET
+          value: cpln://secret/{{ include "cassandra.secret.credentials.name" . }}.backup-bucket
+        {{- if eq .Values.backup.provider "aws" }}
+        - name: AWS_REGION
+          value: cpln://secret/{{ include "cassandra.secret.credentials.name" . }}.aws-region
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.aws.prefix | quote }}
+        {{- end }}
+        {{- if eq .Values.backup.provider "gcp" }}
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.gcp.prefix | quote }}
+        {{- end }}
+        - name: CASSANDRA_JMX_PASSWORD
+          value: cpln://secret/{{ include "cassandra.secret.credentials.name" . }}.superuser-password
+      volumes:
+        - path: /var/lib/cassandra
+          recoveryPolicy: retain
+          uri: 'cpln://volumeset/{{ include "cassandra.volumeset.name" . }}'
+{{- end }}
   defaultOptions:
     autoscaling:
       maxConcurrency: 0

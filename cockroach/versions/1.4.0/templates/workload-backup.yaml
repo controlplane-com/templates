@@ -28,6 +28,8 @@ spec:
           {{- else }}
           value: "26257"
           {{- end }}
+        - name: COCKROACH_DB
+          value: {{ .Values.database.name | quote }}
       {{- if eq .Values.backup.provider "aws" }}
         - name: AWS_BUCKET
           value: {{ .Values.backup.aws.bucket }}

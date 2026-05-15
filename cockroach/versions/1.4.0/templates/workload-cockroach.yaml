@@ -62,6 +62,8 @@ spec:
       target: 100
     capacityAI: false
     debug: false
+    multiZone:
+      enabled: {{ .Values.multiZone }}
     suspend: false
     timeoutSeconds: 10
   firewallConfig:
@@ -95,6 +97,8 @@ spec:
       capacityAI: false
       debug: false
       location: //location/{{ $location.name }}
+      multiZone:
+        enabled: {{ $.Values.multiZone }}
       suspend: {{ if eq ($location.replicas | int) 0 }}true{{ else }}false{{ end }}
       timeoutSeconds: 10
     {{- end }}

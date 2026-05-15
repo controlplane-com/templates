@@ -1,14 +1,16 @@
 gvc:
   name: cockroach-gvc
   locations:
-    - name: aws-us-west-2
-      replicas: 3
-    - name: aws-us-east-2
+    - name: aws-us-east-1
       replicas: 3
     - name: aws-eu-central-1
       replicas: 3
+    - name: aws-us-west-2
+      replicas: 3
 
 image: cockroachdb/cockroach:v25.4.0
+
+multiZone: false
 
 resources:
   cpu: 2
@@ -57,10 +59,10 @@ pgbouncer:
 
 backup:
   enabled: false
-  image: controlplanecorporation/cockroach-backup:1.0
+  image: ghcr.io/controlplane-com/backup-images/cockroach-backup:1.1
   schedule: "0 2 * * *"
   activeDeadlineSeconds: 14400   # hard kill after 4 hours if backup hangs
-  location: aws-us-east-2        # run the backup job in the same region as your storage bucket
+  location: aws-us-east-1        # run the backup job in the same region as your storage bucket
   resources:
     cpu: 500m
     memory: 512Mi

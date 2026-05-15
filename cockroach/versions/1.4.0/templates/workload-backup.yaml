@@ -17,7 +17,19 @@ spec:
         - name: BACKUP_PROVIDER
           value: {{ .Values.backup.provider }}
         - name: COCKROACH_HOST
+          {{- if .Values.pgbouncer.enabled }}
+          value: {{ include "cockroach.pgbouncer.name" . }}.{{ .Values.gvc.name }}.cpln.local
+          {{- else }}
           value: {{ include "cockroach.name" . }}.{{ .Values.gvc.name }}.cpln.local
+          {{- end }}
+        - name: COCKROACH_PORT
+          {{- if .Values.pgbouncer.enabled }}
+          value: "5432"
+          {{- else }}
+          value: "26257"
+          {{- end }}
+        - name: COCKROACH_DB
+          value: {{ .Values.database.name | quote }}
       {{- if eq .Values.backup.provider "aws" }}
         - name: AWS_BUCKET
           value: {{ .Values.backup.aws.bucket }}

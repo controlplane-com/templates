@@ -10,6 +10,8 @@ gvc:
 
 image: cockroachdb/cockroach:v25.4.0
 
+multiZone: false
+
 resources:
   cpu: 2
   memory: 4Gi

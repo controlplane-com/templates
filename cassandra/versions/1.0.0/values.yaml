@@ -23,6 +23,9 @@ volumes:
       minFreePercentage: 20
       scalingFactor: 1.5
 
+multiZone:
+  enabled: false
+
 internal_access:
   type: same-gvc
   workloads:

@@ -73,6 +73,8 @@ spec:
       target: 95
     capacityAI: false
     debug: false
+    multiZone:
+      enabled: {{ .Values.multiZone.enabled }}
     suspend: false
     timeoutSeconds: 60
   firewallConfig:

@@ -33,9 +33,9 @@ spec:
         - name: CASSANDRA_PORT
           value: "9042"
         - name: CASSANDRA_USER
-          value: cpln://secret/{{ include "cassandra.secret.credentials.name" . }}.username
+          value: cassandra
         - name: CASSANDRA_PASSWORD
-          value: cpln://secret/{{ include "cassandra.secret.credentials.name" . }}.password
+          value: cpln://secret/{{ include "cassandra.secret.credentials.name" . }}.superuser-password
         - name: CASSANDRA_KEYSPACE
           value: cpln://secret/{{ include "cassandra.secret.credentials.name" . }}.keyspace
   identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "cassandra.identity.name" . }}

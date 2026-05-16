@@ -110,6 +110,12 @@ spec:
     suspend: false
     timeoutSeconds: 60
   firewallConfig:
+    {{- if and .Values.backup.enabled (eq .Values.backup.type "physical") }}
+    external:
+      inboundAllowCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    {{- end }}
     internal:
       inboundAllowType: {{ .Values.internal_access.type }}
       {{- if .Values.internal_access.workloads }}

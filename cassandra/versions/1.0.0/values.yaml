@@ -45,7 +45,7 @@ backup:
   aws:
     bucket: my-backup-bucket
     region: us-east-1
-    cloudAccountName: my-cloud-account
+    cloudAccountName: my-backup-cloudaccount
     policyName: my-s3-policy
     prefix: cassandra/backups
 

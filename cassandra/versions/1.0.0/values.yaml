@@ -33,7 +33,7 @@ internal_access:
 backup:
   enabled: false
   type: logical   # options: logical, physical
-  image: 
+  image: ghcr.io/controlplane-com/backup-images/cassandra-backup:5.0
   schedule: "0 2 * * *"   # daily at 2am UTC
 
   resources:

@@ -68,11 +68,7 @@ Password: {password}
 Keyspace: {keyspaceName}
 ```
 
-For example, with `release-name=my-app` and `gvc=production`:
-- Replica 0: `my-app-cassandra-0.production.cpln.local:9042`
-- Replica 1: `my-app-cassandra-1.production.cpln.local:9042`
-
-Configure your Cassandra driver with all replica addresses as contact points so it can discover the full topology and perform token-aware routing.
+Provide multiple node hostnames as contact points in your application so it can discover the full cluster topology.
 
 ## Replicas vs Replication Factor
 

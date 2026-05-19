@@ -1,0 +1,88 @@
+{{- include "elasticsearch.validate" . }}
+kind: workload
+name: {{ include "elasticsearch.name" . }}
+description: Elasticsearch cluster
+tags: {{- include "elasticsearch.tags" . | nindent 2 }}
+spec:
+  type: stateful
+  containers:
+    - name: elasticsearch
+      command: /bin/bash
+      args:
+        - /usr/local/bin/elasticsearch-startup.sh
+      image: {{ .Values.image }}
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      inheritEnv: false
+      env:
+        - name: ES_JAVA_OPTS
+          value: "-Xms{{ .Values.jvmHeap }} -Xmx{{ .Values.jvmHeap }}"
+        - name: ELASTIC_PASSWORD
+          value: cpln://secret/{{ include "elasticsearch.secret.credentials.name" . }}.elastic-password
+      ports:
+        - number: 9200
+          protocol: http
+        - number: 9300
+          protocol: tcp
+      livenessProbe:
+        failureThreshold: 5
+        initialDelaySeconds: 90
+        periodSeconds: 30
+        successThreshold: 1
+        tcpSocket:
+          port: 9200
+        timeoutSeconds: 10
+      readinessProbe:
+        failureThreshold: 10
+        initialDelaySeconds: 60
+        periodSeconds: 10
+        successThreshold: 1
+        tcpSocket:
+          port: 9200
+        timeoutSeconds: 5
+      volumes:
+        - path: /usr/share/elasticsearch/data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "elasticsearch.volumeset.name" . }}
+        - path: /usr/local/bin/elasticsearch-startup.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "elasticsearch.secret.startup.name" . }}.payload
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: {{ .Values.replicas }}
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: {{ .Values.multiZone.enabled }}
+    suspend: false
+    timeoutSeconds: 60
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internal_access.type }}
+      {{- if .Values.internal_access.workloads }}
+      inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "elasticsearch.identity.name" . }}
+  loadBalancer:
+    replicaDirect: true
+  rolloutOptions:
+    maxSurgeReplicas: 0%
+    maxUnavailableReplicas: '1'
+    minReadySeconds: 60
+    scalingPolicy: OrderedReady
+  localOptions: []
+  securityOptions:
+    filesystemGroupId: 1000
+    runAsUser: 1000
+  supportDynamicTags: false

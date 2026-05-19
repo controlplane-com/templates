@@ -24,11 +24,6 @@ volumeset:
     minFreePercentage: 10 # Minimum free percentage to trigger scaling when autoscaling is enabled
     scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
 
-# Enables Elasticsearch zone awareness so primary and replica shards are distributed
-# across availability zones within the location for higher durability
-multiZone:
-  enabled: false
-
 internal_access:
   type: same-gvc # options: same-gvc, same-org, workload-list
   workloads: # Note: can only be used if type is same-gvc or workload-list
@@ -42,6 +37,10 @@ kibana:
   resources:
     cpu: 100m
     memory: 1Gi
+  internal_access:
+    type: same-gvc # options: same-gvc, same-org, workload-list
+    workloads: # Note: can only be used if type is same-gvc or workload-list
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
 # Backup Configuration (optional)
 # Uses Elasticsearch Snapshot Lifecycle Management (SLM) to schedule and retain snapshots.

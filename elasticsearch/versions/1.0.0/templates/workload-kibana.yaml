@@ -45,8 +45,10 @@ spec:
       outboundAllowPort: []
       outboundBlockedCIDR: []
     internal:
-      inboundAllowType: same-gvc
-      inboundAllowWorkload: []
+      inboundAllowType: {{ .Values.kibana.internal_access.type }}
+      {{- if .Values.kibana.internal_access.workloads }}
+      inboundAllowWorkload: {{ .Values.kibana.internal_access.workloads | toYaml | nindent 8 }}
+      {{- end }}
   identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "elasticsearch.identity.name" . }}
   loadBalancer:
     replicaDirect: false

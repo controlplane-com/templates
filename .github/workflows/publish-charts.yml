@@ -3,7 +3,7 @@ name: Publish Helm Charts
 
 on:
   push:
-    branches: [main]
+    branches-ignore: [main]
   workflow_dispatch:
     inputs:
       migrate:
@@ -79,7 +79,7 @@ jobs:
       - name: Determine registry
         id: registry
         run: |
-          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "path=oci://ghcr.io/controlplane-com/templates" >> $GITHUB_OUTPUT
           else
             echo "path=oci://ghcr.io/controlplane-com/templates/test" >> $GITHUB_OUTPUT

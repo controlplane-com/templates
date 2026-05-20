@@ -24,6 +24,9 @@ volumeset:
     minFreePercentage: 10 # Minimum free percentage to trigger scaling when autoscaling is enabled
     scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
 
+multiZone:
+  enabled: false # Set to true to schedule replicas across availability zones for higher durability
+
 internal_access:
   type: same-gvc # options: same-gvc, same-org, workload-list
   workloads: # Note: can only be used if type is same-gvc or workload-list

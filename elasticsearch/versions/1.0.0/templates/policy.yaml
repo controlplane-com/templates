@@ -11,4 +11,3 @@ bindings:
 targetKind: secret
 targetLinks:
   - //secret/{{ include "elasticsearch.secret.startup.name" . }}
-  - //secret/{{ include "elasticsearch.secret.credentials.name" . }}

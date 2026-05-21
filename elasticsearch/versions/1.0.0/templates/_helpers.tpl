@@ -28,10 +28,6 @@
 {{- printf "%s-elasticsearch-startup" .Release.Name }}
 {{- end }}
 
-{{- define "elasticsearch.secret.credentials.name" -}}
-{{- printf "%s-elasticsearch-credentials" .Release.Name }}
-{{- end }}
-
 
 {{/* Validation */}}
 

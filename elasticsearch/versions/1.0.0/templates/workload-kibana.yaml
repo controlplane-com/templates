@@ -14,14 +14,12 @@ spec:
       env:
         - name: ELASTICSEARCH_HOSTS
           value: 'http://{{ include "elasticsearch.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:9200'
-        - name: ELASTICSEARCH_USERNAME
-          value: elastic
-        - name: ELASTICSEARCH_PASSWORD
-          value: cpln://secret/{{ include "elasticsearch.secret.credentials.name" . }}.elastic-password
         - name: SERVER_HOST
           value: '0.0.0.0'
         - name: SERVER_PORT
           value: '5601'
+        - name: NODE_OPTIONS
+          value: '--max-old-space-size=1500'
       ports:
         - number: 5601
           protocol: http

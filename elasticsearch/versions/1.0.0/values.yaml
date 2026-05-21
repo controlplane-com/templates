@@ -4,17 +4,14 @@ replicas: 3 # Must be odd for master quorum
 
 clusterName: my-elasticsearch-cluster
 
-# Password for the built-in elastic superuser.
-elasticPassword: mysecurepassword
-
 # JVM heap size for each node - set to ~50% of maxMemory, hard cap at 30g
 jvmHeap: 4g
 
 resources:
-  minCpu: 500m
-  minMemory: 4Gi
+  minCpu: 1
+  minMemory: 2Gi
   maxCpu: 2
-  maxMemory: 8Gi
+  maxMemory: 6Gi
 
 volumeset:
   capacity: 10 # initial capacity in GiB (minimum is 10)
@@ -38,8 +35,8 @@ kibana:
   enabled: true
   image: docker.elastic.co/kibana/kibana:8.17.0
   resources:
-    cpu: 100m
-    memory: 1Gi
+    cpu: 500m
+    memory: 2Gi
   internal_access:
     type: same-gvc # options: same-gvc, same-org, workload-list
     workloads: # Note: can only be used if type is same-gvc or workload-list

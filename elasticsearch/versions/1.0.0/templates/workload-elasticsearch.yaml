@@ -19,8 +19,6 @@ spec:
       env:
         - name: ES_JAVA_OPTS
           value: "-Xms{{ .Values.jvmHeap }} -Xmx{{ .Values.jvmHeap }}"
-        - name: ELASTIC_PASSWORD
-          value: cpln://secret/{{ include "elasticsearch.secret.credentials.name" . }}.elastic-password
       ports:
         - number: 9200
           protocol: http
@@ -63,10 +61,7 @@ spec:
     external:
       inboundAllowCIDR: []
       inboundBlockedCIDR: []
-      outboundAllowCIDR:
-        {{- if .Values.backup.enabled }}
-        - 0.0.0.0/0
-        {{- end }}
+      outboundAllowCIDR: {{ if .Values.backup.enabled }}["0.0.0.0/0"]{{ else }}[]{{ end }}
       outboundAllowHostname: []
       outboundAllowPort: []
       outboundBlockedCIDR: []

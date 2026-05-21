@@ -13,9 +13,6 @@ spec:
       cpu: 100m
       memory: 128Mi
       inheritEnv: false
-      env:
-        - name: ELASTIC_PASSWORD
-          value: cpln://secret/{{ include "elasticsearch.secret.credentials.name" . }}.elastic-password
       command: /bin/sh
       args:
         - -c
@@ -28,7 +25,6 @@ spec:
           echo ""
 
           ES_URL="http://{{ include "elasticsearch.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:9200"
-          AUTH="-u elastic:${ELASTIC_PASSWORD}"
           MAX_RETRIES=60
           RETRY_COUNT=0
 
@@ -37,7 +33,7 @@ spec:
           # ============================================
           echo "Step 1: Waiting for Elasticsearch cluster..."
 
-          until curl -sf ${AUTH} "${ES_URL}/_cluster/health" > /dev/null; do
+          until curl -sf "${ES_URL}/_cluster/health" > /dev/null; do
             RETRY_COUNT=$((RETRY_COUNT + 1))
             if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
               echo "ERROR: Elasticsearch not ready after ${MAX_RETRIES} attempts"
@@ -77,7 +73,7 @@ spec:
           {{- end }}
 
           RESPONSE=$(curl -w "%{http_code}" -o /tmp/repo_response.json -s -X PUT \
-            ${AUTH} "${ES_URL}/_snapshot/backup-repo" \
+            "${ES_URL}/_snapshot/backup-repo" \
             -H 'Content-Type: application/json' \
             -d "${REPO_CONFIG}")
 
@@ -101,7 +97,7 @@ spec:
           echo "Step 3: Verifying repository connectivity..."
 
           RESPONSE=$(curl -w "%{http_code}" -o /tmp/verify_response.json -s -X POST \
-            ${AUTH} "${ES_URL}/_snapshot/backup-repo/_verify")
+            "${ES_URL}/_snapshot/backup-repo/_verify")
 
           if [ "$RESPONSE" -eq 200 ]; then
             echo "Repository verified - storage connectivity OK"
@@ -117,7 +113,7 @@ spec:
           # ============================================
           echo "Step 4: Creating SLM snapshot policy..."
 
-          if curl -sf ${AUTH} "${ES_URL}/_slm/policy/automated-snapshots" > /dev/null 2>&1; then
+          if curl -sf "${ES_URL}/_slm/policy/automated-snapshots" > /dev/null 2>&1; then
             echo "SLM policy already exists (skipping)"
           else
             SLM_POLICY='{
@@ -137,7 +133,7 @@ spec:
             }'
 
             RESPONSE=$(curl -w "%{http_code}" -o /tmp/slm_response.json -s -X PUT \
-              ${AUTH} "${ES_URL}/_slm/policy/automated-snapshots" \
+              "${ES_URL}/_slm/policy/automated-snapshots" \
               -H 'Content-Type: application/json' \
               -d "${SLM_POLICY}")
 
@@ -169,9 +165,9 @@ spec:
           echo "  Retention:  {{ .Values.backup.retention.maxAge }} / max {{ .Values.backup.retention.maxCount }} snapshots"
           echo ""
           echo "Next Steps:"
-          echo "  Manual snapshot:  curl ${AUTH} -X PUT '${ES_URL}/_slm/policy/automated-snapshots/_execute'"
-          echo "  List snapshots:   curl ${AUTH} '${ES_URL}/_snapshot/backup-repo/_all?pretty'"
-          echo "  View SLM policy:  curl ${AUTH} '${ES_URL}/_slm/policy/automated-snapshots?pretty'"
+          echo "  Manual snapshot:  curl -X PUT '${ES_URL}/_slm/policy/automated-snapshots/_execute'"
+          echo "  List snapshots:   curl '${ES_URL}/_snapshot/backup-repo/_all?pretty'"
+          echo "  View SLM policy:  curl '${ES_URL}/_slm/policy/automated-snapshots?pretty'"
           echo ""
 
           echo "Setup job will complete in 30 seconds..."

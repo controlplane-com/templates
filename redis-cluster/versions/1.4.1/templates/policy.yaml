@@ -1,0 +1,17 @@
+kind: policy
+name: {{ include "redis-cluster.policy.name" . }}
+description: Redis Cluster Policy
+tags: {{- include "redis-cluster.tags" . | nindent 4 }}
+origin: default
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "redis-cluster.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "redis-cluster.secretConfig.name" . }}
+  - //secret/{{ include "redis-cluster.secretStartup.name" . }}
+  {{- if .Values.redis.password }}
+  - //secret/{{ include "redis-cluster.secretAuthPassword.name" . }}
+  {{- end }}

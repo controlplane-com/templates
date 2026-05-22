@@ -1,0 +1,76 @@
+{{- include "redis-cluster.validateBackupConfig" . }}
+{{- if .Values.backup.enabled }}
+kind: workload
+name: {{ include "redis-cluster.backup.name" . }}
+description: Redis Cluster Backup
+tags: {{- include "redis-cluster.tags" . | nindent 4 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  type: cron
+  containers:
+    - name: backup-redis-cluster
+      cpu: {{ .Values.backup.resources.cpu | quote }}
+      memory: {{ .Values.backup.resources.memory | quote }}
+      env:
+        - name: BACKUP_PROVIDER
+          value: {{ .Values.backup.provider }}
+      {{- if eq .Values.backup.provider "aws" }}
+        - name: AWS_REGION
+          value: {{ .Values.backup.aws.region }}
+        - name: BACKUP_BUCKET
+          value: {{ .Values.backup.aws.bucket }}
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.aws.prefix | quote }}
+      {{- end }}
+      {{- if eq .Values.backup.provider "gcp" }}
+        - name: BACKUP_BUCKET
+          value: {{ .Values.backup.gcp.bucket }}
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.gcp.prefix | quote }}
+      {{- end }}
+        - name: NUM_PRIMARIES
+          value: "{{ div .Values.replicas 2 }}"
+        - name: REDIS_HOST
+          value: {{ include "redis-cluster.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local
+        - name: REDIS_PORT
+          value: "{{ .Values.port }}"
+        - name: REDIS_WORKLOAD_NAME
+          value: {{ include "redis-cluster.name" . }}
+      {{- if .Values.redis.password }}
+        - name: REDIS_PASSWORD
+          value: cpln://secret/{{ include "redis-cluster.secretAuthPassword.name" . }}.REDIS_PASSWORD
+      {{- end }}
+      image: {{ .Values.backup.image }}
+      inheritEnv: false
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 3600
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: none
+      inboundAllowWorkload: []
+  identityLink: //identity/{{ include "redis-cluster.identity.name" . }}
+  job:
+    concurrencyPolicy: Forbid
+    historyLimit: 5
+    restartPolicy: Never
+    schedule: {{ .Values.backup.schedule }}
+  supportDynamicTags: false
+{{- end }}

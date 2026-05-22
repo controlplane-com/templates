@@ -1,0 +1,13 @@
+apiVersion: v2
+name: redis-cluster
+description: Redis cluster
+type: application
+
+version: 1.4.1
+appVersion: "7.2"
+
+annotations:
+  created: "2024-09-26"
+  lastModified: "2026-05-22"
+  category: "database"
+  createsGvc: false

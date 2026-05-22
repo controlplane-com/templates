@@ -5,7 +5,7 @@ replicas: 3 # Must be odd for master quorum
 clusterName: my-elasticsearch-cluster
 
 # JVM heap size for each node - set to ~50% of maxMemory, hard cap at 30g
-jvmHeap: 4g
+jvmHeap: 3g
 
 resources:
   minCpu: 1

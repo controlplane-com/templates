@@ -13,6 +13,8 @@ NODE_LIST=""
 echo "" >> /usr/local/etc/redis/redis.conf
 echo "cluster-announce-ip $WORKLOAD_NAME-$PET_ORDINAL.$WORKLOAD_NAME" >> /usr/local/etc/redis/redis.conf
 redis-server /usr/local/etc/redis/redis.conf > /dev/null 2>&1 &
+REDIS_PID=$!
+trap 'kill -TERM $REDIS_PID; wait $REDIS_PID' TERM INT
 sleep 10
 
 # Auth parameters if password is set
@@ -87,4 +89,4 @@ else
     done
 fi
 
-wait
+wait $REDIS_PID

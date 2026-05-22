@@ -40,6 +40,16 @@ spec:
         tcpSocket:
           port: 9200
         timeoutSeconds: 5
+      lifecycle:
+        preStop:
+          exec:
+            command:
+              - bash
+              - '-c'
+              - |
+                NODE_ID=$(curl -s http://localhost:9200/_nodes/_local | grep -o '"nodes":{"[^"]*"' | grep -o '"[^"]*"$' | tr -d '"')
+                curl -s -X PUT "http://localhost:9200/_nodes/${NODE_ID}/shutdown" -H 'Content-Type: application/json' -d '{"type":"restart","reason":"Rolling restart","allocation_delay":"2m"}'
+                sleep 10
       volumes:
         - path: /usr/share/elasticsearch/data
           recoveryPolicy: retain

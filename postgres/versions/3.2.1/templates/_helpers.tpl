@@ -11,7 +11,7 @@ Postgres Workload Name
 Postgres Backup Workload Name
 */}}
 {{- define "postgres.backup.name" -}}
-{{- printf "%s-pg-backup" .Release.Name }}
+{{- printf "%s-postgres-backup" .Release.Name }}
 {{- end }}
 
 {{/*

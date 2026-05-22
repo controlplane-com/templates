@@ -1,0 +1,76 @@
+image: docker.elastic.co/elasticsearch/elasticsearch:8.17.0
+
+replicas: 3 # Must be odd for master quorum
+
+clusterName: my-elasticsearch-cluster
+
+# JVM heap size for each node - set to ~50% of maxMemory, hard cap at 30g
+jvmHeap: 3g
+
+resources:
+  minCpu: 1
+  minMemory: 2Gi
+  maxCpu: 2
+  maxMemory: 6Gi
+
+volumeset:
+  capacity: 10 # initial capacity in GiB (minimum is 10)
+  autoscaling:
+    enabled: false # Set to true to enable autoscaling
+    maxCapacity: 100 # Maximum capacity in GiB when autoscaling is enabled
+    minFreePercentage: 10 # Minimum free percentage to trigger scaling when autoscaling is enabled
+    scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
+
+multiZone:
+  enabled: false # Set to true to schedule replicas across availability zones for higher durability
+
+internal_access:
+  type: same-gvc # options: same-gvc, same-org, workload-list
+  workloads: # Note: can only be used if type is same-gvc or workload-list
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# Kibana Configuration (recommended)
+kibana:
+  enabled: true
+  image: docker.elastic.co/kibana/kibana:8.17.0
+  resources:
+    cpu: 500m
+    memory: 2Gi
+  internal_access:
+    type: same-gvc # options: same-gvc, same-org, workload-list
+    workloads: # Note: can only be used if type is same-gvc or workload-list
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# Backup Configuration (optional)
+# Uses Elasticsearch Snapshot Lifecycle Management (SLM) to schedule and retain snapshots.
+# The repository-s3 and repository-gcs plugins are bundled in the official image (no install needed).
+backup:
+  enabled: false
+  remove_setup_workload: false # Set to true after backup setup is no longer needed to reduce resource usage
+
+  # Cloud provider: aws or gcp
+  provider: aws
+
+  # Snapshot schedule in Quartz cron format (6 fields: seconds minutes hours day-of-month month day-of-week)
+  # e.g. "0 0 2 * * ?" = daily at 2am UTC. Note: ES SLM requires Quartz format, not standard 5-field cron.
+  schedule: "0 0 2 * * ?"
+
+  # Snapshot retention
+  retention:
+    maxAge: 30d   # Delete snapshots older than this
+    maxCount: 30  # Keep at most this many snapshots
+
+  # AWS S3 Configuration
+  aws:
+    bucket: my-s3-bucket               # S3 bucket name (required if provider=aws)
+    region: us-east-1                  # S3 bucket region (required if provider=aws)
+    prefix: elasticsearch-snapshots    # Path prefix in bucket
+    cloudAccountName: my-cloud-account # Control Plane Cloud Account name (required)
+    policyName: my-backup-policy       # AWS IAM custom policy name (required)
+
+  # GCP GCS Configuration
+  gcp:
+    bucket: my-gcs-bucket              # GCS bucket name (required if provider=gcp)
+    prefix: elasticsearch-snapshots    # Path prefix in bucket
+    cloudAccountName: my-cloud-account # Control Plane Cloud Account name (required)

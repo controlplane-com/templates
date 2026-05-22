@@ -1,0 +1,190 @@
+{{- if .Values.backup.enabled }}
+{{- if not .Values.backup.remove_setup_workload }}
+---
+kind: workload
+name: {{ include "elasticsearch.backupSetup.name" . }}
+description: One-time Elasticsearch backup setup job
+tags: {{- include "elasticsearch.tags" . | nindent 2 }}
+spec:
+  type: standard
+  containers:
+    - name: setup
+      image: curlimages/curl:latest
+      cpu: 100m
+      memory: 128Mi
+      inheritEnv: false
+      command: /bin/sh
+      args:
+        - -c
+        - |
+          set -e
+
+          echo "========================================="
+          echo "  Elasticsearch Backup Configuration"
+          echo "========================================="
+          echo ""
+
+          ES_URL="http://{{ include "elasticsearch.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:9200"
+          MAX_RETRIES=60
+          RETRY_COUNT=0
+
+          # ============================================
+          # Wait for cluster to be healthy
+          # ============================================
+          echo "Step 1: Waiting for Elasticsearch cluster..."
+
+          until curl -sf "${ES_URL}/_cluster/health" > /dev/null; do
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
+              echo "ERROR: Elasticsearch not ready after ${MAX_RETRIES} attempts"
+              exit 1
+            fi
+            echo "  Waiting... (attempt $RETRY_COUNT/$MAX_RETRIES)"
+            sleep 5
+          done
+
+          echo "Elasticsearch is ready!"
+          echo ""
+
+          # ============================================
+          # Register Snapshot Repository
+          # ============================================
+          echo "Step 2: Registering snapshot repository..."
+
+          {{- if eq .Values.backup.provider "aws" }}
+          REPO_CONFIG='{
+            "type": "s3",
+            "settings": {
+              "bucket": "{{ .Values.backup.aws.bucket }}",
+              "region": "{{ .Values.backup.aws.region }}",
+              "base_path": "{{ .Values.backup.aws.prefix }}",
+              "compress": true
+            }
+          }'
+          {{- else if eq .Values.backup.provider "gcp" }}
+          REPO_CONFIG='{
+            "type": "gcs",
+            "settings": {
+              "bucket": "{{ .Values.backup.gcp.bucket }}",
+              "base_path": "{{ .Values.backup.gcp.prefix }}",
+              "compress": true
+            }
+          }'
+          {{- end }}
+
+          RESPONSE=$(curl -w "%{http_code}" -o /tmp/repo_response.json -s -X PUT \
+            "${ES_URL}/_snapshot/backup-repo" \
+            -H 'Content-Type: application/json' \
+            -d "${REPO_CONFIG}")
+
+          if [ "$RESPONSE" -eq 200 ] || [ "$RESPONSE" -eq 201 ]; then
+            echo "Snapshot repository registered"
+            {{- if eq .Values.backup.provider "aws" }}
+            echo "  Location: s3://{{ .Values.backup.aws.bucket }}/{{ .Values.backup.aws.prefix }}"
+            {{- else if eq .Values.backup.provider "gcp" }}
+            echo "  Location: gs://{{ .Values.backup.gcp.bucket }}/{{ .Values.backup.gcp.prefix }}"
+            {{- end }}
+          else
+            echo "ERROR: Failed to register repository (HTTP $RESPONSE)"
+            cat /tmp/repo_response.json
+            exit 1
+          fi
+          echo ""
+
+          # ============================================
+          # Verify Repository Connectivity
+          # ============================================
+          echo "Step 3: Verifying repository connectivity..."
+
+          RESPONSE=$(curl -w "%{http_code}" -o /tmp/verify_response.json -s -X POST \
+            "${ES_URL}/_snapshot/backup-repo/_verify")
+
+          if [ "$RESPONSE" -eq 200 ]; then
+            echo "Repository verified - storage connectivity OK"
+          else
+            echo "WARNING: Verification returned HTTP $RESPONSE"
+            cat /tmp/verify_response.json
+            echo "Continuing anyway..."
+          fi
+          echo ""
+
+          # ============================================
+          # Create SLM Policy
+          # ============================================
+          echo "Step 4: Creating SLM snapshot policy..."
+
+          if curl -sf "${ES_URL}/_slm/policy/automated-snapshots" > /dev/null 2>&1; then
+            echo "SLM policy already exists (skipping)"
+          else
+            SLM_POLICY='{
+              "schedule": "{{ .Values.backup.schedule }}",
+              "name": "<automated-snapshot-{now/d}>",
+              "repository": "backup-repo",
+              "config": {
+                "indices": ["*", "-.internal.*", "-.slo-observability.*.temp", "-.ds-ilm-history*", "-.ds-.slm-history*", "-.ds-.kibana-event-log*"],
+                "include_global_state": false,
+                "ignore_unavailable": true
+              },
+              "retention": {
+                "expire_after": "{{ .Values.backup.retention.maxAge }}",
+                "max_count": {{ .Values.backup.retention.maxCount }},
+                "min_count": 1
+              }
+            }'
+
+            RESPONSE=$(curl -w "%{http_code}" -o /tmp/slm_response.json -s -X PUT \
+              "${ES_URL}/_slm/policy/automated-snapshots" \
+              -H 'Content-Type: application/json' \
+              -d "${SLM_POLICY}")
+
+            if [ "$RESPONSE" -eq 200 ] || [ "$RESPONSE" -eq 201 ]; then
+              echo "SLM policy created"
+            else
+              echo "ERROR: Failed to create SLM policy (HTTP $RESPONSE)"
+              cat /tmp/slm_response.json
+              exit 1
+            fi
+          fi
+          echo ""
+
+          # ============================================
+          # Summary
+          # ============================================
+          echo "========================================="
+          echo "  Backup Configuration Complete!"
+          echo "========================================="
+          echo ""
+          echo "Configuration Summary:"
+          echo "  Repository: backup-repo"
+          {{- if eq .Values.backup.provider "aws" }}
+          echo "  Location:   s3://{{ .Values.backup.aws.bucket }}/{{ .Values.backup.aws.prefix }}"
+          {{- else if eq .Values.backup.provider "gcp" }}
+          echo "  Location:   gs://{{ .Values.backup.gcp.bucket }}/{{ .Values.backup.gcp.prefix }}"
+          {{- end }}
+          echo "  Schedule:   {{ .Values.backup.schedule }}"
+          echo "  Retention:  {{ .Values.backup.retention.maxAge }} / max {{ .Values.backup.retention.maxCount }} snapshots"
+          echo ""
+          echo "Next Steps:"
+          echo "  Manual snapshot:  curl -X PUT '${ES_URL}/_slm/policy/automated-snapshots/_execute'"
+          echo "  List snapshots:   curl '${ES_URL}/_snapshot/backup-repo/_all?pretty'"
+          echo "  View SLM policy:  curl '${ES_URL}/_slm/policy/automated-snapshots?pretty'"
+          echo ""
+
+          echo "Setup job will complete in 30 seconds..."
+          sleep 30
+          echo "Setup job complete - exiting"
+  defaultOptions:
+    autoscaling:
+      minScale: 1
+      metric: disabled
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 600
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+{{- end }}
+{{- end }}

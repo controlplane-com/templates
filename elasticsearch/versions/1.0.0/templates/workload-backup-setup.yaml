@@ -121,7 +121,7 @@ spec:
               "name": "<automated-snapshot-{now/d}>",
               "repository": "backup-repo",
               "config": {
-                "indices": ["*"],
+                "indices": ["*", "-.internal.*", "-.slo-observability.*.temp", "-.ds-ilm-history*", "-.ds-.slm-history*", "-.ds-.kibana-event-log*"],
                 "include_global_state": false,
                 "ignore_unavailable": true
               },

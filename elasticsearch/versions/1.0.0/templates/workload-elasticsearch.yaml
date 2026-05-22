@@ -18,7 +18,7 @@ spec:
       inheritEnv: false
       env:
         - name: ES_JAVA_OPTS
-          value: "-Xms{{ .Values.jvmHeap }} -Xmx{{ .Values.jvmHeap }}"
+          value: "-Xms{{ .Values.jvmHeap }} -Xmx{{ .Values.jvmHeap }} -Daws.ec2MetadataV1Disabled=false"
       ports:
         - number: 9200
           protocol: http

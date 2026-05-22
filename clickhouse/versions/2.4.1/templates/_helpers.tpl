@@ -1,0 +1,141 @@
+{{/* Resource Naming */}}
+
+{{/*
+Clickhouse Keeper Workload Name
+*/}}
+{{- define "clickhouse.keeper.name" -}}
+{{- printf "%s-clickhouse-keeper" .Release.Name }}
+{{- end }}
+
+{{/*
+Clickhouse Server Workload Name
+*/}}
+{{- define "clickhouse.server.name" -}}
+{{- printf "%s-clickhouse-server" .Release.Name }}
+{{- end }}
+
+{{/*
+Clickhouse Secret Database Config Name
+*/}}
+{{- define "clickhouse.secretDatabase.name" -}}
+{{- printf "%s-clickhouse-db-config" .Release.Name }}
+{{- end }}
+
+{{/*
+Clickhouse Secret Keeper Config Name
+*/}}
+{{- define "clickhouse.secretKeeper.name" -}}
+{{- printf "%s-clickhouse-keeper-startup" .Release.Name }}
+{{- end }}
+
+{{/*
+Clickhouse Secret Server Config Name
+*/}}
+{{- define "clickhouse.secretServer.name" -}}
+{{- printf "%s-clickhouse-server-startup" .Release.Name }}
+{{- end }}
+
+{{/*
+Clickhouse Secret GCS Config Name
+*/}}
+{{- define "clickhouse.secretGCS.name" -}}
+{{- printf "%s-clickhouse-gcs-config" .Release.Name }}
+{{- end }}
+
+{{/*
+Clickhouse Secret S3 Config Name
+*/}}
+{{- define "clickhouse.secretS3.name" -}}
+{{- printf "%s-clickhouse-s3-config" .Release.Name }}
+{{- end }}
+
+{{/*
+Clickhouse Identity Name
+*/}}
+{{- define "clickhouse.identity.name" -}}
+{{- printf "%s-clickhouse-identity" .Release.Name }}
+{{- end }}
+
+{{/*
+Clickhouse Policy Name
+*/}}
+{{- define "clickhouse.policy.name" -}}
+{{- printf "%s-clickhouse-policy" .Release.Name }}
+{{- end }}
+
+{{/*
+Clickhouse Volume Set Server Name
+*/}}
+{{- define "clickhouse.volumeServer.name" -}}
+{{- printf "%s-clickhouse-server-vs" .Release.Name }}
+{{- end }}
+
+{{/*
+Clickhouse Volume Set Keeper Name
+*/}}
+{{- define "clickhouse.volumeKeeper.name" -}}
+{{- printf "%s-clickhouse-keeper-vs" .Release.Name }}
+{{- end }}
+
+
+{{/* Validation */}}
+
+{{/*
+Determine if this is a single-node deployment.
+Requires exactly 1 location with exactly 1 replica.
+1 location with >1 replica is a single-shard cluster and still requires Keeper.
+*/}}
+{{- define "clickhouse.isSingleNode" -}}
+{{- if and (eq (len .Values.gvc.locations) 1) (eq ((index .Values.gvc.locations 0).replicas | int) 1) -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{- define "clickhouse.validateStorage" -}}
+{{- $provider := .Values.provider -}}
+{{- if not (or (eq $provider "aws") (eq $provider "gcp")) -}}
+  {{- fail "provider must be set to either 'aws' or 'gcp'." -}}
+{{- end -}}
+{{- if eq $provider "aws" -}}
+  {{- if not .Values.aws.bucket -}}
+    {{- fail "All fields are required for AWS. Missing: aws.bucket" -}}
+  {{- end -}}
+  {{- if not .Values.aws.region -}}
+    {{- fail "All fields are required for AWS. Missing: aws.region" -}}
+  {{- end -}}
+  {{- if not .Values.aws.cloudAccountName -}}
+    {{- fail "All fields are required for AWS. Missing: aws.cloudAccountName" -}}
+  {{- end -}}
+  {{- if not .Values.aws.policyName -}}
+    {{- fail "All fields are required for AWS. Missing: aws.policyName" -}}
+  {{- end -}}
+{{- end -}}
+{{- if eq $provider "gcp" -}}
+  {{- if not .Values.gcp.bucket -}}
+    {{- fail "All fields are required for GCP. Missing: gcp.bucket" -}}
+  {{- end -}}
+  {{- if not .Values.gcp.accessKeyId -}}
+    {{- fail "All fields are required for GCP. Missing: gcp.accessKeyId" -}}
+  {{- end -}}
+  {{- if not .Values.gcp.secretAccessKey -}}
+    {{- fail "All fields are required for GCP. Missing: gcp.secretAccessKey" -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "clickhouse.validateLocations" -}}
+{{- $count := len .Values.gvc.locations -}}
+{{- if eq $count 2 -}}
+  {{- fail "2 locations is not supported. Use 1 location for single-node mode or 3+ locations for cluster mode." -}}
+{{- end -}}
+{{- end -}}
+
+
+{{/* Labeling */}}
+
+{{/*
+Common labels - delegated to cpln-common
+*/}}
+{{- define "clickhouse.tags" -}}
+{{- include "cpln-common.tags" . }}
+{{- end }}

@@ -1,0 +1,12 @@
+{{- include "mongo-cluster.validateLocations" . -}}
+---
+kind: gvc
+name: {{ .Values.gvc.name }}
+tags: {{- include "mongo-cluster.tags" . | nindent 2 }}
+spec:
+  endpointNamingFormat: org
+  staticPlacement:
+    locationLinks:
+    {{- range .Values.gvc.locations }}
+      - //location/{{ .name }}
+    {{- end }}

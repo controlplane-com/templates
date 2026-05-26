@@ -1,0 +1,57 @@
+gvc:
+  name: mongodb-gvc
+  locations:
+    - name: aws-us-east-1
+      replicas: 3
+
+image: percona/percona-server-mongodb:8.0
+
+multiZone: false
+
+resources:
+  cpu: 1
+  memory: 2Gi
+
+mongodb:
+  username: admin
+  password: mypassword
+  database: mydatabase
+  # REQUIRED: Generate with `openssl rand -base64 32`
+  replicaSetKey: "Ol0GnqpqntkcnjprS+Pu/1Ji8fcSEKb8f4zkF5c+dEQ="
+
+volumeset:
+  capacity: 10 # initial capacity in GiB (minimum is 10)
+  autoscaling:
+    enabled: false
+    maxCapacity: 100
+    minFreePercentage: 10
+    scalingFactor: 1.2
+
+firewall:
+  internalAllowType: same-gvc # options: same-gvc, same-org, workload-list
+  workloads: []
+  # - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+backup:
+  enabled: false
+  image: ghcr.io/controlplane-com/backup-images/mongo-backup:1.0.0
+  schedule: "0 2 * * *" # daily at 2am UTC
+
+  resources:
+    cpu: 100m
+    memory: 128Mi
+
+  provider: aws # options: aws or gcp
+  location: aws-us-east-1 # run the backup job in the same region as your storage bucket
+
+  aws:
+    bucket: my-backup-bucket
+    region: us-east-1
+    cloudAccountName: my-backup-cloudaccount
+    policyName: my-backup-policy
+    prefix: mongodb-cluster/backups
+
+  gcp:
+    bucket: my-backup-bucket
+    cloudAccountName: my-backup-cloudaccount
+    prefix: mongodb-cluster/backups

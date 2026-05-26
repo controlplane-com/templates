@@ -1,0 +1,104 @@
+---
+kind: workload
+name: {{ include "mongo-cluster.name" . }}
+description: MongoDB cluster
+tags: {{- include "mongo-cluster.tags" . | nindent 2 }}
+spec:
+  type: stateful
+  containers:
+    - name: mongodb
+      image: {{ .Values.image }}
+      command: /bin/bash
+      args:
+        - /scripts/start.sh
+      inheritEnv: false
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
+      env:
+        - name: MONGO_INITDB_ROOT_USERNAME
+          value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.username'
+        - name: MONGO_INITDB_ROOT_PASSWORD
+          value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.password'
+      ports:
+        - number: 27017
+          protocol: tcp
+      readinessProbe:
+        exec:
+          command:
+            - /bin/bash
+            - -c
+            - "mongosh --quiet --eval \"db.adminCommand('ping').ok\" | grep -q '1'"
+        initialDelaySeconds: 15
+        periodSeconds: 5
+        failureThreshold: 12
+        successThreshold: 1
+        timeoutSeconds: 4
+      livenessProbe:
+        exec:
+          command:
+            - /bin/bash
+            - -c
+            - "mongosh --quiet --eval \"db.adminCommand('ping').ok\" | grep -q '1'"
+        initialDelaySeconds: 30
+        periodSeconds: 15
+        failureThreshold: 6
+        timeoutSeconds: 5
+      volumes:
+        - path: /data/db
+          recoveryPolicy: retain
+          uri: 'cpln://volumeset/{{ include "mongo-cluster.volume.name" . }}'
+        - path: /scripts/start.sh
+          recoveryPolicy: retain
+          uri: 'cpln://secret/{{ include "mongo-cluster.secretStartup.name" . }}'
+        - path: /etc/mongo-keyfile/keyfile
+          recoveryPolicy: retain
+          uri: 'cpln://secret/{{ include "mongo-cluster.secretKeyfile.name" . }}'
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      metric: disabled
+      minScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: {{ .Values.multiZone }}
+    suspend: false
+    timeoutSeconds: 10
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: {{ .Values.firewall.internalAllowType }}
+      {{- if .Values.firewall.workloads }}
+      inboundAllowWorkload: {{ .Values.firewall.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "mongo-cluster.identity.name" . }}
+  loadBalancer:
+    replicaDirect: true
+  localOptions:
+    {{- range $location := .Values.gvc.locations }}
+    - location: //location/{{ $location.name }}
+      autoscaling:
+        maxConcurrency: 0
+        maxScale: {{ $location.replicas | int }}
+        metric: disabled
+        minScale: {{ $location.replicas | int }}
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      multiZone:
+        enabled: {{ $.Values.multiZone }}
+      suspend: false
+      timeoutSeconds: 10
+    {{- end }}
+  rolloutOptions:
+    maxSurgeReplicas: 25%
+    maxUnavailableReplicas: "1"
+    minReadySeconds: 0
+    scalingPolicy: OrderedReady
+  supportDynamicTags: false

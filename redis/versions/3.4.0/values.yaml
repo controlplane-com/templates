@@ -73,7 +73,7 @@ redis:
     resources:
       cpu: 50m
       memory: 64Mi
-      minCpu: 20m
+      minCpu: 25m
       minMemory: 32Mi
     dropMetrics: []  # e.g., ["redis_command_.*", "redis_keyspace_.*"]
   dataDir: /data

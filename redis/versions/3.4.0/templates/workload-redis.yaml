@@ -277,7 +277,7 @@ spec:
           {{- else }}
           PORT=6379
           {{- end }}
-          exec redis_exporter --redis.addr="redis://localhost:${PORT}"
+          exec /redis_exporter --redis.addr="redis://localhost:${PORT}"
       env:
         {{- if and (hasKey .Values.redis "auth") (hasKey .Values.redis.auth "fromSecret") .Values.redis.auth.fromSecret.enabled }}
         - name: REDIS_PASSWORD
@@ -291,7 +291,7 @@ spec:
       metrics:
         path: /metrics
         port: 9121
-        dropMetrics: {{ .Values.redis.exporter.dropMetrics | toYaml | nindent 8 }}
+        dropMetrics:{{- if .Values.redis.exporter.dropMetrics }} {{ .Values.redis.exporter.dropMetrics | toYaml | nindent 10 }}{{- else }} []{{- end }}
       ports:
         - number: 9121
           protocol: http

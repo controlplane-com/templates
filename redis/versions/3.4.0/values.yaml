@@ -60,7 +60,7 @@ redis:
     readiness:
       failureThreshold: 10
       initialDelaySeconds: 10  # extend if AOF load takes longer than this
-      periodSeconds: 5          # also controls startup window: budget = initialDelay + 30×period
+      periodSeconds: 5         # also controls startup window: budget = initialDelay + 30×period
       timeoutSeconds: 4
     liveness:
       failureThreshold: 5

@@ -1,3 +1,11 @@
+# Release Notes - Version 3.4.0
+
+## What's New
+
+- **Configurable Probe Settings**: Readiness and liveness probe timing (`initialDelaySeconds`, `periodSeconds`, `failureThreshold`, `timeoutSeconds`) are now overridable via `redis.probes.readiness` and `redis.probes.liveness` in the values file. The startup probe is derived by the platform from the readiness probe with a fixed `failureThreshold` of 30, giving a startup window of `initialDelaySeconds + (30 × periodSeconds)`. For large persistent datasets increase `periodSeconds` to extend this window.
+- **Temp File Cleanup Hooks**: When `redis.persistence.enabled` is `true`, `postStart` and `preStop` lifecycle hooks are automatically added to remove orphaned `temp-*.rdb` and `temp-rewriteaof-*.aof` files. These files accumulate when pods are terminated mid-sync and can fill the volume over time, causing crash loops.
+
+
 # Release Notes - Version 3.3.0
 
 ## What's New

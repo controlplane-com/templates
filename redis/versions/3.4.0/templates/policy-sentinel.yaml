@@ -1,0 +1,20 @@
+kind: policy
+name: {{ include "redis.sentinelPolicy.name" . }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "redis.sentinelIdentity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "redis.sentinelSecretConfig.name" . }}
+  {{- if and (hasKey .Values.sentinel "auth") (hasKey .Values.sentinel.auth "fromSecret") .Values.sentinel.auth.fromSecret.enabled }}
+  - //secret/{{ .Values.sentinel.auth.fromSecret.name }}
+  {{- else if and (hasKey .Values.sentinel "auth") (hasKey .Values.sentinel.auth "password") .Values.sentinel.auth.password.enabled }}
+  - //secret/{{ include "redis.sentinelSecretPassword.name" . }}
+  {{- end }}
+  {{- if and (hasKey .Values.redis "auth") (hasKey .Values.redis.auth "fromSecret") .Values.redis.auth.fromSecret.enabled }}
+  - //secret/{{ .Values.redis.auth.fromSecret.name }}
+  {{- else if and (hasKey .Values.redis "auth") (hasKey .Values.redis.auth "password") .Values.redis.auth.password.enabled }}
+  - //secret/{{ include "redis.secretPassword.name" . }}
+  {{- end }}

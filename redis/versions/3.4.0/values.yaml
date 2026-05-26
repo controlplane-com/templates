@@ -68,7 +68,7 @@ redis:
       periodSeconds: 10
       timeoutSeconds: 5
   exporter:
-    enabled: false
+    enabled: false    # adds a redis_exporter sidecar that exposes metrics at :9121/metrics
     image: oliver006/redis_exporter:v1.67.0-alpine
     resources:
       cpu: 50m

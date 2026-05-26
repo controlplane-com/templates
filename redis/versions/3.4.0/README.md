@@ -59,6 +59,21 @@ redis:
       periodSeconds: 20         # startup window = 35 + (30×20) = 635s (~10 min)
 ```
 
+**Metrics exporter** — disabled by default. When enabled, a `redis_exporter` sidecar is added to each Redis pod. Control Plane scrapes `:9121/metrics` automatically every 30 seconds and makes the metrics available in the console:
+```yaml
+redis:
+  exporter:
+    enabled: true
+```
+Use `dropMetrics` to filter high-cardinality series before they are stored (regex patterns matched against metric names):
+```yaml
+redis:
+  exporter:
+    dropMetrics:
+      - "redis_commands_latencies_usec_bucket"
+      - "redis_latency_percentiles_usec"
+```
+
 **Firewall** — set the internal access scope for both Redis and Sentinel:
 ```yaml
 firewall:

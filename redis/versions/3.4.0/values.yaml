@@ -67,6 +67,15 @@ redis:
       initialDelaySeconds: 30
       periodSeconds: 10
       timeoutSeconds: 5
+  exporter:
+    enabled: false
+    image: oliver006/redis_exporter:v1.67.0-alpine
+    resources:
+      cpu: 50m
+      memory: 64Mi
+      minCpu: 20m
+      minMemory: 32Mi
+    dropMetrics: []  # e.g., ["redis_command_.*", "redis_keyspace_.*"]
   dataDir: /data
   persistence:
     enabled: false

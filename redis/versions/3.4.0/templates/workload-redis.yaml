@@ -259,6 +259,43 @@ spec:
           recoveryPolicy: retain
           uri: cpln://volumeset/{{ include "redis.volume.name" . }}
         {{- end }}
+{{- if and (hasKey .Values.redis "exporter") .Values.redis.exporter.enabled }}
+    - name: redis-exporter
+      image: {{ .Values.redis.exporter.image }}
+      cpu: {{ .Values.redis.exporter.resources.cpu }}
+      memory: {{ .Values.redis.exporter.resources.memory }}
+      minCpu: {{ .Values.redis.exporter.resources.minCpu }}
+      minMemory: {{ .Values.redis.exporter.resources.minMemory }}
+      inheritEnv: false
+      command: /bin/sh
+      args:
+        - '-c'
+        - |-
+          {{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
+          POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev)
+          PORT=$((6380 + POD_ID))
+          {{- else }}
+          PORT=6379
+          {{- end }}
+          exec redis_exporter --redis.addr="redis://localhost:${PORT}"
+      env:
+        {{- if and (hasKey .Values.redis "auth") (hasKey .Values.redis.auth "fromSecret") .Values.redis.auth.fromSecret.enabled }}
+        - name: REDIS_PASSWORD
+          value: cpln://secret/{{ .Values.redis.auth.fromSecret.name }}.{{ .Values.redis.auth.fromSecret.passwordKey }}
+        {{- else if and (hasKey .Values.redis "auth") (hasKey .Values.redis.auth "password") .Values.redis.auth.password.enabled }}
+        - name: REDIS_PASSWORD
+          value: cpln://secret/{{ include "redis.secretPassword.name" . }}.password
+        {{- else }}
+        []
+        {{- end }}
+      metrics:
+        path: /metrics
+        port: 9121
+        dropMetrics: {{ .Values.redis.exporter.dropMetrics | toYaml | nindent 8 }}
+      ports:
+        - number: 9121
+          protocol: http
+{{- end }}
   defaultOptions:
     autoscaling:
       maxConcurrency: 0

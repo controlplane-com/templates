@@ -24,6 +24,33 @@ spec:
       ports:
         - number: 27017
           protocol: tcp
+      readinessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            - >-
+              mongosh --quiet
+              -u "$MONGO_INITDB_ROOT_USERNAME"
+              -p "$MONGO_INITDB_ROOT_PASSWORD"
+              --authenticationDatabase admin
+              --eval "var h=db.hello(); if(!h.isWritablePrimary && !h.secondary) quit(1)"
+        failureThreshold: 3
+        initialDelaySeconds: 15
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        exec:
+          command:
+            - /bin/bash
+            - -c
+            - (echo > /dev/tcp/127.0.0.1/27017) 2>/dev/null
+        failureThreshold: 3
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 5
       lifecycle:
         preStop:
           exec:

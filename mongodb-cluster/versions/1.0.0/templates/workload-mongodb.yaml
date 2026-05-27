@@ -27,14 +27,9 @@ spec:
       readinessProbe:
         exec:
           command:
-            - /bin/sh
+            - /bin/bash
             - -c
-            - >-
-              mongosh --quiet
-              -u "$MONGO_INITDB_ROOT_USERNAME"
-              -p "$MONGO_INITDB_ROOT_PASSWORD"
-              --authenticationDatabase admin
-              --eval "var h=db.hello(); if(!h.isWritablePrimary && !h.secondary) quit(1)"
+            - (echo > /dev/tcp/127.0.0.1/27017) 2>/dev/null
         failureThreshold: 3
         initialDelaySeconds: 15
         periodSeconds: 10

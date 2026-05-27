@@ -2,7 +2,9 @@
 kind: workload
 name: {{ include "mongo-cluster.name" . }}
 description: MongoDB cluster
-tags: {{- include "mongo-cluster.tags" . | nindent 2 }}
+tags:
+  cpln/publishNotReadyAddresses: "true"
+  {{- include "mongo-cluster.tags" . | nindent 2 }}
 spec:
   type: stateful
   containers:

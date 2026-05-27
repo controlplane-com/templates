@@ -55,7 +55,7 @@ internal_access:
 
 backup:
   enabled: false
-  provider: aws   # options: aws, gcp, azure
+  provider: aws   # options: aws or gcp
   schedule: "0 2 * * *"   # daily at 2am UTC
 
   resources:
@@ -72,9 +72,4 @@ backup:
   gcp:
     bucket: my-backup-bucket
     cloudAccountName: my-cloud-account
-    path: weaviate/backups
-
-  azure:
-    container: my-backup-container
-    connectionString: ""
     path: weaviate/backups

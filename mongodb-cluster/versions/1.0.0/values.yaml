@@ -2,7 +2,11 @@ gvc:
   name: mongodb-gvc
   locations:
     - name: aws-us-east-1
-      replicas: 3
+      replicas: 1
+    - name: aws-us-west-2
+      replicas: 1
+    - name: aws-eu-central-1
+      replicas: 1
 
 image: percona/percona-server-mongodb:8.0
 

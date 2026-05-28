@@ -22,6 +22,16 @@ spec:
           protocol: http
         - number: 8405
           protocol: http
+      readinessProbe:
+        httpGet:
+          path: /healthz
+          port: 8404
+          scheme: HTTP
+        failureThreshold: 3
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        successThreshold: 1
+        timeoutSeconds: 2
       volumes:
         - path: /proxy/start.sh
           uri: cpln://secret/{{ include "mongo-cluster.secretProxyStartup.name" . }}.payload
@@ -53,4 +63,9 @@ spec:
       enabled: false
       ports: []
     replicaDirect: false
+  rolloutOptions:
+    maxSurgeReplicas: "1"
+    maxUnavailableReplicas: "0"
+    minReadySeconds: 0
+    scalingPolicy: OrderedReady
 {{- end }}

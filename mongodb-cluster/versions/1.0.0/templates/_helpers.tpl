@@ -40,6 +40,10 @@
 {{- printf "%s-mongo-proxy-startup" .Release.Name }}
 {{- end }}
 
+{{- define "mongo-cluster.secretPbmStartup.name" -}}
+{{- printf "%s-mongo-pbm-startup" .Release.Name }}
+{{- end }}
+
 
 {{/* Validation */}}
 
@@ -56,6 +60,10 @@
 
 {{- define "mongo-cluster.validateBackupConfig" -}}
 {{- if .Values.backup.enabled -}}
+  {{- $mode := .Values.backup.mode -}}
+  {{- if not (or (eq $mode "logical") (eq $mode "physical")) -}}
+    {{- fail "backup.mode must be 'logical' or 'physical'" -}}
+  {{- end -}}
   {{- $provider := .Values.backup.provider -}}
   {{- if not (or (eq $provider "aws") (eq $provider "gcp")) -}}
     {{- fail "backup.provider must be 'aws' or 'gcp'" -}}

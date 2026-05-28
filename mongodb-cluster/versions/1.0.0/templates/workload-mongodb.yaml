@@ -68,6 +68,39 @@ spec:
         - path: /etc/mongo-keyfile/keyfile
           recoveryPolicy: retain
           uri: 'cpln://secret/{{ include "mongo-cluster.secretKeyfile.name" . }}'
+    # PBM agent sidecar for physical backups
+    {{- if and .Values.backup.enabled (eq .Values.backup.mode "physical") }}
+    - name: pbm-agent
+      image: {{ .Values.backup.physical.image }}
+      command: /bin/sh
+      args:
+        - /pbm/startup.sh
+      inheritEnv: false
+      cpu: {{ .Values.backup.physical.resources.cpu | quote }}
+      memory: {{ .Values.backup.physical.resources.memory | quote }}
+      env:
+        - name: MONGO_INITDB_ROOT_USERNAME
+          value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.username'
+        - name: MONGO_INITDB_ROOT_PASSWORD
+          value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.password'
+        - name: PBM_BUCKET
+          value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.backup-bucket'
+        - name: PBM_PREFIX
+          value: {{ (eq .Values.backup.provider "aws") | ternary .Values.backup.aws.prefix .Values.backup.gcp.prefix | quote }}
+        - name: BACKUP_SCHEDULE
+          value: {{ .Values.backup.schedule | quote }}
+        {{- if eq .Values.backup.provider "aws" }}
+        - name: AWS_REGION
+          value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.backup-region'
+        {{- end }}
+      volumes:
+        - path: /data/db
+          recoveryPolicy: retain
+          uri: 'cpln://volumeset/{{ include "mongo-cluster.volume.name" . }}'
+        - path: /pbm/startup.sh
+          recoveryPolicy: retain
+          uri: 'cpln://secret/{{ include "mongo-cluster.secretPbmStartup.name" . }}'
+    {{- end }}
   defaultOptions:
     autoscaling:
       maxConcurrency: 0

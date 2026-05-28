@@ -16,3 +16,6 @@ targetLinks:
   {{- if .Values.proxy.enabled }}
   - //secret/{{ include "mongo-cluster.secretProxyStartup.name" . }}
   {{- end }}
+  {{- if and .Values.backup.enabled (eq .Values.backup.mode "physical") }}
+  - //secret/{{ include "mongo-cluster.secretPbmStartup.name" . }}
+  {{- end }}

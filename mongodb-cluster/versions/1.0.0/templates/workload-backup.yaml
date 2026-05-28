@@ -1,17 +1,17 @@
 {{- include "mongo-cluster.validateBackupConfig" . }}
-{{- if .Values.backup.enabled }}
+{{- if and .Values.backup.enabled (eq .Values.backup.mode "logical") }}
 ---
 kind: workload
 name: {{ include "mongo-cluster.backup.name" . }}
-description: MongoDB Backup
+description: MongoDB logical backup
 tags: {{- include "mongo-cluster.tags" . | nindent 2 }}
 spec:
   type: cron
   containers:
     - name: backup-mongodb
-      image: {{ .Values.backup.image }}
-      cpu: {{ .Values.backup.resources.cpu | quote }}
-      memory: {{ .Values.backup.resources.memory | quote }}
+      image: {{ .Values.backup.logical.image }}
+      cpu: {{ .Values.backup.logical.resources.cpu | quote }}
+      memory: {{ .Values.backup.logical.resources.memory | quote }}
       inheritEnv: false
       env:
         - name: BACKUP_PROVIDER

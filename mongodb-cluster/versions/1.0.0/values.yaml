@@ -47,15 +47,26 @@ proxy:
 
 backup:
   enabled: false
-  image: ghcr.io/controlplane-com/backup-images/mongo-backup:8.0
-  schedule: "0 2 * * *" # daily at 2am UTC
+  mode: logical # options: logical, physical
 
-  resources:
-    cpu: 100m
-    memory: 128Mi
+  schedule: "0 2 * * *" # daily at 2am UTC
 
   provider: aws # options: aws or gcp
   location: aws-us-east-1 # run the backup job in the same region as your storage bucket
+
+  # Logical backup (mongodump)
+  logical:
+    image: ghcr.io/controlplane-com/backup-images/mongo-backup:8.0
+    resources:
+      cpu: 100m
+      memory: 128Mi
+
+  # Physical backup (Percona Backup for MongoDB)
+  physical:
+    image: percona/percona-backup-mongodb:2.5.0
+    resources:
+      cpu: 300m
+      memory: 256Mi
 
   aws:
     bucket: my-backup-bucket

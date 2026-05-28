@@ -13,3 +13,6 @@ targetLinks:
   - //secret/{{ include "mongo-cluster.secretConfig.name" . }}
   - //secret/{{ include "mongo-cluster.secretKeyfile.name" . }}
   - //secret/{{ include "mongo-cluster.secretStartup.name" . }}
+  {{- if .Values.proxy.enabled }}
+  - //secret/{{ include "mongo-cluster.secretProxyStartup.name" . }}
+  {{- end }}

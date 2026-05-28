@@ -32,6 +32,15 @@ firewall:
   workloads: []
   # - //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
+proxy:
+  enabled: true
+  image: haproxy:2.9
+  resources:
+    cpu: 100m
+    memory: 128Mi
+  minReplicas: 2
+  maxReplicas: 2
+
 backup:
   enabled: false
   image: ghcr.io/controlplane-com/backup-images/mongo-backup:1.0.0

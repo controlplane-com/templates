@@ -32,6 +32,14 @@
 {{- printf "%s-mongo-backup" .Release.Name }}
 {{- end }}
 
+{{- define "mongo-cluster.proxy.name" -}}
+{{- printf "%s-mongo-proxy" .Release.Name }}
+{{- end }}
+
+{{- define "mongo-cluster.secretProxyStartup.name" -}}
+{{- printf "%s-mongo-proxy-startup" .Release.Name }}
+{{- end }}
+
 
 {{/* Validation */}}
 

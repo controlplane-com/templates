@@ -17,25 +17,23 @@ spec:
         - name: BACKUP_PROVIDER
           value: {{ .Values.backup.provider | quote }}
         - name: MONGO_HOST
-          value: {{ include "mongo-cluster.name" . }}.{{ .Values.gvc.name }}.cpln.local
+          value: replica-0.{{ include "mongo-cluster.name" . }}.{{ .Values.backup.location }}.{{ .Values.gvc.name }}.cpln.local
         - name: MONGO_USER
           value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.username'
         - name: MONGO_PASSWORD
           value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.password'
         - name: MONGO_RS
           value: rs0
-        {{- if eq .Values.backup.provider "aws" }}
-        - name: AWS_BUCKET
+        - name: BACKUP_BUCKET
           value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.backup-bucket'
+        {{- if eq .Values.backup.provider "aws" }}
         - name: AWS_REGION
           value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.backup-region'
-        - name: AWS_PREFIX
+        - name: BACKUP_PREFIX
           value: {{ .Values.backup.aws.prefix | quote }}
         {{- end }}
         {{- if eq .Values.backup.provider "gcp" }}
-        - name: GCP_BUCKET
-          value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.backup-bucket'
-        - name: GCP_PREFIX
+        - name: BACKUP_PREFIX
           value: {{ .Values.backup.gcp.prefix | quote }}
         {{- end }}
   defaultOptions:
@@ -56,8 +54,18 @@ spec:
   firewallConfig:
     external:
       inboundAllowCIDR: []
-      outboundAllowCIDR:
-        - 0.0.0.0/0
+      outboundAllowPort:
+        - number: 443
+          protocol: tcp
+      {{- if eq .Values.backup.provider "aws" }}
+      outboundAllowHostname:
+        - s3.{{ .Values.backup.aws.region }}.amazonaws.com
+        - s3.amazonaws.com
+      {{- end }}
+      {{- if eq .Values.backup.provider "gcp" }}
+      outboundAllowHostname:
+        - storage.googleapis.com
+      {{- end }}
     internal:
       inboundAllowType: none
   identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "mongo-cluster.identity.name" . }}

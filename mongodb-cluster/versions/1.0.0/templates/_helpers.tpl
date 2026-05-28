@@ -70,6 +70,14 @@
     {{- if not .Values.backup.gcp.bucket -}}{{- fail "Missing: backup.gcp.bucket" -}}{{- end -}}
     {{- if not .Values.backup.gcp.cloudAccountName -}}{{- fail "Missing: backup.gcp.cloudAccountName" -}}{{- end -}}
   {{- end -}}
+  {{- $backupLoc := .Values.backup.location -}}
+  {{- $validLoc := false -}}
+  {{- range .Values.gvc.locations -}}
+    {{- if eq .name $backupLoc -}}{{- $validLoc = true -}}{{- end -}}
+  {{- end -}}
+  {{- if not $validLoc -}}
+    {{- fail (printf "backup.location '%s' must be one of the locations defined in gvc.locations" $backupLoc) -}}
+  {{- end -}}
 {{- end -}}
 {{- end }}
 

@@ -47,7 +47,7 @@ proxy:
 
 backup:
   enabled: false
-  image: ghcr.io/controlplane-com/backup-images/mongo-backup:1.0.0
+  image: ghcr.io/controlplane-com/backup-images/mongo-backup:8.0
   schedule: "0 2 * * *" # daily at 2am UTC
 
   resources:

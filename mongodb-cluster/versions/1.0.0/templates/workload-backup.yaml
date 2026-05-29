@@ -94,9 +94,17 @@ spec:
       command: /bin/sh
       args:
         - -c
-        - >-
-          pbm backup --type=physical
-          --mongodb-uri="mongodb://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@replica-0.{{ include "mongo-cluster.name" . }}.{{ include "mongo-cluster.backup.location" . }}.{{ .Values.gvc.name }}.cpln.local:27017/admin?replicaSet=rs0&authSource=admin&authMechanism=SCRAM-SHA-256"
+        - |
+          MONGO_URI="mongodb://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@replica-0.{{ include "mongo-cluster.name" . }}.{{ include "mongo-cluster.backup.location" . }}.{{ .Values.gvc.name }}.cpln.local:27017/admin?replicaSet=rs0&authSource=admin&authMechanism=SCRAM-SHA-256"
+          echo "Starting physical backup..."
+          OUTPUT=$(pbm backup --type=physical --wait --mongodb-uri="${MONGO_URI}" 2>&1) || true
+          if echo "${OUTPUT}" | grep -q "saved to remote store"; then
+            echo "Backup completed successfully"
+            exit 0
+          fi
+          echo "Backup failed:"
+          echo "${OUTPUT}"
+          exit 1
       inheritEnv: false
       cpu: {{ .Values.backup.physical.cron.resources.cpu | quote }}
       memory: {{ .Values.backup.physical.cron.resources.memory | quote }}

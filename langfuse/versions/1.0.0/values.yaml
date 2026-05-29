@@ -1,0 +1,99 @@
+# Object store - used by both ClickHouse (data files) and Langfuse (raw event buffer + media)
+# Both services share the same bucket using separate key prefixes
+objectStore:
+  provider: aws # Options: aws, gcp
+  aws:
+    bucket: my-langfuse-bucket
+    region: us-east-1
+    cloudAccountName: my-cloud-account  # Name of your Control Plane Cloud Account
+    policyName: my-custom-policy               # Name of your pre-created policy granting S3 access
+  gcp:
+    bucket: my-langfuse-bucket
+    accessKeyId: CHANGE_ME    # GCS HMAC key ID
+    secretAccessKey: CHANGE_ME
+
+# Langfuse application
+langfuse:
+  image: langfuse/langfuse:3
+
+  web:
+    minReplicas: 2  # Keep at 2+ for zero-downtime rolling deploys
+    maxReplicas: 5
+    resources:
+      minCpu: 500m
+      maxCpu: 1000m
+      minMemory: 1Gi
+      maxMemory: 2Gi
+
+  worker:
+    replicas: 1
+    resources:
+      minCpu: 250m
+      maxCpu: 500m
+      minMemory: 512Mi
+      maxMemory: 1Gi
+
+  auth:
+    nextAuthUrl: https://your-langfuse-domain.example.com  # Public URL of the web workload - set before deploying
+    nextAuthSecret: CHANGE_ME  # Required: openssl rand -base64 32
+    encryptionKey: CHANGE_ME   # Required: openssl rand -hex 32 (must produce exactly 64 hex characters)
+    salt: CHANGE_ME            # Required: openssl rand -base64 32
+
+  # Optional: SMTP for user invite emails and password reset
+  smtp:
+    enabled: false
+    host: ""
+    port: 587
+    user: ""
+    password: ""
+    fromAddress: ""
+
+  # Optional: LLM API keys enable the playground and LLM-as-Judge evaluation features
+  llm:
+    openAiApiKey: ""
+    anthropicApiKey: ""
+
+  firewall:
+    inboundAllowCIDR:
+      - 0.0.0.0/0  # Restrict to specific IPs in production (e.g. - 203.0.113.0/24)
+
+# PostgreSQL - stores users, projects, API keys, prompts, datasets, eval configs
+postgres:
+  image: postgres:18
+  resources:
+    minCpu: 250m
+    maxCpu: 1
+    minMemory: 512Mi
+    maxMemory: 1Gi
+  config:
+    username: langfuse
+    password: CHANGE_ME
+    database: langfuse
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+# Redis - BullMQ ingestion queue and API key/prompt cache
+redis:
+  image: redis:7.4
+  resources:
+    minCpu: 100m
+    maxCpu: 500m
+    minMemory: 256Mi
+    maxMemory: 512Mi
+  auth:
+    password: CHANGE_ME
+
+# ClickHouse - stores all traces, observations, and scores; powers dashboards
+# Data files are stored in the object store above; volumeset holds local metadata only
+clickhouse:
+  image: clickhouse/clickhouse-server:25.10
+  resources:
+    minCpu: 1
+    maxCpu: 2
+    minMemory: 2Gi
+    maxMemory: 4Gi
+  config:
+    password: CHANGE_ME
+    database: langfuse
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)

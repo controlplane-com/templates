@@ -1,0 +1,84 @@
+gvc:
+  name: mongodb-gvc
+  locations:
+    - name: aws-us-east-1
+      replicas: 3
+    - name: aws-us-west-2
+      replicas: 3
+    - name: aws-eu-central-1
+      replicas: 3
+
+image: percona/percona-server-mongodb:8.0
+
+multiZone: false
+
+resources:
+  cpu: 1
+  memory: 2Gi
+
+mongodb:
+  username: admin
+  password: mypassword
+  database: mydatabase
+  # REQUIRED: Generate with `openssl rand -base64 32`
+  replicaSetKey: "Ol0GnqpqntkcnjprS+Pu/1Ji8fcSEKb8f4zkF5c+dEQ="
+
+volumeset:
+  capacity: 10 # initial capacity in GiB (minimum is 10)
+  autoscaling:
+    enabled: false
+    maxCapacity: 100
+    minFreePercentage: 10
+    scalingFactor: 1.2
+
+firewall:
+  internalAllowType: same-gvc # options: same-gvc, same-org, workload-list
+  workloads: []
+  # - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+proxy:
+  enabled: true
+  image: haproxy:2.9
+  resources:
+    cpu: 100m
+    memory: 128Mi
+  minReplicas: 2
+  maxReplicas: 2
+
+backup:
+  enabled: false
+  mode: logical # options: logical, physical
+
+  schedule: "0 2 * * *" # daily at 2am UTC
+  
+  provider: aws # options: aws or gcp
+
+  # Logical backup (mongodump)
+  logical:
+    image: ghcr.io/controlplane-com/backup-images/mongo-backup:8.0
+    resources:
+      cpu: 100m
+      memory: 128Mi
+
+  # Physical backup (Percona Backup for MongoDB)
+  physical:
+    image: percona/percona-backup-mongodb:2.14.0
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    cron:
+      resources:
+        cpu: 50m
+        memory: 64Mi
+
+  aws:
+    bucket: my-backup-bucket
+    region: us-east-1
+    cloudAccountName: my-backup-cloudaccount
+    policyName: my-backup-policy
+    prefix: mongodb-cluster/backups
+
+  gcp:
+    bucket: my-backup-bucket
+    cloudAccountName: my-backup-cloudaccount
+    prefix: mongodb-cluster/backups

@@ -44,6 +44,18 @@
 {{- printf "%s-mongo-pbm-startup" .Release.Name }}
 {{- end }}
 
+{{- define "mongo-cluster.physicalBackup.name" -}}
+{{- printf "%s-mongo-physical-backup" .Release.Name }}
+{{- end }}
+
+{{- define "mongo-cluster.backup.location" -}}
+{{- if eq .Values.backup.provider "aws" -}}
+{{- printf "aws-%s" .Values.backup.aws.region -}}
+{{- else -}}
+{{- (index .Values.gvc.locations 0).name -}}
+{{- end -}}
+{{- end }}
+
 
 {{/* Validation */}}
 
@@ -78,13 +90,13 @@
     {{- if not .Values.backup.gcp.bucket -}}{{- fail "Missing: backup.gcp.bucket" -}}{{- end -}}
     {{- if not .Values.backup.gcp.cloudAccountName -}}{{- fail "Missing: backup.gcp.cloudAccountName" -}}{{- end -}}
   {{- end -}}
-  {{- $backupLoc := .Values.backup.location -}}
+  {{- $backupLoc := include "mongo-cluster.backup.location" . -}}
   {{- $validLoc := false -}}
   {{- range .Values.gvc.locations -}}
     {{- if eq .name $backupLoc -}}{{- $validLoc = true -}}{{- end -}}
   {{- end -}}
   {{- if not $validLoc -}}
-    {{- fail (printf "backup.location '%s' must be one of the locations defined in gvc.locations" $backupLoc) -}}
+    {{- fail (printf "Derived backup location '%s' is not in gvc.locations. Ensure your backup provider region maps to a configured GVC location." $backupLoc) -}}
   {{- end -}}
 {{- end -}}
 {{- end }}

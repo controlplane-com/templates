@@ -87,8 +87,6 @@ spec:
           value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.backup-bucket'
         - name: PBM_PREFIX
           value: {{ (eq .Values.backup.provider "aws") | ternary .Values.backup.aws.prefix .Values.backup.gcp.prefix | quote }}
-        - name: BACKUP_SCHEDULE
-          value: {{ .Values.backup.schedule | quote }}
         {{- if eq .Values.backup.provider "aws" }}
         - name: AWS_REGION
           value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.backup-region'

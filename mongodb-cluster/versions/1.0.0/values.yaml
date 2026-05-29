@@ -50,9 +50,8 @@ backup:
   mode: logical # options: logical, physical
 
   schedule: "0 2 * * *" # daily at 2am UTC
-
+  
   provider: aws # options: aws or gcp
-  location: aws-us-east-1 # run the backup job in the same region as your storage bucket
 
   # Logical backup (mongodump)
   logical:
@@ -63,10 +62,14 @@ backup:
 
   # Physical backup (Percona Backup for MongoDB)
   physical:
-    image: percona/percona-backup-mongodb:2.5.0
+    image: percona/percona-backup-mongodb:2.14.0
     resources:
-      cpu: 300m
-      memory: 256Mi
+      cpu: 100m
+      memory: 128Mi
+    cron:
+      resources:
+        cpu: 50m
+        memory: 64Mi
 
   aws:
     bucket: my-backup-bucket

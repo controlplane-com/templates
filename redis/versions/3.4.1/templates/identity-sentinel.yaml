@@ -1,0 +1,4 @@
+kind: identity
+name: {{ include "redis.sentinelIdentity.name" . }}
+description: Redis Sentinel Identity
+gvc: {{ .Values.global.cpln.gvc }}

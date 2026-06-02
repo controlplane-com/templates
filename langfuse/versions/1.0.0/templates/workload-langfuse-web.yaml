@@ -90,15 +90,6 @@ spec:
         - name: LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY
           value: cpln://secret/{{ include "langfuse.secret.name" . }}.s3SecretAccessKey
         {{- end }}
-        # LLM (optional)
-        {{- if .Values.langfuse.llm.openAiApiKey }}
-        - name: OPENAI_API_KEY
-          value: cpln://secret/{{ include "langfuse.secret.name" . }}.openAiApiKey
-        {{- end }}
-        {{- if .Values.langfuse.llm.anthropicApiKey }}
-        - name: ANTHROPIC_API_KEY
-          value: cpln://secret/{{ include "langfuse.secret.name" . }}.anthropicApiKey
-        {{- end }}
       ports:
         - number: 3000
           protocol: http

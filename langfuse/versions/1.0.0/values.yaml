@@ -5,7 +5,7 @@ objectStore:
   aws:
     bucket: my-langfuse-bucket
     region: us-east-1
-    cloudAccountName: my-s3-cloudaccount  # Name of your Control Plane Cloud Account
+    cloudAccountName: my-cloudaccount  # Name of your Control Plane Cloud Account
     policyName: my-custom-policy               # Name of your pre-created policy granting S3 access
   gcp:
     bucket: my-langfuse-bucket
@@ -37,11 +37,6 @@ langfuse:
     nextAuthSecret: Fxmyrcyo3UjEh5lj+cvRHqcy30UN6gc8kn0EFnHpHZ4=                      # Required: openssl rand -base64 32
     encryptionKey: 945a6a6a61add7f4d344e8e69206af08506cc2a9ffb58ff104c26bcc6191e451   # Required: openssl rand -hex 32 (must produce exactly 64 hex characters)
     salt: Fxmyrcyo3UjEh5lj+cvRHqcy30UN6gc8kn0EFnHpHZ4=                                # Required: openssl rand -base64 32
-
-  # Optional: LLM API keys enable the playground and LLM-as-Judge evaluation features
-  llm:
-    openAiApiKey: ""
-    anthropicApiKey: ""
 
   firewall:
     inboundAllowCIDR:

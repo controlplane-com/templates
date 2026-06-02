@@ -5,18 +5,17 @@ objectStore:
   aws:
     bucket: my-langfuse-bucket
     region: us-east-1
-    cloudAccountName: my-cloud-account  # Name of your Control Plane Cloud Account
+    cloudAccountName: my-s3-cloudaccount  # Name of your Control Plane Cloud Account
     policyName: my-custom-policy               # Name of your pre-created policy granting S3 access
   gcp:
     bucket: my-langfuse-bucket
-    accessKeyId: CHANGE_ME    # GCS HMAC key ID
-    secretAccessKey: CHANGE_ME
+    accessKeyId: my-gcs-key        # GCS HMAC key ID
+    secretAccessKey: my-gcs-secret # GCS HMAC secret key
 
 # Langfuse application
 langfuse:
-  image: langfuse/langfuse:3
-
   web:
+    image: langfuse/langfuse:3
     minReplicas: 2  # Keep at 2+ for zero-downtime rolling deploys
     maxReplicas: 5
     resources:
@@ -26,6 +25,7 @@ langfuse:
       maxMemory: 2Gi
 
   worker:
+    image: langfuse/langfuse-worker:3
     replicas: 1
     resources:
       minCpu: 250m
@@ -34,19 +34,9 @@ langfuse:
       maxMemory: 1Gi
 
   auth:
-    nextAuthUrl: https://your-langfuse-domain.example.com  # Public URL of the web workload - set before deploying
-    nextAuthSecret: CHANGE_ME  # Required: openssl rand -base64 32
-    encryptionKey: CHANGE_ME   # Required: openssl rand -hex 32 (must produce exactly 64 hex characters)
-    salt: CHANGE_ME            # Required: openssl rand -base64 32
-
-  # Optional: SMTP for user invite emails and password reset
-  smtp:
-    enabled: false
-    host: ""
-    port: 587
-    user: ""
-    password: ""
-    fromAddress: ""
+    nextAuthSecret: Fxmyrcyo3UjEh5lj+cvRHqcy30UN6gc8kn0EFnHpHZ4=                      # Required: openssl rand -base64 32
+    encryptionKey: 945a6a6a61add7f4d344e8e69206af08506cc2a9ffb58ff104c26bcc6191e451   # Required: openssl rand -hex 32 (must produce exactly 64 hex characters)
+    salt: Fxmyrcyo3UjEh5lj+cvRHqcy30UN6gc8kn0EFnHpHZ4=                                # Required: openssl rand -base64 32
 
   # Optional: LLM API keys enable the playground and LLM-as-Judge evaluation features
   llm:
@@ -67,7 +57,7 @@ postgres:
     maxMemory: 1Gi
   config:
     username: langfuse
-    password: CHANGE_ME
+    password: mypassword
     database: langfuse
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)
@@ -77,11 +67,11 @@ redis:
   image: redis:7.4
   resources:
     minCpu: 100m
-    maxCpu: 500m
+    maxCpu: 400m
     minMemory: 256Mi
     maxMemory: 512Mi
   auth:
-    password: CHANGE_ME
+    password: mypassword
 
 # ClickHouse - stores all traces, observations, and scores; powers dashboards
 # Data files are stored in the object store above; volumeset holds local metadata only
@@ -93,7 +83,7 @@ clickhouse:
     minMemory: 2Gi
     maxMemory: 4Gi
   config:
-    password: CHANGE_ME
+    password: mypassword
     database: langfuse
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)

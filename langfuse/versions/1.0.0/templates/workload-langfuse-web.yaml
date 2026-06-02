@@ -1,0 +1,133 @@
+---
+kind: workload
+name: {{ include "langfuse.web.name" . }}
+description: Langfuse web server
+tags: {{- include "langfuse.tags" . | nindent 2 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  type: stateful
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "langfuse.identity.name" . }}
+  containers:
+    - name: langfuse-web
+      image: {{ .Values.langfuse.web.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.langfuse.web.resources.minCpu | quote }}
+      cpu: {{ .Values.langfuse.web.resources.maxCpu | quote }}
+      minMemory: {{ .Values.langfuse.web.resources.minMemory | quote }}
+      memory: {{ .Values.langfuse.web.resources.maxMemory | quote }}
+      env:
+        # Postgres
+        - name: POSTGRES_USER
+          value: cpln://secret/{{ include "langfuse.secret.name" . }}.postgresUsername
+        - name: POSTGRES_PASSWORD
+          value: cpln://secret/{{ include "langfuse.secret.name" . }}.postgresPassword
+        - name: DATABASE_URL
+          value: postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@{{ printf "%s-postgres" .Release.Name }}.{{ .Values.global.cpln.gvc }}.cpln.local:5432/{{ .Values.postgres.config.database }}
+        # ClickHouse
+        - name: CLICKHOUSE_PASSWORD
+          value: cpln://secret/{{ include "langfuse.secret.name" . }}.clickhousePassword
+        - name: CLICKHOUSE_URL
+          value: http://{{ include "langfuse.clickhouse.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:8123
+        - name: CLICKHOUSE_MIGRATION_URL
+          value: clickhouse://default:$(CLICKHOUSE_PASSWORD)@{{ include "langfuse.clickhouse.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:9000/{{ .Values.clickhouse.config.database }}
+        - name: CLICKHOUSE_USER
+          value: default
+        - name: CLICKHOUSE_CLUSTER_ENABLED
+          value: "false"
+        # Redis
+        - name: REDIS_HOST
+          value: {{ include "langfuse.redis.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local
+        - name: REDIS_PORT
+          value: "6379"
+        - name: REDIS_AUTH
+          value: cpln://secret/{{ include "langfuse.secret.name" . }}.redisPassword
+        # Auth
+        - name: NEXTAUTH_URL
+          value: http://{{ include "langfuse.web.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:3000
+        - name: AUTH_TRUST_HOST
+          value: "true"
+        - name: NEXTAUTH_SECRET
+          value: cpln://secret/{{ include "langfuse.secret.name" . }}.nextAuthSecret
+        - name: ENCRYPTION_KEY
+          value: cpln://secret/{{ include "langfuse.secret.name" . }}.encryptionKey
+        - name: SALT
+          value: cpln://secret/{{ include "langfuse.secret.name" . }}.salt
+        # Object store (AWS)
+        {{- if eq .Values.objectStore.provider "aws" }}
+        - name: LANGFUSE_S3_EVENT_UPLOAD_BUCKET
+          value: {{ .Values.objectStore.aws.bucket | quote }}
+        - name: LANGFUSE_S3_EVENT_UPLOAD_REGION
+          value: {{ .Values.objectStore.aws.region | quote }}
+        - name: LANGFUSE_S3_EVENT_UPLOAD_PREFIX
+          value: "events/"
+        - name: LANGFUSE_S3_MEDIA_UPLOAD_BUCKET
+          value: {{ .Values.objectStore.aws.bucket | quote }}
+        - name: LANGFUSE_S3_MEDIA_UPLOAD_REGION
+          value: {{ .Values.objectStore.aws.region | quote }}
+        - name: LANGFUSE_S3_MEDIA_UPLOAD_PREFIX
+          value: "media/"
+        {{- end }}
+        # Object store (GCP)
+        {{- if eq .Values.objectStore.provider "gcp" }}
+        - name: LANGFUSE_S3_EVENT_UPLOAD_BUCKET
+          value: {{ .Values.objectStore.gcp.bucket | quote }}
+        - name: LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT
+          value: "https://storage.googleapis.com"
+        - name: LANGFUSE_S3_EVENT_UPLOAD_PREFIX
+          value: "events/"
+        - name: LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID
+          value: cpln://secret/{{ include "langfuse.secret.name" . }}.s3AccessKeyId
+        - name: LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY
+          value: cpln://secret/{{ include "langfuse.secret.name" . }}.s3SecretAccessKey
+        - name: LANGFUSE_S3_MEDIA_UPLOAD_BUCKET
+          value: {{ .Values.objectStore.gcp.bucket | quote }}
+        - name: LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT
+          value: "https://storage.googleapis.com"
+        - name: LANGFUSE_S3_MEDIA_UPLOAD_PREFIX
+          value: "media/"
+        - name: LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID
+          value: cpln://secret/{{ include "langfuse.secret.name" . }}.s3AccessKeyId
+        - name: LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY
+          value: cpln://secret/{{ include "langfuse.secret.name" . }}.s3SecretAccessKey
+        {{- end }}
+        # LLM (optional)
+        {{- if .Values.langfuse.llm.openAiApiKey }}
+        - name: OPENAI_API_KEY
+          value: cpln://secret/{{ include "langfuse.secret.name" . }}.openAiApiKey
+        {{- end }}
+        {{- if .Values.langfuse.llm.anthropicApiKey }}
+        - name: ANTHROPIC_API_KEY
+          value: cpln://secret/{{ include "langfuse.secret.name" . }}.anthropicApiKey
+        {{- end }}
+      ports:
+        - number: 3000
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /api/public/health
+          port: 3000
+        failureThreshold: 10
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      metric: cpu
+      target: 70
+      minScale: {{ .Values.langfuse.web.minReplicas }}
+      maxScale: {{ .Values.langfuse.web.maxReplicas }}
+      scaleToZeroDelay: 300
+    capacityAI: false
+  firewallConfig:
+    external:
+      inboundAllowCIDR: {{- toYaml .Values.langfuse.firewall.inboundAllowCIDR | nindent 8 }}
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: same-gvc
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  supportDynamicTags: false

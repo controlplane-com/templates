@@ -73,8 +73,12 @@ spec:
           value: {{ .Values.objectStore.gcp.bucket | quote }}
         - name: LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT
           value: "https://storage.googleapis.com"
+        - name: LANGFUSE_S3_EVENT_UPLOAD_REGION
+          value: "auto"
         - name: LANGFUSE_S3_EVENT_UPLOAD_PREFIX
           value: "events/"
+        - name: LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE
+          value: "true"
         - name: LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID
           value: cpln://secret/{{ include "langfuse.secret.name" . }}.s3AccessKeyId
         - name: LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY
@@ -83,8 +87,12 @@ spec:
           value: {{ .Values.objectStore.gcp.bucket | quote }}
         - name: LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT
           value: "https://storage.googleapis.com"
+        - name: LANGFUSE_S3_MEDIA_UPLOAD_REGION
+          value: "auto"
         - name: LANGFUSE_S3_MEDIA_UPLOAD_PREFIX
           value: "media/"
+        - name: LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE
+          value: "true"
         - name: LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID
           value: cpln://secret/{{ include "langfuse.secret.name" . }}.s3AccessKeyId
         - name: LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY

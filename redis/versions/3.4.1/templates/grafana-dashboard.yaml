@@ -1,0 +1,233 @@
+{{- if and (.Capabilities.APIVersions.Has "grafana.integreatly.org/v1beta1") .Values.grafana.dashboard.enabled }}
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: {{ include "redis.grafanaDashboard.name" . }}
+spec:
+  folder: {{ include "redis.grafanaFolder.name" . }}
+  instanceSelector:
+    matchLabels:
+      {{- toYaml .Values.grafana.instanceSelector.matchLabels | nindent 6 }}
+  json: |
+    {
+      "uid": "{{ .Release.Name }}-redis",
+      "title": "Redis - {{ .Release.Name }}",
+      "tags": ["redis"],
+      "timezone": "browser",
+      "schemaVersion": 38,
+      "version": 1,
+      "refresh": "30s",
+      "time": {"from": "now-1h", "to": "now"},
+      "templating": {
+        "list": [
+          {
+            "type": "datasource",
+            "name": "datasource",
+            "label": "Datasource",
+            "pluginId": "prometheus",
+            "current": {}
+          },
+          {
+            "type": "textbox",
+            "name": "namespace",
+            "label": "Namespace",
+            "current": {
+              "value": "{{ .Release.Namespace }}",
+              "text": "{{ .Release.Namespace }}"
+            },
+            "options": [
+              {
+                "selected": true,
+                "text": "{{ .Release.Namespace }}",
+                "value": "{{ .Release.Namespace }}"
+              }
+            ]
+          },
+          {
+            "type": "query",
+            "name": "pod",
+            "label": "Pod",
+            "datasource": {"type": "prometheus", "uid": "${datasource}"},
+            "definition": "label_values(container_cpu_usage_seconds_total{container=\"redis\", namespace=\"$namespace\"}, pod)",
+            "query": {
+              "query": "label_values(container_cpu_usage_seconds_total{container=\"redis\", namespace=\"$namespace\"}, pod)",
+              "refId": "StandardVariableQuery"
+            },
+            "refresh": 2,
+            "multi": true,
+            "includeAll": true,
+            "allValue": ".*",
+            "current": {}
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "title": "CPU Usage",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "targets": [
+            {
+              "datasource": {"type": "prometheus", "uid": "${datasource}"},
+              "expr": "rate(container_cpu_usage_seconds_total{container=\"redis\", namespace=\"$namespace\", pod=~\"$pod\"}[5m])",
+              "legendFormat": "{{ "{{" }}pod{{ "}}" }}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": {"mode": "palette-classic"},
+              "custom": {"lineWidth": 1, "fillOpacity": 10}
+            },
+            "overrides": []
+          },
+          "options": {
+            "tooltip": {"mode": "multi", "sort": "none"},
+            "legend": {"displayMode": "list", "placement": "bottom"}
+          }
+        },
+        {
+          "id": 2,
+          "title": "Memory Usage",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "targets": [
+            {
+              "datasource": {"type": "prometheus", "uid": "${datasource}"},
+              "expr": "container_memory_working_set_bytes{container=\"redis\", namespace=\"$namespace\", pod=~\"$pod\"}",
+              "legendFormat": "{{ "{{" }}pod{{ "}}" }}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes",
+              "color": {"mode": "palette-classic"},
+              "custom": {"lineWidth": 1, "fillOpacity": 10}
+            },
+            "overrides": []
+          },
+          "options": {
+            "tooltip": {"mode": "multi", "sort": "none"},
+            "legend": {"displayMode": "list", "placement": "bottom"}
+          }
+        }
+        {{- if .Values.redis.exporter.enabled }},
+        {
+          "id": 3,
+          "title": "Connected Clients",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "targets": [
+            {
+              "datasource": {"type": "prometheus", "uid": "${datasource}"},
+              "expr": "redis_connected_clients{namespace=\"$namespace\", pod=~\"$pod\"}",
+              "legendFormat": "{{ "{{" }}pod{{ "}}" }}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": {"mode": "palette-classic"},
+              "custom": {"lineWidth": 1, "fillOpacity": 10}
+            },
+            "overrides": []
+          },
+          "options": {
+            "tooltip": {"mode": "multi", "sort": "none"},
+            "legend": {"displayMode": "list", "placement": "bottom"}
+          }
+        },
+        {
+          "id": 4,
+          "title": "Redis Memory Used",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "targets": [
+            {
+              "datasource": {"type": "prometheus", "uid": "${datasource}"},
+              "expr": "redis_memory_used_bytes{namespace=\"$namespace\", pod=~\"$pod\"}",
+              "legendFormat": "{{ "{{" }}pod{{ "}}" }}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes",
+              "color": {"mode": "palette-classic"},
+              "custom": {"lineWidth": 1, "fillOpacity": 10}
+            },
+            "overrides": []
+          },
+          "options": {
+            "tooltip": {"mode": "multi", "sort": "none"},
+            "legend": {"displayMode": "list", "placement": "bottom"}
+          }
+        },
+        {
+          "id": 5,
+          "title": "Commands Processed / sec",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "targets": [
+            {
+              "datasource": {"type": "prometheus", "uid": "${datasource}"},
+              "expr": "rate(redis_commands_processed_total{namespace=\"$namespace\", pod=~\"$pod\"}[5m])",
+              "legendFormat": "{{ "{{" }}pod{{ "}}" }}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "color": {"mode": "palette-classic"},
+              "custom": {"lineWidth": 1, "fillOpacity": 10}
+            },
+            "overrides": []
+          },
+          "options": {
+            "tooltip": {"mode": "multi", "sort": "none"},
+            "legend": {"displayMode": "list", "placement": "bottom"}
+          }
+        },
+        {
+          "id": 6,
+          "title": "Cache Hit Rate",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "targets": [
+            {
+              "datasource": {"type": "prometheus", "uid": "${datasource}"},
+              "expr": "rate(redis_keyspace_hits_total{namespace=\"$namespace\", pod=~\"$pod\"}[5m]) / (rate(redis_keyspace_hits_total{namespace=\"$namespace\", pod=~\"$pod\"}[5m]) + rate(redis_keyspace_misses_total{namespace=\"$namespace\", pod=~\"$pod\"}[5m]))",
+              "legendFormat": "{{ "{{" }}pod{{ "}}" }}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1,
+              "color": {"mode": "palette-classic"},
+              "custom": {"lineWidth": 1, "fillOpacity": 10}
+            },
+            "overrides": []
+          },
+          "options": {
+            "tooltip": {"mode": "multi", "sort": "none"},
+            "legend": {"displayMode": "list", "placement": "bottom"}
+          }
+        }
+        {{- end }}
+      ]
+    }
+{{- end }}

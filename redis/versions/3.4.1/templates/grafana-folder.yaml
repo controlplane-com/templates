@@ -1,0 +1,11 @@
+{{- if and (.Capabilities.APIVersions.Has "grafana.integreatly.org/v1beta1") .Values.grafana.dashboard.enabled }}
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaFolder
+metadata:
+  name: {{ include "redis.grafanaFolder.name" . }}
+spec:
+  title: {{ .Values.grafana.folder }}
+  instanceSelector:
+    matchLabels:
+      {{- toYaml .Values.grafana.instanceSelector.matchLabels | nindent 6 }}
+{{- end }}

@@ -106,6 +106,20 @@ Redis Backup Policy Name
 {{- printf "%s-redis-backup-policy" .Release.Name }}
 {{- end }}
 
+{{/*
+Grafana Folder Name
+*/}}
+{{- define "redis.grafanaFolder.name" -}}
+{{- printf "%s-redis-folder" .Release.Name }}
+{{- end }}
+
+{{/*
+Grafana Dashboard Name
+*/}}
+{{- define "redis.grafanaDashboard.name" -}}
+{{- printf "%s-redis-dashboard" .Release.Name }}
+{{- end }}
+
 
 {{/* Validation */}}
 

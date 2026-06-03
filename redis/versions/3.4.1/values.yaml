@@ -184,3 +184,12 @@ backup:
     bucket: my-backup-bucket
     cloudAccountName: my-backup-cloudaccount
     prefix: redis/backups # folder name where your backups will be stored
+
+grafana:
+  dashboard:
+    enabled: false          # K8s clusters only - set to true to provision the dashboard via the Grafana Operator
+  folder: Redis             # Grafana folder the dashboard is placed in
+  datasource: Prometheus    # name of the Prometheus datasource in your Grafana instance
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana   # must match the label on your Grafana CR

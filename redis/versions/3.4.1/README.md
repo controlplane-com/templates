@@ -74,6 +74,55 @@ redis:
       - "redis_latency_percentiles_usec"
 ```
 
+**Grafana Dashboard** — opt-in, k8s clusters only. When enabled, a `GrafanaDashboard` CRD is provisioned via the [Grafana Operator](https://grafana.github.io/grafana-operator/) and automatically appears in your Grafana instance:
+
+```yaml
+grafana:
+  dashboard:
+    enabled: true
+  folder: Redis                 # Grafana folder the dashboard is placed in
+  datasource: metrics           # name of the Prometheus datasource in your Grafana instance
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana       # must match the label on your Grafana CR
+```
+
+On Control Plane's managed platform where no Grafana Operator is present, leave this disabled — the `GrafanaDashboard` CRD will have nothing to reconcile it.
+
+**Prerequisites:**
+
+1. **Grafana Operator installed** in your Kubernetes cluster. The operator must be configured with your Grafana instance URL and a Grafana service account API token (not a Control Plane token):
+
+```bash
+kubectl create secret generic grafana-admin-credentials \
+  --from-literal=GF_SECURITY_ADMIN_USER=admin \
+  --from-literal=GF_SECURITY_ADMIN_PASSWORD=<grafana-api-token> \
+  -n grafana-operator
+```
+
+2. **A Grafana CR** with a label matching `grafana.instanceSelector.matchLabels`. For example:
+```yaml
+apiVersion: grafana.integreatly.org/v1beta1
+kind: Grafana
+metadata:
+  name: grafana
+  labels:
+    dashboards: grafana
+spec:
+  external:
+    url: https://your-org.grafana.cpln.io
+    adminPassword:
+      name: grafana-admin-credentials
+      key: GF_SECURITY_ADMIN_PASSWORD
+```
+
+**Included panels:**
+- CPU Usage (`cpu_used`) — always included
+- Memory Usage (`mem_used`) — always included
+- Connected Clients, Redis Memory, Commands/sec, Cache Hit Rate — included when `redis.exporter.enabled: true`
+
+The dashboard includes template variables for datasource, GVC, workload, and replica so you can filter by deployment without editing the dashboard.
+
 **Firewall** — set the internal access scope for both Redis and Sentinel:
 ```yaml
 firewall:

@@ -1,10 +1,10 @@
-{{- if and (.Capabilities.APIVersions.Has "grafana.integreatly.org/v1beta1") .Values.grafana.dashboard.enabled }}
+{{- if .Values.grafana.dashboard.enabled }}
 apiVersion: grafana.integreatly.org/v1beta1
 kind: GrafanaDashboard
 metadata:
   name: {{ include "redis.grafanaDashboard.name" . }}
 spec:
-  folder: {{ include "redis.grafanaFolder.name" . }}
+  folder: {{ .Values.grafana.folder }}
   instanceSelector:
     matchLabels:
       {{- toYaml .Values.grafana.instanceSelector.matchLabels | nindent 6 }}
@@ -25,32 +25,54 @@ spec:
             "name": "datasource",
             "label": "Datasource",
             "pluginId": "prometheus",
-            "current": {}
+            "regex": "{{ .Values.grafana.datasource }}",
+            "current": {
+              "text": "{{ .Values.grafana.datasource }}",
+              "value": "{{ .Values.grafana.datasource }}"
+            }
           },
           {
             "type": "textbox",
-            "name": "namespace",
-            "label": "Namespace",
+            "name": "gvc",
+            "label": "GVC",
+            "query": "{{ .Values.global.cpln.gvc }}",
             "current": {
-              "value": "{{ .Release.Namespace }}",
-              "text": "{{ .Release.Namespace }}"
+              "value": "{{ .Values.global.cpln.gvc }}",
+              "text": "{{ .Values.global.cpln.gvc }}"
             },
             "options": [
               {
                 "selected": true,
-                "text": "{{ .Release.Namespace }}",
-                "value": "{{ .Release.Namespace }}"
+                "text": "{{ .Values.global.cpln.gvc }}",
+                "value": "{{ .Values.global.cpln.gvc }}"
+              }
+            ]
+          },
+          {
+            "type": "textbox",
+            "name": "workload",
+            "label": "Workload",
+            "query": "{{ include "redis.name" . }}",
+            "current": {
+              "value": "{{ include "redis.name" . }}",
+              "text": "{{ include "redis.name" . }}"
+            },
+            "options": [
+              {
+                "selected": true,
+                "text": "{{ include "redis.name" . }}",
+                "value": "{{ include "redis.name" . }}"
               }
             ]
           },
           {
             "type": "query",
-            "name": "pod",
-            "label": "Pod",
+            "name": "replica",
+            "label": "Replica",
             "datasource": {"type": "prometheus", "uid": "${datasource}"},
-            "definition": "label_values(container_cpu_usage_seconds_total{container=\"redis\", namespace=\"$namespace\"}, pod)",
+            "definition": "label_values(cpu_used{workload=\"$workload\", gvc=\"$gvc\"}, replica)",
             "query": {
-              "query": "label_values(container_cpu_usage_seconds_total{container=\"redis\", namespace=\"$namespace\"}, pod)",
+              "query": "label_values(cpu_used{workload=\"$workload\", gvc=\"$gvc\"}, replica)",
               "refId": "StandardVariableQuery"
             },
             "refresh": 2,
@@ -71,8 +93,8 @@ spec:
           "targets": [
             {
               "datasource": {"type": "prometheus", "uid": "${datasource}"},
-              "expr": "rate(container_cpu_usage_seconds_total{container=\"redis\", namespace=\"$namespace\", pod=~\"$pod\"}[5m])",
-              "legendFormat": "{{ "{{" }}pod{{ "}}" }}",
+              "expr": "cpu_used{workload=\"$workload\", gvc=\"$gvc\", replica=~\"$replica\"}",
+              "legendFormat": "{{ "{{" }}replica{{ "}}" }}",
               "refId": "A"
             }
           ],
@@ -98,8 +120,8 @@ spec:
           "targets": [
             {
               "datasource": {"type": "prometheus", "uid": "${datasource}"},
-              "expr": "container_memory_working_set_bytes{container=\"redis\", namespace=\"$namespace\", pod=~\"$pod\"}",
-              "legendFormat": "{{ "{{" }}pod{{ "}}" }}",
+              "expr": "mem_used{workload=\"$workload\", gvc=\"$gvc\", replica=~\"$replica\"}",
+              "legendFormat": "{{ "{{" }}replica{{ "}}" }}",
               "refId": "A"
             }
           ],
@@ -126,8 +148,8 @@ spec:
           "targets": [
             {
               "datasource": {"type": "prometheus", "uid": "${datasource}"},
-              "expr": "redis_connected_clients{namespace=\"$namespace\", pod=~\"$pod\"}",
-              "legendFormat": "{{ "{{" }}pod{{ "}}" }}",
+              "expr": "redis_connected_clients{workload=\"$workload\", gvc=\"$gvc\", replica=~\"$replica\"}",
+              "legendFormat": "{{ "{{" }}replica{{ "}}" }}",
               "refId": "A"
             }
           ],
@@ -153,8 +175,8 @@ spec:
           "targets": [
             {
               "datasource": {"type": "prometheus", "uid": "${datasource}"},
-              "expr": "redis_memory_used_bytes{namespace=\"$namespace\", pod=~\"$pod\"}",
-              "legendFormat": "{{ "{{" }}pod{{ "}}" }}",
+              "expr": "redis_memory_used_bytes{workload=\"$workload\", gvc=\"$gvc\", replica=~\"$replica\"}",
+              "legendFormat": "{{ "{{" }}replica{{ "}}" }}",
               "refId": "A"
             }
           ],
@@ -180,8 +202,8 @@ spec:
           "targets": [
             {
               "datasource": {"type": "prometheus", "uid": "${datasource}"},
-              "expr": "rate(redis_commands_processed_total{namespace=\"$namespace\", pod=~\"$pod\"}[5m])",
-              "legendFormat": "{{ "{{" }}pod{{ "}}" }}",
+              "expr": "rate(redis_commands_processed_total{workload=\"$workload\", gvc=\"$gvc\", replica=~\"$replica\"}[5m])",
+              "legendFormat": "{{ "{{" }}replica{{ "}}" }}",
               "refId": "A"
             }
           ],
@@ -207,8 +229,8 @@ spec:
           "targets": [
             {
               "datasource": {"type": "prometheus", "uid": "${datasource}"},
-              "expr": "rate(redis_keyspace_hits_total{namespace=\"$namespace\", pod=~\"$pod\"}[5m]) / (rate(redis_keyspace_hits_total{namespace=\"$namespace\", pod=~\"$pod\"}[5m]) + rate(redis_keyspace_misses_total{namespace=\"$namespace\", pod=~\"$pod\"}[5m]))",
-              "legendFormat": "{{ "{{" }}pod{{ "}}" }}",
+              "expr": "rate(redis_keyspace_hits_total{workload=\"$workload\", gvc=\"$gvc\", replica=~\"$replica\"}[5m]) / (rate(redis_keyspace_hits_total{workload=\"$workload\", gvc=\"$gvc\", replica=~\"$replica\"}[5m]) + rate(redis_keyspace_misses_total{workload=\"$workload\", gvc=\"$gvc\", replica=~\"$replica\"}[5m]))",
+              "legendFormat": "{{ "{{" }}replica{{ "}}" }}",
               "refId": "A"
             }
           ],

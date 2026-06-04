@@ -107,13 +107,6 @@ Redis Backup Policy Name
 {{- end }}
 
 {{/*
-Grafana Folder Name
-*/}}
-{{- define "redis.grafanaFolder.name" -}}
-{{- .Values.grafana.folder | lower | replace " " "-" }}
-{{- end }}
-
-{{/*
 Grafana Dashboard Name
 */}}
 {{- define "redis.grafanaDashboard.name" -}}

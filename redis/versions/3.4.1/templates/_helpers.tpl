@@ -110,7 +110,7 @@ Redis Backup Policy Name
 Grafana Folder Name
 */}}
 {{- define "redis.grafanaFolder.name" -}}
-{{- printf "%s-redis-folder" .Release.Name }}
+{{- .Values.grafana.folder | lower | replace " " "-" }}
 {{- end }}
 
 {{/*

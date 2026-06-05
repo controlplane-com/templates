@@ -1,6 +1,6 @@
 redpanda:
   name: cluster
-  image: docker.redpanda.com/redpandadata/redpanda:v26.1.9
+  image: redpandadata/redpanda:v26.1.9
   replicas: 3
   multiZone: false
   env: []
@@ -12,7 +12,7 @@ redpanda:
 
   volume:
     initialCapacity: 10 # In GB
-    performanceClass: high-throughput-ssd # general-purpose-ssd / high-throughput-ssd (Min 1000GB)
+    performanceClass: general-purpose-ssd # For production workloads, switch to high-throughput-ssd (min 200GB) for higher IOPS
     fileSystemType: xfs # xfs / ext4
     # customEncryption:
     #   enabled: true
@@ -74,7 +74,7 @@ redpanda:
 redpanda_console:
   enabled: true
   name: console
-  image: docker.redpanda.com/redpandadata/console:v3.7.4
+  image: redpandadata/console:v3.7.4
   cpu: 200m
   memory: 256Mi
   minCpu: 50m

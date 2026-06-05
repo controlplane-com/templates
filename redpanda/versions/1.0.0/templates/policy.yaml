@@ -1,5 +1,6 @@
 kind: policy
 name: {{ include "redpanda.name" . }}
+description: {{ include "redpanda.name" . }}
 origin: default
 bindings:
   - permissions:

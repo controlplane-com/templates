@@ -1,6 +1,7 @@
 {{- include "redpanda.validateReplicas" . }}
 kind: workload
 name: {{ include "redpanda.clusterName" . }}
+description: {{ include "redpanda.clusterName" . }}
 gvc: {{ .Values.global.cpln.gvc }}
 tags:
   # Brokers must resolve peer FQDNs for Raft consensus before they are Ready.

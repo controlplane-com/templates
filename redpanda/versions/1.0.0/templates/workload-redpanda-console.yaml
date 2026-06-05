@@ -47,6 +47,7 @@ gvc: {{ .Values.global.cpln.gvc }}
 ---
 kind: workload
 name: {{ include "redpanda.consoleName" . }}
+description: {{ include "redpanda.consoleName" . }}
 gvc: {{ .Values.global.cpln.gvc }}
 tags:
   {{- include "redpanda.tags" . | nindent 2 }}

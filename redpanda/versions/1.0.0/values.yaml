@@ -9,6 +9,11 @@ redpanda:
   memory: 4Gi
   minCpu: 500m
   minMemory: 2Gi
+  # smp: number of Seastar reactor threads — must match the container's vCPU count (floor of cpu limit).
+  # Without this, Seastar uses all node CPUs and divides memory across them, starving each shard.
+  smp: 1
+  # reserveMemory: memory set aside for the OS; Redpanda uses (memory - reserveMemory).
+  reserveMemory: 1G
 
   volume:
     initialCapacity: 10 # In GB

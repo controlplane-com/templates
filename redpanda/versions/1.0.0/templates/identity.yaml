@@ -1,4 +1,4 @@
 kind: identity
 name: {{ include "redpanda.name" . }}
-description: {{ include "redpanda.clusterName" . }} identity
+description: Redpanda identity
 gvc: {{ .Values.global.cpln.gvc }}

@@ -27,3 +27,31 @@ spec:
         minProtocolVersion: TLSV1_2
   workloadLink: //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "redpanda.clusterName" . }}
 {{- end }}
+{{- if .Values.redpanda_console.domain }}
+
+---
+kind: domain
+name: {{ .Values.redpanda_console.domain }}
+description: {{ .Values.redpanda_console.domain }}
+spec:
+  acceptAllHosts: false
+  dnsMode: cname
+  ports:
+    - number: 443
+      protocol: http2
+      routes:
+        - port: 8080
+          prefix: /
+          workloadLink: //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "redpanda.consoleName" . }}
+      tls:
+        cipherSuites:
+          - ECDHE-ECDSA-AES256-GCM-SHA384
+          - ECDHE-ECDSA-CHACHA20-POLY1305
+          - ECDHE-ECDSA-AES128-GCM-SHA256
+          - ECDHE-RSA-AES256-GCM-SHA384
+          - ECDHE-RSA-CHACHA20-POLY1305
+          - ECDHE-RSA-AES128-GCM-SHA256
+          - AES256-GCM-SHA384
+          - AES128-GCM-SHA256
+        minProtocolVersion: TLSV1_2
+{{- end }}

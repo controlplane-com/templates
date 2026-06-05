@@ -1,6 +1,6 @@
 kind: policy
 name: {{ include "redpanda.name" . }}
-description: {{ include "redpanda.name" . }}
+description: Redpanda secrets access policy
 origin: default
 bindings:
   - permissions:
@@ -11,3 +11,6 @@ targetKind: secret
 targetLinks:
   - //secret/{{ include "redpanda.name" . }}-init
   - //secret/{{ include "redpanda.name" . }}-secrets
+  {{- if .Values.redpanda_console.enabled }}
+  - //secret/{{ include "redpanda.name" . }}-console-config
+  {{- end }}

@@ -1,7 +1,7 @@
 {{- include "redpanda.validateReplicas" . }}
 kind: workload
 name: {{ include "redpanda.clusterName" . }}
-description: {{ include "redpanda.clusterName" . }}
+description: Redpanda broker cluster
 gvc: {{ .Values.global.cpln.gvc }}
 tags:
   # Brokers must resolve peer FQDNs for Raft consensus before they are Ready.
@@ -25,11 +25,16 @@ spec:
               - '-c'
               - |
                 ORDINAL=$(echo "$HOSTNAME" | awk -F'-' '{print $NF}')
+                CLUSTER_NAME=$(echo "$HOSTNAME" | sed 's/-[0-9]*$//')
                 ADMIN="localhost:{{ .Values.redpanda.listeners.adminApi.port }}"
-                until curl -sf "http://${ADMIN}/v1/health" | grep -q '"is_healthy":true'; do sleep 2; done
+                ADMIN_HOSTS=""
+                for i in $(seq 0 $(( {{ .Values.redpanda.replicas }} - 1 ))); do
+                  ADMIN_HOSTS="${ADMIN_HOSTS:+${ADMIN_HOSTS},}${CLUSTER_NAME}-${i}.${CLUSTER_NAME}:{{ .Values.redpanda.listeners.adminApi.port }}"
+                done
+                until curl -sf "http://${ADMIN}/v1/cluster/health_overview" 2>/dev/null | grep -qE '"is_healthy"\s*:\s*true'; do sleep 2; done
                 [ "$ORDINAL" != "0" ] && exit 0
                 {{- range .Values.redpanda.auth.users }}
-                rpk security user create {{ .username }} --password "$REDPANDA_{{ .username | upper | replace "-" "_" }}_PASSWORD" --mechanism {{ $.Values.redpanda.auth.saslMechanism }} --api-addr "$ADMIN" || true
+                rpk security user create {{ .username }} --password "$REDPANDA_{{ .username | upper | replace "-" "_" }}_PASSWORD" --mechanism {{ $.Values.redpanda.auth.saslMechanism }} -X admin.hosts="${ADMIN_HOSTS}" || true
                 {{- end }}
         # Transfer all partition leadership off this broker before Kubernetes sends
         # SIGTERM. By the time SIGTERM arrives the broker holds no leadership, so
@@ -39,7 +44,7 @@ spec:
             command:
               - /bin/bash
               - '-c'
-              - rpk cluster maintenance enable --wait --api-addr localhost:{{ .Values.redpanda.listeners.adminApi.port }} || true
+              - rpk cluster maintenance enable --wait -X admin.hosts=localhost:{{ .Values.redpanda.listeners.adminApi.port }} || true
       cpu: '{{ .Values.redpanda.cpu }}'
       {{- if .Values.redpanda.minCpu }}
       minCpu: '{{ .Values.redpanda.minCpu }}'
@@ -91,9 +96,11 @@ spec:
         initialDelaySeconds: 20
         periodSeconds: 10
         successThreshold: 1
-        httpGet:
-          path: /v1/health
-          port: {{ .Values.redpanda.listeners.adminApi.port }}
+        exec:
+          command:
+            - /bin/bash
+            - '-c'
+            - curl -sf http://localhost:{{ .Values.redpanda.listeners.adminApi.port }}/v1/cluster/health_overview | grep -qE '"is_healthy"\s*:\s*true'
         timeoutSeconds: 5
       volumes:
         - path: /var/lib/redpanda/data

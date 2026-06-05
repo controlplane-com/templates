@@ -1,0 +1,89 @@
+redpanda:
+  name: cluster
+  image: docker.redpanda.com/redpandadata/redpanda:v26.1.9
+  replicas: 3
+  multiZone: false
+  env: []
+
+  cpu: 1500m
+  memory: 4Gi
+  minCpu: 500m
+  minMemory: 2Gi
+
+  volume:
+    initialCapacity: 10 # In GB
+    performanceClass: high-throughput-ssd # general-purpose-ssd / high-throughput-ssd (Min 1000GB)
+    fileSystemType: xfs # xfs / ext4
+    # customEncryption:
+    #   enabled: true
+    #   region: aws-us-east-2
+    #   keyId: arn:aws:kms:us-east-2:1234567890:key/your-key-id
+
+  # To disable all traffic, comment out the corresponding rule. Docs: https://docs.controlplane.com/concepts/security#firewall
+  firewall:
+    internal_inboundAllowType: "same-gvc" # Options: same-org / same-gvc
+    # external_inboundAllowCIDR: 0.0.0.0/0
+    # inboundAllowWorkload:
+    #   - //gvc/my-gvc/workload/my-app
+    # external_outboundAllowCIDR: "0.0.0.0/0"
+
+  listeners:
+    kafka:
+      internal:
+        port: 9092
+      # external:
+      #   directReplicaRouting:
+      #     containerPort: 9094
+      #     publicAddress: redpanda.example.com
+      #   sasl:
+      #     users: "external-user"
+      #     passwords: "your-external-password"
+
+    adminApi:
+      port: 9644
+
+    schemaRegistry:
+      port: 8081
+
+    pandaproxy:
+      enabled: false
+      port: 8082
+
+  auth:
+    saslMechanism: SCRAM-SHA-256 # SCRAM-SHA-256 / SCRAM-SHA-512
+    users:
+      - username: admin
+        password: "your-admin-password"
+      # - username: your-app-user
+      #   password: "your-app-password"
+    superusers: []
+
+  acl:
+    allowEveryoneIfNoAclFound: false
+
+  secrets:
+    # Leave empty to auto-generate on first boot. Set explicitly to preserve identity across reinstalls.
+    cluster_id: ""
+
+  extra_configurations: {}
+    # auto_create_topics_enabled: false
+    # log_retention_ms: 604800000
+    # log_segment_size: 134217728
+    # log_retention_bytes: -1
+
+redpanda_console:
+  enabled: true
+  name: console
+  image: docker.redpanda.com/redpandadata/console:v3.7.4
+  cpu: 200m
+  memory: 256Mi
+  minCpu: 50m
+  minMemory: 64Mi
+  replicas: 1
+  timeoutSeconds: 30
+  # domain: console.example.com
+  # To disable all traffic, comment out the corresponding rule. Docs: https://docs.controlplane.com/concepts/security#firewall
+  firewall:
+    # internal_inboundAllowType: "same-gvc"
+    external_inboundAllowCIDR: "0.0.0.0/0"
+    external_outboundAllowCIDR: "0.0.0.0/0"

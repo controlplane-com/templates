@@ -1,0 +1,12 @@
+kind: policy
+name: {{ include "redpanda.name" . }}
+origin: default
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "redpanda.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "redpanda.name" . }}-init
+  - //secret/{{ include "redpanda.name" . }}-secrets

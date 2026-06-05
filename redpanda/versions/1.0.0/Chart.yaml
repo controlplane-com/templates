@@ -1,0 +1,17 @@
+apiVersion: v2
+name: redpanda
+description: Kafka-compatible event streaming platform with built-in Schema Registry and no ZooKeeper.
+type: application
+version: 1.0.0
+appVersion: "26.1"
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+
+annotations:
+  created: "2026-06-04"
+  lastModified: "2026-06-04"
+  category: "event-streaming"
+  createsGvc: false

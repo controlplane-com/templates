@@ -1,0 +1,146 @@
+{{- include "redpanda.validateReplicas" . }}
+kind: workload
+name: {{ include "redpanda.clusterName" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  # Brokers must resolve peer FQDNs for Raft consensus before they are Ready.
+  # This tag sets publishNotReadyAddresses=true on the headless service so DNS
+  # includes not-yet-Ready pods. Without it, cold starts deadlock — pods can't
+  # form a quorum because they can't resolve each other.
+  cpln/publishNotReadyAddresses: "true"
+  {{- include "redpanda.tags" . | nindent 2 }}
+spec:
+  type: stateful
+  containers:
+    - name: redpanda
+      command: /bin/bash
+      args:
+        - /scripts/redpanda-init.sh
+      lifecycle:
+        postStart:
+          exec:
+            command:
+              - /bin/bash
+              - '-c'
+              - |
+                ORDINAL=$(echo "$HOSTNAME" | awk -F'-' '{print $NF}')
+                ADMIN="localhost:{{ .Values.redpanda.listeners.adminApi.port }}"
+                until curl -sf "http://${ADMIN}/v1/health" | grep -q '"is_healthy":true'; do sleep 2; done
+                [ "$ORDINAL" != "0" ] && exit 0
+                {{- range .Values.redpanda.auth.users }}
+                rpk security user create {{ .username }} --password "$REDPANDA_{{ .username | upper | replace "-" "_" }}_PASSWORD" --mechanism {{ $.Values.redpanda.auth.saslMechanism }} --api-addr "$ADMIN" || true
+                {{- end }}
+        # Transfer all partition leadership off this broker before Kubernetes sends
+        # SIGTERM. By the time SIGTERM arrives the broker holds no leadership, so
+        # shutdown is near-instant and clients see no dropped messages.
+        preStop:
+          exec:
+            command:
+              - /bin/bash
+              - '-c'
+              - rpk cluster maintenance enable --wait --api-addr localhost:{{ .Values.redpanda.listeners.adminApi.port }} || true
+      cpu: '{{ .Values.redpanda.cpu }}'
+      {{- if .Values.redpanda.minCpu }}
+      minCpu: '{{ .Values.redpanda.minCpu }}'
+      {{- end }}
+      memory: {{ .Values.redpanda.memory }}
+      {{- if .Values.redpanda.minMemory }}
+      minMemory: {{ .Values.redpanda.minMemory }}
+      {{- end }}
+      image: {{ .Values.redpanda.image }}
+      inheritEnv: false
+      env:
+        {{- if .Values.redpanda.env }}
+{{ toYaml .Values.redpanda.env | indent 8 }}
+        {{- end }}
+        {{- range .Values.redpanda.auth.users }}
+        - name: REDPANDA_{{ .username | upper | replace "-" "_" }}_PASSWORD
+          value: 'cpln://secret/{{ include "redpanda.name" $ }}-secrets.{{ .username }}-password'
+        {{- end }}
+      ports:
+        - number: {{ .Values.redpanda.listeners.kafka.internal.port }}
+          protocol: tcp
+        {{- if .Values.redpanda.listeners.kafka.external }}
+        - number: {{ .Values.redpanda.listeners.kafka.external.directReplicaRouting.containerPort }}
+          protocol: tcp
+        {{- end }}
+        - number: {{ .Values.redpanda.listeners.adminApi.port }}
+          protocol: http
+        - number: {{ .Values.redpanda.listeners.schemaRegistry.port }}
+          protocol: http
+        {{- if .Values.redpanda.listeners.pandaproxy.enabled }}
+        - number: {{ .Values.redpanda.listeners.pandaproxy.port }}
+          protocol: http
+        {{- end }}
+        - number: 33145
+          protocol: tcp
+      metrics:
+        path: /public_metrics
+        port: {{ .Values.redpanda.listeners.adminApi.port }}
+      livenessProbe:
+        failureThreshold: 5
+        initialDelaySeconds: 60
+        periodSeconds: 15
+        successThreshold: 1
+        tcpSocket:
+          port: {{ .Values.redpanda.listeners.kafka.internal.port }}
+        timeoutSeconds: 15
+      readinessProbe:
+        failureThreshold: 20
+        initialDelaySeconds: 20
+        periodSeconds: 10
+        successThreshold: 1
+        httpGet:
+          path: /v1/health
+          port: {{ .Values.redpanda.listeners.adminApi.port }}
+        timeoutSeconds: 5
+      volumes:
+        - path: /var/lib/redpanda/data
+          recoveryPolicy: retain
+          uri: 'cpln://volumeset/{{ include "redpanda.name" . }}-data'
+        - path: /scripts/redpanda-init.sh
+          recoveryPolicy: retain
+          uri: 'cpln://secret/{{ include "redpanda.name" . }}-init'
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.redpanda.replicas }}
+      metric: disabled
+      minScale: {{ .Values.redpanda.replicas }}
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: {{ .Values.redpanda.multiZone }}
+    suspend: false
+    timeoutSeconds: 600
+  {{- if .Values.redpanda.firewall }}
+  firewallConfig:
+    {{- if or (hasKey .Values.redpanda.firewall "external_inboundAllowCIDR") (hasKey .Values.redpanda.firewall "external_outboundAllowCIDR") }}
+    external:
+      inboundAllowCIDR: {{- if .Values.redpanda.firewall.external_inboundAllowCIDR }}{{ .Values.redpanda.firewall.external_inboundAllowCIDR | splitList "," | toYaml | nindent 8 }}{{- else }} []{{- end }}
+      outboundAllowCIDR: {{- if .Values.redpanda.firewall.external_outboundAllowCIDR }}{{ .Values.redpanda.firewall.external_outboundAllowCIDR | splitList "," | toYaml | nindent 8 }}{{- else }} []{{- end }}
+    {{- end }}
+    {{- if hasKey .Values.redpanda.firewall "internal_inboundAllowType" }}
+    internal:
+      inboundAllowType: {{ default "[]" .Values.redpanda.firewall.internal_inboundAllowType }}
+      {{- if .Values.redpanda.firewall.inboundAllowWorkload }}
+      inboundAllowWorkload: {{ .Values.redpanda.firewall.inboundAllowWorkload | toYaml | nindent 8 }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: true
+  identityLink: //identity/{{ include "redpanda.name" . }}
+  rolloutOptions:
+    maxSurgeReplicas: 25%
+    maxUnavailableReplicas: '1'
+    minReadySeconds: 0
+    scalingPolicy: Parallel
+  securityOptions:
+    filesystemGroupId: 101
+  supportDynamicTags: false

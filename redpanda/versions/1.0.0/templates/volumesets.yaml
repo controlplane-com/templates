@@ -1,0 +1,14 @@
+kind: volumeset
+name: {{ include "redpanda.name" . }}-data
+description: {{ include "redpanda.clusterName" . }} data
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  initialCapacity: {{ .Values.redpanda.volume.initialCapacity }}
+  performanceClass: {{ .Values.redpanda.volume.performanceClass }}
+  fileSystemType: {{ .Values.redpanda.volume.fileSystemType }}
+  {{- if and .Values.redpanda.volume.customEncryption .Values.redpanda.volume.customEncryption.enabled }}
+  customEncryption:
+    regions:
+      {{ .Values.redpanda.volume.customEncryption.region }}:
+        keyId: '{{ .Values.redpanda.volume.customEncryption.keyId }}'
+  {{- end }}

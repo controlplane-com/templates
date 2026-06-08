@@ -40,9 +40,7 @@ redpanda:
       #   directReplicaRouting:
       #     containerPort: 9094
       #     publicAddress: redpanda.example.com
-      #   sasl:
-      #     users: "external-user"
-      #     passwords: "your-external-password"
+      # Uncomment to enable external Kafka access over TLS via a public domain.
 
     adminApi:
       port: 9644

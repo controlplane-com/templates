@@ -57,6 +57,13 @@ Clickhouse Secret Azure Config Name
 {{- end }}
 
 {{/*
+Clickhouse Secret Hetzner Config Name
+*/}}
+{{- define "clickhouse.secretHetzner.name" -}}
+{{- printf "%s-clickhouse-hetzner-config" .Release.Name }}
+{{- end }}
+
+{{/*
 Clickhouse Identity Name
 */}}
 {{- define "clickhouse.identity.name" -}}
@@ -100,8 +107,8 @@ true
 
 {{- define "clickhouse.validateStorage" -}}
 {{- $provider := .Values.provider -}}
-{{- if not (or (eq $provider "aws") (eq $provider "gcp") (eq $provider "azure")) -}}
-  {{- fail "provider must be set to 'aws', 'gcp', or 'azure'." -}}
+{{- if not (or (eq $provider "aws") (eq $provider "gcp") (eq $provider "azure") (eq $provider "hetzner")) -}}
+  {{- fail "provider must be set to 'aws', 'gcp', 'azure', or 'hetzner'." -}}
 {{- end -}}
 {{- if eq $provider "aws" -}}
   {{- if not .Values.aws.bucket -}}
@@ -137,6 +144,20 @@ true
   {{- end -}}
   {{- if not .Values.azure.accountKey -}}
     {{- fail "All fields are required for Azure. Missing: azure.accountKey" -}}
+  {{- end -}}
+{{- end -}}
+{{- if eq $provider "hetzner" -}}
+  {{- if not .Values.hetzner.bucket -}}
+    {{- fail "All fields are required for Hetzner. Missing: hetzner.bucket" -}}
+  {{- end -}}
+  {{- if not .Values.hetzner.region -}}
+    {{- fail "All fields are required for Hetzner. Missing: hetzner.region" -}}
+  {{- end -}}
+  {{- if not .Values.hetzner.accessKeyId -}}
+    {{- fail "All fields are required for Hetzner. Missing: hetzner.accessKeyId" -}}
+  {{- end -}}
+  {{- if not .Values.hetzner.secretAccessKey -}}
+    {{- fail "All fields are required for Hetzner. Missing: hetzner.secretAccessKey" -}}
   {{- end -}}
 {{- end -}}
 {{- end -}}

@@ -56,6 +56,11 @@ spec:
           recoveryPolicy: retain
           uri: cpln://secret/{{ include "clickhouse.secretAzure.name" . }}
         {{- end }}
+        {{- if eq .Values.provider "hetzner" }}
+        - path: /etc/clickhouse-server/config.d/storage.xml
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "clickhouse.secretHetzner.name" . }}
+        {{- end }}
   identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "clickhouse.identity.name" . }}
   defaultOptions:
     autoscaling:

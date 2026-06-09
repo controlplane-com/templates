@@ -12,7 +12,7 @@ gvc:
     - name: aws-us-east-1
       replicas: 1
 
-provider: aws # Options: aws, gcp, or azure
+provider: aws # Options: aws, gcp, azure, or hetzner
 
 aws: # If enabled, all fields below are required - See README for guidance
   bucket: clickhouse-s3-bucket # Name of your S3 bucket
@@ -29,6 +29,12 @@ azure: # If enabled, all fields below are required - See README for guidance
   storageAccount: myclickhousestorage # Name of your Azure Storage Account
   container: clickhouse-data # Name of your Blob Storage container
   accountKey: my-azure-storage-account-key # Access key for your Azure Storage Account
+
+hetzner: # If enabled, all fields below are required - See README for guidance
+  bucket: clickhouse-hetzner-bucket # Name of your Hetzner Object Storage bucket
+  region: nbg1 # Region of your bucket. Options: nbg1, hel1, fsn1
+  accessKeyId: my-hetzner-access-key-id # Access key ID for your Hetzner Object Storage
+  secretAccessKey: my-hetzner-secret-access-key # Secret access key for your Hetzner Object Storage
 
 clusterName: my_cluster # Used in cluster mode only
 

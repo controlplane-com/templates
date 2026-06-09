@@ -1,10 +1,10 @@
 # ClickHouse
 
-This template deploys ClickHouse in either **single-node** or **cluster** mode depending on how locations are configured in `values.yaml`. All deployments use object storage (AWS S3 or GCS) as the primary data store.
+This template deploys ClickHouse in either **single-node** or **cluster** mode depending on how locations are configured in `values.yaml`. All deployments use object storage (AWS S3, GCS, Azure Blob Storage, or Hetzner Object Storage) as the primary data store.
 
 ClickHouse is a high-performance column-oriented analytical database designed for real-time querying and data warehousing at scale. Storage includes:
 
-- **Primary object storage** — long-term scalable storage (AWS S3 or GCS)
+- **Primary object storage** — long-term scalable storage (AWS S3, GCS, Azure Blob Storage, or Hetzner Object Storage)
 - **Scratch volume** — fast local read cache for performance
 - **Volumeset** — persistent metadata, state, and system files
 
@@ -30,14 +30,14 @@ Before installing, update `values.yaml` with the parameters relevant to your env
 - **GVC name**: Assign a name for the Global Virtual Cloud.
 - **Locations**: Set 1 location with `replicas: 1` for single-node, or configure 3+ locations for a cluster.
 - **Cluster Name**: Assign a cluster name. Used in distributed DDL queries (cluster mode only).
-- **Storage**: Choose AWS S3 or GCS and fill in the configuration values under that section.
+- **Storage**: Choose a provider (`aws`, `gcp`, `azure`, or `hetzner`) and fill in the configuration values under that section.
 
 **Note on GVC Naming**
   - This template creates a GVC automatically with a name defined in `values.yaml`. If deploying multiple independent ClickHouse instances, **you must use a unique GVC name** for each deployment.
 
 ## Setting Up Storage
 
-Object storage is required for all deployment modes.
+Object storage is required for all deployment modes. Choose one of the supported providers below.
 
 ### AWS S3
 
@@ -110,6 +110,61 @@ gcloud projects add-iam-policy-binding $(gcloud config get-value project) \
 gsutil hmac create clickhouse-storage@$(gcloud config get-value project).iam.gserviceaccount.com
 ```
 
+### Azure Blob Storage
+
+ClickHouse uses Azure's native Blob Storage SDK. A Cloud Account is not required — authentication uses a storage account access key directly.
+
+1. In the [Azure Portal](https://portal.azure.com), go to **Storage accounts → Create**.
+   - Performance: Standard
+   - Redundancy: LRS
+   - Leave hierarchical namespace off
+
+2. Inside the storage account, go to **Containers → + Container** and create a container (e.g. `clickhouse-data`). Set access level to **Private**.
+
+3. Go to **Security + networking → Access keys** and copy either `key1` or `key2`.
+
+4. Update `values.yaml`:
+   - `azure.storageAccount` — the storage account name
+   - `azure.container` — the container name from step 2
+   - `azure.accountKey` — the access key from step 3
+
+To configure using the CLI:
+
+```BASH
+az storage account create \
+  --name YOUR_STORAGE_ACCOUNT \
+  --resource-group YOUR_RESOURCE_GROUP \
+  --sku Standard_LRS
+
+az storage container create \
+  --name clickhouse-data \
+  --account-name YOUR_STORAGE_ACCOUNT
+
+az storage account keys list \
+  --account-name YOUR_STORAGE_ACCOUNT \
+  --resource-group YOUR_RESOURCE_GROUP \
+  --query "[0].value" -o tsv
+```
+
+### Hetzner Object Storage
+
+Hetzner Object Storage is S3-compatible. A Cloud Account is not required — authentication uses an access key pair.
+
+Available regions:
+- `nbg1` — Nuremberg, Germany
+- `hel1` — Helsinki, Finland
+- `fsn1` — Falkenstein, Germany
+
+1. In the Hetzner Cloud console, go to **Object Storage** and create a bucket. Note the bucket name and region.
+
+2. Go to **Security → S3 Credentials** and click **Generate credentials**. Save the **Access Key** and **Secret Key** immediately — the secret will not be shown again.
+
+3. Update `values.yaml`:
+   - `hetzner.bucket` — the bucket name
+   - `hetzner.region` — the region (e.g. `nbg1`)
+   - `hetzner.accessKeyId` — the access key from step 2
+   - `hetzner.secretAccessKey` — the secret key from step 2
+
 ## Connecting to ClickHouse
 
 To connect using the ClickHouse client from within the same GVC:
@@ -124,3 +179,5 @@ clickhouse-client --host $WORKLOAD_NAME --password $PASSWORD
 - [Cloud Accounts Documentation](https://docs.controlplane.com/guides/create-cloud-account#overview)
 - [ClickHouse with S3](https://clickhouse.com/docs/integrations/s3)
 - [ClickHouse with GCS](https://clickhouse.com/docs/integrations/gcs)
+- [ClickHouse with Azure Blob Storage](https://clickhouse.com/docs/integrations/azure-data-lake-storage)
+- [ClickHouse with S3-compatible storage](https://clickhouse.com/docs/integrations/s3#s3-compatible-storage)

@@ -20,3 +20,6 @@ targetLinks:
   {{- if eq .Values.provider "gcp" }}
   - //secret/{{ include "clickhouse.secretGCS.name" . }}
   {{- end }}
+  {{- if eq .Values.provider "azure" }}
+  - //secret/{{ include "clickhouse.secretAzure.name" . }}
+  {{- end }}

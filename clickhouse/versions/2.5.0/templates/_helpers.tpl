@@ -50,6 +50,13 @@ Clickhouse Secret S3 Config Name
 {{- end }}
 
 {{/*
+Clickhouse Secret Azure Config Name
+*/}}
+{{- define "clickhouse.secretAzure.name" -}}
+{{- printf "%s-clickhouse-azure-config" .Release.Name }}
+{{- end }}
+
+{{/*
 Clickhouse Identity Name
 */}}
 {{- define "clickhouse.identity.name" -}}
@@ -93,8 +100,8 @@ true
 
 {{- define "clickhouse.validateStorage" -}}
 {{- $provider := .Values.provider -}}
-{{- if not (or (eq $provider "aws") (eq $provider "gcp")) -}}
-  {{- fail "provider must be set to either 'aws' or 'gcp'." -}}
+{{- if not (or (eq $provider "aws") (eq $provider "gcp") (eq $provider "azure")) -}}
+  {{- fail "provider must be set to 'aws', 'gcp', or 'azure'." -}}
 {{- end -}}
 {{- if eq $provider "aws" -}}
   {{- if not .Values.aws.bucket -}}
@@ -119,6 +126,17 @@ true
   {{- end -}}
   {{- if not .Values.gcp.secretAccessKey -}}
     {{- fail "All fields are required for GCP. Missing: gcp.secretAccessKey" -}}
+  {{- end -}}
+{{- end -}}
+{{- if eq $provider "azure" -}}
+  {{- if not .Values.azure.storageAccount -}}
+    {{- fail "All fields are required for Azure. Missing: azure.storageAccount" -}}
+  {{- end -}}
+  {{- if not .Values.azure.container -}}
+    {{- fail "All fields are required for Azure. Missing: azure.container" -}}
+  {{- end -}}
+  {{- if not .Values.azure.accountKey -}}
+    {{- fail "All fields are required for Azure. Missing: azure.accountKey" -}}
   {{- end -}}
 {{- end -}}
 {{- end -}}

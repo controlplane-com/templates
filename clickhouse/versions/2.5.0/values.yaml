@@ -12,7 +12,7 @@ gvc:
     - name: aws-us-east-1
       replicas: 1
 
-provider: aws # Options: aws or gcp
+provider: aws # Options: aws, gcp, or azure
 
 aws: # If enabled, all fields below are required - See README for guidance
   bucket: clickhouse-s3-bucket # Name of your S3 bucket
@@ -24,6 +24,11 @@ gcp: # If enabled, all fields below are required - See README for guidance
   bucket: clickhouse-gcs-bucket # Name of your GCS bucket
   accessKeyId: gcs-access-key-id # Access key ID for your GCS service account
   secretAccessKey: gcs-secret-access-key # Secret access key for your GCS service account
+
+azure: # If enabled, all fields below are required - See README for guidance
+  storageAccount: myclickhousestorage # Name of your Azure Storage Account
+  container: clickhouse-data # Name of your Blob Storage container
+  accountKey: my-azure-storage-account-key # Access key for your Azure Storage Account
 
 clusterName: my_cluster # Used in cluster mode only
 

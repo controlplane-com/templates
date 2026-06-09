@@ -1,13 +1,13 @@
 apiVersion: v2
 name: weaviate
-description: Weaviate vector database cluster for Control Plane
+description: AI-native vector database with hybrid search and built-in ML module support
 type: application
 version: 1.0.0
 appVersion: "1.28.4"
 
 annotations:
   created: "2026-05-27"
-  lastModified: "2026-05-27"
+  lastModified: "2026-06-09"
   category: "database"
   createsGvc: false
 

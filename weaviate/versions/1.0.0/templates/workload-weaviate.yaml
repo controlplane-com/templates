@@ -1,0 +1,157 @@
+{{- include "weaviate.validate" . }}
+kind: workload
+name: {{ include "weaviate.workload.name" . }}
+description: Weaviate vector database cluster
+tags: {{- include "weaviate.tags" . | nindent 2 }}
+spec:
+  type: stateful
+  containers:
+    - name: weaviate
+      command: /bin/sh
+      args:
+        - '-c'
+        - >-
+          cp /scripts/weaviate-start.sh /tmp/weaviate-start.sh &&
+          chmod +x /tmp/weaviate-start.sh &&
+          /tmp/weaviate-start.sh
+      env:
+        - name: AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED
+          value: "false"
+        - name: AUTHENTICATION_APIKEY_ENABLED
+          value: "true"
+        - name: AUTHENTICATION_APIKEY_ALLOWED_KEYS
+          value: cpln://secret/{{ include "weaviate.secret.credentials.name" . }}.api-key
+        - name: AUTHENTICATION_APIKEY_USERS
+          value: cpln://secret/{{ include "weaviate.secret.credentials.name" . }}.api-user
+        - name: AUTHORIZATION_ADMINLIST_ENABLED
+          value: "true"
+        - name: AUTHORIZATION_ADMINLIST_USERS
+          value: cpln://secret/{{ include "weaviate.secret.credentials.name" . }}.api-user
+        - name: QUERY_DEFAULTS_LIMIT
+          value: {{ .Values.queryDefaultsLimit | quote }}
+        - name: PERSISTENCE_DATA_PATH
+          value: /var/lib/weaviate
+        - name: DEFAULT_VECTORIZER_MODULE
+          value: {{ .Values.defaultVectorizerModule | quote }}
+        {{- $modules := list }}
+        {{- if .Values.modules.enabled }}
+        {{- $modules = .Values.modules.enabled }}
+        {{- end }}
+        {{- if .Values.backup.enabled }}
+          {{- if eq .Values.backup.provider "aws" }}
+            {{- $modules = append $modules "backup-s3" }}
+          {{- else if eq .Values.backup.provider "gcp" }}
+            {{- $modules = append $modules "backup-gcs" }}
+          {{- end }}
+        {{- end }}
+        {{- if gt (len $modules) 0 }}
+        - name: ENABLE_MODULES
+          value: {{ join "," $modules | quote }}
+        {{- end }}
+        {{- if .Values.modules.openai.apiKey }}
+        - name: OPENAI_APIKEY
+          value: cpln://secret/{{ include "weaviate.secret.credentials.name" . }}.openai-api-key
+        {{- end }}
+        {{- if .Values.modules.anthropic.apiKey }}
+        - name: ANTHROPIC_APIKEY
+          value: cpln://secret/{{ include "weaviate.secret.credentials.name" . }}.anthropic-api-key
+        {{- end }}
+        {{- if .Values.modules.cohere.apiKey }}
+        - name: COHERE_APIKEY
+          value: cpln://secret/{{ include "weaviate.secret.credentials.name" . }}.cohere-api-key
+        {{- end }}
+        {{- if .Values.modules.huggingface.apiKey }}
+        - name: HUGGINGFACE_APIKEY
+          value: cpln://secret/{{ include "weaviate.secret.credentials.name" . }}.huggingface-api-key
+        {{- end }}
+        {{- if and .Values.backup.enabled (eq .Values.backup.provider "aws") }}
+        - name: BACKUP_S3_BUCKET
+          value: cpln://secret/{{ include "weaviate.secret.credentials.name" . }}.backup-bucket
+        - name: BACKUP_S3_PATH
+          value: cpln://secret/{{ include "weaviate.secret.credentials.name" . }}.backup-path
+        - name: BACKUP_S3_REGION
+          value: cpln://secret/{{ include "weaviate.secret.credentials.name" . }}.backup-region
+        {{- end }}
+        {{- if and .Values.backup.enabled (eq .Values.backup.provider "gcp") }}
+        - name: BACKUP_GCS_BUCKET
+          value: cpln://secret/{{ include "weaviate.secret.credentials.name" . }}.backup-bucket
+        - name: BACKUP_GCS_PATH
+          value: cpln://secret/{{ include "weaviate.secret.credentials.name" . }}.backup-path
+        {{- end }}
+      image: {{ .Values.image }}
+      cpu: {{ .Values.cpu | quote }}
+      memory: {{ .Values.memory | quote }}
+      inheritEnv: false
+      ports:
+        - number: 8080
+          protocol: http
+        - number: 50051
+          protocol: grpc
+        - number: 7100
+          protocol: tcp
+        - number: 7101
+          protocol: tcp
+      livenessProbe:
+        failureThreshold: 5
+        initialDelaySeconds: 60
+        periodSeconds: 30
+        successThreshold: 1
+        httpGet:
+          path: /v1/.well-known/live
+          port: 8080
+          scheme: HTTP
+        timeoutSeconds: 10
+      readinessProbe:
+        failureThreshold: 10
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        successThreshold: 1
+        httpGet:
+          path: /v1/.well-known/ready
+          port: 8080
+          scheme: HTTP
+        timeoutSeconds: 5
+      volumes:
+        - path: /var/lib/weaviate
+          recoveryPolicy: retain
+          uri: 'cpln://volumeset/{{ include "weaviate.volumeset.name" . }}'
+        - path: /scripts/weaviate-start.sh
+          recoveryPolicy: retain
+          uri: 'cpln://secret/{{ include "weaviate.secret.start-script.name" . }}'
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.replicas | int }}
+      metric: disabled
+      minScale: {{ .Values.replicas | int }}
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: {{ .Values.multiZone.enabled }}
+    suspend: false
+    timeoutSeconds: 60
+  firewallConfig:
+    {{- if .Values.backup.enabled }}
+    external:
+      inboundAllowCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internal_access.type }}
+      {{- if .Values.internal_access.workloads }}
+      inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "weaviate.identity.name" . }}
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: true
+  rolloutOptions:
+    maxSurgeReplicas: 0%
+    maxUnavailableReplicas: '1'
+    minReadySeconds: 60
+    scalingPolicy: OrderedReady
+  supportDynamicTags: false

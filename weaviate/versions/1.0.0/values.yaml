@@ -28,11 +28,11 @@ modules:
   # External API keys for AI-powered modules (leave empty if not using that provider)
   openai:
     apiKey: ""
+  anthropic:
+    apiKey: ""
   cohere:
     apiKey: ""
   huggingface:
-    apiKey: ""
-  anthropic:
     apiKey: ""
 
 cpu: 2

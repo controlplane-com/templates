@@ -91,6 +91,10 @@ spec:
           protocol: tcp
         - number: 7101
           protocol: tcp
+        - number: 8300
+          protocol: tcp
+        - number: 8301
+          protocol: tcp
       livenessProbe:
         failureThreshold: 5
         initialDelaySeconds: 60
@@ -107,7 +111,7 @@ spec:
         periodSeconds: 10
         successThreshold: 1
         httpGet:
-          path: /v1/.well-known/ready
+          path: /v1/.well-known/live
           port: 8080
           scheme: HTTP
         timeoutSeconds: 5
@@ -133,7 +137,8 @@ spec:
     suspend: false
     timeoutSeconds: 60
   firewallConfig:
-    {{- if .Values.backup.enabled }}
+    {{- $needsExternalAccess := or .Values.backup.enabled (ne .Values.modules.anthropic.apiKey "") (ne .Values.modules.openai.apiKey "") (ne .Values.modules.cohere.apiKey "") (ne .Values.modules.huggingface.apiKey "") }}
+    {{- if $needsExternalAccess }}
     external:
       inboundAllowCIDR: []
       outboundAllowCIDR:

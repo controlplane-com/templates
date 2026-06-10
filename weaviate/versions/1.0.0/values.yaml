@@ -1,13 +1,13 @@
 replicas: 3
 
-image: cr.weaviate.io/semitechnologies/weaviate:1.28.4
+image: semitechnologies/weaviate:1.38.0
 
 # Weaviate cluster name
 clusterName: my-weaviate
 
 # IMPORTANT: Change all credentials before deploying to production
 # API key for authenticating with Weaviate
-apiKey: my-secret-api-key
+apiKey: 21203583df918a538cecb1f96c85c4516c4c0e478be23f76466ad8a30adc68cc
 # Username associated with the API key (used for authorization and admin list)
 apiUser: admin@example.com
 
@@ -65,11 +65,11 @@ backup:
   aws:
     bucket: my-backup-bucket
     region: us-east-1
-    cloudAccountName: my-cloud-account
-    policyName: my-s3-policy
+    cloudAccountName: my-s3-cloudaccount
+    policyName: my-backup-policy
     path: weaviate/backups
 
   gcp:
     bucket: my-backup-bucket
-    cloudAccountName: my-cloud-account
+    cloudAccountName: my-gcs-cloudaccount
     path: weaviate/backups

@@ -1,0 +1,12 @@
+kind: policy
+name: {{ include "weaviate.policy.name" . }}
+origin: default
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "weaviate.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "weaviate.secret.credentials.name" . }}
+  - //secret/{{ include "weaviate.secret.start-script.name" . }}

@@ -1,6 +1,6 @@
 ## Redis Multi-Location
 
-Creates a Redis Sentinel cluster spread across multiple locations on Control Plane. Each location runs in a single GVC with replicas distributed per location via `localOptions`, and Sentinel provides automatic leader election and failover across locations.
+Creates a single Redis Sentinel cluster spread across multiple Control Plane locations within one GVC. Sentinel provides automatic leader election and failover across locations.
 
 ### Configuration
 
@@ -120,15 +120,9 @@ backup:
   provider: aws  # Options: aws or gcp
 ```
 
-**Sentinel quorum** — must be less than the total number of sentinel instances (one per location). For 3 locations a quorum of 2 is recommended:
-```yaml
-sentinel:
-  quorum: 2
-```
-
 ### Connecting
 
-Redis replica `0` is always the initial master. All replicas are accessible within the GVC on port `6379`, and Sentinel on port `26379`.
+Replica `0` in the first configured location is the initial master. All replicas are accessible within the GVC on port `6379`, and Sentinel on port `26379`. After a failover, Sentinel elects a new master and all replicas re-point to it automatically.
 
 #### Option 1: via workload name (load-balanced)
 ```
@@ -136,10 +130,10 @@ redis-cli -h {release-name}-redis -p 6379 set mykey "test"
 redis-cli -h {release-name}-redis -p 6379 get mykey
 ```
 
-#### Option 2: directly to a replica
+#### Option 2: directly to a replica (location-scoped DNS)
 ```
-redis-cli -h {release-name}-redis-0.{release-name}-redis -p 6379 set mykey "test"
-redis-cli -h {release-name}-redis-1.{release-name}-redis -p 6379 get mykey
+redis-cli -h replica-0.{release-name}-redis.{location}.{gvc}.cpln.local -p 6379 ping
+redis-cli -h replica-1.{release-name}-redis.{location}.{gvc}.cpln.local -p 6379 ping
 ```
 
 #### Routing writes to the current master via Sentinel

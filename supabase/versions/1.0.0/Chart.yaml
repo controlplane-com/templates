@@ -1,0 +1,18 @@
+apiVersion: v2
+name: supabase
+description: PostgreSQL backend-as-a-service with built-in auth, REST API, realtime subscriptions, file storage, and a web dashboard
+
+type: application
+version: 1.0.0
+appVersion: "1"
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+
+annotations:
+  created: "2026-06-11"
+  lastModified: "2026-06-11"
+  category: "database"
+  createsGvc: false

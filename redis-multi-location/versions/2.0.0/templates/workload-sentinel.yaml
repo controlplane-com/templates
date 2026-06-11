@@ -70,6 +70,7 @@ spec:
   rolloutOptions:
     scalingPolicy: Parallel
   firewallConfig:
+    {{- if or .Values.firewall.externalOutboundAllowCIDR .Values.firewall.externalInboundAllowCIDR (and (hasKey .Values.sentinel "publicAccess") .Values.sentinel.publicAccess.enabled) }}
     external:
       {{- if .Values.firewall.externalOutboundAllowCIDR }}
       outboundAllowCIDR:
@@ -87,6 +88,7 @@ spec:
         - 0.0.0.0/0
         {{- end }}
       {{- end }}
+    {{- end }}
     internal:
       inboundAllowType: {{ .Values.firewall.internalAllowType }}
       {{- if .Values.firewall.workloads }}

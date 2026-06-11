@@ -1,0 +1,21 @@
+{{- if and (hasKey .Values.sentinel "publicAccess") .Values.sentinel.publicAccess.enabled }}
+kind: domain
+name: {{ .Values.sentinel.publicAccess.address }}
+description: {{ .Values.sentinel.publicAccess.address }}
+spec:
+  acceptAllHosts: false
+  dnsMode: cname
+  {{- $total := include "redis.sentinel.totalReplicas" . | int }}
+  {{- if gt $total 0 }}
+  ports:
+    {{- range $i := until $total }}
+    - number: {{ add 26380 $i }}
+      protocol: tcp
+      routes:
+        - port: 26379
+          prefix: /
+          replica: {{ $i }}
+          workloadLink: //gvc/{{ $.Values.gvc.name }}/workload/{{ include "redis.sentinel.name" $ }}
+    {{- end }}
+  {{- end }}
+{{- end }}

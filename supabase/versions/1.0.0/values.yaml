@@ -141,11 +141,14 @@ storage:
   s3:             # only used when backend is s3
     bucket: my-supabase-storage-bucket
     region: us-east-1
-    cloudAccountName: my-s3-cloud-account
+    cloudAccountName: my-s3-cloudaccount
+    policyName: my-bucket-policy  # IAM policy granting s3:GetObject, s3:PutObject, s3:DeleteObject on the bucket
 
   gcs:            # only used when backend is gcs
+    # GCS is accessed via S3-compatible API using HMAC keys (no cloud account needed)
     bucket: my-supabase-storage-bucket
-    cloudAccountName: my-gcs-cloud-account
+    accessKeyId: my-gcs-hmac-access-key-id
+    secretAccessKey: my-gcs-hmac-secret-access-key
 
 # ── Studio (web dashboard) + pg_meta ──────────────────────────────────────────
 # pg_meta is the Postgres metadata API used exclusively by Studio. It is
@@ -202,15 +205,21 @@ pgbouncer:
 # ── Backup ────────────────────────────────────────────────────────────────────
 backup:
   enabled: false
-  image: ghcr.io/controlplane-com/backup-images/postgres-backup:15.1.0
-  schedule: "0 2 * * *"  # daily at 2am UTC
+  mode: logical  # options: logical (pg_dump cron), walg (continuous WAL archiving + base backups, supports PITR)
+  provider: aws  # options: aws, gcp
+
   resources:
     minCpu: 100m
     minMemory: 128Mi
     maxCpu: 200m
     maxMemory: 256Mi
 
-  provider: aws  # options: aws, gcp
+  logical:
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:15.1.0
+    schedule: "0 2 * * *"  # daily at 2am UTC
+
+  walg:
+    intervalSeconds: 21600  # base backup interval in seconds (default: every 6 hours)
 
   aws:
     bucket: my-supabase-backup-bucket

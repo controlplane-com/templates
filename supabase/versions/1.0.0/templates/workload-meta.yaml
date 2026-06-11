@@ -1,0 +1,61 @@
+{{- if .Values.studio.enabled }}
+---
+kind: workload
+name: {{ include "supabase.meta.name" . }}
+description: Supabase pg_meta — Postgres metadata API for Studio
+tags: {{- include "supabase.tags" . | nindent 2 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "supabase.identity.name" . }}
+  containers:
+    - name: meta
+      image: {{ .Values.studio.meta.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.studio.meta.resources.minCpu | quote }}
+      cpu: {{ .Values.studio.meta.resources.maxCpu | quote }}
+      minMemory: {{ .Values.studio.meta.resources.minMemory | quote }}
+      memory: {{ .Values.studio.meta.resources.maxMemory | quote }}
+      env:
+        - name: PG_META_PORT
+          value: "8080"
+        - name: PG_META_DB_HOST
+          value: {{ include "supabase.postgresHost" . }}
+        - name: PG_META_DB_PORT
+          value: "5432"
+        - name: PG_META_DB_NAME
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresDatabase
+        - name: PG_META_DB_USER
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresUsername
+        - name: PG_META_DB_PASSWORD
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
+        - name: PG_META_DB_SSL_MODE
+          value: disable
+      ports:
+        - number: 8080
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 8080
+        failureThreshold: 10
+        initialDelaySeconds: 10
+        periodSeconds: 5
+        successThreshold: 1
+        timeoutSeconds: 3
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+    capacityAI: false
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: workload-list
+      inboundAllowWorkload:
+        - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "supabase.kong.name" . }}
+        - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "supabase.studio.name" . }}
+{{- end }}

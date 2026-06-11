@@ -1,0 +1,67 @@
+{{- if .Values.studio.enabled }}
+---
+kind: workload
+name: {{ include "supabase.studio.name" . }}
+description: Supabase Studio — web dashboard
+tags: {{- include "supabase.tags" . | nindent 2 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "supabase.identity.name" . }}
+  containers:
+    - name: studio
+      image: {{ .Values.studio.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.studio.resources.minCpu | quote }}
+      cpu: {{ .Values.studio.resources.maxCpu | quote }}
+      minMemory: {{ .Values.studio.resources.minMemory | quote }}
+      memory: {{ .Values.studio.resources.maxMemory | quote }}
+      env:
+        - name: STUDIO_PG_META_URL
+          value: http://{{ include "supabase.meta.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:8080
+        - name: POSTGRES_PASSWORD
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
+        - name: DEFAULT_ORGANIZATION_NAME
+          value: Default Organization
+        - name: DEFAULT_PROJECT_NAME
+          value: Default Project
+        - name: SUPABASE_URL
+          value: http://{{ include "supabase.kong.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:8000
+        - name: SUPABASE_PUBLIC_URL
+          value: {{ include "supabase.siteUrl" . }}
+        - name: SUPABASE_ANON_KEY
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.anonKey
+        - name: SUPABASE_SERVICE_KEY
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.serviceRoleKey
+        - name: AUTH_JWT_SECRET
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.jwtSecret
+        - name: NEXT_PUBLIC_ENABLE_LOGS
+          value: "false"
+      ports:
+        - number: 3000
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /
+          port: 3000
+        failureThreshold: 10
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+    capacityAI: false
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: {{ .Values.studio.internalAccess.type }}
+      {{- if .Values.studio.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.studio.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
+{{- end }}

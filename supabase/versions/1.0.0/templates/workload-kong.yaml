@@ -1,0 +1,69 @@
+---
+kind: workload
+name: {{ include "supabase.kong.name" . }}
+description: Supabase Kong API gateway
+tags: {{- include "supabase.tags" . | nindent 2 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "supabase.identity.name" . }}
+  containers:
+    - name: kong
+      image: {{ .Values.kong.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.kong.resources.minCpu | quote }}
+      cpu: {{ .Values.kong.resources.maxCpu | quote }}
+      minMemory: {{ .Values.kong.resources.minMemory | quote }}
+      memory: {{ .Values.kong.resources.maxMemory | quote }}
+      env:
+        - name: KONG_DATABASE
+          value: "off"
+        - name: KONG_DECLARATIVE_CONFIG
+          value: /usr/local/kong/declarative/kong.yaml
+        - name: KONG_DNS_ORDER
+          value: LAST,A,CNAME
+        - name: KONG_PLUGINS
+          value: request-transformer,cors,key-auth,acl
+        - name: KONG_NGINX_PROXY_PROXY_BUFFER_SIZE
+          value: 160k
+        - name: KONG_NGINX_PROXY_PROXY_BUFFERS
+          value: 64 160k
+        - name: SUPABASE_ANON_KEY
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.anonKey
+        - name: SUPABASE_SERVICE_KEY
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.serviceRoleKey
+      ports:
+        - number: 8000
+          protocol: http
+      volumes:
+        - path: /usr/local/kong/declarative/kong.yaml
+          uri: cpln://secret/{{ include "supabase.kong.config.secret.name" . }}.payload
+      readinessProbe:
+        httpGet:
+          path: /auth/v1/health
+          port: 8000
+        failureThreshold: 10
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      metric: cpu
+      target: 70
+      minScale: {{ .Values.kong.minReplicas }}
+      maxScale: {{ .Values.kong.maxReplicas }}
+      scaleToZeroDelay: 300
+    capacityAI: false
+  firewallConfig:
+    external:
+      {{- if .Values.kong.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: same-gvc

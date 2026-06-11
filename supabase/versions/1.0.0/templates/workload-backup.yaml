@@ -1,0 +1,69 @@
+{{- if and .Values.backup.enabled (eq .Values.backup.mode "logical") }}
+---
+kind: workload
+name: {{ include "supabase.backup.name" . }}
+description: Supabase Postgres backup
+tags: {{- include "supabase.tags" . | nindent 2 }}
+spec:
+  type: cron
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "supabase.identity.name" . }}
+  containers:
+    - name: backup
+      image: {{ .Values.backup.logical.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.backup.resources.minCpu | quote }}
+      cpu: {{ .Values.backup.resources.maxCpu | quote }}
+      minMemory: {{ .Values.backup.resources.minMemory | quote }}
+      memory: {{ .Values.backup.resources.maxMemory | quote }}
+      env:
+        - name: PG_HOST
+          value: {{ include "supabase.postgresHost" . }}
+        - name: PG_PORT
+          value: "5432"
+        - name: PG_USER
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresUsername
+        - name: PG_PASSWORD
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
+        - name: BACKUP_BUCKET
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.backupBucket
+        {{- if eq .Values.backup.provider "aws" }}
+        - name: BACKUP_PROVIDER
+          value: aws
+        - name: AWS_REGION
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.backupAwsRegion
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.aws.prefix | quote }}
+        {{- end }}
+        {{- if eq .Values.backup.provider "gcp" }}
+        - name: BACKUP_PROVIDER
+          value: gcp
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.gcp.prefix | quote }}
+        {{- end }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: none
+      inboundAllowWorkload: []
+  job:
+    concurrencyPolicy: Forbid
+    historyLimit: 5
+    restartPolicy: Never
+    schedule: {{ .Values.backup.logical.schedule | quote }}
+  supportDynamicTags: false
+{{- end }}

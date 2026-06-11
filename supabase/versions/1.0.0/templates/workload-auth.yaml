@@ -1,0 +1,125 @@
+---
+kind: workload
+name: {{ include "supabase.auth.name" . }}
+description: Supabase GoTrue — auth service
+tags: {{- include "supabase.tags" . | nindent 2 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "supabase.identity.name" . }}
+  containers:
+    - name: auth
+      image: {{ .Values.auth.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.auth.resources.minCpu | quote }}
+      cpu: {{ .Values.auth.resources.maxCpu | quote }}
+      minMemory: {{ .Values.auth.resources.minMemory | quote }}
+      memory: {{ .Values.auth.resources.maxMemory | quote }}
+      env:
+        - name: DB_USER
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresUsername
+        - name: DB_PASSWORD
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
+        - name: DB_NAME
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresDatabase
+        - name: GOTRUE_API_HOST
+          value: "0.0.0.0"
+        - name: GOTRUE_API_PORT
+          value: "9999"
+        - name: API_EXTERNAL_URL
+          value: {{ include "supabase.siteUrl" . }}/auth/v1
+        - name: GOTRUE_DB_DRIVER
+          value: postgres
+        - name: GOTRUE_DB_DATABASE_URL
+          value: postgresql://$(DB_USER):$(DB_PASSWORD)@{{ include "supabase.postgresHost" . }}:5432/$(DB_NAME)?search_path=auth,public&connect_timeout=10
+        - name: GOTRUE_SITE_URL
+          value: {{ include "supabase.siteUrl" . }}
+        - name: GOTRUE_URI_ALLOW_LIST
+          value: "*"
+        - name: GOTRUE_DISABLE_SIGNUP
+          value: {{ .Values.auth.disableSignup | quote }}
+        - name: GOTRUE_JWT_ADMIN_ROLES
+          value: service_role
+        - name: GOTRUE_JWT_AUD
+          value: authenticated
+        - name: GOTRUE_JWT_DEFAULT_GROUP_NAME
+          value: authenticated
+        - name: GOTRUE_JWT_EXP
+          value: "3600"
+        - name: GOTRUE_JWT_SECRET
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.jwtSecret
+        {{- if .Values.auth.smtp.enabled }}
+        - name: GOTRUE_MAILER_AUTOCONFIRM
+          value: "false"
+        - name: GOTRUE_SMTP_HOST
+          value: {{ .Values.auth.smtp.host | quote }}
+        - name: GOTRUE_SMTP_PORT
+          value: {{ .Values.auth.smtp.port | quote }}
+        - name: GOTRUE_SMTP_USER
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.smtpUser
+        - name: GOTRUE_SMTP_PASS
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.smtpPassword
+        - name: GOTRUE_SMTP_SENDER_NAME
+          value: {{ .Values.auth.smtp.senderName | quote }}
+        - name: GOTRUE_MAILER_URLPATHS_INVITE
+          value: /auth/v1/verify
+        - name: GOTRUE_MAILER_URLPATHS_CONFIRMATION
+          value: /auth/v1/verify
+        - name: GOTRUE_MAILER_URLPATHS_RECOVERY
+          value: /auth/v1/verify
+        - name: GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE
+          value: /auth/v1/verify
+        {{- else }}
+        - name: GOTRUE_MAILER_AUTOCONFIRM
+          value: "true"
+        {{- end }}
+        {{- if .Values.auth.providers }}
+        {{- with .Values.auth.providers.github }}
+        - name: GOTRUE_EXTERNAL_GITHUB_ENABLED
+          value: "true"
+        - name: GOTRUE_EXTERNAL_GITHUB_CLIENT_ID
+          value: {{ .clientId | quote }}
+        - name: GOTRUE_EXTERNAL_GITHUB_SECRET
+          value: {{ .clientSecret | quote }}
+        - name: GOTRUE_EXTERNAL_GITHUB_REDIRECT_URI
+          value: {{ include "supabase.siteUrl" $ }}/auth/v1/callback
+        {{- end }}
+        {{- with .Values.auth.providers.google }}
+        - name: GOTRUE_EXTERNAL_GOOGLE_ENABLED
+          value: "true"
+        - name: GOTRUE_EXTERNAL_GOOGLE_CLIENT_ID
+          value: {{ .clientId | quote }}
+        - name: GOTRUE_EXTERNAL_GOOGLE_SECRET
+          value: {{ .clientSecret | quote }}
+        - name: GOTRUE_EXTERNAL_GOOGLE_REDIRECT_URI
+          value: {{ include "supabase.siteUrl" $ }}/auth/v1/callback
+        {{- end }}
+        {{- end }}
+      ports:
+        - number: 9999
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 9999
+        failureThreshold: 10
+        initialDelaySeconds: 15
+        periodSeconds: 5
+        successThreshold: 1
+        timeoutSeconds: 3
+  defaultOptions:
+    autoscaling:
+      metric: cpu
+      target: 70
+      minScale: {{ .Values.auth.minReplicas }}
+      maxScale: {{ .Values.auth.maxReplicas }}
+      scaleToZeroDelay: 300
+    capacityAI: false
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: workload-list
+      inboundAllowWorkload:
+        - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "supabase.kong.name" . }}

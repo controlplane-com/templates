@@ -1,0 +1,66 @@
+---
+kind: workload
+name: {{ include "supabase.postgrest.name" . }}
+description: Supabase PostgREST — auto-generated REST API
+tags: {{- include "supabase.tags" . | nindent 2 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "supabase.identity.name" . }}
+  containers:
+    - name: postgrest
+      image: {{ .Values.postgrest.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.postgrest.resources.minCpu | quote }}
+      cpu: {{ .Values.postgrest.resources.maxCpu | quote }}
+      minMemory: {{ .Values.postgrest.resources.minMemory | quote }}
+      memory: {{ .Values.postgrest.resources.maxMemory | quote }}
+      env:
+        - name: DB_USER
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresUsername
+        - name: DB_PASSWORD
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
+        - name: DB_NAME
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresDatabase
+        - name: PGRST_DB_URI
+          value: postgresql://$(DB_USER):$(DB_PASSWORD)@{{ include "supabase.postgresHost" . }}:5432/$(DB_NAME)
+        - name: PGRST_DB_SCHEMAS
+          value: public,storage,graphql_public
+        - name: PGRST_DB_ANON_ROLE
+          value: anon
+        - name: PGRST_JWT_SECRET
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.jwtSecret
+        - name: PGRST_DB_USE_LEGACY_GUCS
+          value: "false"
+        - name: PGRST_APP_SETTINGS_JWT_SECRET
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.jwtSecret
+        - name: PGRST_APP_SETTINGS_JWT_EXP
+          value: "3600"
+      ports:
+        - number: 3000
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /
+          port: 3000
+        failureThreshold: 10
+        initialDelaySeconds: 10
+        periodSeconds: 5
+        successThreshold: 1
+        timeoutSeconds: 3
+  defaultOptions:
+    autoscaling:
+      metric: cpu
+      target: 70
+      minScale: {{ .Values.postgrest.minReplicas }}
+      maxScale: {{ .Values.postgrest.maxReplicas }}
+      scaleToZeroDelay: 300
+    capacityAI: false
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: workload-list
+      inboundAllowWorkload:
+        - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "supabase.kong.name" . }}

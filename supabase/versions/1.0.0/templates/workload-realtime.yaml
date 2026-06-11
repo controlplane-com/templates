@@ -1,0 +1,81 @@
+{{- if .Values.realtime.enabled }}
+---
+kind: workload
+name: {{ include "supabase.realtime.name" . }}
+description: Supabase Realtime — WebSocket subscriptions
+tags: {{- include "supabase.tags" . | nindent 2 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "supabase.identity.name" . }}
+  containers:
+    - name: realtime
+      image: {{ .Values.realtime.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.realtime.resources.minCpu | quote }}
+      cpu: {{ .Values.realtime.resources.maxCpu | quote }}
+      minMemory: {{ .Values.realtime.resources.minMemory | quote }}
+      memory: {{ .Values.realtime.resources.maxMemory | quote }}
+      env:
+        - name: PORT
+          value: "4000"
+        - name: DB_HOST
+          value: {{ include "supabase.postgresHost" . }}
+        - name: DB_PORT
+          value: "5432"
+        # Realtime uses supabase_admin — created by the supabase/postgres init scripts
+        - name: DB_USER
+          value: supabase_admin
+        - name: DB_PASSWORD
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
+        - name: DB_NAME
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresDatabase
+        - name: DB_AFTER_CONNECT_QUERY
+          value: "SET search_path TO _realtime"
+        - name: DB_ENC_KEY
+          value: supabaserealtime
+        - name: API_JWT_SECRET
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.jwtSecret
+        - name: SECRET_KEY_BASE
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.jwtSecret
+        - name: ERL_AFLAGS
+          value: -proto_dist inet_tcp
+        - name: ENABLE_TAILSCALE
+          value: "false"
+        - name: DNS_NODES
+          value: "''"
+        - name: RLIMIT_NOFILE
+          value: "10000"
+        - name: FLY_ALLOC_ID
+          value: fly123
+        - name: FLY_APP_NAME
+          value: realtime
+      ports:
+        - number: 4000
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /
+          port: 4000
+        failureThreshold: 10
+        initialDelaySeconds: 20
+        periodSeconds: 5
+        successThreshold: 1
+        timeoutSeconds: 3
+  defaultOptions:
+    autoscaling:
+      metric: cpu
+      target: 70
+      minScale: {{ .Values.realtime.minReplicas }}
+      maxScale: {{ .Values.realtime.maxReplicas }}
+      scaleToZeroDelay: 300
+    capacityAI: false
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: workload-list
+      inboundAllowWorkload:
+        - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "supabase.kong.name" . }}
+{{- end }}

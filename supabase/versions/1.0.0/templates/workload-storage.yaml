@@ -1,0 +1,113 @@
+{{- if .Values.storage.enabled }}
+---
+kind: workload
+name: {{ include "supabase.storage.name" . }}
+description: Supabase Storage API
+tags: {{- include "supabase.tags" . | nindent 2 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  type: {{ if eq .Values.storage.backend "local" }}stateful{{ else }}standard{{ end }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "supabase.identity.name" . }}
+  containers:
+    - name: storage
+      image: {{ .Values.storage.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.storage.resources.minCpu | quote }}
+      cpu: {{ .Values.storage.resources.maxCpu | quote }}
+      minMemory: {{ .Values.storage.resources.minMemory | quote }}
+      memory: {{ .Values.storage.resources.maxMemory | quote }}
+      env:
+        - name: DB_USER
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresUsername
+        - name: DB_PASSWORD
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
+        - name: DB_NAME
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresDatabase
+        - name: ANON_KEY
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.anonKey
+        - name: SERVICE_KEY
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.serviceRoleKey
+        - name: TENANT_ID
+          value: stub
+        - name: DATABASE_URL
+          value: postgresql://$(DB_USER):$(DB_PASSWORD)@{{ include "supabase.postgresHost" . }}:5432/$(DB_NAME)
+        - name: PGOPTIONS
+          value: -c search_path=storage,public
+        - name: JWT_SECRET
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.jwtSecret
+        - name: FILE_SIZE_LIMIT
+          value: "52428800"
+        - name: POSTGREST_URL
+          value: http://{{ include "supabase.postgrest.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:3000
+        - name: IS_MULTITENANT
+          value: "false"
+        - name: IMAGE_TRANSFORMATION_ENABLED
+          value: "false"
+        {{- if eq .Values.storage.backend "local" }}
+        - name: STORAGE_BACKEND
+          value: file
+        - name: FILE_STORAGE_BACKEND_PATH
+          value: /var/lib/storage
+        {{- else if eq .Values.storage.backend "s3" }}
+        - name: STORAGE_BACKEND
+          value: s3
+        - name: REGION
+          value: {{ .Values.storage.s3.region | quote }}
+        - name: GLOBAL_S3_BUCKET
+          value: {{ .Values.storage.s3.bucket | quote }}
+        {{- else if eq .Values.storage.backend "gcs" }}
+        - name: STORAGE_BACKEND
+          value: s3
+        - name: GLOBAL_S3_BUCKET
+          value: {{ .Values.storage.gcs.bucket | quote }}
+        - name: GLOBAL_S3_ENDPOINT
+          value: https://storage.googleapis.com
+        - name: GLOBAL_S3_FORCE_PATH_STYLE
+          value: "true"
+        - name: REGION
+          value: auto
+        - name: AWS_ACCESS_KEY_ID
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.storageGcsAccessKeyId
+        - name: AWS_SECRET_ACCESS_KEY
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.storageGcsSecretAccessKey
+        {{- end }}
+      ports:
+        - number: 5000
+          protocol: http
+      {{- if eq .Values.storage.backend "local" }}
+      volumes:
+        - path: /var/lib/storage
+          uri: cpln://volumeset/{{ include "supabase.storage.volumeset.name" . }}
+      {{- end }}
+      readinessProbe:
+        httpGet:
+          path: /status
+          port: 5000
+        failureThreshold: 10
+        initialDelaySeconds: 15
+        periodSeconds: 5
+        successThreshold: 1
+        timeoutSeconds: 3
+  defaultOptions:
+    autoscaling:
+      {{- if eq .Values.storage.backend "local" }}
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+      {{- else }}
+      metric: cpu
+      target: 70
+      minScale: {{ .Values.storage.minReplicas }}
+      maxScale: {{ .Values.storage.maxReplicas }}
+      scaleToZeroDelay: 300
+      {{- end }}
+    capacityAI: false
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: workload-list
+      inboundAllowWorkload:
+        - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "supabase.kong.name" . }}
+{{- end }}

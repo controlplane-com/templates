@@ -1,32 +1,73 @@
 kind: workload
 name: {{ include "redis.name" . }}
 description: Redis
-tags: {{- include "redis.tags" . | nindent 4 }}
+tags:
+  cpln/publishNotReadyAddresses: "true"
+  {{- include "redis.tags" . | nindent 2 }}
 gvc: {{ .Values.gvc.name }}
 spec:
   type: stateful
   containers:
-    - name: valkey
+    - name: redis
+      command: /bin/sh
       args:
         - '-c'
-        - >-
-          mkdir /etc/redis
-
+        - |-
+          mkdir -p /etc/redis
           cp /config/redis.conf /etc/redis/redis.conf
 
-          echo "\nreplica-announce-ip ${HOSTNAME}.{{ include "redis.name" . }}" >>
-          /etc/redis/redis.conf
+          POD_ID=$(echo "$HOSTNAME" | rev | cut -d'-' -f1 | rev)
+          LOCATION=${CPLN_LOCATION##*/}
+          WORKLOAD_NAME=${CPLN_WORKLOAD##*/}
+          SELF_HOST="replica-${POD_ID}.${WORKLOAD_NAME}.${LOCATION}.${CPLN_GVC}.cpln.local"
+          SELF_PORT=6379
 
-          if [ "$(hostname)" = "{{ include "redis.name" . }}-0" ]; then
-            {{ .Values.redis.serverCommand | default "redis-server" }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }}
+          echo "\nreplica-announce-ip ${SELF_HOST}" >> /etc/redis/redis.conf
+          echo "\nreplica-announce-port ${SELF_PORT}" >> /etc/redis/redis.conf
+
+          # Sentinel endpoints — one per location, rendered at template time
+          SENTINELS="{{ range $loc := .Values.gvc.locations }}replica-0.{{ include "redis.sentinel.name" $ }}.{{ $loc.name }}.{{ $.Values.gvc.name }}.cpln.local {{ end }}"
+
+          # Ask any sentinel who the master is, retrying until one responds.
+          # On cold start, sentinels respond from their static config (replica-0 of the
+          # primary location); after failover, they respond with the elected master.
+          # The pod whose announced identity matches becomes master; all others replicate.
+          MASTER_HOST=""
+          MASTER_PORT=""
+          until echo "$MASTER_PORT" | grep -qE '^[0-9]+$'; do
+            for S_HOST in $SENTINELS; do
+              if [ -n "$SENTINEL_PASSWORD" ]; then
+                INFO=$(redis-cli -h "$S_HOST" -p 26379 --no-auth-warning -a "$SENTINEL_PASSWORD" SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
+              else
+                INFO=$(redis-cli -h "$S_HOST" -p 26379 SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
+              fi
+              MASTER_HOST=$(echo "$INFO" | head -1)
+              MASTER_PORT=$(echo "$INFO" | tail -1)
+              echo "$MASTER_PORT" | grep -qE '^[0-9]+$' && break
+              echo "Sentinel at $S_HOST not responding, trying next"
+            done
+            echo "$MASTER_PORT" | grep -qE '^[0-9]+$' || sleep 5
+          done
+          echo "Sentinel says master=$MASTER_HOST:$MASTER_PORT (self=$SELF_HOST:$SELF_PORT)"
+
+          if [ "$MASTER_HOST" = "$SELF_HOST" ] && [ "$MASTER_PORT" = "$SELF_PORT" ]; then
+            echo "Booting as master"
+            exec {{ .Values.redis.serverCommand | default "redis-server" }} /etc/redis/redis.conf {{ .Values.redis.extraArgs | default "" }} --dir /data
           else
-            {{ .Values.redis.serverCommand | default "redis-server" }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --replicaof {{ include "redis.name" . }}-0.{{ include "redis.name" . }} 6379
+            echo "Booting as replica of $MASTER_HOST:$MASTER_PORT"
+            exec {{ .Values.redis.serverCommand | default "redis-server" }} /etc/redis/redis.conf {{ .Values.redis.extraArgs | default "" }} --dir /data --replicaof "$MASTER_HOST" "$MASTER_PORT"
           fi
-      command: /bin/sh
       cpu: {{ .Values.redis.resources.cpu | quote }}
       memory: {{ .Values.redis.resources.memory | quote }}
-      image: {{ .Values.redis.image | default "redis:7.2" }}
+      image: {{ .Values.redis.image | default "redis:7.4" }}
       inheritEnv: false
+      {{- if .Values.sentinel.password }}
+      env:
+        - name: SENTINEL_PASSWORD
+          value: {{ .Values.sentinel.password | quote }}
+      {{- else }}
+      env: []
+      {{- end }}
       ports:
         - number: 6379
           protocol: tcp
@@ -46,7 +87,9 @@ spec:
       scaleToZeroDelay: 300
       target: 100
     capacityAI: false
-    timeoutSeconds: 5
+    timeoutSeconds: 15
+  rolloutOptions:
+    scalingPolicy: Parallel
   firewallConfig:
     external:
       {{- if .Values.firewall.externalOutboundAllowCIDR }}
@@ -71,10 +114,8 @@ spec:
       inboundAllowWorkload: {{ .Values.firewall.workloads | toYaml | nindent 8 }}
       {{- end }}
   identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "redis.identity.name" . }}
-  {{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
   loadBalancer:
     replicaDirect: true
-  {{- end }}
   localOptions:
     {{- range $location := .Values.gvc.locations }}
     - location: //location/{{ $location.name }}
@@ -86,5 +127,5 @@ spec:
         scaleToZeroDelay: 300
         target: 100
       capacityAI: false
-      timeoutSeconds: 5
+      timeoutSeconds: 15
     {{- end }}

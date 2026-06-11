@@ -1,6 +1,6 @@
 gvc:
   name: my-redis-gvc
-  locations: # Replica count applies to Redis workload only
+  locations: # Replica count applies to Redis workload only; 1 Sentinel per location is fixed
     - name: aws-eu-central-1
       replicas: 2
     - name: aws-us-west-2
@@ -9,12 +9,12 @@ gvc:
       replicas: 2
 
 redis:
-  image: redis:7.2
+  image: redis:7.4
   resources:
     cpu: 200m
     memory: 256Mi
-  # serverCommand: redis-server  # Can be overridden based on the version of redis/valkey image
-  # extraArgs: "--maxclients 20000 --maxmemory 200mb --maxmemory-policy allkeys-lru"
+  serverCommand: redis-server  # Can be overridden based on the version of redis/valkey image
+  # extraArgs: "--maxmemory 200mb --maxmemory-policy allkeys-lru"
   # password: fu3h4f9834f8
   publicAccess:
     enabled: false
@@ -28,11 +28,10 @@ redis:
       scalingFactor: 1.2
 
 sentinel:
-  image: redis:7.2
+  image: redis:7.4
   resources:
     cpu: 200m
     memory: 256Mi
-  quorum: 2
   # extraArgs: "--sentinel down-after-milliseconds mymaster 5000 --sentinel failover-timeout mymaster 10000"
   # password: poek290f4238f
   publicAccess:

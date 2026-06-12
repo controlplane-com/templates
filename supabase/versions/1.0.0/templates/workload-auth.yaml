@@ -42,8 +42,6 @@ spec:
           value: service_role
         - name: GOTRUE_JWT_AUD
           value: authenticated
-        - name: GOTRUE_JWT_DEFAULT_GROUP_NAME
-          value: authenticated
         - name: GOTRUE_JWT_EXP
           value: "3600"
         - name: GOTRUE_JWT_SECRET

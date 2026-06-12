@@ -21,7 +21,7 @@ spec:
         {{- if and .Values.backup.enabled (eq .Values.backup.mode "walg") }}
         - "chown -R postgres:postgres /var/lib/postgresql/data && exec docker-entrypoint.sh postgres -c listen_addresses='*' -c wal_level=replica -c archive_mode=on -c 'archive_command=wal-g wal-push %p' -c archive_timeout=60"
         {{- else }}
-        - "chown -R postgres:postgres /var/lib/postgresql/data && exec docker-entrypoint.sh postgres -c listen_addresses='*'"
+        - "chown -R postgres:postgres /var/lib/postgresql/data && exec docker-entrypoint.sh postgres -c listen_addresses='*' -c wal_level=logical"
         {{- end }}
       env:
         - name: PGDATA
@@ -58,6 +58,10 @@ spec:
       volumes:
         - path: /var/lib/postgresql/data
           uri: cpln://volumeset/{{ include "supabase.postgres.volumeset.name" . }}
+        - path: /docker-entrypoint-initdb.d/00-supabase-init.sh
+          uri: cpln://secret/{{ include "supabase.preinit.secret.name" . }}.payload
+        - path: /docker-entrypoint-initdb.d/zzz-set-passwords.sh
+          uri: cpln://secret/{{ include "supabase.postinit.secret.name" . }}.payload
       readinessProbe:
         exec:
           command:

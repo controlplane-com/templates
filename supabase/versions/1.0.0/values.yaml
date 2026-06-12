@@ -35,9 +35,9 @@ kong:
   image: kong:2.8.1
   resources:
     minCpu: 100m
-    minMemory: 128Mi
-    maxCpu: 500m
-    maxMemory: 512Mi
+    minMemory: 256Mi
+    maxCpu: 1000m
+    maxMemory: 1Gi
   minReplicas: 1
   maxReplicas: 3
 

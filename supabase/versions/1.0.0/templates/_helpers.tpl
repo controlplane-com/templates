@@ -44,6 +44,14 @@
 {{- printf "%s-supabase-walg-script" .Release.Name }}
 {{- end }}
 
+{{- define "supabase.preinit.secret.name" -}}
+{{- printf "%s-supabase-preinit" .Release.Name }}
+{{- end }}
+
+{{- define "supabase.postinit.secret.name" -}}
+{{- printf "%s-supabase-postinit" .Release.Name }}
+{{- end }}
+
 {{- define "supabase.secret.name" -}}
 {{- printf "%s-supabase-config" .Release.Name }}
 {{- end }}

@@ -12,3 +12,5 @@ targetKind: secret
 targetLinks:
   - //secret/{{ include "supabase.secret.name" . }}
   - //secret/{{ include "supabase.kong.config.secret.name" . }}
+  - //secret/{{ include "supabase.preinit.secret.name" . }}
+  - //secret/{{ include "supabase.postinit.secret.name" . }}

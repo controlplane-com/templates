@@ -28,6 +28,8 @@ spec:
           value: 160k
         - name: KONG_NGINX_PROXY_PROXY_BUFFERS
           value: 64 160k
+        - name: KONG_NGINX_WORKER_PROCESSES
+          value: "2"
         - name: SUPABASE_ANON_KEY
           value: cpln://secret/{{ include "supabase.secret.name" . }}.anonKey
         - name: SUPABASE_SERVICE_KEY

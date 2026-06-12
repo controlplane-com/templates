@@ -33,7 +33,7 @@ spec:
           value: postgresql://$(DB_USER):$(DB_PASSWORD)@{{ include "supabase.postgresHost" . }}:5432/$(DB_NAME)
         - name: PGOPTIONS
           value: -c search_path=storage,public
-        - name: JWT_SECRET
+        - name: PGRST_JWT_SECRET
           value: cpln://secret/{{ include "supabase.secret.name" . }}.jwtSecret
         - name: FILE_SIZE_LIMIT
           value: "52428800"

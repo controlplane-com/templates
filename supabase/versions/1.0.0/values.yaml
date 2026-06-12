@@ -154,7 +154,7 @@ storage:
 # automatically deployed alongside Studio and scoped to only the Studio workload.
 studio:
   enabled: true
-  image: supabase/studio:2025.06.02-sha-8e1f4ef
+  image: supabase/studio:2025.06.02-sha-8f2993d
   username: supabase
   password: change-me-studio
   resources:
@@ -163,7 +163,15 @@ studio:
     maxCpu: 500m
     maxMemory: 512Mi
 
-  # Controls who can reach the Studio dashboard.
+  # Restrict inbound access to Studio by CIDR. Empty list (default) means no
+  # external access — use `cpln workload connect` for local access. Set to your
+  # office/VPN CIDR or 0.0.0.0/0 to open to the internet (Studio requires
+  # username + password login regardless).
+  allowedCidrs: []
+  #  - 203.0.113.0/24   # example: office IP range
+  #  - 0.0.0.0/0        # open to all (protected by username/password only)
+
+  # Controls who can reach the Studio dashboard internally.
   internalAccess:
     type: same-gvc  # options: none, same-gvc, same-org, workload-list
     workloads:
@@ -184,6 +192,9 @@ studio:
 # To generate your own: https://supabase.com/docs/guides/self-hosting/docker#generate-api-keys
 jwt:
   secret: your-super-secret-jwt-token-with-at-least-32-characters-long
+  # secretKeyBase is used by Realtime (Phoenix) for cookie signing — must be ≥ 64 chars.
+  # Generate with: openssl rand -base64 64
+  secretKeyBase: your-super-secret-key-base-used-by-realtime-must-be-at-least-64-characters-long!!
   anonKey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlLWRlbW8iLCJpYXQiOjE2NDE3NjkyMDAsImV4cCI6MTc5OTUzNTYwMH0.dc_X5iR_VP_qroESsovj6sUbE1SDp5kKbiRrAWKV7ts
   serviceRoleKey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UtZGVtbyIsImlhdCI6MTY0MTc2OTIwMCwiZXhwIjoxNzk5NTM1NjAwfQ.DaYlNEoUrrEn2Ig7tqibS-PHK5vgusbcbo7X36XVt4Q
 

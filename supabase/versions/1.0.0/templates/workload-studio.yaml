@@ -91,6 +91,14 @@ spec:
     capacityAI: false
   firewallConfig:
     external:
+      inboundAllowCIDR:
+        {{- if .Values.studio.allowedCidrs }}
+        {{- range .Values.studio.allowedCidrs }}
+        - {{ . }}
+        {{- end }}
+        {{- else }}
+        []
+        {{- end }}
       outboundAllowCIDR:
         - 0.0.0.0/0
     internal:

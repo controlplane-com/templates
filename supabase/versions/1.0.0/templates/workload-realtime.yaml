@@ -37,7 +37,7 @@ spec:
         - name: API_JWT_SECRET
           value: cpln://secret/{{ include "supabase.secret.name" . }}.jwtSecret
         - name: SECRET_KEY_BASE
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.jwtSecret
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.secretKeyBase
         - name: ERL_AFLAGS
           value: -proto_dist inet_tcp
         - name: ENABLE_TAILSCALE
@@ -46,6 +46,8 @@ spec:
           value: "''"
         - name: RLIMIT_NOFILE
           value: "10000"
+        - name: APP_NAME
+          value: realtime
         - name: FLY_ALLOC_ID
           value: fly123
         - name: FLY_APP_NAME

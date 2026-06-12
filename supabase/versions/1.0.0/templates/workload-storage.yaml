@@ -18,7 +18,7 @@ spec:
       memory: {{ .Values.storage.resources.maxMemory | quote }}
       env:
         - name: DB_USER
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresUsername
+          value: supabase_storage_admin
         - name: DB_PASSWORD
           value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
         - name: DB_NAME

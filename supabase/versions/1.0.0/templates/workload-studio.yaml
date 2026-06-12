@@ -2,7 +2,7 @@
 ---
 kind: workload
 name: {{ include "supabase.studio.name" . }}
-description: Supabase Studio — web dashboard
+description: Supabase Studio — web dashboard and pg_meta API
 tags: {{- include "supabase.tags" . | nindent 2 }}
 gvc: {{ .Values.global.cpln.gvc }}
 spec:
@@ -18,7 +18,7 @@ spec:
       memory: {{ .Values.studio.resources.maxMemory | quote }}
       env:
         - name: STUDIO_PG_META_URL
-          value: http://{{ include "supabase.meta.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:8080
+          value: http://localhost:8080
         - name: POSTGRES_PASSWORD
           value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
         - name: DEFAULT_ORGANIZATION_NAME
@@ -49,6 +49,40 @@ spec:
         periodSeconds: 10
         successThreshold: 1
         timeoutSeconds: 5
+    - name: meta
+      image: {{ .Values.studio.meta.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.studio.meta.resources.minCpu | quote }}
+      cpu: {{ .Values.studio.meta.resources.maxCpu | quote }}
+      minMemory: {{ .Values.studio.meta.resources.minMemory | quote }}
+      memory: {{ .Values.studio.meta.resources.maxMemory | quote }}
+      env:
+        - name: PG_META_PORT
+          value: "8080"
+        - name: PG_META_DB_HOST
+          value: {{ include "supabase.postgresHost" . }}
+        - name: PG_META_DB_PORT
+          value: "5432"
+        - name: PG_META_DB_NAME
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresDatabase
+        - name: PG_META_DB_USER
+          value: supabase_admin
+        - name: PG_META_DB_PASSWORD
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
+        - name: PG_META_DB_SSL_MODE
+          value: disable
+      ports:
+        - number: 8080
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 8080
+        failureThreshold: 10
+        initialDelaySeconds: 10
+        periodSeconds: 5
+        successThreshold: 1
+        timeoutSeconds: 3
   defaultOptions:
     autoscaling:
       metric: disabled
@@ -61,7 +95,9 @@ spec:
         - 0.0.0.0/0
     internal:
       inboundAllowType: {{ .Values.studio.internalAccess.type }}
-      {{- if .Values.studio.internalAccess.workloads }}
-      inboundAllowWorkload: {{ .Values.studio.internalAccess.workloads | toYaml | nindent 8 }}
-      {{- end }}
+      inboundAllowWorkload:
+        - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "supabase.kong.name" . }}
+        {{- range .Values.studio.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
 {{- end }}

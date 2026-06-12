@@ -3,7 +3,6 @@
 # (pgvector, pg_graphql, pg_net, pgjwt, etc.) not present in the official image.
 postgres:
   image: supabase/postgres:15.8.1.060
-  username: supabase
   password: change-me-postgres
   database: postgres
 
@@ -128,7 +127,7 @@ storage:
   minReplicas: 1
   maxReplicas: 3
 
-  backend: local  # options: local, s3, gcs
+  backend: s3  # options: local, s3, gcs
 
   volumeset:      # only used when backend is local
     capacity: 10  # initial capacity in GiB (minimum is 10)
@@ -139,10 +138,10 @@ storage:
       scalingFactor: 1.2
 
   s3:             # only used when backend is s3
-    bucket: my-supabase-storage-bucket
+    bucket: cpln-backup-bucket
     region: us-east-1
     cloudAccountName: my-s3-cloudaccount
-    policyName: my-bucket-policy  # IAM policy granting s3:GetObject, s3:PutObject, s3:DeleteObject on the bucket
+    policyName: my-backup-policy  # IAM policy granting s3:GetObject, s3:PutObject, s3:DeleteObject on the bucket
 
   gcs:            # only used when backend is gcs
     # GCS is accessed via S3-compatible API using HMAC keys (no cloud account needed)

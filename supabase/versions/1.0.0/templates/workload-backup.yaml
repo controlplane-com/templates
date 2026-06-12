@@ -21,7 +21,7 @@ spec:
         - name: PG_PORT
           value: "5432"
         - name: PG_USER
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresUsername
+          value: postgres
         - name: PG_PASSWORD
           value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
         - name: BACKUP_BUCKET

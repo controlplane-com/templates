@@ -15,25 +15,21 @@ spec:
       cpu: {{ .Values.postgres.resources.maxCpu | quote }}
       minMemory: {{ .Values.postgres.resources.minMemory | quote }}
       memory: {{ .Values.postgres.resources.maxMemory | quote }}
-      {{- if and .Values.backup.enabled (eq .Values.backup.mode "walg") }}
+      command: /bin/bash
       args:
-        - postgres
         - -c
-        - wal_level=replica
-        - -c
-        - archive_mode=on
-        - -c
-        - archive_command=wal-g wal-push %p
-        - -c
-        - archive_timeout=60
-      {{- end }}
+        {{- if and .Values.backup.enabled (eq .Values.backup.mode "walg") }}
+        - "chown -R postgres:postgres /var/lib/postgresql/data && exec docker-entrypoint.sh postgres -c listen_addresses='*' -c wal_level=replica -c archive_mode=on -c 'archive_command=wal-g wal-push %p' -c archive_timeout=60"
+        {{- else }}
+        - "chown -R postgres:postgres /var/lib/postgresql/data && exec docker-entrypoint.sh postgres -c listen_addresses='*'"
+        {{- end }}
       env:
         - name: PGDATA
           value: /var/lib/postgresql/data/pg_data
         - name: POSTGRES_DB
           value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresDatabase
         - name: POSTGRES_USER
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresUsername
+          value: postgres
         - name: POSTGRES_PASSWORD
           value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
         - name: JWT_SECRET
@@ -67,7 +63,7 @@ spec:
           command:
             - sh
             - -c
-            - pg_isready -U $(POSTGRES_USER) -d $(POSTGRES_DB)
+            - pg_isready -U $POSTGRES_USER -d $POSTGRES_DB
         failureThreshold: 10
         initialDelaySeconds: 20
         periodSeconds: 5

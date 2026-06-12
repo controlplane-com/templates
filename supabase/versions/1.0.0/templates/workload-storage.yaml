@@ -2,7 +2,7 @@
 ---
 kind: workload
 name: {{ include "supabase.storage.name" . }}
-description: Supabase Storage API
+description: Supabase Storage API (jwt-{{ .Values.jwt.serviceRoleKey | sha256sum | trunc 8 }})
 tags: {{- include "supabase.tags" . | nindent 2 }}
 gvc: {{ .Values.global.cpln.gvc }}
 spec:

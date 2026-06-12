@@ -2,7 +2,7 @@
 ---
 kind: workload
 name: {{ include "supabase.studio.name" . }}
-description: Supabase Studio — web dashboard and pg_meta API
+description: Supabase Studio — web dashboard and pg_meta API (jwt-{{ .Values.jwt.serviceRoleKey | sha256sum | trunc 8 }})
 tags: {{- include "supabase.tags" . | nindent 2 }}
 gvc: {{ .Values.global.cpln.gvc }}
 spec:
@@ -19,6 +19,10 @@ spec:
       env:
         - name: STUDIO_PG_META_URL
           value: http://localhost:8080
+        - name: DASHBOARD_USERNAME
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.studioUsername
+        - name: DASHBOARD_PASSWORD
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.studioPassword
         - name: POSTGRES_PASSWORD
           value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
         - name: DEFAULT_ORGANIZATION_NAME

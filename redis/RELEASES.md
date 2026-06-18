@@ -2,7 +2,7 @@
 
 ## What's New
 
-- **Grafana Dashboard**: Added optional `GrafanaDashboard` CRD provisioned via the [Grafana Operator](https://grafana.github.io/grafana-operator/). Enable with `grafana.dashboard.enabled: true` (disabled by default). When enabled, a pre-built Redis dashboard is automatically created in your Grafana instance with CPU and memory panels always included, and Connected Clients, Redis Memory Used, Commands/sec, and Cache Hit Rate panels added when `redis.exporter.enabled: true`. Compatible with both Helm and ArgoCD deployments. Configure the target folder, datasource name, and Grafana CR selector via `grafana.folder`, `grafana.datasource`, and `grafana.instanceSelector`.
+- **Grafana Dashboard**: Added optional `GrafanaDashboard` CRD provisioned via the [Grafana Operator](https://grafana.github.io/grafana-operator/). Enable with `grafana.dashboard.enabled: true` (disabled by default). When enabled, a pre-built Redis dashboard is automatically created in your Grafana instance with CPU and memory panels always included, and Connected Clients, Redis Memory Used, Commands/sec, and Cache Hit Rate panels added when `redis.exporter.enabled: true`. Compatible ArgoCD deployments. Configure the target folder, datasource name, and Grafana CR selector via `grafana.folder`, `grafana.datasource`, and `grafana.instanceSelector`.
 
 
 # Release Notes - Version 3.4.0

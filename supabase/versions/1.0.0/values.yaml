@@ -195,8 +195,8 @@ jwt:
   # secretKeyBase is used by Realtime (Phoenix) for cookie signing — must be ≥ 64 chars.
   # Generate with: openssl rand -base64 64
   secretKeyBase: your-super-secret-key-base-used-by-realtime-must-be-at-least-64-characters-long!!
-  anonKey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlLWRlbW8iLCJpYXQiOjE2NDE3NjkyMDAsImV4cCI6MTc5OTUzNTYwMH0.dc_X5iR_VP_qroESsovj6sUbE1SDp5kKbiRrAWKV7ts
-  serviceRoleKey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UtZGVtbyIsImlhdCI6MTY0MTc2OTIwMCwiZXhwIjoxNzk5NTM1NjAwfQ.DaYlNEoUrrEn2Ig7tqibS-PHK5vgusbcbo7X36XVt4Q
+  anonKey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlLWRlbW8iLCJpYXQiOjE2NDE3NjkyMDAsImV4cCI6MTc5OTUzNTYwMH0.zQomPPgIVgwVRMh3NJhhAl2cJ-GKQgNXpMTbIKxKyoo
+  serviceRoleKey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UtZGVtbyIsImlhdCI6MTY0MTc2OTIwMCwiZXhwIjoxNzk5NTM1NjAwfQ.4HviqYnTKiRK-RJvWzgAAuaFiq8--foTrXQpl7HYMU4
 
 # ── PgBouncer (connection pooling) ───────────────────────────────────────────
 pgbouncer:
@@ -225,7 +225,7 @@ backup:
     maxMemory: 256Mi
 
   logical:
-    image: ghcr.io/controlplane-com/backup-images/postgres-backup:15.1.0
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0  # pg_dump 17 is backward-compatible with Postgres 15
     schedule: "0 2 * * *"  # daily at 2am UTC
 
   walg:

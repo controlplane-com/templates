@@ -14,3 +14,6 @@ targetLinks:
   - //secret/{{ include "supabase.kong.config.secret.name" . }}
   - //secret/{{ include "supabase.preinit.secret.name" . }}
   - //secret/{{ include "supabase.postinit.secret.name" . }}
+  {{- if and .Values.backup.enabled (eq .Values.backup.mode "walg") }}
+  - //secret/{{ include "supabase.walg.secret.name" . }}
+  {{- end }}

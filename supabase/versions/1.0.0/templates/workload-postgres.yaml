@@ -90,7 +90,7 @@ spec:
         - name: PGPORT
           value: "5432"
         - name: PGUSER
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresUsername
+          value: postgres
         - name: PGPASSWORD
           value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
         - name: WALG_BACKUP_INTERVAL_SECONDS

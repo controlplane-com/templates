@@ -57,6 +57,8 @@ spec:
           value: cpln://secret/{{ include "supabase.secret.name" . }}.smtpUser
         - name: GOTRUE_SMTP_PASS
           value: cpln://secret/{{ include "supabase.secret.name" . }}.smtpPassword
+        - name: GOTRUE_SMTP_ADMIN_EMAIL
+          value: {{ .Values.auth.smtp.senderEmail | quote }}
         - name: GOTRUE_SMTP_SENDER_NAME
           value: {{ .Values.auth.smtp.senderName | quote }}
         - name: GOTRUE_MAILER_URLPATHS_INVITE

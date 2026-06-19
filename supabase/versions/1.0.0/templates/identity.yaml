@@ -1,0 +1,34 @@
+---
+kind: identity
+name: {{ include "supabase.identity.name" . }}
+description: Supabase shared identity
+tags: {{- include "supabase.tags" . | nindent 2 }}
+gvc: {{ .Values.global.cpln.gvc }}
+{{- if and .Values.storage.enabled (eq .Values.storage.backend "s3") }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.storage.s3.cloudAccountName }}
+  policyRefs:
+    - cpln-connector
+    - aws::ReadOnlyAccess
+    - {{ .Values.storage.s3.policyName | quote }}
+    {{- if and .Values.backup.enabled (eq .Values.backup.provider "aws") }}
+    - {{ .Values.backup.aws.policyName | quote }}
+    {{- end }}
+{{- else if and .Values.backup.enabled (eq .Values.backup.provider "aws") }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.backup.aws.cloudAccountName }}
+  policyRefs:
+    - cpln-connector
+    - aws::ReadOnlyAccess
+    - {{ .Values.backup.aws.policyName | quote }}
+{{- end }}
+{{- if and .Values.backup.enabled (eq .Values.backup.provider "gcp") }}
+gcp:
+  cloudAccountLink: //cloudaccount/{{ .Values.backup.gcp.cloudAccountName }}
+  bindings:
+    - resource: //storage.googleapis.com/projects/_/buckets/{{ .Values.backup.gcp.bucket }}
+      roles:
+        - roles/storage.objectAdmin
+  scopes:
+    - https://www.googleapis.com/auth/cloud-platform
+{{- end }}

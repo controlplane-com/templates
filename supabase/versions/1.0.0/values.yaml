@@ -1,0 +1,244 @@
+# ── Postgres ─────────────────────────────────────────────────────────────────
+# Must use the Supabase-patched image — it pre-installs required extensions
+# (pgvector, pg_graphql, pg_net, pgjwt, etc.) not present in the official image.
+postgres:
+  image: supabase/postgres:15.8.1.060
+  password: change-me-postgres
+  database: postgres
+
+  resources:
+    minCpu: 500m
+    minMemory: 512Mi
+    maxCpu: 2
+    maxMemory: 2Gi
+
+  volumeset:
+    capacity: 10  # initial capacity in GiB (minimum is 10)
+    autoscaling:
+      enabled: false
+      maxCapacity: 100
+      minFreePercentage: 10
+      scalingFactor: 1.2
+
+  # Controls who can reach Postgres directly. All internal services in this
+  # deployment connect to Postgres within the same GVC.
+  internalAccess:
+    type: same-gvc  # options: none, same-gvc, same-org, workload-list
+    workloads:
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ── Kong (API gateway — single entry point for all services) ──────────────────
+# Pinned to 2.8 — Supabase's routing config is tested against this version.
+# PostgREST, GoTrue, Realtime, and Storage are only reachable through Kong
+# and are automatically scoped to the Kong workload internally.
+kong:
+  image: kong:2.8.1
+  resources:
+    minCpu: 100m
+    minMemory: 256Mi
+    maxCpu: 1000m
+    maxMemory: 1Gi
+  minReplicas: 1
+  maxReplicas: 3
+
+  # When enabled, Kong gets a public-facing endpoint.
+  # siteUrl must be set to the resulting domain — GoTrue uses it for OAuth
+  # redirect callbacks and magic link email links.
+  publicAccess:
+    enabled: false
+    siteUrl: ""  # e.g. https://api.my-app.com — required when publicAccess is enabled
+
+# ── PostgREST (auto-generated REST API) ───────────────────────────────────────
+# Stateless — scales horizontally. Only reachable via Kong.
+postgrest:
+  image: postgrest/postgrest:v12.2.3
+  resources:
+    minCpu: 100m
+    minMemory: 128Mi
+    maxCpu: 500m
+    maxMemory: 512Mi
+  minReplicas: 1
+  maxReplicas: 3
+
+# ── Auth (GoTrue) ─────────────────────────────────────────────────────────────
+# Stateless — scales horizontally. Only reachable via Kong.
+auth:
+  image: supabase/gotrue:v2.170.0
+  resources:
+    minCpu: 100m
+    minMemory: 128Mi
+    maxCpu: 500m
+    maxMemory: 512Mi
+  minReplicas: 1
+  maxReplicas: 3
+
+  disableSignup: false  # set true to prevent new user registration
+
+  # SMTP — required for magic link (passwordless login), signup email
+  # confirmation, and password reset. Disable to skip email-based flows entirely.
+  # Can use any SMTP provider: Gmail, SendGrid, Mailgun, Postmark, etc.
+  smtp:
+    enabled: false
+    host: smtp.example.com
+    port: 587
+    user: smtp-user
+    password: smtp-password
+    senderName: Supabase
+    senderEmail: noreply@example.com
+
+  # OAuth providers — uncomment and fill in credentials for any you want to enable.
+  # Supported: Apple, Azure, Bitbucket, Discord, Facebook, Figma, GitHub, GitLab,
+  # Google, Kakao, Keycloak, LinkedIn, Notion, Slack, Spotify, Twitch, Twitter/X,
+  # WorkOS, Zoom
+  # providers:
+  #   github:
+  #     clientId: ""
+  #     clientSecret: ""
+  #   google:
+  #     clientId: ""
+  #     clientSecret: ""
+
+# ── Realtime (WebSocket subscriptions to database changes) ────────────────────
+# Stateless — scales horizontally. Only reachable via Kong.
+realtime:
+  enabled: true
+  image: supabase/realtime:v2.34.47
+  resources:
+    minCpu: 100m
+    minMemory: 128Mi
+    maxCpu: 500m
+    maxMemory: 512Mi
+  minReplicas: 1
+  maxReplicas: 3
+
+# ── Storage (file/object storage) ─────────────────────────────────────────────
+# Disable if your app has no file upload requirements — saves a workload.
+# backend: local  → stateful, single replica, volume-backed (dev/simple use)
+# backend: s3/gcs → stateless, horizontally scalable, recommended for production
+# Only reachable via Kong.
+storage:
+  enabled: true
+  image: supabase/storage-api:v1.14.6
+  resources:
+    minCpu: 100m
+    minMemory: 128Mi
+    maxCpu: 500m
+    maxMemory: 512Mi
+  minReplicas: 1
+  maxReplicas: 3
+
+  backend: s3  # options: local, s3, gcs
+
+  volumeset:      # only used when backend is local
+    capacity: 10  # initial capacity in GiB (minimum is 10)
+    autoscaling:
+      enabled: false
+      maxCapacity: 100
+      minFreePercentage: 10
+      scalingFactor: 1.2
+
+  s3:             # only used when backend is s3
+    bucket: cpln-backup-bucket
+    region: us-east-1
+    cloudAccountName: my-s3-cloudaccount
+    policyName: my-backup-policy  # IAM policy granting s3:GetObject, s3:PutObject, s3:DeleteObject on the bucket
+
+  gcs:            # only used when backend is gcs
+    # GCS is accessed via S3-compatible API using HMAC keys (no cloud account needed)
+    bucket: my-supabase-storage-bucket
+    accessKeyId: my-gcs-hmac-access-key-id
+    secretAccessKey: my-gcs-hmac-secret-access-key
+
+# ── Studio (web dashboard) + pg_meta ──────────────────────────────────────────
+# pg_meta is the Postgres metadata API used exclusively by Studio. It is
+# automatically deployed alongside Studio and scoped to only the Studio workload.
+studio:
+  enabled: true
+  image: supabase/studio:2025.06.02-sha-8f2993d
+  username: supabase
+  password: change-me-studio
+  resources:
+    minCpu: 100m
+    minMemory: 256Mi
+    maxCpu: 500m
+    maxMemory: 512Mi
+
+  # Restrict inbound access to Studio by CIDR. Empty list (default) means no
+  # external access — use `cpln workload connect` for local access. Set to your
+  # office/VPN CIDR or 0.0.0.0/0 to open to the internet (Studio requires
+  # username + password login regardless).
+  allowedCidrs: []
+  #  - 203.0.113.0/24   # example: office IP range
+  #  - 0.0.0.0/0        # open to all (protected by username/password only)
+
+  # Controls who can reach the Studio dashboard internally.
+  internalAccess:
+    type: same-gvc  # options: none, same-gvc, same-org, workload-list
+    workloads:
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+  meta:
+    image: supabase/postgres-meta:v0.86.0
+    resources:
+      minCpu: 100m
+      minMemory: 64Mi
+      maxCpu: 200m
+      maxMemory: 256Mi
+
+# ── JWT ───────────────────────────────────────────────────────────────────────
+# anonKey and serviceRoleKey are JWTs signed with jwtSecret. The defaults below
+# are Supabase's official published development values and work together out of
+# the box. CHANGE ALL THREE before deploying to production.
+# To generate your own: https://supabase.com/docs/guides/self-hosting/docker#generate-api-keys
+jwt:
+  secret: your-super-secret-jwt-token-with-at-least-32-characters-long
+  # secretKeyBase is used by Realtime (Phoenix) for cookie signing — must be ≥ 64 chars.
+  # Generate with: openssl rand -base64 64
+  secretKeyBase: your-super-secret-key-base-used-by-realtime-must-be-at-least-64-characters-long!!
+  anonKey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlLWRlbW8iLCJpYXQiOjE2NDE3NjkyMDAsImV4cCI6MTc5OTUzNTYwMH0.zQomPPgIVgwVRMh3NJhhAl2cJ-GKQgNXpMTbIKxKyoo
+  serviceRoleKey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UtZGVtbyIsImlhdCI6MTY0MTc2OTIwMCwiZXhwIjoxNzk5NTM1NjAwfQ.4HviqYnTKiRK-RJvWzgAAuaFiq8--foTrXQpl7HYMU4
+
+# ── PgBouncer (connection pooling) ───────────────────────────────────────────
+pgbouncer:
+  enabled: false
+  image: edoburu/pgbouncer:v1.25.1-p0
+  poolMode: transaction  # options: session, transaction, statement
+  defaultPoolSize: 25
+  maxClientConn: 1000
+  replicas: 1
+  resources:
+    minCpu: 100m
+    minMemory: 64Mi
+    maxCpu: 200m
+    maxMemory: 128Mi
+
+# ── Backup ────────────────────────────────────────────────────────────────────
+backup:
+  enabled: false
+  mode: logical  # options: logical (pg_dump cron), walg (continuous WAL archiving + base backups, supports PITR)
+  provider: aws  # options: aws, gcp
+
+  resources:
+    minCpu: 100m
+    minMemory: 128Mi
+    maxCpu: 200m
+    maxMemory: 256Mi
+
+  logical:
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0  # pg_dump 17 is backward-compatible with Postgres 15
+    schedule: "0 2 * * *"  # daily at 2am UTC
+
+  walg:
+    intervalSeconds: 21600  # base backup interval in seconds (default: every 6 hours)
+
+  aws:
+    bucket: my-supabase-backup-bucket
+    region: us-east-1
+    cloudAccountName: my-backup-cloudaccount
+    policyName: my-backup-policy
+    prefix: supabase/backups
+
+  gcp:
+    bucket: my-supabase-backup-bucket
+    cloudAccountName: my-backup-cloudaccount
+    prefix: supabase/backups

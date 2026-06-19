@@ -1,0 +1,19 @@
+---
+kind: volumeset
+name: {{ include "supabase.postgres.volumeset.name" . }}
+description: Supabase Postgres data volume
+tags: {{- include "supabase.tags" . | nindent 2 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.postgres.volumeset.capacity }}
+  {{- if .Values.postgres.volumeset.autoscaling.enabled }}
+  autoscaling:
+    maxCapacity: {{ .Values.postgres.volumeset.autoscaling.maxCapacity }}
+    minFreePercentage: {{ .Values.postgres.volumeset.autoscaling.minFreePercentage }}
+    scalingFactor: {{ .Values.postgres.volumeset.autoscaling.scalingFactor }}
+  {{- end }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d

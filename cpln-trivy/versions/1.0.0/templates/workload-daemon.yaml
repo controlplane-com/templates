@@ -1,0 +1,52 @@
+kind: workload
+name: {{ include "cpln-trivy.daemon.name" . }}
+description: Trivy scanning daemon — queries unscanned images and orchestrates scans
+tags:
+  {{- include "cpln-trivy.tags" . | nindent 2 }}
+spec:
+  type: cron
+  containers:
+    - name: daemon
+      image: cplnquickstarts/cpln-trivy-daemon:1.0
+      cpu: {{ .Values.daemon.resources.cpu | quote }}
+      memory: {{ .Values.daemon.resources.memory | quote }}
+      inheritEnv: false
+      env:
+        - name: POST_TOKEN
+          value: {{ .Values.postToken | quote }}
+    - name: trivy-api
+      image: cplnquickstarts/cpln-trivy-api:1.0
+      cpu: {{ .Values.trivyApi.resources.cpu | quote }}
+      memory: {{ .Values.trivyApi.resources.memory | quote }}
+      inheritEnv: false
+      env:
+        - name: TRIVY_AUTH_URL
+          value: https://$(CPLN_ORG).registry.cpln.io
+        - name: TRIVY_USERNAME
+          value: unused
+        - name: TRIVY_PASSWORD
+          value: cpln://secret/{{ .Values.trivyPasswordSecretName }}.payload
+  defaultOptions:
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 120
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: none
+      inboundAllowWorkload: []
+  identityLink: //identity/{{ include "cpln-trivy.identity.name" . }}
+  job:
+    concurrencyPolicy: Forbid
+    historyLimit: 5
+    restartPolicy: Never
+    schedule: {{ .Values.schedule | quote }}
+  supportDynamicTags: false

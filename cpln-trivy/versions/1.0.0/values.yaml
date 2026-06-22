@@ -1,0 +1,45 @@
+# Storage backend for vulnerability reports. Options: "s3" or "azureFileshare"
+storage:
+  type: s3
+
+  s3:
+    cloudAccountName: "" # AWS cloud account name registered in Control Plane
+    bucket: ""           # S3 bucket name
+    region: ""           # AWS region (e.g. us-east-1)
+
+  azureFileshare:
+    cloudAccountName: "" # Azure cloud account name registered in Control Plane
+    accountName: ""      # Azure storage account name
+    fileShare: ""        # Azure file share name
+    # /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Storage/storageAccounts/<name>
+    scope: ""
+
+# Bearer token shared between the daemon and web-server. Change before deploying to production.
+postToken: "changeme"
+
+# CPLN opaque secret containing the service account key for Trivy registry auth (see README)
+trivyPasswordSecretName: trivy-password
+
+# Control Plane service account that Trivy uses to pull images (see README)
+serviceAccountName: cpln-trivy-service-account
+
+# Cron schedule for the scanning daemon
+schedule: "*/59 * * * *"
+
+daemon:
+  resources:
+    cpu: "1"
+    memory: 1Gi
+
+trivyApi:
+  resources:
+    cpu: "2"
+    memory: 4Gi
+
+webServer:
+  resources:
+    cpu: 150m
+    memory: 128Mi
+  autoscaling:
+    minScale: 1
+    maxScale: 3

@@ -1,0 +1,17 @@
+apiVersion: v2
+name: cpln-trivy
+description: Automated vulnerability scanning for images in a Control Plane image registry using Trivy
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+
+annotations:
+  created: "2026-06-22"
+  lastModified: "2026-06-22"
+  category: "security"
+  createsGvc: false

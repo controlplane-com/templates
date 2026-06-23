@@ -3,21 +3,22 @@ storage:
   type: s3
 
   s3:
-    cloudAccountName: "" # AWS cloud account name registered in Control Plane
-    bucket: ""           # S3 bucket name
-    region: ""           # AWS region (e.g. us-east-1)
+    cloudAccountName: my-aws-cloud-account # AWS cloud account name registered in Control Plane
+    bucket: trivy-reports-bucket           # S3 bucket name
+    region: us-east-1                      # AWS region
 
   azureFileshare:
-    cloudAccountName: "" # Azure cloud account name registered in Control Plane
-    accountName: ""      # Azure storage account name
-    fileShare: ""        # Azure file share name
+    cloudAccountName: my-azure-cloud-account # Azure cloud account name registered in Control Plane
+    accountName: mystorageaccount            # Azure storage account name
+    fileShare: trivy-reports                 # Azure file share name
     # /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Storage/storageAccounts/<name>
     scope: ""
 
 # Bearer token shared between the daemon and web-server. Change before deploying to production.
-postToken: "changeme"
+postToken: changeme
 
-# CPLN opaque secret containing the service account key for Trivy registry auth (see README)
+# Service account key used by Trivy to authenticate against the Control Plane image registry
+trivyPassword: my-service-account-key
 trivyPasswordSecretName: trivy-password
 
 # Control Plane service account that Trivy uses to pull images (see README)
@@ -28,12 +29,15 @@ schedule: "*/59 * * * *"
 
 daemon:
   resources:
-    cpu: "1"
+    cpu: 1
     memory: 1Gi
+  firewall:
+    outboundAllowCIDR:
+      - 0.0.0.0/0
 
 trivyApi:
   resources:
-    cpu: "2"
+    cpu: 2
     memory: 4Gi
 
 webServer:
@@ -43,3 +47,8 @@ webServer:
   autoscaling:
     minScale: 1
     maxScale: 3
+  firewall:
+    inboundAllowCIDR:
+      - 0.0.0.0/0
+    outboundAllowCIDR:
+      - 0.0.0.0/0

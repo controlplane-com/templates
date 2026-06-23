@@ -17,7 +17,7 @@ spec:
           protocol: http
       env:
         - name: POST_TOKEN
-          value: {{ .Values.postToken | quote }}
+          value: cpln://secret/{{ include "cpln-trivy.secret.name" . }}.payload
         {{- if eq .Values.storage.type "s3" }}
         - name: FILE_SYSTEM_ENABLED
           value: "false"
@@ -51,11 +51,9 @@ spec:
     timeoutSeconds: 5
   firewallConfig:
     external:
-      inboundAllowCIDR:
-        - 0.0.0.0/0
+      inboundAllowCIDR: {{- toYaml .Values.webServer.firewall.inboundAllowCIDR | nindent 8 }}
       inboundBlockedCIDR: []
-      outboundAllowCIDR:
-        - 0.0.0.0/0
+      outboundAllowCIDR: {{- toYaml .Values.webServer.firewall.outboundAllowCIDR | nindent 8 }}
       outboundAllowHostname: []
       outboundAllowPort: []
       outboundBlockedCIDR: []

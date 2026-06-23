@@ -13,7 +13,7 @@ spec:
       inheritEnv: false
       env:
         - name: POST_TOKEN
-          value: {{ .Values.postToken | quote }}
+          value: cpln://secret/{{ include "cpln-trivy.secret.name" . }}.payload
     - name: trivy-api
       image: cplnquickstarts/cpln-trivy-api:1.0
       cpu: {{ .Values.trivyApi.resources.cpu | quote }}
@@ -35,8 +35,7 @@ spec:
     external:
       inboundAllowCIDR: []
       inboundBlockedCIDR: []
-      outboundAllowCIDR:
-        - 0.0.0.0/0
+      outboundAllowCIDR: {{- toYaml .Values.daemon.firewall.outboundAllowCIDR | nindent 8 }}
       outboundAllowHostname: []
       outboundAllowPort: []
       outboundBlockedCIDR: []

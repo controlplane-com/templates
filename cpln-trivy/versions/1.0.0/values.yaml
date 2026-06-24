@@ -11,8 +11,7 @@ storage:
     cloudAccountName: my-azure-cloud-account # Azure cloud account name registered in Control Plane
     accountName: mystorageaccount            # Azure storage account name
     fileShare: trivy-reports                 # Azure file share name
-    # /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Storage/storageAccounts/<name>
-    scope: ""
+    scope: "" # /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Storage/storageAccounts/<name>
 
 # Bearer token shared between the daemon and web-server. Change before deploying to production.
 postToken: changeme

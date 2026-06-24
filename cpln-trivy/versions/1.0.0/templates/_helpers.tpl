@@ -1,11 +1,11 @@
 {{/* Resource naming */}}
 
 {{- define "cpln-trivy.daemon.name" -}}
-{{- printf "%s-daemon" .Release.Name }}
+{{- "daemon" }}
 {{- end }}
 
 {{- define "cpln-trivy.webserver.name" -}}
-{{- printf "%s-web-server" .Release.Name }}
+{{- "web-server" }}
 {{- end }}
 
 {{- define "cpln-trivy.identity.name" -}}

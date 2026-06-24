@@ -1,0 +1,56 @@
+# Storage backend for vulnerability reports. Options: "s3" or "azureFileshare"
+storage:
+  type: s3
+
+  s3:
+    cloudAccountName: my-aws-cloud-account # AWS cloud account name registered in Control Plane
+    bucket: trivy-reports-bucket           # S3 bucket name
+    region: us-east-1                      # AWS region
+
+  azureFileshare:
+    cloudAccountName: my-azure-cloud-account # Azure cloud account name registered in Control Plane
+    accountName: mystorageaccount            # Azure storage account name
+    fileShare: trivy-reports                 # Azure file share name
+    scope: "" # /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Storage/storageAccounts/<name>
+
+# Bearer token shared between the daemon and web-server. Change before deploying to production.
+postToken: changeme
+
+# Service account key used by Trivy to authenticate against the Control Plane image registry
+trivyPassword: my-service-account-key
+trivyPasswordSecretName: trivy-password
+
+# Control Plane service account that Trivy uses to pull images (see README)
+serviceAccountName: trivy-service-account
+
+# Cron schedule for the scanning daemon
+schedule: "*/59 * * * *"
+
+daemon:
+  image: ghcr.io/controlplane-com/cpln-trivy-daemon:1.0.0
+  resources:
+    cpu: 1
+    memory: 1Gi
+  firewall:
+    outboundAllowCIDR:
+      - 0.0.0.0/0
+
+trivyApi:
+  image: ghcr.io/controlplane-com/cpln-trivy-trivy-api:1.0.0
+  resources:
+    cpu: 2
+    memory: 4Gi
+
+webServer:
+  image: ghcr.io/controlplane-com/cpln-trivy-web-server:1.0.0
+  resources:
+    cpu: 150m
+    memory: 128Mi
+  autoscaling:
+    minScale: 1
+    maxScale: 3
+  firewall:
+    inboundAllowCIDR:
+      - 0.0.0.0/0
+    outboundAllowCIDR:
+      - 0.0.0.0/0

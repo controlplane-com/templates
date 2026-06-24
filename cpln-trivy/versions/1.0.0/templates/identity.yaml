@@ -1,0 +1,19 @@
+kind: identity
+name: {{ include "cpln-trivy.identity.name" . }}
+description: Identity for the Trivy scanning daemon and web-server
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "cpln-trivy.tags" . | nindent 2 }}
+{{- if eq .Values.storage.type "s3" }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.storage.s3.cloudAccountName }}
+  policyRefs:
+    - aws::AmazonS3FullAccess
+{{- else if eq .Values.storage.type "azureFileshare" }}
+azure:
+  cloudAccountLink: //cloudaccount/{{ .Values.storage.azureFileshare.cloudAccountName }}
+  roleAssignments:
+    - roles:
+        - Reader and Data Access
+      scope: {{ .Values.storage.azureFileshare.scope }}
+{{- end }}

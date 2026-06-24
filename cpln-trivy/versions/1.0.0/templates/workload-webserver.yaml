@@ -8,7 +8,7 @@ spec:
   type: serverless
   containers:
     - name: web-server
-      image: cplnquickstarts/cpln-trivy-web-server:1.0
+      image: {{ .Values.webServer.image }}
       cpu: {{ .Values.webServer.resources.cpu | quote }}
       memory: {{ .Values.webServer.resources.memory | quote }}
       inheritEnv: false

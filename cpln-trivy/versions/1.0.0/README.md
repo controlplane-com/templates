@@ -57,11 +57,14 @@ Trivy authenticates against the Control Plane image registry using a service acc
 | `trivyPasswordSecretName` | `trivy-password` | Name of the CPLN secret created to store `trivyPassword` |
 | `serviceAccountName` | `cpln-trivy-service-account` | Service account that Trivy uses to pull images |
 | `schedule` | `*/59 * * * *` | Cron schedule for the scanning daemon |
+| `daemon.image` | `ghcr.io/controlplane-com/cpln-trivy-daemon:1.0.0` | Daemon container image |
 | `daemon.resources.cpu` | `1` | CPU for the daemon container |
 | `daemon.resources.memory` | `1Gi` | Memory for the daemon container |
 | `daemon.firewall.outboundAllowCIDR` | `["0.0.0.0/0"]` | Outbound CIDR for the daemon (needs to reach CPLN APIs and the web-server) |
+| `trivyApi.image` | `ghcr.io/controlplane-com/cpln-trivy-trivy-api:1.0.0` | Trivy sidecar image |
 | `trivyApi.resources.cpu` | `2` | CPU for the trivy-api sidecar |
 | `trivyApi.resources.memory` | `4Gi` | Memory for the trivy-api sidecar |
+| `webServer.image` | `ghcr.io/controlplane-com/cpln-trivy-web-server:1.0.0` | Web-server container image |
 | `webServer.resources.cpu` | `150m` | CPU for the web-server |
 | `webServer.resources.memory` | `128Mi` | Memory for the web-server |
 | `webServer.autoscaling.minScale` | `1` | Minimum web-server replicas |

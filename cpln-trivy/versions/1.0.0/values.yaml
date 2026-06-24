@@ -21,12 +21,13 @@ trivyPassword: my-service-account-key
 trivyPasswordSecretName: trivy-password
 
 # Control Plane service account that Trivy uses to pull images (see README)
-serviceAccountName: cpln-trivy-service-account
+serviceAccountName: trivy-service-account
 
 # Cron schedule for the scanning daemon
 schedule: "*/59 * * * *"
 
 daemon:
+  image: ghcr.io/controlplane-com/cpln-trivy-daemon:1.0.0
   resources:
     cpu: 1
     memory: 1Gi
@@ -35,11 +36,13 @@ daemon:
       - 0.0.0.0/0
 
 trivyApi:
+  image: ghcr.io/controlplane-com/cpln-trivy-trivy-api:1.0.0
   resources:
     cpu: 2
     memory: 4Gi
 
 webServer:
+  image: ghcr.io/controlplane-com/cpln-trivy-web-server:1.0.0
   resources:
     cpu: 150m
     memory: 128Mi

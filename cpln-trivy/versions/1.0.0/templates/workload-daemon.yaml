@@ -7,7 +7,7 @@ spec:
   type: cron
   containers:
     - name: daemon
-      image: cplnquickstarts/cpln-trivy-daemon:1.0
+      image: {{ .Values.daemon.image }}
       cpu: {{ .Values.daemon.resources.cpu | quote }}
       memory: {{ .Values.daemon.resources.memory | quote }}
       inheritEnv: false
@@ -15,7 +15,7 @@ spec:
         - name: POST_TOKEN
           value: cpln://secret/{{ include "cpln-trivy.secret.name" . }}.payload
     - name: trivy-api
-      image: cplnquickstarts/cpln-trivy-api:1.0
+      image: {{ .Values.trivyApi.image }}
       cpu: {{ .Values.trivyApi.resources.cpu | quote }}
       memory: {{ .Values.trivyApi.resources.memory | quote }}
       inheritEnv: false

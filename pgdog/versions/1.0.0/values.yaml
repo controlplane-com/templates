@@ -60,6 +60,15 @@ users:
     # poolMode: transaction      # per-user override: session, transaction, statement
     # poolSize: 10               # per-user connection limit override
 
+# ─── Admin Database ───────────────────────────────────────────────────────────
+# PgDog exposes an internal admin database for stats and introspection.
+# Connect with: psql -h <pgdog-host> -p 6432 -U <admin.user> <admin.database>
+
+admin:
+  database: admin
+  user: admin
+  password: changeme         # change this — a random password is generated if omitted from config
+
 # ─── Authentication ───────────────────────────────────────────────────────────
 
 auth:

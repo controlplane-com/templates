@@ -8,7 +8,7 @@ PgDog is a high-performance PostgreSQL connection pooler, load balancer, and sha
 - **pgdog.toml**: Main configuration rendered as a secret and mounted at startup — defines backend databases, pool settings, timeouts, and load balancing strategy.
 - **users.toml**: Credentials configuration rendered as a separate secret — defines which users can connect to PgDog and which backend databases they map to.
 
-PgDog does not include or manage any PostgreSQL instance. It is intended to be deployed alongside the **postgres** or **postgres-highly-available** templates, or pointed at any external PostgreSQL endpoint.
+This template does not include a PostgreSQL deployment. Users connect PgDog to their existing **postgres** or **postgres-highly-available** template deployments, or to any external PostgreSQL endpoint.
 
 ## Configuration
 

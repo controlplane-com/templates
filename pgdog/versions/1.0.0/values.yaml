@@ -11,7 +11,7 @@ replicas: 1
 # ─── Connection Pooling ────────────────────────────────────────────────────────
 
 pooling:
-  mode: transaction          # options: transaction, session, statement
+  mode: transaction          # options: transaction, session
   defaultPoolSize: 10        # max server connections per pool
   minPoolSize: 1             # minimum idle connections kept open
   workers: 2                 # tokio async threads; recommend 2× vCPU count
@@ -28,7 +28,7 @@ timeouts:
 
 loadBalancing:
   strategy: least_active_connections  # options: random, round_robin, least_active_connections
-  readWriteSplit: include_primary      # options: include_primary, exclude_primary, include_primary_if_replica_banned
+  readWriteSplit: include_primary
 
 # ─── Backend Databases ────────────────────────────────────────────────────────
 # Each entry maps to a [[databases]] block in pgdog.toml.
@@ -48,17 +48,11 @@ databases:
 # ─── Users ────────────────────────────────────────────────────────────────────
 # Each entry maps to a [[users]] block in users.toml.
 # 'database' must match a name from the databases list above.
-# serverUser/serverPassword are the credentials PgDog uses to connect to Postgres;
-# if omitted, they default to name/password.
 
 users:
   - name: myuser
     password: mypassword
     database: mydb
-    # serverUser: postgres       # backend Postgres username if different from name
-    # serverPassword: secret     # backend Postgres password if different from password
-    # poolMode: transaction      # per-user override: session, transaction, statement
-    # poolSize: 10               # per-user connection limit override
 
 # ─── Admin Database ───────────────────────────────────────────────────────────
 # PgDog exposes an internal admin database for stats and introspection.
@@ -72,7 +66,7 @@ admin:
 # ─── Authentication ───────────────────────────────────────────────────────────
 
 auth:
-  type: scram                # options: scram, md5, trust
+  type: scram
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
@@ -91,12 +85,3 @@ internalAccess:
   workloads: []
   # workloads:
   #   - //gvc/my-gvc/workload/my-app
-
-# ─── Advanced / Sharding (optional) ──────────────────────────────────────────
-# Uncomment and configure only when using PgDog's sharding features.
-# Shard numbers in the databases list above must align with these settings.
-
-# sharding:
-#   twoPhaseCommit: false      # enable distributed transactions across shards
-#   dryRun: false              # route without executing — useful for testing shard config
-#   crossShardDisabled: false  # block queries that would fan out to all shards

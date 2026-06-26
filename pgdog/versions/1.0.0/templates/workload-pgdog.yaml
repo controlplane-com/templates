@@ -66,10 +66,12 @@ spec:
     direct:
       enabled: true
       ports:
-        - externalPort: 6432
-          protocol: tcp
-          {{- if .Values.publicAccess.address }}
+        - containerPort: 6432
+          externalPort: 6432
+          protocol: TCP
+          scheme: tcp
+  {{- if .Values.publicAccess.address }}
     domains:
       - domainLink: //domain/{{ .Values.publicAccess.address }}
-          {{- end }}
+  {{- end }}
   {{- end }}

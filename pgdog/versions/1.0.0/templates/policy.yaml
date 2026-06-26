@@ -1,0 +1,13 @@
+kind: policy
+name: {{ include "pgdog.policy.name" . }}
+description: PgDog policy
+tags: {{- include "pgdog.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pgdog.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "pgdog.secret.config.name" . }}
+  - //secret/{{ include "pgdog.secret.users.name" . }}

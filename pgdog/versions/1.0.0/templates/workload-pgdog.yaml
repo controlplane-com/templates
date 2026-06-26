@@ -1,0 +1,77 @@
+{{- include "pgdog.validate" . }}
+kind: workload
+name: {{ include "pgdog.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: PgDog connection pooler and load balancer
+tags: {{- include "pgdog.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //identity/{{ include "pgdog.identity.name" . }}
+  containers:
+    - name: pgdog
+      image: {{ .Values.image }}
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      inheritEnv: false
+      env:
+        - name: RUST_LOG
+          value: {{ .Values.logging.level | quote }}
+      ports:
+        - number: 6432
+          protocol: tcp
+      volumes:
+        - path: /pgdog/pgdog.toml
+          uri: cpln://secret/{{ include "pgdog.secret.config.name" . }}.payload
+        - path: /pgdog/users.toml
+          uri: cpln://secret/{{ include "pgdog.secret.users.name" . }}.payload
+      readinessProbe:
+        tcpSocket:
+          port: 6432
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        failureThreshold: 6
+        timeoutSeconds: 3
+      livenessProbe:
+        tcpSocket:
+          port: 6432
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        failureThreshold: 3
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: {{ .Values.replicas }}
+      maxScale: {{ .Values.replicas }}
+    capacityAI: false
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  {{- if .Values.publicAccess.enabled }}
+  loadBalancer:
+    direct:
+      enabled: true
+      ports:
+        - containerPort: 6432
+          externalPort: 6432
+          protocol: TCP
+          scheme: tcp
+  {{- if .Values.publicAccess.address }}
+    domains:
+      - domainLink: //domain/{{ .Values.publicAccess.address }}
+  {{- end }}
+  {{- end }}

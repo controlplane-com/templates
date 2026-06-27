@@ -1,0 +1,60 @@
+replicas: 3
+# replicationFactor must not exceed replicas
+replicationFactor: 1
+
+# IMPORTANT: Change all credentials before deploying to production
+superuserPassword: supersecretpassword
+username: username
+password: password
+keyspaceName: mydatabase
+
+image: cassandra:5.0
+cpu: 1
+memory: 4Gi
+# JVM heap: leave ~50% of container memory for off-heap (bloom filters, page cache, etc.)
+# Cassandra 5.x uses G1GC — only MAX_HEAP_SIZE is valid; HEAP_NEWSIZE is ignored.
+jvmHeapSize: 2G
+clusterName: my-cassandra
+volumes:
+  data:
+    initialCapacity: 10
+    autoscaling:
+      maxCapacity: 100
+      minFreePercentage: 20
+      scalingFactor: 1.5
+
+multiZone:
+  enabled: false
+
+internal_access:
+  type: same-gvc
+  workloads:
+
+backup:
+  enabled: false
+  type: logical   # options: logical, physical
+  image: ghcr.io/controlplane-com/backup-images/cassandra-backup:5.0
+  schedule: "0 2 * * *"   # daily at 2am UTC
+
+  resources:
+    cpu: 250m
+    memory: 256Mi
+
+  provider: aws   # options: aws, gcp
+
+  aws:
+    bucket: my-backup-bucket
+    region: us-east-1
+    cloudAccountName: my-backup-cloudaccount
+    policyName: my-s3-policy
+    prefix: cassandra/backups
+
+  gcp:
+    bucket: my-backup-bucket
+    cloudAccountName: my-cloud-account
+    prefix: cassandra/backups
+
+repair:
+  enabled: true
+  # Cron schedule for full cluster repair (must run within gc_grace_seconds = 10 days)
+  schedule: "0 2 * * 0"

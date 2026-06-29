@@ -1,0 +1,18 @@
+apiVersion: v2
+name: minio
+description: Minio object storage for Control Plane
+
+type: application
+version: 1.2.1
+appVersion: "RELEASE.2025-09-07T16-13-09Z"
+
+annotations:
+  created: "2025-11-19"
+  lastModified: "2026-06-26"
+  category: "storage"
+  createsGvc: false
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

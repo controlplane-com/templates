@@ -1,0 +1,22 @@
+image: ghcr.io/controlplane-com/cpln-build/secret-env-var-syncer:v1.3.1
+
+resources:
+  cpu: 100m
+  memory: 256Mi
+
+schedule: "*/5 * * * *" # Default: every 5 minutes. Uses standard cron syntax (minute hour day month weekday).
+
+timeoutSeconds: 300 # Maximum time allowed for a single sync run. Increase if you have a large number of entries.
+
+sevsConfig:
+  entries:
+    - target:
+        type: gvc
+        name: my-gvc
+      secret: my-dictionary-secret
+    # - target:
+    #     type: workload
+    #     name: my-workload
+    #     gvc: my-gvc
+    #     container: app
+    #   secret: my-dictionary-secret

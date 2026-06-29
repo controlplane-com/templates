@@ -1,0 +1,12 @@
+kind: policy
+name: {{ include "ts.policy.name" . }}
+description: Allow the tailscale workload to access the tailscale secret
+tags: {{- include "ts.tags" . | nindent 2 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "ts.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "ts.secret.name" . }}

@@ -1,0 +1,21 @@
+---
+kind: policy
+name: {{ include "tyk.policy.name" . }}
+description: {{ include "tyk.policy.name" . }}
+tags: {{- include "tyk.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "tyk.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "tyk.redisAuthSecret.name" . }}
+  - //secret/{{ include "tyk.sentinelAuthSecret.name" . }}
+  - //secret/{{ include "tyk.gatewaySecret.name" . }}
+{{- if .Values.apiSecretName }}
+  - //secret/{{ .Values.apiSecretName }}
+{{- end }}
+{{- if .Values.policySecretName }}
+  - //secret/{{ .Values.policySecretName }}
+{{- end }}

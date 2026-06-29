@@ -1,0 +1,18 @@
+apiVersion: v2
+name: opensearch
+description: OpenSearch distributed search and analytics engine for Control Plane
+
+type: application
+version: 1.0.1
+appVersion: "3.4.0"
+
+annotations:
+  created: "2026-02-19"
+  lastModified: "2026-06-26"
+  category: "search"
+  createsGvc: false
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

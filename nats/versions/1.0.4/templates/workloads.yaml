@@ -1,0 +1,80 @@
+{{- $natsConfig := .Values.nats_defaults }}
+---
+kind: workload
+name: {{ include "nats.name" . }}
+description: NATS cluster
+tags: {{- include "nats.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  containers:
+    - name: nats
+      cpu: {{ .Values.resources.cpu | quote }}
+      image: {{ $natsConfig.image }}
+      inheritEnv: false
+      memory: {{ .Values.resources.memory | quote }}
+      ports:
+        {{- if and $natsConfig.websocket $natsConfig.websocket.enabled }}
+        - number: {{ $natsConfig.websocket.port }}
+          protocol: http
+        {{- end }}
+        - number: {{ $natsConfig.port }}
+          protocol: tcp
+        {{- if $natsConfig.cluster }}
+        - number: {{ $natsConfig.cluster.port }}
+          protocol: tcp
+        {{- end }}
+        {{- if $natsConfig.gateway }}
+        - number: {{ $natsConfig.gateway.port }}
+          protocol: tcp
+        {{- end }}
+      volumes:
+        - path: /etc/nats/nats.yaml
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "nats.secret.name" . }}.payload
+        - path: /etc/nats/nats-extra.yaml
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "nats.extraData.name" . }}.payload
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      metric: disabled
+      minScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 10
+  firewallConfig:
+    external:
+      inboundAllowCIDR: {{ toYaml .Values.allowCIDR | nindent 6 }}
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "nats.identity.name" . }}
+  loadBalancer:
+    replicaDirect: true
+  localOptions:
+    {{- range $location := .Values.gvc.locations }}
+    - autoscaling:
+        maxConcurrency: 0
+        maxScale: {{ if eq ($location.replicas | int) 0 }}1{{ else }}{{ $location.replicas | int }}{{ end }}
+        metric: disabled
+        minScale: {{ if eq ($location.replicas | int) 0 }}0{{ else }}{{ $location.replicas | int }}{{ end }}
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      location: //location/{{ $location.name }}
+      suspend: {{ if eq ($location.replicas | int) 0 }}true{{ else }}false{{ end }}
+      timeoutSeconds: 10
+    {{- end }}
+  supportDynamicTags: false

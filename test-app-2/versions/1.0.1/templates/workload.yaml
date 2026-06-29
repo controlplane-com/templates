@@ -1,0 +1,22 @@
+kind: workload
+name: {{ .Release.Name }}
+{{- if (get (get .Values "workload") "description") }}
+description: {{ .Values.workload.description | quote }}
+{{- end }}
+tags: {{- include "test-app-2.tags" . | nindent 2 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  type: serverless
+  containers:
+    - name: httpbin
+      cpu: 32m
+      image: gcr.io/knative-samples/helloworld-go
+      memory: 64Mi
+      ports:
+        - number: 8080
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /
+          port: 8080
+          scheme: HTTP

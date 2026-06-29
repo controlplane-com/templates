@@ -1,0 +1,15 @@
+{{ include "langfuse.validateObjectStore" . }}
+---
+kind: identity
+name: {{ include "langfuse.identity.name" . }}
+description: Langfuse identity
+tags: {{- include "langfuse.tags" . | nindent 4 }}
+gvc: {{ .Values.global.cpln.gvc }}
+{{- if eq .Values.objectStore.provider "aws" }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.objectStore.aws.cloudAccountName }}
+  policyRefs:
+    - cpln-connector
+    - aws::ReadOnlyAccess
+    - {{ .Values.objectStore.aws.policyName | quote }}
+{{- end }}

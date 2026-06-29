@@ -1,0 +1,84 @@
+# Object store - used by both ClickHouse (data files) and Langfuse (raw event buffer + media)
+# Both services share the same bucket using separate key prefixes
+objectStore:
+  provider: aws # Options: aws, gcp
+  aws:
+    bucket: my-langfuse-bucket
+    region: us-east-1
+    cloudAccountName: my-cloudaccount  # Name of your Control Plane Cloud Account
+    policyName: my-custom-policy               # Name of your pre-created policy granting S3 access
+  gcp:
+    bucket: my-langfuse-bucket
+    accessKeyId: my-gcs-key        # GCS HMAC key ID
+    secretAccessKey: my-gcs-secret # GCS HMAC secret key
+
+# Langfuse application
+langfuse:
+  web:
+    image: langfuse/langfuse:3
+    minReplicas: 2  # Keep at 2+ for zero-downtime rolling deploys
+    maxReplicas: 5
+    resources:
+      minCpu: 500m
+      maxCpu: 1000m
+      minMemory: 1Gi
+      maxMemory: 2Gi
+
+  worker:
+    image: langfuse/langfuse-worker:3
+    replicas: 1
+    resources:
+      minCpu: 250m
+      maxCpu: 500m
+      minMemory: 512Mi
+      maxMemory: 1Gi
+
+  auth:
+    nextAuthSecret: Fxmyrcyo3UjEh5lj+cvRHqcy30UN6gc8kn0EFnHpHZ4=                      # Required: openssl rand -base64 32
+    encryptionKey: 945a6a6a61add7f4d344e8e69206af08506cc2a9ffb58ff104c26bcc6191e451   # Required: openssl rand -hex 32 (must produce exactly 64 hex characters)
+    salt: Fxmyrcyo3UjEh5lj+cvRHqcy30UN6gc8kn0EFnHpHZ4=                                # Required: openssl rand -base64 32
+
+  firewall:
+    inboundAllowCIDR:
+      - 0.0.0.0/0  # Restrict to specific IPs in production (e.g. - 203.0.113.0/24)
+
+# PostgreSQL - stores users, projects, API keys, prompts, datasets, eval configs
+postgres:
+  image: postgres:18
+  resources:
+    minCpu: 250m
+    maxCpu: 1
+    minMemory: 512Mi
+    maxMemory: 1Gi
+  config:
+    username: langfuse
+    password: mypassword
+    database: langfuse
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+# Redis - BullMQ ingestion queue and API key/prompt cache
+redis:
+  image: redis:7.4
+  resources:
+    minCpu: 100m
+    maxCpu: 400m
+    minMemory: 256Mi
+    maxMemory: 512Mi
+  auth:
+    password: mypassword
+
+# ClickHouse - stores all traces, observations, and scores; powers dashboards
+# Data files are stored in the object store above; volumeset holds local metadata only
+clickhouse:
+  image: clickhouse/clickhouse-server:25.10
+  resources:
+    minCpu: 1
+    maxCpu: 2
+    minMemory: 2Gi
+    maxMemory: 4Gi
+  config:
+    password: mypassword
+    database: langfuse
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)

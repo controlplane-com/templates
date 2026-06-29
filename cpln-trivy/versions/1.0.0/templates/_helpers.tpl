@@ -21,7 +21,7 @@
 {{- end }}
 
 {{- define "cpln-trivy.policy.secret.name" -}}
-{{- printf "%s-trivy-password" .Release.Name }}
+{{- printf "%s-trivy-credentials" .Release.Name }}
 {{- end }}
 
 {{- define "cpln-trivy.policy.pull.name" -}}
@@ -37,6 +37,26 @@
 
 
 {{/* Validation */}}
+
+{{- define "cpln-trivy.validateAuth" -}}
+{{- $authType := .Values.trivyAuth.type -}}
+{{- if not (or (eq $authType "inline") (eq $authType "existingSecret")) -}}
+  {{- fail "trivyAuth.type must be 'inline' or 'existingSecret'" -}}
+{{- end -}}
+{{- if eq $authType "inline" -}}
+  {{- if not .Values.trivyAuth.serviceAccountKey -}}
+    {{- fail "trivyAuth.serviceAccountKey is required when trivyAuth.type is 'inline'" -}}
+  {{- end -}}
+{{- end -}}
+{{- if eq $authType "existingSecret" -}}
+  {{- if not .Values.trivyAuth.existingSecret.name -}}
+    {{- fail "trivyAuth.existingSecret.name is required when trivyAuth.type is 'existingSecret'" -}}
+  {{- end -}}
+  {{- if not .Values.trivyAuth.existingSecret.key -}}
+    {{- fail "trivyAuth.existingSecret.key is required when trivyAuth.type is 'existingSecret'" -}}
+  {{- end -}}
+{{- end -}}
+{{- end }}
 
 {{- define "cpln-trivy.validateStorage" -}}
 {{- $type := .Values.storage.type -}}

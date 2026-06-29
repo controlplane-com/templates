@@ -25,8 +25,10 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "cpln-trivy.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ .Values.trivyPasswordSecretName }}
   - //secret/{{ include "cpln-trivy.secret.name" . }}
+  {{- if eq .Values.trivyAuth.type "existingSecret" }}
+  - //secret/{{ .Values.trivyAuth.existingSecret.name }}
+  {{- end }}
 
 ---
 kind: policy

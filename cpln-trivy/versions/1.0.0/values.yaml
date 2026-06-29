@@ -17,9 +17,19 @@ storage:
 # Bearer token shared between the daemon and web-server. Change before deploying to production.
 postToken: changeme
 
-# Service account key used by Trivy to authenticate against the Control Plane image registry
-trivyPassword: my-service-account-key
-trivyPasswordSecretName: trivy-password
+# Authentication for Trivy to pull images from the Control Plane image registry.
+# Set type to "inline" to paste the service account key directly (the template creates the secret),
+# or "existingSecret" to reference a pre-existing CPLN dictionary secret.
+trivyAuth:
+  type: inline  # "inline" or "existingSecret"
+
+  # ── Inline ──────────────────────────────────────────────────────────────────
+  serviceAccountKey: my-service-account-key  # Service account key value
+
+  # ── Existing Secret ──────────────────────────────────────────────────────────
+  existingSecret:
+    name: trivy-credentials   # Name of the pre-existing CPLN dictionary secret
+    key: serviceAccountKey    # Key within the dictionary secret whose value is the service account key
 
 # Control Plane service account that Trivy uses to pull images (see README)
 serviceAccountName: trivy-service-account

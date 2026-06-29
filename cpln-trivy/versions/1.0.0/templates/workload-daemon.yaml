@@ -13,7 +13,7 @@ spec:
       inheritEnv: false
       env:
         - name: POST_TOKEN
-          value: cpln://secret/{{ include "cpln-trivy.secret.name" . }}.payload
+          value: cpln://secret/{{ include "cpln-trivy.secret.name" . }}.POST_TOKEN
     - name: trivy-api
       image: {{ .Values.trivyApi.image }}
       cpu: {{ .Values.trivyApi.resources.cpu | quote }}
@@ -25,7 +25,11 @@ spec:
         - name: TRIVY_USERNAME
           value: unused
         - name: TRIVY_PASSWORD
-          value: cpln://secret/{{ .Values.trivyPasswordSecretName }}.payload
+          {{- if eq .Values.trivyAuth.type "inline" }}
+          value: cpln://secret/{{ include "cpln-trivy.secret.name" . }}.SERVICE_ACCOUNT_KEY
+          {{- else }}
+          value: cpln://secret/{{ .Values.trivyAuth.existingSecret.name }}.{{ .Values.trivyAuth.existingSecret.key }}
+          {{- end }}
   defaultOptions:
     capacityAI: false
     debug: false

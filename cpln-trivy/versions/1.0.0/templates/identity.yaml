@@ -8,7 +8,7 @@ tags:
 aws:
   cloudAccountLink: //cloudaccount/{{ .Values.storage.s3.cloudAccountName }}
   policyRefs:
-    - aws::AmazonS3FullAccess
+    - {{ .Values.storage.s3.policyName | quote }}
 {{- else if eq .Values.storage.type "azureFileshare" }}
 azure:
   cloudAccountLink: //cloudaccount/{{ .Values.storage.azureFileshare.cloudAccountName }}

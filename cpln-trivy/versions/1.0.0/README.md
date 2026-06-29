@@ -28,17 +28,42 @@ Trivy authenticates against the Control Plane image registry using a service acc
 
 ### Storage
 
+Choose a storage backend — either AWS S3 or Azure File Share. Set `storage.type` to the appropriate value and configure only that section.
+
 #### AWS S3
 
-1. Create an S3 bucket in your AWS account
-2. Register an [AWS Cloud Account](https://docs.controlplane.com/guides/create-cloud-account) in Control Plane with `AmazonS3FullAccess` permissions
-3. Set `storage.s3.cloudAccountName`, `storage.s3.bucket`, and `storage.s3.region` in `values.yaml`
+1. Create an S3 bucket in your AWS account. Set `storage.s3.bucket` to its name and `storage.s3.region` to its region.
+
+2. Register an [AWS Cloud Account](https://docs.controlplane.com/guides/create-cloud-account) in Control Plane. Set `storage.s3.cloudAccountName` to its name.
+
+3. Create an IAM policy scoped to your bucket (replace `YOUR_BUCKET_NAME`) and set `storage.s3.policyName` to its name:
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:ListBucket"
+            ],
+            "Resource": [
+                "arn:aws:s3:::YOUR_BUCKET_NAME",
+                "arn:aws:s3:::YOUR_BUCKET_NAME/*"
+            ]
+        }
+    ]
+}
+```
 
 #### Azure File Share
 
-1. Create an Azure storage account and file share
-2. Register an [Azure Cloud Account](https://docs.controlplane.com/guides/create-cloud-account) in Control Plane
-3. Set `storage.azureFileshare.cloudAccountName`, `storage.azureFileshare.accountName`, `storage.azureFileshare.fileShare`, and `storage.azureFileshare.scope` in `values.yaml`
+1. Create an Azure storage account and file share.
+2. Register an [Azure Cloud Account](https://docs.controlplane.com/guides/create-cloud-account) in Control Plane.
+3. Set `storage.azureFileshare.cloudAccountName`, `storage.azureFileshare.accountName`, `storage.azureFileshare.fileShare`, and `storage.azureFileshare.scope` in `values.yaml`.
 
 ## Configuration
 
@@ -48,6 +73,7 @@ Trivy authenticates against the Control Plane image registry using a service acc
 | `storage.s3.cloudAccountName` | — | AWS cloud account name registered in Control Plane |
 | `storage.s3.bucket` | — | S3 bucket name |
 | `storage.s3.region` | — | AWS region (e.g. `us-east-1`) |
+| `storage.s3.policyName` | — | Name of the IAM policy scoped to the bucket (see Storage section above) |
 | `storage.azureFileshare.cloudAccountName` | — | Azure cloud account name registered in Control Plane |
 | `storage.azureFileshare.accountName` | — | Azure storage account name |
 | `storage.azureFileshare.fileShare` | — | Azure file share name |

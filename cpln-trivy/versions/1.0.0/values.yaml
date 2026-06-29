@@ -6,6 +6,7 @@ storage:
     cloudAccountName: my-aws-cloud-account # AWS cloud account name registered in Control Plane
     bucket: trivy-reports-bucket           # S3 bucket name
     region: us-east-1                      # AWS region
+    policyName: my-trivy-s3-policy         # Name of the IAM policy scoped to the bucket above (see README)
 
   azureFileshare:
     cloudAccountName: my-azure-cloud-account # Azure cloud account name registered in Control Plane

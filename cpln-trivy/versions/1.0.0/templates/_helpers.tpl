@@ -53,6 +53,9 @@
   {{- if not .Values.storage.s3.region -}}
     {{- fail "storage.s3.region is required when storage.type is 's3'" -}}
   {{- end -}}
+  {{- if not .Values.storage.s3.policyName -}}
+    {{- fail "storage.s3.policyName is required when storage.type is 's3'" -}}
+  {{- end -}}
 {{- end -}}
 {{- if eq $type "azureFileshare" -}}
   {{- if not .Values.storage.azureFileshare.cloudAccountName -}}

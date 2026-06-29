@@ -19,12 +19,31 @@ Only images that do not already have a `cpln/trivy-scan` tag are scanned. Re-sca
 
 ### Service Account
 
-Trivy authenticates against the Control Plane image registry using a service account key. Before installing:
+Trivy authenticates against the Control Plane image registry using a service account key. Set `serviceAccountName` to the name of your service account and choose one of the two auth methods below.
 
-1. Create a Control Plane service account (or use an existing one)
-2. Generate a key for the service account
-3. Set `trivyPassword` in `values.yaml` to the key value
-4. Set `serviceAccountName` to the name of your service account
+#### Inline key (trivyAuth.type: inline)
+
+Paste the service account key directly — the template creates a CPLN secret automatically:
+
+```yaml
+trivyAuth:
+  type: inline
+  serviceAccountKey: "your-service-account-key"
+```
+
+#### Existing CPLN secret (trivyAuth.type: existingSecret)
+
+If you already have a CPLN **dictionary** secret containing the key, reference it by name and key:
+
+```yaml
+trivyAuth:
+  type: existingSecret
+  existingSecret:
+    name: my-registry-credentials   # CPLN dictionary secret name
+    key: SERVICE_ACCOUNT_KEY        # Key within the dictionary secret
+```
+
+The template grants the workload identity `reveal` access to the referenced secret automatically.
 
 ### Storage
 
@@ -79,8 +98,10 @@ Choose a storage backend — either AWS S3 or Azure File Share. Set `storage.typ
 | `storage.azureFileshare.fileShare` | — | Azure file share name |
 | `storage.azureFileshare.scope` | — | Full Azure resource scope for role assignment |
 | `postToken` | `changeme` | Shared bearer token between daemon and web-server. Change before deploying to production. |
-| `trivyPassword` | — | Service account key used by Trivy to authenticate against the registry |
-| `trivyPasswordSecretName` | `trivy-password` | Name of the CPLN secret created to store `trivyPassword` |
+| `trivyAuth.type` | `inline` | Auth method: `inline` or `existingSecret` |
+| `trivyAuth.serviceAccountKey` | — | Service account key value (required when type is `inline`) |
+| `trivyAuth.existingSecret.name` | — | CPLN dictionary secret name (required when type is `existingSecret`) |
+| `trivyAuth.existingSecret.key` | — | Key within the dictionary secret (required when type is `existingSecret`) |
 | `serviceAccountName` | `cpln-trivy-service-account` | Service account that Trivy uses to pull images |
 | `schedule` | `*/59 * * * *` | Cron schedule for the scanning daemon |
 | `daemon.image` | `ghcr.io/controlplane-com/cpln-trivy-daemon:1.0.0` | Daemon container image |

@@ -16,11 +16,11 @@ source:
 
   # Database connection settings
   database:
-    hostname: ""           # Required: database hostname or IP
+    hostname: "db.example.com"  # Required: database hostname or IP
     port: 5432             # Default port varies by type (postgres:5432, mysql:3306, mongodb:27017, sqlserver:1433, oracle:1521)
-    name: ""               # Required: database name (or SID for Oracle)
-    user: ""               # Required: database username
-    password: ""           # Required: database password (stored in credentials secret)
+    name: "mydb"           # Required: database name (or SID for Oracle)
+    user: "dbuser"         # Required: database username
+    password: "changeme"   # Required: database password (stored in credentials secret)
 
   # Server name used as prefix for topic names
   serverName: "dbserver1"
@@ -126,7 +126,7 @@ sink:
 
   # Kafka sink settings
   kafka:
-    bootstrapServers: ""                  # Required: Kafka bootstrap servers (e.g., kafka.mygvc.cpln.local:9092)
+    bootstrapServers: "kafka.my-gvc.cpln.local:9092"  # Required: Kafka bootstrap servers
     topic: ""                             # Topic prefix (events sent to {topic}.{table})
     securityProtocol: "PLAINTEXT"         # Security protocol: PLAINTEXT, SSL, SASL_PLAINTEXT, SASL_SSL
     saslMechanism: ""                     # SASL mechanism: PLAIN, SCRAM-SHA-256, SCRAM-SHA-512

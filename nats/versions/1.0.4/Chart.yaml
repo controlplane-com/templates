@@ -1,0 +1,17 @@
+apiVersion: v2
+name: nats
+description: NATS super cluster across regions
+type: application
+version: 1.0.4
+appVersion: "2.11.6"
+
+annotations:
+  created: "2025-07-04"
+  lastModified: "2026-06-26"
+  category: "app"
+  createsGvc: true
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

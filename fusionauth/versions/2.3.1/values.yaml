@@ -1,0 +1,66 @@
+image: controlplanecorporation/fusionauth:0.2
+
+resources:
+  cpu: 512m
+  memory: 1024Mi
+
+firewall:
+  external:
+    inboundAllowCIDR:
+        - 0.0.0.0/0
+    outboundAllowCIDR: [] # Set to 0.0.0.0/0 to allow outbound traffic if communicating with IDP
+  internal:
+    type: same-gvc # options: same-gvc, same-org, workload-list
+    workloads:  # Note: can only be used if type is same-gvc or workload-list
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# Database configuration
+postgres:
+  image: postgres:18
+  config:
+    username: username
+    password: password
+    database: test
+  resources:
+    minCpu: 200m
+    minMemory: 128Mi
+    maxCpu: 500m
+    maxMemory: 256Mi
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+    autoscaling:
+      enabled: false # Set to true to enable autoscaling
+      maxCapacity: 100 # Maximum capacity in GiB when autoscaling is enabled
+      minFreePercentage: 10 # Minimum free percentage to trigger scaling when autoscaling is enabled
+      scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
+
+  internalAccess: # Sets the internal firewall scope - if set to none, replicas will not be able to reach each other
+    type: same-gvc # options: none, same-gvc, same-org, workload-list
+    workloads:  # Note: can only be used if type is same-gvc or workload-list
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+  # Postgres backup configuration   
+  backup: # compatible with Postgres 17+
+    enabled: false
+    image: controlplanecorporation/pg-backup:18.1.0 # tag 18.1.0 = Postgres 18, 17.1.0 = Postgres 17
+    schedule: "0 2 * * *"   # daily at 2am UTC
+
+    resources:
+      cpu: 100m
+      memory: 128Mi
+
+    provider: aws # Options: aws or gcp
+
+    aws:
+      bucket: my-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-backup-cloudaccount
+      policyName: my-backup-policy
+      prefix: postgres/backups # folder name where your backups will be stored
+
+    gcp:
+      bucket: my-backup-bucket
+      cloudAccountName: my-backup-cloudaccount
+      prefix: postgres/backups # folder name where your backups will be stored

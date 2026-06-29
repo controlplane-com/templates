@@ -1,0 +1,22 @@
+proxyWorkload:
+  image: nginx:latest
+  port: 80
+  capacityAI: false
+  timeoutSeconds: 5
+
+resources:
+  cpu: 100m
+  memory: 128Mi
+
+autoscaling:
+  minScale: 1
+  maxScale: 1
+  maxConcurrency: 1000
+
+enableExample: true # set to true to deploy an example backend workload and route all traffic to it
+
+locations: [] # add your own proxy targets here
+  # - path: /
+  #   workload: my-workload
+  #   port: 8080
+  #   regexModifier: ""

@@ -1,0 +1,21 @@
+---
+kind: policy
+name: {{ include "tidb.policy.name" . }}
+description: {{ include "tidb.policy.name" . }}
+tags: {{- include "tidb.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.gvc.name }}/identity/{{ include "tidb.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "tidb.pdSecret.name" . }}
+  - //secret/{{ include "tidb.serverSecret.name" . }}
+  - //secret/{{ include "tidb.tikvSecret.name" . }}
+{{- if .Values.autoCreateDatabase.enabled }}
+  - //secret/{{ include "tidb.userSecret.name" . }}
+{{- end }}
+{{- if and .Values.autoCreateDatabase.enabled .Values.autoCreateDatabase.deployInitWorkload }}
+  - //secret/{{ include "tidb.dbInit.name" . }}
+{{- end }}

@@ -1,0 +1,382 @@
+{{- if .Values.demoLogs.enabled }}
+---
+kind: workload
+name: {{ include "opensearch.demoLogs.name" . }}
+description: Demo app generating logs for OpenSearch
+tags: {{ include "opensearch.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: log-generator
+      args:
+        - '-u'
+        - '-c'
+        - >
+          import json
+
+          import time
+
+          import random
+
+          from datetime import datetime
+
+          import os
+
+
+          os.makedirs('/var/log/app', exist_ok=True)
+
+          log_file = '/var/log/app/app.log'
+
+
+          services = ['api-gateway', 'payment-service', 'user-service',
+          'inventory-service']
+
+          levels = ['INFO', 'WARN', 'ERROR', 'DEBUG']
+
+          weights = [60, 20, 10, 10]
+
+
+          actions = [
+              'User login successful',
+              'Payment processed',
+              'Product added to cart',
+              'Order created',
+              'Database query executed',
+              'API request received',
+              'Cache hit',
+              'Cache miss',
+              'Email sent',
+              'File uploaded'
+          ]
+
+
+          errors = [
+              'Connection timeout to database',
+              'Payment gateway unavailable',
+              'Invalid authentication token',
+              'Rate limit exceeded',
+              'Resource not found',
+              'Internal server error'
+          ]
+
+
+          print("Starting log generator...")
+
+          print(f"Writing logs to: {log_file}")
+
+
+          counter = 0
+
+          with open(log_file, 'a', buffering=1) as f:
+              while True:
+                  counter += 1
+                  level = random.choices(levels, weights=weights)[0]
+                  service = random.choice(services)
+                  
+                  if level == 'ERROR':
+                      message = random.choice(errors)
+                  else:
+                      message = random.choice(actions)
+                  
+                  log_entry = {
+                      'timestamp': datetime.utcnow().isoformat() + 'Z',
+                      'level': level,
+                      'service': service,
+                      'message': message,
+                      'user_id': f'user-{random.randint(1000,9999)}',
+                      'request_id': f'req-{random.randint(10000,99999)}',
+                      'duration_ms': random.randint(10, 500),
+                      'status_code': random.choice([200, 201, 400, 404, 500]) if level == 'ERROR' else 200,
+                      'ip_address': f'{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}'
+                  }
+                  
+                  f.write(json.dumps(log_entry) + '\n')
+                  f.flush()
+                  
+                  if counter % 10 == 0:
+                      print(f"Generated {counter} logs... (Level: {level}, Service: {service})")
+                  
+                  time.sleep(random.uniform(1, 3))
+      command: python3
+      cpu: 100m
+      env: []
+      image: python:3.11-slim
+      inheritEnv: false
+      memory: 128Mi
+      ports: []
+      volumes:
+        - path: /var/log/app
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "opensearch.demoLogsVolume.name" . }}
+    - name: fluent-bit
+      cpu: 50m
+      env: []
+      image: fluent/fluent-bit:3.2
+      inheritEnv: false
+      memory: 64Mi
+      ports: []
+      volumes:
+        - path: /var/log/app
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "opensearch.demoLogsVolume.name" . }}
+        - path: /fluent-bit/etc/fluent-bit.conf
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "opensearch.secretFluentBitDemo.name" . }}.payload
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+      inboundAllowWorkload: []
+  identityLink: //gvc/test-gvc/identity/{{ include "opensearch.demoLogsIdentity.name" . }}
+  loadBalancer:
+    replicaDirect: false
+  localOptions: []
+  supportDynamicTags: false
+
+{{- if not .Values.demoLogs.remove_setup_workload }}
+---
+kind: workload
+name: {{ include "opensearch.demoLogsSetup.name" . }}
+description: One-time setup job for OpenSearch demo
+tags: {{ include "opensearch.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: setup
+      image: curlimages/curl:latest
+      cpu: 100m
+      memory: 128Mi
+      command: /bin/sh
+      args:
+        - -c
+        - |
+          set -e
+          
+          echo "========================================="
+          echo "  OpenSearch Demo Setup"
+          echo "========================================="
+          echo ""
+          
+          # ============================================
+          # Wait for OpenSearch to be ready
+          # ============================================
+          echo "Step 1: Waiting for OpenSearch cluster..."
+          MAX_RETRIES=60
+          RETRY_COUNT=0
+          
+          until curl -sf "http://{{ include "opensearch.name" . }}.{{ .Values.global.cpln.gvc}}.cpln.local:9200/_cluster/health" > /dev/null; do
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
+              echo "❌ ERROR: OpenSearch not ready after ${MAX_RETRIES} attempts"
+              exit 1
+            fi
+            echo "  Waiting for OpenSearch... (attempt $RETRY_COUNT/$MAX_RETRIES)"
+            sleep 5
+          done
+          
+          echo "✅ OpenSearch is ready!"
+          echo ""
+          
+          # ============================================
+          # Create Index Template
+          # ============================================
+          echo "Step 2: Creating index template..."
+          
+          RESPONSE=$(curl -w "%{http_code}" -o /tmp/template_response.json -s -X PUT \
+            "http://{{ include "opensearch.name" . }}.{{ .Values.global.cpln.gvc}}.cpln.local:9200/_index_template/demo-logs-template" \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "index_patterns": ["demo-logs*"],
+              "template": {
+                "settings": {
+                  "number_of_shards": 3,
+                  "number_of_replicas": 2,
+                  "refresh_interval": "5s"
+                },
+                "mappings": {
+                  "properties": {
+                    "@timestamp": {
+                      "type": "date"
+                    },
+                    "timestamp": {
+                      "type": "date"
+                    },
+                    "level": {
+                      "type": "keyword"
+                    },
+                    "service": {
+                      "type": "keyword"
+                    },
+                    "message": {
+                      "type": "text",
+                      "fields": {
+                        "keyword": {
+                          "type": "keyword",
+                          "ignore_above": 256
+                        }
+                      }
+                    },
+                    "user_id": {
+                      "type": "keyword"
+                    },
+                    "request_id": {
+                      "type": "keyword"
+                    },
+                    "duration_ms": {
+                      "type": "integer"
+                    },
+                    "status_code": {
+                      "type": "integer"
+                    },
+                    "ip_address": {
+                      "type": "ip"
+                    },
+                    "cluster": {
+                      "type": "keyword"
+                    },
+                    "environment": {
+                      "type": "keyword"
+                    }
+                  }
+                }
+              }
+            }')
+          
+          if [ "$RESPONSE" -eq 200 ] || [ "$RESPONSE" -eq 201 ]; then
+            echo "✅ Index template created successfully"
+          else
+            echo "❌ Failed to create index template (HTTP $RESPONSE)"
+            cat /tmp/template_response.json
+            exit 1
+          fi
+          echo ""
+          
+          # ============================================
+          # Wait for Dashboard to be ready
+          # ============================================
+          echo "Step 3: Waiting for OpenSearch Dashboard..."
+          RETRY_COUNT=0
+          
+          until curl -sf "http://{{ include "opensearch.dashboard.name" . }}.{{ .Values.global.cpln.gvc}}.cpln.local:5601/api/status" > /dev/null; do
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
+              echo "❌ ERROR: Dashboard not ready after ${MAX_RETRIES} attempts"
+              exit 1
+            fi
+            echo "  Waiting for Dashboard... (attempt $RETRY_COUNT/$MAX_RETRIES)"
+            sleep 5
+          done
+          
+          echo "✅ Dashboard is ready!"
+          echo ""
+          
+          # ============================================
+          # Create Index Pattern in Dashboard
+          # ============================================
+          echo "Step 4: Creating Dashboard index pattern..."
+          
+          RESPONSE=$(curl -w "%{http_code}" -o /tmp/pattern_response.json -s -X POST \
+            "http://{{ include "opensearch.dashboard.name" . }}.{{ .Values.global.cpln.gvc}}.cpln.local:5601/api/saved_objects/index-pattern/demo-logs" \
+            -H 'osd-xsrf: true' \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "attributes": {
+                "title": "demo-logs*",
+                "timeFieldName": "@timestamp"
+              }
+            }')
+          
+          # 200 = created, 409 = already exists (both OK)
+          if [ "$RESPONSE" -eq 200 ] || [ "$RESPONSE" -eq 409 ]; then
+            echo "✅ Index pattern created/exists"
+          else
+            echo "⚠️  Index pattern creation returned HTTP $RESPONSE"
+            cat /tmp/pattern_response.json
+            echo ""
+            echo "Continuing anyway..."
+          fi
+          echo ""
+          
+          # ============================================
+          # Set as Default Index Pattern
+          # ============================================
+          echo "Step 5: Setting default index pattern..."
+          
+          RESPONSE=$(curl -w "%{http_code}" -o /tmp/default_response.json -s -X POST \
+            "http://{{ include "opensearch.dashboard.name" . }}.{{ .Values.global.cpln.gvc}}.cpln.local:5601/api/opensearch-dashboards/settings/defaultIndex" \
+            -H 'osd-xsrf: true' \
+            -H 'Content-Type: application/json' \
+            -d '{"value": "demo-logs"}')
+          
+          if [ "$RESPONSE" -eq 200 ]; then
+            echo "✅ Default index pattern set"
+          else
+            echo "⚠️  Setting default returned HTTP $RESPONSE"
+            cat /tmp/default_response.json
+            echo ""
+            echo "Continuing anyway..."
+          fi
+          echo ""
+          
+          # ============================================
+          # Verify Setup
+          # ============================================
+          echo "Step 6: Verifying setup..."
+          
+          # Check template exists
+          if curl -sf "http://{{ include "opensearch.name" . }}.{{ .Values.global.cpln.gvc}}.cpln.local:9200/_index_template/demo-logs-template" > /dev/null; then
+            echo "✅ Index template verified"
+          else
+            echo "⚠️  Could not verify index template"
+          fi
+          
+          echo ""
+          echo "========================================="
+          echo "  Setup Complete!"
+          echo "========================================="
+          echo ""
+          echo "📊 Next steps:"
+          echo "   1. Demo app will start generating logs"
+          echo "   2. Logs will appear in ~30 seconds"
+          echo "   3. Access Dashboard:"
+          echo "      cpln port-forward {{ include "opensearch.dashboard.name" . }} 5601:5601"
+          echo "      http://localhost:5601"
+          echo ""
+          echo "The demo-logs* index pattern is already configured!"
+          echo ""
+          
+          # Keep container running briefly so logs are visible
+          echo "Setup job will complete in 60 seconds..."
+          sleep 60
+          echo "✅ Setup job complete - exiting"
+  defaultOptions:
+    autoscaling:
+      minScale: 1
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 600  # 10 minutes timeout
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+  supportDynamicTags: false
+{{- end }}
+{{- end }}

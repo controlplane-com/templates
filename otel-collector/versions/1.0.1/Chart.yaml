@@ -1,0 +1,17 @@
+apiVersion: v2
+name: otel-collector
+description: OpenTelemetry Collector
+type: application
+version: 1.0.1
+appVersion: "1.0.0"
+
+annotations:
+  created: "2026-03-26"
+  lastModified: "2026-06-26"
+  category: "observability"
+  createsGvc: false
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

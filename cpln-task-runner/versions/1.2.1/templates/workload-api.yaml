@@ -1,0 +1,100 @@
+{{- if .Values.api.enabled }}
+kind: workload
+name: {{ include "task-runner-api.name" . }}
+description: Task Runner API - HTTP endpoint for enqueuing tasks
+tags: {{- include "cpln-task-runner.tags" . | nindent 4 }}
+spec:
+  type: serverless
+
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "task-runner.identity.name" . }}
+
+  containers:
+    - name: api
+      image: {{ .Values.image }}
+      port: {{ .Values.api.port }}
+
+      cpu: {{ .Values.api.resources.cpu | quote }}
+      memory: {{ .Values.api.resources.memory | quote }}
+
+      env:
+        - name: MODE
+          value: api
+        - name: PORT
+          value: {{ .Values.api.port | quote }}
+        - name: LOG_LEVEL
+          value: {{ .Values.api.env.logLevel | quote }}
+        # Redis configuration
+        - name: REDIS_MASTER_NAME
+          value: mymaster
+        - name: REDIS_SENTINEL_ADDR
+          value: {{ include "task-runner-sentinel.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:26379
+        - name: REDIS_CONNECT_RETRIES
+          value: {{ .Values.api.env.connectRetries | quote }}
+        - name: REDIS_RETRY_INTERVAL_SEC
+          value: {{ .Values.api.env.retryIntervalSec | quote }}
+        # Secrets
+        {{- if .Values.createSecret }}
+        - name: REDIS_SENTINEL_PASSWORD
+          value: "cpln://secret/{{ .Values.secretName }}.redis-sentinel-password"
+        - name: REDIS_PASSWORD
+          value: "cpln://secret/{{ .Values.secretName }}.redis-password"
+        {{- if .Values.api.env.adminApiKey }}
+        - name: ADMIN_API_KEY
+          value: "cpln://secret/{{ .Values.secretName }}.admin-api-key"
+        {{- end }}
+        {{- else }}
+        - name: REDIS_SENTINEL_PASSWORD
+          value: "cpln://secret/{{ .Values.redis.sentinel.auth.fromSecret.name }}.{{ .Values.redis.sentinel.auth.fromSecret.passwordKey }}"
+        - name: REDIS_PASSWORD
+          value: "cpln://secret/{{ .Values.redis.redis.auth.fromSecret.name }}.{{ .Values.redis.redis.auth.fromSecret.passwordKey }}"
+        {{- if .Values.api.env.adminApiKey }}
+        - name: ADMIN_API_KEY
+          value: "cpln://secret/{{ .Values.redis.admin.fromSecret.name }}.{{ .Values.redis.admin.fromSecret.apiKeyKey }}"
+        {{- end }}
+        {{- end }}
+  
+        {{- if .Values.api.env.otelEndpoint }}
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: {{ .Values.api.env.otelEndpoint | quote }}
+        {{- end }}
+
+      readinessProbe:
+        httpGet:
+          path: /health/ready
+          port: {{ .Values.api.port }}
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 3
+
+      livenessProbe:
+        httpGet:
+          path: /health/live
+          port: {{ .Values.api.port }}
+        initialDelaySeconds: 10
+        periodSeconds: 15
+        timeoutSeconds: 5
+        failureThreshold: 3
+
+  defaultOptions:
+    autoscaling:
+      metric: concurrency
+      target: 100
+      minScale: {{ .Values.api.replicas.min }}
+      maxScale: {{ .Values.api.replicas.max }}
+      scaleToZeroDelay: 300
+    capacityAI: false
+    timeoutSeconds: 30
+
+  firewallConfig:
+    {{- if .Values.api.public.enabled }}
+    external:
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.api.public.pathPrefix }}
+      outboundAllowHostname: []
+      {{- end }}
+    {{- end }}
+    internal:
+      inboundAllowType: same-gvc
+{{- end }}

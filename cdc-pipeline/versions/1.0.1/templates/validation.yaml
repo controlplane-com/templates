@@ -1,0 +1,3 @@
+{{- include "cdc.validateWalLevel" . -}}
+{{- include "cdc.validateCredentials" . -}}
+{{- include "cdc.validateKafkaCredentials" . -}}

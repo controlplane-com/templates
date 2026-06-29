@@ -1,0 +1,18 @@
+apiVersion: v2
+name: mysql
+description: MySQL databaseapp for Control Plane
+
+type: application
+version: 1.4.1
+appVersion: "9"
+
+annotations:
+  created: "2024-10-31"
+  lastModified: "2026-06-26"
+  category: "database"
+  createsGvc: false
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

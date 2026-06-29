@@ -1,0 +1,62 @@
+image: tykio/tyk-gateway:v5.10.0
+
+listenPort: 8080 # REQUIRED - The port exposed on the Tyk workload
+
+apiSecretName: my-tyk-apis # REQUIRED - The name of the pre-configured Control Plane secret that contains your API definitions
+policySecretName: my-tyk-policies # REQUIRED - The name of the pre-configured Control Plane secret that contains your policies
+# Note: if you wish to omit one of these secrets, leave the value empty and it will be omitted from the workload's configuration
+
+adminSecret: mysecret # REQUIRED - The value you set to be the admin API key for management of Tyk
+
+resources:
+  cpu: 50m
+  memory: 128Mi
+
+autoscaling:
+  maxScale: 3
+  metric: cpu
+  minScale: 1
+  scaleToZeroDelay: 300
+  target: 100
+
+multiZone: false # OPTIONAL - Deploys replicas across multiple zones (confirm availability in your location)
+
+externalAccess: true # OPTIONAL - Set to true to expose the workload to the internet; set to false for internal-only access
+internalAccess: # OPTIONAL - Sets the internal firewall scope
+  type: none # options: none, same-gvc, same-org, workload-list
+  workloads:  # Note: can only be used if type is same-gvc or workload-list
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# OPTIONAL - Redis and Sentinel configuration is sufficient for this template's purpose
+redis:
+  redis:
+    resources:
+      cpu: 200m
+      memory: 256Mi
+      minCpu: 80m
+      minMemory: 128Mi
+    replicas: 2
+    auth:
+      password:
+        enabled: true
+        value: myRedisPassword
+    firewall:
+      internal_inboundAllowType: same-gvc
+    persistence:
+      enabled: true
+  sentinel:
+    resources:
+      cpu: 200m
+      memory: 256Mi
+      minCpu: 80m
+      minMemory: 128Mi
+    replicas: 3
+    auth:
+      password:
+        enabled: true
+        value: mySentinelPassword
+    firewall:
+      internal_inboundAllowType: same-gvc
+    persistence:
+      enabled: true

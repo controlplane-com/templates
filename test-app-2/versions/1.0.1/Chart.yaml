@@ -1,0 +1,16 @@
+apiVersion: v2
+name: test-app-2
+description: Test app for Control Plane
+type: application
+version: 1.0.1
+appVersion: "1.0.0"
+annotations:
+  created: "2025-04-16"
+  lastModified: "2026-06-26"
+  category: "test"
+  createsGvc: false
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

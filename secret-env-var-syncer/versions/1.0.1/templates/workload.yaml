@@ -1,0 +1,47 @@
+kind: workload
+name: {{ include "sevs.name" . }}
+description: Secret Env Var Syncer
+tags: {{- include "sevs.tags" . | nindent 4 }}
+spec:
+  type: cron
+  containers:
+    - name: syncer
+      cpu: {{ .Values.resources.cpu | quote }}
+      image: {{ .Values.image }}
+      inheritEnv: false
+      memory: {{ .Values.resources.memory | quote }}
+      volumes:
+        - path: /app/config.yaml
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "sevs.secret.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: {{ .Values.timeoutSeconds }}
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: none
+      inboundAllowWorkload: []
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "sevs.identity.name" . }}
+  job:
+    concurrencyPolicy: Forbid
+    historyLimit: 5
+    restartPolicy: Never
+    schedule: {{ .Values.schedule | quote }}
+  supportDynamicTags: false

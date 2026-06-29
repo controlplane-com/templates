@@ -1,0 +1,18 @@
+replicas: 3 # minimum 3, must be odd
+
+image: controlplanecorporation/etcd:0.1
+
+resources:
+  cpu: 1
+  memory: 2Gi
+
+multiZone: false
+
+volumeset:
+  capacity: 10 # initial capacity in GiB (minimum is 10)
+
+internal_access:
+  type: same-gvc # options: same-gvc, same-org, workload-list
+  workloads:  # Note: can only be used if type is same-gvc or workload-list
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME

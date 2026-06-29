@@ -1,0 +1,5 @@
+workload:
+  description: default description
+
+secret:
+  defaultProperty: defaultPropertyValue

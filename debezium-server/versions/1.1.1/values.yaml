@@ -1,0 +1,219 @@
+# Debezium Server CDC Template
+# Documentation: https://debezium.io/documentation/reference/stable/operations/debezium-server.html
+
+image: quay.io/debezium/server:3.0
+
+resources:
+  cpu: 500m
+  memory: 512Mi
+
+# =============================================================================
+# Source Database Configuration
+# =============================================================================
+source:
+  # Database type: postgres, mysql, mongodb, sqlserver, oracle
+  type: postgres
+
+  # Database connection settings
+  database:
+    hostname: ""           # Required: database hostname or IP
+    port: 5432             # Default port varies by type (postgres:5432, mysql:3306, mongodb:27017, sqlserver:1433, oracle:1521)
+    name: ""               # Required: database name (or SID for Oracle)
+    user: ""               # Required: database username
+    password: ""           # Required: database password (stored in credentials secret)
+
+  # Server name used as prefix for topic names
+  serverName: "dbserver1"
+
+  # Tables to capture (comma-separated, e.g., "public.users,public.orders")
+  # Leave empty to capture all tables
+  tableIncludeList: ""
+
+  # Tables to exclude (comma-separated)
+  tableExcludeList: ""
+
+  # PostgreSQL-specific settings
+  postgres:
+    slotName: "debezium"                  # Replication slot name
+    publicationName: "dbz_publication"    # Publication name
+    pluginName: "pgoutput"                # Logical decoding plugin: pgoutput (default), decoderbufs
+    slotDropOnStop: false                 # Keep replication slot on stop (required for HA/failover)
+    heartbeatIntervalMs: 0               # Heartbeat interval in ms (0=disabled; set 5000 for HA)
+    heartbeatActionQuery: ""              # SQL executed on heartbeat (e.g., "UPDATE debezium_heartbeat SET ts = now() WHERE id = 1")
+
+  # MySQL-specific settings
+  mysql:
+    serverId: 85744                       # Unique server ID for MySQL replication
+    includeSchemaChanges: true            # Include DDL events
+
+  # MongoDB-specific settings
+  mongodb:
+    connectionString: ""                  # Full connection string (overrides hostname/port)
+    replicaSet: ""                        # Replica set name
+
+  # SQL Server-specific settings
+  sqlserver:
+    databaseNames: ""                     # Comma-separated database names to capture
+    snapshotMode: "initial"               # Snapshot mode: initial, schema_only, initial_only
+
+  # Oracle-specific settings
+  oracle:
+    pdbName: ""                           # Pluggable database name
+    logMiningStrategy: "online_catalog"   # Log mining strategy: online_catalog, redo_log_catalog
+
+  # Offset storage configuration
+  offset:
+    # Storage type: file, redis, jdbc
+    storage: file
+
+    # Flush settings
+    flushIntervalMs: 10000               # How often offsets flush to storage (ms)
+    flushTimeoutMs: 60000                # Timeout for offset flush operations (ms)
+
+    # File storage settings (requires volumeset)
+    file:
+      filename: "/debezium/data/offsets.dat"
+
+    # Redis storage settings
+    redis:
+      address: ""                         # Redis address (e.g., redis.mygvc.cpln.local:6379)
+      key: "debezium:offsets"             # Redis key for offsets
+      password: ""                        # Redis password (stored in credentials secret)
+      ssl: false                          # Enable SSL/TLS
+
+    # JDBC storage settings
+    jdbc:
+      url: ""                             # JDBC URL (e.g., jdbc:postgresql://host:5432/dbname)
+      user: ""                            # JDBC username
+      password: ""                        # JDBC password (stored in credentials secret)
+      tableName: "debezium_offsets"       # Table name for storing offsets
+
+  # Schema history storage (required for MySQL and SQL Server)
+  schemaHistory:
+    # Storage type: file, redis, jdbc (only used for mysql/sqlserver)
+    storage: file
+
+    # File storage settings
+    file:
+      filename: "/debezium/data/schema-history.dat"
+
+    # Redis storage settings
+    redis:
+      address: ""
+      key: "debezium:schema-history"
+      password: ""
+      ssl: false
+
+    # JDBC storage settings
+    jdbc:
+      url: ""
+      user: ""
+      password: ""
+      tableName: "debezium_schema_history"
+
+  # Error retry configuration
+  errors:
+    retryDelayInitialMs: 300             # Initial retry delay (ms)
+    retryDelayMaxMs: 10000               # Max retry delay (ms)
+    maxRetries: -1                       # Max retries (-1 = infinite)
+
+# =============================================================================
+# Sink Configuration
+# =============================================================================
+sink:
+  # Sink type: kafka, redis, nats-jetstream, http, kinesis, pubsub, pulsar, eventhubs
+  type: kafka
+
+  # Kafka sink settings
+  kafka:
+    bootstrapServers: ""                  # Required: Kafka bootstrap servers (e.g., kafka.mygvc.cpln.local:9092)
+    topic: ""                             # Topic prefix (events sent to {topic}.{table})
+    securityProtocol: "PLAINTEXT"         # Security protocol: PLAINTEXT, SSL, SASL_PLAINTEXT, SASL_SSL
+    saslMechanism: ""                     # SASL mechanism: PLAIN, SCRAM-SHA-256, SCRAM-SHA-512
+    saslUsername: ""                      # SASL username
+    saslPassword: ""                      # SASL password (stored in credentials secret)
+
+  # Redis sink settings (Redis Streams)
+  redis:
+    address: ""                           # Required: Redis address (e.g., redis.mygvc.cpln.local:6379)
+    password: ""                          # Redis password (stored in credentials secret)
+    ssl: false                            # Enable SSL/TLS
+    streamName: ""                        # Stream name prefix (events sent to {streamName}.{table})
+
+  # NATS JetStream sink settings
+  nats:
+    url: ""                               # Required: NATS URL (e.g., nats://nats.mygvc.cpln.local:4222)
+    subject: ""                           # Subject prefix (events sent to {subject}.{table})
+    username: ""                          # NATS username
+    password: ""                          # NATS password (stored in credentials secret)
+
+  # HTTP sink settings (webhooks)
+  http:
+    url: ""                               # Required: HTTP endpoint URL
+    headers: {}                           # Additional headers (key-value pairs)
+    authType: ""                          # Auth type: none, basic, bearer
+    username: ""                          # Basic auth username
+    password: ""                          # Basic auth password (stored in credentials secret)
+    bearerToken: ""                       # Bearer token (stored in credentials secret)
+
+  # AWS Kinesis sink settings (uses Universal Cloud Identity)
+  kinesis:
+    region: ""                            # Required: AWS region
+    streamName: ""                        # Required: Kinesis stream name
+    credentialsProvider: "default"        # Use "default" for Universal Cloud Identity
+    # Cloud account for Universal Cloud Identity
+    cloudAccount:
+      enabled: false
+      name: ""                            # AWS cloud account name in Control Plane
+
+  # GCP Pub/Sub sink settings (uses Universal Cloud Identity)
+  pubsub:
+    projectId: ""                         # Required: GCP project ID
+    topic: ""                             # Topic prefix (events sent to {topic}.{table})
+    # Cloud account for Universal Cloud Identity
+    cloudAccount:
+      enabled: false
+      name: ""                            # GCP cloud account name in Control Plane
+
+  # Apache Pulsar sink settings
+  pulsar:
+    serviceUrl: ""                        # Required: Pulsar service URL
+    topic: ""                             # Topic prefix
+    authPluginClassName: ""               # Auth plugin class (e.g., org.apache.pulsar.client.impl.auth.AuthenticationToken)
+    authToken: ""                         # Auth token (stored in credentials secret)
+
+  # Azure Event Hubs sink settings
+  eventhubs:
+    connectionString: ""                  # Required: Event Hubs connection string (stored in credentials secret)
+    hubName: ""                           # Required: Event Hub name
+
+# =============================================================================
+# Serialization Format
+# =============================================================================
+format:
+  key: json                               # Key format: json, avro, protobuf
+  value: json                             # Value format: json, avro, protobuf
+
+  # Schema registry settings (for avro/protobuf)
+  schemaRegistry:
+    url: ""                               # Schema registry URL
+    username: ""                          # Schema registry username
+    password: ""                          # Schema registry password (stored in credentials secret)
+
+# =============================================================================
+# Volumeset Configuration (for file-based offset/schema-history storage)
+# =============================================================================
+volumeset:
+  capacity: 10                            # Initial capacity in GiB (minimum 10)
+  performanceClass: general-purpose-ssd   # Performance class: general-purpose-ssd, high-throughput-ssd
+
+# =============================================================================
+# Firewall Configuration
+# =============================================================================
+firewall:
+  internal:
+    inboundAllowType: same-gvc            # Options: none, same-gvc, same-org, workload-list
+    workloads: []                         # Workload list for inbound access (when type is workload-list)
+  external:
+    outboundAllowCIDR:
+      - 0.0.0.0/0                         # Allow all outbound by default (required for database connectivity)

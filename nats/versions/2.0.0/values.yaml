@@ -40,9 +40,19 @@ allowCIDR:
   - 0.0.0.0/0 # Allow all traffic. CAREFUL: Change this to a more specific CIDRs to not expose the NATS server to the world.
               # Only applicable to the WebSocket port. Control Plane exposes it on port 443.
 
-# You can add any VALID NATS configuration under nats_extra_config
-nats_extra_config: |
-  jetstream: false
+jetstream:
+  enabled: false # set to true to enable persistent JetStream streaming and storage
+
+volumeset:
+  capacity: 10 # initial capacity in GiB per replica (minimum is 10)
+  autoscaling:
+    enabled: false
+    maxCapacity: 100
+    minFreePercentage: 10
+    scalingFactor: 1.2
+
+# Add any additional valid NATS configuration here — appended to the server config at startup
+nats_extra_config: ""
 
 internalAccess: # Sets the internal firewall scope - if set to none, replicas will not be able to reach each other
   type: same-gvc # options: none, same-gvc, same-org, workload-list

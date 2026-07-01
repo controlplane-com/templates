@@ -37,6 +37,11 @@ spec:
         - path: /etc/nats/nats-extra.conf
           recoveryPolicy: retain
           uri: cpln://secret/{{ include "nats.extraData.name" . }}.payload
+        {{- if .Values.jetstream.enabled }}
+        - path: /data/nats
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "nats.volumeset.name" . }}
+        {{- end }}
   defaultOptions:
     autoscaling:
       maxConcurrency: 0

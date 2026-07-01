@@ -35,6 +35,13 @@ NATS Policy Name
 {{- printf "%s-nats-policy" .Release.Name }}
 {{- end }}
 
+{{/*
+NATS VolumeSet Name
+*/}}
+{{- define "nats.volumeset.name" -}}
+{{- printf "%s-nats-vs" .Release.Name }}
+{{- end }}
+
 
 {{/* Labeling */}}
 

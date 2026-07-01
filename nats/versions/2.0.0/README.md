@@ -53,10 +53,25 @@ websocket:
   noTls: true
 ```
 
-**Extra NATS config** — any valid NATS configuration can be added under `nats_extra_config`. It is appended to the server config at startup:
+**JetStream** — enables NATS's persistent streaming layer. When enabled, each replica gets its own dedicated persistent volume (`/data/nats`) and the server is configured to store streams, consumers, and K-V data there:
+```yaml
+jetstream:
+  enabled: true
+
+volumeset:
+  capacity: 10 # GiB per replica
+  autoscaling:
+    enabled: false
+    maxCapacity: 100
+    minFreePercentage: 10
+    scalingFactor: 1.2
+```
+
+When `jetstream.enabled` is `false` (the default), NATS runs in pure pub/sub mode with no persistence and no volume is provisioned.
+
+**Extra NATS config** — any additional valid NATS configuration appended to the server config at startup:
 ```yaml
 nats_extra_config: |
-  jetstream: true
   max_payload: 8MB
 ```
 

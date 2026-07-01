@@ -32,11 +32,11 @@ spec:
         {{- end }}
       volumes:
         - path: /etc/nats/start.sh
-          recoveryPolicy: retain
           uri: cpln://secret/{{ include "nats.secret.name" . }}.payload
+        {{- if and .Values.nats_extra_config (ne (.Values.nats_extra_config | trim) "") }}
         - path: /etc/nats/nats-extra.conf
-          recoveryPolicy: retain
           uri: cpln://secret/{{ include "nats.extraData.name" . }}.payload
+        {{- end }}
         {{- if .Values.jetstream.enabled }}
         - path: /data/nats
           recoveryPolicy: retain
@@ -76,7 +76,7 @@ spec:
         maxConcurrency: 0
         maxScale: {{ if eq ($location.replicas | int) 0 }}1{{ else }}{{ $location.replicas | int }}{{ end }}
         metric: disabled
-        minScale: {{ if eq ($location.replicas | int) 0 }}0{{ else }}{{ $location.replicas | int }}{{ end }}
+        minScale: {{ if eq ($location.replicas | int) 0 }}1{{ else }}{{ $location.replicas | int }}{{ end }}
         scaleToZeroDelay: 300
         target: 100
       capacityAI: false

@@ -47,19 +47,22 @@ internalAccess:
 
 **WebSocket** — enabled by default on port 8080. Control Plane handles TLS termination and exposes it externally on port 443:
 ```yaml
-websocket:
-  enabled: true
-  port: 8080
-  noTls: true
+nats_defaults:
+  websocket:
+    enabled: true
+    port: 8080
+    noTls: true
 ```
 
-**JetStream** — enables NATS's persistent streaming layer. When enabled, each replica gets its own dedicated persistent volume (`/data/nats`) and the server is configured to store streams, consumers, and K-V data there:
+**JetStream** — enables NATS's built-in persistence layer, adding durable streams, consumers, K-V store, and object store on top of the core pub/sub model. Without it, NATS is purely in-memory.
+
+When enabled, each replica gets its own dedicated persistent volume:
 ```yaml
 jetstream:
   enabled: true
 
 volumeset:
-  capacity: 10 # GiB per replica
+  capacity: 10  # GiB per replica
   autoscaling:
     enabled: false
     maxCapacity: 100
@@ -67,7 +70,7 @@ volumeset:
     scalingFactor: 1.2
 ```
 
-When `jetstream.enabled` is `false` (the default), NATS runs in pure pub/sub mode with no persistence and no volume is provisioned.
+**Note:** streams default to `num_replicas: 1`, meaning stream data lives on a single server. For streams that must survive a location outage, set `num_replicas` to 2 or higher in your application — this is configured per-stream, not in this template.
 
 **Extra NATS config** — any additional valid NATS configuration appended to the server config at startup:
 ```yaml
@@ -91,3 +94,4 @@ wss://RELEASE_NAME-nats.GVC_NAME.cpln.app
 
 ### Supported External Services
 - [NATS Documentation](https://docs.nats.io/)
+- [JetStream Documentation](https://docs.nats.io/nats-concepts/jetstream)

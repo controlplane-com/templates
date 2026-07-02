@@ -1,0 +1,44 @@
+---
+kind: policy
+name: {{ include "cpln-trivy.policy.images.name" . }}
+description: Allows the Trivy identity to manage image tags in the org registry
+tags:
+  {{- include "cpln-trivy.tags" . | nindent 2 }}
+bindings:
+  - permissions:
+      - manage
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "cpln-trivy.identity.name" . }}
+target: all
+targetKind: image
+
+---
+kind: policy
+name: {{ include "cpln-trivy.policy.secret.name" . }}
+description: Allows the Trivy identity to reveal the registry credentials secret
+tags:
+  {{- include "cpln-trivy.tags" . | nindent 2 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "cpln-trivy.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "cpln-trivy.secret.name" . }}
+  - //secret/{{ .Values.trivyAuth.secretName }}
+
+---
+kind: policy
+name: {{ include "cpln-trivy.policy.pull.name" . }}
+description: Allows the Trivy service account to pull and view images for scanning
+tags:
+  {{- include "cpln-trivy.tags" . | nindent 2 }}
+bindings:
+  - permissions:
+      - pull
+      - view
+    principalLinks:
+      - //serviceaccount/{{ .Values.serviceAccountName }}
+target: all
+targetKind: image

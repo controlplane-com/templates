@@ -127,6 +127,15 @@ cpln image query --tag cpln/trivy-scan -o json | jq -r '.items[].name' | \
   xargs -I{} cpln image tag {} --remove cpln/trivy-scan --remove cpln/trivy-scan-time
 ```
 
+## Important Notes
+
+- **Reports are public by default.** Anyone with a report URL can view it — the URLs contain an unguessable SHA-256 hash, but there is no authentication. Restrict `webServer.firewall.inboundAllowCIDR` to your network if reports must stay private.
+- **Change `postToken` before deploying.** It is the only thing preventing unauthorized report uploads to the web-server.
+- **Scans take roughly 15–20 seconds per image.** The first run over a large registry can take a while (about 30 minutes for 100 images). Runs are protected against overlap (`concurrencyPolicy: Forbid`), so a long run simply delays the next scheduled one.
+- **Rescans update in place.** When `rescanAfter` triggers a rescan, the report is overwritten at the same URL and `cpln/trivy-scan-time` is refreshed — links saved from the Control Plane UI stay valid.
+- **Images deleted mid-run log tag errors.** If an image is deleted after the run starts, the daemon logs a 404 tagging error for it and continues. This is harmless.
+- **Rotating the service account key:** add a new key to the service account, update the opaque secret's payload, and delete the old key. No reinstall needed.
+
 ## References
 
 - [Trivy Documentation](https://trivy.dev/latest/docs/)

@@ -1,0 +1,38 @@
+{{- if .Values.enablePhpMyAdmin }}
+kind: workload
+name: {{ include "mysql.phpAdmin.name" . }}
+description: Admin interface for MySQL database
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "mysql.tags" . | nindent 2 }}
+spec:
+  type: serverless
+  containers:
+    - name: phpmyadmin
+      env:
+        - name: PMA_HOST
+          value: '{{ include "mysql.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local'
+        - name: PMA_PORT
+          value: '3306'
+        - name: MYSQL_ROOT_PASSWORD
+          value: 'cpln://secret/{{ include "mysql.secretDatabase.name" . }}.rootPassword'
+      image: phpmyadmin/phpmyadmin:latest
+      inheritEnv: false
+      cpu: 100m
+      memory: 128Mi
+      ports:
+        - number: 80
+          protocol: http
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+  firewallConfig:
+    external:
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: same-gvc
+  identityLink: //identity/{{ include "mysql.identity.name" . }}
+{{- end }}

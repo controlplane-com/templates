@@ -1,0 +1,15 @@
+---
+kind: policy
+name: {{ include "pgedge.policy.name" . }}
+description: pgEdge policy
+tags: {{- include "pgedge.tags" . | nindent 2 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.gvc.name }}/identity/{{ include "pgedge.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "pgedge.secretStartup.name" . }}
+  - //secret/{{ include "pgedge.secretConfig.name" . }}
+  - //secret/{{ include "pgedge.secretPgcatConfig.name" . }}

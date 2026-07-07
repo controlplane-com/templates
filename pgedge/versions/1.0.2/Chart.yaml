@@ -1,0 +1,18 @@
+apiVersion: v2
+name: pgedge
+description: Active-active distributed PostgreSQL with Spock multi-master replication across global locations
+
+type: application
+version: 1.0.2
+appVersion: "17"
+
+annotations:
+  created: "2026-04-03"
+  lastModified: "2026-07-07"
+  category: "database"
+  createsGvc: true
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

@@ -89,6 +89,7 @@ Write to the path given in your task prompt (if none, `architecture.md` in the r
 - Production-first per the proposal's posture; beyond that keep v1 lean and honest.
 - Every upstream fact that shapes a decision needs a citation. When sources disagree, say so and pick with reasoning — never design from unverified assumption.
 - Consistency beats invention: mirror the reference templates' helper naming, secret patterns, tags helper, and values.yaml style.
-- The Testability Map is a hard gate: a knob without a concrete, executable test does not belong in values.yaml.
+- The Testability Map is a hard gate: a knob without a concrete, executable test does not belong in values.yaml. Exception: knobs that are pure pass-through to an already-tested dependency template (e.g. exposing the postgres template's own backup block), exercising that template's native logic unchanged — mark these "covered by dependency template" in the map instead of designing a redundant test. Any new logic this template adds around a dependency still needs its own test.
+- All template install paths (cpln helm install, the marketplace UI, upgrades) execute standard Helm under the hood — standard Helm features like `dependencies[].condition` and `alias` work everywhere; do not treat the marketplace UI as a separate compatibility target.
 - If blocked on something only the maintainer can answer, do not guess — record it under Open Questions and design the rest.
 - Your final message must be short: the key design decisions (a few lines), any open questions, and the spec's file path. The detail lives in the file, not the message.

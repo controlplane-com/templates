@@ -4,6 +4,12 @@
 
 - **Kafka Cluster Parallel Scaling Policy**: Changed the default `scalingPolicy` for the Kafka cluster stateful workload from `OrderedReady` to `Parallel`
 
+# Release Notes - Version 4.0.2
+
+## What's New
+
+- **REST Proxy: Comment out default `password_properties`**: The sample `password_properties` block in `kafka_rest_proxy` is now commented out by default so it no longer merges into the secret when deploying with custom values.
+
 # Release Notes - Version 4.0.0
 
 ## What's New

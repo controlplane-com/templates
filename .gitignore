@@ -8,4 +8,5 @@ CLAUDE.md
 # agent pipeline artifacts (stage outputs, reviewed locally, never committed)
 proposal.md
 architecture.md
+review-report.md
 test-report.md

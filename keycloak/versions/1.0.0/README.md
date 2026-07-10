@@ -13,15 +13,7 @@ All durable state — realms, users, and active sessions — lives in PostgreSQL
 
 ## Prerequisites
 
-- None for a default install. Optional: a custom domain if you want a pinned production hostname, and a cloud account + bucket if you enable the Postgres backup pass-through.
-
-## Installation
-
-```bash
-cpln helm install my-keycloak ./keycloak/versions/1.0.0 --gvc my-gvc --dependency-update \
-  --set 'admin.password=a-strong-admin-password' \
-  --set 'postgresHA.postgres.password=a-strong-db-password'
-```
+- None for a default install. Optional: a cloud account + bucket if you enable the Postgres backup pass-through.
 
 ## Configuration
 
@@ -41,9 +33,6 @@ resources:           # per replica
 admin:
   username: admin    # temporary bootstrap admin, created on first boot
   password: change-me-keycloak-admin
-
-hostname: ""         # empty: canonical *.cpln.app endpoint works out of the box
-                     # production: pin your domain, e.g. https://sso.example.com
 ```
 
 ### Backing Store

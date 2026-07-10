@@ -1,9 +1,12 @@
 # .github/workflows/publish-charts.yml
 name: Publish Helm Charts
 
+# Branch pushes publish to the test registry (templates/test) for pre-merge testing.
+# Pushes to main (i.e. merges) publish to the production registry automatically —
+# the merge is the release decision; quality gates run before it (PR validation + review).
 on:
   push:
-    branches-ignore: [main]
+    branches: ['**']
   workflow_dispatch:
     inputs:
       migrate:
@@ -79,7 +82,7 @@ jobs:
       - name: Determine registry
         id: registry
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "${{ github.ref }}" = "refs/heads/main" ]; then
             echo "path=oci://ghcr.io/controlplane-com/templates" >> $GITHUB_OUTPUT
           else
             echo "path=oci://ghcr.io/controlplane-com/templates/test" >> $GITHUB_OUTPUT

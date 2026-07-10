@@ -1,0 +1,115 @@
+{{- include "keycloak.validate" . }}
+kind: workload
+name: {{ include "keycloak.name" . }}
+description: Keycloak
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "keycloak.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "keycloak.identity.name" . }}
+  containers:
+    - name: keycloak
+      image: {{ .Values.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
+      env:
+        - name: KC_DB
+          value: postgres
+        - name: KC_DB_URL
+          value: jdbc:postgresql://{{ include "keycloak.db.host" . }}:5432/{{ include "keycloak.db.database" . }}
+        - name: KC_DB_USERNAME
+          value: 'cpln://secret/{{ include "keycloak.db.secretName" . }}.username'
+        - name: KC_DB_PASSWORD
+          value: 'cpln://secret/{{ include "keycloak.db.secretName" . }}.password'
+        - name: KC_BOOTSTRAP_ADMIN_USERNAME
+          value: 'cpln://secret/{{ include "keycloak.secretAdmin.name" . }}.username'
+        - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+          value: 'cpln://secret/{{ include "keycloak.secretAdmin.name" . }}.password'
+        - name: KC_HEALTH_ENABLED
+          value: 'true'
+        - name: KC_HTTP_ENABLED
+          value: 'true'
+        - name: KC_PROXY_HEADERS
+          value: xforwarded
+        - name: KC_HOSTNAME_STRICT
+          value: 'false'
+        - name: CLUSTERED
+          value: {{ gt (int .Values.replicas) 1 | quote }}
+      ports:
+        - number: 8080
+          protocol: http
+        {{- if gt (int .Values.replicas) 1 }}
+        - number: 7800
+          protocol: tcp
+        - number: 57800
+          protocol: tcp
+        {{- end }}
+      command: /bin/bash
+      args:
+        - /opt/keycloak/bin/start-keycloak.sh
+      volumes:
+        - path: /opt/keycloak/bin/start-keycloak.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "keycloak.secretStartup.name" . }}.payload
+      readinessProbe:
+        httpGet:
+          path: /health/ready
+          port: 9000
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        exec:
+          command:
+            - /bin/bash
+            - "-c"
+            - >-
+                if [ -f /tmp/kc-db-wait ]; then exit 0; fi;
+                exec 3<>/dev/tcp/127.0.0.1/9000 &&
+                printf 'GET /health/live HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n' >&3 &&
+                grep -q '"status": "UP"' <&3
+        initialDelaySeconds: 60
+        periodSeconds: 15
+        failureThreshold: 5
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.replicas }}
+      metric: disabled
+      minScale: {{ .Values.replicas }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  {{- if gt (int .Values.replicas) 1 }}
+  loadBalancer:
+    replicaDirect: true
+  {{- end }}
+  rolloutOptions:
+    maxSurgeReplicas: 0%
+    maxUnavailableReplicas: "1"
+    minReadySeconds: 10
+    scalingPolicy: OrderedReady

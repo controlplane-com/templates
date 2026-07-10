@@ -34,13 +34,8 @@ spec:
           value: 'true'
         - name: KC_PROXY_HEADERS
           value: xforwarded
-        {{- if .Values.hostname }}
-        - name: KC_HOSTNAME
-          value: {{ .Values.hostname | quote }}
-        {{- else }}
         - name: KC_HOSTNAME_STRICT
           value: 'false'
-        {{- end }}
         - name: CLUSTERED
           value: {{ gt (int .Values.replicas) 1 | quote }}
       ports:

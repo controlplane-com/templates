@@ -17,12 +17,6 @@ admin:
   username: admin
   password: change-me-keycloak-admin # change before installing
 
-# ─── Hostname ─────────────────────────────────────────────────────────────────
-# Empty (default): hostname is derived from request headers — the canonical
-# *.cpln.app endpoint works out of the box.
-# Production: pin to your domain, e.g. https://sso.example.com
-hostname: ""
-
 # ─── Backing Store: Highly Available PostgreSQL (default) ────────────────────
 # Deploys the postgres-highly-available template: 3 Patroni replicas, 3 etcd
 # replicas, and an HAProxy leader-routing endpoint Keycloak connects to.

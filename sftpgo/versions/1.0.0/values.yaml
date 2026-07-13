@@ -1,0 +1,66 @@
+image: drakkan/sftpgo:v2.7.4-distroless-slim
+
+# ─── Mode ─────────────────────────────────────────────────────────────────────
+# scale_to_zero: SFTPGo suspends when idle; an always-on proxy holds inbound
+#   connections, wakes it (~10-15s cold), and re-suspends after idleHold.
+#   Clients connect to the PROXY endpoint and need generous timeouts (see README).
+# always_warm: no proxy; SFTPGo runs always-on with its own public endpoint.
+mode: scale_to_zero # options: scale_to_zero, always_warm
+
+scaleToZero: # only used when mode is scale_to_zero
+  idleHold: 5m # suspend after this window with no active connections (e.g. 90s, 5m, 1h)
+  proxy:
+    image: ghcr.io/controlplane-com/scale-to-zero-proxy:0.1.0
+    resources: # all SFTP traffic flows through the proxy
+      cpu: 500m
+      memory: 256Mi
+      minCpu: 100m
+      minMemory: 128Mi
+
+resources: # SFTPGo container; CPU governs transfer throughput and wake speed
+  cpu: 1000m
+  memory: 512Mi
+  minCpu: 250m
+  minMemory: 256Mi
+
+# ─── Admin Bootstrap ──────────────────────────────────────────────────────────
+admin: # SFTPGo administrator (REST API / optional web admin), created on first boot
+  username: admin
+  password: change-me-sftpgo-admin # change before installing
+
+# ─── S3 Storage Backend ───────────────────────────────────────────────────────
+storage:
+  s3:
+    bucket: "" # required — bucket must already exist
+    region: us-east-1
+    endpoint: "" # set for S3-compatible servers, e.g. http://my-minio-workload:9000
+    forcePathStyle: false # set true for most S3-compatible servers (e.g. MinIO)
+    keyPrefix: "" # optional bucket-wide folder prefix, e.g. sftp/
+    accessKey: "" # required — scope credentials to this bucket only (see README)
+    accessSecret: "" # required
+
+# ─── SFTP Users ───────────────────────────────────────────────────────────────
+# Declarative user list, re-applied on every start. Each user is isolated to the
+# bucket folder {storage.s3.keyPrefix}{username}/ unless keyPrefix is overridden.
+users:
+  - username: sftpuser
+    password: change-me-sftp-user # omit when publicKeys is set
+    publicKeys: [] # SSH public keys, e.g. ["ssh-ed25519 AAAA... user@laptop"]
+    # keyPrefix: custom/folder/ # optional per-user bucket folder override
+
+volumeset:
+  capacity: 10 # GiB (minimum 10) — stores the embedded database and SSH host keys
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: true # public SFTP endpoint (dedicated NLB) on the client-facing workload
+
+internalAccess: # internal firewall scope of the SFTPGo workload
+  type: same-gvc # options: none, same-gvc, same-org, workload-list (scale_to_zero requires non-none)
+  workloads: [] # used with workload-list; the scale-to-zero proxy is added automatically
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+webAdmin:
+  enabled: false # declare SFTPGo's web admin/REST API port 8080 (public via the canonical
+                 # endpoint in always_warm mode when publicAccess is enabled)

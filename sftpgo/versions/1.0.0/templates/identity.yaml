@@ -1,0 +1,13 @@
+kind: identity
+name: {{ include "sftpgo.identity.name" . }}
+description: SFTPGo workload identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "sftpgo.tags" . | nindent 4 }}
+{{- if eq .Values.mode "scale_to_zero" }}
+---
+kind: identity
+name: {{ include "sftpgo.proxy.identity.name" . }}
+description: Scale-to-zero proxy identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "sftpgo.tags" . | nindent 4 }}
+{{- end }}

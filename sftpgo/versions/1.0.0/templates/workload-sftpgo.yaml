@@ -88,12 +88,12 @@ spec:
       {{- end }}
     internal:
       inboundAllowType: {{ .Values.internalAccess.type }}
-      {{- if or .Values.internalAccess.workloads (and (eq .Values.mode "scale_to_zero") (eq .Values.internalAccess.type "workload-list")) }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
       inboundAllowWorkload:
         {{- range .Values.internalAccess.workloads }}
         - {{ . }}
         {{- end }}
-        {{- if and (eq .Values.mode "scale_to_zero") (eq .Values.internalAccess.type "workload-list") }}
+        {{- if eq .Values.mode "scale_to_zero" }}
         - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "sftpgo.proxy.name" . }}
         {{- end }}
       {{- end }}

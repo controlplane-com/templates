@@ -7,7 +7,7 @@ tags: {{- include "sftpgo.tags" . | nindent 4 }}
 aws:
   cloudAccountLink: //cloudaccount/{{ .Values.storage.aws.cloudAccountName }}
   policyRefs:
-    - {{ .Values.storage.aws.policyName }}
+    - {{ .Values.storage.aws.policyName | quote }}
 {{- end }}
 {{- if eq .Values.mode "scale_to_zero" }}
 ---

@@ -65,9 +65,9 @@ webAdmin:
 
 ### Storage backend
 
-Pick a backend with `storage.type` and fill in that block.
+Pick a backend with `storage.type`. AWS and GCP use **cloud identity** — no credentials are stored; the workload's identity vends temporary credentials at runtime via a [cloud account](https://docs.controlplane.com/guides/create-cloud-account). Only S3-compatible servers, which can't federate, use static keys.
 
-**AWS S3 — keyless via Universal Cloud Identity (recommended):** no credentials stored. Register a [cloud account](https://docs.controlplane.com/guides/create-cloud-account) for your AWS account and create an IAM policy scoped to the bucket (example below); the workload's identity vends temporary credentials at runtime.
+**AWS S3 (keyless):** register an AWS cloud account and create a custom IAM policy scoped to the bucket (example below).
 
 ```yaml
 storage:
@@ -76,20 +76,19 @@ storage:
     bucket: my-bucket           # required, must already exist
     region: us-east-1
     keyPrefix: ""               # optional bucket-wide folder prefix, e.g. sftp/
-    cloudAccountName: my-aws    # Control Plane cloud account
-    policyName: my-s3-policy    # AWS IAM policy granting bucket access (bare name)
+    cloudAccountName: my-aws    # Control Plane AWS cloud account
+    policyName: my-s3-policy    # custom IAM policy granting bucket access (bare name)
 ```
 
-**AWS S3 — static keys (fallback):** leave `cloudAccountName` empty and supply keys instead.
+**Google Cloud Storage (keyless):** register a GCP cloud account; the identity is granted `objectAdmin` on the bucket.
 
 ```yaml
 storage:
-  type: aws
-  aws:
-    bucket: my-bucket
-    region: us-east-1
-    accessKey: AKIA...
-    accessSecret: "..."
+  type: gcp
+  gcp:
+    bucket: my-bucket           # required, must already exist
+    keyPrefix: ""
+    cloudAccountName: my-gcp    # Control Plane GCP cloud account
 ```
 
 **S3-compatible (MinIO, R2, Wasabi, …):** static keys only.

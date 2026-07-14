@@ -67,21 +67,22 @@ Proxy Policy Name
 {{/* Storage resolution */}}
 
 {{/*
-The active storage block (aws or minio) as a dict of the fields the rest of
-the chart needs, normalized. Isolates every "which backend" decision here.
-  keyless: true when AWS + cloudAccountName set (identity vends S3 creds)
+The active storage block as a normalized dict — isolates every "which backend"
+decision here. `provider` is SFTPGo's filesystem provider (1 = S3, 2 = GCS).
+AWS and GCP are always keyless (cloud identity); minio is static-keys.
 */}}
 {{- define "sftpgo.storage" -}}
 {{- $t := .Values.storage.type -}}
 {{- if eq $t "aws" -}}
 {{- $a := .Values.storage.aws -}}
-{{- dict "bucket" $a.bucket "region" $a.region "keyPrefix" ($a.keyPrefix | default "")
-      "endpoint" "" "forcePathStyle" false
-      "accessKey" ($a.accessKey | default "") "accessSecret" ($a.accessSecret | default "")
-      "keyless" (ne ($a.cloudAccountName | default "") "") | toJson -}}
+{{- dict "provider" 1 "bucket" $a.bucket "region" $a.region "keyPrefix" ($a.keyPrefix | default "")
+      "endpoint" "" "forcePathStyle" false "accessKey" "" "accessSecret" "" "keyless" true | toJson -}}
+{{- else if eq $t "gcp" -}}
+{{- $g := .Values.storage.gcp -}}
+{{- dict "provider" 2 "bucket" $g.bucket "keyPrefix" ($g.keyPrefix | default "") "keyless" true | toJson -}}
 {{- else -}}
 {{- $m := .Values.storage.minio -}}
-{{- dict "bucket" $m.bucket "region" $m.region "keyPrefix" ($m.keyPrefix | default "")
+{{- dict "provider" 1 "bucket" $m.bucket "region" $m.region "keyPrefix" ($m.keyPrefix | default "")
       "endpoint" $m.endpoint "forcePathStyle" true
       "accessKey" ($m.accessKey | default "") "accessSecret" ($m.accessSecret | default "")
       "keyless" false | toJson -}}
@@ -111,6 +112,10 @@ credentials from the workload identity.
 {{- if hasKey . "keyPrefix" -}}
 {{- $kp = .keyPrefix -}}
 {{- end -}}
+{{- $fs := dict "provider" $s.provider -}}
+{{- if eq (int $s.provider) 2 -}}
+{{- $_ := set $fs "gcsconfig" (dict "bucket" $s.bucket "key_prefix" $kp "automatic_credentials" 1) -}}
+{{- else -}}
 {{- $s3config := dict
       "bucket" $s.bucket
       "region" $s.region
@@ -122,12 +127,14 @@ credentials from the workload identity.
 {{- $_ := set $s3config "access_key" $s.accessKey -}}
 {{- $_ := set $s3config "access_secret" (dict "status" "Plain" "payload" $s.accessSecret) -}}
 {{- end -}}
+{{- $_ := set $fs "s3config" $s3config -}}
+{{- end -}}
 {{- $user := dict
       "username" .username
       "status" 1
       "home_dir" (printf "/srv/sftpgo/data/%s" .username)
       "permissions" (dict "/" (list "*"))
-      "filesystem" (dict "provider" 1 "s3config" $s3config)
+      "filesystem" $fs
 -}}
 {{- if .password -}}
 {{- $_ := set $user "password" .password -}}
@@ -153,21 +160,19 @@ credentials from the workload identity.
 {{- if and (eq .Values.mode "scale_to_zero") (not (regexMatch "^[0-9]+(ms|s|m|h)$" (printf "%v" .Values.scaleToZero.idleHold))) -}}
 {{- fail (printf "sftpgo: scaleToZero.idleHold must be a duration like 90s, 5m, or 1h, got '%v'" .Values.scaleToZero.idleHold) -}}
 {{- end -}}
-{{- if not (or (eq .Values.storage.type "aws") (eq .Values.storage.type "minio")) -}}
-{{- fail (printf "sftpgo: storage.type must be 'aws' or 'minio', got '%s'" .Values.storage.type) -}}
+{{- if not (has .Values.storage.type (list "aws" "gcp" "minio")) -}}
+{{- fail (printf "sftpgo: storage.type must be 'aws', 'gcp', or 'minio', got '%s'" .Values.storage.type) -}}
 {{- end -}}
 {{- if eq .Values.storage.type "aws" -}}
 {{- $a := .Values.storage.aws -}}
 {{- if not $a.bucket -}}{{- fail "sftpgo: storage.aws.bucket is required (the bucket must already exist)" -}}{{- end -}}
 {{- if not $a.region -}}{{- fail "sftpgo: storage.aws.region is required" -}}{{- end -}}
-{{- $hasUCI := ne ($a.cloudAccountName | default "") "" -}}
-{{- $hasKeys := and (ne ($a.accessKey | default "") "") (ne ($a.accessSecret | default "") "") -}}
-{{- if not (or $hasUCI $hasKeys) -}}
-{{- fail "sftpgo: storage.aws needs auth — set cloudAccountName + policyName for keyless access (recommended), or accessKey + accessSecret for static keys" -}}
-{{- end -}}
-{{- if and $hasUCI (not $a.policyName) -}}
-{{- fail "sftpgo: storage.aws.policyName is required alongside cloudAccountName (the AWS IAM policy granting bucket access)" -}}
-{{- end -}}
+{{- if not $a.cloudAccountName -}}{{- fail "sftpgo: storage.aws.cloudAccountName is required — AWS access is keyless via a Control Plane cloud account" -}}{{- end -}}
+{{- if not $a.policyName -}}{{- fail "sftpgo: storage.aws.policyName is required (a custom IAM policy granting bucket access)" -}}{{- end -}}
+{{- else if eq .Values.storage.type "gcp" -}}
+{{- $g := .Values.storage.gcp -}}
+{{- if not $g.bucket -}}{{- fail "sftpgo: storage.gcp.bucket is required (the bucket must already exist)" -}}{{- end -}}
+{{- if not $g.cloudAccountName -}}{{- fail "sftpgo: storage.gcp.cloudAccountName is required — GCS access is keyless via a Control Plane cloud account" -}}{{- end -}}
 {{- else -}}
 {{- $m := .Values.storage.minio -}}
 {{- if not $m.endpoint -}}{{- fail "sftpgo: storage.minio.endpoint is required (e.g. http://my-minio-workload:9000)" -}}{{- end -}}

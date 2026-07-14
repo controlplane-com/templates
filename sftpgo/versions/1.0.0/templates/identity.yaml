@@ -7,7 +7,16 @@ tags: {{- include "sftpgo.tags" . | nindent 4 }}
 aws:
   cloudAccountLink: //cloudaccount/{{ .Values.storage.aws.cloudAccountName }}
   policyRefs:
+    - cpln-connector
     - {{ .Values.storage.aws.policyName | quote }}
+{{- end }}
+{{- if and (eq .Values.storage.type "gcp") .Values.storage.gcp.cloudAccountName }}
+gcp:
+  cloudAccountLink: //cloudaccount/{{ .Values.storage.gcp.cloudAccountName }}
+  bindings:
+    - resource: //storage.googleapis.com/projects/_/buckets/{{ .Values.storage.gcp.bucket }}
+      roles:
+        - roles/storage.objectAdmin
 {{- end }}
 {{- if eq .Values.mode "scale_to_zero" }}
 ---

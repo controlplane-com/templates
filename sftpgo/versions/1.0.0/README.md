@@ -20,7 +20,7 @@ This app deploys [SFTPGo](https://github.com/drakkan/sftpgo) — an SFTP server 
 
 ## Prerequisites
 
-- An existing S3 bucket (AWS S3 or any S3-compatible server, e.g. a MinIO deployment) and access credentials scoped to that bucket (least-privilege policy example below).
+- An existing S3 bucket (AWS S3 or any S3-compatible server, e.g. a MinIO deployment). For AWS, either a [cloud account](https://docs.controlplane.com/guides/create-cloud-account) + a bucket-scoped IAM policy (keyless, recommended) or static access keys; for S3-compatible servers, static keys. Least-privilege policy example below.
 
 ## Configuration
 

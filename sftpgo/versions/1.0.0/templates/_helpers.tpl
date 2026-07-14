@@ -64,17 +64,44 @@ Proxy Policy Name
 {{- end }}
 
 
+{{/* Storage resolution */}}
+
+{{/*
+The active storage block (aws or minio) as a dict of the fields the rest of
+the chart needs, normalized. Isolates every "which backend" decision here.
+  keyless: true when AWS + cloudAccountName set (identity vends S3 creds)
+*/}}
+{{- define "sftpgo.storage" -}}
+{{- $t := .Values.storage.type -}}
+{{- if eq $t "aws" -}}
+{{- $a := .Values.storage.aws -}}
+{{- dict "bucket" $a.bucket "region" $a.region "keyPrefix" ($a.keyPrefix | default "")
+      "endpoint" "" "forcePathStyle" false
+      "accessKey" ($a.accessKey | default "") "accessSecret" ($a.accessSecret | default "")
+      "keyless" (ne ($a.cloudAccountName | default "") "") | toJson -}}
+{{- else -}}
+{{- $m := .Values.storage.minio -}}
+{{- dict "bucket" $m.bucket "region" $m.region "keyPrefix" ($m.keyPrefix | default "")
+      "endpoint" $m.endpoint "forcePathStyle" true
+      "accessKey" ($m.accessKey | default "") "accessSecret" ($m.accessSecret | default "")
+      "keyless" false | toJson -}}
+{{- end -}}
+{{- end }}
+
+
 {{/* Users LOADDATA JSON (SFTPGo dump format) */}}
 
 {{/*
 Renders the SFTPGO_LOADDATA_FROM file: declared users with per-user S3
-filesystems. Plain passwords are bcrypt-hashed by SFTPGo on load; the
-access secret uses the {"status":"Plain","payload":...} form and is
-encrypted by SFTPGo's local KMS before persisting.
+filesystems. Plain passwords are bcrypt-hashed by SFTPGo on load. For static
+credentials the access secret uses the {"status":"Plain","payload":...} form
+(encrypted by SFTPGo's local KMS on load); for keyless (UCI) auth the
+access_key/access_secret are OMITTED so SFTPGo's AWS SDK uses the vended
+credentials from the workload identity.
 */}}
 {{- define "sftpgo.usersFile" -}}
-{{- $s3 := .Values.storage.s3 -}}
-{{- $globalPrefix := $s3.keyPrefix | default "" -}}
+{{- $s := include "sftpgo.storage" . | fromJson -}}
+{{- $globalPrefix := $s.keyPrefix -}}
 {{- if and $globalPrefix (not (hasSuffix "/" $globalPrefix)) -}}
 {{- $globalPrefix = printf "%s/" $globalPrefix -}}
 {{- end -}}
@@ -85,14 +112,16 @@ encrypted by SFTPGo's local KMS before persisting.
 {{- $kp = .keyPrefix -}}
 {{- end -}}
 {{- $s3config := dict
-      "bucket" $s3.bucket
-      "region" $s3.region
-      "access_key" $s3.accessKey
-      "access_secret" (dict "status" "Plain" "payload" $s3.accessSecret)
-      "endpoint" ($s3.endpoint | default "")
-      "force_path_style" ($s3.forcePathStyle | default false)
+      "bucket" $s.bucket
+      "region" $s.region
+      "endpoint" $s.endpoint
+      "force_path_style" $s.forcePathStyle
       "key_prefix" $kp
 -}}
+{{- if not $s.keyless -}}
+{{- $_ := set $s3config "access_key" $s.accessKey -}}
+{{- $_ := set $s3config "access_secret" (dict "status" "Plain" "payload" $s.accessSecret) -}}
+{{- end -}}
 {{- $user := dict
       "username" .username
       "status" 1
@@ -124,17 +153,27 @@ encrypted by SFTPGo's local KMS before persisting.
 {{- if and (eq .Values.mode "scale_to_zero") (not (regexMatch "^[0-9]+(ms|s|m|h)$" (printf "%v" .Values.scaleToZero.idleHold))) -}}
 {{- fail (printf "sftpgo: scaleToZero.idleHold must be a duration like 90s, 5m, or 1h, got '%v'" .Values.scaleToZero.idleHold) -}}
 {{- end -}}
-{{- if not .Values.storage.s3.bucket -}}
-{{- fail "sftpgo: storage.s3.bucket is required (the bucket must already exist)" -}}
+{{- if not (or (eq .Values.storage.type "aws") (eq .Values.storage.type "minio")) -}}
+{{- fail (printf "sftpgo: storage.type must be 'aws' or 'minio', got '%s'" .Values.storage.type) -}}
 {{- end -}}
-{{- if not .Values.storage.s3.region -}}
-{{- fail "sftpgo: storage.s3.region is required" -}}
+{{- if eq .Values.storage.type "aws" -}}
+{{- $a := .Values.storage.aws -}}
+{{- if not $a.bucket -}}{{- fail "sftpgo: storage.aws.bucket is required (the bucket must already exist)" -}}{{- end -}}
+{{- if not $a.region -}}{{- fail "sftpgo: storage.aws.region is required" -}}{{- end -}}
+{{- $hasUCI := ne ($a.cloudAccountName | default "") "" -}}
+{{- $hasKeys := and (ne ($a.accessKey | default "") "") (ne ($a.accessSecret | default "") "") -}}
+{{- if not (or $hasUCI $hasKeys) -}}
+{{- fail "sftpgo: storage.aws needs auth — set cloudAccountName + policyName for keyless access (recommended), or accessKey + accessSecret for static keys" -}}
 {{- end -}}
-{{- if not .Values.storage.s3.accessKey -}}
-{{- fail "sftpgo: storage.s3.accessKey is required" -}}
+{{- if and $hasUCI (not $a.policyName) -}}
+{{- fail "sftpgo: storage.aws.policyName is required alongside cloudAccountName (the AWS IAM policy granting bucket access)" -}}
 {{- end -}}
-{{- if not .Values.storage.s3.accessSecret -}}
-{{- fail "sftpgo: storage.s3.accessSecret is required" -}}
+{{- else -}}
+{{- $m := .Values.storage.minio -}}
+{{- if not $m.endpoint -}}{{- fail "sftpgo: storage.minio.endpoint is required (e.g. http://my-minio-workload:9000)" -}}{{- end -}}
+{{- if not $m.bucket -}}{{- fail "sftpgo: storage.minio.bucket is required" -}}{{- end -}}
+{{- if not $m.accessKey -}}{{- fail "sftpgo: storage.minio.accessKey is required" -}}{{- end -}}
+{{- if not $m.accessSecret -}}{{- fail "sftpgo: storage.minio.accessSecret is required" -}}{{- end -}}
 {{- end -}}
 {{- if not .Values.users -}}
 {{- fail "sftpgo: at least one entry in 'users' is required" -}}

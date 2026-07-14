@@ -3,6 +3,12 @@ name: {{ include "sftpgo.identity.name" . }}
 description: SFTPGo workload identity
 gvc: {{ .Values.global.cpln.gvc }}
 tags: {{- include "sftpgo.tags" . | nindent 4 }}
+{{- if and (eq .Values.storage.type "aws") .Values.storage.aws.cloudAccountName }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.storage.aws.cloudAccountName }}
+  policyRefs:
+    - {{ .Values.storage.aws.policyName }}
+{{- end }}
 {{- if eq .Values.mode "scale_to_zero" }}
 ---
 kind: identity

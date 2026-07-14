@@ -28,20 +28,34 @@ admin: # SFTPGo administrator (REST API / optional web admin), created on first 
   username: admin
   password: change-me-sftpgo-admin # change before installing
 
-# ─── S3 Storage Backend ───────────────────────────────────────────────────────
+# ─── Storage Backend ──────────────────────────────────────────────────────────
 storage:
-  s3:
+  type: aws # options: aws, minio
+
+  # AWS S3. Preferred auth is keyless via Universal Cloud Identity — set
+  # cloudAccountName + policyName and leave accessKey/accessSecret blank. Static
+  # keys are a fallback used only when cloudAccountName is empty.
+  aws:
     bucket: "" # required — bucket must already exist
     region: us-east-1
-    endpoint: "" # set for S3-compatible servers, e.g. http://my-minio-workload:9000
-    forcePathStyle: false # set true for most S3-compatible servers (e.g. MinIO)
     keyPrefix: "" # optional bucket-wide folder prefix, e.g. sftp/
-    accessKey: "" # required — scope credentials to this bucket only (see README)
+    cloudAccountName: "" # Control Plane cloud account linked to your AWS account
+    policyName: "" # AWS IAM policy name granting access to the bucket (bare name)
+    accessKey: "" # static-key fallback (only if cloudAccountName is empty)
+    accessSecret: ""
+
+  # Any S3-compatible server (MinIO, R2, Wasabi, …). Static keys only.
+  minio:
+    endpoint: "" # required, e.g. http://my-minio-workload:9000
+    bucket: "" # required — bucket must already exist
+    region: us-east-1
+    keyPrefix: "" # optional bucket-wide folder prefix, e.g. sftp/
+    accessKey: "" # required
     accessSecret: "" # required
 
 # ─── SFTP Users ───────────────────────────────────────────────────────────────
 # Declarative user list, re-applied on every start. Each user is isolated to the
-# bucket folder {storage.s3.keyPrefix}{username}/ unless keyPrefix is overridden.
+# bucket folder {keyPrefix}{username}/ unless keyPrefix is overridden.
 users:
   - username: sftpuser
     password: change-me-sftp-user # omit when publicKeys is set

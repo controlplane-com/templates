@@ -65,16 +65,44 @@ webAdmin:
 
 ### Storage backend
 
+Pick a backend with `storage.type` and fill in that block.
+
+**AWS S3 — keyless via Universal Cloud Identity (recommended):** no credentials stored. Register a [cloud account](https://docs.controlplane.com/guides/create-cloud-account) for your AWS account and create an IAM policy scoped to the bucket (example below); the workload's identity vends temporary credentials at runtime.
+
 ```yaml
 storage:
-  s3:
-    bucket: my-bucket          # required, must already exist
+  type: aws
+  aws:
+    bucket: my-bucket           # required, must already exist
     region: us-east-1
-    endpoint: ""               # set for S3-compatible servers, e.g. http://my-minio:9000
-    forcePathStyle: false      # true for most S3-compatible servers (e.g. MinIO)
-    keyPrefix: ""              # optional bucket-wide folder prefix, e.g. sftp/
-    accessKey: AKIA...         # required — scope to this bucket only (policy below)
-    accessSecret: "..."        # required
+    keyPrefix: ""               # optional bucket-wide folder prefix, e.g. sftp/
+    cloudAccountName: my-aws    # Control Plane cloud account
+    policyName: my-s3-policy    # AWS IAM policy granting bucket access (bare name)
+```
+
+**AWS S3 — static keys (fallback):** leave `cloudAccountName` empty and supply keys instead.
+
+```yaml
+storage:
+  type: aws
+  aws:
+    bucket: my-bucket
+    region: us-east-1
+    accessKey: AKIA...
+    accessSecret: "..."
+```
+
+**S3-compatible (MinIO, R2, Wasabi, …):** static keys only.
+
+```yaml
+storage:
+  type: minio
+  minio:
+    endpoint: http://my-minio-workload:9000   # required
+    bucket: my-bucket
+    region: us-east-1
+    accessKey: minio-user
+    accessSecret: minio-pass
 ```
 
 ### Users

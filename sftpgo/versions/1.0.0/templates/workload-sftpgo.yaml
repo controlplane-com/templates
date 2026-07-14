@@ -76,6 +76,12 @@ spec:
     debug: false
     suspend: false
     timeoutSeconds: 30
+  # The distroless image runs as UID/GID 1000 with no root entrypoint to chown
+  # the freshly-provisioned (root-owned) volumeset mount. filesystemGroupId makes
+  # /var/lib/sftpgo group-owned and group-writable by GID 1000 so SFTPGo can
+  # create its bolt database and SSH host keys on first boot.
+  securityOptions:
+    filesystemGroupId: 1000
   firewallConfig:
     external:
       outboundAllowCIDR:

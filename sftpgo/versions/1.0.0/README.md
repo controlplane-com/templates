@@ -20,7 +20,11 @@ This app deploys [SFTPGo](https://github.com/drakkan/sftpgo) — an SFTP server 
 
 ## Prerequisites
 
-- An existing S3 bucket (AWS S3 or any S3-compatible server, e.g. a MinIO deployment). For AWS, either a [cloud account](https://docs.controlplane.com/guides/create-cloud-account) + a bucket-scoped IAM policy (keyless, recommended) or static access keys; for S3-compatible servers, static keys. Least-privilege policy example below.
+An existing bucket in one of the supported backends, and the access setup for it (step-by-step under [Storage setup](#storage-setup)):
+
+- **AWS S3** — an S3 bucket, a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) for your AWS account, and a bucket-scoped IAM policy (keyless — no stored credentials).
+- **Google Cloud Storage** — a GCS bucket and a Control Plane cloud account for your GCP project (keyless).
+- **S3-compatible (MinIO, R2, Wasabi, …)** — a bucket and static access credentials (no cloud account).
 
 ## Configuration
 
@@ -65,11 +69,10 @@ webAdmin:
 
 ### Storage backend
 
-Pick a backend with `storage.type`. AWS and GCP use **cloud identity** — no credentials are stored; the workload's identity vends temporary credentials at runtime via a [cloud account](https://docs.controlplane.com/guides/create-cloud-account). Only S3-compatible servers, which can't federate, use static keys.
-
-**AWS S3 (keyless):** register an AWS cloud account and create a custom IAM policy scoped to the bucket (example below).
+Set `storage.type` to `aws`, `gcp`, or `minio`, and configure that block. AWS and GCP use **cloud identity** — no credentials are stored; the workload's identity vends temporary credentials at runtime. See [Storage setup](#storage-setup) below for the step-by-step per backend.
 
 ```yaml
+# AWS S3 (keyless)
 storage:
   type: aws
   aws:
@@ -80,9 +83,8 @@ storage:
     policyName: my-s3-policy    # custom IAM policy granting bucket access (bare name)
 ```
 
-**Google Cloud Storage (keyless):** register a GCP cloud account; the identity is granted `objectAdmin` on the bucket.
-
 ```yaml
+# Google Cloud Storage (keyless)
 storage:
   type: gcp
   gcp:
@@ -91,9 +93,8 @@ storage:
     cloudAccountName: my-gcp    # Control Plane GCP cloud account
 ```
 
-**S3-compatible (MinIO, R2, Wasabi, …):** static keys only.
-
 ```yaml
+# S3-compatible: MinIO, R2, Wasabi, … (static keys)
 storage:
   type: minio
   minio:
@@ -127,6 +128,8 @@ internalAccess:       # internal firewall scope of the SFTPGo workload
   workloads: []       # with workload-list; the proxy is added automatically
 ```
 
+SFTP is a raw-TCP protocol, and Control Plane's canonical `*.cpln.app` endpoints serve HTTP only — so a **public** SFTP endpoint requires a dedicated network load balancer (`loadBalancer.direct`), which this template configures automatically when `publicAccess.enabled` is `true`. For an internal-only endpoint, set `publicAccess.enabled: false`: no load balancer is created and clients reach SFTPGo over the GVC network (see [Connecting](#connecting)).
+
 ## Connecting
 
 | What | Value |
@@ -149,7 +152,15 @@ The first connection after an idle period wakes the server (measured ~30s, occas
 
 For third-party clients you cannot configure, use `always_warm`.
 
-## Least-privilege S3 policy (AWS)
+## Storage setup
+
+Complete the steps for your chosen backend before installing.
+
+### AWS S3
+
+1. Create your S3 bucket. Set `storage.aws.bucket` and `storage.aws.region`.
+2. If you do not have one, create a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) for your AWS account. Set `storage.aws.cloudAccountName`.
+3. Create an AWS IAM policy with the JSON below (replace `YOUR_BUCKET`), then set `storage.aws.policyName` to the policy's name:
 
 ```json
 {
@@ -162,6 +173,20 @@ For third-party clients you cannot configure, use `always_warm`.
   }]
 }
 ```
+
+Access is keyless — the workload identity assumes a role carrying this policy (plus `cpln-connector`, which lets Control Plane manage the role); no credentials are stored.
+
+### Google Cloud Storage
+
+1. Create your GCS bucket. Set `storage.gcp.bucket`.
+2. If you do not have one, create a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) for your GCP project. Set `storage.gcp.cloudAccountName`.
+3. No policy to author — the template grants the workload identity `roles/storage.objectAdmin` scoped to the bucket automatically. Ensure your cloud account setup (per the Create a Cloud Account guide) permits its service account to receive that binding.
+
+### S3-compatible (MinIO, R2, Wasabi, …)
+
+1. Create your bucket on the server. Set `storage.minio.bucket`.
+2. Set `storage.minio.endpoint` to the S3 API address including port. For the `minio` marketplace template deployed in the same GVC, this is `http://WORKLOAD_NAME:9000`.
+3. Set `storage.minio.accessKey` and `storage.minio.accessSecret` to credentials with access to the bucket. For the MinIO template, these are its `admin.username` and `admin.password`.
 
 ## Important Notes
 

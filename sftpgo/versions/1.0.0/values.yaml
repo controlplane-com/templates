@@ -35,28 +35,28 @@ storage:
   # AWS S3 — keyless via Control Plane cloud identity (no stored credentials).
   # Requires a cloud account and a custom bucket-scoped IAM policy.
   aws:
-    bucket: "" # required — bucket must already exist
+    bucket: my-sftp-bucket # bucket must already exist
     region: us-east-1
     keyPrefix: "" # optional bucket-wide folder prefix, e.g. sftp/
-    cloudAccountName: "" # required — Control Plane AWS cloud account
-    policyName: "" # required — custom IAM policy granting bucket access (bare name)
+    cloudAccountName: my-s3-cloud-account # Control Plane AWS cloud account
+    policyName: my-sftp-s3-policy # custom IAM policy granting bucket access (bare name)
 
   # Google Cloud Storage — keyless via Control Plane cloud identity.
   # Requires a cloud account; the identity is granted objectAdmin on the bucket.
   gcp:
-    bucket: "" # required — bucket must already exist
+    bucket: my-sftp-bucket # bucket must already exist
     keyPrefix: "" # optional bucket-wide folder prefix, e.g. sftp/
-    cloudAccountName: "" # required — Control Plane GCP cloud account
+    cloudAccountName: my-gcs-cloud-account # Control Plane GCP cloud account
 
   # Any S3-compatible server (MinIO, R2, Wasabi, …) — static keys only, since
   # these cannot federate with a cloud account.
   minio:
-    endpoint: "" # required, e.g. http://my-minio-workload:9000
-    bucket: "" # required — bucket must already exist
+    endpoint: http://my-minio-workload:9000 # e.g. an internal MinIO template deployment
+    bucket: my-sftp-bucket # bucket must already exist
     region: us-east-1
     keyPrefix: "" # optional bucket-wide folder prefix, e.g. sftp/
-    accessKey: "" # required
-    accessSecret: "" # required
+    accessKey: my-minio-username
+    accessSecret: my-minio-password
 
 # ─── SFTP Users ───────────────────────────────────────────────────────────────
 # Declarative user list, re-applied on every start. Each user is isolated to the

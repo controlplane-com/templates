@@ -2,7 +2,7 @@ image: drakkan/sftpgo:v2.7.4-distroless-slim
 
 # ─── Mode ─────────────────────────────────────────────────────────────────────
 # scale_to_zero: SFTPGo suspends when idle; an always-on proxy holds inbound
-#   connections, wakes it (~10-15s cold), and re-suspends after idleHold.
+#   connections, wakes it (~30s cold), and re-suspends after idleHold.
 #   Clients connect to the PROXY endpoint and need generous timeouts (see README).
 # always_warm: no proxy; SFTPGo runs always-on with its own public endpoint.
 mode: scale_to_zero # options: scale_to_zero, always_warm

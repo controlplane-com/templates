@@ -14,8 +14,8 @@ This app deploys [SFTPGo](https://github.com/drakkan/sftpgo) — an SFTP server 
 | | `scale_to_zero` (default) | `always_warm` |
 |---|---|---|
 | Cost when idle | Proxy (~100m/128Mi) + the dedicated load balancer | Full SFTPGo replica + load balancer |
-| First connect after idle | ~10–15s cold start | Instant |
-| Client requirements | Timeout ≥60s or retry (see below) | None — works unchanged |
+| First connect after idle | ~30s cold start (occasionally up to ~75s) | Instant |
+| Client requirements | Timeout ≥120s or retry (see below) | None — works unchanged |
 | Best for | Cost-sensitive, periodic transfers, cooperative clients | Strict SLAs, arbitrary third-party clients |
 
 ## Prerequisites
@@ -112,12 +112,13 @@ internalAccess:       # internal firewall scope of the SFTPGo workload
 
 ## Cold starts and client configuration (`scale_to_zero` mode)
 
-The first connection after an idle period wakes the server (measured ~10–15s). The proxy holds the TCP connection so nothing is refused, but clients with short SSH banner timeouts (~15s in several libraries) may give up right at the finish line. Configure clients generously:
+The first connection after an idle period wakes the server (measured ~30s, occasionally up to ~75s — the persistent volume attaches on each wake). The proxy holds the TCP connection so nothing is refused, but clients with short SSH banner timeouts (~15s in several libraries) give up right at the finish line. Configure clients generously:
 
-- **paramiko**: `connect(..., banner_timeout=60, timeout=60)`
-- **WinSCP**: Session → Timeout ≥ 60s
+- **paramiko**: `connect(..., banner_timeout=120, timeout=120)`
+- **WinSCP**: Session → Timeout ≥ 120s
 - **OpenSSH CLI**: tolerant by default — no change needed
 - **Unattended jobs**: retry with backoff — the first (even failed) attempt triggers the wake, and `idleHold` keeps the server warm so the retry lands instantly
+- **Right after install**: the load balancer needs a few minutes to warm up; the very first cold connect may time out once, then succeed on retry
 
 For third-party clients you cannot configure, use `always_warm`.
 

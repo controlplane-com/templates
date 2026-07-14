@@ -1,0 +1,29 @@
+kind: policy
+name: {{ include "sftpgo.policy.name" . }}
+description: SFTPGo secret access
+tags: {{- include "sftpgo.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "sftpgo.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "sftpgo.secretAdmin.name" . }}
+  - //secret/{{ include "sftpgo.secretUsers.name" . }}
+{{- if eq .Values.mode "scale_to_zero" }}
+---
+kind: policy
+name: {{ include "sftpgo.proxy.policy.name" . }}
+description: Proxy may suspend and wake exactly the SFTPGo workload
+tags: {{- include "sftpgo.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - view
+      - edit
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "sftpgo.proxy.identity.name" . }}
+targetKind: workload
+targetLinks:
+  - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "sftpgo.name" . }}
+{{- end }}

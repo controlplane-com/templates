@@ -128,7 +128,7 @@ internalAccess:       # internal firewall scope of the SFTPGo workload
   workloads: []       # with workload-list; the proxy is added automatically
 ```
 
-SFTP is a raw-TCP protocol, and Control Plane's canonical `*.cpln.app` endpoints serve HTTP only — so a **public** SFTP endpoint requires a dedicated network load balancer (`loadBalancer.direct`), which this template configures automatically when `publicAccess.enabled` is `true`. For an internal-only endpoint, set `publicAccess.enabled: false`: no load balancer is created and clients reach SFTPGo over the GVC network (see [Connecting](#connecting)).
+Public access uses a dedicated direct load balancer, required for raw-TCP protocols like SFTP. Set `publicAccess.enabled: false` for an internal-only endpoint (no load balancer; clients reach SFTPGo over the GVC network).
 
 ## Connecting
 
@@ -173,8 +173,6 @@ Complete the steps for your chosen backend before installing.
   }]
 }
 ```
-
-Access is keyless — the workload identity assumes a role carrying this policy (plus `cpln-connector`, which lets Control Plane manage the role); no credentials are stored.
 
 ### Google Cloud Storage
 

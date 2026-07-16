@@ -22,10 +22,10 @@ Single replica is by design: memory is a single-writer SQLite database and upstr
   | Dashboard basic-auth password | when dashboard enabled | `secret.keys.dashboardPassword` |
 
   ```bash
-  cpln secret create --type dictionary --name my-hermes-secret --gvc $GVC \
-    --data 'api-key=sk-ant-...' \
-    --data 'api-server-key=choose-a-long-random-token' \
-    --data 'dashboard-password=choose-a-dashboard-password'
+  cpln secret create-dictionary --name my-hermes-secret \
+    --entry 'api-key=sk-ant-...' \
+    --entry 'api-server-key=choose-a-long-random-token' \
+    --entry 'dashboard-password=choose-a-dashboard-password'
   ```
 
   Pass its name as `secret.name` at install (and override `secret.keys` if your key names differ).

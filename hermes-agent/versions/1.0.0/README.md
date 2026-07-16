@@ -21,16 +21,10 @@ Single replica is by design: memory is a single-writer SQLite database and upstr
   | Bearer token clients present to the gateway API — **must be at least 16 characters** | yes | `secret.keys.apiServerKey` |
   | Dashboard basic-auth password | when dashboard enabled | `secret.keys.dashboardPassword` |
 
-  ```bash
-  cpln secret create-dictionary --name my-hermes-secret \
-    --entry 'api-key=sk-ant-...' \
-    --entry "api-server-key=$(openssl rand -hex 32)" \
-    --entry 'dashboard-password=choose-a-dashboard-password'
-  ```
-
   Hermes **rejects an API server key shorter than 16 characters** (this endpoint dispatches
-  terminal-capable agent work, so a guessable key is remote code execution). If the key is too
-  short the gateway still starts but the API never serves — the workload will not become ready.
+  terminal-capable agent work, so a guessable key is remote code execution) — generate one with
+  `openssl rand -hex 32`. If the key is too short the gateway still starts but the API never
+  serves, and the workload will not become ready.
 
   Pass its name as `secret.name` at install (and override `secret.keys` if your key names differ).
 

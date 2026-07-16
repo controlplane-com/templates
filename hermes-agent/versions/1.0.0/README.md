@@ -151,6 +151,7 @@ Follow the prompts for your platform; the configuration is stored on the data vo
 - **The dashboard is internal-only** — it is never on the public endpoint; reach it via `port-forward`.
 - **Single replica by design** — memory is single-writer SQLite; do not scale up. State persists on the volume across restarts.
 - **The model is external** — cost and rate limits are governed by your LLM provider, not this workload.
+- **Failed model calls return HTTP 200** with the error inside the body (`"finish_reason": "error"`, `"hermes": {"failed": true}`). A client that checks only the HTTP status will read a provider failure as success — inspect the body, or the agent log at `/opt/data/logs/agent.log`.
 - **Keep `cpu` under 4× `minCpu`** — the platform rejects a wider ratio; raise `minCpu` if you raise `cpu`.
 - **Reset** requires `cpln helm uninstall` (deletes the volumeset) — changing the secret and redeploying does not wipe existing memory/config on the volume.
 

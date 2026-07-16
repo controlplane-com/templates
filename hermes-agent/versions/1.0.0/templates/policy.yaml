@@ -1,0 +1,12 @@
+kind: policy
+name: {{ include "hermes-agent.policy.name" . }}
+description: Hermes Agent secret access
+tags: {{- include "hermes-agent.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "hermes-agent.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ .Values.secret.name }}

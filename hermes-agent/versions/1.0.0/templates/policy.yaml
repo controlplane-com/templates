@@ -9,4 +9,4 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "hermes-agent.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ .Values.secretName }}
+  - //secret/{{ .Values.secret.name }}

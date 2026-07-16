@@ -54,8 +54,11 @@ prerequisite secret. "custom" reuses the OpenAI-compatible key env.
 {{- if and (eq .Values.model.provider "custom") (not .Values.model.baseUrl) -}}
 {{- fail "hermes-agent: model.baseUrl is required when model.provider is 'custom'" -}}
 {{- end -}}
-{{- if not .Values.secretName -}}
-{{- fail "hermes-agent: secretName is required — create the prerequisite dictionary secret first (see README → Prerequisites)" -}}
+{{- if not .Values.secret.name -}}
+{{- fail "hermes-agent: secret.name is required — create the prerequisite dictionary secret first (see README → Prerequisites)" -}}
+{{- end -}}
+{{- if gt (int .Values.volumeset.capacity) (int .Values.volumeset.maxCapacity) -}}
+{{- fail (printf "hermes-agent: volumeset.maxCapacity (%v) must be >= volumeset.capacity (%v)" .Values.volumeset.maxCapacity .Values.volumeset.capacity) -}}
 {{- end -}}
 {{- if not (has .Values.internalAccess.type (list "none" "same-gvc" "same-org" "workload-list")) -}}
 {{- fail (printf "hermes-agent: internalAccess.type must be none, same-gvc, same-org, or workload-list — got '%s'" .Values.internalAccess.type) -}}

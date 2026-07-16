@@ -7,6 +7,10 @@ spec:
   fileSystemType: ext4
   initialCapacity: {{ .Values.volumeset.capacity }}
   performanceClass: general-purpose-ssd
+  autoscaling:
+    maxCapacity: {{ .Values.volumeset.maxCapacity }}
+    minFreePercentage: 20
+    scalingFactor: 1.5
   snapshots:
     createFinalSnapshot: true
     retentionDuration: 7d

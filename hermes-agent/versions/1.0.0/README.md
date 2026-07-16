@@ -13,22 +13,22 @@ Single replica is by design: memory is a single-writer SQLite database and upstr
 ## Prerequisites
 
 - **An LLM API key** from your provider (Anthropic, OpenAI, OpenRouter, or any OpenAI-compatible endpoint).
-- **A dictionary secret** you create *before* installing (secrets are never passed through values). Give it these keys:
+- **A dictionary secret** you create *before* installing (secrets are never passed through values). It holds three values; **name the keys however you like** and map them under `secret.keys` at install — an existing secret works unchanged.
 
-  | Key | Required | Purpose |
+  | Value | Required | Maps to |
   |---|---|---|
-  | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` | yes | The key matching `model.provider` (custom uses `OPENAI_API_KEY`) |
-  | `API_SERVER_KEY` | yes | Bearer token clients present to the gateway API |
-  | `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD` | when dashboard enabled | Dashboard basic-auth password |
+  | LLM API key for your provider | yes | `secret.keys.apiKey` |
+  | Bearer token clients present to the gateway API | yes | `secret.keys.apiServerKey` |
+  | Dashboard basic-auth password | when dashboard enabled | `secret.keys.dashboardPassword` |
 
   ```bash
-  cpln secret create --type dictionary --name my-hermes-secrets --gvc $GVC \
-    --data 'ANTHROPIC_API_KEY=sk-ant-...' \
-    --data 'API_SERVER_KEY=choose-a-long-random-token' \
-    --data 'HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=choose-a-dashboard-password'
+  cpln secret create --type dictionary --name my-hermes-secret --gvc $GVC \
+    --data 'api-key=sk-ant-...' \
+    --data 'api-server-key=choose-a-long-random-token' \
+    --data 'dashboard-password=choose-a-dashboard-password'
   ```
 
-  Pass its name as `secretName` at install.
+  Pass its name as `secret.name` at install (and override `secret.keys` if your key names differ).
 
 ## Configuration
 
@@ -50,7 +50,12 @@ model:
 ### Secret
 
 ```yaml
-secretName: my-hermes-secrets   # name of the dictionary secret you created (see Prerequisites)
+secret:
+  name: my-hermes-secret        # name of the dictionary secret you created (see Prerequisites)
+  keys:                         # point each field at the key in YOUR secret that holds it
+    apiKey: api-key
+    apiServerKey: api-server-key
+    dashboardPassword: dashboard-password
 ```
 
 ### Dashboard
@@ -64,8 +69,8 @@ dashboard:
 ### Resources
 
 ```yaml
-# capacityAI is off (required for stateful). The min→max spread is the elasticity:
-# idle floor reserved at min, burst toward the ceiling only while Chromium runs.
+# The min→max spread is the elasticity: idle floor at min, burst toward the
+# ceiling only while the agent's on-demand browser (headless Chromium) runs.
 resources:
   minCpu: 500m
   minMemory: 1Gi
@@ -77,7 +82,8 @@ resources:
 
 ```yaml
 volumeset:
-  capacity: 10          # GiB (minimum 10) — memory DB, sessions, skills, config
+  capacity: 10          # initial GiB (minimum 10) — memory DB, sessions, skills, config
+  maxCapacity: 100      # auto-expands up to this GiB as state grows (keeps ~20% free)
 ```
 
 ### Access
@@ -96,7 +102,7 @@ internalAccess:
 | Interface | Where | Auth |
 |---|---|---|
 | Gateway API (OpenAI-compatible) | Public canonical HTTPS endpoint on 8642 — find it in `status.canonicalEndpoint` (`cpln workload get RELEASE-hermes-agent -o yaml`) | Bearer `API_SERVER_KEY` |
-| Web dashboard | Internal only — `cpln workload port-forward RELEASE-hermes-agent --gvc GVC -p 9119:9119`, then `http://localhost:9119` | Basic auth (`dashboard.username` + `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD`) |
+| Web dashboard | Internal only — `cpln workload port-forward RELEASE-hermes-agent --gvc GVC -p 9119:9119`, then `http://localhost:9119` | Basic auth (`dashboard.username` + the dashboard password from your secret) |
 | From another workload | `RELEASE-hermes-agent.GVC.cpln.local:8642` | Bearer `API_SERVER_KEY` |
 
 Example request against the gateway API:

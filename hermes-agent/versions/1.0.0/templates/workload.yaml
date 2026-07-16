@@ -18,7 +18,7 @@ spec:
       env:
         # ── LLM provider (key comes from the prerequisite secret) ──
         - name: {{ include "hermes-agent.apiKeyEnv" . }}
-          value: 'cpln://secret/{{ .Values.secretName }}.{{ include "hermes-agent.apiKeyEnv" . }}'
+          value: 'cpln://secret/{{ .Values.secret.name }}.{{ .Values.secret.keys.apiKey }}'
         - name: HERMES_INFERENCE_PROVIDER
           value: {{ .Values.model.provider | quote }}
         {{- if .Values.model.name }}
@@ -39,7 +39,7 @@ spec:
         - name: API_SERVER_PORT
           value: '8642'
         - name: API_SERVER_KEY
-          value: 'cpln://secret/{{ .Values.secretName }}.API_SERVER_KEY'
+          value: 'cpln://secret/{{ .Values.secret.name }}.{{ .Values.secret.keys.apiServerKey }}'
         {{- if .Values.dashboard.enabled }}
         # ── Web dashboard (internal-only, basic auth) ──
         - name: HERMES_DASHBOARD
@@ -51,7 +51,7 @@ spec:
         - name: HERMES_DASHBOARD_BASIC_AUTH_USERNAME
           value: {{ .Values.dashboard.username | quote }}
         - name: HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
-          value: 'cpln://secret/{{ .Values.secretName }}.HERMES_DASHBOARD_BASIC_AUTH_PASSWORD'
+          value: 'cpln://secret/{{ .Values.secret.name }}.{{ .Values.secret.keys.dashboardPassword }}'
         {{- end }}
       ports:
         # First port receives the public canonical HTTPS endpoint.

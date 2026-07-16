@@ -6,11 +6,13 @@ tags: {{- include "hermes-agent.tags" . | nindent 4 }}
 spec:
   fileSystemType: ext4
   initialCapacity: {{ .Values.volumeset.capacity }}
-  performanceClass: general-purpose-ssd
+  {{- if .Values.volumeset.autoscaling.enabled }}
   autoscaling:
-    maxCapacity: {{ .Values.volumeset.maxCapacity }}
-    minFreePercentage: 20
-    scalingFactor: 1.5
+    maxCapacity: {{ .Values.volumeset.autoscaling.maxCapacity }}
+    minFreePercentage: {{ .Values.volumeset.autoscaling.minFreePercentage }}
+    scalingFactor: {{ .Values.volumeset.autoscaling.scalingFactor }}
+  {{- end }}
+  performanceClass: general-purpose-ssd
   snapshots:
     createFinalSnapshot: true
     retentionDuration: 7d

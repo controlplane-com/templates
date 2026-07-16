@@ -30,8 +30,12 @@ resources:
 
 # ─── Storage ──────────────────────────────────────────────────────────────────
 volumeset:
-  capacity: 10 # initial GiB (minimum 10)
-  maxCapacity: 100 # auto-expands up to this GiB as memory/sessions grow
+  capacity: 10 # Initial capacity in GiB (minimum is 10)
+  autoscaling:
+    enabled: false # Set to true to enable autoscaling
+    maxCapacity: 100 # Maximum capacity in GiB when autoscaling is enabled
+    minFreePercentage: 10 # Minimum free percentage to trigger scaling when autoscaling is enabled
+    scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
 
 # ─── Access ───────────────────────────────────────────────────────────────────
 publicAccess:

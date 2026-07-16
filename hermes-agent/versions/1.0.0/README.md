@@ -82,8 +82,12 @@ resources:
 
 ```yaml
 volumeset:
-  capacity: 10          # initial GiB (minimum 10) — memory DB, sessions, skills, config
-  maxCapacity: 100      # auto-expands up to this GiB as state grows (keeps ~20% free)
+  capacity: 10                # initial GiB (minimum 10) — memory DB, sessions, skills, config
+  autoscaling:
+    enabled: false            # set true to auto-expand the volume as state grows
+    maxCapacity: 100          # ceiling in GiB when autoscaling is enabled
+    minFreePercentage: 10     # scale up when free space drops below this
+    scalingFactor: 1.2        # multiplier applied on each scale-up
 ```
 
 ### Access

@@ -12,7 +12,7 @@ Single replica is by design: memory is a single-writer SQLite database and upstr
 
 ## Prerequisites
 
-- **An LLM API key** from your provider (Anthropic, OpenAI, OpenRouter, or any OpenAI-compatible endpoint).
+- **An LLM API key** from your provider — Anthropic, OpenAI, or any OpenAI-compatible endpoint (OpenRouter, Ollama, vLLM, …) via `provider: custom`.
 - **A dictionary secret** you create *before* installing (secrets are never passed through values). It holds three values; **name the keys however you like** and map them under `secret.keys` at install — an existing secret works unchanged.
 
   | Value | Required | Maps to |
@@ -46,10 +46,22 @@ image: nousresearch/hermes-agent:v2026.7.7.2   # pin the Hermes Agent image tag
 
 ```yaml
 model:
-  provider: anthropic   # anthropic | openai | openrouter | custom
-  name: ""              # model override (e.g. claude-opus-4.6, gpt-4o); empty = provider default. Recommended for non-anthropic providers.
-  baseUrl: ""           # OpenAI-compatible endpoint; required when provider is "custom"
+  provider: anthropic     # anthropic | openai | custom
+  name: ""                # model override (e.g. claude-opus-4.6, gpt-5); empty = provider default. Recommended for non-anthropic providers.
+  baseUrl: ""             # OpenAI-compatible endpoint; required when provider is "custom"
+  reasoningEffort: medium # none | low | medium | high — use "none" for non-reasoning models
 ```
+
+**Any other OpenAI-compatible endpoint — OpenRouter, Ollama, vLLM, LM Studio, a proxy — uses `provider: custom`** with `baseUrl` set and that service's key as your `apiKey`. For example, OpenRouter:
+
+```yaml
+model:
+  provider: custom
+  baseUrl: https://openrouter.ai/api/v1
+  name: anthropic/claude-sonnet-4-5
+```
+
+**Reasoning effort:** Hermes sends a reasoning effort with every request, and models that do not support reasoning reject it with a `400: Unsupported parameter: 'reasoning.effort'`. Set `reasoningEffort: none` for those (e.g. `gpt-4o`); leave the default for reasoning-capable models (e.g. `gpt-5`, `claude-opus-4.6`).
 
 ### Secret
 

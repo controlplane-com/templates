@@ -38,9 +38,46 @@ prerequisite secret. "custom" reuses the OpenAI-compatible key env.
 {{- define "hermes-agent.apiKeyEnv" -}}
 {{- $p := .Values.model.provider -}}
 {{- if eq $p "anthropic" -}}ANTHROPIC_API_KEY
-{{- else if eq $p "openai" -}}OPENAI_API_KEY
-{{- else if eq $p "openrouter" -}}OPENROUTER_API_KEY
 {{- else -}}OPENAI_API_KEY
+{{- end -}}
+{{- end }}
+
+{{/*
+The provider slug the IMAGE understands, which is not always the friendly name we
+expose. The image's registry (hermes_cli.models.CANONICAL_PROVIDERS) has no
+"openai" — it is "openai-api", and an unknown slug kills every request at agent
+construction with RuntimeError: Unknown provider.
+*/}}
+{{- define "hermes-agent.providerSlug" -}}
+{{- if eq .Values.model.provider "openai" -}}openai-api
+{{- else -}}{{ .Values.model.provider }}
+{{- end -}}
+{{- end }}
+
+{{/*
+The endpoint to seed as model.base_url. The image's generated config defaults to
+openrouter for EVERY provider, so a non-openrouter key is sent to openrouter and
+rejected unless we override it. An explicit model.baseUrl always wins.
+*/}}
+{{- define "hermes-agent.baseUrl" -}}
+{{- $p := .Values.model.provider -}}
+{{- if .Values.model.baseUrl -}}{{ .Values.model.baseUrl }}
+{{- else if eq $p "anthropic" -}}https://api.anthropic.com
+{{- else if eq $p "openai" -}}https://api.openai.com/v1
+{{- end -}}
+{{- end }}
+
+{{/*
+The model string to seed as model.default. Prefix handling is provider-specific:
+"anthropic/<name>" is required, while openai-api receives the prefix verbatim and
+rejects it ("model 'openai-api/gpt-4o' does not exist"), so it must be bare. The
+custom provider strips a leading prefix, so bare is safe there too.
+*/}}
+{{- define "hermes-agent.modelDefault" -}}
+{{- if eq .Values.model.provider "anthropic" -}}
+{{- printf "anthropic/%s" .Values.model.name -}}
+{{- else -}}
+{{- .Values.model.name -}}
 {{- end -}}
 {{- end }}
 
@@ -62,24 +99,26 @@ against that scalar then wipes the model value entirely. Dotted paths only ever
 touch one leaf, so the mapping stays intact regardless of ordering.
 */}}
 {{- define "hermes-agent.configSeed" -}}
-hermes config set model.provider {{ .Values.model.provider | quote }}
+hermes config set model.provider {{ include "hermes-agent.providerSlug" . | quote }}
+hermes config set model.base_url {{ include "hermes-agent.baseUrl" . | quote }}
 {{- if .Values.model.name }}
-hermes config set model.default {{ printf "%s/%s" .Values.model.provider .Values.model.name | quote }}
+hermes config set model.default {{ include "hermes-agent.modelDefault" . | quote }}
 {{- end }}
-{{- if .Values.model.baseUrl }}
-hermes config set model.base_url {{ .Values.model.baseUrl | quote }}
-{{- end }}
+hermes config set agent.reasoning_effort {{ .Values.model.reasoningEffort | quote }}
 {{- end }}
 
 
 {{/* Validation */}}
 
 {{- define "hermes-agent.validate" -}}
-{{- if not (has .Values.model.provider (list "anthropic" "openai" "openrouter" "custom")) -}}
-{{- fail (printf "hermes-agent: model.provider must be one of anthropic, openai, openrouter, custom — got '%s'" .Values.model.provider) -}}
+{{- if not (has .Values.model.provider (list "anthropic" "openai" "custom")) -}}
+{{- fail (printf "hermes-agent: model.provider must be one of anthropic, openai, custom — got '%s'. Any other OpenAI-compatible endpoint (OpenRouter, Ollama, vLLM, …) uses provider 'custom' with model.baseUrl." .Values.model.provider) -}}
 {{- end -}}
 {{- if and (eq .Values.model.provider "custom") (not .Values.model.baseUrl) -}}
 {{- fail "hermes-agent: model.baseUrl is required when model.provider is 'custom'" -}}
+{{- end -}}
+{{- if not (has .Values.model.reasoningEffort (list "none" "low" "medium" "high")) -}}
+{{- fail (printf "hermes-agent: model.reasoningEffort must be one of none, low, medium, high — got '%s'" .Values.model.reasoningEffort) -}}
 {{- end -}}
 {{- if not .Values.secret.name -}}
 {{- fail "hermes-agent: secret.name is required — create the prerequisite dictionary secret first (see README → Prerequisites)" -}}

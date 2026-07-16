@@ -2,9 +2,10 @@ image: nousresearch/hermes-agent:v2026.7.7.2
 
 # ─── LLM provider ─────────────────────────────────────────────────────────────
 model:
-  provider: anthropic # anthropic | openai | openrouter | custom
-  name: "" # model override (e.g. claude-opus-4.6, gpt-4o); empty = provider default
+  provider: anthropic # anthropic | openai | custom (any other OpenAI-compatible endpoint, e.g. OpenRouter)
+  name: "" # model override (e.g. claude-opus-4.6, gpt-5); empty = provider default
   baseUrl: "" # OpenAI-compatible endpoint; required when provider is "custom"
+  reasoningEffort: medium # none | low | medium | high — use "none" for non-reasoning models (e.g. gpt-4o)
 
 # ─── Prerequisite secret ──────────────────────────────────────────────────────
 # A dictionary secret you create before installing (see README → Prerequisites).

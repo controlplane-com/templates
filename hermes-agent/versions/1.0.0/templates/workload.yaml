@@ -67,7 +67,6 @@ spec:
           uri: cpln://volumeset/{{ include "hermes-agent.volume.name" . }}
         # Shared memory for headless Chromium (default 64 MB /dev/shm crashes it).
         - path: /dev/shm
-          recoveryPolicy: retain
           uri: scratch://dev-shm
       readinessProbe:
         tcpSocket:

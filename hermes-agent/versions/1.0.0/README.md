@@ -32,6 +32,12 @@ Single replica is by design: memory is a single-writer SQLite database and upstr
 
 ## Configuration
 
+### Image
+
+```yaml
+image: nousresearch/hermes-agent:v2026.7.7.2   # pin the Hermes Agent image tag
+```
+
 ### Model
 
 ```yaml

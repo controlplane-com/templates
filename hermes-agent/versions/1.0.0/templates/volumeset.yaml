@@ -1,0 +1,12 @@
+kind: volumeset
+name: {{ include "hermes-agent.volume.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: Hermes Agent durable state (memory DB, sessions, skills, config)
+tags: {{- include "hermes-agent.tags" . | nindent 4 }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.capacity }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d

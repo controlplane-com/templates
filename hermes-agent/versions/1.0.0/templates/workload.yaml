@@ -1,0 +1,109 @@
+{{- include "hermes-agent.validate" . }}
+kind: workload
+name: {{ include "hermes-agent.name" . }}
+description: Hermes Agent — self-hosted AI agent gateway (API + dashboard)
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "hermes-agent.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "hermes-agent.identity.name" . }}
+  containers:
+    - name: hermes
+      image: {{ .Values.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
+      env:
+        # ── LLM provider (key comes from the prerequisite secret) ──
+        - name: {{ include "hermes-agent.apiKeyEnv" . }}
+          value: 'cpln://secret/{{ .Values.secretName }}.{{ include "hermes-agent.apiKeyEnv" . }}'
+        - name: HERMES_INFERENCE_PROVIDER
+          value: {{ .Values.model.provider | quote }}
+        {{- if .Values.model.name }}
+        - name: HERMES_MODEL
+          value: {{ .Values.model.name | quote }}
+        - name: API_SERVER_MODEL_NAME
+          value: {{ .Values.model.name | quote }}
+        {{- end }}
+        {{- if eq .Values.model.provider "custom" }}
+        - name: OPENAI_BASE_URL
+          value: {{ .Values.model.baseUrl | quote }}
+        {{- end }}
+        # ── OpenAI-compatible gateway API (public via canonical endpoint) ──
+        - name: API_SERVER_ENABLED
+          value: '1'
+        - name: API_SERVER_HOST
+          value: 0.0.0.0
+        - name: API_SERVER_PORT
+          value: '8642'
+        - name: API_SERVER_KEY
+          value: 'cpln://secret/{{ .Values.secretName }}.API_SERVER_KEY'
+        {{- if .Values.dashboard.enabled }}
+        # ── Web dashboard (internal-only, basic auth) ──
+        - name: HERMES_DASHBOARD
+          value: '1'
+        - name: HERMES_DASHBOARD_HOST
+          value: 0.0.0.0
+        - name: HERMES_DASHBOARD_PORT
+          value: '9119'
+        - name: HERMES_DASHBOARD_BASIC_AUTH_USERNAME
+          value: {{ .Values.dashboard.username | quote }}
+        - name: HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
+          value: 'cpln://secret/{{ .Values.secretName }}.HERMES_DASHBOARD_BASIC_AUTH_PASSWORD'
+        {{- end }}
+      ports:
+        # First port receives the public canonical HTTPS endpoint.
+        - number: 8642
+          protocol: http
+        {{- if .Values.dashboard.enabled }}
+        - number: 9119
+          protocol: http
+        {{- end }}
+      volumes:
+        - path: /opt/data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "hermes-agent.volume.name" . }}
+        # Shared memory for headless Chromium (default 64 MB /dev/shm crashes it).
+        - path: /dev/shm
+          recoveryPolicy: retain
+          uri: scratch://dev-shm
+      readinessProbe:
+        tcpSocket:
+          port: 8642
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        failureThreshold: 30
+        successThreshold: 1
+        timeoutSeconds: 3
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}

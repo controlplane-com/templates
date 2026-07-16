@@ -1,0 +1,47 @@
+image: nousresearch/hermes-agent:v2026.7.7.2
+
+# ─── LLM provider ─────────────────────────────────────────────────────────────
+# The model is EXTERNAL. Supply its API key in the prerequisite secret (below) —
+# never here. `provider` selects which key the workload reads from that secret.
+model:
+  provider: anthropic # anthropic | openai | openrouter | custom
+  name: "" # model override (e.g. claude-opus-4.6, gpt-4o); empty = provider default. Recommended for non-anthropic providers.
+  baseUrl: "" # OpenAI-compatible endpoint; required when provider is "custom"
+
+# ─── Prerequisite secret ──────────────────────────────────────────────────────
+# Create a DICTIONARY secret BEFORE installing (see README → Prerequisites). The
+# template takes only its NAME and grants the workload `reveal` on exactly it.
+# Expected keys:
+#   ANTHROPIC_API_KEY | OPENAI_API_KEY | OPENROUTER_API_KEY   (the one matching model.provider; custom uses OPENAI_API_KEY)
+#   API_SERVER_KEY                                            (required — bearer token clients present to the gateway API)
+#   HERMES_DASHBOARD_BASIC_AUTH_PASSWORD                      (required when dashboard.enabled)
+secretName: my-hermes-secrets
+
+# ─── Dashboard ────────────────────────────────────────────────────────────────
+# Internal-only web UI on port 9119 — reach it via `cpln workload port-forward`.
+# The PUBLIC HTTPS endpoint is the gateway API (8642), not the dashboard.
+dashboard:
+  enabled: true
+  username: admin # basic-auth username; the password is a key in the prerequisite secret
+
+# ─── Resources ────────────────────────────────────────────────────────────────
+# capacityAI is off (required for stateful). The min→max spread is the elasticity:
+# idle floor reserved at min, burst toward the ceiling only while the agent's
+# browser (headless Chromium, baked into the image, launched on demand) runs.
+resources:
+  minCpu: 500m
+  minMemory: 1Gi
+  cpu: 2000m
+  memory: 4Gi
+
+# ─── Storage ──────────────────────────────────────────────────────────────────
+volumeset:
+  capacity: 10 # GiB (minimum 10) — memory DB, sessions, skills, learned config
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: true # expose the gateway API (8642) publicly via the canonical HTTPS endpoint (bearer-auth enforced)
+
+internalAccess:
+  type: same-gvc # none | same-gvc | same-org | workload-list
+  workloads: [] # used with workload-list, e.g. //gvc/GVC/workload/NAME

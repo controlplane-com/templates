@@ -118,15 +118,15 @@ curl https://ENDPOINT/v1/chat/completions \
   -d '{"messages":[{"role":"user","content":"hello"}]}'
 ```
 
-## Connecting messaging platforms (optional)
+## Messaging platforms (optional)
 
-Hermes can front chat platforms (Telegram, Discord, Slack, WhatsApp, Signal) so people message the agent directly, with full memory. Platform setup is interactive and persists on the data volume — connect one *after* install:
+Hermes supports chat-platform gateways (Telegram, Discord, Slack, and others). These are **configured after install**, using Hermes's own interactive setup — not through this template's values:
 
 ```bash
 cpln workload exec RELEASE-hermes-agent --gvc GVC --container hermes -- hermes gateway setup
 ```
 
-Follow the prompts to add your platform and bot token; the supervised gateway picks it up. No reinstall needed, and the configuration survives restarts.
+Follow the prompts for your platform; the configuration is stored on the data volume. See the [Hermes documentation](https://github.com/NousResearch/hermes-agent) for each platform's requirements, such as bot tokens.
 
 ## Important Notes
 

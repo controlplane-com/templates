@@ -54,11 +54,17 @@ ever WRITTEN by the image for subprocesses, never read as an input, and there is
 no HERMES_*MODEL* env-override key. The model lives in config.yaml as
 `model.default` in provider/name form, so it must be seeded via the CLI. This runs
 on every boot, which makes values the source of truth across restarts.
+
+Every key is set via a DOTTED path on purpose. The bare `hermes config set model <v>`
+form writes a scalar `model:` that replaces the whole mapping and destroys the
+sibling `default`/`provider`/`base_url` keys; a later `config set model.provider`
+against that scalar then wipes the model value entirely. Dotted paths only ever
+touch one leaf, so the mapping stays intact regardless of ordering.
 */}}
 {{- define "hermes-agent.configSeed" -}}
 hermes config set model.provider {{ .Values.model.provider | quote }}
 {{- if .Values.model.name }}
-hermes config set model {{ printf "%s/%s" .Values.model.provider .Values.model.name | quote }}
+hermes config set model.default {{ printf "%s/%s" .Values.model.provider .Values.model.name | quote }}
 {{- end }}
 {{- if .Values.model.baseUrl }}
 hermes config set model.base_url {{ .Values.model.baseUrl | quote }}

@@ -22,6 +22,11 @@ spec:
         - -c
         - |
           set -e
+          # The container's boot env carries only PATH — the image's own
+          # HERMES_HOME does not reach it (exec sessions DO get it, which makes
+          # this easy to mis-verify). Without it, `hermes config set` silently
+          # writes to /opt/data/.hermes/config.yaml, which the gateway never reads.
+          export HERMES_HOME=/opt/data
           {{- include "hermes-agent.configSeed" . | nindent 10 }}
           exec hermes gateway run
       inheritEnv: false

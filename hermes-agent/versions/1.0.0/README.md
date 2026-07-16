@@ -18,15 +18,19 @@ Single replica is by design: memory is a single-writer SQLite database and upstr
   | Value | Required | Maps to |
   |---|---|---|
   | LLM API key for your provider | yes | `secret.keys.apiKey` |
-  | Bearer token clients present to the gateway API | yes | `secret.keys.apiServerKey` |
+  | Bearer token clients present to the gateway API — **must be at least 16 characters** | yes | `secret.keys.apiServerKey` |
   | Dashboard basic-auth password | when dashboard enabled | `secret.keys.dashboardPassword` |
 
   ```bash
   cpln secret create-dictionary --name my-hermes-secret \
     --entry 'api-key=sk-ant-...' \
-    --entry 'api-server-key=choose-a-long-random-token' \
+    --entry "api-server-key=$(openssl rand -hex 32)" \
     --entry 'dashboard-password=choose-a-dashboard-password'
   ```
+
+  Hermes **rejects an API server key shorter than 16 characters** (this endpoint dispatches
+  terminal-capable agent work, so a guessable key is remote code execution). If the key is too
+  short the gateway still starts but the API never serves — the workload will not become ready.
 
   Pass its name as `secret.name` at install (and override `secret.keys` if your key names differ).
 
@@ -94,7 +98,7 @@ volumeset:
 
 ```yaml
 publicAccess:
-  enabled: true         # expose the gateway API (8642) via the canonical HTTPS endpoint
+  enabled: false        # expose the gateway API (8642) on the public canonical HTTPS endpoint
 
 internalAccess:
   type: same-gvc        # none | same-gvc | same-org | workload-list
@@ -105,7 +109,7 @@ internalAccess:
 
 | Interface | Where | Auth |
 |---|---|---|
-| Gateway API (OpenAI-compatible) | Public canonical HTTPS endpoint on 8642 — find it in `status.canonicalEndpoint` (`cpln workload get RELEASE-hermes-agent -o yaml`) | Bearer `API_SERVER_KEY` |
+| Gateway API (OpenAI-compatible) | From another workload by default (see below). With `publicAccess.enabled: true`, also on the canonical HTTPS endpoint on 8642 — find it in `status.canonicalEndpoint` (`cpln workload get RELEASE-hermes-agent -o yaml`) | Bearer `API_SERVER_KEY` |
 | Web dashboard | Internal only — `cpln workload port-forward RELEASE-hermes-agent --gvc GVC -p 9119:9119`, then `http://localhost:9119` | Basic auth (`dashboard.username` + the dashboard password from your secret) |
 | From another workload | `RELEASE-hermes-agent.GVC.cpln.local:8642` | Bearer `API_SERVER_KEY` |
 
@@ -130,11 +134,12 @@ Follow the prompts for your platform; the configuration is stored on the data vo
 
 ## Important Notes
 
-- **Set strong values** for `API_SERVER_KEY` and the dashboard password in your secret — the gateway API is public.
-- **The dashboard is internal-only** — it is not on the public endpoint; reach it via `port-forward`.
+- **`publicAccess.enabled: true` publishes a terminal-capable agent to the internet**, guarded only by your bearer token. The agent's terminal backend runs unsandboxed as the container user with full file access, so anyone holding the key can execute work inside the workload. It is off by default — before enabling it, use a long random `api-server-key` (`openssl rand -hex 32`) and prefer restricting reach via `internalAccess`.
+- **The API server key must be at least 16 characters** — Hermes rejects anything shorter, and the workload will not become ready.
+- **The dashboard is internal-only** — it is never on the public endpoint; reach it via `port-forward`.
 - **Single replica by design** — memory is single-writer SQLite; do not scale up. State persists on the volume across restarts.
 - **The model is external** — cost and rate limits are governed by your LLM provider, not this workload.
-- **Browser automation is always available** — headless Chromium is baked in and launches on demand; the min→max resource spread absorbs the burst.
+- **Keep `cpu` under 4× `minCpu`** — the platform rejects a wider ratio; raise `minCpu` if you raise `cpu`.
 - **Reset** requires `cpln helm uninstall` (deletes the volumeset) — changing the secret and redeploying does not wipe existing memory/config on the volume.
 
 ## Links

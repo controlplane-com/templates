@@ -45,6 +45,27 @@ prerequisite secret. "custom" reuses the OpenAI-compatible key env.
 {{- end }}
 
 
+{{/* Config seed */}}
+
+{{/*
+Commands run before `hermes gateway run` to make values authoritative over the
+config on the data volume. The model CANNOT be set by env: HERMES_MODEL is only
+ever WRITTEN by the image for subprocesses, never read as an input, and there is
+no HERMES_*MODEL* env-override key. The model lives in config.yaml as
+`model.default` in provider/name form, so it must be seeded via the CLI. This runs
+on every boot, which makes values the source of truth across restarts.
+*/}}
+{{- define "hermes-agent.configSeed" -}}
+hermes config set model.provider {{ .Values.model.provider | quote }}
+{{- if .Values.model.name }}
+hermes config set model {{ printf "%s/%s" .Values.model.provider .Values.model.name | quote }}
+{{- end }}
+{{- if .Values.model.baseUrl }}
+hermes config set model.base_url {{ .Values.model.baseUrl | quote }}
+{{- end }}
+{{- end }}
+
+
 {{/* Validation */}}
 
 {{- define "hermes-agent.validate" -}}

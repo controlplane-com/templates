@@ -23,7 +23,7 @@ dashboard:
 
 # ─── Resources ────────────────────────────────────────────────────────────────
 resources:
-  minCpu: 500m # idle floor
+  minCpu: 500m # idle floor — cpu:minCpu ratio must stay under 4:1
   minMemory: 1Gi
   cpu: 2000m # burst ceiling (headroom for on-demand browser automation)
   memory: 4Gi
@@ -39,7 +39,7 @@ volumeset:
 
 # ─── Access ───────────────────────────────────────────────────────────────────
 publicAccess:
-  enabled: true # expose the gateway API (8642) via the canonical HTTPS endpoint
+  enabled: false # expose the gateway API (8642) on the public canonical HTTPS endpoint — read the README security note first
 
 internalAccess:
   type: same-gvc # none | same-gvc | same-org | workload-list

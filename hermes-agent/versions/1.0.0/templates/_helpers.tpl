@@ -117,6 +117,9 @@ hermes config set agent.reasoning_effort {{ .Values.model.reasoningEffort | quot
 {{- if and (eq .Values.model.provider "custom") (not .Values.model.baseUrl) -}}
 {{- fail "hermes-agent: model.baseUrl is required when model.provider is 'custom'" -}}
 {{- end -}}
+{{- if and (eq .Values.model.provider "anthropic") .Values.model.baseUrl -}}
+{{- fail "hermes-agent: model.baseUrl has no effect with model.provider 'anthropic' — the Anthropic client ignores it (verified: requests still reach Anthropic even when base_url points at a blackhole). To route through a proxy or any OpenAI-compatible endpoint, use model.provider 'custom'." -}}
+{{- end -}}
 {{- if not (has .Values.model.reasoningEffort (list "none" "low" "medium" "high")) -}}
 {{- fail (printf "hermes-agent: model.reasoningEffort must be one of none, low, medium, high — got '%s'" .Values.model.reasoningEffort) -}}
 {{- end -}}

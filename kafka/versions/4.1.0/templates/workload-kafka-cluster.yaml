@@ -1,6 +1,6 @@
 {{- include "kafka.validateKafkaImage" . -}}
 {{- include "kafka.validatedirectReplicaRoutingConfig" . -}}
-{{- include "kafka.validateVolumeSetNames" . -}}
+{{- include "kafka.validateExternalVolumeSets" . -}}
 {{- if .Values.jmx_exporter }}
 kind: secret
 name: {{ include "kafka.name" . }}-jmx-exporter-conf

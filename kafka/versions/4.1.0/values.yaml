@@ -13,10 +13,12 @@ kafka:
   # RackAwareReplicaSelector. A consumer that sets `client.rack` to its own zone ID
   # then reads from a same-zone replica instead of always the (possibly cross-zone)
   # leader, cutting cross-zone data-transfer cost. Only meaningful when brokers are
-  # spread across zones (see multiZone above). On non-AWS clusters AWS_ZONE_ID is
-  # absent, so broker.rack is left unset and Kafka falls back to leader-only fetches.
+  # spread across zones (see multiZone above). AWS-only: on non-AWS locations AWS_ZONE_ID
+  # is absent, so broker.rack stays unset and RackAwareReplicaSelector is dead config
+  # (brokers fall back to leader-only fetches) — leave this disabled there. Defaults to
+  # false so it's an explicit opt-in on AWS.
   rackAwareness:
-    enabled: true
+    enabled: false
   logDirs: /opt/kafka/logs-0,/opt/kafka/logs-1
   env: [] # If you need to set environment variables, add them here
   # How long Control Plane waits for a graceful broker shutdown (controlled.shutdown completes,
@@ -29,13 +31,19 @@ kafka:
       initialCapacity: 10 # In GB
       performanceClass: general-purpose-ssd # general-purpose-ssd / high-throughput-ssd (Min 1000GB)
       fileSystemType: ext4 # ext4 / xfs
-      # By default each entry in kafka.logDirs gets a volume set named
-      # "<release-name>-logs-<index>" (e.g. kafka-logs-0, kafka-logs-1). Override the
-      # names here — one per logDir, in the same order — when the cluster's existing
-      # volume sets are named differently (e.g. renamed with a "-fresh" suffix during an
-      # incident). This keeps the workload mounting those exact volume sets on upgrade
-      # instead of provisioning new empty ones under the default names and losing data.
-      # volumeSetNames:
+      # Import externally-managed volume sets instead of having the chart create them.
+      # By default (empty list) the chart creates and manages one volume set per
+      # kafka.logDirs entry, named "<release-name>-logs-<index>" (e.g. kafka-logs-0),
+      # using the settings above. Provide one entry per logDir (same order) to point the
+      # broker workload at pre-existing volume sets that live OUTSIDE this chart — for
+      # example a volume set created or renamed with a "-fresh" suffix during incident
+      # recovery. For each non-empty entry the chart does NOT emit a `kind: volumeset`
+      # resource: it only mounts that volume set by name and never touches its data or
+      # settings (adopting one the chart didn't create would fail the cpln/release
+      # ownership tag). This is what lets such a cluster upgrade without the chart
+      # provisioning new empty volume sets and dropping the data. Use an empty string
+      # ("") for any log dir you still want the chart to manage normally.
+      externalVolumeSets: []
       #   - kafka-logs-0-fresh
       #   - kafka-logs-1-fresh
       snapshots:

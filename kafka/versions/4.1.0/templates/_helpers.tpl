@@ -13,37 +13,56 @@ Cluster Workload Name
 {{- end }}
 
 {{/*
-Volume set name for a given log-dir index. Call with a dict: (dict "root" $root "index" $i).
-Defaults to "<release-name>-logs-<index>" (e.g. kafka-logs-0). Can be overridden per index
-via kafka.volumes.logs.volumeSetNames — a list aligned 1:1 with kafka.logDirs. This exists so
-a cluster whose volume sets were renamed out-of-band (e.g. given a "-fresh" suffix during an
-incident) keeps mounting those exact volume sets on upgrade, instead of the chart provisioning
-brand-new empty ones under the default names and silently dropping the data. Both the volume
-set definitions and the workload mount URIs resolve names through this helper so they can never
-drift apart.
+Log volume set name for a given index. Call with a dict: (dict "root" $root "index" $i).
+Defaults to "<release-name>-logs-<index>" (e.g. kafka-logs-0). If
+kafka.volumes.logs.externalVolumeSets has a non-empty entry at this index, that name is
+used instead — see kafka.volumeSetIsExternal. Both the volume set definitions and the
+workload mount URIs resolve names through this helper so they can never drift apart.
 */}}
 {{- define "kafka.volumeSetName" -}}
 {{- $root := .root -}}
 {{- $index := int .index -}}
-{{- $names := (($root.Values.kafka.volumes.logs).volumeSetNames) -}}
-{{- if and $names (gt (len $names) $index) (index $names $index) -}}
-{{- index $names $index -}}
+{{- $external := (($root.Values.kafka.volumes.logs).externalVolumeSets) -}}
+{{- if and $external (gt (len $external) $index) (index $external $index) -}}
+{{- index $external $index -}}
 {{- else -}}
 {{- printf "%s-logs-%d" (include "kafka.name" $root) $index -}}
 {{- end -}}
 {{- end -}}
 
 {{/*
-Guard against a partial volumeSetNames override. If provided, it must have exactly one entry
-per kafka.logDirs; a shorter list would let unlisted indices fall back to the default name and
-provision a new empty volume set — the exact data-loss-on-upgrade footgun this feature prevents.
+Whether the log volume set at a given index is externally managed (imported) rather than
+created by this chart. Call with a dict: (dict "root" $root "index" $i). Returns "true" when
+kafka.volumes.logs.externalVolumeSets has a non-empty entry at that index, otherwise "".
+An imported volume set is only referenced by the broker workload's mount URI — the chart
+does NOT emit a `kind: volumeset` for it, so it never tries to adopt or overwrite a volume
+set it didn't create (which would fail the cpln/release ownership tag). Use this for a volume
+set that was created/renamed outside the chart (e.g. a "-fresh" volume set from incident
+recovery): its data and settings are left exactly as they are and the workload just points at
+it.
 */}}
-{{- define "kafka.validateVolumeSetNames" -}}
-{{- $names := (.Values.kafka.volumes.logs).volumeSetNames -}}
-{{- if $names -}}
+{{- define "kafka.volumeSetIsExternal" -}}
+{{- $root := .root -}}
+{{- $index := int .index -}}
+{{- $external := (($root.Values.kafka.volumes.logs).externalVolumeSets) -}}
+{{- if and $external (gt (len $external) $index) (index $external $index) -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
+Guard against a partial externalVolumeSets list. If provided, it must have exactly one entry
+per kafka.logDirs (entries may be empty strings to keep that log dir chart-managed); a shorter
+list would leave a trailing log dir chart-managed under the default name and, on a cluster
+whose data lives in imported volume sets, mount a new empty volume set — the exact
+data-loss-on-upgrade footgun this feature prevents.
+*/}}
+{{- define "kafka.validateExternalVolumeSets" -}}
+{{- $external := (.Values.kafka.volumes.logs).externalVolumeSets -}}
+{{- if $external -}}
   {{- $logDirCount := len (split "," .Values.kafka.logDirs) -}}
-  {{- if ne (len $names) $logDirCount -}}
-    {{- fail (printf "kafka.volumes.logs.volumeSetNames has %d entr(y/ies) but kafka.logDirs defines %d log dir(s); provide exactly one volume set name per log dir, in the same order." (len $names) $logDirCount) -}}
+  {{- if ne (len $external) $logDirCount -}}
+    {{- fail (printf "kafka.volumes.logs.externalVolumeSets has %d entr(y/ies) but kafka.logDirs defines %d log dir(s); provide exactly one entry per log dir (use an empty string to keep a log dir chart-managed), in the same order." (len $external) $logDirCount) -}}
   {{- end -}}
 {{- end -}}
 {{- end -}}

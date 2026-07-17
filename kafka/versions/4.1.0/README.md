@@ -169,7 +169,7 @@ server:
 
 In a multi-zone cluster, a consumer that reads from the partition leader may be pulling data across an availability zone, which incurs cross-zone data-transfer charges. Rack awareness ([KIP-392](https://cwiki.apache.org/confluence/display/KAFKA/KIP-392%3A+Allow+consumers+to+fetch+from+closest+replica)) lets a consumer read from an in-sync replica in its **own** zone instead.
 
-This is enabled by default via `kafka.rackAwareness.enabled: true`:
+It is **disabled by default** and is **AWS-only** (it depends on the `AWS_ZONE_ID` env var, which is present only on AWS locations). Enable it on an AWS, multi-zone cluster:
 
 ```yaml
 kafka:
@@ -195,27 +195,30 @@ Consumers running on Control Plane can source their own zone ID from the same `A
 
 - Only **consumer fetch** traffic becomes zone-local. Producer writes always go to the leader, and inter-broker replication is unchanged — those cross-zone flows are inherent to Kafka's replication model.
 - Rack awareness is only beneficial when brokers are actually spread across zones (`kafka.multiZone: true`) so that a same-zone replica exists.
-- On non-AWS clusters `AWS_ZONE_ID` is absent, so `broker.rack` is left unset and Kafka behaves exactly as it did before (leader-only fetches). Set `kafka.rackAwareness.enabled: false` to disable the feature outright.
+- **AWS-only.** On non-AWS locations `AWS_ZONE_ID` is absent, so `broker.rack` stays unset and `RackAwareReplicaSelector` is dead config — the brokers fall back to leader-only fetches. If you enable it there anyway, the broker init script logs an `INFO` line noting that `broker.rack` was left unset. Keep `kafka.rackAwareness.enabled: false` (the default) on non-AWS locations.
 
-### Overriding Volume Set Names
+### Importing Externally-Managed Volume Sets
 
-By default the chart creates one volume set per entry in `kafka.logDirs`, named `<release-name>-logs-<index>` (e.g. `kafka-logs-0`, `kafka-logs-1`), and mounts those same volume sets on the broker workload.
+By default the chart creates one volume set per entry in `kafka.logDirs`, named `<release-name>-logs-<index>` (e.g. `kafka-logs-0`, `kafka-logs-1`), manages their settings, and mounts them on the broker workload.
 
-If your cluster's volume sets were renamed out-of-band — for example given a `-fresh` suffix during incident recovery — upgrading with the default names would provision **new, empty** volume sets and mount those instead, losing your data. Set `kafka.volumes.logs.volumeSetNames` to your actual volume set names so the workload keeps mounting them:
+Sometimes a cluster's data lives in volume sets that were created or renamed **outside** the chart — for example volume sets given a `-fresh` suffix during incident recovery. You cannot simply let the chart create volume sets under those names: adopting a volume set the chart didn't create fails on the `cpln/release` ownership tag, and even if it didn't, you don't want the chart overwriting an already-configured volume set's settings.
+
+`kafka.volumes.logs.externalVolumeSets` **imports** such volume sets instead. For each non-empty entry the chart does **not** emit a `kind: volumeset` resource — it only points the broker workload's mount at that existing volume set by name, leaving its data and settings untouched:
 
 ```yaml
 kafka:
   logDirs: /opt/kafka/logs-0,/opt/kafka/logs-1
   volumes:
     logs:
-      volumeSetNames:
+      externalVolumeSets:
         - kafka-logs-0-fresh
         - kafka-logs-1-fresh
 ```
 
-- Provide **exactly one name per `kafka.logDirs` entry, in the same order**. The names are used both to define the volume sets and to build the mount URIs, so they always stay in sync.
-- If the list length doesn't match the number of log dirs, rendering fails with an explicit error — this prevents a partial override from silently mounting a new empty volume set for an unlisted index.
-- Omit `volumeSetNames` entirely to keep the default `<release-name>-logs-<index>` naming.
+- The named volume sets must already exist in the GVC (they are managed outside this chart). The chart references them but never creates, updates, or deletes them.
+- Provide **exactly one entry per `kafka.logDirs` entry, in the same order**. Use an empty string (`""`) for any log dir you still want the chart to create and manage normally.
+- If the list length doesn't match the number of log dirs, rendering fails with an explicit error — this prevents a partial list from silently leaving a log dir chart-managed and mounting a new empty volume set for it.
+- Omit `externalVolumeSets` (the default empty list) to have the chart create and manage all log volume sets under the default `<release-name>-logs-<index>` names.
 
 ### Release Notes
 See [RELEASES.md](https://github.com/controlplane-com/templates/blob/main/kafka/RELEASES.md)

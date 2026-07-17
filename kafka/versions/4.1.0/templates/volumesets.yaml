@@ -1,8 +1,9 @@
-{{- include "kafka.validateVolumeSetNames" . -}}
+{{- include "kafka.validateExternalVolumeSets" . -}}
 {{- $root := . -}}
 {{- $logDirs := split "," $root.Values.kafka.logDirs }}
 {{- $counter := 0 }}
 {{- range $index, $path := $logDirs }}
+{{- if not (include "kafka.volumeSetIsExternal" (dict "root" $root "index" $counter)) }}
 kind: volumeset
 name: {{ include "kafka.volumeSetName" (dict "root" $root "index" $counter) }}
 description: {{ include "kafka.name" $root }} logs {{ $counter }}
@@ -29,5 +30,6 @@ spec:
     schedule: {{ $root.Values.kafka.volumes.logs.snapshots.schedule }}
 {{- end }}
 ---
+{{- end }}
 {{- $counter = add $counter 1 }}
 {{- end }}

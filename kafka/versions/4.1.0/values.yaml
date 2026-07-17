@@ -29,6 +29,15 @@ kafka:
       initialCapacity: 10 # In GB
       performanceClass: general-purpose-ssd # general-purpose-ssd / high-throughput-ssd (Min 1000GB)
       fileSystemType: ext4 # ext4 / xfs
+      # By default each entry in kafka.logDirs gets a volume set named
+      # "<release-name>-logs-<index>" (e.g. kafka-logs-0, kafka-logs-1). Override the
+      # names here — one per logDir, in the same order — when the cluster's existing
+      # volume sets are named differently (e.g. renamed with a "-fresh" suffix during an
+      # incident). This keeps the workload mounting those exact volume sets on upgrade
+      # instead of provisioning new empty ones under the default names and losing data.
+      # volumeSetNames:
+      #   - kafka-logs-0-fresh
+      #   - kafka-logs-1-fresh
       snapshots:
         createFinalSnapshot: true
         retentionDuration: 7d

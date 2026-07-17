@@ -197,5 +197,25 @@ Consumers running on Control Plane can source their own zone ID from the same `A
 - Rack awareness is only beneficial when brokers are actually spread across zones (`kafka.multiZone: true`) so that a same-zone replica exists.
 - On non-AWS clusters `AWS_ZONE_ID` is absent, so `broker.rack` is left unset and Kafka behaves exactly as it did before (leader-only fetches). Set `kafka.rackAwareness.enabled: false` to disable the feature outright.
 
+### Overriding Volume Set Names
+
+By default the chart creates one volume set per entry in `kafka.logDirs`, named `<release-name>-logs-<index>` (e.g. `kafka-logs-0`, `kafka-logs-1`), and mounts those same volume sets on the broker workload.
+
+If your cluster's volume sets were renamed out-of-band — for example given a `-fresh` suffix during incident recovery — upgrading with the default names would provision **new, empty** volume sets and mount those instead, losing your data. Set `kafka.volumes.logs.volumeSetNames` to your actual volume set names so the workload keeps mounting them:
+
+```yaml
+kafka:
+  logDirs: /opt/kafka/logs-0,/opt/kafka/logs-1
+  volumes:
+    logs:
+      volumeSetNames:
+        - kafka-logs-0-fresh
+        - kafka-logs-1-fresh
+```
+
+- Provide **exactly one name per `kafka.logDirs` entry, in the same order**. The names are used both to define the volume sets and to build the mount URIs, so they always stay in sync.
+- If the list length doesn't match the number of log dirs, rendering fails with an explicit error — this prevents a partial override from silently mounting a new empty volume set for an unlisted index.
+- Omit `volumeSetNames` entirely to keep the default `<release-name>-logs-<index>` naming.
+
 ### Release Notes
 See [RELEASES.md](https://github.com/controlplane-com/templates/blob/main/kafka/RELEASES.md)

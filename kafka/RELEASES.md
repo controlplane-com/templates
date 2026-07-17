@@ -9,6 +9,10 @@
   - **Non-AWS safe**: when `AWS_ZONE_ID` is absent (non-AWS clusters), `broker.rack` is left unset and the selector transparently falls back to leader-only fetches, so topic creation never fails on partial rack information. Set `kafka.rackAwareness.enabled: false` to opt out entirely.
   - Most beneficial when brokers are actually spread across zones (see `kafka.multiZone`).
 
+- **Overridable volume set names**: The Kafka cluster's log volume sets can now be named explicitly via the new `kafka.volumes.logs.volumeSetNames` list (one entry per `kafka.logDirs`, same order). By default they remain `<release-name>-logs-<index>` (e.g. `kafka-logs-0`). This lets a cluster whose volume sets were renamed out-of-band — e.g. given a `-fresh` suffix during incident recovery — upgrade to a newer chart while continuing to mount those exact volume sets, instead of the chart provisioning new empty ones under the default names and dropping the data.
+  - The name is resolved through a single `kafka.volumeSetName` helper used by **both** the volume set definitions and the workload mount URIs, so the two can never drift apart.
+  - If `volumeSetNames` is set, chart rendering fails unless its length exactly matches the number of `kafka.logDirs`, preventing a partial override from silently falling back to a default (empty) volume set for an unlisted index.
+
 # Release Notes - Version 3.5.0
 
 ## What's New

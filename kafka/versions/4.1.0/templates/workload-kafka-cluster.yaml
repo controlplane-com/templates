@@ -1,5 +1,6 @@
 {{- include "kafka.validateKafkaImage" . -}}
 {{- include "kafka.validatedirectReplicaRoutingConfig" . -}}
+{{- include "kafka.validateVolumeSetNames" . -}}
 {{- if .Values.jmx_exporter }}
 kind: secret
 name: {{ include "kafka.name" . }}-jmx-exporter-conf
@@ -130,7 +131,7 @@ spec:
         {{- range $path := $logDirs }}
         - path: {{ $path | trim }}
           recoveryPolicy: retain
-          uri: 'cpln://volumeset/{{ include "kafka.name" $root }}-logs-{{ $counter }}'
+          uri: 'cpln://volumeset/{{ include "kafka.volumeSetName" (dict "root" $root "index" $counter) }}'
         {{- $counter = add $counter 1 }}
         {{- end }}
         - path: /configmaps/server.properties

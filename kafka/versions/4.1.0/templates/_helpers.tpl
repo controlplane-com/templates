@@ -13,6 +13,42 @@ Cluster Workload Name
 {{- end }}
 
 {{/*
+Volume set name for a given log-dir index. Call with a dict: (dict "root" $root "index" $i).
+Defaults to "<release-name>-logs-<index>" (e.g. kafka-logs-0). Can be overridden per index
+via kafka.volumes.logs.volumeSetNames — a list aligned 1:1 with kafka.logDirs. This exists so
+a cluster whose volume sets were renamed out-of-band (e.g. given a "-fresh" suffix during an
+incident) keeps mounting those exact volume sets on upgrade, instead of the chart provisioning
+brand-new empty ones under the default names and silently dropping the data. Both the volume
+set definitions and the workload mount URIs resolve names through this helper so they can never
+drift apart.
+*/}}
+{{- define "kafka.volumeSetName" -}}
+{{- $root := .root -}}
+{{- $index := int .index -}}
+{{- $names := (($root.Values.kafka.volumes.logs).volumeSetNames) -}}
+{{- if and $names (gt (len $names) $index) (index $names $index) -}}
+{{- index $names $index -}}
+{{- else -}}
+{{- printf "%s-logs-%d" (include "kafka.name" $root) $index -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Guard against a partial volumeSetNames override. If provided, it must have exactly one entry
+per kafka.logDirs; a shorter list would let unlisted indices fall back to the default name and
+provision a new empty volume set — the exact data-loss-on-upgrade footgun this feature prevents.
+*/}}
+{{- define "kafka.validateVolumeSetNames" -}}
+{{- $names := (.Values.kafka.volumes.logs).volumeSetNames -}}
+{{- if $names -}}
+  {{- $logDirCount := len (split "," .Values.kafka.logDirs) -}}
+  {{- if ne (len $names) $logDirCount -}}
+    {{- fail (printf "kafka.volumes.logs.volumeSetNames has %d entr(y/ies) but kafka.logDirs defines %d log dir(s); provide exactly one volume set name per log dir, in the same order." (len $names) $logDirCount) -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Convert .Values.kafka.memory to appropriate JVM heap size settings.
 */}}
 {{- define "kafka.heap.opts" -}}

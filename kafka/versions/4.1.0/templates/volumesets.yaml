@@ -1,9 +1,10 @@
+{{- include "kafka.validateVolumeSetNames" . -}}
 {{- $root := . -}}
 {{- $logDirs := split "," $root.Values.kafka.logDirs }}
 {{- $counter := 0 }}
 {{- range $index, $path := $logDirs }}
 kind: volumeset
-name: {{ include "kafka.name" $root }}-logs-{{ $counter }}
+name: {{ include "kafka.volumeSetName" (dict "root" $root "index" $counter) }}
 description: {{ include "kafka.name" $root }} logs {{ $counter }}
 tags: {{- include "kafka.tags" $root | nindent 2 }}
 gvc: {{ $root.Values.global.cpln.gvc }}

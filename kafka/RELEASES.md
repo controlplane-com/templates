@@ -1,3 +1,14 @@
+# Release Notes - Version 4.1.0
+
+## What's New
+
+- **Rack-aware fetching to cut cross-zone traffic (KIP-392)**: The Kafka cluster now supports rack awareness so consumers can read from a same-zone replica instead of always the (possibly cross-zone) partition leader, reducing cross-zone data-transfer cost in multi-zone deployments. Configured under the new `kafka.rackAwareness` section in `values.yaml` (`enabled: true` by default).
+  - Each broker advertises its AWS availability-zone ID as `broker.rack`. The value is read at pod startup from the `AWS_ZONE_ID` env var (injected into the broker pod from the node's `topology.k8s.aws/zone-id` label, e.g. `usw2-az2`) and applied via `kafka_conf_set` in the init script.
+  - The brokers run `replica.selector.class=org.apache.kafka.common.replica.RackAwareReplicaSelector` so a consumer that sets `client.rack` to its own zone ID is served by an in-sync replica in the same zone.
+  - **Client-side requirement**: consumers must set `client.rack=<their AWS zone ID>` (e.g. `usw2-az2`) to benefit — this is the client's responsibility. Producers and inter-broker replication are unaffected; only consumer fetches become zone-local.
+  - **Non-AWS safe**: when `AWS_ZONE_ID` is absent (non-AWS clusters), `broker.rack` is left unset and the selector transparently falls back to leader-only fetches, so topic creation never fails on partial rack information. Set `kafka.rackAwareness.enabled: false` to opt out entirely.
+  - Most beneficial when brokers are actually spread across zones (see `kafka.multiZone`).
+
 # Release Notes - Version 3.5.0
 
 ## What's New

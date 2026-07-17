@@ -17,6 +17,11 @@ Your task prompt names the template, its version directory in the templates repo
 ### 1. Scope (hard gate)
 `git diff origin/main...{branch} --name-only` must show EXACTLY the four allowed paths: `template-catalog/templates/{service}.mdx`, `template-catalog/templates/icons/{service}.png`, `template-catalog/overview.mdx`, `docs.json`. Anything else changed is a BLOCKER. For the two shared files, the diff must be a single-card / single-nav-entry insertion — any other modification to existing content is a BLOCKER.
 
+### 1b. Slug match (hard gate)
+`{service}` MUST equal the template's `name` in `Chart.yaml` (also its directory name in the templates repo). **Verify it — do not eyeball it.** Read the chart name and compare it byte-for-byte against all five places the slug appears: the `.mdx` filename, the icon filename, the card's `href`, the card's `icon` path, and the `docs.json` entry. Any divergence — abbreviation, re-wording, a stray plural — is a **BLOCKER**.
+
+The marketplace UI links a template to its docs page by matching this slug to the chart name, so a mismatch silently breaks that automation. Note what makes this dangerous: nothing else catches it. The page renders fine, `mintlify broken-links` passes, every link resolves, and the docs look correct in review — the breakage is invisible from inside the docs repo. The human-readable name lives in the frontmatter `title` and the card title and is NOT constrained; only the slug is.
+
 ### 2. Structure conformance
 Read 2–3 sibling pages of the same template class plus the new page. The new page must match the house structure: frontmatter shape (`title`, search-oriented `description`, `keywords` array), the shared section order, and the boilerplate Installation `<CardGroup>` verbatim. Deviations from the sibling pattern are findings; if siblings themselves vary, say so in a QUESTION rather than inventing a standard.
 

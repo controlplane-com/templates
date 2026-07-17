@@ -19,6 +19,8 @@ Your task prompt names the template and its latest version directory in the temp
 
 Nothing else — no other pages, no site config beyond the one nav entry, no restructuring of existing content.
 
+**`{service}` is not yours to choose — it MUST be the template's `name` from `Chart.yaml`, which is also the template's directory name in the templates repo.** Read `Chart.yaml` and use that string verbatim for the `.mdx` filename (which becomes the docs slug), the icon filename, the `href`/`icon` paths in the overview card, and the `docs.json` entry. Do not prettify, abbreviate, or re-word it (`postgres-highly-available` stays `postgres-highly-available`, never `postgres-ha`). The marketplace UI links a template to its docs page **by matching this slug to the chart name**, so any divergence silently breaks that automation — the page still renders and every link still resolves, which is exactly why this is easy to miss and must be checked deliberately. The human-readable name belongs in the frontmatter `title` and the card title (e.g. file `hermes-agent.mdx` with `title: Hermes Agent`); only the slug is constrained.
+
 ## Truth rules (these outrank style)
 
 - **Document only what was proven.** The template's README and values.yaml define the feature surface; `test-report.md` defines what is proven to work. Read any banner/annotation notes in the report carefully — features marked removed or historical must NOT be documented even if test rows for them passed.

@@ -4,6 +4,7 @@ charts/
 .claude/*
 !.claude/agents/
 !.claude/hooks/
+.claude/hooks/*.log
 CLAUDE.md
 
 # agent pipeline artifacts (stage outputs, reviewed locally, never committed)

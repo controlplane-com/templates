@@ -119,7 +119,9 @@ Only needed when `postgres-highly-available.backup.enabled: true`. Complete the 
 
 - **Back up the encryption-key secret** — losing it permanently bricks every credential n8n has stored; never change it after first boot (n8n fails to start on a key mismatch).
 - **Change `owner.password` and `postgres-highly-available.postgres.password` before installing.**
-- **The n8n main instance is single-replica by upstream design** — the HA Postgres backend removes the database as a failure point; horizontal scale-out is queue mode (a planned follow-up).
+- **The n8n main instance is single-replica by upstream design** — the HA Postgres backend removes the database as a failure point.
+- **Upgrades restart the single replica** — expect roughly a minute of editor/webhook downtime per `helm upgrade`.
+- **Synchronous webhook responses must finish within 30 seconds** (the platform edge times out longer ones) — for long-running workflows, set the Webhook node to respond immediately or use a Respond to Webhook node early; the workflow itself keeps running either way.
 - **Uninstall deletes the database and n8n volumesets** — all workflows, credentials, and execution data. Enable backups if the data matters.
 - **n8n is fair-code under the Sustainable Use License** — free to self-host, but not OSI open source.
 

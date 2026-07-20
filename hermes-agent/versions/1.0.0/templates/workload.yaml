@@ -28,6 +28,45 @@ spec:
           # writes to /opt/data/.hermes/config.yaml, which the gateway never reads.
           export HERMES_HOME=/opt/data
           {{- include "hermes-agent.configSeed" . | nindent 10 }}
+          {{- if .Values.dashboard.enabled }}
+          # Backport upstream 3e24b16f (fixed one day AFTER v2026.7.7.2 was built;
+          # in no pinned tag yet): password-only providers must never enter the
+          # OAuth redirect flow — without this, a fresh browser hit on the
+          # dashboard 500s at /auth/login. /opt/hermes is container-layer, so the
+          # patch re-applies each boot; the asserts fail the boot loudly if a
+          # future image tag moves the anchors — that is the signal to DELETE this
+          # block and bump the image/appVersion instead. NOTE: the routes.py
+          # idempotency marker must stay the RedirectResponse line — the
+          # supports_password string already exists in the stock file and would
+          # silently skip the patch.
+          python3 - <<'PYPATCH'
+          mw = "/opt/hermes/hermes_cli/dashboard_auth/middleware.py"
+          s = open(mw).read()
+          if 'getattr(provider, "supports_password"' not in s:
+              anchor = "    provider = providers[0]\n"
+              assert anchor in s, "auto_sso anchor missing"
+              guard = anchor + '    if getattr(provider, "supports_password", False):\n        return None\n\n'
+              s = s.replace(anchor, guard, 1)
+              open(mw, "w").write(s)
+          rt = "/opt/hermes/hermes_cli/dashboard_auth/routes.py"
+          s = open(rt).read()
+          if "return RedirectResponse(url=login_url, status_code=302)" not in s:
+              anchor = "    try:\n        ls = p.start_login(redirect_uri=_redirect_uri(request))\n"
+              assert anchor in s, "auth_login anchor missing"
+              guard = (
+                  '    if getattr(p, "supports_password", False):\n'
+                  "        from urllib.parse import quote\n\n"
+                  "        safe_next = _validate_post_login_target(next)\n"
+                  '        login_url = f"{_prefix(request)}/login"\n'
+                  "        if safe_next:\n"
+                  "            login_url = f\"{login_url}?next={quote(safe_next, safe='')}\"\n"
+                  "        return RedirectResponse(url=login_url, status_code=302)\n\n"
+              )
+              s = s.replace(anchor, guard + anchor, 1)
+              open(rt, "w").write(s)
+          print("dashboard-auth backport applied")
+          PYPATCH
+          {{- end }}
           exec hermes gateway run
       inheritEnv: false
       minCpu: {{ .Values.resources.minCpu | quote }}

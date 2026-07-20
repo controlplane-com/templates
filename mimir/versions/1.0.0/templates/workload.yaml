@@ -1,0 +1,79 @@
+{{- include "mimir.validate" . }}
+kind: workload
+name: {{ include "mimir.name" . }}
+description: Grafana Mimir — monolithic long-term Prometheus metrics store
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "mimir.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "mimir.identity.name" . }}
+  containers:
+    - name: mimir
+      image: {{ .Values.image }}
+      inheritEnv: false
+      args:
+        - -config.file=/etc/mimir/mimir.yaml
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
+      ports:
+        - number: 8080
+          protocol: http
+        - number: 9095
+          protocol: tcp
+        - number: 7946
+          protocol: tcp
+      volumes:
+        - path: /etc/mimir/mimir.yaml
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "mimir.secret.config.name" . }}.payload
+        - path: /data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "mimir.volume.name" . }}
+      # /ready needs the ingester ring's 15s min_ready_duration plus boot-time
+      # bucket validation, which can transiently fail while the workload
+      # identity's cloud credentials are vended (self-heals) — hence the
+      # generous ceiling. Liveness is deliberately NOT /ready: it can flap on
+      # ring/storage hiccups and would cause restart loops.
+      readinessProbe:
+        httpGet:
+          path: /ready
+          port: 8080
+        initialDelaySeconds: 10
+        periodSeconds: 5
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 3
+      livenessProbe:
+        tcpSocket:
+          port: 8080
+        initialDelaySeconds: 30
+        periodSeconds: 30
+        failureThreshold: 5
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      inboundAllowCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}

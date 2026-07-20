@@ -13,6 +13,7 @@
   - For each non-empty entry the chart does **not** emit a `kind: volumeset` resource — it only points the broker workload's mount at that existing volume set by name and leaves its data and settings untouched. This is what lets a cluster whose data lives in out-of-band volume sets — e.g. ones renamed with a `-fresh` suffix during incident recovery — upgrade without the chart trying to adopt them (which would fail the `cpln/release` ownership tag) or provisioning new empty ones under the default names and dropping the data.
   - Names resolve through a single `kafka.volumeSetName` helper used by **both** the volume set definitions and the workload mount URIs, so the two can never drift apart.
   - If `externalVolumeSets` is set, chart rendering fails unless its length exactly matches the number of `kafka.logDirs`, preventing a partial list from silently leaving a log dir chart-managed and mounting a new empty volume set for it.
+  - Import volume sets the chart never managed. When a log dir switches from chart-managed to imported, the default-named volume set the chart previously created is removed on the next apply/upgrade (it's no longer in the rendered release) — correct when your data already lives on the imported volume set, but it means the name you list must be the one that actually holds the data.
 
 # Release Notes - Version 3.5.0
 

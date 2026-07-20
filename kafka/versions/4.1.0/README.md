@@ -220,5 +220,7 @@ kafka:
 - If the list length doesn't match the number of log dirs, rendering fails with an explicit error — this prevents a partial list from silently leaving a log dir chart-managed and mounting a new empty volume set for it.
 - Omit `externalVolumeSets` (the default empty list) to have the chart create and manage all log volume sets under the default `<release-name>-logs-<index>` names.
 
+> **Important — import volume sets that the chart never managed.** `externalVolumeSets` is meant for volume sets created outside this chart (e.g. the `-fresh` volume set holding your recovered data). When a log dir switches from chart-managed to imported, the volume set the chart previously created for it under the default `<release-name>-logs-<index>` name is **removed** on the next apply/upgrade, because it is no longer part of the rendered release. That is exactly what you want when your data has already moved to the imported volume set — but it means you must **not** point `externalVolumeSets` at a *different* (e.g. empty) volume set while your live data still sits on the default-named one, or that default volume set will be deleted along with its data. The safe rule: the name you list must be the volume set that actually holds the data.
+
 ### Release Notes
 See [RELEASES.md](https://github.com/controlplane-com/templates/blob/main/kafka/RELEASES.md)

@@ -67,8 +67,14 @@ blocks_storage:
   storage_prefix: blocks
   tsdb:
     dir: /data/tsdb
+{{- if gt (int .Values.replicas) 1 }}
+    flush_blocks_on_shutdown: true
+{{- end }}
   bucket_store:
     sync_dir: /data/tsdb-sync
+{{- if gt (int .Values.replicas) 1 }}
+    sync_interval: 2m
+{{- end }}
 ruler_storage:
   storage_prefix: ruler
 ruler:
@@ -77,6 +83,9 @@ alertmanager_storage:
   storage_prefix: alertmanager
 compactor:
   data_dir: /data/compactor
+{{- if gt (int .Values.replicas) 1 }}
+  cleanup_interval: 2m
+{{- end }}
 ingester:
   ring:
     replication_factor: {{ ternary 3 1 (gt (int .Values.replicas) 1) }}
@@ -89,12 +98,15 @@ memberlist:
     - {{ include "mimir.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:7946
   abort_if_cluster_join_fails: false
 querier:
-  # Quorum reads default to contacting 2-of-3 ingesters; series written before a
-  # 1->3 scale-up live on ONE ingester and would flicker in results (~1/3 of
-  # queries) until their blocks age past query_store_after. Contacting all
-  # ingesters trades a little query fan-out for correct results through the
-  # scale-up window (test-observed: 24/30 -> expected 30/30).
-  minimize_ingester_requests: false
+  # Series written BEFORE a 1->3 scale-up live in one ingester's head; quorum
+  # reads (2-of-3) miss them intermittently, and no querier fan-out knob can
+  # force-include the sole holder (dskit cancels the slow call once quorum
+  # answers — test-proven). Store path instead: the scale-up restarts replica-0,
+  # flush_blocks_on_shutdown persists its head at exactly that moment, and this
+  # low store boundary + fast sync/cleanup make it queryable in minutes
+  # (upstream defaults would hide it ~12h). Freshest pre-upgrade writes may
+  # take ~5-10 minutes to reappear after scaling.
+  query_store_after: 5m
 {{- end }}
 activity_tracker:
   filepath: /data/metrics-activity.log

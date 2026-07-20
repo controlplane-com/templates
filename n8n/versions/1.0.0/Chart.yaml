@@ -1,0 +1,20 @@
+apiVersion: v2
+name: n8n
+description: n8n workflow automation platform (fair-code) with a highly available PostgreSQL backend
+type: application
+version: 1.0.0
+appVersion: "2.29.8"
+
+dependencies:
+  - name: postgres-highly-available
+    version: 2.4.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+
+annotations:
+  created: "2026-07-20"
+  lastModified: "2026-07-20"
+  category: "app"
+  createsGvc: false

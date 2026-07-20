@@ -1,0 +1,5 @@
+kind: identity
+name: {{ include "n8n.identity.name" . }}
+description: n8n workload identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "n8n.tags" . | nindent 4 }}

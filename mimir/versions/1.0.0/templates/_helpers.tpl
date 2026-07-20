@@ -45,21 +45,21 @@ common:
 {{- if eq .Values.storage.type "aws" }}
     backend: s3
     s3:
-      endpoint: s3.{{ .Values.storage.aws.region }}.amazonaws.com
-      region: {{ .Values.storage.aws.region }}
-      bucket_name: {{ .Values.storage.aws.bucket }}
+      endpoint: {{ printf "s3.%s.amazonaws.com" .Values.storage.aws.region | quote }}
+      region: {{ .Values.storage.aws.region | quote }}
+      bucket_name: {{ .Values.storage.aws.bucket | quote }}
 {{- else if eq .Values.storage.type "gcp" }}
     backend: gcs
     gcs:
-      bucket_name: {{ .Values.storage.gcp.bucket }}
+      bucket_name: {{ .Values.storage.gcp.bucket | quote }}
 {{- else }}
     backend: s3
     s3:
-      endpoint: {{ .Values.storage.minio.endpoint }}
-      region: {{ .Values.storage.minio.region }}
-      bucket_name: {{ .Values.storage.minio.bucket }}
-      access_key_id: {{ .Values.storage.minio.accessKey }}
-      secret_access_key: {{ .Values.storage.minio.accessSecret }}
+      endpoint: {{ .Values.storage.minio.endpoint | quote }}
+      region: {{ .Values.storage.minio.region | quote }}
+      bucket_name: {{ .Values.storage.minio.bucket | quote }}
+      access_key_id: {{ .Values.storage.minio.accessKey | quote }}
+      secret_access_key: {{ .Values.storage.minio.accessSecret | quote }}
       insecure: {{ .Values.storage.minio.insecure }}
       bucket_lookup_type: path
 {{- end }}

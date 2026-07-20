@@ -88,6 +88,13 @@ memberlist:
   join_members:
     - {{ include "mimir.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:7946
   abort_if_cluster_join_fails: false
+querier:
+  # Quorum reads default to contacting 2-of-3 ingesters; series written before a
+  # 1->3 scale-up live on ONE ingester and would flicker in results (~1/3 of
+  # queries) until their blocks age past query_store_after. Contacting all
+  # ingesters trades a little query fan-out for correct results through the
+  # scale-up window (test-observed: 24/30 -> expected 30/30).
+  minimize_ingester_requests: false
 {{- end }}
 activity_tracker:
   filepath: /data/metrics-activity.log

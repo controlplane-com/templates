@@ -139,6 +139,7 @@ Point a Grafana Prometheus datasource at the PromQL URL. Collectors inside the G
 - **Transient "Access Denied" warnings in the first seconds of a fresh boot are expected** — the workload identity's cloud credentials are still being issued; Mimir retries and proceeds.
 - **Data lives in your bucket** — the volumeset only holds the WAL and scratch space. Reinstalling the template against the same bucket resumes with your data; deleting data means emptying the bucket.
 - **Retention is enforced by the compactor** — changing `retention.period` applies to existing blocks too.
+- **After uninstall, re-check your bucket**: the terminating replica can re-write a small cluster-seed file (`blocks/__mimir_cluster/`) minutes after teardown — delete it if you are emptying the bucket.
 
 ## Links
 

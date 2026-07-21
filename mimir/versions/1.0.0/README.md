@@ -6,19 +6,18 @@ This is a **self-hosted metrics store for your own metrics from your own sources
 
 ## Architecture
 
-- **Mimir**: Stateful workload (single replica) running all Mimir components in one process (`target: all`). Remote-write ingest and PromQL query on port 8080; internal gRPC on 9095; memberlist on 7946 (self-contained ring — no Consul/etcd).
+- **Mimir**: Stateful workload running all Mimir components in one process (`target: all`); single replica by default — set `replicas: 3` or more for an HA cluster with 3-way-replicated ingest, where queries and pushes continue through a replica loss or rolling restart. Remote-write ingest and PromQL query on port 8080; internal gRPC on 9095; memberlist on 7946 (self-contained ring — no Consul/etcd).
 - **Volumeset**: 20 GiB at `/data` for the ingester WAL/TSDB and compactor workspace; metric blocks are durably stored in your object bucket, not on the volume.
 - **Config secret**: the rendered Mimir configuration, mounted as a file.
-- **Identity + policy**: least privilege — `reveal` on the config secret only, plus keyless cloud access scoped to your bucket (AWS/GCP).
+- **Identity + policy**: least privilege — `reveal` on the config secret only, plus cloud access scoped to your bucket (AWS/GCP).
 
-Single replica is by design for v1; Mimir's horizontally-scaled microservices mode is a planned follow-up.
 
 ## Prerequisites
 
 An existing bucket in one of the supported backends, and access setup for it (step-by-step under [Storage setup](#storage-setup)):
 
-- **AWS S3** — an S3 bucket, a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) for your AWS account, and a bucket-scoped IAM policy (keyless — no stored credentials).
-- **Google Cloud Storage** — a GCS bucket and a Control Plane cloud account for your GCP project (keyless).
+- **AWS S3** — an S3 bucket, a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) for your AWS account, and a bucket-scoped IAM policy.
+- **Google Cloud Storage** — a GCS bucket and a Control Plane cloud account for your GCP project.
 - **S3-compatible (MinIO, R2, Wasabi, …)** — a bucket and static access credentials (no cloud account).
 
 ## Configuration
@@ -33,6 +32,8 @@ resources:            # memory governs how many active series you can ingest
   memory: 2Gi
   minCpu: 500m
   minMemory: 1Gi
+
+replicas: 1           # 1 for a single instance; 3 or more forms an HA cluster with 3-way replication
 ```
 
 ### Storage
@@ -87,7 +88,7 @@ internalAccess:
 
 ## Storage setup
 
-### AWS S3 (keyless)
+### AWS S3
 
 1. Create an S3 bucket (e.g. `my-mimir-bucket`).
 2. In AWS IAM, create a policy (e.g. `my-mimir-s3-policy`) scoped to that bucket:
@@ -109,13 +110,13 @@ internalAccess:
 ```
 
 3. Create a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) for your AWS account.
-4. Set `storage.aws.*` to your bucket, region, cloud account name, and policy name. No keys anywhere — the workload identity assumes bucket access at runtime.
+4. Set `storage.aws.*` to your bucket, region, cloud account name, and policy name.
 
-### Google Cloud Storage (keyless)
+### Google Cloud Storage
 
 1. Create a GCS bucket.
 2. Create a Control Plane cloud account for your GCP project.
-3. Set `storage.gcp.bucket` and `storage.gcp.cloudAccountName`. The template grants the workload identity `roles/storage.objectAdmin` on exactly that bucket; Mimir authenticates via Application Default Credentials — no keys.
+3. Set `storage.gcp.bucket` and `storage.gcp.cloudAccountName`. The template grants the workload identity `roles/storage.objectAdmin` on exactly that bucket.
 
 ### S3-compatible (MinIO, R2, Wasabi, …)
 
@@ -138,6 +139,7 @@ Point a Grafana Prometheus datasource at the PromQL URL. Collectors inside the G
 - **With `multitenancy.enabled: true`, every request needs `X-Scope-OrgID`** — pushes and queries without it are rejected; tenants are implicit (no provisioning step).
 - **Transient "Access Denied" warnings in the first seconds of a fresh boot are expected** — the workload identity's cloud credentials are still being issued; Mimir retries and proceeds.
 - **Data lives in your bucket** — the volumeset only holds the WAL and scratch space. Reinstalling the template against the same bucket resumes with your data; deleting data means emptying the bucket.
+- **After scaling `replicas` 1 → 3 on a live install**, metrics written shortly before the scale-up can be intermittently invisible to queries (roughly a third of requests) for up to ~12 hours while their blocks age into the store. No data is lost, new writes are unaffected, and it resolves on its own — scale up at a quiet hour if that window matters.
 - **Retention is enforced by the compactor** — changing `retention.period` applies to existing blocks too.
 - **After uninstall, re-check your bucket**: the terminating replica can re-write a small cluster-seed file (`blocks/__mimir_cluster/`) minutes after teardown — delete it if you are emptying the bucket.
 

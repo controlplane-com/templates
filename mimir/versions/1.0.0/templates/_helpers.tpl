@@ -79,10 +79,16 @@ compactor:
   data_dir: /data/compactor
 ingester:
   ring:
-    replication_factor: 1
+    replication_factor: {{ ternary 3 1 (gt (int .Values.replicas) 1) }}
 store_gateway:
   sharding_ring:
-    replication_factor: 1
+    replication_factor: {{ ternary 3 1 (gt (int .Values.replicas) 1) }}
+{{- if gt (int .Values.replicas) 1 }}
+memberlist:
+  join_members:
+    - {{ include "mimir.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:7946
+  abort_if_cluster_join_fails: false
+{{- end }}
 activity_tracker:
   filepath: /data/metrics-activity.log
 limits:
@@ -93,6 +99,10 @@ limits:
 {{/* Validation */}}
 
 {{- define "mimir.validate" -}}
+{{- $r := int .Values.replicas -}}
+{{- if and (ne $r 1) (lt $r 3) -}}
+{{- fail "mimir: replicas must be 1 or >= 3 — a 2-replica cluster has no failure tolerance under 3-way replication" -}}
+{{- end -}}
 {{- if not (has .Values.storage.type (list "aws" "gcp" "minio")) -}}
 {{- fail (printf "mimir: storage.type must be aws, gcp, or minio — got '%s'" .Values.storage.type) -}}
 {{- end -}}

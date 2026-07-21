@@ -6,20 +6,22 @@ resources: # monolithic Mimir; memory governs ingestable series count
   minCpu: 500m
   minMemory: 1Gi
 
+replicas: 1 # 1 for a single instance; 3 or more forms an HA cluster with 3-way replication
+
 # ─── Object Storage (required) ─────────────────────────────────────────────────
 # Mimir stores metric blocks in an object bucket you create beforehand (see
 # README Storage setup). One bucket; the template namespaces it internally.
 storage:
   type: aws # options: aws, gcp, minio
 
-  # AWS S3 — keyless via Control Plane cloud identity (no stored credentials).
+  # AWS S3 — via Control Plane cloud identity.
   aws:
     bucket: my-mimir-bucket # bucket must already exist
     region: us-east-1
     cloudAccountName: my-s3-cloud-account # Control Plane AWS cloud account
     policyName: my-mimir-s3-policy # custom IAM policy granting bucket access (bare name)
 
-  # Google Cloud Storage — keyless via Control Plane cloud identity.
+  # Google Cloud Storage — via Control Plane cloud identity.
   gcp:
     bucket: my-mimir-bucket # bucket must already exist
     cloudAccountName: my-gcs-cloud-account # Control Plane GCP cloud account

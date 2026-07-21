@@ -21,7 +21,7 @@ This app deploys [n8n](https://n8n.io/) — a workflow automation platform (fair
 ### n8n
 
 ```yaml
-image: docker.n8n.io/n8nio/n8n:2.29.8
+image: n8nio/n8n:2.29.8
 
 resources:
   cpu: 1000m

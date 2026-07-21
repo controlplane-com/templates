@@ -1,0 +1,141 @@
+{{- include "n8n.validate" . }}
+kind: workload
+name: {{ include "n8n.name" . }}
+description: n8n workflow automation — editor, API, and webhooks
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "n8n.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "n8n.identity.name" . }}
+  containers:
+    - name: n8n
+      image: {{ .Values.image }}
+      # Public URLs (WEBHOOK_URL etc.) must be process env at n8n start and the
+      # canonical endpoint is only known at runtime, so boot goes through the
+      # mounted start script instead of the image entrypoint.
+      command: /bin/sh
+      args:
+        - /cpln/start.sh
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
+      env:
+        {{- if .Values.postgresHA.enabled }}
+        # ── Database (postgres-highly-available subchart, HAProxy leader endpoint) ──
+        {{- else }}
+        # ── Database (postgres subchart, single instance) ──
+        {{- end }}
+        - name: DB_TYPE
+          value: postgresdb
+        - name: DB_POSTGRESDB_HOST
+          value: {{ include "n8n.postgres.host" . }}
+        - name: DB_POSTGRESDB_PORT
+          value: '5432'
+        - name: DB_POSTGRESDB_DATABASE
+          {{- if .Values.postgresHA.enabled }}
+          value: 'cpln://secret/{{ include "n8n.postgres.secret.name" . }}.database'
+          {{- else }}
+          # the single-postgres config secret has no `database` key — use the value directly
+          value: {{ .Values.postgres.config.database | quote }}
+          {{- end }}
+        - name: DB_POSTGRESDB_USER
+          value: 'cpln://secret/{{ include "n8n.postgres.secret.name" . }}.username'
+        - name: DB_POSTGRESDB_PASSWORD
+          value: 'cpln://secret/{{ include "n8n.postgres.secret.name" . }}.password'
+        # ── Credential encryption (prerequisite opaque secret) ──
+        # If `.payload` does not resolve as an env value for opaque secrets,
+        # fall back to requiring a dictionary secret with a documented key
+        # (and update the README prerequisite accordingly).
+        - name: N8N_ENCRYPTION_KEY
+          value: 'cpln://secret/{{ .Values.encryptionKey.secretName }}.payload'
+        # ── Instance owner (env-managed — no unauthenticated /setup window) ──
+        - name: N8N_INSTANCE_OWNER_MANAGED_BY_ENV
+          value: 'true'
+        - name: N8N_INSTANCE_OWNER_EMAIL
+          value: 'cpln://secret/{{ include "n8n.secretOwner.name" . }}.email'
+        - name: N8N_INSTANCE_OWNER_FIRST_NAME
+          value: {{ .Values.owner.firstName | quote }}
+        - name: N8N_INSTANCE_OWNER_LAST_NAME
+          value: {{ .Values.owner.lastName | quote }}
+        - name: N8N_INSTANCE_OWNER_PASSWORD_HASH
+          value: 'cpln://secret/{{ include "n8n.secretOwner.name" . }}.password-hash'
+        # ── Public URL construction (host derived at runtime in start.sh) ──
+        - name: N8N_PROTOCOL
+          value: https
+        - name: N8N_PROXY_HOPS
+          value: '1'
+        # ── Misc ──
+        - name: GENERIC_TIMEZONE
+          value: {{ .Values.timezone | quote }}
+        - name: TZ
+          value: {{ .Values.timezone | quote }}
+        - name: N8N_DIAGNOSTICS_ENABLED
+          value: 'false'
+      ports:
+        - number: 5678
+          protocol: http
+      volumes:
+        - path: /home/node/.n8n
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "n8n.volume.name" . }}
+        - path: /cpln/start.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "n8n.secretStart.name" . }}.payload
+      # /healthz/readiness is 200 only once the DB is connected and migrated —
+      # exactly what "ready for traffic" means here. failureThreshold 20 is the
+      # platform max (spec asked 30); first boot runs DB migrations.
+      readinessProbe:
+        httpGet:
+          path: /healthz/readiness
+          port: 5678
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 3
+      livenessProbe:
+        httpGet:
+          path: /healthz
+          port: 5678
+        initialDelaySeconds: 30
+        periodSeconds: 30
+        failureThreshold: 5
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  # The image runs as user `node` (uid/gid 1000) and boots through our start
+  # script, so nothing chowns the freshly-provisioned (root-owned) volumeset
+  # mount. filesystemGroupId makes /home/node/.n8n group-writable by GID 1000
+  # so n8n can write its config and binaryData on first boot (sftpgo pattern).
+  securityOptions:
+    filesystemGroupId: 1000
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}

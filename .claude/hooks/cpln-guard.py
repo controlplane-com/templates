@@ -105,6 +105,10 @@ def main() -> None:
         sys.exit(0)  # not ours; normal flow
 
     test_gvc = os.environ.get("CPLN_TEST_GVC", "test-gvc")
+    # test-gvc-2 is the maintainer-sanctioned second test slot (2026-07-20,
+    # created for parallel template runs). The env var loads at session start,
+    # so a set is safer than swapping the var mid-session.
+    allowed_gvcs = {test_gvc, "test-gvc", "test-gvc-2"}
 
     segs = split_segments(cmd)
     if segs is None:
@@ -135,7 +139,7 @@ def main() -> None:
         if m:
             raw = m.group(1)
             gv = raw.strip("'\"")
-            if gv in (test_gvc, "$CPLN_TEST_GVC", "${CPLN_TEST_GVC}"):
+            if gv in allowed_gvcs or gv in ("$CPLN_TEST_GVC", "${CPLN_TEST_GVC}"):
                 verdicts.append("mutation-in-test-gvc")
                 continue
             out("deny",

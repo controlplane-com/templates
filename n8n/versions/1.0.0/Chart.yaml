@@ -11,7 +11,7 @@ dependencies:
     repository: "oci://ghcr.io/controlplane-com/templates"
   - name: postgres-highly-available
     alias: postgresHA
-    version: 2.4.0
+    version: 2.4.1
     repository: "oci://ghcr.io/controlplane-com/templates"
     condition: postgresHA.enabled
   - name: postgres

@@ -139,6 +139,7 @@ Point a Grafana Prometheus datasource at the PromQL URL. Collectors inside the G
 - **With `multitenancy.enabled: true`, every request needs `X-Scope-OrgID`** — pushes and queries without it are rejected; tenants are implicit (no provisioning step).
 - **Transient "Access Denied" warnings in the first seconds of a fresh boot are expected** — the workload identity's cloud credentials are still being issued; Mimir retries and proceeds.
 - **Data lives in your bucket** — the volumeset only holds the WAL and scratch space. Reinstalling the template against the same bucket resumes with your data; deleting data means emptying the bucket.
+- **After scaling `replicas` 1 → 3 on a live install**, metrics written shortly before the scale-up can be intermittently invisible to queries (roughly a third of requests) for up to ~12 hours while their blocks age into the store. No data is lost, new writes are unaffected, and it resolves on its own — scale up at a quiet hour if that window matters.
 - **Retention is enforced by the compactor** — changing `retention.period` applies to existing blocks too.
 - **After uninstall, re-check your bucket**: the terminating replica can re-write a small cluster-seed file (`blocks/__mimir_cluster/`) minutes after teardown — delete it if you are emptying the bucket.
 

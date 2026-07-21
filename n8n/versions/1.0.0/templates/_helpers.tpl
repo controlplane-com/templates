@@ -43,22 +43,35 @@ n8n Policy Name
 {{- end }}
 
 
-{{/* Subchart resource references */}}
+{{/* Mode-aware Database Helpers */}}
 
 {{/*
-The postgres-highly-available subchart's dictionary config secret
-({username, password, database}). Its helpers are deterministic on
-.Release.Name, so the parent duplicates the derived name (tyk pattern).
+Database hostname: the HAProxy leader-only endpoint (HA mode) or the single
+postgres workload (dev mode), both on port 5432. Names must match the
+dependency charts' own helpers (pg-ha.proxy.name / postgres.name); their
+helpers are deterministic on .Release.Name, so the parent duplicates the
+derived name (tyk pattern).
 */}}
-{{- define "n8n.postgres.secret.name" -}}
-{{- printf "%s-postgres-config" .Release.Name }}
+{{- define "n8n.postgres.host" -}}
+{{- if .Values.postgresHA.enabled -}}
+{{- printf "%s-postgres-ha-proxy.%s.cpln.local" .Release.Name .Values.global.cpln.gvc }}
+{{- else -}}
+{{- printf "%s-postgres.%s.cpln.local" .Release.Name .Values.global.cpln.gvc }}
+{{- end }}
 {{- end }}
 
 {{/*
-The subchart's HAProxy leader-only endpoint hostname (port 5432).
+Credentials secret of the active database (created by the dependency chart).
+Names must match the dependency charts' own helpers (pg-ha.secretDatabase.name
+/ postgres.secretDatabase.name). Both hold {username, password}; only the HA
+secret also holds {database}.
 */}}
-{{- define "n8n.postgres.host" -}}
-{{- printf "%s-postgres-ha-proxy.%s.cpln.local" .Release.Name .Values.global.cpln.gvc }}
+{{- define "n8n.postgres.secret.name" -}}
+{{- if .Values.postgresHA.enabled -}}
+{{- printf "%s-postgres-config" .Release.Name }}
+{{- else -}}
+{{- printf "%s-pg-config" .Release.Name }}
+{{- end }}
 {{- end }}
 
 
@@ -77,8 +90,14 @@ The subchart's HAProxy leader-only endpoint hostname (port 5432).
 {{- if not (has .Values.internalAccess.type (list "none" "same-gvc" "same-org" "workload-list")) -}}
 {{- fail (printf "n8n: internalAccess.type must be 'none', 'same-gvc', 'same-org', or 'workload-list', got '%s'" .Values.internalAccess.type) -}}
 {{- end -}}
-{{- if not (index .Values "postgres-highly-available" "proxy" "enabled") -}}
-{{- fail "n8n: postgres-highly-available.proxy.enabled must be true — the HAProxy leader endpoint is n8n's stable database endpoint" -}}
+{{- if and .Values.postgresHA.enabled .Values.postgres.enabled -}}
+{{- fail "n8n: enable exactly one database — set either postgresHA.enabled or postgres.enabled to true, not both" -}}
+{{- end -}}
+{{- if and (not .Values.postgresHA.enabled) (not .Values.postgres.enabled) -}}
+{{- fail "n8n: enable exactly one database — postgresHA.enabled (production) or postgres.enabled (dev/lightweight)" -}}
+{{- end -}}
+{{- if and .Values.postgresHA.enabled (not (dig "proxy" "enabled" true .Values.postgresHA)) -}}
+{{- fail "n8n: postgresHA.proxy.enabled must remain true — the HAProxy leader endpoint is n8n's stable database endpoint" -}}
 {{- end -}}
 {{- end }}
 

@@ -22,7 +22,11 @@ spec:
       cpu: {{ .Values.resources.cpu | quote }}
       memory: {{ .Values.resources.memory | quote }}
       env:
+        {{- if .Values.postgresHA.enabled }}
         # ── Database (postgres-highly-available subchart, HAProxy leader endpoint) ──
+        {{- else }}
+        # ── Database (postgres subchart, single instance) ──
+        {{- end }}
         - name: DB_TYPE
           value: postgresdb
         - name: DB_POSTGRESDB_HOST
@@ -30,7 +34,12 @@ spec:
         - name: DB_POSTGRESDB_PORT
           value: '5432'
         - name: DB_POSTGRESDB_DATABASE
+          {{- if .Values.postgresHA.enabled }}
           value: 'cpln://secret/{{ include "n8n.postgres.secret.name" . }}.database'
+          {{- else }}
+          # the single-postgres config secret has no `database` key — use the value directly
+          value: {{ .Values.postgres.config.database | quote }}
+          {{- end }}
         - name: DB_POSTGRESDB_USER
           value: 'cpln://secret/{{ include "n8n.postgres.secret.name" . }}.username'
         - name: DB_POSTGRESDB_PASSWORD

@@ -1,12 +1,13 @@
 # n8n
 
-This app deploys [n8n](https://n8n.io/) — a workflow automation platform (fair-code, [Sustainable Use License](https://docs.n8n.io/sustainable-use-license/)) — backed by a highly available PostgreSQL cluster. The editor, REST API, and webhook endpoints are served on one public HTTPS endpoint, and the instance owner account is pre-provisioned at install so there is never an unauthenticated setup page.
+This app deploys [n8n](https://n8n.io/) — a workflow automation platform (fair-code, [Sustainable Use License](https://docs.n8n.io/sustainable-use-license/)) — backed by a highly available PostgreSQL cluster by default. The editor, REST API, and webhook endpoints are served on one public HTTPS endpoint, and the instance owner account is pre-provisioned at install so there is never an unauthenticated setup page.
 
 ## Architecture
 
 - **n8n**: Stateful workload (single replica) serving the editor, API, and webhooks on port 5678; public URLs are derived from the canonical endpoint at start.
 - **Volumeset**: 10 GiB persistent storage for instance config and binary execution data (`/home/node/.n8n`).
-- **PostgreSQL HA** (subchart): the `postgres-highly-available` template — 3× Patroni Postgres, 3× etcd, and a 2-replica HAProxy leader endpoint n8n connects through.
+- **PostgreSQL (HA, default)** (subchart): the `postgres-highly-available` template — 3× Patroni Postgres, 3× etcd, and a 2-replica HAProxy leader endpoint n8n connects through.
+- **PostgreSQL (dev/lightweight, optional)** (subchart): the single-instance `postgres` template instead, for lighter deployments.
 - **Secrets, identity, and policy**: owner bootstrap credentials (bcrypt-hashed), a start script, and a least-privilege policy granting the n8n identity `reveal` on exactly the secrets it uses.
 - **Optional database backups** (subchart): logical dumps or WAL-G archiving to S3, GCS, or an S3-compatible endpoint.
 
@@ -56,19 +57,35 @@ internalAccess:               # internal firewall scope (in-GVC webhook callers)
 
 ### PostgreSQL
 
-All keys under `postgres-highly-available:` pass through to the [postgres-highly-available](https://github.com/controlplane-com/templates) template. The ones to review:
+Exactly one of the two databases must be enabled (the chart enforces this at render).
 
 ```yaml
-postgres-highly-available:
+postgresHA:                   # default: highly available PostgreSQL
+  enabled: true
   postgres:
     username: n8n
     password: change-me-n8n-db-password # change before installing
     database: n8n
-  proxy:
-    enabled: true             # required — n8n's stable leader endpoint (validation enforces it)
+  replicas: 3
+  volumeset:
+    capacity: 10              # GiB per replica
   backup:
     enabled: false            # optional — see Backup storage setup
-    provider: aws             # aws, gcp, minio
+```
+
+```yaml
+postgresHA:
+  enabled: false
+postgres:                     # dev/lightweight: single-instance PostgreSQL
+  enabled: true
+  config:
+    username: n8n
+    password: change-me-n8n-db-password # change before installing
+    database: n8n
+  volumeset:
+    capacity: 10              # GiB
+  backup:
+    enabled: false            # optional — see Backup storage setup
 ```
 
 ## Connecting
@@ -80,11 +97,12 @@ postgres-highly-available:
 | Test webhooks | `https://<canonical>.cpln.app/webhook-test/<path>` |
 | Internal (same GVC) | `http://{release}-n8n.{gvc}.cpln.local:5678` |
 | Login | `owner.email` / `owner.password` |
-| Postgres (internal, for inspection) | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432`, credentials in the `{release}-postgres-config` secret |
+| Postgres (internal, HA mode) | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432`, credentials in the `{release}-postgres-config` secret |
+| Postgres (internal, single mode) | `{release}-postgres.{gvc}.cpln.local:5432`, credentials in the `{release}-pg-config` secret |
 
 ## Backup storage setup
 
-Only needed when `postgres-highly-available.backup.enabled: true`. Complete the steps for your provider before installing.
+Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.backup.enabled`). Complete the steps for your provider before installing.
 
 ### AWS S3
 
@@ -118,8 +136,8 @@ Only needed when `postgres-highly-available.backup.enabled: true`. Complete the 
 ## Important Notes
 
 - **Back up the encryption-key secret** — losing it permanently bricks every credential n8n has stored; never change it after first boot (n8n fails to start on a key mismatch).
-- **Change `owner.password` and `postgres-highly-available.postgres.password` before installing.**
-- **The n8n main instance is single-replica by upstream design** — the HA Postgres backend removes the database as a failure point.
+- **Change `owner.password` and the database password (`postgresHA.postgres.password` / `postgres.config.password`) before installing.**
+- **The n8n main instance is single-replica by upstream design** — the default HA Postgres backend removes the database as a failure point.
 - **Upgrades restart the single replica** — expect roughly a minute of editor/webhook downtime per `helm upgrade`.
 - **Synchronous webhook responses must finish within 30 seconds** (the platform edge times out longer ones) — for long-running workflows, set the Webhook node to respond immediately or use a Respond to Webhook node early; the workflow itself keeps running either way.
 - **Uninstall deletes the database and n8n volumesets** — all workflows, credentials, and execution data. Enable backups if the data matters.

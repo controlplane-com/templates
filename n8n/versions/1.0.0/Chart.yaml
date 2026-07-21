@@ -6,15 +6,21 @@ version: 1.0.0
 appVersion: "2.29.8"
 
 dependencies:
-  - name: postgres-highly-available
-    version: 2.4.0
-    repository: "oci://ghcr.io/controlplane-com/templates"
   - name: cpln-common
     version: 1.0.0
     repository: "oci://ghcr.io/controlplane-com/templates"
+  - name: postgres-highly-available
+    alias: postgresHA
+    version: 2.4.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+    condition: postgresHA.enabled
+  - name: postgres
+    version: 3.3.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+    condition: postgres.enabled
 
 annotations:
   created: "2026-07-20"
-  lastModified: "2026-07-20"
+  lastModified: "2026-07-21"
   category: "app"
   createsGvc: false

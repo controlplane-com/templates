@@ -6,6 +6,8 @@ resources: # monolithic Mimir; memory governs ingestable series count
   minCpu: 500m
   minMemory: 1Gi
 
+replicas: 1 # 1 for a single instance; 3 or more forms an HA cluster with 3-way replication
+
 # ─── Object Storage (required) ─────────────────────────────────────────────────
 # Mimir stores metric blocks in an object bucket you create beforehand (see
 # README Storage setup). One bucket; the template namespaces it internally.

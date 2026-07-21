@@ -55,9 +55,9 @@ spec:
   defaultOptions:
     autoscaling:
       maxConcurrency: 0
-      maxScale: 1
+      maxScale: {{ .Values.replicas }}
       metric: disabled
-      minScale: 1
+      minScale: {{ .Values.replicas }}
       scaleToZeroDelay: 300
       target: 100
     capacityAI: false

@@ -1,6 +1,6 @@
 # Metabase
 
-This app deploys [Metabase](https://www.metabase.com/) open-source BI — dashboards, a SQL editor, and scheduled report subscriptions — backed by a highly available PostgreSQL app database by default. The admin account is created automatically on first boot inside the container, and the workload only starts receiving traffic once setup is complete, so there is never a publicly reachable setup page.
+This app deploys [Metabase](https://www.metabase.com/) open-source BI — dashboards, a SQL editor, and scheduled report subscriptions. The bundled PostgreSQL is Metabase's own **app database** (users, dashboards, saved connections); the databases you analyze are **data sources** you connect in the app after install — they are never installed or touched by this template. The admin account is created automatically on first boot inside the container, and the workload only starts receiving traffic once setup is complete, so there is never a publicly reachable setup page.
 
 ## Architecture
 
@@ -93,6 +93,8 @@ postgres:                     # dev/lightweight: single-instance PostgreSQL
 | Login | `admin.email` / `admin.password` |
 | Postgres (internal, HA mode) | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432`, credentials in the `{release}-postgres-config` secret |
 | Postgres (internal, single mode) | `{release}-postgres.{gvc}.cpln.local:5432`, credentials in the `{release}-pg-config` secret |
+
+To analyze a database running on Control Plane, add it in Metabase (Admin → Databases) using its internal endpoint, e.g. `{workload}.{gvc}.cpln.local:5432` — any database Metabase can reach, inside or outside Control Plane, works as a data source.
 
 ## Backup storage setup
 

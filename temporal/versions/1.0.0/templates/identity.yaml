@@ -1,0 +1,5 @@
+kind: identity
+name: {{ include "temporal.identity.name" . }}
+description: Temporal server workload identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "temporal.tags" . | nindent 4 }}

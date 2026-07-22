@@ -1,0 +1,134 @@
+{{- include "temporal.validate" . }}
+kind: workload
+name: {{ include "temporal.name" . }}
+description: Temporal server — single-process (frontend, history, matching, worker), gRPC frontend on 7233
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "temporal.tags" . | nindent 4 }}
+spec:
+  # Stateless by design: all state (workflow histories, task queues, timers,
+  # visibility) lives in the two Postgres databases — no volumeset.
+  type: standard
+  identityLink: //identity/{{ include "temporal.identity.name" . }}
+  containers:
+    - name: temporal
+      image: {{ .Values.image }}
+      # No command override: the auto-setup entrypoint runs idempotent DB
+      # create + schema setup/upgrade synchronously, then starts the server
+      # (with a backgrounded describe-then-create default-namespace
+      # registration). This is the template's schema/migration mechanism —
+      # upgrades apply new schema migrations at boot, in the upstream-documented
+      # schema-before-server order. Fallback if restarts prove non-idempotent:
+      # boot via a template start script that guards the schema steps
+      # (SKIP_DB_CREATE=true / schema_version-table check) before
+      # `exec /etc/temporal/start-temporal.sh` — all tools are in this image.
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
+      env:
+        {{- if .Values.postgresHA.enabled }}
+        # ── Persistence (postgres-highly-available subchart, HAProxy leader endpoint) ──
+        {{- else }}
+        # ── Persistence (postgres subchart, single instance) ──
+        {{- end }}
+        - name: DB
+          value: postgres12
+        - name: POSTGRES_SEEDS
+          value: {{ include "temporal.postgres.host" . }}
+        - name: DB_PORT
+          value: '5432'
+        - name: POSTGRES_USER
+          value: 'cpln://secret/{{ include "temporal.postgres.secret.name" . }}.username'
+        - name: POSTGRES_PWD
+          value: 'cpln://secret/{{ include "temporal.postgres.secret.name" . }}.password'
+        # The main store matches the subchart-created database; auto-setup
+        # creates the visibility database alongside it.
+        - name: DBNAME
+          value: temporal
+        - name: VISIBILITY_DBNAME
+          value: temporal_visibility
+        - name: ENABLE_ES
+          value: 'false'
+        # ── Cluster settings ──
+        # NUM_HISTORY_SHARDS is PERMANENT once the cluster is initialized.
+        - name: NUM_HISTORY_SHARDS
+          value: {{ .Values.historyShards | quote }}
+        # ── Namespace bootstrap (idempotent describe-then-create) ──
+        - name: DEFAULT_NAMESPACE
+          value: default
+        - name: DEFAULT_NAMESPACE_RETENTION
+          value: {{ .Values.namespaceRetention | quote }}
+        - name: SKIP_ADD_CUSTOM_SEARCH_ATTRIBUTES
+          value: 'true'
+        # ── Networking ──
+        # Bind all interfaces so mesh inbound works regardless of Envoy's
+        # target IP; the entrypoint then derives TEMPORAL_BROADCAST_ADDRESS
+        # (container IP — ringpop only talks to itself in single-process mode).
+        # Fallback if 0.0.0.0 misbehaves under the mesh: drop BIND_ON_IP — the
+        # entrypoint defaults to the container IP (the k8s-normal shape).
+        - name: BIND_ON_IP
+          value: 0.0.0.0
+        # In-process client address (worker service, auto-setup health polling,
+        # in-container CLI).
+        - name: TEMPORAL_ADDRESS
+          value: 127.0.0.1:7233
+      ports:
+        - number: 7233
+          protocol: grpc
+      # Ready = the frontend gRPC health check reports SERVING — the same
+      # check auto-setup itself polls. failureThreshold 20 is the platform
+      # max; first boot runs DB create + schema setup before the port opens.
+      readinessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            - temporal operator cluster health --address 127.0.0.1:7233 | grep -q SERVING
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      # Schema setup runs pre-listen — a liveness kill mid-migration would
+      # crash-loop, hence the long initial delay.
+      livenessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            - temporal operator cluster health --address 127.0.0.1:7233 | grep -q SERVING
+        initialDelaySeconds: 120
+        periodSeconds: 30
+        failureThreshold: 5
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      # Pinned to exactly one replica: multi-replica requires a ringpop
+      # membership design — a second replica would split-brain, so
+      # autoscaling is disabled, not merely defaulted.
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    # SDK task-queue long-polls are ~60-70 s gRPC calls; 120 s gives headroom.
+    timeoutSeconds: 120
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      # Internal-only, fail-closed: public gRPC would demand a TLS/mTLS story.
+      inboundAllowCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}

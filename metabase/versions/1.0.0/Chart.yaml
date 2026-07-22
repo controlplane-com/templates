@@ -1,0 +1,26 @@
+apiVersion: v2
+name: metabase
+description: Metabase open-source BI — dashboards, SQL editor, and scheduled reports, with a highly available PostgreSQL app database
+type: application
+version: 1.0.0
+appVersion: "0.63.1.3"
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+  - name: postgres-highly-available
+    alias: postgresHA
+    version: 2.4.1
+    repository: "oci://ghcr.io/controlplane-com/templates"
+    condition: postgresHA.enabled
+  - name: postgres
+    version: 3.3.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+    condition: postgres.enabled
+
+annotations:
+  created: "2026-07-22"
+  lastModified: "2026-07-22"
+  category: "app"
+  createsGvc: false

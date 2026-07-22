@@ -1,0 +1,114 @@
+image: metabase/metabase:v0.63.1.3
+
+resources:
+  cpu: 1000m
+  memory: 2Gi
+  minCpu: 500m
+  minMemory: 1Gi
+
+# ─── Encryption Key (prerequisite) ────────────────────────────────────────────
+# Create BEFORE install: an opaque secret (encoding: plain) whose payload is a
+# random string of at least 16 chars, e.g. `openssl rand -hex 24`. Metabase
+# encrypts saved database-connection details with it. Back it up — losing or
+# changing it means re-entering every saved connection.
+encryptionKey:
+  secretName: my-metabase-encryption-key # name of your pre-created opaque secret
+
+# ─── Admin Account ────────────────────────────────────────────────────────────
+# Created automatically on first boot (no public /setup window). Values must
+# not contain double quotes or backslashes (embedded in the setup API call).
+admin:
+  email: admin@example.com # admin login email
+  firstName: Metabase
+  lastName: Admin
+  password: change-me-metabase-1 # change before installing; letters + digits, 8+ chars
+
+siteName: Metabase # instance name shown in the UI and emails
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: true # UI + API on the canonical *.cpln.app HTTPS endpoint
+
+internalAccess: # internal firewall scope (in-GVC API/embedding callers)
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # used with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── App Database: Highly Available PostgreSQL (default) ──────────────────────
+# Deploys the postgres-highly-available template: 3 Patroni replicas, 3 etcd
+# replicas, and an HAProxy leader-routing endpoint Metabase connects to.
+postgresHA:
+  enabled: true
+  postgres:
+    username: metabase
+    password: change-me-metabase-db-password # change before installing
+    database: metabase
+  replicas: 3
+  volumeset:
+    capacity: 10 # initial capacity in GiB per replica (minimum is 10)
+
+  backup: # optional database backups — see README storage setup
+    enabled: false
+    mode: logical # logical or wal-g
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    logical:
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      schedule: "0 2 * * *"
+    walg:
+      intervalSeconds: 21600
+    provider: aws # options: aws, gcp, minio
+    aws:
+      bucket: metabase-pg-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: metabase-pg-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: metabase-pg-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: metabase-pg-backup-bucket
+      accessKey: my-minio-username
+      secretKey: my-minio-password
+      prefix: postgres/backups
+
+# ─── App Database: Single-instance PostgreSQL (dev/lightweight) ───────────────
+# Enable this and disable postgresHA for a lighter non-HA deployment.
+postgres:
+  enabled: false
+  config:
+    username: metabase
+    password: change-me-metabase-db-password # change before installing
+    database: metabase
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+  backup: # optional database backups (Postgres 17+) — see README storage setup
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
+    schedule: "0 2 * * *"
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    provider: aws # options: aws, gcp, minio
+    aws:
+      bucket: metabase-pg-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: metabase-pg-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: metabase-pg-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: metabase-pg-backup-bucket
+      accessKey: my-minio-username
+      secretKey: my-minio-password
+      prefix: postgres/backups

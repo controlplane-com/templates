@@ -21,7 +21,7 @@ This app deploys [Temporal](https://temporal.io/) — an open-source (MIT) durab
 ### Temporal server
 
 ```yaml
-image: temporalio/auto-setup:1.31.2 # server + schema tools; boot runs schema setup, then the server
+image: temporalio/auto-setup:1.29.7 # server + schema tools; boot runs schema setup, then the server
 
 resources:
   cpu: 1000m

@@ -1,4 +1,4 @@
-image: temporalio/auto-setup:1.31.2 # Temporal server + schema tools; boot runs schema setup, then the server
+image: temporalio/auto-setup:1.29.7 # Temporal server + schema tools; boot runs schema setup, then the server
 
 resources:
   cpu: 1000m

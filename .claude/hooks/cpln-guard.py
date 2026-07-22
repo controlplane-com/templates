@@ -101,6 +101,23 @@ def main() -> None:
     if data.get("tool_name") != "Bash":
         sys.exit(0)
     cmd = (data.get("tool_input") or {}).get("command", "") or ""
+    # ── Deterministic hard-denies (maintainer gates + irreversibles) ──
+    # These outrank any LLM permission evaluator by design: the evaluator only
+    # ever adjudicates commands that survive this layer.
+    import re as _re
+    HARD_DENY = [
+        (r"\bgh\s+pr\s+merge\b", "PR merges are the maintainer's gate — never automated"),
+        (r"\bgit\s+push\b[^|;&]*(\s-f\b|--force)", "force-push is irreversible history rewrite"),
+        (r"\bgit\s+push\b[^|;&]*\borigin\s+main\b", "direct pushes to main bypass PR review"),
+        (r"\bcpln\s+(org|gvc)\s+delete\b", "org/GVC deletion is never pipeline work"),
+    ]
+    for pat, why in HARD_DENY:
+        if _re.search(pat, cmd):
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": f"cpln guard hard-deny: {why}"}}))
+            sys.exit(0)
+
     if "cpln" not in cmd:
         sys.exit(0)  # not ours; normal flow
 

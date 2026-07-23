@@ -1,0 +1,109 @@
+image: temporalio/auto-setup:1.29.7 # Temporal server + schema tools; boot runs schema setup, then the server
+
+resources:
+  cpu: 1000m
+  memory: 2Gi
+  minCpu: 500m
+  minMemory: 1Gi
+
+# ─── Cluster Settings ─────────────────────────────────────────────────────────
+historyShards: 512 # PERMANENT after first install — cannot ever be changed for this cluster
+namespaceRetention: 72h # how long closed workflow histories are kept in the default namespace
+
+# ─── Web UI ───────────────────────────────────────────────────────────────────
+# Internal-only: the Temporal UI has no built-in authentication, so this
+# template never exposes it publicly. Reach it from workloads in the internal
+# access scope, or front it with your own authenticating proxy.
+ui:
+  enabled: true
+  image: temporalio/ui:2.52.1
+  resources:
+    cpu: 500m
+    memory: 512Mi
+    minCpu: 125m
+    minMemory: 128Mi
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+internalAccess: # internal firewall scope for the gRPC frontend (:7233) and the UI (:8080)
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # used with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Database: Highly Available PostgreSQL (default) ──────────────────────────
+# Deploys the postgres-highly-available template: 3 Patroni replicas, 3 etcd
+# replicas, and an HAProxy leader-routing endpoint Temporal connects to.
+postgresHA:
+  enabled: true
+  postgres:
+    username: temporal
+    password: change-me-temporal-db-password # change before installing
+    database: temporal
+  replicas: 3
+  volumeset:
+    capacity: 10 # initial capacity in GiB per replica (minimum is 10)
+
+  backup: # optional database backups — see README storage setup
+    enabled: false
+    mode: logical # logical or wal-g
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    logical:
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      schedule: "0 2 * * *"
+    walg:
+      intervalSeconds: 21600
+    provider: aws # options: aws, gcp, minio
+    aws:
+      bucket: temporal-pg-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: temporal-pg-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: temporal-pg-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: temporal-pg-backup-bucket
+      accessKey: my-minio-username
+      secretKey: my-minio-password
+      prefix: postgres/backups
+
+# ─── Database: Single-instance PostgreSQL (dev/lightweight) ───────────────────
+# Enable this and disable postgresHA for a lighter non-HA deployment.
+postgres:
+  enabled: false
+  config:
+    username: temporal
+    password: change-me-temporal-db-password # change before installing
+    database: temporal
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+  backup: # optional database backups (Postgres 17+) — see README storage setup
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
+    schedule: "0 2 * * *"
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    provider: aws # options: aws, gcp, minio
+    aws:
+      bucket: temporal-pg-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: temporal-pg-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: temporal-pg-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: temporal-pg-backup-bucket
+      accessKey: my-minio-username
+      secretKey: my-minio-password
+      prefix: postgres/backups

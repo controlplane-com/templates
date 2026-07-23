@@ -1,0 +1,75 @@
+{{- if .Values.ui.enabled }}
+kind: workload
+name: {{ include "temporal.ui.name" . }}
+description: Temporal Web UI — internal-only (no built-in authentication)
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "temporal.tags" . | nindent 4 }}
+spec:
+  type: standard
+  # No identityLink: the UI mounts no secrets — zero grants beats an unused
+  # identity.
+  containers:
+    - name: temporal-ui
+      image: {{ .Values.ui.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.ui.resources.minCpu | quote }}
+      minMemory: {{ .Values.ui.resources.minMemory | quote }}
+      cpu: {{ .Values.ui.resources.cpu | quote }}
+      memory: {{ .Values.ui.resources.memory | quote }}
+      env:
+        # FQDN required — short workload names do not resolve over the mesh.
+        - name: TEMPORAL_ADDRESS
+          value: {{ include "temporal.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:7233
+        - name: TEMPORAL_UI_PORT
+          value: '8080'
+      ports:
+        - number: 8080
+          protocol: http
+      # `GET /` is the probe (no documented dedicated health endpoint);
+      # fallback if it proves unreliable: a tcpSocket probe on 8080.
+      readinessProbe:
+        httpGet:
+          path: /
+          port: 8080
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /
+          port: 8080
+        initialDelaySeconds: 30
+        periodSeconds: 30
+        failureThreshold: 5
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 120
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      # Internal-only, fail-closed: the UI has no built-in authentication and
+      # must never be reachable from the internet. No publicAccess knob exists
+      # in this template by design.
+      inboundAllowCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}
+{{- end }}

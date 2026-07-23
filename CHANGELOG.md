@@ -4,6 +4,7 @@ High-level, user-facing catalog changes by month: new templates and notable vers
 
 ## 2026-07
 
+- **New template: temporal 1.0.0** — durable-execution platform (workflows that survive crashes and restarts) with web UI and a choice of highly-available or single-instance PostgreSQL backing
 - **New template: metabase 1.0.0** — self-hosted BI and analytics (dashboards, SQL editor, scheduled reports) with a choice of highly-available or single-instance PostgreSQL backing
 - **New template: n8n 1.0.0** — workflow automation (editor, integrations, webhooks) with a choice of highly-available or single-instance PostgreSQL backing
 - **postgres-highly-available 2.4.1** — HAProxy now waits for the database endpoints before starting, eliminating an install-time DNS race

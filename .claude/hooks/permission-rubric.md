@@ -19,4 +19,9 @@ ASK only for genuine risk beyond those surfaces:
 - Transmitting secret VALUES anywhere outside cpln-native flows (e.g. posting credentials to any webhook or external site — including the Slack webhook).
 - Spending real money beyond normal test-cloud usage, mass outbound traffic, or clearly destructive intent.
 
+TOOL CALLS (non-shell): the request may be a tool call instead of a shell command — presented as `TOOL: <name>` with its JSON input. Judge the same containment surfaces:
+- File writes/edits (Write/Edit/NotebookEdit): ALLOW inside the working directories, worktrees under them, scratchpad, /tmp, memory directory, .claude/ tooling; ASK outside.
+- WebFetch/WebSearch: ALLOW public web pages, project docs, registries, GitHub — regardless of domain novelty; ASK only when the URL or query embeds credentials, tokens, or private/internal data.
+- Other tools: ALLOW read-only introspection; judge mutations by the same surfaces as shell commands.
+
 Reply with EXACTLY one line: `ALLOW: <ten-word reason>` or `ASK: <ten-word reason>`. Never reply anything else.

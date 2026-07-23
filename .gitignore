@@ -7,8 +7,18 @@ charts/
 .claude/hooks/*.log
 CLAUDE.md
 
-# agent pipeline artifacts (stage outputs, reviewed locally, never committed)
+# agent pipeline artifacts (stage outputs, reviewed locally, never committed).
+# Namespaced per-template forms (proposal-{service}.md etc.), in-flight briefings,
+# and spike reports are working artifacts; the PERMANENT homes stay tracked:
+# briefings/ (maintainer briefings) and CHANGELOG.md.
 proposal.md
+proposal-*.md
 architecture.md
+architecture-*.md
 review-report.md
+review-report-*.md
 test-report.md
+test-report-*.md
+spike-*.md
+briefing-*.md
+.pipeline-archive/

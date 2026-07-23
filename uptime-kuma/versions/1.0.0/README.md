@@ -57,7 +57,7 @@ Monitors, notification providers, and status pages are all configured in the app
 - **No HA / multi-replica** — upstream supports exactly one instance (no clustering), so the workload is pinned to 1 replica. A restart means a brief monitoring gap; monitors resume automatically on boot, and all data survives on the volumeset.
 - **No cloud backups in this version** — durability is the persistent volume plus a 7-day final snapshot on uninstall. Uninstalling and reinstalling starts a fresh instance.
 - **Do not switch the database to MariaDB in place** — upstream does not support migrating an existing SQLite instance; a MariaDB-backed deployment must be a fresh install.
-- **Forgot the admin password?** `cpln workload exec {release}-uptime-kuma --container uptime-kuma -- npm run reset-password` (upstream's documented recovery).
+- **Forgot the admin password?** `cpln workload exec {release}-uptime-kuma --gvc {gvc} --container uptime-kuma -- npm run reset-password` (upstream's documented recovery).
 
 ## Links
 

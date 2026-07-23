@@ -110,8 +110,8 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
   "Version": "2012-10-17",
   "Statement": [{
     "Effect": "Allow",
-    "Action": ["s3:ListBucket", "s3:GetBucketLocation", "s3:GetObject", "s3:PutObject",
-               "s3:DeleteObject", "s3:AbortMultipartUpload"],
+    "Action": ["s3:ListBucket", "s3:GetBucketLocation", "s3:GetObject", "s3:GetObjectVersion",
+               "s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:AbortMultipartUpload"],
     "Resource": ["arn:aws:s3:::YOUR_BUCKET", "arn:aws:s3:::YOUR_BUCKET/*"]
   }]
 }
@@ -120,7 +120,8 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
 ### Google Cloud Storage
 
 1. Create your GCS bucket. Set `backup.gcp.bucket`.
-2. If you do not have one, create a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) for your GCP project. Set `backup.gcp.cloudAccountName` — the backup identity is granted access to the bucket keylessly (no stored credentials).
+2. If you do not have one, create a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) for your GCP project. Set `backup.gcp.cloudAccountName` — access is keyless (no stored credentials).
+3. Grant the **Storage Admin** role (`roles/storage.objectAdmin` scoped to the bucket also works) to the GCP service account created for the cloud account.
 
 ### S3-compatible (MinIO, R2, Wasabi, …)
 

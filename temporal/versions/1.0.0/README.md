@@ -142,6 +142,7 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
 - **Never expose the Web UI publicly** — it has no built-in authentication. To offer browser access from outside the internal scope, put your own authenticating proxy in front of it.
 - **Temporal connects and runs schema setup as the database superuser** provisioned by the Postgres subchart — it needs `CREATE DATABASE` and DDL rights at every version upgrade.
 - **Upgrades restart the single server replica and apply schema migrations automatically at boot** — expect a brief frontend outage per `helm upgrade`; in-flight workflows resume where they left off once the server is back.
+- **Keep the server at one replica** — manually scaling the workload will not form a working cluster (required inter-service ports are not declared and the database connection limit will be exceeded).
 - **Uninstall deletes the database volumesets** — all workflow histories and state. Enable backups if the data matters.
 
 ## Links

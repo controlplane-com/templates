@@ -1,0 +1,26 @@
+apiVersion: v2
+name: unleash
+description: Unleash open-source feature-flag server with admin UI, SDK APIs, and a highly available PostgreSQL backend
+type: application
+version: 1.0.0
+appVersion: "8.0.3"
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+  - name: postgres-highly-available
+    alias: postgresHA
+    version: 2.4.1
+    repository: "oci://ghcr.io/controlplane-com/templates"
+    condition: postgresHA.enabled
+  - name: postgres
+    version: 3.3.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+    condition: postgres.enabled
+
+annotations:
+  created: "2026-07-23"
+  lastModified: "2026-07-23"
+  category: "app"
+  createsGvc: false

@@ -33,7 +33,7 @@ except Exception: print("tool approval")' 2>>"$LOG")
   } >/dev/null 2>&1 &
   exit 0
 fi
-verdict=$(claude --model claude-haiku-4-5-20251001 -p "$(cat "$(dirname "$0")/permission-rubric.md")
+verdict=$(claude --model claude-sonnet-5 -p "$(cat "$(dirname "$0")/permission-rubric.md")
 
 COMMAND TO EVALUATE:
 $cmd" 2>>"$LOG" | head -1)

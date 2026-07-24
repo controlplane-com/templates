@@ -60,6 +60,51 @@ READONLY_CPLN_VERBS = {"get", "list", "logs", "query", "get-deployments", "event
                        "access-report", "whoami", "version", "profile", "help"}
 CPLN_MUTATING = re.compile(r"\bcpln\b")
 
+# A network CLIENT actually makes a request; other programs that merely carry an
+# http:// string (helm --set endpoint=..., cpln, echo) do not. Only flag
+# external plain-HTTP when a client is present (fixes the helm-render false deny).
+# Note: no bare "http" here — it would match the "http" inside an http:// URL
+# and defeat the check. httpie's real command names are covered.
+NET_CLIENTS = re.compile(r"\b(curl|wget|ncat|httpie|nc)\b")
+
+# Raw cloud CLIs reach real cloud accounts — scope their MUTATIONS like cpln.
+CLOUD_CLIS = ("aws", "gcloud", "gsutil", "az")
+TEST_BUCKETS = ("cpln-test-bucket",)
+_CLOUD_MUT = re.compile(
+    r"\b(rm|mv|cp|sync|mirror|put|mb|rb|delete|create|remove|run-instances|"
+    r"terminate|modify|reboot|stop|start|update|set-[a-z-]+|attach|detach|"
+    r"put-[a-z-]+|delete-[a-z-]+|create-[a-z-]+)\b")
+
+# Credential / key material that template testing never needs to read. Matched
+# only OUTSIDE the sandbox — a test's own generated key in scratchpad is fine.
+SENSITIVE = re.compile(
+    r"(/\.ssh/|\bid_rsa\b|\bid_ed25519\b|\bid_dsa\b|/\.aws/credentials|/\.aws/config|"
+    r"/\.config/gcloud/|/\.azure/|\.keychain\b|/\.netrc\b|/\.docker/config\.json|"
+    r"/\.kube/config)", re.I)
+
+
+def _cloud_concern(seg):
+    """Cloud-CLI mutation not scoped to the sanctioned test bucket -> ask.
+    Reads are harmless anywhere; test-bucket object ops are allowed."""
+    words = seg.split()
+    if not any(w.split("/")[-1] in CLOUD_CLIS for w in words):
+        return None
+    if not _CLOUD_MUT.search(seg.lower()):
+        return None  # read-only cloud call (ls/list/describe/get...) -> allow
+    buckets = re.findall(r"(?:s3|gs)://([^/\s\"']+)", seg)
+    if buckets and all(b in TEST_BUCKETS for b in buckets):
+        return None  # object op entirely within the test bucket -> allow
+    return "cloud-CLI mutation outside the sanctioned test bucket"
+
+
+def _sensitive_read(cmd):
+    """Reading credential/key material outside the sandbox -> ask."""
+    for m in re.finditer(r"((?:/|~/|\$HOME/)[^\s\"';|&]+)", cmd):
+        p = m.group(1).replace("~/", "/Users/jacobcox/").replace("$HOME/", "/Users/jacobcox/")
+        if SENSITIVE.search(p) and not p.startswith(SAFE_ROOTS):
+            return True
+    return False
+
 
 def _split_top(cmd):
     """Quote-aware split into top-level segments on ; && | and newlines."""
@@ -102,7 +147,11 @@ def _cpln_non_test_gvc_mutation(seg):
 
 
 def _external_http(cmd):
-    """A curl/wget/http client hitting a plain-HTTP EXTERNAL host."""
+    """A network CLIENT hitting a plain-HTTP EXTERNAL host. An http:// string in
+    a non-client command (helm --set, cpln, echo) is a config value, not a
+    request, so it does not count."""
+    if not NET_CLIENTS.search(cmd):
+        return False
     for m in re.finditer(r"http://([^\s\"'/]+)", cmd):
         host = m.group(0)
         if not INTERNAL_HTTP_OK.search(host):
@@ -138,14 +187,25 @@ def decide_bash(cmd):
     m = re.search(r"\bcpln\s+policy\s+(create|delete|update)\s+(\S+)", cmd)
     if m and not m.group(2).strip("\"'").startswith(TEST_PREFIXES):
         return "ask", "org policy change (non-test-scoped)"
+    # raw cloud-CLI mutation reaching beyond the sanctioned test bucket
+    for seg in _split_top(cmd):
+        c = _cloud_concern(seg)
+        if c:
+            return "ask", c
+    # reading credential/key material outside the sandbox
+    if _sensitive_read(cmd):
+        return "ask", "reading credential/key material outside the sandbox"
     return "allow", "default-allow (no deny/ask pattern matched)"
 
 
 def decide(payload):
     tn = payload.get("tool_name") or ""
     ti = payload.get("tool_input") or {}
-    # reads are always allowed
+    # reads are allowed — except credential/key material outside the sandbox
     if tn in ("Read", "Glob", "Grep", "LS", "WebSearch"):
+        p = str(ti.get("file_path") or ti.get("path") or "")
+        if p and SENSITIVE.search(p) and not p.startswith(SAFE_ROOTS):
+            return "ask", "reading credential/key material outside the sandbox"
         return "allow", "read-only tool"
     if tn in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
         p = str(ti.get("file_path") or ti.get("notebook_path") or "")

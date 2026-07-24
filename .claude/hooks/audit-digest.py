@@ -21,17 +21,37 @@ import subprocess
 HOOKDIR = os.path.dirname(os.path.abspath(__file__))
 AUDIT = os.path.join(HOOKDIR, "audit-log.jsonl")
 
-# Deterministic anomaly heuristics over an ALLOW'd command — the residual risks
-# of allow-by-default worth a human glance even though nothing was blocked.
+# Deterministic anomaly heuristics over an ALLOW'd command — the residual risk
+# of allow-by-default worth a human glance even though nothing was blocked: a
+# real secret VALUE heading to a genuinely external host.
 SECRETISH = re.compile(r"(reveal|id_rsa|\.pem|PRIVATE KEY|password|secret|token|credential)", re.I)
 NETWORK = re.compile(r"\b(curl|wget|nc|scp|ssh|rsync)\b")
-EXTERNAL = re.compile(r"https?://(?!(localhost|127\.0\.0\.1|[^\s/]*\.cpln\.(local|app)|api\.cpln\.io))", re.I)
+_URL = re.compile(r"https?://([A-Za-z0-9.\-]+)")
+# Hostnames that are never real exfil targets: internal/mesh, loopback, and the
+# standard test/example/attacker FIXTURE domains agents use to test rejection.
+_BENIGN_HOST = re.compile(
+    r"(^|\.)(localhost|cpln\.local|cpln\.app|api\.cpln\.io|example\.(com|org|net)|"
+    r"evil\.|attacker\.|test\.local|invalid|127\.0\.0\.1|10\.\d)", re.I)
+
+
+def _real_external_host(subj):
+    """A syntactically real hostname that isn't internal/mesh/a test fixture.
+    Regex patterns (backrefs, char classes) never yield a real host here."""
+    for m in _URL.finditer(subj):
+        host = m.group(1)
+        if "." not in host or host.endswith("."):
+            continue  # not a real FQDN (or a regex fragment)
+        if _BENIGN_HOST.search(host):
+            continue
+        return host
+    return None
 
 
 def flags(subj):
     out = []
-    if SECRETISH.search(subj) and NETWORK.search(subj) and EXTERNAL.search(subj):
-        out.append("secret-ish token + network call to an external host")
+    host = _real_external_host(subj)
+    if host and SECRETISH.search(subj) and NETWORK.search(subj):
+        out.append(f"secret-ish token + network call to external host {host}")
     return out
 
 

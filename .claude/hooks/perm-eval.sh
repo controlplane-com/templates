@@ -20,61 +20,7 @@ payload=$(cat)
 # cards visibly queue and occasionally EVAL-ERROR. The objectively-safe bulk
 # never needs judgment: decide it in <100ms. Anything not matched falls
 # through to the LLM exactly as before. Conservative by design.
-fast=$(printf '%s' "$payload" | python3 -c '
-import sys, json
-try:
-    d = json.load(sys.stdin); tn = d.get("tool_name") or ""; ti = d.get("tool_input") or {}
-except Exception:
-    sys.exit(0)
-SAFE_ROOTS = ("/Users/jacobcox/code/control-plane/", "/private/tmp/claude-501/", "/tmp/",
-              "/Users/jacobcox/.claude/projects/-Users-jacobcox-code-control-plane-templates/memory/")
-READONLY_PROGS = {"ls", "cat", "head", "tail", "grep", "egrep", "fgrep", "wc", "sort",
-                  "uniq", "cut", "tr", "echo", "printf", "date", "pwd", "stat", "file",
-                  "basename", "dirname", "diff", "which", "true", "cd"}
-GIT_READONLY = {"status", "log", "diff", "show", "branch", "ls-files", "rev-parse", "remote"}
-
-def readonly_bash(cmd):
-    # Provably-read-only compounds only. Any construct that could write or
-    # execute arbitrary code disqualifies instantly — those go to the LLM.
-    if any(tok in cmd for tok in ("$(", "`", ">", "<", ";", "\n")):
-        return False
-    if cmd.count("&") != 2 * cmd.count("&&"):  # bare & (backgrounding)
-        return False
-    for seg in [s for part in cmd.split("&&") for s in part.split("|")]:
-        words = seg.split()
-        if not words:
-            continue
-        prog = words[0]
-        if prog == "git":
-            sub = next((w for w in words[1:] if not w.startswith("-") and w != "-C"
-                        and not w.startswith("/")), "")
-            if sub not in GIT_READONLY:
-                return False
-        elif prog not in READONLY_PROGS:
-            return False
-    return True
-
-if tn in ("Read", "Glob", "Grep", "WebSearch"):
-    print("ALLOW: read-only tool (fast-path)")
-elif tn in ("", "Bash") and ti.get("command") and readonly_bash(str(ti.get("command"))):
-    print("ALLOW: provably read-only shell compound (fast-path)")
-elif tn in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
-    p = str(ti.get("file_path") or ti.get("notebook_path") or "")
-    if p.startswith(SAFE_ROOTS):
-        print("ALLOW: file write inside sanctioned surfaces (fast-path)")
-elif tn == "WebFetch":
-    u = str(ti.get("url") or "")
-    try:
-        from urllib.parse import urlparse
-        parsed = urlparse(u)
-        clean = (parsed.scheme in ("http", "https")
-                 and "@" not in (parsed.netloc or "")
-                 and not any(k in u.lower() for k in ("token=", "key=", "password=", "secret=")))
-    except Exception:
-        clean = False
-    if clean:
-        print("ALLOW: public web fetch, no embedded credentials (fast-path)")
-' 2>>"$LOG")
+fast=$(printf '%s' "$payload" | python3 "$(dirname "$0")/perm-fastpath.py" 2>>"$LOG")
 if [ -n "$fast" ]; then
   python3 - "$payload" "$fast" >>"$LOG" 2>&1 <<'PYEOF'
 import sys, json, datetime

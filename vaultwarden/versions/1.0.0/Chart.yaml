@@ -1,0 +1,17 @@
+apiVersion: v2
+name: vaultwarden
+description: Vaultwarden self-hosted password manager — Bitwarden-compatible server for all official Bitwarden clients, with admin panel, organizations, and attachments
+type: application
+version: 1.0.0
+appVersion: "1.36.0"
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+
+annotations:
+  created: "2026-07-24"
+  lastModified: "2026-07-24"
+  category: "security"
+  createsGvc: false

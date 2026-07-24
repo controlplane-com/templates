@@ -1,0 +1,53 @@
+image: vaultwarden/server:1.36.0
+
+resources:
+  cpu: 500m
+  memory: 512Mi
+  minCpu: 125m
+  minMemory: 256Mi
+
+volumeset:
+  capacity: 10 # GiB (minimum 10) — SQLite database, attachments, sends, and RSA keys
+
+# ─── Sign-ups & Invitations ───────────────────────────────────────────────────
+# Registration is OPEN by default so a fresh install is immediately usable.
+# After onboarding your users, lock down: set allowed=false or restrict
+# registration with domainsWhitelist.
+signups:
+  allowed: true # open registration on the public endpoint — turn off after onboarding
+  domainsWhitelist: [] # email domains that may register even when allowed=false, e.g. [mycompany.com]
+  verify: false # require email verification at registration (needs smtp.host)
+
+invitations:
+  allowed: true # existing org owners can invite users; invited emails may register
+
+# ─── Admin Panel (/admin — disabled by default) ───────────────────────────────
+# To enable, create BEFORE install an opaque secret (encoding: plain) holding
+# the argon2 hash of your admin token:
+#   docker run --rm -it vaultwarden/server:1.36.0 /vaultwarden hash
+admin:
+  tokenSecretName: "" # name of your pre-created opaque secret (e.g. my-vaultwarden-admin-token); empty = /admin disabled
+
+# ─── SMTP (optional — invites, verification, 2FA email) ───────────────────────
+smtp:
+  host: "" # e.g. smtp.example.com; empty = all email features off
+  port: 587
+  security: starttls # options: starttls, force_tls, off
+  from: "" # sender address (required when host is set)
+  authSecretName: "" # pre-created dictionary secret with keys `username` and `password` (e.g. my-vaultwarden-smtp-auth); empty = unauthenticated relay
+
+# ─── Privacy ──────────────────────────────────────────────────────────────────
+icons:
+  disableDownload: false # set true to stop the server fetching site favicons (outbound requests reveal stored-site domains); clients then show letter placeholders
+
+customDomain: "" # full URL of a custom domain (e.g. https://vault.example.com); empty = canonical *.cpln.app endpoint
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: true # Bitwarden clients (browser/desktop/mobile) connect via the canonical *.cpln.app HTTPS endpoint
+
+internalAccess: # internal firewall scope — keep closed for a password vault unless in-GVC callers need the API
+  type: none # options: none, same-gvc, same-org, workload-list
+  workloads: [] # used with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME

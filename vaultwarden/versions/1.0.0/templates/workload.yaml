@@ -1,0 +1,137 @@
+{{- include "vaultwarden.validate" . }}
+kind: workload
+name: {{ include "vaultwarden.name" . }}
+description: Vaultwarden — Bitwarden-compatible password manager server
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "vaultwarden.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "vaultwarden.identity.name" . }}
+  containers:
+    - name: vaultwarden
+      image: {{ .Values.image }}
+      # DOMAIN must be process env at server start and the canonical endpoint
+      # is only known at runtime, so boot goes through the mounted start
+      # script instead of the image CMD.
+      command: /bin/sh
+      args:
+        - /cpln/start.sh
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
+      env:
+        # ── Sign-ups & invitations ──
+        - name: SIGNUPS_ALLOWED
+          value: {{ .Values.signups.allowed | quote }}
+        {{- if .Values.signups.domainsWhitelist }}
+        # whitelisted domains may register even when SIGNUPS_ALLOWED=false
+        - name: SIGNUPS_DOMAINS_WHITELIST
+          value: {{ join "," .Values.signups.domainsWhitelist | quote }}
+        {{- end }}
+        {{- if .Values.signups.verify }}
+        - name: SIGNUPS_VERIFY
+          value: 'true'
+        {{- end }}
+        - name: INVITATIONS_ALLOWED
+          value: {{ .Values.invitations.allowed | quote }}
+        # ── Privacy ──
+        - name: DISABLE_ICON_DOWNLOAD
+          value: {{ .Values.icons.disableDownload | quote }}
+        {{- if .Values.customDomain }}
+        # explicit DOMAIN wins over the start script's canonical-endpoint fallback
+        - name: DOMAIN
+          value: {{ .Values.customDomain | quote }}
+        {{- end }}
+        {{- if .Values.admin.tokenSecretName }}
+        # ── Admin panel (prerequisite opaque secret holding the argon2 token hash) ──
+        - name: ADMIN_TOKEN
+          value: 'cpln://secret/{{ .Values.admin.tokenSecretName }}.payload'
+        {{- end }}
+        {{- if .Values.smtp.host }}
+        # ── SMTP ──
+        - name: SMTP_HOST
+          value: {{ .Values.smtp.host | quote }}
+        - name: SMTP_PORT
+          value: {{ .Values.smtp.port | quote }}
+        - name: SMTP_SECURITY
+          value: {{ .Values.smtp.security | quote }}
+        - name: SMTP_FROM
+          value: {{ .Values.smtp.from | quote }}
+        {{- end }}
+        {{- if .Values.smtp.authSecretName }}
+        # ── SMTP auth (prerequisite dictionary secret) ──
+        - name: SMTP_USERNAME
+          value: 'cpln://secret/{{ .Values.smtp.authSecretName }}.username'
+        - name: SMTP_PASSWORD
+          value: 'cpln://secret/{{ .Values.smtp.authSecretName }}.password'
+        {{- end }}
+      ports:
+        - number: 80
+          protocol: http
+      volumes:
+        - path: /data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "vaultwarden.volume.name" . }}
+        - path: /cpln/start.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "vaultwarden.secretStart.name" . }}.payload
+      # Unauthenticated upstream health endpoint (upstream's own Docker
+      # HEALTHCHECK curls it). failureThreshold 12 covers upgrade-boot
+      # embedded migrations.
+      readinessProbe:
+        httpGet:
+          path: /alive
+          port: 80
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        failureThreshold: 12
+        successThreshold: 1
+        timeoutSeconds: 3
+      livenessProbe:
+        httpGet:
+          path: /alive
+          port: 80
+        initialDelaySeconds: 30
+        periodSeconds: 30
+        failureThreshold: 5
+        timeoutSeconds: 5
+  # Exactly one replica, always: upstream officially does not support
+  # active-active (no cross-instance websocket propagation, attachments need
+  # shared storage), and volumesets are per-replica — SQLite on local disk.
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  # Makes /data group-writable by GID 1000 (uptime-kuma pattern). Harmless
+  # under the default root image; keeps a user-supplied non-root image
+  # override from failing on a root-owned volumeset.
+  securityOptions:
+    filesystemGroupId: 1000
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}

@@ -135,7 +135,7 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
 - **Admin credentials and API tokens are seeded on first boot only** — they live in the database afterwards; change the password or manage tokens in the admin UI, not by upgrading values.
 - **Backend tokens must stay secret** (server-side SDKs, `/api/client`); frontend tokens are safe to embed in browsers (`/api/frontend`). A 401 usually means the wrong token type or environment.
 - **The free edition ships exactly two environments** (`development`, `production`); SSO, role-based access control, multiple projects, change requests, and audit logs require an Unleash Enterprise license and are not available in this template.
-- **Fresh installs at `replicas: 2+`**: all replicas run first-boot database migrations concurrently; if a replica errors once and restarts during first boot, install at 1 and then scale up.
+- **HA-mode first boot takes ~5–7 minutes** — transient `Failed to migrate db` log errors while the database cluster starts are expected and self-heal, at any replica count.
 - **Uninstall deletes the database volumesets** — all flags, users, and tokens. Enable backups if the data matters.
 
 ## Links

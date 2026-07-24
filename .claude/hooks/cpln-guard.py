@@ -52,7 +52,35 @@ READONLY_CPLN = (
 )
 
 
-def out(decision: str, reason: str) -> None:
+def notify_deny(reason: str, cmd: str) -> None:
+    """Best-effort maintainer ping on every guard deny (banner + Slack).
+    Zero-prompt mode means denies must never be silent. Never blocks/raises."""
+    import subprocess
+    hookdir = os.path.dirname(os.path.abspath(__file__))
+    snip = " ".join(cmd.split())[:120]
+    try:
+        subprocess.Popen(
+            [os.path.join(hookdir, "desktop-notify.sh")],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ).stdin.write(json.dumps({"message": f"GUARD hard-deny: {reason} — {snip}"}).encode())
+    except Exception:
+        pass
+    url = os.environ.get("SLACK_WEBHOOK_URL")
+    if url:
+        try:
+            subprocess.Popen(
+                ["curl", "-s", "-m", "10", "-X", "POST", "-H", "Content-type: application/json",
+                 "--data", json.dumps({"text": f":rotating_light: [templates] GUARD hard-deny — {reason}\n`{snip}`"}),
+                 url],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
+
+
+def out(decision: str, reason: str, cmd: str = "") -> None:
+    if decision == "deny":
+        notify_deny(reason, cmd)
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -113,19 +141,16 @@ def main() -> None:
     ]
     for pat, why in HARD_DENY:
         if _re.search(pat, cmd):
-            print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": f"cpln guard hard-deny: {why}"}}))
-            sys.exit(0)
+            out("deny", f"cpln guard hard-deny: {why}", cmd)
 
     if "cpln" not in cmd:
         sys.exit(0)  # not ours; normal flow
 
     test_gvc = os.environ.get("CPLN_TEST_GVC", "test-gvc")
-    # test-gvc-2 is the maintainer-sanctioned second test slot (2026-07-20,
-    # created for parallel template runs). The env var loads at session start,
+    # test-gvc-2 (2026-07-20) and test-gvc-3 (2026-07-24) are the maintainer-
+    # sanctioned parallel test slots. The env var loads at session start,
     # so a set is safer than swapping the var mid-session.
-    allowed_gvcs = {test_gvc, "test-gvc", "test-gvc-2"}
+    allowed_gvcs = {test_gvc, "test-gvc", "test-gvc-2", "test-gvc-3"}
 
     segs = split_segments(cmd)
     if segs is None:
@@ -161,7 +186,7 @@ def main() -> None:
                 continue
             out("deny",
                 f"cpln guard: mutation targets gvc '{gv}' — automated runs may only mutate "
-                f"'{test_gvc}' (set CPLN_TEST_GVC). Blocked deterministically.")
+                f"the sanctioned test GVCs. Blocked deterministically.", cmd)
 
         # org-scoped mutation: every positional name must be test-prefixed
         positionals = [w.strip("'\"") for w in words[1:] if not w.startswith("-")]

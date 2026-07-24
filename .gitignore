@@ -22,3 +22,6 @@ test-report-*.md
 spike-*.md
 briefing-*.md
 .pipeline-archive/
+.claude/hooks/audit-log.jsonl
+.claude/hooks/*.jsonl
+.claude/hooks/__pycache__/

@@ -59,7 +59,7 @@ redis:
     auth:
       password:
         enabled: true
-        value: change-me-glitchtip-redis # change before installing; URL-safe characters recommended
+        value: change-me-glitchtip-redis # change before installing (any characters OK — the boot script percent-encodes it)
     firewall:
       internal_inboundAllowType: same-gvc
     persistence:

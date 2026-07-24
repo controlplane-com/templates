@@ -20,6 +20,8 @@ spec:
       env:
         {{- include "glitchtip.env.common" . | trim | nindent 8 }}
         # ── Worker ──
+        - name: SERVER_ROLE
+          value: worker
         - name: VTASKS_CONCURRENCY
           value: {{ .Values.worker.concurrency | quote }}
         # ── Superuser bootstrap (read by `createsuperuser --noinput`) ──

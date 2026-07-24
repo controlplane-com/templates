@@ -54,6 +54,9 @@ Vaultwarden Policy Name
 {{- if and .Values.signups.verify (not .Values.smtp.host) -}}
 {{- fail "vaultwarden: signups.verify requires smtp.host — registration verification emails need an SMTP server" -}}
 {{- end -}}
+{{- if and .Values.smtp.authSecretName (not .Values.smtp.host) -}}
+{{- fail "vaultwarden: smtp.authSecretName is set but smtp.host is empty — the secret would be granted with no SMTP feature consuming it" -}}
+{{- end -}}
 {{- end }}
 
 

@@ -14,7 +14,7 @@ ALLOW when the command stays within the sanctioned surfaces:
 
 ASK only for genuine risk beyond those surfaces:
 - Deleting or modifying files outside the surfaces above (anything in $HOME beyond ~/Applications and dotfile reads, system paths, other users).
-- sudo, system-configuration changes, keychain or credential-store access.
+- sudo or root-level changes that touch ANYTHING outside the working directories/scratchpad (system config, /etc, /Library, services, hostname, package managers needing root) — maintainer ruling 2026-07-24: these always go to the maintainer (deny + ping; the maintainer unblocks via chat if wanted). sudo operating strictly on files INSIDE the repo/worktrees/scratchpad is contained → ALLOW. Keychain or credential-store access: always ASK.
 - cpln MUTATIONS (create/update/delete) on any GVC other than test-gvc/test-gvc-2/test-gvc-3, or org-level mutations. Reads are always fine.
 - Transmitting secret VALUES anywhere outside cpln-native flows (e.g. posting credentials to any webhook or external site — including the Slack webhook).
 - Spending real money beyond normal test-cloud usage, mass outbound traffic, or clearly destructive intent.

@@ -32,10 +32,20 @@ except Exception:
 # CLI hangs, we still return a decision (empty verdict → deny + ping) instead
 # of the harness killing the hook and silently falling through to a waiting
 # human prompt — the one hole zero-prompt mode cannot tolerate.
-verdict=$(timeout 70 claude --model claude-sonnet-5 -p "$(cat "$(dirname "$0")/permission-rubric.md")
-
-REQUEST TO EVALUATE:
-$subject" 2>>"$LOG" | head -1)
+# NOTE: macOS ships no `timeout` binary (a bare `timeout 70 claude ...` broke
+# every evaluation into deny on 2026-07-24) — python subprocess owns the clock.
+verdict=$(PERM_SUBJECT="$subject" python3 - "$(dirname "$0")/permission-rubric.md" <<'PY' 2>>"$LOG"
+import os, subprocess, sys
+prompt = open(sys.argv[1]).read() + "\n\nREQUEST TO EVALUATE:\n" + os.environ["PERM_SUBJECT"]
+try:
+    r = subprocess.run(["claude", "--model", "claude-sonnet-5", "-p", prompt],
+                       capture_output=True, text=True, timeout=70)
+    lines = (r.stdout or "").strip().splitlines()
+    print(lines[0] if lines else "")
+except Exception:
+    print("")
+PY
+)
 
 python3 - "$subject" "$verdict" >>"$LOG" 2>&1 <<'PYEOF'
 import sys, json, datetime

@@ -32,14 +32,15 @@ spec:
           uri: cpln://secret/{{ include "glitchtip.secretWebStart.name" . }}.payload
       # /_health/ is the image's own healthcheck target. On first boot the web
       # tier is not-ready until the worker finishes database migrations —
-      # failureThreshold 40 × 5s budgets for that (plus HA database startup).
+      # failureThreshold 20 × 15s ≈ 300s budgets for that (plus HA database
+      # startup); 20 is the platform's hard cap for failureThreshold.
       readinessProbe:
         httpGet:
           path: /_health/
           port: 8000
         initialDelaySeconds: 5
-        periodSeconds: 5
-        failureThreshold: 40
+        periodSeconds: 15
+        failureThreshold: 20
         successThreshold: 1
         timeoutSeconds: 3
       livenessProbe:

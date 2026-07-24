@@ -1,0 +1,22 @@
+kind: policy
+name: {{ include "glitchtip.policy.name" . }}
+description: GlitchTip secret access
+tags: {{- include "glitchtip.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "glitchtip.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "glitchtip.secretDjango.name" . }}
+  - //secret/{{ include "glitchtip.secretAdmin.name" . }}
+  - //secret/{{ include "glitchtip.secretWebStart.name" . }}
+  - //secret/{{ include "glitchtip.secretWorkerStart.name" . }}
+  - //secret/{{ include "glitchtip.postgres.secret.name" . }}
+  {{- if .Values.redis.enabled }}
+  - //secret/{{ include "glitchtip.redis.secretPassword.name" . }}
+  {{- end }}
+  {{- if .Values.email.secretName }}
+  - //secret/{{ .Values.email.secretName }}
+  {{- end }}

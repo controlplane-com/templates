@@ -1,0 +1,150 @@
+image: glitchtip/glitchtip:6.2.2
+
+replicas: 1 # web tier — stateless; set 2+ for high availability (state lives in PostgreSQL/Redis)
+
+resources: # web workload
+  cpu: 1000m
+  memory: 1Gi
+  minCpu: 250m
+  minMemory: 512Mi
+
+# ─── Background Worker ────────────────────────────────────────────────────────
+# Processes events, alerts, emails, and scheduled jobs; also runs database
+# migrations and admin bootstrap at boot. Single replica (scheduler singleton).
+worker:
+  resources:
+    cpu: 1000m
+    memory: 1Gi
+    minCpu: 250m
+    minMemory: 512Mi
+  concurrency: 20 # async tasks processed in parallel (VTASKS_CONCURRENCY)
+
+# ─── Django ───────────────────────────────────────────────────────────────────
+django:
+  secretKey: change-me-glitchtip-secret-key # session/token signing key — change before installing; rotating later logs out all users
+
+# ─── Initial Admin ────────────────────────────────────────────────────────────
+# Superuser seeded on first boot only — log in with these, then manage in the UI.
+admin:
+  email: admin@example.com
+  password: change-me-glitchtip-admin # change before installing
+
+registration:
+  enabled: false # open self-signup on the endpoint; admin-created users and invites work regardless
+
+# ─── Email (optional) ─────────────────────────────────────────────────────────
+email:
+  secretName: "" # name of a pre-created opaque secret whose payload is an EMAIL_URL, e.g. smtp://user:pass@smtp.example.com:587 (create BEFORE install; empty = outbound email off)
+  fromAddress: glitchtip@example.com # DEFAULT_FROM_EMAIL — used only when secretName is set
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+domain: "" # full URL used in DSNs and email links (e.g. https://errors.example.com); empty = canonical *.cpln.app endpoint
+publicAccess:
+  enabled: true # UI + SDK event ingest (DSN) on the canonical *.cpln.app HTTPS endpoint
+
+internalAccess: # internal firewall scope (in-GVC SDK callers)
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # used with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Task Queue / Cache: Redis (default) ──────────────────────────────────────
+# Deploys the redis template (master-replica + Sentinel); GlitchTip connects
+# through Sentinel. Disable to run tasks/cache/sessions on PostgreSQL instead
+# (lighter dev shape, lower throughput).
+redis:
+  enabled: true
+  redis:
+    replicas: 2
+    auth:
+      password:
+        enabled: true
+        value: change-me-glitchtip-redis # change before installing; URL-safe characters recommended
+    firewall:
+      internal_inboundAllowType: same-gvc
+    persistence:
+      enabled: true
+  sentinel:
+    replicas: 3
+    firewall:
+      internal_inboundAllowType: same-gvc
+    persistence:
+      enabled: true
+
+# ─── Database: Highly Available PostgreSQL (default) ──────────────────────────
+# Deploys the postgres-highly-available template: 3 Patroni replicas, 3 etcd
+# replicas, and an HAProxy leader-routing endpoint GlitchTip connects to.
+postgresHA:
+  enabled: true
+  postgres:
+    username: glitchtip
+    password: change-me-glitchtip-db-password # change before installing
+    database: glitchtip
+  replicas: 3
+  volumeset:
+    capacity: 10 # initial capacity in GiB per replica (minimum is 10)
+
+  backup: # optional database backups — see README storage setup
+    enabled: false
+    mode: logical # logical or wal-g
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    logical:
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      schedule: "0 2 * * *"
+    walg:
+      intervalSeconds: 21600
+    provider: aws # options: aws, gcp, minio
+    aws:
+      bucket: glitchtip-pg-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: glitchtip-pg-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: glitchtip-pg-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: glitchtip-pg-backup-bucket
+      accessKey: my-minio-username
+      secretKey: my-minio-password
+      prefix: postgres/backups
+
+# ─── Database: Single-instance PostgreSQL (dev/lightweight) ───────────────────
+# Enable this and disable postgresHA for a lighter non-HA deployment.
+postgres:
+  enabled: false
+  config:
+    username: glitchtip
+    password: change-me-glitchtip-db-password # change before installing
+    database: glitchtip
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+  backup: # optional database backups (Postgres 17+) — see README storage setup
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
+    schedule: "0 2 * * *"
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    provider: aws # options: aws, gcp, minio
+    aws:
+      bucket: glitchtip-pg-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: glitchtip-pg-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: glitchtip-pg-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: glitchtip-pg-backup-bucket
+      accessKey: my-minio-username
+      secretKey: my-minio-password
+      prefix: postgres/backups

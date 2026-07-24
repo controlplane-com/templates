@@ -1,0 +1,58 @@
+kind: workload
+name: {{ include "glitchtip.worker.name" . }}
+description: GlitchTip background worker — vtasks + scheduler; runs migrations and admin bootstrap at boot
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "glitchtip.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //identity/{{ include "glitchtip.identity.name" . }}
+  containers:
+    - name: glitchtip-worker
+      image: {{ .Values.image }}
+      command: /bin/sh
+      args:
+        - /cpln/start.sh
+      inheritEnv: false
+      minCpu: {{ .Values.worker.resources.minCpu | quote }}
+      minMemory: {{ .Values.worker.resources.minMemory | quote }}
+      cpu: {{ .Values.worker.resources.cpu | quote }}
+      memory: {{ .Values.worker.resources.memory | quote }}
+      env:
+        {{- include "glitchtip.env.common" . | trim | nindent 8 }}
+        # ── Worker ──
+        - name: VTASKS_CONCURRENCY
+          value: {{ .Values.worker.concurrency | quote }}
+        # ── Superuser bootstrap (read by `createsuperuser --noinput`) ──
+        - name: DJANGO_SUPERUSER_EMAIL
+          value: 'cpln://secret/{{ include "glitchtip.secretAdmin.name" . }}.email'
+        - name: DJANGO_SUPERUSER_PASSWORD
+          value: 'cpln://secret/{{ include "glitchtip.secretAdmin.name" . }}.password'
+      volumes:
+        - path: /cpln/start.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "glitchtip.secretWorkerStart.name" . }}.payload
+      # No probes: the worker exposes no port; its failure mode is process
+      # exit (set -eu makes a failed migrate fatal), which restarts the
+      # container.
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      # Fixed single replica: the vtasks scheduler is a singleton and boot-time
+      # migrations must run in exactly one place.
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      # Outbound only: SMTP delivery and uptime-monitor HTTP checks.
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      inboundAllowCIDR: []
+    internal:
+      inboundAllowType: none

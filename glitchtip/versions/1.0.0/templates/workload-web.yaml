@@ -1,0 +1,82 @@
+{{- include "glitchtip.validate" . }}
+kind: workload
+name: {{ include "glitchtip.name" . }}
+description: GlitchTip web — UI, API, and SDK event ingest (DSN)
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "glitchtip.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //identity/{{ include "glitchtip.identity.name" . }}
+  containers:
+    - name: glitchtip
+      image: {{ .Values.image }}
+      # GLITCHTIP_DOMAIN/CSRF origin and the sentinel URL must be process env
+      # at server start and are only known at runtime, so boot goes through
+      # the mounted start script instead of the image CMD.
+      command: /bin/sh
+      args:
+        - /cpln/start.sh
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
+      env:
+        {{- include "glitchtip.env.common" . | trim | nindent 8 }}
+      ports:
+        - number: 8000
+          protocol: http
+      volumes:
+        - path: /cpln/start.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "glitchtip.secretWebStart.name" . }}.payload
+      # /_health/ is the image's own healthcheck target. On first boot the web
+      # tier is not-ready until the worker finishes database migrations —
+      # failureThreshold 40 × 5s budgets for that (plus HA database startup).
+      readinessProbe:
+        httpGet:
+          path: /_health/
+          port: 8000
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        failureThreshold: 40
+        successThreshold: 1
+        timeoutSeconds: 3
+      livenessProbe:
+        httpGet:
+          path: /_health/
+          port: 8000
+        initialDelaySeconds: 120
+        periodSeconds: 30
+        failureThreshold: 5
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.replicas }}
+      metric: disabled
+      minScale: {{ .Values.replicas }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}

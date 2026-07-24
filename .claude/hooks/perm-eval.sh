@@ -28,8 +28,36 @@ except Exception:
     sys.exit(0)
 SAFE_ROOTS = ("/Users/jacobcox/code/control-plane/", "/private/tmp/claude-501/", "/tmp/",
               "/Users/jacobcox/.claude/projects/-Users-jacobcox-code-control-plane-templates/memory/")
+READONLY_PROGS = {"ls", "cat", "head", "tail", "grep", "egrep", "fgrep", "wc", "sort",
+                  "uniq", "cut", "tr", "echo", "printf", "date", "pwd", "stat", "file",
+                  "basename", "dirname", "diff", "which", "true", "cd"}
+GIT_READONLY = {"status", "log", "diff", "show", "branch", "ls-files", "rev-parse", "remote"}
+
+def readonly_bash(cmd):
+    # Provably-read-only compounds only. Any construct that could write or
+    # execute arbitrary code disqualifies instantly — those go to the LLM.
+    if any(tok in cmd for tok in ("$(", "`", ">", "<", ";", "\n")):
+        return False
+    if cmd.count("&") != 2 * cmd.count("&&"):  # bare & (backgrounding)
+        return False
+    for seg in [s for part in cmd.split("&&") for s in part.split("|")]:
+        words = seg.split()
+        if not words:
+            continue
+        prog = words[0]
+        if prog == "git":
+            sub = next((w for w in words[1:] if not w.startswith("-") and w != "-C"
+                        and not w.startswith("/")), "")
+            if sub not in GIT_READONLY:
+                return False
+        elif prog not in READONLY_PROGS:
+            return False
+    return True
+
 if tn in ("Read", "Glob", "Grep", "WebSearch"):
     print("ALLOW: read-only tool (fast-path)")
+elif tn in ("", "Bash") and ti.get("command") and readonly_bash(str(ti.get("command"))):
+    print("ALLOW: provably read-only shell compound (fast-path)")
 elif tn in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
     p = str(ti.get("file_path") or ti.get("notebook_path") or "")
     if p.startswith(SAFE_ROOTS):

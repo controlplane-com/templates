@@ -28,7 +28,11 @@ except Exception:
   print("")' 2>>"$LOG")
 [ -z "$subject" ] && exit 0
 
-verdict=$(claude --model claude-sonnet-5 -p "$(cat "$(dirname "$0")/permission-rubric.md")
+# Internal timeout MUST stay under the hook's 90s registration timeout: if the
+# CLI hangs, we still return a decision (empty verdict → deny + ping) instead
+# of the harness killing the hook and silently falling through to a waiting
+# human prompt — the one hole zero-prompt mode cannot tolerate.
+verdict=$(timeout 70 claude --model claude-sonnet-5 -p "$(cat "$(dirname "$0")/permission-rubric.md")
 
 REQUEST TO EVALUATE:
 $subject" 2>>"$LOG" | head -1)

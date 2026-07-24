@@ -1,0 +1,20 @@
+image: louislam/uptime-kuma:2.4.0
+
+resources:
+  cpu: 500m
+  memory: 512Mi
+  minCpu: 125m
+  minMemory: 256Mi
+
+volumeset:
+  capacity: 10 # GiB (minimum 10) — SQLite database, uploads, and generated keys
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: true # dashboard + public status pages on the canonical *.cpln.app HTTPS endpoint
+
+internalAccess: # internal firewall scope (in-GVC callers, e.g. status-page consumers)
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # used with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME

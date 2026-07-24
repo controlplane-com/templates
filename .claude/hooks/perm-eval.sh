@@ -45,20 +45,26 @@ case "$verdict" in
     python3 -c "import json,sys; print(json.dumps({'hookSpecificOutput':{'hookEventName':'PermissionRequest','permissionDecision':'allow','permissionDecisionReason':'auto-approved (pipeline evaluator): '+sys.argv[1]}}))" "$reason"
     ;;
   *)
-    # ASK / eval-error → a human prompt is about to appear; ping the maintainer.
+    # ZERO-PROMPT MODE (maintainer directive 2026-07-24): ASK / eval-error →
+    # AUTO-DENY with a mandatory maintainer ping (banner + Slack). No human
+    # prompt ever appears; the agent adapts within sanctioned surfaces or
+    # reports blocked. Wrong denies are visible to the maintainer and get
+    # folded into the rubric like overrides did.
     reason=$(printf '%s' "${verdict#ASK: }" | head -c 160)
     snip=$(printf '%s' "$subject" | tr '\n' ' ' | head -c 120)
     {
       python3 -c 'import json,sys; print(json.dumps({"message": sys.argv[1]}))' \
-        "Approval needed: ${reason:-evaluation error} — ${snip}" \
+        "Auto-DENIED: ${reason:-evaluation error} — ${snip}" \
         | "$(dirname "$0")/desktop-notify.sh"
       if [ -n "${SLACK_WEBHOOK_URL:-}" ]; then
         python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1]}))' \
-          ":raised_hand: [templates] approval waiting — ${reason:-evaluation error}
-\`${snip}\`" \
+          ":no_entry: [templates] auto-DENIED — ${reason:-evaluation error}
+\`${snip}\`
+_(evaluator deny; if this looks wrong, tell the orchestrator and it gets folded into the rubric)_" \
           | curl -s -m 10 -X POST -H 'Content-type: application/json' --data @- "$SLACK_WEBHOOK_URL"
       fi
     } >/dev/null 2>&1 &
+    python3 -c "import json,sys; print(json.dumps({'hookSpecificOutput':{'hookEventName':'PermissionRequest','permissionDecision':'deny','permissionDecisionReason':'auto-denied (pipeline evaluator): '+sys.argv[1]+' — the maintainer has been pinged; rephrase the action to stay within sanctioned surfaces (repo/scratchpad/test-GVC/docs) or report yourself blocked. Do not retry the identical request.'}}))" "${reason:-evaluation error}"
     ;;
 esac
 exit 0

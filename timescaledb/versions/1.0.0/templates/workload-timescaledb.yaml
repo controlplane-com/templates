@@ -1,0 +1,75 @@
+kind: workload
+name: {{ include "timescaledb.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: TimescaleDB Database
+tags: {{- include "timescaledb.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "timescaledb.identity.name" . }}
+  containers:
+    - name: timescaledb
+      env:
+        - name: PGDATA
+          value: "/var/lib/postgresql/data/pg_data"
+        - name: POSTGRES_DB
+          value: {{ .Values.config.database | quote }}
+        - name: POSTGRES_PASSWORD
+          value: 'cpln://secret/{{ include "timescaledb.secretDatabase.name" . }}.password'
+        - name: POSTGRES_USER
+          value: 'cpln://secret/{{ include "timescaledb.secretDatabase.name" . }}.username'
+        - name: TS_TELEMETRY
+          value: 'off'
+      image: {{ .Values.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      ports:
+        - number: 5432
+          protocol: tcp
+      volumes:
+        - path: /var/lib/postgresql/data
+          uri: 'cpln://volumeset/{{ include "timescaledb.volume.name" . }}'
+      readinessProbe:
+        exec:
+          command:
+            - sh
+            - '-c'
+            - 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}'
+        failureThreshold: 10
+        initialDelaySeconds: 17
+        periodSeconds: 5
+        successThreshold: 1
+        timeoutSeconds: 3
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+    capacityAI: false
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  {{- if .Values.publicAccess.enabled }}
+  loadBalancer:
+    direct:
+      enabled: true
+      ports:
+        - containerPort: 5432
+          externalPort: 5432
+          protocol: TCP
+          scheme: tcp
+  {{- end }}

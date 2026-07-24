@@ -1,0 +1,19 @@
+apiVersion: v2
+name: timescaledb
+description: TimescaleDB time-series database on PostgreSQL with hypertables, columnar compression, continuous aggregates, and optional PgBouncer pooling and scheduled backups
+
+type: application
+version: 1.0.0
+appVersion: "2.28.3-pg18"
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+
+annotations:
+  created: "2026-07-24"
+  lastModified: "2026-07-24"
+  category: "database"
+  postgresVersion: "18"
+  createsGvc: false

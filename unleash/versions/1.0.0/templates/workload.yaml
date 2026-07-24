@@ -1,0 +1,118 @@
+{{- include "unleash.validate" . }}
+kind: workload
+name: {{ include "unleash.name" . }}
+description: Unleash feature-flag server — admin UI, Admin/Client/Frontend APIs
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "unleash.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //identity/{{ include "unleash.identity.name" . }}
+  containers:
+    - name: unleash
+      image: {{ .Values.image }}
+      # UNLEASH_URL must be process env at server start and the canonical
+      # endpoint is only known at runtime, so boot goes through the mounted
+      # start script instead of the image CMD.
+      command: /bin/sh
+      args:
+        - /cpln/start.sh
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
+      env:
+        {{- if .Values.postgresHA.enabled }}
+        # ── Database (postgres-highly-available subchart, HAProxy leader endpoint) ──
+        {{- else }}
+        # ── Database (postgres subchart, single instance) ──
+        {{- end }}
+        - name: DATABASE_HOST
+          value: {{ include "unleash.postgres.host" . }}
+        - name: DATABASE_PORT
+          value: '5432'
+        - name: DATABASE_NAME
+          {{- if .Values.postgresHA.enabled }}
+          value: 'cpln://secret/{{ include "unleash.postgres.secret.name" . }}.database'
+          {{- else }}
+          # the single-postgres config secret has no `database` key — use the value directly
+          value: {{ .Values.postgres.config.database | quote }}
+          {{- end }}
+        - name: DATABASE_USERNAME
+          value: 'cpln://secret/{{ include "unleash.postgres.secret.name" . }}.username'
+        - name: DATABASE_PASSWORD
+          value: 'cpln://secret/{{ include "unleash.postgres.secret.name" . }}.password'
+        - name: DATABASE_SSL
+          value: 'false'
+        # ── Default admin (seeded on first boot only) ──
+        - name: UNLEASH_DEFAULT_ADMIN_USERNAME
+          value: 'cpln://secret/{{ include "unleash.secretAdmin.name" . }}.username'
+        - name: UNLEASH_DEFAULT_ADMIN_PASSWORD
+          value: 'cpln://secret/{{ include "unleash.secretAdmin.name" . }}.password'
+        {{- if .Values.apiTokens.secretName }}
+        # ── First-boot SDK API tokens (prerequisite dictionary secret) ──
+        - name: INIT_BACKEND_API_TOKENS
+          value: 'cpln://secret/{{ .Values.apiTokens.secretName }}.backend'
+        - name: INIT_FRONTEND_API_TOKENS
+          value: 'cpln://secret/{{ .Values.apiTokens.secretName }}.frontend'
+        {{- end }}
+        # ── Misc ──
+        - name: CHECK_VERSION
+          value: 'false'
+      ports:
+        - number: 4242
+          protocol: http
+      volumes:
+        - path: /cpln/start.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "unleash.secretStart.name" . }}.payload
+      # /health is 200 only once the server is up post-migration — exactly what
+      # "ready for traffic" means here. failureThreshold 20 covers first-boot
+      # DB migrations.
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 4242
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 3
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: 4242
+        initialDelaySeconds: 30
+        periodSeconds: 30
+        failureThreshold: 5
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.replicas }}
+      metric: disabled
+      minScale: {{ .Values.replicas }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}

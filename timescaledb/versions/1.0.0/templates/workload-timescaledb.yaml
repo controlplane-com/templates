@@ -17,7 +17,7 @@ spec:
           value: 'cpln://secret/{{ include "timescaledb.secretDatabase.name" . }}.password'
         - name: POSTGRES_USER
           value: 'cpln://secret/{{ include "timescaledb.secretDatabase.name" . }}.username'
-        - name: TS_TELEMETRY
+        - name: TIMESCALEDB_TELEMETRY
           value: 'off'
       image: {{ .Values.image }}
       inheritEnv: false

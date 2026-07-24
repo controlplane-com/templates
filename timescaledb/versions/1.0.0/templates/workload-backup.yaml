@@ -81,6 +81,6 @@ spec:
     concurrencyPolicy: Forbid
     historyLimit: 5
     restartPolicy: Never
-    schedule: {{ .Values.backup.schedule }}
+    schedule: {{ .Values.backup.schedule | quote }}
   supportDynamicTags: false
 {{- end }}

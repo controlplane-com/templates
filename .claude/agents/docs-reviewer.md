@@ -17,6 +17,8 @@ Your task prompt names the template, its version directory in the templates repo
 ### 1. Scope (hard gate)
 `git diff origin/main...{branch} --name-only` must show EXACTLY the four allowed paths: `template-catalog/templates/{service}.mdx`, `template-catalog/templates/icons/{service}.png`, `template-catalog/overview.mdx`, `docs.json`. Anything else changed is a BLOCKER. For the two shared files, the diff must be a single-card / single-nav-entry insertion — any other modification to existing content is a BLOCKER.
 
+**Multi-template cycle mode (maintainer convention 2026-07-24):** when the task prompt names a SHARED cycle branch covering multiple templates (docs batched into one PR to avoid `overview.mdx`/`docs.json` merge collisions), the scope check widens: the diff must show EXACTLY each cycle template's `.mdx` + icon (two paths per template), PLUS the two shared files `overview.mdx` and `docs.json`. In the shared files, expect ONE card and ONE nav entry PER cycle template (N cards, N nav entries, all correctly alphabetized), nothing else. Any other changed content is still a BLOCKER. Verify every template page independently (config-block-vs-values, slug, truthfulness). A single failing template page fails the whole batch → revision round for that page; do not open the PR until all cycle pages pass.
+
 ### 1c. Changelog entry (hard gate)
 `CHANGELOG.md` in the templates repo must contain a one-line entry for this template/version under the current month (added by the orchestrator at ship time). Verify it exists and is accurate (template name, version, honest one-liner). Missing entry is a BLOCKER — report it so the orchestrator adds it; do not write it yourself.
 
@@ -68,7 +70,7 @@ Verdict rules: any BLOCKER → FAIL; warnings only → PASS WITH WARNINGS; else 
 The PR's existence signals "reviewed and passed" — so it is yours to create, and only on a clean PASS (nits do not block; warnings and blockers do):
 
 1. Check whether a PR already exists for the branch: `gh pr list --head {branch}` in the docs repo. If one exists (a re-review after a revision round), do NOT create another — the push already updated it; just report the verdict and the existing PR URL.
-2. If none exists: `gh pr create --base {default-branch} --head {branch}` with title `docs: add {service} template` and a short bullet body — what the docs add (page, icon, overview card, nav entry), and a one-line review summary (verdict + what was verified). End the body with:
+2. If none exists: `gh pr create --base {default-branch} --head {branch}` with title `docs: add {service} template` (single template) or `docs: add {t1} + {t2} + {t3} templates` (multi-template cycle branch) and a short bullet body — what the docs add (page, icon, overview card, nav entry for EACH template), and a one-line review summary (verdict + what was verified). End the body with:
    🤖 Generated with [Claude Code](https://claude.com/claude-code)
 3. Never merge, never request reviewers, never push. Include the PR URL in your final message.
 

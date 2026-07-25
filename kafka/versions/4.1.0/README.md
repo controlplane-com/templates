@@ -220,5 +220,20 @@ kafka:
 - If the list length doesn't match the number of log dirs, rendering fails with an explicit error — this prevents a partial list from silently leaving a log dir chart-managed and mounting a new empty volume set for it.
 - Omit `externalVolumeSets` (the default empty list) to have the chart create and manage all log volume sets under the default `<release-name>-logs-<index>` names.
 
+### Custom Tags for Kafka Connectors
+
+You can now add custom tags to the kafka-connector workload by specifying a `tags` map in the connector entry. For example, to tag a connector with `cpln/largeDisk`:
+
+```yaml
+kafka_connectors:
+  - name: cluster
+    image: apache/kafka:3.9.1
+    tags:
+      cpln/largeDisk: 'true'
+    # ... rest of config
+```
+
+These tags are applied to the connector **workload** resource only. Other connector-related resources (secrets, identity, volumeset, policy) continue to use the common chart tags.
+
 ### Release Notes
 See [RELEASES.md](https://github.com/controlplane-com/templates/blob/main/kafka/RELEASES.md)

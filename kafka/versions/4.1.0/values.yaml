@@ -232,6 +232,8 @@ kafbat_ui:
 # kafka_connectors:
 #   - name: cluster
 #     image: apache/kafka:3.9.1
+#     # tags:
+#     #   cpln/largeDisk: 'true'
 #     multiZone: true
 #     cpu: 400m
 #     memory: 1500Mi

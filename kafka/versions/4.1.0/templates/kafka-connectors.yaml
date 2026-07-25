@@ -125,6 +125,11 @@ tags:
   {{- if .deletionProtection }}
   cpln/protected: true
   {{- end }}
+  {{- if .tags }}
+  {{- range $key, $value := .tags }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+  {{- end }}
   {{- include "kafka.tags" $ | nindent 2 }}
 spec:
   type: stateful

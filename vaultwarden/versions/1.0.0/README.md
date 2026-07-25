@@ -31,6 +31,11 @@ resources:
 volumeset:
   capacity: 10                # GiB (minimum 10) — SQLite database, attachments, sends, and RSA keys
 
+backup:
+  enabled: true               # scheduled crash-consistent snapshots of the data volume (platform-managed, no bucket needed)
+  schedule: "0 3 * * *"       # cron in UTC — default daily at 03:00
+  retention: 7d               # how long each snapshot is kept (e.g. 7d, 720h, 30d)
+
 customDomain: ""              # full URL of a custom domain (e.g. https://vault.example.com); empty = canonical endpoint
 ```
 
@@ -98,8 +103,8 @@ internalAccess:               # internal firewall scope — keep closed for a pa
 - **Vault contents are end-to-end encrypted** with each user's master password — but master passwords are unrecoverable: without SMTP (password hint emails are off) a forgotten master password means a lost vault.
 - **Admin panel settings override Helm values.** Saving settings in `/admin` writes `/data/config.json`, which silently wins over env vars from then on. If a values change does not take effect, delete that file to return control to values.
 - **Do not change the domain casually** — passkey/WebAuthn logins are bound to the exact URL; switching between the canonical endpoint and a custom domain breaks them until re-registered.
-- **No HA / multi-replica** — upstream does not support multiple instances, so the workload is pinned to 1 replica. Bitwarden apps keep a local offline copy of the vault, so users can read their vault through a brief restart.
-- **No off-site backups in this version** — durability is the persistent volume plus snapshots (7-day retention, final snapshot on uninstall). Losing the volumeset loses the vault database and attachments.
+- **No HA / multi-replica** — upstream does not support multiple instances, so the workload is pinned to 1 replica. A restart is a short full outage (about a minute); Bitwarden apps keep a local offline copy of the vault, so users can still read their vault during it.
+- **Backups are scheduled volume snapshots** (default: daily, 7-day retention), managed by the platform — crash-consistent, and SQLite recovers cleanly from them. A final snapshot is also taken on uninstall. These snapshots live in the platform storage layer alongside the volume, not off-site — losing the whole GVC would lose them too; for off-cluster durability, snapshot-restore into a fresh install or export separately.
 
 ## Links
 

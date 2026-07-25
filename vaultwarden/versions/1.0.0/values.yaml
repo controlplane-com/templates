@@ -9,6 +9,15 @@ resources:
 volumeset:
   capacity: 10 # GiB (minimum 10) — SQLite database, attachments, sends, and RSA keys
 
+# ─── Backup ───────────────────────────────────────────────────────────────────
+# Scheduled, crash-consistent snapshots of the data volume, managed by the
+# platform (no cloud account or bucket required). SQLite recovers cleanly from a
+# snapshot via its WAL. A final snapshot is always taken on uninstall.
+backup:
+  enabled: true # periodic snapshots of the data volume
+  schedule: "0 3 * * *" # cron in UTC — default daily at 03:00
+  retention: 7d # how long each snapshot is kept (e.g. 7d, 720h, 30d)
+
 # ─── Sign-ups & Invitations ───────────────────────────────────────────────────
 # Registration is OPEN by default so a fresh install is immediately usable.
 # After onboarding your users, lock down: set allowed=false or restrict

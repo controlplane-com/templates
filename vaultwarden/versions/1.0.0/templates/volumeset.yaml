@@ -9,4 +9,7 @@ spec:
   performanceClass: general-purpose-ssd
   snapshots:
     createFinalSnapshot: true
-    retentionDuration: 7d
+    retentionDuration: {{ .Values.backup.retention | quote }}
+    {{- if .Values.backup.enabled }}
+    schedule: {{ .Values.backup.schedule | quote }}
+    {{- end }}

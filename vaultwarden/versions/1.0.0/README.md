@@ -33,7 +33,7 @@ volumeset:
 
 backup:
   enabled: true               # scheduled crash-consistent snapshots of the data volume (platform-managed, no bucket needed)
-  schedule: "0 3 * * *"       # cron in UTC — default daily at 03:00
+  schedule: "0 3 * * *"       # cron in UTC — default daily at 03:00 (hourly is the most frequent allowed)
   retention: 7d               # how long each snapshot is kept (e.g. 7d, 720h, 30d)
 
 customDomain: ""              # full URL of a custom domain (e.g. https://vault.example.com); empty = canonical endpoint

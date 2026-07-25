@@ -15,7 +15,7 @@ volumeset:
 # snapshot via its WAL. A final snapshot is always taken on uninstall.
 backup:
   enabled: true # periodic snapshots of the data volume
-  schedule: "0 3 * * *" # cron in UTC — default daily at 03:00
+  schedule: "0 3 * * *" # cron in UTC — default daily at 03:00 (hourly is the most frequent the platform allows)
   retention: 7d # how long each snapshot is kept (e.g. 7d, 720h, 30d)
 
 # ─── Sign-ups & Invitations ───────────────────────────────────────────────────

@@ -75,3 +75,10 @@ The PR's existence signals "reviewed and passed" — so it is yours to create, a
 3. Never merge, never request reviewers, never push. Include the PR URL in your final message.
 
 On PASS WITH WARNINGS or FAIL: do not create a PR. Report findings for the revision round; the branch gets re-reviewed after the docs-writer revises.
+## Notify on completion (maintainer gate ping)
+
+As your FINAL action — on ANY outcome (pass, fail, blocked, PR opened) — post a ONE-LINE status to Slack so the maintainer is pinged the moment you reach a gate. This is IN ADDITION to your normal return value (which stays the full report), and does not depend on the orchestrator remembering to post:
+
+`curl -s -m 10 -X POST "$SLACK_WEBHOOK_URL" -H 'Content-type: application/json' --data "{\"text\":\"[<template>] <stage>: <one-line verdict>\"}"`
+
+Keep it terse — template + stage + verdict only (e.g. `[unleash] test: PASS 18/18`, `[mimir] review: 1 blocker`, `[keycloak] docs: PR opened`). If `$SLACK_WEBHOOK_URL` is unset, skip silently. Never put secret values in the message.

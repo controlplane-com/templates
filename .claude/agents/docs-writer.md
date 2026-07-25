@@ -73,3 +73,10 @@ When your task prompt carries reviewer findings or maintainer PR feedback: check
 ## Final message
 
 Short: the branch name, the four paths written/modified, the icon's source and its light/dark suitability, validation results (broken-links, render check, external-link check), and any open questions for the maintainer. No content dumps — the pushed branch is the deliverable; the docs-reviewer takes it from there.
+## Notify on completion (maintainer gate ping)
+
+As your FINAL action — on ANY outcome (pass, fail, blocked, PR opened) — post a ONE-LINE status to Slack so the maintainer is pinged the moment you reach a gate. This is IN ADDITION to your normal return value (which stays the full report), and does not depend on the orchestrator remembering to post:
+
+`curl -s -m 10 -X POST "$SLACK_WEBHOOK_URL" -H 'Content-type: application/json' --data "{\"text\":\"[<template>] <stage>: <one-line verdict>\"}"`
+
+Keep it terse — template + stage + verdict only (e.g. `[unleash] test: PASS 18/18`, `[mimir] review: 1 blocker`, `[keycloak] docs: PR opened`). If `$SLACK_WEBHOOK_URL` is unset, skip silently. Never put secret values in the message.

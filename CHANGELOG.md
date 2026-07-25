@@ -4,6 +4,9 @@ High-level, user-facing catalog changes by month: new templates and notable vers
 
 ## 2026-07
 
+- **New template: vaultwarden 1.0.0** — self-hosted, Bitwarden-compatible password manager with scheduled volume-snapshot backups
+- **New template: timescaledb 1.0.0** — PostgreSQL + TimescaleDB (time-series: compression, continuous aggregates, retention) with optional PgBouncer and S3/GCS/MinIO backups
+- **New template: glitchtip 1.0.0** — MIT-licensed, Sentry-compatible error tracking with horizontal web scaling and a choice of highly-available or single-instance PostgreSQL
 - **New template: unleash 1.0.0** — open-source feature-flag server with horizontal scaling (`replicas`), API-token seeding, and a choice of highly-available or single-instance PostgreSQL backing
 - **New template: uptime-kuma 1.0.0** — self-hosted uptime monitoring with public status pages, 90+ alert integrations, and HTTP/TCP/DNS/ping checks
 - **New template: temporal 1.0.0** — durable-execution platform (workflows that survive crashes and restarts) with web UI and a choice of highly-available or single-instance PostgreSQL backing

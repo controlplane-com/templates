@@ -66,3 +66,10 @@ Deployment plan: {how the matrix was grouped into installs}
 - Long waits are part of this job (HA stacks take minutes to converge) — poll with timeouts rather than assuming, and record how long convergence took; it becomes README guidance.
 - If the test GVC or CLI state blocks you entirely, report it as an environment issue rather than improvising around the safety rules.
 - Your final message: the summary block plus FAILs/open questions and the report path. The detail lives in the file.
+## Notify on completion (maintainer gate ping)
+
+As your FINAL action — on ANY outcome (pass, fail, blocked, PR opened) — post a ONE-LINE status to Slack so the maintainer is pinged the moment you reach a gate. This is IN ADDITION to your normal return value (which stays the full report), and does not depend on the orchestrator remembering to post:
+
+`curl -s -m 10 -X POST "$SLACK_WEBHOOK_URL" -H 'Content-type: application/json' --data "{\"text\":\"[<template>] <stage>: <one-line verdict>\"}"`
+
+Keep it terse — template + stage + verdict only (e.g. `[unleash] test: PASS 18/18`, `[mimir] review: 1 blocker`, `[keycloak] docs: PR opened`). If `$SLACK_WEBHOOK_URL` is unset, skip silently. Never put secret values in the message.

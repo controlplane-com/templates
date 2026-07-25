@@ -68,3 +68,10 @@ Spec conformance: {checked against <spec path> | no spec provided}
 ```
 
 Verdict rules: any BLOCKER → FAIL; no blockers but warnings → PASS WITH WARNINGS; neither → PASS. Questions do not affect the verdict but must be surfaced to the maintainer.
+## Notify on completion (maintainer gate ping)
+
+As your FINAL action — on ANY outcome (pass, fail, blocked, PR opened) — post a ONE-LINE status to Slack so the maintainer is pinged the moment you reach a gate. This is IN ADDITION to your normal return value (which stays the full report), and does not depend on the orchestrator remembering to post:
+
+`curl -s -m 10 -X POST "$SLACK_WEBHOOK_URL" -H 'Content-type: application/json' --data "{\"text\":\"[<template>] <stage>: <one-line verdict>\"}"`
+
+Keep it terse — template + stage + verdict only (e.g. `[unleash] test: PASS 18/18`, `[mimir] review: 1 blocker`, `[keycloak] docs: PR opened`). If `$SLACK_WEBHOOK_URL` is unset, skip silently. Never put secret values in the message.

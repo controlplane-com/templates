@@ -1,0 +1,17 @@
+kind: policy
+name: {{ include "tsdb-ha.policy.name" . }}
+description: TimescaleDB Highly Available policy
+tags:
+  {{- include "tsdb-ha.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "tsdb-ha.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "tsdb-ha.secretStartup.name" . }}
+  - //secret/{{ include "tsdb-ha.secretDatabase.name" . }}
+  {{- if or .Values.proxy.enabled .Values.pgbouncer.enabled }}
+  - //secret/{{ include "tsdb-ha.secretProxyStartup.name" . }}
+  {{- end }}

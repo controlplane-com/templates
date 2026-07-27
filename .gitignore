@@ -1,10 +1,10 @@
 .DS_STORE
 Chart.lock
 charts/
-.claude/*
-!.claude/agents/
-!.claude/hooks/
-.claude/hooks/*.log
+# Pipeline tooling is proprietary — kept out of this public repo (lives in a
+# private repo; symlinked/pointed-to locally). This ignores the whole .claude/
+# dir: agents, hooks, settings, logs.
+.claude/
 CLAUDE.md
 
 # agent pipeline artifacts (stage outputs, reviewed locally, never committed).
@@ -22,6 +22,3 @@ test-report-*.md
 spike-*.md
 briefing-*.md
 .pipeline-archive/
-.claude/hooks/audit-log.jsonl
-.claude/hooks/*.jsonl
-.claude/hooks/__pycache__/

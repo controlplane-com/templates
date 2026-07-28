@@ -40,30 +40,10 @@ postgres:
     maxMemory: 1Gi
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)
-  backup: # pass-through to the postgres template's native backup feature (Postgres 17+)
+  # Backups are the postgres template's own feature — enable and configure the
+  # provider (aws/gcp/minio) + storage setup via that template's values/README.
+  backup:
     enabled: false
-    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
-    schedule: "0 2 * * *" # daily at 2am UTC
-    resources:
-      cpu: 100m
-      memory: 128Mi
-    provider: aws # Options: aws, gcp, or minio
-    aws:
-      bucket: my-backup-bucket
-      region: us-east-1
-      cloudAccountName: my-backup-cloudaccount
-      policyName: my-backup-policy
-      prefix: umami/backups
-    gcp:
-      bucket: my-backup-bucket
-      cloudAccountName: my-backup-cloudaccount
-      prefix: umami/backups
-    minio: # any S3-compatible endpoint, e.g. an internal MinIO template deployment
-      endpoint: http://my-minio-workload:9000
-      bucket: my-backup-bucket
-      accessKey: my-minio-username
-      secretKey: my-minio-password
-      prefix: umami/backups
 
 # ─── Backing Store: Highly Available PostgreSQL (durable HA path) ──────────────
 # Enable this and disable postgres for a Patroni-managed 3-replica store with
@@ -77,34 +57,10 @@ postgresHA:
   replicas: 3
   volumeset:
     capacity: 10 # initial capacity in GiB per replica (minimum is 10)
-  backup: # pass-through to the postgres-highly-available template's backup feature
+  # Backups are the postgres-highly-available template's own feature — enable and
+  # configure the provider + storage setup via that template's values/README.
+  backup:
     enabled: false
-    mode: logical # logical or wal-g
-    resources:
-      cpu: 100m
-      memory: 128Mi
-    logical:
-      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
-      schedule: "0 2 * * *" # daily at 2am UTC
-    walg:
-      intervalSeconds: 21600 # every 6 hours
-    provider: aws # Options: aws, gcp, or minio
-    aws:
-      bucket: my-backup-bucket
-      region: us-east-1
-      cloudAccountName: my-backup-cloudaccount
-      policyName: my-backup-policy
-      prefix: umami/backups
-    gcp:
-      bucket: my-backup-bucket
-      cloudAccountName: my-backup-cloudaccount
-      prefix: umami/backups
-    minio:
-      endpoint: http://my-minio-workload:9000
-      bucket: my-backup-bucket
-      accessKey: my-minio-username
-      secretKey: my-minio-password
-      prefix: umami/backups
 
 # ─── Access ────────────────────────────────────────────────────────────────────
 publicAccess:

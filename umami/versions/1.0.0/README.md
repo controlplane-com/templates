@@ -57,7 +57,13 @@ postgres:             # default: single-instance PostgreSQL
   volumeset:
     capacity: 10      # GiB
   backup:
-    enabled: false    # see the postgres template docs
+    enabled: false           # true = scheduled backups of the analytics DB to object storage
+    provider: aws            # aws | gcp | minio
+    aws:
+      bucket: my-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-backup-cloudaccount
+      policyName: my-backup-policy
 ```
 
 ```yaml
@@ -73,8 +79,18 @@ postgresHA:           # durable HA: 3-replica Patroni store with an HAProxy lead
   volumeset:
     capacity: 10      # GiB per replica
   backup:
-    enabled: false    # see the postgres-highly-available template docs
+    enabled: false           # true = scheduled backups to object storage
+    mode: logical            # logical | wal-g
+    provider: aws            # aws | gcp | minio
+    aws:
+      bucket: my-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-backup-cloudaccount
+      policyName: my-backup-policy
 ```
+
+Backups are off by default. When enabled they run as a scheduled job in the backing
+Postgres store (`gcp`/`minio` providers are configured the same way). See **Storage setup** below.
 
 ### Access
 
@@ -99,6 +115,30 @@ internalAccess:
 | Default admin | `admin` / `umami` (hardcoded — change it immediately, see below) |
 
 To start collecting data, add a website in the dashboard, then paste the generated `<script>` tag (which loads `/script.js` and POSTs to `/api/send`) into your site's HTML.
+
+## Storage setup (only if you enable backups)
+
+Backups are off by default and need no cloud account. To turn them on, set `<store>.backup.enabled: true` (where `<store>` is `postgres` or `postgresHA`) and configure a provider. The backup runs in the backing Postgres store, so this is the same setup as that template.
+
+**AWS S3** — create the bucket, a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account), and an IAM policy scoped to the bucket:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": "arn:aws:s3:::my-backup-bucket" },
+    { "Effect": "Allow", "Action": ["s3:PutObject","s3:GetObject","s3:DeleteObject"], "Resource": "arn:aws:s3:::my-backup-bucket/*" }
+  ]
+}
+```
+
+Then set `provider: aws` and `aws.{bucket,region,cloudAccountName,policyName}`.
+
+**GCP Cloud Storage** — create the bucket and a cloud account, grant its service account **Storage Object Admin** (`roles/storage.objectAdmin`) on the bucket, then set `provider: gcp` and `gcp.{bucket,cloudAccountName}`.
+
+**MinIO / S3-compatible** — set `provider: minio` and `minio.{endpoint,bucket,accessKey,secretKey}` (no cloud account needed; keys authenticate directly).
+
+The backing template's README has the full per-provider walkthrough.
 
 ## Important Notes
 

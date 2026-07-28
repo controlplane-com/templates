@@ -1,0 +1,18 @@
+---
+kind: policy
+name: {{ include "litellm.policy.name" . }}
+description: LiteLLM secret access
+tags: {{- include "litellm.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "litellm.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "litellm.config.secret.name" . }}
+  - //secret/{{ include "litellm.db.secret.name" . }}
+  - //secret/{{ .Values.secrets.name }}
+  {{- if eq (include "litellm.redisAuthEnabled" .) "true" }}
+  - //secret/{{ include "litellm.redis.secretPassword.name" . }}
+  {{- end }}

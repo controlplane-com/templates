@@ -1,0 +1,16 @@
+kind: policy
+name: {{ include "open-webui.policy.name" . }}
+description: Open WebUI secret access
+tags: {{- include "open-webui.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "open-webui.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "open-webui.secretConfig.name" . }}
+  - //secret/{{ include "open-webui.secretStart.name" . }}
+  {{- if .Values.openai.apiKeySecretName }}
+  - //secret/{{ .Values.openai.apiKeySecretName }}
+  {{- end }}

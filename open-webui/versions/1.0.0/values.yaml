@@ -1,0 +1,56 @@
+# ─── Image & Resources ────────────────────────────────────────────────────────
+image: ghcr.io/open-webui/open-webui:v0.11.0
+
+resources:
+  cpu: 1        # max vCPU
+  memory: 2Gi   # max memory (RAG loads a local embedding model into RAM on first use)
+  minCpu: 500m
+  minMemory: 1Gi
+
+# ─── Persistence ──────────────────────────────────────────────────────────────
+# One per-replica volume holds everything durable: SQLite webui.db, uploaded
+# files, the default Chroma vector store (RAG), and cache. Mounts /app/backend/data.
+volumeset:
+  capacity: 10 # GiB (platform minimum 10)
+
+# ─── Backup ───────────────────────────────────────────────────────────────────
+# Platform-managed crash-consistent snapshots (no cloud account/bucket needed).
+# SQLite recovers cleanly from a snapshot. A final snapshot is taken on uninstall.
+backup:
+  enabled: true
+  schedule: "0 3 * * *" # cron in UTC — daily 03:00 (hourly is the platform max)
+  retention: 7d         # how long each snapshot is kept (e.g. 7d, 720h, 30d)
+
+# ─── Authentication ───────────────────────────────────────────────────────────
+auth:
+  # Signs sessions/JWTs. Override ONCE at install (openssl rand -base64 32).
+  # Must stay STABLE across upgrades — changing it logs every user out.
+  webuiSecretKey: "CHANGE-ME-openssl-rand-base64-32-abcdEFGH1234"
+  enableSignup: true # first registered user becomes ADMIN — turn OFF after onboarding
+
+# ─── Model backends ───────────────────────────────────────────────────────────
+# Point at an existing `ollama` template deployment in this same GVC.
+ollama:
+  enabled: true
+  workloadName: ollama # the ollama workload's name in this GVC
+  port: 11434
+  # → OLLAMA_BASE_URL = http://{workloadName}.{gvc}.cpln.local:{port}
+
+# Optional OpenAI-compatible provider. The API key is a PREREQUISITE opaque
+# secret (encoding: plain) you create BEFORE install; reference it by name here.
+# Empty apiKeySecretName = this backend is off.
+openai:
+  baseUrl: https://api.openai.com/v1 # any OpenAI-compatible endpoint
+  apiKeySecretName: "" # e.g. my-openwebui-openai-key ; empty = OpenAI backend off
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+customDomain: "" # full URL, e.g. https://chat.example.com ; empty = canonical *.cpln.app
+
+publicAccess:
+  enabled: true # serve the UI over public HTTPS on the canonical *.cpln.app endpoint
+
+internalAccess: # inbound firewall scope for in-GVC callers of the Open WebUI API
+  type: none # options: none, same-gvc, same-org, workload-list
+  workloads: [] # used with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME

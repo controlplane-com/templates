@@ -4,6 +4,11 @@ High-level, user-facing catalog changes by month: new templates and notable vers
 
 ## 2026-07
 
+- **New template: timescaledb-highly-available 1.0.0** — Patroni-managed multi-replica TimescaleDB (PostgreSQL time-series) with automatic failover, etcd, HAProxy leader routing, optional PgBouncer, and S3/GCS/MinIO backups
+- **New template: gitea 1.0.0** — lightweight self-hosted Git service (repos, PRs, issues, package registry) backed by PostgreSQL, with public HTTPS + Git-over-HTTPS and optional Git-over-SSH
+- **New template: umami 1.0.0** — privacy-first, cookieless web/product analytics (self-hosted Google Analytics alternative) with a scalable app tier and a choice of highly-available or single-instance PostgreSQL
+- **New template: litellm 1.0.0** — OpenAI-compatible LLM gateway (virtual keys, spend tracking, rate limiting across 100+ providers) backed by PostgreSQL and Redis
+- **New template: open-webui 1.0.0** — self-hosted ChatGPT-style chat UI for LLMs, pairing with the Ollama template and any OpenAI-compatible endpoint
 - **New template: vaultwarden 1.0.0** — self-hosted, Bitwarden-compatible password manager with scheduled volume-snapshot backups
 - **New template: timescaledb 1.0.0** — PostgreSQL + TimescaleDB (time-series: compression, continuous aggregates, retention) with optional PgBouncer and S3/GCS/MinIO backups
 - **New template: glitchtip 1.0.0** — MIT-licensed, Sentry-compatible error tracking with horizontal web scaling and a choice of highly-available or single-instance PostgreSQL

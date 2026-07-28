@@ -101,6 +101,6 @@ internalAccess:               # inbound firewall scope for in-GVC callers of the
 
 - [Open WebUI on GitHub](https://github.com/open-webui/open-webui)
 - [Documentation](https://docs.openwebui.com/)
-- [Environment variable reference](https://docs.openwebui.com/getting-started/env-configuration)
+- [Environment variable reference](https://docs.openwebui.com/reference/env-configuration/)
 - [License](https://github.com/open-webui/open-webui/blob/main/LICENSE)
 - [Ollama](https://github.com/ollama/ollama)

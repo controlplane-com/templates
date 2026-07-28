@@ -12,7 +12,7 @@ infisical:
     minCpu: 250m
     maxCpu: 1000m
     minMemory: 512Mi
-    maxMemory: 1Gi
+    maxMemory: 2Gi   # 2Gi headroom: a Node app under boot migrations OOMs at 1Gi during a cold replicas>=2 boot
 
 # ─── Prerequisite secret (USER-CREATED — MUST EXIST BEFORE INSTALL) ─
 # Dictionary secret holding Infisical's root-of-trust keys. Create it FIRST — the

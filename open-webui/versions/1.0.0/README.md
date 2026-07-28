@@ -94,6 +94,7 @@ internalAccess:               # inbound firewall scope for in-GVC callers of the
 - **Single replica, by design.** The default embedded SQLite is single-writer and the volumeset is per-replica, so the workload is pinned to 1 replica. A restart or upgrade is a brief full outage (about a minute). Multi-replica HA requires an external Postgres + Redis + object store (a planned follow-up).
 - **Data lives only on the volumeset.** Uninstall deletes it (a final snapshot is taken); reinstall starts empty. Changing the secret and redeploying does not re-key existing data.
 - **Ollama unreachable is non-fatal.** The UI boots and simply shows no Ollama models — check that `ollama.workloadName` names a `ready` ollama workload in this GVC.
+- **Model-backend settings apply at install, then persist in the app database.** `ollama.workloadName` and `openai.*` are read from the environment only on first boot and then stored in `webui.db`. Changing them via a later `helm upgrade` is ignored — update model connections afterward from the admin UI (Settings → Connections).
 - **Backups are scheduled volume snapshots** (default: daily, 7-day retention), managed by the platform — crash-consistent, and SQLite recovers cleanly. These live in the platform storage layer alongside the volume, not off-site.
 
 ## Links

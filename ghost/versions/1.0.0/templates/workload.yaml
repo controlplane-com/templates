@@ -71,6 +71,11 @@ spec:
         httpGet:
           path: /
           port: 2368
+          # Ghost 301-redirects http->https unless it sees this header; without it
+          # the probe gets a 301, never goes ready, and the edge returns 503.
+          httpHeaders:
+            - name: X-Forwarded-Proto
+              value: https
         initialDelaySeconds: 20
         periodSeconds: 10
         failureThreshold: 12

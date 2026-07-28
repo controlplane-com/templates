@@ -47,7 +47,7 @@ mysql:
     password: change-me-ghost-db      # change before installing
     rootPassword: change-me-mysql-root # change before installing
   resources:
-    minCpu: 100m
+    minCpu: 150m        # keep cpu:minCpu ratio under the platform's 4:1 (500/150 = 3.3:1)
     maxCpu: 500m
     minMemory: 256Mi
     maxMemory: 1024Mi

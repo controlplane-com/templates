@@ -65,7 +65,7 @@ publicAccess:
   enabled: true  # HTTPS web UI + Git-over-HTTPS on the auto *.cpln.app endpoint
 
 ssh:
-  enabled: true      # false = Git-over-HTTPS only; no SSH port and the container SSH server is disabled
+  enabled: false     # OFF by default (keeps the public web UI); true = public SSH takes over the endpoint
   externalPort: 22   # public port clients connect to (also advertised in SSH clone URLs)
   domain: ""         # advertised SSH host in clone URLs; empty = use the web domain
 
@@ -108,7 +108,7 @@ postgres:
 
 - **Change `gitea.admin.password` and the three `gitea.security.*` values before installing** — the shipped defaults are illustrative placeholders and are insecure as-is.
 - **Never rotate `gitea.security.secretKey` after install** — changing it makes all encrypted data (2FA secrets, tokens, mirror credentials) permanently unreadable. It is a value (not auto-generated) so `helm upgrade` keeps it stable.
-- **SSH is optional.** Set `ssh.enabled: false` for Git-over-HTTPS only — no SSH port is exposed and the built-in SSH server is disabled. The advertised SSH host defaults to the web domain; set `ssh.domain` to a custom domain pointing at the direct LB for clean `git@` clone URLs.
+- **Public SSH and the public web UI cannot share the endpoint — SSH is OFF by default.** A workload has one `*.cpln.app` canonical endpoint, and it is either the L7 HTTPS ingress (web UI + Git-over-HTTPS) or a raw-TCP load balancer (SSH), not both. The default (`ssh.enabled: false`) keeps the web UI + Git-over-HTTPS, which is all most users need. Enable `ssh.enabled: true` only if you either (a) serve the web UI through a custom domain, or (b) only need Git-over-SSH — turning it on repoints the public endpoint to SSH on port 22 and the public web UI on 443 becomes unreachable.
 - **Single replica only** — a rolling restart/upgrade incurs brief downtime. Do not raise the workload's scale above 1; replicas would each get separate repo volumes and corrupt state. HA is a planned follow-up.
 - **Data lives on the volumeset** and survives redeploys under the same release name. Changing admin credentials after first boot must be done in the Gitea UI, not via values — the data directory keeps the original account. To fully reset, `helm uninstall` (deletes the volumeset) then reinstall.
 

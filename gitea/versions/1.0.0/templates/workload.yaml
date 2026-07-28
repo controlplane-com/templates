@@ -98,6 +98,12 @@ spec:
         periodSeconds: 15
         successThreshold: 1
         timeoutSeconds: 5
+  securityOptions:
+    # Rootless gitea runs as UID/GID 1000; make the fresh volumeset group-writable
+    # by GID 1000 so the image's docker-setup.sh can create /var/lib/gitea/git on
+    # first boot (a root-owned mount otherwise masks the image's chowned dir).
+    # Same proven pattern as timescaledb-highly-available's non-root data volume.
+    filesystemGroupId: 1000
   defaultOptions:
     autoscaling:
       metric: disabled

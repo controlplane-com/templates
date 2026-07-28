@@ -1,0 +1,20 @@
+apiVersion: v2
+name: ghost
+description: Ghost open-source publishing platform — blogs, newsletters, and paid memberships — backed by a bundled MySQL 8 database
+type: application
+version: 1.0.0
+appVersion: "6.54.1"
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+  - name: mysql
+    version: 1.4.2
+    repository: "oci://ghcr.io/controlplane-com/templates"
+
+annotations:
+  created: "2026-07-28"
+  lastModified: "2026-07-28"
+  category: "publishing"
+  createsGvc: false

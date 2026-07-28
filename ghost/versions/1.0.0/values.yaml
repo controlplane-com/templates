@@ -1,0 +1,77 @@
+# ─── Ghost Application ────────────────────────────────────────────────────────
+image: ghost:6.54.1-alpine # official Docker Hub image (library/ghost)
+
+resources: # Ghost (Node) app — single instance
+  cpu: 500m
+  memory: 1024Mi
+  minCpu: 250m
+  minMemory: 512Mi
+
+# Persistent content: uploaded images, themes, logs, adapters (mounted at /var/lib/ghost/content)
+volumeset:
+  capacity: 10 # initial capacity in GiB (minimum is 10)
+
+# ─── Site URL ─────────────────────────────────────────────────────────────────
+# Public URL Ghost uses to build links and emails. Leave empty to auto-derive the
+# canonical *.cpln.app endpoint. Set to your custom domain once attached.
+publicUrl: "" # e.g. https://blog.example.com
+
+# ─── Mail (SMTP) — optional ───────────────────────────────────────────────────
+# Member sign-in links & newsletters. DISABLED while secretName is empty (email off).
+# Prerequisite: create a dictionary secret with keys `user` and `password` BEFORE install.
+mail:
+  secretName: "" # e.g. my-ghost-smtp (dictionary secret with keys: user, password)
+  host: ""       # e.g. smtp.mailgun.org
+  port: 587      # 465 = SSL, 587 = STARTTLS
+  secure: false  # true for port 465
+  from: ""       # e.g. "Ghost <noreply@example.com>"
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: true # HTTPS site via the canonical *.cpln.app endpoint
+
+internalAccess:
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: []  # only used when type is same-gvc or workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Backing Database: MySQL 8 (bundled via the mysql template) ───────────────
+# Ghost supports ONLY MySQL 8 (not MySQL 9, not MariaDB) — image pinned to mysql:8.
+mysql:
+  image: mysql:8
+  enablePhpMyAdmin: false # keep the footprint to Ghost + its DB
+  config:
+    db: ghost
+    user: ghost
+    password: change-me-ghost-db      # change before installing
+    rootPassword: change-me-mysql-root # change before installing
+  resources:
+    minCpu: 100m
+    maxCpu: 500m
+    minMemory: 256Mi
+    maxMemory: 1024Mi
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+  internalAccess:
+    type: same-gvc
+  # Scheduled DB backups to object storage (off by default) — pass-through to the
+  # mysql template's native backup. See README "Storage setup" for provider setup.
+  backup:
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/mysql-backup:1.0.0 # works with all MySQL versions
+    schedule: "0 2 * * *" # daily at 2am UTC
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    provider: aws # aws or gcp
+    aws:
+      bucket: my-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-backup-cloudaccount
+      policyName: my-backup-policy
+      prefix: ghost/backups
+    gcp:
+      bucket: my-backup-bucket
+      cloudAccountName: my-backup-cloudaccount
+      prefix: ghost/backups

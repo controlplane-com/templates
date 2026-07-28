@@ -1,0 +1,69 @@
+# ─── Image ────────────────────────────────────────────────────────
+image: gitea/gitea:1.27.1-rootless  # rootless variant: runs as UID 1000, built-in SSH server on 2222
+
+# ─── Resources ────────────────────────────────────────────────────
+resources:
+  minCpu: 250m
+  minMemory: 512Mi
+  maxCpu: 1000m
+  maxMemory: 1024Mi
+
+# ─── Storage (repos, LFS, attachments, SSH host keys) ─────────────
+volumeset:
+  capacity: 20 # initial capacity in GiB (minimum is 10)
+  autoscaling:
+    enabled: false # set to true to enable volume autoscaling
+    maxCapacity: 200 # maximum capacity in GiB when autoscaling is enabled
+    minFreePercentage: 10 # minimum free percentage that triggers scaling
+    scalingFactor: 1.2 # how much to grow the volume when scaling is triggered
+
+# ─── Gitea admin + app secrets (template-scoped — CHANGE THESE) ────
+gitea:
+  admin:
+    username: gitea_admin
+    password: change-me-admin-pass   # CHANGE THIS before install — the first admin login
+    email: admin@example.com
+  security:
+    # Stable per install. CHANGE THESE. Generate each: `gitea generate secret SECRET_KEY|INTERNAL_TOKEN|JWT_SECRET`
+    # Do NOT rotate after install — changing SECRET_KEY makes existing encrypted data (2FA, tokens) unreadable.
+    secretKey: REPLACE_WITH_gitea_generate_secret_SECRET_KEY
+    internalToken: REPLACE_WITH_gitea_generate_secret_INTERNAL_TOKEN
+    jwtSecret: REPLACE_WITH_gitea_generate_secret_JWT_SECRET
+  disableRegistration: true  # true = admin-invite only; false = allow open self-registration
+
+# ─── Access ───────────────────────────────────────────────────────
+publicAccess:
+  enabled: true  # HTTPS web UI + Git-over-HTTPS on the auto *.cpln.app endpoint
+
+# ─── Git-over-SSH (optional) ──────────────────────────────────────
+ssh:
+  enabled: true      # false = Git-over-HTTPS only; no SSH port is exposed and the container SSH server is disabled
+  externalPort: 22   # public port clients connect to (also advertised in SSH clone URLs)
+  domain: ""         # advertised SSH host in clone URLs; empty = use the web domain
+
+internalAccess: # internal firewall scope
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads:  # only used when type is same-gvc or workload-list
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Backing database (postgres subchart) ─────────────────────────
+postgres:
+  image: postgres:18
+  config:
+    username: gitea
+    password: change-me-db-pass
+    database: gitea
+  resources:
+    minCpu: 200m
+    minMemory: 256Mi
+    maxCpu: 500m
+    maxMemory: 512Mi
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+    autoscaling:
+      enabled: false
+      maxCapacity: 100
+      minFreePercentage: 10
+      scalingFactor: 1.2
+  internalAccess:
+    type: same-gvc

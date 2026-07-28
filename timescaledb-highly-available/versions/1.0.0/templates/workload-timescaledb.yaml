@@ -1,0 +1,102 @@
+kind: workload
+name: {{ include "tsdb-ha.name" . }}
+description: TimescaleDB Highly Available
+tags:
+  {{- include "tsdb-ha.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  containers:
+    - name: patroni-timescaledb
+      command: "/bin/bash"
+      args:
+        - "/patroni/start.sh"
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      env:
+        - name: PGDATA
+          value: /home/postgres/pgdata/data
+      image: {{ .Values.image }}
+      inheritEnv: false
+      ports:
+        - number: 8008
+          protocol: tcp
+        - number: 5432
+          protocol: tcp
+      volumes:
+        - path: /home/postgres/pgdata
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "tsdb-ha.volume.name" . }}
+        - path: /patroni/start.sh
+          uri: cpln://secret/{{ include "tsdb-ha.secretStartup.name" . }}.payload
+      lifecycle:
+        preStop:
+          exec:
+            command:
+              - /bin/bash
+              - -c
+              - |
+                set -uo pipefail
+                ROLE=$(curl -fs --max-time 2 http://localhost:8008/patroni | python3 -c 'import sys,json; print(json.load(sys.stdin).get("role",""))' 2>/dev/null || echo "")
+                if [ "$ROLE" = "master" ] || [ "$ROLE" = "primary" ]; then
+                  curl -fs --max-time 10 -X POST http://localhost:8008/switchover -H 'Content-Type: application/json' -d "{\"leader\":\"${HOSTNAME}\"}" || true
+                  for i in $(seq 1 20); do
+                    R=$(curl -fs --max-time 1 http://localhost:8008/patroni | python3 -c 'import sys,json; print(json.load(sys.stdin).get("role",""))' 2>/dev/null)
+                    [ "$R" = "replica" ] && break
+                    sleep 1
+                  done
+                fi
+      livenessProbe:
+        httpGet:
+          path: /liveness
+          port: 8008
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 6
+      readinessProbe:
+        httpGet:
+          path: /readiness
+          port: 8008
+        periodSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 3
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "tsdb-ha.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      keda:
+        cooldownPeriod: 1
+        initialCooldownPeriod: 1
+        pollingInterval: 1
+        triggers: []
+      maxConcurrency: 0
+      maxScale: {{ .Values.replicas }}
+      metric: disabled
+      minScale: {{ .Values.replicas }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: {{ .Values.multiZone }}
+    suspend: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internal_access.type }}
+      {{- if .Values.internal_access.workloads }}
+      inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: true
+  securityOptions:
+    filesystemGroupId: 1000
+  supportDynamicTags: false

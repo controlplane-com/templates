@@ -1,0 +1,92 @@
+{{- include "umami.validate" . }}
+kind: workload
+name: {{ include "umami.name" . }}
+description: Umami analytics
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "umami.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "umami.identity.name" . }}
+  containers:
+    - name: umami
+      image: {{ .Values.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
+      env:
+        - name: DATABASE_TYPE
+          value: postgresql
+        - name: DATABASE_USERNAME
+          value: 'cpln://secret/{{ include "umami.db.secretName" . }}.username'
+        - name: DATABASE_PASSWORD
+          value: 'cpln://secret/{{ include "umami.db.secretName" . }}.password'
+        - name: DATABASE_URL
+          value: postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@{{ include "umami.db.host" . }}:5432/{{ include "umami.db.database" . }}
+        - name: APP_SECRET
+          value: 'cpln://secret/{{ include "umami.secret.config.name" . }}.appSecret'
+        {{- if .Values.app.disableTelemetry }}
+        - name: DISABLE_TELEMETRY
+          value: "1"
+        {{- end }}
+        {{- if .Values.tracker.scriptName }}
+        - name: TRACKER_SCRIPT_NAME
+          value: {{ .Values.tracker.scriptName | quote }}
+        {{- end }}
+        {{- if .Values.tracker.collectEndpoint }}
+        - name: COLLECT_API_ENDPOINT
+          value: {{ .Values.tracker.collectEndpoint | quote }}
+        {{- end }}
+      ports:
+        - number: 3000
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /api/heartbeat
+          port: 3000
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /api/heartbeat
+          port: 3000
+        initialDelaySeconds: 120
+        periodSeconds: 15
+        failureThreshold: 5
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.replicas }}
+      metric: disabled
+      minScale: {{ .Values.replicas }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  rolloutOptions:
+    maxSurgeReplicas: 0%
+    maxUnavailableReplicas: "1"
+    minReadySeconds: 10
+    scalingPolicy: OrderedReady

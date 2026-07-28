@@ -31,6 +31,11 @@ spec:
           value: {{ .Values.pgbouncer.maxClientConn | quote }}
         - name: MAX_DB_CONNECTIONS
           value: {{ .Values.pgbouncer.maxDbConnections | quote }}
+        - name: ADMIN_USERS
+          # match the configured superuser so the pgbouncer admin console
+          # (SHOW POOLS, etc.) is reachable — the edoburu image otherwise
+          # defaults admin_users to "postgres", which is not our superuser.
+          value: {{ .Values.postgres.username | quote }}
         - name: AUTH_TYPE
           value: plain
       ports:

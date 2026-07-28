@@ -1,0 +1,94 @@
+# ─── Infisical server ─────────────────────────────────────────────
+infisical:
+  # Standalone image: bundles the API + web UI on :8080 and runs DB migrations
+  # automatically on boot. Pin a concrete released tag; never latest.
+  image: infisical/infisical:v0.162.14
+  replicas: 1                 # proven single-replica shape; set >=2 for the HA tier (stateless app over shared pg+redis)
+  # Public base URL Infisical advertises (links, cookies, callbacks). Empty =
+  # derive from the platform canonical endpoint (CPLN_GLOBAL_ENDPOINT). Set to a
+  # custom domain (WITH https://) only if you front the workload with one.
+  siteUrl: ""
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 1Gi
+
+# ─── Prerequisite secret (USER-CREATED — MUST EXIST BEFORE INSTALL) ─
+# Dictionary secret holding Infisical's root-of-trust keys. Create it FIRST — the
+# deployment WEDGES on a missing secret and looks broken. Both keys are WRITE-ONCE:
+# never rotate them. Rotating ENCRYPTION_KEY corrupts every stored secret; rotating
+# AUTH_SECRET invalidates all sessions. Required keys:
+#   ENCRYPTION_KEY  — openssl rand -hex 16     (16-byte hex)
+#   AUTH_SECRET     — openssl rand -base64 32   (32-byte base64)
+secrets:
+  name: my-infisical-secrets
+
+# ─── SMTP / email (optional) ──────────────────────────────────────
+# Off by default → zero-config install works via the no-email admin-signup
+# bootstrap. Turn on to enable email invites, verification, and password reset.
+smtp:
+  enabled: false
+  host: smtp.example.com       # SMTP server host
+  port: 587                    # SMTP server port
+  fromAddress: no-reply@example.com   # envelope From address
+  fromName: Infisical          # display name on outbound mail
+  requireTls: true             # STARTTLS required; set false for a plaintext mail catcher (e.g. Mailpit :1025)
+  auth:
+    # OPTIONAL prerequisite dictionary secret holding SMTP_USERNAME + SMTP_PASSWORD.
+    # Empty = no auth (what a mail catcher needs). Set to a secret name to enable
+    # authenticated SMTP; the workload is then granted reveal on exactly that secret.
+    secretName: ""
+
+# ─── Access ───────────────────────────────────────────────────────
+publicAccess:
+  enabled: true               # HTTPS UI + API on the auto *.cpln.app endpoint; false = internal-only
+internalAccess:
+  type: same-gvc              # none | same-gvc | same-org | workload-list
+  workloads: []               # used only with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── PostgreSQL (subchart: postgres) — durable secret store ───────
+postgres:
+  image: postgres:18
+  config:
+    username: infisical
+    password: change-me-infisical-pg   # template-managed cred for the bundled DB — change before install
+    database: infisical
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 1Gi
+  volumeset:
+    capacity: 10              # GiB (minimum 10)
+
+# ─── Redis + Sentinel (subchart: redis, HA) — cache + job queues ──
+# REQUIRED — Infisical needs Redis at boot. Connected Sentinel-aware
+# (REDIS_SENTINEL_HOSTS + master name `mymaster`) so failover is transparent.
+redis:
+  redis:
+    image: redis:7.4
+    replicas: 3
+    # Auth toggle. Default off = the redis template's proven authless default
+    # (same-GVC firewall is the boundary). Set enabled=true to require AUTH — the
+    # master password is then wired into Infisical via REDIS_PASSWORD (data-node
+    # password; sentinels stay authless, mirroring litellm).
+    auth:
+      password:
+        enabled: false
+        value: change-me-infisical-redis
+    resources:
+      cpu: 200m
+      memory: 256Mi
+      minCpu: 80m
+      minMemory: 128Mi
+  sentinel:
+    image: redis:7.4
+    replicas: 3
+    resources:
+      cpu: 200m
+      memory: 256Mi
+      minCpu: 80m
+      minMemory: 128Mi

@@ -1,0 +1,7 @@
+{{- include "infisical.validate" . }}
+---
+kind: identity
+name: {{ include "infisical.identity.name" . }}
+description: Infisical identity
+tags: {{- include "infisical.tags" . | nindent 4 }}
+gvc: {{ .Values.global.cpln.gvc }}

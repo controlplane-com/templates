@@ -6,7 +6,7 @@ This is a **self-hosted metrics store for your own metrics from your own sources
 
 ## Architecture
 
-- **Prometheus**: Stateful workload, single replica; scrape + remote-write ingest and PromQL query on port 9090. HA is achieved by installing the template twice (see [High availability](#high-availability)).
+- **Prometheus**: Stateful workload, single replica; scrape + remote-write ingest and PromQL query on port 9095 (9090 is platform-reserved). HA is achieved by installing the template twice (see [High availability](#high-availability)).
 - **Thanos sidecar** (optional, default on): second container in the same workload; Store API (gRPC) on 10901, HTTP health/metrics on 10902; uploads TSDB blocks to object storage when enabled.
 - **Volumeset**: 20 GiB at `/prometheus` for the TSDB, shared read-only by the sidecar.
 - **Config secret**: the rendered `prometheus.yml`, mounted as a file; a second secret holds the Thanos bucket config when object storage is enabled.
@@ -147,8 +147,8 @@ internalAccess:
 
 | What | Endpoint |
 |---|---|
-| Remote-write ingest (from your senders) | `http://RELEASE-prometheus.GVC.cpln.local:9090/api/v1/write` |
-| PromQL / Grafana datasource | `http://RELEASE-prometheus.GVC.cpln.local:9090` |
+| Remote-write ingest (from your senders) | `http://RELEASE-prometheus.GVC.cpln.local:9095/api/v1/write` |
+| PromQL / Grafana datasource | `http://RELEASE-prometheus.GVC.cpln.local:9095` |
 | Thanos Store API, same GVC | `RELEASE-prometheus:10901` |
 | Thanos Store API, cross-GVC | `replica-0.RELEASE-prometheus.LOCATION.GVC.cpln.local:10901` |
 

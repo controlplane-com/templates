@@ -15,6 +15,9 @@ spec:
         - --config.file=/etc/prometheus-config/prometheus.yml
         - --storage.tsdb.path=/prometheus
         - --web.enable-remote-write-receiver
+        # Prometheus's conventional 9090 is a Control Plane RESERVED port
+        # (platform system use) — workloads may not bind it. Listen on 9095.
+        - --web.listen-address=0.0.0.0:9095
         {{- if .Values.thanos.objectStorage.enabled }}
         # Thanos upload requirement: min == max block duration disables local
         # compaction so the sidecar ships immutable blocks.
@@ -26,7 +29,7 @@ spec:
       cpu: {{ .Values.resources.cpu | quote }}
       memory: {{ .Values.resources.memory | quote }}
       ports:
-        - number: 9090
+        - number: 9095
           protocol: http
       volumes:
         - path: /etc/prometheus-config/prometheus.yml
@@ -49,7 +52,7 @@ spec:
       readinessProbe:
         httpGet:
           path: /-/ready
-          port: 9090
+          port: 9095
         initialDelaySeconds: 5
         periodSeconds: 5
         failureThreshold: 36
@@ -58,7 +61,7 @@ spec:
       livenessProbe:
         httpGet:
           path: /-/healthy
-          port: 9090
+          port: 9095
         initialDelaySeconds: 30
         periodSeconds: 30
         failureThreshold: 5
@@ -69,7 +72,7 @@ spec:
       inheritEnv: false
       args:
         - sidecar
-        - --prometheus.url=http://localhost:9090
+        - --prometheus.url=http://localhost:9095
         - --tsdb.path=/prometheus
         - --grpc-address=0.0.0.0:10901
         - --http-address=0.0.0.0:10902

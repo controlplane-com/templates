@@ -65,6 +65,11 @@ spec:
     debug: false
     suspend: false
     timeoutSeconds: 30
+  # The thanos image runs non-root (USER 1001); make the fresh work volumeset
+  # writable by it (mkdir /data/meta-syncer failed without this).
+  securityOptions:
+    runAsUser: 1001
+    filesystemGroupId: 1001
   firewallConfig:
     external:
       outboundAllowCIDR:

@@ -168,6 +168,7 @@ Two requirements for cross-GVC endpoints, both **on the Prometheus side**:
 - **Changing `stores:` takes effect via `helm upgrade`** — endpoints are workload args, so an upgrade safely redeploys Query with the new list.
 - **No deduplication happening?** `queryReplicaLabels` must exactly match the external label name your HA Prometheus pair sets (`replica` by default).
 - **Long-term reads need both halves on the same bucket**: a sidecar uploading blocks to it, and `storeGateway.enabled: true` here to serve them.
+- **Disabling the storage tier does not remove existing cloud grants from the identity** — the platform deep-merges updates, so a previously-applied AWS/GCP binding stays until you remove it (edit the identity, or uninstall/reinstall the release).
 
 ## Links
 

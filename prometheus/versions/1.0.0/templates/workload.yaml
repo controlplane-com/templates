@@ -46,16 +46,17 @@ spec:
         {{- end }}
         {{- end }}
       # WAL replay after a restart of a full TSDB can take minutes and /-/ready
-      # stays 503 throughout — hence the generous readiness ceiling. Liveness is
-      # /-/healthy, which returns 200 whenever the process is up (including
-      # during replay), so it cannot restart-loop a replaying server.
+      # stays 503 throughout — hence the generous readiness ceiling (18 x 10s =
+      # 180s; the platform caps failureThreshold at 20). Liveness is /-/healthy,
+      # which returns 200 whenever the process is up (including during replay),
+      # so it cannot restart-loop a replaying server.
       readinessProbe:
         httpGet:
           path: /-/ready
           port: 9095
         initialDelaySeconds: 5
-        periodSeconds: 5
-        failureThreshold: 36
+        periodSeconds: 10
+        failureThreshold: 18
         successThreshold: 1
         timeoutSeconds: 3
       livenessProbe:
@@ -97,14 +98,15 @@ spec:
           recoveryPolicy: retain
           uri: cpln://secret/{{ include "prometheus.secret.objstore.name" . }}.payload
         {{- end }}
-      # Sidecar readiness follows its connection to Prometheus.
+      # Sidecar readiness follows its connection to Prometheus (platform caps
+      # failureThreshold at 20; 18 x 10s matches the prometheus container).
       readinessProbe:
         httpGet:
           path: /-/ready
           port: 10902
         initialDelaySeconds: 5
-        periodSeconds: 5
-        failureThreshold: 36
+        periodSeconds: 10
+        failureThreshold: 18
         successThreshold: 1
         timeoutSeconds: 3
       livenessProbe:

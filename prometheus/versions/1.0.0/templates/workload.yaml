@@ -54,6 +54,8 @@ spec:
         httpGet:
           path: /-/ready
           port: 9095
+          # explicit server defaults — prevents cosmetic drift vs the live workload
+          scheme: HTTP
         initialDelaySeconds: 5
         periodSeconds: 10
         failureThreshold: 18
@@ -63,9 +65,12 @@ spec:
         httpGet:
           path: /-/healthy
           port: 9095
+          # explicit server defaults — prevents cosmetic drift vs the live workload
+          scheme: HTTP
         initialDelaySeconds: 30
         periodSeconds: 30
         failureThreshold: 5
+        successThreshold: 1
         timeoutSeconds: 5
     {{- if .Values.thanos.sidecar.enabled }}
     - name: thanos-sidecar
@@ -104,6 +109,8 @@ spec:
         httpGet:
           path: /-/ready
           port: 10902
+          # explicit server defaults — prevents cosmetic drift vs the live workload
+          scheme: HTTP
         initialDelaySeconds: 5
         periodSeconds: 10
         failureThreshold: 18
@@ -113,9 +120,12 @@ spec:
         httpGet:
           path: /-/healthy
           port: 10902
+          # explicit server defaults — prevents cosmetic drift vs the live workload
+          scheme: HTTP
         initialDelaySeconds: 30
         periodSeconds: 30
         failureThreshold: 5
+        successThreshold: 1
         timeoutSeconds: 5
     {{- end }}
   defaultOptions:

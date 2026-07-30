@@ -150,9 +150,11 @@ internalAccess:
 | Remote-write ingest (from your senders) | `http://RELEASE-prometheus.GVC.cpln.local:9095/api/v1/write` |
 | PromQL / Grafana datasource | `http://RELEASE-prometheus.GVC.cpln.local:9095` |
 | Thanos Store API, same GVC | `RELEASE-prometheus:10901` |
-| Thanos Store API, cross-GVC | `replica-0.RELEASE-prometheus.LOCATION.GVC.cpln.local:10901` |
+| Thanos Store API, cross-GVC | `RELEASE-prometheus.GVC.cpln.local:10901` |
 
 For cross-GVC callers (e.g. a Thanos Query tier in another GVC), set `internalAccess.type` to `same-org`, or `workload-list` naming the caller. Cross-location internal traffic incurs egress charges — co-locate the query tier with its stores where practical.
+
+Use the service-level DNS name above — this workload is single-replica by design, so it addresses the one replica directly and is the most reliable path. (The per-replica form `replica-0.RELEASE-prometheus.LOCATION.GVC.cpln.local:10901` also exists but adds no value for a single-replica workload.)
 
 ## High availability
 

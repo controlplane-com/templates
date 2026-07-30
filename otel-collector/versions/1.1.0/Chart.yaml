@@ -1,0 +1,17 @@
+apiVersion: v2
+name: otel-collector
+description: OpenTelemetry Collector for traces and metrics — OTLP ingestion with Prometheus remote-write export and optional authenticated public endpoints
+type: application
+version: 1.1.0
+appVersion: "0.157.0"
+
+annotations:
+  created: "2026-03-26"
+  lastModified: "2026-07-30"
+  category: "observability"
+  createsGvc: false
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

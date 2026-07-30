@@ -40,9 +40,9 @@ replicas: 1             # Query is stateless — set 2+ for an HA query tier
 
 ```yaml
 stores: []              # gRPC Store API endpoints, host:port with NO scheme
-# stores:
-#   - replica-0.my-prometheus.aws-us-east-1.metrics-east.cpln.local:10901
-#   - replica-0.my-prometheus.aws-us-west-2.metrics-west.cpln.local:10901
+# stores:                # service-level DNS — see Wiring Prometheus sources
+#   - my-prometheus-prometheus.metrics-east.cpln.local:10901
+#   - my-prometheus-b-prometheus.metrics-west.cpln.local:10901
 
 queryReplicaLabels:     # external label(s) marking HA duplicates to deduplicate
   - replica

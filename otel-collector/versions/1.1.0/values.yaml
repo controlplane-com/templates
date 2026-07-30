@@ -17,8 +17,10 @@ otelCollector:
           - replace_pattern(span.attributes["http.url"], "^.*(PLACEHOLDER).*$", "/PLACEHOLDER")
     spanmetrics:
       histogram: # Span-duration histogram buckets — tune to your SLO thresholds
-        buckets: [1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000]
-        unit: ms # ms or s
+        # Buckets MUST be duration strings ("250ms", "1s"). Bare numbers are
+        # parsed as NANOSECONDS by the collector, silently breaking the histogram.
+        buckets: ["1ms", "5ms", "10ms", "25ms", "50ms", "100ms", "250ms", "500ms", "1s", "2.5s", "5s"]
+        unit: ms # ms or s (output unit of the recorded histogram)
 
   # Advanced Mode — full collector config, used verbatim when mode: advanced.
   # Public ingestion contract in advanced mode: bind your authed receiver to
@@ -60,7 +62,7 @@ otelCollector:
             - name: http.status_code
           histogram:
             explicit:
-              buckets: [1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000]
+              buckets: ["1ms", "5ms", "10ms", "25ms", "50ms", "100ms", "250ms", "500ms", "1s", "2.5s", "5s"]
             unit: ms
 
       exporters:

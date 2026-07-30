@@ -23,14 +23,17 @@ bind its authed receiver to 0.0.0.0:4318 (+ 0.0.0.0:4319 for gRPC). */}}
     {{- $ports = append $ports (dict "number" (int (split ":" $httpEp)._1) "protocol" "http") -}}
   {{- end -}}
   {{- if ne $auth "none" -}}
-    {{- $nums := list -}}
-    {{- range $ports -}}{{- $nums = append $nums .number -}}{{- end -}}
-    {{- if not (has 4318 $nums) -}}
-      {{- $ports = append $ports (dict "number" 4318 "protocol" "http") -}}
+    {{/* Canonical-endpoint routing targets the FIRST declared port (proven in
+         test: gRPC-first made external HTTP POSTs hit the gRPC server, HTTP 415).
+         With auth on, rebuild the list with the authed HTTP ingest port 4318
+         first, then 4319, then the remaining derived ports. */}}
+    {{- $ordered := list (dict "number" 4318 "protocol" "http") (dict "number" 4319 "protocol" "grpc") -}}
+    {{- range $ports -}}
+      {{- if and (ne (int .number) 4318) (ne (int .number) 4319) -}}
+        {{- $ordered = append $ordered . -}}
+      {{- end -}}
     {{- end -}}
-    {{- if not (has 4319 $nums) -}}
-      {{- $ports = append $ports (dict "number" 4319 "protocol" "grpc") -}}
-    {{- end -}}
+    {{- $ports = $ordered -}}
   {{- end -}}
   {{/* Probes only when the user's health_check endpoint is network-bound —
        the upstream default binds localhost, which probes cannot reach. */}}

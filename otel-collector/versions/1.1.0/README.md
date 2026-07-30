@@ -115,7 +115,7 @@ The `auth.*` and `publicAccess.*` knobs still wire secret mounts, the reveal pol
 | Endpoint | Address | Auth |
 |---|---|---|
 | In-GVC OTLP gRPC (traces + metrics) | `{release}.{gvc}.cpln.local:4317` | none (GVC tracing target) |
-| In-GVC OTLP HTTP | `http://{release}.{gvc}.cpln.local:4318` | none (or bearer/mTLS when auth is on) |
+| In-GVC OTLP HTTP | `http://{release}.{gvc}.cpln.local:4318` | none, or bearer when auth is on (in mTLS mode use plain gRPC `:4317` instead) |
 | Public OTLP HTTP (bearer) | `https://{canonical-endpoint}/v1/traces` `/v1/metrics` | `Authorization: Bearer <token>` |
 | Public OTLP (mTLS) | `{direct-lb-endpoint}:4318` (HTTP), `:4317` (gRPC) | client certificate signed by your CA |
 | Spanmetrics scrape | `http://{release}.{gvc}.cpln.local:8889/metrics` | none |
@@ -129,6 +129,7 @@ The canonical endpoint is in `status.canonicalEndpoint` of `cpln workload get {r
 - Public ingestion requires auth: `publicAccess.enabled` with `auth.method: none` or an empty `allowedCidrs` fails at install — opening to the world requires an explicit `["0.0.0.0/0"]`.
 - Create the auth secret before installing — a missing secret leaves the deployment waiting on it.
 - mTLS uses the direct load balancer (raw TCP), not the canonical endpoint; in mTLS mode the canonical `https://` endpoint intentionally stops accepting traffic.
+- **In mTLS mode, in-GVC senders must use the plain internal gRPC port `:4317`** — the TLS-terminating ingest ports (4318/4319) are not reachable through the internal service mesh (handshake fails); they are for external clients via the direct LB only.
 - One collector pushes to one remote-write store; run multiple installs for multiple targets.
 
 ## Links

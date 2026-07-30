@@ -4,6 +4,9 @@ High-level, user-facing catalog changes by month: new templates and notable vers
 
 ## 2026-07
 
+- **New template: prometheus 1.0.0** — Prometheus metrics database with remote-write ingestion, durable TSDB storage, and an optional Thanos sidecar (Store API + object-storage block upload) for a global query tier
+- **New template: thanos 1.0.0** — Thanos Query global metrics view fanning out across Prometheus installs (cross-GVC), with HA-pair deduplication and an optional Store Gateway + Compactor long-term storage tier
+- **otel-collector 1.1.0** — OTLP metrics pipeline with Prometheus remote-write export and authenticated public ingestion (bearer token or mTLS), alongside the existing trace path
 - **New template: timescaledb-highly-available 1.0.0** — Patroni-managed multi-replica TimescaleDB (PostgreSQL time-series) with automatic failover, etcd, HAProxy leader routing, optional PgBouncer, and S3/GCS/MinIO backups
 - **New template: gitea 1.0.0** — lightweight self-hosted Git service (repos, PRs, issues, package registry) backed by PostgreSQL, with public HTTPS + Git-over-HTTPS and optional Git-over-SSH
 - **New template: umami 1.0.0** — privacy-first, cookieless web/product analytics (self-hosted Google Analytics alternative) with a scalable app tier and a choice of highly-available or single-instance PostgreSQL

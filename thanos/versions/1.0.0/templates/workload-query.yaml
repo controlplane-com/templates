@@ -41,6 +41,7 @@ spec:
         httpGet:
           path: /-/ready
           port: 10902
+          scheme: HTTP
         initialDelaySeconds: 5
         periodSeconds: 5
         failureThreshold: 12
@@ -52,9 +53,11 @@ spec:
         httpGet:
           path: /-/healthy
           port: 10902
+          scheme: HTTP
         initialDelaySeconds: 15
         periodSeconds: 15
         failureThreshold: 5
+        successThreshold: 1
         timeoutSeconds: 5
   defaultOptions:
     autoscaling:

@@ -106,8 +106,10 @@ storage:
 
 Each `stores:` entry is a gRPC Store API endpoint — typically a Prometheus Thanos sidecar — as `host:port` with **no scheme**:
 
-- **Same GVC**: `WORKLOAD.GVC.cpln.local:10901`
-- **Cross-GVC / cross-region**: replica-direct internal DNS — `replica-0.WORKLOAD.LOCATION.GVC.cpln.local:10901` (e.g. `replica-0.my-prometheus.aws-us-east-1.metrics-east.cpln.local:10901`)
+- **Same GVC**: `WORKLOAD.GVC.cpln.local:10901` (the short form `WORKLOAD:10901` also works)
+- **Cross-GVC / cross-region**: the same service-level internal DNS — `WORKLOAD.GVC.cpln.local:10901` (e.g. `my-prometheus-prometheus.metrics-east.cpln.local:10901`)
+
+Use the service-level name in both cases: the prometheus template is single-replica by design, so it addresses the one replica directly and is the most reliable form. (Per-replica DNS — `replica-N.WORKLOAD.LOCATION.GVC.cpln.local` — is only needed for genuinely multi-replica Store API targets.)
 
 Two requirements for cross-GVC endpoints, both **on the Prometheus side**:
 

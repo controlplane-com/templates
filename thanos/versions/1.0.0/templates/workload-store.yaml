@@ -39,6 +39,7 @@ spec:
         httpGet:
           path: /-/ready
           port: 10902
+          scheme: HTTP
         initialDelaySeconds: 10
         periodSeconds: 15
         failureThreshold: 18  # platform caps failureThreshold at 20; 18x15s keeps a ~270s init window
@@ -48,9 +49,11 @@ spec:
         httpGet:
           path: /-/healthy
           port: 10902
+          scheme: HTTP
         initialDelaySeconds: 30
         periodSeconds: 30
         failureThreshold: 5
+        successThreshold: 1
         timeoutSeconds: 5
   defaultOptions:
     autoscaling:

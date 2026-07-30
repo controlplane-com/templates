@@ -10,13 +10,15 @@ replicas: 1 # Query is stateless — set 2+ for an HA query tier
 
 # ─── Store endpoints (fan-out wiring) ─────────────────────────────────────────
 # gRPC Store API endpoints Query fans out over — typically the Thanos sidecar of
-# each prometheus-template install. Cross-GVC targets use replica-direct internal
-# DNS and must allow inbound from this GVC (same-org or workload-list) on THEIR
-# side. Cross-location internal traffic incurs egress charges.
+# each prometheus-template install, addressed by SERVICE-LEVEL internal DNS
+# ({workload}.{gvc}.cpln.local — the prometheus template is single-replica, so
+# this reaches the one replica directly and is the most reliable form).
+# Cross-GVC targets must allow inbound from this Query workload (same-org or
+# workload-list) on THEIR side. Cross-location traffic incurs egress charges.
 stores: []
 # stores:
-#   - replica-0.my-prometheus.aws-us-east-1.metrics-east.cpln.local:10901
-#   - replica-0.my-prometheus.aws-us-west-2.metrics-west.cpln.local:10901
+#   - my-prometheus-prometheus.metrics-east.cpln.local:10901
+#   - my-prometheus-b-prometheus.metrics-west.cpln.local:10901
 
 queryReplicaLabels: # external label(s) marking HA duplicates to deduplicate
   - replica

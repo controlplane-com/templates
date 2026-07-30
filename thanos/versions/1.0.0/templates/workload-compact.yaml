@@ -38,6 +38,7 @@ spec:
         httpGet:
           path: /-/ready
           port: 10902
+          scheme: HTTP
         initialDelaySeconds: 10
         periodSeconds: 10
         failureThreshold: 12
@@ -47,9 +48,11 @@ spec:
         httpGet:
           path: /-/healthy
           port: 10902
+          scheme: HTTP
         initialDelaySeconds: 30
         periodSeconds: 30
         failureThreshold: 5
+        successThreshold: 1
         timeoutSeconds: 5
   # The Compactor is an upstream-mandated singleton per bucket: exactly one,
   # ever, across all installs. Scale is hard-pinned to 1 and is not a value.

@@ -1,0 +1,177 @@
+{{- include "oc.validate" . }}
+{{- $mode := .Values.otelCollector.mode -}}
+{{- $auth := .Values.auth.method -}}
+{{- $replicas := int .Values.otelCollector.replicas -}}
+
+{{/* ── Container ports ─────────────────────────────────────────────────────
+Simple mode: fixed layout (4317 grpc plain; 4318 http; 4319 grpc when auth on).
+When auth is on, 4318/4319 belong to the authed otlp/ingest receiver and 4318
+is listed first so canonical-endpoint routing favors the HTTP ingest port.
+Advanced mode: derived from receivers.otlp endpoints (1.0.1 behavior, extended
+to http); public ingestion is a fixed port contract — the user's config must
+bind its authed receiver to 0.0.0.0:4318 (+ 0.0.0.0:4319 for gRPC). */}}
+{{- $ports := list -}}
+{{- $probePort := 0 -}}
+{{- if eq $mode "advanced" -}}
+  {{- $conf := fromYaml .Values.otelCollector.advanced.config -}}
+  {{- $grpcEp := dig "receivers" "otlp" "protocols" "grpc" "endpoint" "" $conf -}}
+  {{- $httpEp := dig "receivers" "otlp" "protocols" "http" "endpoint" "" $conf -}}
+  {{- if $grpcEp -}}
+    {{- $ports = append $ports (dict "number" (int (split ":" $grpcEp)._1) "protocol" "grpc") -}}
+  {{- end -}}
+  {{- if $httpEp -}}
+    {{- $ports = append $ports (dict "number" (int (split ":" $httpEp)._1) "protocol" "http") -}}
+  {{- end -}}
+  {{- if ne $auth "none" -}}
+    {{/* Canonical-endpoint routing targets the FIRST declared port (proven in
+         test: gRPC-first made external HTTP POSTs hit the gRPC server, HTTP 415).
+         With auth on, rebuild the list with the authed HTTP ingest port 4318
+         first, then 4319, then the remaining derived ports. */}}
+    {{- $ordered := list (dict "number" 4318 "protocol" "http") (dict "number" 4319 "protocol" "grpc") -}}
+    {{- range $ports -}}
+      {{- if and (ne (int .number) 4318) (ne (int .number) 4319) -}}
+        {{- $ordered = append $ordered . -}}
+      {{- end -}}
+    {{- end -}}
+    {{- $ports = $ordered -}}
+  {{- end -}}
+  {{/* Probes only when the user's health_check endpoint is network-bound —
+       the upstream default binds localhost, which probes cannot reach. */}}
+  {{- $ext := dig "extensions" (dict) $conf -}}
+  {{- if kindIs "map" $ext -}}
+    {{- $hc := dig "health_check" (dict) $ext -}}
+    {{- if kindIs "map" $hc -}}
+      {{- $healthEp := dig "endpoint" "" $hc | toString -}}
+      {{- if hasPrefix "0.0.0.0:" $healthEp -}}
+        {{- $probePort = int (split ":" $healthEp)._1 -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- else -}}
+  {{- if ne $auth "none" -}}
+    {{- $ports = list (dict "number" 4318 "protocol" "http") (dict "number" 4319 "protocol" "grpc") (dict "number" 4317 "protocol" "grpc") -}}
+  {{- else -}}
+    {{- $ports = list (dict "number" 4317 "protocol" "grpc") (dict "number" 4318 "protocol" "http") -}}
+  {{- end -}}
+  {{- $probePort = 13133 -}}
+{{- end -}}
+{{- $ports = append $ports (dict "number" 8889 "protocol" "http") -}}
+
+kind: workload
+name: {{ include "oc.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "oc.tags" . | nindent 2 }}
+spec:
+  type: standard
+  identityLink: //identity/{{ include "oc.name" . }}
+  containers:
+    - name: opentelemetry-collector-contrib
+      cpu: {{ .Values.otelCollector.resources.cpu | quote }}
+      memory: {{ .Values.otelCollector.resources.memory | quote }}
+      image: {{ .Values.otelCollector.image }}
+      inheritEnv: false
+      args:
+        - '--config=/etc/otel-collector/otlp-forwarder.yaml'
+      ports:
+{{- range $ports }}
+        - number: {{ .number }}
+          protocol: {{ .protocol }}
+{{- end }}
+      volumes:
+        - path: /etc/otel-collector/otlp-forwarder.yaml
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "oc.secretName" . }}.payload
+{{- if eq $auth "bearer" }}
+        - path: /etc/otel-collector/auth/token
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ .Values.auth.bearer.secretName }}.payload
+{{- end }}
+{{- if eq $auth "mtls" }}
+        - path: /etc/otel-collector/tls/server.crt
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ .Values.auth.mtls.secretName }}.cert
+        - path: /etc/otel-collector/tls/server.key
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ .Values.auth.mtls.secretName }}.key
+        - path: /etc/otel-collector/tls/ca.crt
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ .Values.auth.mtls.secretName }}.ca
+{{- end }}
+{{- if gt $probePort 0 }}
+      readinessProbe:
+        httpGet:
+          path: /
+          port: {{ $probePort }}
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        failureThreshold: 6
+        successThreshold: 1
+        timeoutSeconds: 3
+      livenessProbe:
+        httpGet:
+          path: /
+          port: {{ $probePort }}
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        failureThreshold: 3
+        timeoutSeconds: 3
+{{- end }}
+      metrics:
+        path: /metrics
+        port: 8889
+        dropMetrics: []
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ $replicas }}
+      minScale: {{ $replicas }}
+      metric: disabled
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 150
+  firewallConfig:
+    external:
+{{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+{{- range .Values.publicAccess.allowedCidrs }}
+        - {{ . | quote }}
+{{- end }}
+{{- else }}
+      inboundAllowCIDR: []
+{{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      inboundAllowWorkload: []
+  loadBalancer:
+{{- if and .Values.publicAccess.enabled (eq $auth "mtls") }}
+    {{- /* mTLS needs raw TCP passthrough — edge termination would strip client
+           certificates. External clients use standard OTLP ports 4317 (gRPC) /
+           4318 (HTTP); the plain :4317 receiver is NOT exposed. */}}
+    direct:
+      enabled: true
+      ports:
+        - containerPort: 4318
+          externalPort: 4318
+          protocol: TCP
+          scheme: tcp
+        - containerPort: 4319
+          externalPort: 4317
+          protocol: TCP
+          scheme: tcp
+{{- else }}
+    direct:
+      enabled: false
+      ports: []
+{{- end }}
+    replicaDirect: false
+  supportDynamicTags: false

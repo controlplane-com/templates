@@ -1,0 +1,14 @@
+{{- if .Values.compactor.enabled }}
+kind: volumeset
+name: {{ include "thanos.compact.volume.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: Thanos Compactor compaction workspace
+tags: {{- include "thanos.tags" . | nindent 4 }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.compactor.volumeset.capacity }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d
+{{- end }}

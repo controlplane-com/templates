@@ -99,8 +99,8 @@ true
 {{- if not (dig "auth" "password" "value" "" .Values.redis.redis) -}}
 {{- fail "tooljet: redis.redis.auth.password.value is required when redis.redis.auth.password.enabled is true — it is wired into ToolJet as REDIS_PASSWORD" -}}
 {{- end -}}
+{{- end -}}
 {{- if or (dig "auth" "password" "enabled" false .Values.redis.sentinel) (dig "auth" "fromSecret" "enabled" false .Values.redis.sentinel) -}}
 {{- fail "tooljet: redis.sentinel.auth must stay disabled — ToolJet authenticates only the data node (REDIS_PASSWORD), not the sentinel; the same-gvc firewall is the boundary" -}}
-{{- end -}}
 {{- end -}}
 {{- end }}

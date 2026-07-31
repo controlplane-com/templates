@@ -16,7 +16,7 @@ This app deploys [Grafana](https://grafana.com/oss/grafana/) OSS — dashboards 
 - None for a default install.
 - For credentialed provisioned datasources: a **dictionary** secret per `datasources.credentialSecrets` entry, created **before install** (see [Provisioning datasources](#provisioning-datasources)).
 - For authenticated SMTP: an **opaque** secret (encoding `plain`) holding the SMTP password, created **before install**.
-- For optional database backups: a bucket and access setup for one of the supported providers (see [Backup storage setup](#backup-storage-setup)).
+- For optional database backups: a bucket and access setup on AWS S3, Google Cloud Storage, or a MinIO/S3-compatible server (see [Backup storage setup](#backup-storage-setup)).
 
 ## Configuration
 

@@ -10,11 +10,11 @@ dependencies:
     version: 1.0.0
     repository: "oci://ghcr.io/controlplane-com/templates"
   - name: mysql
-    version: 1.4.2
+    version: 1.4.3
     repository: "oci://ghcr.io/controlplane-com/templates"
 
 annotations:
   created: "2026-07-28"
-  lastModified: "2026-07-28"
+  lastModified: "2026-07-31"
   category: "publishing"
   createsGvc: false

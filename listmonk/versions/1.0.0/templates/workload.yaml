@@ -35,7 +35,7 @@ spec:
         - name: LISTMONK_app__address
           value: 0.0.0.0:9000
         - name: LISTMONK_db__host
-          value: {{ include "listmonk.db.host" . }}
+          value: '{{ include "listmonk.db.host" . }}'
         - name: LISTMONK_db__port
           value: "5432"
         - name: LISTMONK_db__user
@@ -43,7 +43,7 @@ spec:
         - name: LISTMONK_db__password
           value: 'cpln://secret/{{ include "listmonk.db.secretName" . }}.password'
         - name: LISTMONK_db__database
-          value: {{ include "listmonk.db.database" . }}
+          value: '{{ include "listmonk.db.database" . }}'
         - name: LISTMONK_db__ssl_mode
           value: disable
         # Consumed during --install only: creates the Super Admin on first boot.

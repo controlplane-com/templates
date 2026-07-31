@@ -33,7 +33,7 @@ storage:
   s3:
     bucket: my-docmost-bucket
     region: us-east-1
-    endpoint: ""              # set for S3-compatible servers (e.g. https://my-minio.example.com)
+    endpoint: ""              # set for S3-compatible servers (e.g. http://my-minio:9000)
     forcePathStyle: false     # true for most S3-compatible servers (MinIO)
     # Keyless auth (AWS, preferred): Control Plane cloud account + your pre-created
     # IAM policy scoped to the bucket (full JSON in README). Used only when

@@ -16,11 +16,11 @@ Docmost is an open-source (AGPL) knowledge base and wiki — a Confluence/Notion
 - **A prerequisite opaque secret — create it BEFORE installing.** The server references it by name (`secrets.name`, default `my-docmost-app-secret`) and the deployment wedges on a missing secret. Its payload is `APP_SECRET` — a random string of at least 32 characters, **write-once**: rotating it logs out every user and invalidates outstanding invite/share links (stored documents are unaffected).
 
   ```bash
-  cpln secret create --name my-docmost-app-secret --type opaque \
-    --payload $(openssl rand -hex 32) --encoding plain
+  printf '%s' "$(openssl rand -hex 32)" | \
+    cpln secret create-opaque --name my-docmost-app-secret --encoding plain -f -
   ```
 
-- **(Only for S3 attachment storage)** an S3 bucket plus either an AWS cloud account + IAM policy (keyless, preferred) or a static-key dictionary secret — see Storage setup.
+- **(Only for S3 attachment storage)** a bucket on AWS S3 (keyless via a cloud account + IAM policy, preferred; or static keys) or a MinIO/S3-compatible server with a static-key dictionary secret — see Storage setup.
 - **(Optional, only for authenticated SMTP)** a dictionary secret with `SMTP_USERNAME` + `SMTP_PASSWORD`, referenced via `smtp.auth.secretName`.
 
   ```bash

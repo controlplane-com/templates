@@ -4,6 +4,9 @@ High-level, user-facing catalog changes by month: new templates and notable vers
 
 ## 2026-07
 
+- **New template: ghost 1.0.0** — open-source publishing platform (blog, newsletters, paid memberships, Content API) backed by bundled MySQL 8, with optional SMTP and scheduled S3/GCS database backups
+- **New template: infisical 1.0.0** — open-source secrets management (web UI + API, per-environment scoping, versioning) with horizontal scaling (`replicas`), backed by PostgreSQL and highly-available Redis
+- **mysql 1.4.3** — scheduled backups now dump the configured application database (previously the backup job targeted a placeholder database — upgrade if you use `backup.enabled`)
 - **New template: prometheus 1.0.0** — Prometheus metrics database with remote-write ingestion, durable TSDB storage, and an optional Thanos sidecar (Store API + object-storage block upload) for a global query tier
 - **New template: thanos 1.0.0** — Thanos Query global metrics view fanning out across Prometheus installs (cross-GVC), with HA-pair deduplication and an optional Store Gateway + Compactor long-term storage tier
 - **otel-collector 1.1.0** — OTLP metrics pipeline with Prometheus remote-write export and authenticated public ingestion (bearer token or mTLS), alongside the existing trace path

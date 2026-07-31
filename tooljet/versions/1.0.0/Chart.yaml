@@ -1,0 +1,24 @@
+apiVersion: v2
+name: tooljet
+description: ToolJet open-source low-code platform for building internal tools — visual app builder with the ToolJet Database (PostgREST), backed by Postgres and optional Redis
+type: application
+version: 1.0.0
+appVersion: "3.20.204-lts"
+
+annotations:
+  created: "2026-07-31"
+  lastModified: "2026-07-31"
+  category: "internal-tools"
+  createsGvc: false
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+  - name: postgres
+    version: 3.3.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+  - name: redis
+    version: 3.4.3
+    repository: "oci://ghcr.io/controlplane-com/templates"
+    condition: redis.enabled

@@ -42,7 +42,7 @@ infisical:
     minCpu: 250m
     maxCpu: 1000m
     minMemory: 512Mi
-    maxMemory: 1Gi
+    maxMemory: 2Gi   # 2Gi floor — boot migrations OOM at 1Gi on a cold multi-replica install
 ```
 
 ### Prerequisite secret
@@ -128,5 +128,5 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`c
 - [Infisical docs](https://infisical.com/docs/documentation/getting-started/introduction)
 - [Self-hosting configuration (env vars)](https://infisical.com/docs/self-hosting/configuration/envars)
 - [Standalone deployment](https://infisical.com/docs/self-hosting/deployment-options/standalone-infisical)
-- [SMTP configuration](https://infisical.com/docs/self-hosting/configuration/email)
+- [SMTP configuration](https://infisical.com/docs/self-hosting/configuration/envars#email-service)
 - [GitHub](https://github.com/Infisical/infisical)

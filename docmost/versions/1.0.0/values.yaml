@@ -1,0 +1,102 @@
+# ─── Docmost server ───────────────────────────────────────────────
+docmost:
+  # Single image: web UI + API + realtime collab on :3000; runs DB migrations
+  # automatically on boot. Pin a concrete released tag; never latest.
+  image: docmost/docmost:0.95.0
+  # Replicas coordinate via Redis (socket.io adapter + collab sync); >1 REQUIRES
+  # storage.type: s3 — local attachments are per-replica and would 404.
+  replicas: 1
+  # Public base URL (links in emails, share URLs). Empty = derive from the
+  # platform canonical endpoint. Set WITH https:// only for a custom domain.
+  appUrl: ""
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 2Gi   # headroom for boot migrations and large imports
+
+# ─── Prerequisite secret (USER-CREATED — MUST EXIST BEFORE INSTALL) ─
+# Opaque secret (encoding: plain) whose payload is APP_SECRET: a random string of
+# at least 32 chars (openssl rand -hex 32). Create it FIRST — the deployment
+# WEDGES on a missing secret and looks broken. Treat as write-once: rotating it
+# logs out every user and invalidates outstanding invite/share links (stored
+# documents are unaffected).
+secrets:
+  name: my-docmost-app-secret
+
+# ─── Attachment storage ───────────────────────────────────────────
+storage:
+  type: local                 # local | s3  (s3 required for replicas > 1)
+  local:
+    volumeset:
+      capacity: 10            # GiB (minimum 10); mounted at /app/data/storage
+  s3:
+    bucket: my-docmost-bucket
+    region: us-east-1
+    endpoint: ""              # set for S3-compatible servers (e.g. https://my-minio.example.com)
+    forcePathStyle: false     # true for most S3-compatible servers (MinIO)
+    # Keyless auth (AWS, preferred): Control Plane cloud account + your pre-created
+    # IAM policy scoped to the bucket (full JSON in README). Used only when
+    # auth.secretName is empty.
+    cloudAccountName: my-s3-cloud-account
+    policyName: my-docmost-s3-policy
+    auth:
+      # OPTIONAL prerequisite dictionary secret with AWS_S3_ACCESS_KEY_ID +
+      # AWS_S3_SECRET_ACCESS_KEY. Empty = keyless via cloud account (AWS only).
+      # Required for MinIO / non-AWS endpoints (e.g. my-docmost-s3-keys).
+      secretName: ""
+  fileUploadSizeLimit: 50mb   # max single attachment size (FILE_UPLOAD_SIZE_LIMIT)
+
+# ─── SMTP / email (optional) ──────────────────────────────────────
+# Off by default → invites still work: MAIL_DRIVER falls back to `log`, so invite
+# links appear in the workload logs. Turn on for real email delivery.
+smtp:
+  enabled: false
+  host: smtp.example.com      # SMTP server host
+  port: 587                   # SMTP server port
+  secure: false               # false = STARTTLS/plain (587); true = implicit TLS (465)
+  fromAddress: no-reply@example.com   # From address
+  fromName: Docmost           # display name on outbound mail
+  auth:
+    # OPTIONAL prerequisite dictionary secret holding SMTP_USERNAME + SMTP_PASSWORD.
+    # Empty = unauthenticated relay / mail catcher (e.g. my-docmost-smtp).
+    secretName: ""
+
+# ─── Access ───────────────────────────────────────────────────────
+publicAccess:
+  enabled: true               # HTTPS UI + websockets on the auto *.cpln.app endpoint; false = internal-only
+internalAccess:
+  type: same-gvc              # none | same-gvc | same-org | workload-list
+  workloads: []               # used only with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── PostgreSQL (subchart: postgres) — documents, users, spaces ───
+postgres:
+  image: postgres:18
+  config:
+    username: docmost
+    password: change-me-docmost-pg   # template-managed cred for the bundled DB — change before install
+    database: docmost
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 1Gi
+  volumeset:
+    capacity: 10              # GiB (minimum 10)
+
+# ─── Redis (bundled single-node) — queues + realtime coordination ──
+# REQUIRED — Docmost will not report healthy without Redis. Single node with AOF
+# persistence; Docmost has no Sentinel support, so the HA redis template is not used.
+redis:
+  image: redis:8
+  auth:
+    password: change-me-docmost-redis   # template-managed; wired into REDIS_URL — change before install
+  resources:
+    minCpu: 100m
+    maxCpu: 400m
+    minMemory: 256Mi
+    maxMemory: 512Mi
+  volumeset:
+    capacity: 10              # GiB (minimum 10); AOF at /data

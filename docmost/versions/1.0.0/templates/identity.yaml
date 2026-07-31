@@ -1,0 +1,15 @@
+{{- include "docmost.validate" . }}
+---
+kind: identity
+name: {{ include "docmost.identity.name" . }}
+description: Docmost identity
+tags: {{- include "docmost.tags" . | nindent 4 }}
+gvc: {{ .Values.global.cpln.gvc }}
+{{- if eq (include "docmost.s3.keyless" .) "true" }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.storage.s3.cloudAccountName }}
+  policyRefs:
+    - cpln-connector
+    - aws::ReadOnlyAccess
+    - "{{ .Values.storage.s3.policyName }}"
+{{- end }}

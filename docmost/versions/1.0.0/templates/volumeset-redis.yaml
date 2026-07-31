@@ -1,0 +1,10 @@
+---
+kind: volumeset
+name: {{ include "docmost.redis.volumeset.name" . }}
+description: Docmost Redis AOF persistence
+tags: {{- include "docmost.tags" . | nindent 4 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.redis.volumeset.capacity }}
+  performanceClass: general-purpose-ssd

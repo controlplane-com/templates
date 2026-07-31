@@ -1,0 +1,146 @@
+---
+kind: workload
+name: {{ include "docmost.name" . }}
+description: Docmost server — wiki UI + API + realtime collab, HTTP :3000
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "docmost.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "docmost.identity.name" . }}
+  containers:
+    - name: docmost
+      image: {{ .Values.docmost.image }}
+      # Single image (UI + API + collab); runs DB migrations automatically on boot.
+      inheritEnv: false
+      minCpu: {{ .Values.docmost.resources.minCpu | quote }}
+      cpu: {{ .Values.docmost.resources.maxCpu | quote }}
+      minMemory: {{ .Values.docmost.resources.minMemory | quote }}
+      memory: {{ .Values.docmost.resources.maxMemory | quote }}
+      env:
+        # ── JWT/token signing secret (user prerequisite opaque secret) ──
+        - name: APP_SECRET
+          value: cpln://secret/{{ .Values.secrets.name }}.payload
+        # ── Public base URL — empty appUrl derives from the platform canonical endpoint ──
+        - name: APP_URL
+          value: {{ if .Values.docmost.appUrl }}{{ .Values.docmost.appUrl | quote }}{{ else }}"$(CPLN_GLOBAL_ENDPOINT)"{{ end }}
+        # ── Database (postgres subchart) — documents, users, spaces ──
+        - name: POSTGRES_USER
+          value: cpln://secret/{{ include "docmost.secret.creds.name" . }}.postgresUsername
+        - name: POSTGRES_PASSWORD
+          value: cpln://secret/{{ include "docmost.secret.creds.name" . }}.postgresPassword
+        - name: DATABASE_URL
+          value: postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@{{ include "docmost.postgres.host" . }}:5432/{{ .Values.postgres.config.database }}?schema=public
+        # ── Redis (bundled) — BullMQ queues + socket.io adapter + collab sync ──
+        - name: REDIS_PASSWORD
+          value: cpln://secret/{{ include "docmost.secret.creds.name" . }}.redisPassword
+        - name: REDIS_URL
+          value: redis://:$(REDIS_PASSWORD)@{{ include "docmost.redis.host" . }}:6379
+        # ── Attachment storage ──
+        - name: STORAGE_DRIVER
+          value: {{ .Values.storage.type | quote }}
+        - name: FILE_UPLOAD_SIZE_LIMIT
+          value: {{ .Values.storage.fileUploadSizeLimit | quote }}
+        {{- if eq .Values.storage.type "s3" }}
+        - name: AWS_S3_BUCKET
+          value: {{ .Values.storage.s3.bucket | quote }}
+        - name: AWS_S3_REGION
+          value: {{ .Values.storage.s3.region | quote }}
+        {{- if .Values.storage.s3.endpoint }}
+        - name: AWS_S3_ENDPOINT
+          value: {{ .Values.storage.s3.endpoint | quote }}
+        {{- end }}
+        - name: AWS_S3_FORCE_PATH_STYLE
+          value: {{ .Values.storage.s3.forcePathStyle | quote }}
+        {{- if .Values.storage.s3.auth.secretName }}
+        # ── Static S3 keys (optional prerequisite dictionary secret); empty = keyless SDK chain ──
+        - name: AWS_S3_ACCESS_KEY_ID
+          value: cpln://secret/{{ .Values.storage.s3.auth.secretName }}.AWS_S3_ACCESS_KEY_ID
+        - name: AWS_S3_SECRET_ACCESS_KEY
+          value: cpln://secret/{{ .Values.storage.s3.auth.secretName }}.AWS_S3_SECRET_ACCESS_KEY
+        {{- end }}
+        {{- end }}
+        {{- if .Values.smtp.enabled }}
+        # ── SMTP / email (default MAIL_DRIVER=log prints invite links to logs) ──
+        - name: MAIL_DRIVER
+          value: "smtp"
+        - name: SMTP_HOST
+          value: {{ .Values.smtp.host | quote }}
+        - name: SMTP_PORT
+          value: {{ .Values.smtp.port | quote }}
+        - name: SMTP_SECURE
+          value: {{ .Values.smtp.secure | quote }}
+        - name: MAIL_FROM_ADDRESS
+          value: {{ .Values.smtp.fromAddress | quote }}
+        - name: MAIL_FROM_NAME
+          value: {{ .Values.smtp.fromName | quote }}
+        {{- if .Values.smtp.auth.secretName }}
+        - name: SMTP_USERNAME
+          value: cpln://secret/{{ .Values.smtp.auth.secretName }}.SMTP_USERNAME
+        - name: SMTP_PASSWORD
+          value: cpln://secret/{{ .Values.smtp.auth.secretName }}.SMTP_PASSWORD
+        {{- end }}
+        {{- end }}
+      ports:
+        - number: 3000
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /api/health
+          port: 3000
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 15
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /api/health/live
+          port: 3000
+          scheme: HTTP
+        initialDelaySeconds: 120
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+      {{- if eq .Values.storage.type "local" }}
+      volumes:
+        - path: /app/data/storage
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "docmost.storage.volumeset.name" . }}
+      {{- end }}
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: {{ .Values.docmost.replicas }}
+      maxScale: {{ .Values.docmost.replicas }}
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 300   # headroom for large uploads/imports; websockets unaffected
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  supportDynamicTags: false

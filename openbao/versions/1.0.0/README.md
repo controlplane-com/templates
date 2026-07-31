@@ -14,7 +14,7 @@ OpenBao is the Linux Foundation's open-source (MPL-2.0) fork of HashiCorp Vault 
 - **Static seal (default): an opaque unseal-key secret — create it BEFORE installing.** The workload references it by name (`seal.static.secretName`, default `my-openbao-unseal-key`) and the deployment wedges on a missing secret:
 
   ```bash
-  cpln secret create --name my-openbao-unseal-key --type opaque --payload $(openssl rand -hex 32)
+  printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name my-openbao-unseal-key --encoding plain -f -
   ```
 
   **WRITE-ONCE — never change or delete this secret.** It wraps OpenBao's encryption barrier; losing or rotating it makes all stored data permanently unrecoverable.

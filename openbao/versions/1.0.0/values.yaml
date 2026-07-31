@@ -15,7 +15,7 @@ seal:
 
   # static: auto-unseal from a key in a platform secret. PREREQUISITE — create the
   # opaque secret BEFORE install (a missing secret wedges the deployment):
-  #   cpln secret create --name my-openbao-unseal-key --type opaque --payload $(openssl rand -hex 32)
+  #   printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name my-openbao-unseal-key --encoding plain -f -
   # WRITE-ONCE: losing or changing this key makes all stored data unrecoverable.
   static:
     secretName: my-openbao-unseal-key

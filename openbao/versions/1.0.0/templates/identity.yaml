@@ -1,0 +1,23 @@
+kind: identity
+name: {{ include "openbao.identity.name" . }}
+description: OpenBao identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "openbao.tags" . | nindent 4 }}
+{{- if eq .Values.seal.type "awskms" }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.seal.aws.cloudAccountName }}
+  policyRefs:
+    - cpln-connector
+    - "{{ .Values.seal.aws.policyName }}"
+{{- end }}
+{{- if eq .Values.seal.type "gcpckms" }}
+gcp:
+  bindings:
+    - resource: //cloudkms.googleapis.com/projects/{{ .Values.seal.gcp.project }}/locations/{{ .Values.seal.gcp.region }}/keyRings/{{ .Values.seal.gcp.keyRing }}/cryptoKeys/{{ .Values.seal.gcp.cryptoKey }}
+      roles:
+        - roles/cloudkms.cryptoKeyEncrypterDecrypter
+  cloudAccountLink: //cloudaccount/{{ .Values.seal.gcp.cloudAccountName }}
+  scopes:
+    - https://www.googleapis.com/auth/cloud-platform
+{{- end }}

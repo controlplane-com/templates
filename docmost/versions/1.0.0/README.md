@@ -24,8 +24,8 @@ Docmost is an open-source (AGPL) knowledge base and wiki — a Confluence/Notion
 - **(Optional, only for authenticated SMTP)** a dictionary secret with `SMTP_USERNAME` + `SMTP_PASSWORD`, referenced via `smtp.auth.secretName`.
 
   ```bash
-  cpln secret create --name my-docmost-smtp --type dictionary \
-    --data SMTP_USERNAME=apikey --data SMTP_PASSWORD=...
+  cpln secret create-dictionary --name my-docmost-smtp \
+    --entry SMTP_USERNAME=apikey --entry SMTP_PASSWORD=...
   ```
 
 ## Configuration
@@ -154,8 +154,8 @@ Only needed for `storage.type: s3` (required for `replicas > 1`); the default lo
 2. Create a dictionary secret and set `storage.s3.auth.secretName` to its name (this bypasses the cloud account — `cloudAccountName`/`policyName` are ignored):
 
 ```bash
-cpln secret create --name my-docmost-s3-keys --type dictionary \
-  --data AWS_S3_ACCESS_KEY_ID=... --data AWS_S3_SECRET_ACCESS_KEY=...
+cpln secret create-dictionary --name my-docmost-s3-keys \
+  --entry AWS_S3_ACCESS_KEY_ID=... --entry AWS_S3_SECRET_ACCESS_KEY=...
 ```
 
 ### MinIO / S3-compatible

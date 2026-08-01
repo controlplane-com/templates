@@ -17,16 +17,16 @@ Infisical is an open-source (MIT core) secrets-management platform: store, versi
   - `AUTH_SECRET` — `openssl rand -base64 32` (32-byte base64).
 
   ```bash
-  cpln secret create --name my-infisical-secrets --type dictionary --gvc $GVC \
-    --data ENCRYPTION_KEY=$(openssl rand -hex 16) \
-    --data AUTH_SECRET=$(openssl rand -base64 32)
+  cpln secret create-dictionary --name my-infisical-secrets \
+    --entry ENCRYPTION_KEY=$(openssl rand -hex 16) \
+    --entry AUTH_SECRET=$(openssl rand -base64 32)
   ```
 
 - **(Optional, only for authenticated SMTP)** a dictionary secret with `SMTP_USERNAME` + `SMTP_PASSWORD`, referenced via `smtp.auth.secretName`. Leave `smtp.auth.secretName` empty for unauthenticated relays / mail catchers.
 
   ```bash
-  cpln secret create --name my-infisical-smtp --type dictionary --gvc $GVC \
-    --data SMTP_USERNAME=apikey --data SMTP_PASSWORD=...
+  cpln secret create-dictionary --name my-infisical-smtp \
+    --entry SMTP_USERNAME=apikey --entry SMTP_PASSWORD=...
   ```
 
 ## Configuration

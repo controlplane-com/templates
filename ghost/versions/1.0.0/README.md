@@ -52,8 +52,8 @@ mail:
 Create the prerequisite secret before install:
 
 ```bash
-cpln secret create --name my-ghost-smtp --type dictionary \
-  --data 'user=smtp-username,password=smtp-password' --gvc <gvc>
+cpln secret create-dictionary --name my-ghost-smtp \
+  --entry user=smtp-username --entry password=smtp-password
 ```
 
 ### Access

@@ -11,7 +11,7 @@ tooljet:
     minCpu: 500m
     maxCpu: 2000m
     minMemory: 1Gi
-    maxMemory: 2Gi
+    maxMemory: 4Gi   # first-boot migrations OOM below this (image bakes a 4096MB Node heap)
 
 # ─── Prerequisite secret (USER-CREATED — MUST EXIST BEFORE INSTALL) ─
 # Dictionary secret holding ToolJet's root-of-trust keys. Create it FIRST — the
@@ -28,7 +28,7 @@ secrets:
 # Off by default → zero-config install works; the first visitor to the UI
 # becomes the Super Admin without email. Enable for invites / password reset.
 smtp:
-  enabled: false
+  enabled: false               # NOTE: only takes effect at INITIAL install — a first-boot migration seeds it; enabling via a later upgrade does nothing
   host: smtp.example.com       # SMTP server host (SMTP_DOMAIN)
   port: 587                    # SMTP server port
   fromEmail: no-reply@example.com   # DEFAULT_FROM_EMAIL

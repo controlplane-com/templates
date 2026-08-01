@@ -18,17 +18,17 @@ ToolJet is an open-source low-code platform for building internal tools: a visua
   - `PGRST_JWT_SECRET` — `openssl rand -hex 32`
 
   ```bash
-  cpln secret create --name my-tooljet-secrets --type dictionary --gvc $GVC \
-    --data SECRET_KEY_BASE=$(openssl rand -hex 64) \
-    --data LOCKBOX_MASTER_KEY=$(openssl rand -hex 32) \
-    --data PGRST_JWT_SECRET=$(openssl rand -hex 32)
+  cpln secret create-dictionary --name my-tooljet-secrets \
+    --entry SECRET_KEY_BASE=$(openssl rand -hex 64) \
+    --entry LOCKBOX_MASTER_KEY=$(openssl rand -hex 32) \
+    --entry PGRST_JWT_SECRET=$(openssl rand -hex 32)
   ```
 
-- **(Optional, only for authenticated SMTP)** a dictionary secret with `SMTP_USERNAME` + `SMTP_PASSWORD`, referenced via `smtp.auth.secretName`. Leave `smtp.auth.secretName` empty for unauthenticated relays / mail catchers.
+- **(Optional, only for authenticated SMTP)** a dictionary secret with `SMTP_USERNAME` + `SMTP_PASSWORD`, referenced via `smtp.auth.secretName`. Leave `smtp.auth.secretName` empty for unauthenticated relays / mail catchers. **Decide before installing:** a first-boot migration seeds the SMTP settings — they only take effect when configured at initial install; enabling them via a later upgrade has no effect.
 
   ```bash
-  cpln secret create --name my-tooljet-smtp --type dictionary --gvc $GVC \
-    --data SMTP_USERNAME=apikey --data SMTP_PASSWORD=...
+  cpln secret create-dictionary --name my-tooljet-smtp \
+    --entry SMTP_USERNAME=apikey --entry SMTP_PASSWORD=...
   ```
 
 ## Configuration

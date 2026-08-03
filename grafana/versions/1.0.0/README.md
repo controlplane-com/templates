@@ -142,6 +142,31 @@ datasources:
       keys: [PG_PASSWORD]
 ```
 
+### Platform metrics as a datasource
+
+The platform's own metrics store is Prometheus-compatible and holds more than the built-in dashboards display — including any [custom metrics](https://docs.controlplane.com/reference/workload/custom-metrics) your workloads expose via a container `metrics` block, cost-relevant series (`egress`, `cross_zone_traffic`, `volume_set_*`), and cron/stability counters. To dashboard and alert on those alongside your other datasources, add it per the [centralized metrics guide](https://docs.controlplane.com/guides/centralized-metrics-management):
+
+1. Create a service account with the `readMetrics` org permission and generate a key (a workload's built-in `CPLN_TOKEN` will NOT authenticate to the metrics endpoint).
+2. Put the key in a dictionary secret (e.g. key `CPLN_METRICS_TOKEN`) and list it under `datasources.credentialSecrets`.
+
+```yaml
+datasources:
+  definitions:
+    - name: Control Plane metrics
+      type: prometheus
+      access: proxy
+      url: https://metrics.cpln.io/metrics/org/YOUR_ORG
+      jsonData:
+        httpHeaderName1: Authorization
+      secureJsonData:
+        httpHeaderValue1: Bearer $CPLN_METRICS_TOKEN
+  credentialSecrets:
+    - name: my-grafana-ds-credentials
+      keys: [CPLN_METRICS_TOKEN]
+```
+
+This complements the built-in workload dashboards rather than replacing them — use it when you need custom app metrics, cost views, alerting you own, or one pane mixing platform metrics with your other datasources.
+
 ## Connecting
 
 | What | Value |

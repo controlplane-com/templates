@@ -1,0 +1,7 @@
+{{- include "tooljet.validate" . }}
+---
+kind: identity
+name: {{ include "tooljet.identity.name" . }}
+description: ToolJet identity
+tags: {{- include "tooljet.tags" . | nindent 4 }}
+gvc: {{ .Values.global.cpln.gvc }}

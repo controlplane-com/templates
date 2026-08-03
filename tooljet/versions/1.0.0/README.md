@@ -44,7 +44,7 @@ tooljet:
     minCpu: 500m
     maxCpu: 2000m
     minMemory: 1Gi
-    maxMemory: 2Gi
+    maxMemory: 4Gi   # do not lower — first-boot migrations OOM below this
 ```
 
 ### Prerequisite secret

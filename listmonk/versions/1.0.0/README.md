@@ -150,12 +150,12 @@ The backing template's README has the full per-provider walkthrough.
 - **Single instance by design — do not attempt to scale.** Upstream forbids two listmonk instances on one database (duplicate campaign sends); the template pins one replica and uses a no-surge rollout, so upgrades incur a brief gap instead of overlapping instances.
 - **No mail sends until SMTP is configured** in **Admin → Settings → SMTP** — see Post-install setup.
 - **Keep `publicAccess` enabled for subscriber-facing pages to work** — subscription forms, unsubscribe links, and tracking pixels must be reachable from the internet.
-- **Database volumes survive reinstalls under the same release name; uninstalling deletes them** — all lists, subscribers, and campaigns are lost. Use `postgresHA` and/or enable the backup pass-through for durable production data.
+- **Database volumes survive restarts, redeploys, and upgrades; uninstalling deletes them** — all lists, subscribers, and campaigns are lost. Use `postgresHA` and/or enable the backup pass-through for durable production data.
 
 ## Links
 
 - [Listmonk documentation](https://listmonk.app/docs/)
 - [Configuration reference](https://listmonk.app/docs/configuration/)
 - [SMTP setup](https://listmonk.app/docs/installation/#smtp)
-- [Media uploads](https://listmonk.app/docs/media-uploads/)
+- [Core concepts](https://listmonk.app/docs/concepts/)
 - [API reference](https://listmonk.app/docs/apis/apis/)

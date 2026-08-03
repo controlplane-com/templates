@@ -157,5 +157,5 @@ The backing template's README has the full per-provider walkthrough.
 - [Listmonk documentation](https://listmonk.app/docs/)
 - [Configuration reference](https://listmonk.app/docs/configuration/)
 - [SMTP setup](https://listmonk.app/docs/installation/#smtp)
-- [Media uploads](https://listmonk.app/docs/media-uploads/)
+- [Core concepts](https://listmonk.app/docs/concepts/)
 - [API reference](https://listmonk.app/docs/apis/apis/)

@@ -1,0 +1,167 @@
+image: grafana/grafana:13.1.1
+
+replicas: 1 # 1 = single instance; >=2 = HA tier over shared Postgres (requires redis.enabled: true)
+
+resources:
+  cpu: 1000m
+  memory: 1Gi
+  minCpu: 500m
+  minMemory: 512Mi
+
+# ─── Admin Bootstrap & Encryption ─────────────────────────────────────────────
+# Applied on FIRST boot only; change both passwords BEFORE installing.
+admin:
+  user: admin
+  password: change-me-grafana-1 # initial admin login password
+  # Encrypts datasource credentials stored in the DB (AES-256). Set once BEFORE
+  # install and never change it — rotating breaks every saved datasource secret.
+  secretKey: change-me-grafana-secret-key
+
+# ─── Datasources as Code (optional) ───────────────────────────────────────────
+# Grafana datasource provisioning entries, passed through verbatim. Point them at
+# YOUR datasources (prometheus/thanos/mimir templates, your DBs, external APIs).
+# Workload metrics are already built into the Control Plane console — do not
+# recreate them here.
+datasources:
+  definitions: []
+  # - name: Prometheus
+  #   type: prometheus
+  #   access: proxy
+  #   url: http://RELEASE-prometheus.GVC.cpln.local:9095 # prometheus template
+  #   isDefault: true
+  # - name: Thanos
+  #   type: prometheus
+  #   access: proxy
+  #   url: http://RELEASE-thanos.GVC.cpln.local:10902 # thanos Query template
+  # - name: AppDB
+  #   type: postgres
+  #   url: my-db-host:5432
+  #   user: grafana_reader
+  #   jsonData: { database: appdb, sslmode: disable }
+  #   secureJsonData:
+  #     password: $PG_PASSWORD # interpolated from credentialSecrets below
+
+  # Credential env exposure: user-created dictionary secrets (MUST EXIST BEFORE
+  # INSTALL when listed). Each key becomes an env var referenced as $KEY above.
+  credentialSecrets: []
+  # - name: my-grafana-ds-credentials
+  #   keys: [PG_PASSWORD]
+
+# ─── SMTP for Alert Emails (optional) ─────────────────────────────────────────
+smtp:
+  enabled: false
+  host: smtp.example.com:587 # host:port
+  user: "" # empty = unauthenticated SMTP
+  passwordSecretName: "" # opaque secret (encoding: plain) with the SMTP password; create BEFORE install
+  fromAddress: grafana@example.com
+  fromName: Grafana
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: true # UI on the canonical *.cpln.app HTTPS endpoint
+
+internalAccess:
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # used with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── App Database: Highly Available PostgreSQL (default) ──────────────────────
+# postgres-highly-available template: 3 Patroni replicas, 3 etcd replicas, and
+# an HAProxy leader endpoint Grafana connects to.
+postgresHA:
+  enabled: true
+  postgres:
+    username: grafana
+    password: change-me-grafana-db-password # change before installing
+    database: grafana
+  replicas: 3
+  volumeset:
+    capacity: 10 # initial capacity in GiB per replica (minimum is 10)
+
+  backup: # optional database backups — see README storage setup
+    enabled: false
+    mode: logical # logical or wal-g
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    logical:
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      schedule: "0 2 * * *"
+    walg:
+      intervalSeconds: 21600
+    provider: aws # options: aws, gcp, minio
+    aws:
+      bucket: grafana-pg-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: grafana-pg-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: grafana-pg-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: grafana-pg-backup-bucket
+      accessKey: my-minio-username
+      secretKey: my-minio-password
+      prefix: postgres/backups
+
+# ─── App Database: Single-instance PostgreSQL (dev/lightweight) ───────────────
+# Enable this and disable postgresHA for a lighter non-HA deployment.
+postgres:
+  enabled: false
+  config:
+    username: grafana
+    password: change-me-grafana-db-password # change before installing
+    database: grafana
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+  backup: # optional database backups — see README storage setup
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
+    schedule: "0 2 * * *"
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    provider: aws # options: aws, gcp, minio
+    aws:
+      bucket: grafana-pg-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: grafana-pg-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: grafana-pg-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: grafana-pg-backup-bucket
+      accessKey: my-minio-username
+      secretKey: my-minio-password
+      prefix: postgres/backups
+
+# ─── Redis (subchart: redis, Sentinel) — alerting-HA coordination ─────────────
+# Required when replicas >= 2: coordinates alert evaluation so exactly one
+# notification is sent. Ships authless (same-GVC firewall is the boundary).
+redis:
+  enabled: false
+  redis:
+    image: redis:7.4
+    replicas: 3
+    resources:
+      cpu: 200m
+      memory: 256Mi
+      minCpu: 80m
+      minMemory: 128Mi
+  sentinel:
+    image: redis:7.4
+    replicas: 3
+    resources:
+      cpu: 200m
+      memory: 256Mi
+      minCpu: 80m
+      minMemory: 128Mi

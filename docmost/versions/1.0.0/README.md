@@ -182,6 +182,6 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`c
 
 - [Docmost docs](https://docmost.com/docs/)
 - [Self-hosting environment variables](https://docmost.com/docs/self-hosting/environment-variables)
-- [File storage (S3) configuration](https://docmost.com/docs/self-hosting/file-storage)
-- [Email configuration](https://docmost.com/docs/self-hosting/email)
+- [File storage (S3) configuration](https://docmost.com/docs/self-hosting/configuration#file-storage)
+- [Email configuration](https://docmost.com/docs/self-hosting/configuration#email)
 - [GitHub](https://github.com/docmost/docmost)

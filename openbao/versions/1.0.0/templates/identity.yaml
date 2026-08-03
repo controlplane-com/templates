@@ -1,0 +1,24 @@
+kind: identity
+name: {{ include "openbao.identity.name" . }}
+description: OpenBao identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "openbao.tags" . | nindent 4 }}
+{{- if eq .Values.seal.type "awskms" }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.seal.aws.cloudAccountName }}
+  policyRefs:
+    - cpln-connector
+    - "{{ .Values.seal.aws.policyName }}"
+{{- end }}
+{{- if eq .Values.seal.type "gcpckms" }}
+# No bindings: the platform materializes the service account from the cloud
+# account alone, and Cloud KMS resources are not a supported binding target.
+# You grant roles/cloudkms.cryptoKeyEncrypterDecrypter + roles/cloudkms.viewer
+# on the ONE key to this identity's service account (README) — key-scoped,
+# never project-wide.
+gcp:
+  cloudAccountLink: //cloudaccount/{{ .Values.seal.gcp.cloudAccountName }}
+  scopes:
+    - https://www.googleapis.com/auth/cloud-platform
+{{- end }}

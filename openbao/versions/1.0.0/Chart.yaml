@@ -1,0 +1,15 @@
+apiVersion: v2
+name: openbao
+description: OpenBao identity-based secrets engine — Vault-compatible API, KV, dynamic secrets, PKI, and transit encryption with raft storage and auto-unseal
+type: application
+version: 1.0.0
+appVersion: "2.6.1"
+annotations:
+  created: "2026-07-31"
+  lastModified: "2026-07-31"
+  category: "secrets-management"
+  createsGvc: false
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

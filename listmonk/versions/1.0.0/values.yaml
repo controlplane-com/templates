@@ -26,7 +26,7 @@ publicAccess:
 
 internalAccess:
   type: same-gvc # options: none, same-gvc, same-org, workload-list
-  workloads: []  # only used when type is same-gvc or workload-list
+  workloads: []  # only used when type is workload-list
   # workloads:
   #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
 

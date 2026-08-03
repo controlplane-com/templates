@@ -83,8 +83,11 @@ true
 {{- if not .Values.storage.s3.bucket -}}
 {{- fail "docmost: storage.s3.bucket is required when storage.type is s3" -}}
 {{- end -}}
+{{- if and .Values.storage.s3.auth.secretName (not .Values.storage.s3.endpoint) -}}
+{{- fail "docmost: static keys (storage.s3.auth.secretName) are only for S3-compatible servers (storage.s3.endpoint set). For AWS S3 leave auth.secretName empty and use the keyless cloud-account path (cloudAccountName + policyName)" -}}
+{{- end -}}
 {{- if and (not .Values.storage.s3.auth.secretName) (or (not .Values.storage.s3.cloudAccountName) (not .Values.storage.s3.policyName)) -}}
-{{- fail "docmost: s3 storage needs credentials — either set storage.s3.auth.secretName (static-key dictionary secret) or both storage.s3.cloudAccountName and storage.s3.policyName (keyless via AWS cloud account)" -}}
+{{- fail "docmost: s3 storage needs credentials — AWS S3: set storage.s3.cloudAccountName + storage.s3.policyName (keyless); S3-compatible server: set storage.s3.endpoint + storage.s3.auth.secretName (static-key dictionary secret)" -}}
 {{- end -}}
 {{- end -}}
 {{- if not (has .Values.internalAccess.type (list "none" "same-gvc" "same-org" "workload-list")) -}}

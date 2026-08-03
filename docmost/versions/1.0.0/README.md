@@ -20,7 +20,7 @@ Docmost is an open-source (AGPL) knowledge base and wiki — a Confluence/Notion
     cpln secret create-opaque --name my-docmost-app-secret --encoding plain -f -
   ```
 
-- **(Only for S3 attachment storage)** a bucket on AWS S3 (keyless via a cloud account + IAM policy, preferred; or static keys) or a MinIO/S3-compatible server with a static-key dictionary secret — see Storage setup.
+- **(Only for S3 attachment storage)** a bucket on AWS S3 (keyless via a cloud account + IAM policy — static keys are not accepted for AWS) or a MinIO/S3-compatible server with a static-key dictionary secret — see Storage setup.
 - **(Optional, only for authenticated SMTP)** a dictionary secret with `SMTP_USERNAME` + `SMTP_PASSWORD`, referenced via `smtp.auth.secretName`.
 
   ```bash
@@ -146,23 +146,18 @@ Only needed for `storage.type: s3` (required for `replicas > 1`); the default lo
 }
 ```
 
-4. Leave `storage.s3.auth.secretName` empty — the workload identity authenticates through the cloud account with no static keys.
+4. Leave `storage.s3.auth.secretName` empty — the workload identity authenticates through the cloud account with no static keys. (AWS S3 is keyless-only: the chart rejects static keys unless an S3-compatible `endpoint` is set.)
 
-### AWS S3 (static keys)
+### MinIO / S3-compatible (static keys)
 
-1. Create the bucket and an IAM user restricted to the policy JSON above; generate an access key pair.
-2. Create a dictionary secret and set `storage.s3.auth.secretName` to its name (this bypasses the cloud account — `cloudAccountName`/`policyName` are ignored):
+1. Create the bucket on your server (for the in-catalog `minio` template in the same GVC: `http://WORKLOAD_NAME:9000`).
+2. Set `storage.s3.endpoint` to the S3 API address (with scheme and port) and `storage.s3.forcePathStyle: true`.
+3. Create a static-key dictionary secret with the server's access/secret keys (for the MinIO template: its `admin.username`/`admin.password`) and set `storage.s3.auth.secretName` to its name:
 
 ```bash
 cpln secret create-dictionary --name my-docmost-s3-keys \
   --entry AWS_S3_ACCESS_KEY_ID=... --entry AWS_S3_SECRET_ACCESS_KEY=...
 ```
-
-### MinIO / S3-compatible
-
-1. Create the bucket on your server (for the in-catalog `minio` template in the same GVC: `http://WORKLOAD_NAME:9000`).
-2. Set `storage.s3.endpoint` to the S3 API address (with scheme and port) and `storage.s3.forcePathStyle: true`.
-3. Create the static-key dictionary secret as above with the server's access/secret keys (for the MinIO template: its `admin.username`/`admin.password`) and set `storage.s3.auth.secretName`.
 
 ## Connecting
 

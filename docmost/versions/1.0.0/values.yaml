@@ -49,8 +49,8 @@ storage:
   fileUploadSizeLimit: 50mb   # max single attachment size (FILE_UPLOAD_SIZE_LIMIT)
 
 # ─── SMTP / email (optional) ──────────────────────────────────────
-# Off by default → invites still work: MAIL_DRIVER falls back to `log`, so invite
-# links appear in the workload logs. Turn on for real email delivery.
+# Off by default. The production image has NO log fallback for mail — with SMTP
+# off, member invites cannot be delivered. Configure before inviting members.
 smtp:
   enabled: false              # off = member invites CANNOT be delivered (no log fallback in the production image) — enable for any multi-user workspace
   host: smtp.example.com      # SMTP server host

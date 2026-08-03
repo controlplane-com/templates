@@ -21,10 +21,10 @@ LiteLLM is an OpenAI-compatible LLM gateway/proxy: one endpoint in front of 100+
   Create it with the CLI (add one entry per provider key you use):
 
   ```bash
-  cpln secret create --name my-litellm-secrets --type dictionary --gvc $GVC \
-    --data LITELLM_MASTER_KEY=sk-$(openssl rand -hex 24) \
-    --data LITELLM_SALT_KEY=sk-$(openssl rand -hex 24) \
-    --data OPENAI_API_KEY=sk-...your-openai-key...
+  cpln secret create-dictionary --name my-litellm-secrets \
+    --entry LITELLM_MASTER_KEY=sk-$(openssl rand -hex 24) \
+    --entry LITELLM_SALT_KEY=sk-$(openssl rand -hex 24) \
+    --entry OPENAI_API_KEY=sk-...your-openai-key...
   ```
 
 ## Configuration

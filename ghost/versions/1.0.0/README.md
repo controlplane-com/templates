@@ -52,8 +52,8 @@ mail:
 Create the prerequisite secret before install:
 
 ```bash
-cpln secret create --name my-ghost-smtp --type dictionary \
-  --data 'user=smtp-username,password=smtp-password' --gvc <gvc>
+cpln secret create-dictionary --name my-ghost-smtp \
+  --entry user=smtp-username --entry password=smtp-password
 ```
 
 ### Access
@@ -78,7 +78,7 @@ mysql:
     password: change-me-ghost-db      # change before installing
     rootPassword: change-me-mysql-root # change before installing
   resources:
-    minCpu: 100m
+    minCpu: 150m
     maxCpu: 500m
     minMemory: 256Mi
     maxMemory: 1024Mi

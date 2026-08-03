@@ -17,16 +17,16 @@ Infisical is an open-source (MIT core) secrets-management platform: store, versi
   - `AUTH_SECRET` — `openssl rand -base64 32` (32-byte base64).
 
   ```bash
-  cpln secret create --name my-infisical-secrets --type dictionary --gvc $GVC \
-    --data ENCRYPTION_KEY=$(openssl rand -hex 16) \
-    --data AUTH_SECRET=$(openssl rand -base64 32)
+  cpln secret create-dictionary --name my-infisical-secrets \
+    --entry ENCRYPTION_KEY=$(openssl rand -hex 16) \
+    --entry AUTH_SECRET=$(openssl rand -base64 32)
   ```
 
 - **(Optional, only for authenticated SMTP)** a dictionary secret with `SMTP_USERNAME` + `SMTP_PASSWORD`, referenced via `smtp.auth.secretName`. Leave `smtp.auth.secretName` empty for unauthenticated relays / mail catchers.
 
   ```bash
-  cpln secret create --name my-infisical-smtp --type dictionary --gvc $GVC \
-    --data SMTP_USERNAME=apikey --data SMTP_PASSWORD=...
+  cpln secret create-dictionary --name my-infisical-smtp \
+    --entry SMTP_USERNAME=apikey --entry SMTP_PASSWORD=...
   ```
 
 ## Configuration
@@ -42,7 +42,7 @@ infisical:
     minCpu: 250m
     maxCpu: 1000m
     minMemory: 512Mi
-    maxMemory: 1Gi
+    maxMemory: 2Gi   # 2Gi floor — boot migrations OOM at 1Gi on a cold multi-replica install
 ```
 
 ### Prerequisite secret
@@ -128,5 +128,5 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`c
 - [Infisical docs](https://infisical.com/docs/documentation/getting-started/introduction)
 - [Self-hosting configuration (env vars)](https://infisical.com/docs/self-hosting/configuration/envars)
 - [Standalone deployment](https://infisical.com/docs/self-hosting/deployment-options/standalone-infisical)
-- [SMTP configuration](https://infisical.com/docs/self-hosting/configuration/email)
+- [SMTP configuration](https://infisical.com/docs/self-hosting/configuration/envars#email-service)
 - [GitHub](https://github.com/Infisical/infisical)

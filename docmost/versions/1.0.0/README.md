@@ -75,7 +75,7 @@ storage:
 
 ```yaml
 smtp:
-  enabled: false              # off = invite links are printed to the workload logs instead of emailed
+  enabled: false              # off = member invites cannot be delivered — enable for any multi-user workspace
   host: smtp.example.com
   port: 587
   secure: false               # false = STARTTLS/plain (587); true = implicit TLS (465)
@@ -175,7 +175,7 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`c
 - **`APP_SECRET` is write-once** — rotating it logs out every user and invalidates outstanding invite/share links; stored documents are unaffected.
 - **Secure your workspace on first visit** — the first browser session to reach the UI creates the admin account and workspace; install and set it up promptly.
 - **`replicas > 1` requires `storage.type: s3`** — local attachments live on per-replica volumes and would 404 across replicas; the chart refuses to render otherwise.
-- **With SMTP off, member-invite links are printed to the workload logs** (`cpln logs`) instead of emailed — copy them from there.
+- **With SMTP off, member invites cannot be delivered** — the production image sends no mail and logs no invite links. Configure `smtp.*` before inviting members; the solo/first-admin experience works fine without it.
 - **Pages and attachments survive reinstall** — documents live in the Postgres volumeset, local attachments in the storage volumeset; to wipe all data, delete those volumesets too.
 
 ## Links

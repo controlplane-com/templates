@@ -52,7 +52,7 @@ storage:
 # Off by default → invites still work: MAIL_DRIVER falls back to `log`, so invite
 # links appear in the workload logs. Turn on for real email delivery.
 smtp:
-  enabled: false
+  enabled: false              # off = member invites CANNOT be delivered (no log fallback in the production image) — enable for any multi-user workspace
   host: smtp.example.com      # SMTP server host
   port: 587                   # SMTP server port
   secure: false               # false = STARTTLS/plain (587); true = implicit TLS (465)

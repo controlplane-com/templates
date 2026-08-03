@@ -10,6 +10,5 @@ aws:
   cloudAccountLink: //cloudaccount/{{ .Values.storage.s3.cloudAccountName }}
   policyRefs:
     - cpln-connector
-    - aws::ReadOnlyAccess
     - "{{ .Values.storage.s3.policyName }}"
 {{- end }}

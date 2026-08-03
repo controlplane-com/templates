@@ -109,6 +109,10 @@ spec:
           recoveryPolicy: retain
           uri: cpln://volumeset/{{ include "docmost.storage.volumeset.name" . }}
       {{- end }}
+  securityOptions:
+    # image runs as node (uid/gid 1000); without this the volumeset mounts
+    # root-owned and every attachment upload fails with EACCES
+    filesystemGroupId: 1000
   defaultOptions:
     autoscaling:
       metric: disabled

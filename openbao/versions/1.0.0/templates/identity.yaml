@@ -12,11 +12,12 @@ aws:
     - "{{ .Values.seal.aws.policyName }}"
 {{- end }}
 {{- if eq .Values.seal.type "gcpckms" }}
+# No bindings: the platform materializes the service account from the cloud
+# account alone, and Cloud KMS resources are not a supported binding target.
+# You grant roles/cloudkms.cryptoKeyEncrypterDecrypter + roles/cloudkms.viewer
+# on the ONE key to this identity's service account (README) — key-scoped,
+# never project-wide.
 gcp:
-  bindings:
-    - resource: //cloudkms.googleapis.com/projects/{{ .Values.seal.gcp.project }}/locations/{{ .Values.seal.gcp.region }}/keyRings/{{ .Values.seal.gcp.keyRing }}/cryptoKeys/{{ .Values.seal.gcp.cryptoKey }}
-      roles:
-        - roles/cloudkms.cryptoKeyEncrypterDecrypter
   cloudAccountLink: //cloudaccount/{{ .Values.seal.gcp.cloudAccountName }}
   scopes:
     - https://www.googleapis.com/auth/cloud-platform

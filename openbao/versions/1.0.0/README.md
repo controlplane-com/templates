@@ -106,7 +106,23 @@ Access is keyless — the workload identity federates into your AWS account thro
 
 1. Create a key ring + symmetric crypto key in Cloud KMS. Fill in `seal.gcp.project`, `region` (key ring location), `keyRing`, and `cryptoKey`.
 2. If you do not have one, [create a GCP Cloud Account](https://docs.controlplane.com/guides/create-cloud-account). Set `seal.gcp.cloudAccountName`.
-3. No manual IAM step — the template binds `roles/cloudkms.cryptoKeyEncrypterDecrypter` on exactly that crypto key to the workload identity.
+3. Install, then grant the workload identity's service account access **on that one key**. Read the generated account name from the identity:
+
+```bash
+cpln identity get {release}-openbao-identity --gvc {gvc} -o json | jq -r '.status.objectName'
+# service account is {objectName}@{project}.iam.gserviceaccount.com
+
+SA={objectName}@{project}.iam.gserviceaccount.com
+for ROLE in roles/cloudkms.cryptoKeyEncrypterDecrypter roles/cloudkms.viewer; do
+  gcloud kms keys add-iam-policy-binding {cryptoKey} \
+    --keyring {keyRing} --location {region} --project {project} \
+    --member "serviceAccount:$SA" --role "$ROLE"
+done
+```
+
+Both roles are required: `cryptoKeyEncrypterDecrypter` performs the seal/unseal, and `cloudkms.viewer` supplies the `cloudkms.cryptoKeys.get` call OpenBao makes at startup. Grant them on the key, never project-wide.
+
+**Until the grant exists the workload crash-loops** with `PermissionDenied … cloudkms.cryptoKeys.get`; it heals itself within about 30 seconds of the grant — no redeploy needed.
 
 ## First run — initialize once
 
@@ -133,6 +149,7 @@ External clients use `https://` (the platform edge terminates TLS); same-GVC cli
 - **Static mode: the unseal-key secret must exist before install and is WRITE-ONCE** — a missing secret wedges the deployment; a lost or changed key makes all stored data unrecoverable. Back the key up securely.
 - **Run `bao operator init` once after install and save the output** — recovery keys and the root token are printed once, to your terminal only.
 - **Do not switch `seal.type` after initialization** — the seal wraps the existing data; changing modes requires an OpenBao seal migration, not a values change.
+- **`gcpckms` needs its key grant applied after install** (see the setup steps) — the workload crash-loops on `cloudkms.cryptoKeys.get` until then, and `cpln identity get … -o json` shows `status.gcp.usable` for diagnosis.
 - **Data survives restarts and upgrades; uninstall deletes the volumeset** (final snapshot kept 7 days). A reinstall starts uninitialized.
 - **Private by default** — set `publicAccess.enabled: true` to expose the API + web UI on the canonical endpoint.
 

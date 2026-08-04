@@ -15,8 +15,8 @@ This app deploys a Cassandra 5.0 cluster in a single location. Each node runs as
 
 ```yaml
 replicas: 3           # Number of Cassandra nodes
-replicationFactor: 3  # Copies of each partition stored across the cluster
-                      # Must not exceed replicas
+replicationFactor: 1  # Copies of each partition stored across the cluster
+                      # Must not exceed replicas; raise to 3 for fault tolerance
 
 superuserPassword: supersecretpassword  # Built-in cassandra superuser password
 username: username    # Application user

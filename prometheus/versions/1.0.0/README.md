@@ -49,7 +49,13 @@ volumeset:
 ```yaml
 scrapeInterval: 30s   # global scrape interval
 externalLabels: {}    # identity labels on all uploaded/forwarded series, e.g. region: us-east-1
-extraScrapeConfigs: | # raw YAML list of additional scrape_configs entries
+extraScrapeConfigs: "" # raw YAML list of additional scrape_configs entries
+```
+
+To scrape your own workloads, set `extraScrapeConfigs` to a raw YAML list:
+
+```yaml
+extraScrapeConfigs: |
   - job_name: my-app
     static_configs:
       - targets: ["my-app.my-gvc.cpln.local:8080"]

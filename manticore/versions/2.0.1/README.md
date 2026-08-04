@@ -168,10 +168,10 @@ Run the orchestrator cron workload to execute operations:
 
 ```bash
 # Trigger an import
-cpln workload run-cron {release-name}-orchestrator-job --gvc {gvc-name}
+cpln workload cron start {release-name}-orchestrator-job --gvc {gvc-name}
 
 # Trigger a repair (set ACTION=repair on the workload first)
-cpln workload run-cron {release-name}-orchestrator-job --gvc {gvc-name}
+cpln workload cron start {release-name}-orchestrator-job --gvc {gvc-name}
 ```
 
 ## Load Testing
@@ -184,7 +184,7 @@ loadTest:
   vus: 10
   duration: "5m"
   query:
-    index: products
+    index: addresses
     query:
       match:
         "*": "test"
@@ -192,7 +192,7 @@ loadTest:
 
 Trigger via Control Plane:
 ```bash
-cpln workload run-cron {release-name}-load-test-controller --gvc {gvc-name}
+cpln workload cron start {release-name}-load-test-controller --gvc {gvc-name}
 ```
 
 Or set `loadTest.controller.schedule` to run on a cron schedule.

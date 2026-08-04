@@ -3,7 +3,7 @@ name: ess
 description: External Secret Syncer for Control Plane
 type: application
 version: 2.0.0
-appVersion: v2.0.0
+appVersion: 2.0.0
 
 dependencies:
   - name: cpln-common
@@ -12,6 +12,6 @@ dependencies:
 
 annotations:
   created: "2025-03-12"
-  lastModified: "2026-07-30"
+  lastModified: "2026-08-04"
   category: "secrets"
   createsGvc: false

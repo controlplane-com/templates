@@ -175,13 +175,13 @@ backup:
   aws:
     bucket: my-backup-bucket
     region: us-east-1
-    cloudAccountName: my-cloud-account
+    cloudAccountName: my-backup-cloudaccount
     policyName: my-backup-policy
     prefix: mongodb-cluster/backups
 
   gcp:
     bucket: my-backup-bucket
-    cloudAccountName: my-cloud-account
+    cloudAccountName: my-backup-cloudaccount
     prefix: mongodb-cluster/backups
 ```
 

@@ -55,10 +55,9 @@ otelCollector:
       histogram:
         buckets: [1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000]  # span-duration buckets — tune to your SLOs
         unit: ms              # ms or s
-  advanced:
-    config: |                 # full collector config, used verbatim when mode: advanced
-      ...
 ```
+
+`otelCollector.advanced.config` holds a full collector config used verbatim when `mode: advanced`. It ships with a complete working config (OTLP receivers → the platform tracing backend, plus spanmetrics), so read the shipped `values.yaml` for the starting point before you replace it.
 
 ### Metrics ingestion
 

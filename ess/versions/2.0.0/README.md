@@ -286,5 +286,5 @@ Priority (highest wins):
 
 ### Resources
 
-- [ESS Documentation](https://docs.controlplane.com/template-catalog/templates/external-secret-syncer)
+- [ESS Documentation](https://docs.controlplane.com/template-catalog/templates/ess)
 - [Image Source Code](https://github.com/controlplane-com/external-secret-syncer)

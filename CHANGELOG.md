@@ -2,6 +2,14 @@
 
 High-level, user-facing catalog changes by month: new templates and notable version updates, one line each. Feeds the marketplace "What's New" section. Maintained by the template pipeline at ship time (entry added when a template or version merges); internal tooling changes are not listed.
 
+## 2026-08
+
+- **New template: openbao 1.0.0** — OpenBao secrets engine (Vault-compatible: KV, dynamic secrets, PKI, transit) on raft storage, with auto-unseal via a static key or AWS/GCP KMS
+- **New template: grafana 1.0.0** — Grafana OSS dashboards over your own datasources, with datasource provisioning as code, horizontal scaling (`replicas`), and Redis-backed alerting HA
+- **New template: docmost 1.0.0** — open-source knowledge base and wiki with real-time collaborative editing, backed by PostgreSQL and Redis, with local or S3 attachment storage
+- **New template: tooljet 1.0.0** — open-source low-code internal-tools builder (visual app builder, 50+ connectors, built-in ToolJet Database) backed by PostgreSQL
+- **New template: listmonk 1.0.0** — self-hosted newsletter and mailing-list manager with public subscription pages, backed by highly-available or single-instance PostgreSQL
+
 ## 2026-07
 
 - **New template: ghost 1.0.0** — open-source publishing platform (blog, newsletters, paid memberships, Content API) backed by bundled MySQL 8, with optional SMTP and scheduled S3/GCS database backups

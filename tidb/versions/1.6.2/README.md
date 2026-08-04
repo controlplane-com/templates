@@ -8,7 +8,7 @@ To configure your TiDB cluster across multiple locations, update the `gvc.locati
 
 ```yaml
 gvc:
-  name: my-tidb-gvc
+  name: tidb-gvc
   locations:
     - name: aws-us-east-1
       replicas: 1
@@ -93,9 +93,9 @@ autoCreateDatabase:
   enabled: true
   deployInitWorkload: true
   database:
-    rootPassword: your-root-password
+    rootPassword: myrootpw   # change before deploying
     user: myuser
-    password: mypassword
+    password: mypw           # change before deploying
     db: mydb
 ```
 

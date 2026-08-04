@@ -16,7 +16,9 @@ This template deploys a Weaviate 1.38 vector database cluster in a single locati
 replicas: 3               # Number of Weaviate nodes (3 recommended for HA)
 clusterName: my-weaviate  # Internal cluster identifier
 
-apiKey: changeme          # Bearer token for authenticating with Weaviate
+# Bearer token for authenticating with Weaviate — the shipped default is the same
+# for every install, so replace it with your own value before you deploy
+apiKey: 21203583df918a538cecb1f96c85c4516c4c0e478be23f76466ad8a30adc68cc
 apiUser: admin@example.com  # Username associated with the API key
 
 queryDefaultsLimit: 25    # Default result limit for queries
@@ -139,13 +141,13 @@ backup:
   aws:
     bucket: my-backup-bucket
     region: us-east-1
-    cloudAccountName: my-cloud-account
+    cloudAccountName: my-s3-cloudaccount
     policyName: my-backup-policy
     path: weaviate/backups
 
   gcp:
     bucket: my-backup-bucket
-    cloudAccountName: my-cloud-account
+    cloudAccountName: my-gcs-cloudaccount
     path: weaviate/backups
 ```
 

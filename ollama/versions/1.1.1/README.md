@@ -37,7 +37,7 @@ workload:
       image: ollama/ollama
       resources:
         cpu: 6
-        memory: 7Gi
+        memory: 8Gi
       gpu:
         nvidia:
           model: t4

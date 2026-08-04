@@ -7,7 +7,7 @@ Creates a Redis Sentinel cluster on Control Plane with automatic leader election
 **Redis and Sentinel** — set replicas, resources, and timeouts for each. Sentinel replicas must be an odd number for quorum:
 ```yaml
 redis:
-  replicas: 2
+  replicas: 3
   resources:
     minCpu: 80m
     minMemory: 128Mi

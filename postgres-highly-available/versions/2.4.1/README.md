@@ -166,20 +166,20 @@ backup:
     intervalSeconds: 21600
 
   aws:
-    bucket: my-bucket
+    bucket: pg-ha-backup-bucket
     region: us-east-1
-    cloudAccountName: my-cloud-account
-    policyName: my-backup-policy
+    cloudAccountName: my-s3-cloud-account
+    policyName: pg-ha-backup-policy
     prefix: postgres/backups
 
   gcp:
-    bucket: my-bucket
-    cloudAccountName: my-cloud-account
+    bucket: pg-ha-backup-bucket
+    cloudAccountName: my-gcs-cloud-account
     prefix: postgres/backups
 
   minio:
     endpoint: http://my-minio-workload:9000
-    bucket: my-bucket
+    bucket: pg-ha-backup-bucket
     accessKey: my-minio-username
     secretKey: my-minio-password
     prefix: postgres/backups

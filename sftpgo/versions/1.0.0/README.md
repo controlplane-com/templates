@@ -76,33 +76,33 @@ Set `storage.type` to `aws`, `gcp`, or `minio`, and configure that block. AWS an
 storage:
   type: aws
   aws:
-    bucket: my-bucket           # required, must already exist
+    bucket: my-sftp-bucket                # required, must already exist
     region: us-east-1
-    keyPrefix: ""               # optional bucket-wide folder prefix, e.g. sftp/
-    cloudAccountName: my-aws    # Control Plane AWS cloud account
-    policyName: my-s3-policy    # custom IAM policy granting bucket access (bare name)
+    keyPrefix: ""                         # optional bucket-wide folder prefix, e.g. sftp/
+    cloudAccountName: my-s3-cloud-account # Control Plane AWS cloud account
+    policyName: my-sftp-s3-policy         # custom IAM policy granting bucket access (bare name)
 ```
 
+For Google Cloud Storage (keyless), set `storage.type: gcp` and configure:
+
 ```yaml
-# Google Cloud Storage (keyless)
 storage:
-  type: gcp
   gcp:
-    bucket: my-bucket           # required, must already exist
+    bucket: my-sftp-bucket                 # required, must already exist
     keyPrefix: ""
-    cloudAccountName: my-gcp    # Control Plane GCP cloud account
+    cloudAccountName: my-gcs-cloud-account # Control Plane GCP cloud account
 ```
 
+For an S3-compatible server — MinIO, R2, Wasabi, … (static keys) — set `storage.type: minio` and configure:
+
 ```yaml
-# S3-compatible: MinIO, R2, Wasabi, … (static keys)
 storage:
-  type: minio
   minio:
     endpoint: http://my-minio-workload:9000   # required
-    bucket: my-bucket
+    bucket: my-sftp-bucket
     region: us-east-1
-    accessKey: minio-user
-    accessSecret: minio-pass
+    accessKey: my-minio-username
+    accessSecret: my-minio-password
 ```
 
 ### Users

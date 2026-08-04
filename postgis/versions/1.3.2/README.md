@@ -13,7 +13,7 @@ This application works only with a single replica, do not scale up the replicas.
 config:
   username: username
   password: password
-  database: database
+  database: test
 ```
 
 **Resources** — adjust CPU and memory per replica:

@@ -62,8 +62,8 @@ Supabase uses JWT to authenticate requests between services and from clients. Th
 jwt:
   secret: your-super-secret-jwt-token-with-at-least-32-characters-long
   secretKeyBase: your-super-secret-key-base-used-by-realtime-must-be-at-least-64-characters-long!!
-  anonKey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-  serviceRoleKey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+  anonKey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlLWRlbW8iLCJpYXQiOjE2NDE3NjkyMDAsImV4cCI6MTc5OTUzNTYwMH0.zQomPPgIVgwVRMh3NJhhAl2cJ-GKQgNXpMTbIKxKyoo
+  serviceRoleKey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UtZGVtbyIsImlhdCI6MTY0MTc2OTIwMCwiZXhwIjoxNzk5NTM1NjAwfQ.4HviqYnTKiRK-RJvWzgAAuaFiq8--foTrXQpl7HYMU4
 ```
 
 The default values are Supabase's official published development keys and work together out of the box. **Change all three before any production deployment.**
@@ -147,19 +147,19 @@ storage:
 ```yaml
 storage:
   s3:
-    bucket: my-storage-bucket
+    bucket: cpln-backup-bucket
     region: us-east-1
     cloudAccountName: my-s3-cloudaccount
-    policyName: my-storage-policy  # IAM policy granting GetObject, PutObject, DeleteObject on the bucket
+    policyName: my-backup-policy  # IAM policy granting GetObject, PutObject, DeleteObject on the bucket
 ```
 
 **GCS backend:**
 ```yaml
 storage:
   gcs:
-    bucket: my-storage-bucket
-    accessKeyId: my-hmac-access-key-id
-    secretAccessKey: my-hmac-secret-access-key
+    bucket: my-supabase-storage-bucket
+    accessKeyId: my-gcs-hmac-access-key-id
+    secretAccessKey: my-gcs-hmac-secret-access-key
 ```
 
 GCS HMAC keys can be created in the GCP console under Cloud Storage → Settings → Interoperability.
@@ -257,15 +257,15 @@ backup:
     intervalSeconds: 21600  # base backup interval (default: every 6 hours)
 
   aws:
-    bucket: my-backup-bucket
+    bucket: my-supabase-backup-bucket
     region: us-east-1
-    cloudAccountName: my-cloud-account
+    cloudAccountName: my-backup-cloudaccount
     policyName: my-backup-policy
     prefix: supabase/backups
 
   gcp:
-    bucket: my-backup-bucket
-    cloudAccountName: my-cloud-account
+    bucket: my-supabase-backup-bucket
+    cloudAccountName: my-backup-cloudaccount
     prefix: supabase/backups
 ```
 

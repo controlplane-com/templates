@@ -21,6 +21,6 @@ dependencies:
 
 annotations:
   created: "2026-07-20"
-  lastModified: "2026-07-21"
-  category: "app"
+  lastModified: "2026-08-04"
+  category: "workflow-automation"
   createsGvc: false

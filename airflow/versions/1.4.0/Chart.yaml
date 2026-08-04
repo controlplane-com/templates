@@ -7,8 +7,8 @@ appVersion: "3.0.3"
 
 annotations:
   created: "2025-08-14"
-  lastModified: "2026-03-10"
-  category: "app"
+  lastModified: "2026-08-04"
+  category: "workflow-orchestration"
   createsGvc: true
 
 dependencies:

@@ -315,7 +315,7 @@ cpln helm install debezium ./debezium-server/versions/1.0.0 \
 
 3. View logs:
    ```bash
-   cpln workload logs debezium-<release>-debezium --gvc my-gvc
+   cpln logs '{gvc="my-gvc", workload="debezium-<release>-debezium"}' --limit 50 --since 10m
    ```
 
 4. Test CDC by making changes in the source database and verifying events appear in the configured sink.

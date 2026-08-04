@@ -1,5 +1,5 @@
 redis:
-  image: redis:7.4
+  image: redis:8
   resources:
     cpu: 200m
     memory: 256Mi
@@ -97,7 +97,7 @@ redis:
         #   keyId: arn:aws:kms:us-east-1:1234567890:key/d411f35a-1d31-4515-9934-4f193e042d80 # Replace with your AWS KMS key ARN
 
 sentinel:
-  image: redis:7.4
+  image: redis:8
   resources:
     cpu: 200m
     memory: 256Mi

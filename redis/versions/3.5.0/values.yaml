@@ -16,7 +16,7 @@ redis:
       passwordKey: password
     password:
       enabled: false
-      value: your-password
+      value: change-me-redis-password
   serverCommand: redis-server  # Can be overridden based on the version of redis image
   # extraArgs: "--maxclients 20000 --maxmemory 200mb --maxmemory-policy allkeys-lru"
   publicAccess:
@@ -116,7 +116,7 @@ sentinel:
       passwordKey: password
     password:
       enabled: false
-      value: your-password
+      value: change-me-sentinel-password
   publicAccess:
     enabled: false
     address: redis-sentinel-test.example-cpln.com

@@ -34,7 +34,7 @@ redis:
   auth:
     password:
       enabled: true
-      value: your-password
+      value: change-me-redis-password
     # fromSecret:
     #   enabled: true
     #   name: my-redis-secret

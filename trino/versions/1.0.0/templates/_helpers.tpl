@@ -233,6 +233,9 @@ file.password-file=/etc/trino/password.db
 {{- if not (has .Values.internalAccess.type (list "none" "same-gvc" "same-org" "workload-list")) -}}
 {{- fail (printf "trino: internalAccess.type must be none, same-gvc, same-org, or workload-list — got '%s'" .Values.internalAccess.type) -}}
 {{- end -}}
+{{- if and (eq .Values.internalAccess.type "none") (gt (int .Values.workers.replicas) 0) -}}
+{{- fail "trino: internalAccess.type 'none' blocks worker->coordinator discovery, so every query would fail with 'insufficient active worker nodes'. Use same-gvc, same-org, or workload-list (the coordinator auto-allows its own workers), or set workers.replicas: 0 for a single-node install where 'none' is safe." -}}
+{{- end -}}
 {{- if and .Values.publicAccess.enabled (not .Values.auth.enabled) -}}
 {{- fail "trino: publicAccess.enabled requires auth.enabled — an unauthenticated Trino on the public internet is an arbitrary-read primitive over every connected data source" -}}
 {{- end -}}

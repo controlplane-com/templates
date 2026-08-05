@@ -97,10 +97,10 @@ auth:
 Create both secrets first — Trino requires an internal shared secret as soon as authentication is on:
 
 ```bash
-htpasswd -B -C 10 -n alice > passwords.txt   # bcrypt, cost >= 8; one user per line
-cpln secret create-opaque --name my-trino-passwords --encoding plain -f passwords.txt
-openssl rand -hex 32 > shared.txt
-cpln secret create-opaque --name my-trino-shared-secret --encoding plain -f shared.txt
+htpasswd -B -C 10 -n alice | cpln secret create-opaque \
+  --name my-trino-passwords --encoding plain -f -    # bcrypt, cost >= 8; one user per line
+printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque \
+  --name my-trino-shared-secret --encoding plain -f -
 ```
 
 ### Access
@@ -114,7 +114,7 @@ internalAccess:
   workloads: [] # used with workload-list, e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME
 ```
 
-`internalAccess` controls who may query the coordinator. The worker tier keeps its own least-privilege firewall (coordinator and sibling workers only) regardless of this setting, so tightening it never breaks the cluster.
+`internalAccess` controls who may reach the coordinator — including its own workers, which announce themselves over that same internal path. `workload-list` is safe because the coordinator automatically allows its worker workload in addition to whatever you list. **`none` is rejected whenever `workers.replicas > 0`**, since it would cut worker discovery and every query would fail with *insufficient active worker nodes*; it is available only for a single-node install (`workers.replicas: 0`). The worker tier keeps its own least-privilege firewall (coordinator and sibling workers only).
 
 ## Connecting data sources
 

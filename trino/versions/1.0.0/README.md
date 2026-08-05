@@ -200,6 +200,8 @@ Object-storage catalogs (Hive, Iceberg, Delta Lake) are not offered in this vers
 
 ## Important Notes
 
+- **Availability, measured.** A rolling restart at 3 workers dropped 3 of 80 queries, all inside the ~180 s rollout window; losing a worker replica dropped **0** of 90 (its replacement joined at +41 s). The coordinator is the single point of failure: restarting it served 503s for **6 seconds** and lost exactly one in-flight query.
+
 - **Authentication requires public access.** Trino refuses password authentication over plain HTTP, so `auth.enabled` without `publicAccess.enabled` leaves the cluster unqueryable by anyone — in-GVC clients get `401 Password not allowed for insecure authentication`. Use auth with the public endpoint (TLS terminates at the edge), or leave auth off and let the internal firewall be the boundary.
 
 - The default install has no authentication; it is reachable only inside the GVC. Turning on `publicAccess` requires `auth.enabled` and the render fails otherwise.

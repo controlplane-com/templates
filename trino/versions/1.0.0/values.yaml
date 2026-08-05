@@ -60,9 +60,8 @@ catalogs: []
 # ─── Authentication ───────────────────────────────────────────────────────────
 # Off by default: Trino is then unauthenticated and reachable only inside the
 # GVC. REQUIRED before publicAccess can be enabled. Both secrets must exist
-# BEFORE install (see README Prerequisites). Note: with auth on, the Trino CLI
-# and JDBC driver refuse to send credentials over plain HTTP, so in-GVC clients
-# must use the public HTTPS endpoint.
+# BEFORE install (see README Prerequisites). Note: the SERVER refuses password
+# auth over plain HTTP, so auth requires publicAccess — the chart enforces it.
 auth:
   enabled: false
   passwordFileSecretName: "" # opaque secret, payload = bcrypt password file (e.g. my-trino-passwords)

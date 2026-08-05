@@ -2,6 +2,11 @@
 
 Creates a Redis Sentinel cluster on Control Plane with automatic leader election, failover, and an optional backup configuration.
 
+### Operational notes
+
+- **Do not rotate the Redis password in place.** Changing `redis.auth.password.value` on a running cluster deadlocks the rollout: the first restarted node cannot replicate from the not-yet-restarted master (`Unable to AUTH to MASTER: -WRONGPASS`), so its readiness probe never passes and the roll never advances. Re-applying the previous password recovers it. To change the password, uninstall and reinstall, or accept a brief planned outage.
+- **Switching `backup.provider` between `aws` and `gcp` leaves the previous provider's cloud binding on the workload identity.** The rendered manifest is correct, but the platform deep-merges identity updates, so the old block persists until you edit the identity or reinstall the release. Verify the identity after a provider switch if least privilege matters to you.
+
 ### Upgrading from a 3.4.x release (Redis 7.4 → 8)
 
 This version moves the default image to `redis:8`. Redis 8 reads 7.4 data directly, so an upgrade with persistence enabled keeps your data — but **the upgrade is one-way**: once a node has written its data file under Redis 8, a 7.4 image can no longer load it. If you need a rollback path, snapshot the volume set before upgrading, or pin `redis.image`/`sentinel.image` back to `redis:7.4` (both remain supported values).

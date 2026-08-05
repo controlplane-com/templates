@@ -35,13 +35,6 @@ SeaweedFS Policy Name
 {{- printf "%s-seaweedfs-policy" .Release.Name }}
 {{- end }}
 
-{{/*
-Internal service DNS host — the in-GVC S3 endpoint host
-*/}}
-{{- define "seaweedfs.internal.host" -}}
-{{- printf "%s.%s.cpln.local" (include "seaweedfs.name" .) .Values.global.cpln.gvc }}
-{{- end }}
-
 
 {{/* Validation */}}
 

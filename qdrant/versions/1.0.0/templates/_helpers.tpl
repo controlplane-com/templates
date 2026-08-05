@@ -28,13 +28,6 @@ Qdrant Policy Name (reveal on the user's API-key secret)
 {{- printf "%s-qdrant-policy" .Release.Name }}
 {{- end }}
 
-{{/*
-Internal service DNS host — how in-GVC clients reach the REST/gRPC APIs
-*/}}
-{{- define "qdrant.internal.host" -}}
-{{- printf "%s.%s.cpln.local" (include "qdrant.name" .) .Values.global.cpln.gvc }}
-{{- end }}
-
 
 {{/* Validation */}}
 

@@ -119,7 +119,7 @@ Qdrant is the retrieval tier of a RAG stack; every other component reaches it ov
 | Template | Internal address | Role |
 |---|---|---|
 | `qdrant` | `http://{release}-qdrant.{gvc}.cpln.local:6333` | vector store |
-| `ollama` | `http://ollama.{gvc}.cpln.local:11434` | local embedding + chat models |
+| `ollama` | `http://{release}-ollama.{gvc}.cpln.local:11434` | local embedding + chat models |
 | `litellm` | `http://{release}-litellm.{gvc}.cpln.local:4000` | OpenAI-compatible gateway to hosted models |
 | `langfuse` | `http://{release}-langfuse-web.{gvc}.cpln.local:3000` | tracing for the retrieval + generation calls |
 
@@ -136,7 +136,7 @@ qdrant = QdrantClient(host=f"my-qdrant.{GVC}.cpln.local", port=6333, grpc_port=6
 qdrant.create_collection("docs", vectors_config=VectorParams(size=768, distance=Distance.COSINE))
 
 # embed with the in-GVC ollama workload
-vec = httpx.post(f"http://ollama.{GVC}.cpln.local:11434/api/embeddings",
+vec = httpx.post(f"http://{OLLAMA_RELEASE}-ollama.{GVC}.cpln.local:11434/api/embeddings",
                  json={"model": "nomic-embed-text", "prompt": text}).json()["embedding"]
 qdrant.upsert("docs", points=[PointStruct(id=1, vector=vec, payload={"text": text})])
 
@@ -150,7 +150,7 @@ httpx.post(f"http://my-litellm.{GVC}.cpln.local:4000/v1/chat/completions", json=
 ## Important Notes
 
 - **Public access requires an API key** — installing with `publicAccess.enabled: true` and an empty `auth.secretName` fails at render time. Create the dictionary secret first.
-- **In-GVC clients must disable TLS** (`https=False` in `qdrant-client`, plain `http://` URLs) — the client silently switches to TLS when an `api_key` is supplied and then hangs against the internal endpoint.
+- **In-GVC clients must disable TLS** (`https=False` in `qdrant-client`, plain `http://` URLs) — the client silently switches to TLS when an `api_key` is supplied and then hangs against the internal endpoint (the symptom is a gRPC `DEADLINE_EXCEEDED`).
 - **The `/dashboard` shell loads without an API key** (its API calls do not). Set `service.dashboard: false` when Qdrant is publicly exposed.
 - **Single replica by design** — data survives restarts and upgrades on the volumeset, but a rolling restart is a brief availability gap. Distributed/raft mode is not in this version.
 - **Uninstall deletes the volumeset** (a final snapshot is kept for `backup.retention`); your own API-key secret is left untouched.

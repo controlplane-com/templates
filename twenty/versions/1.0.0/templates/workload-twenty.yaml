@@ -108,7 +108,7 @@ spec:
       enabled: false
     replicaDirect: false
   rolloutOptions:
-    # never drop below the requested replica count during an upgrade
+    # allow at most one replica below count during an upgrade
     maxSurgeReplicas: "0%"
     maxUnavailableReplicas: "1"
     minReadySeconds: 10

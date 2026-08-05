@@ -17,7 +17,8 @@
 - **An opaque secret holding the app key — it must exist BEFORE you install.** Twenty uses it as both `APP_SECRET` and `ENCRYPTION_KEY` (at-rest encryption of OAuth tokens, TOTP secrets and app variables). Reference it with `secrets.name`.
 
   ```bash
-  openssl rand -base64 32 | cpln secret create-opaque --name my-twenty-app-secret --encoding plain --file -
+  printf '%s' "$(openssl rand -base64 32)" | \
+    cpln secret create-opaque --name my-twenty-app-secret --encoding plain --file -
   ```
 
 - **(Only for S3 attachment storage)** a bucket on AWS S3 (keyless via a cloud account + IAM policy — static keys are not accepted for AWS) or a MinIO/S3-compatible server with a static-key dictionary secret — see Storage setup.
@@ -205,6 +206,16 @@ cpln secret create-dictionary --name my-twenty-s3-keys \
   --entry STORAGE_S3_ACCESS_KEY_ID=... --entry STORAGE_S3_SECRET_ACCESS_KEY=...
 ```
 
+### Database backups (AWS S3 and MinIO)
+
+Scheduled database backups are configured on whichever database path you enabled — `postgres.backup.*` (single instance) or `postgresHA.backup.*` (highly available). They are off by default.
+
+**AWS S3** — create the bucket, a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account), and an IAM policy scoped to that bucket, then set `…backup.enabled: true`, `…backup.provider: aws`, and `…backup.aws.{bucket,region,cloudAccountName,policyName}`. The policy JSON is the same bucket-scoped document shown above for attachment storage.
+
+**MinIO / S3-compatible** — set `…backup.provider: minio` and `…backup.minio.{endpoint,bucket,accessKey,secretKey}`; no cloud account is involved because the keys authenticate directly.
+
+The backing database template's own README carries the full per-provider walkthrough.
+
 ### Google Cloud Storage (database backups only)
 
 1. Create the bucket and set `postgres.backup.gcp.bucket` (or `postgresHA.backup.gcp.bucket`).
@@ -223,6 +234,8 @@ cpln secret create-dictionary --name my-twenty-s3-keys \
 | First login | there is no seeded account — **the first person to sign up becomes the workspace admin** |
 
 ## Important Notes
+
+- **Use `storage.type: s3` for production.** In `local` mode the attachment volume binds to the server workload only, so the worker's file-maintenance jobs cannot reach uploaded files (upstream's compose shares one volume between both, which this platform does not do). Local mode is fine for evaluation and single-user use.
 
 - **Create the app-key secret before installing.** Without it the deployment sits waiting on a missing secret and looks broken.
 - **On a public endpoint, whoever reaches the URL first owns the CRM.** Sign up immediately after install, or set `publicAccess.enabled: false` until you are ready.

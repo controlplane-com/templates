@@ -43,6 +43,9 @@ secrets:
 
 # ─── Attachment storage ───────────────────────────────────────────
 storage:
+  # Use s3 for production. In local mode the volumeset binds to the SERVER only,
+  # so the worker's file-maintenance jobs cannot see attachments (upstream runs
+  # both off one shared volume, which this platform does not do).
   type: local                 # local | s3  (s3 required for twenty.replicas > 1)
   local:
     volumeset:

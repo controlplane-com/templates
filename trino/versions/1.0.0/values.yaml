@@ -73,5 +73,5 @@ publicAccess:
   enabled: false # true = Web UI + JDBC on the automatic *.cpln.app HTTPS endpoint; requires auth.enabled
 
 internalAccess: # who may reach the coordinator from inside Control Plane
-  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  type: same-gvc # options: same-gvc, same-org, workload-list ('none' breaks Trino — the coordinator calls itself over this path)
   workloads: [] # used with workload-list, e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME

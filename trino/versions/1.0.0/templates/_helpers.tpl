@@ -125,6 +125,7 @@ NIO buffers. Upstream's 80 is written for 8–64GiB nodes.
 -agentpath:/usr/lib/trino/bin/libjvmkill.so
 -XX:InitialRAMPercentage={{ int .Values.jvm.maxRAMPercentage }}
 -XX:MaxRAMPercentage={{ int .Values.jvm.maxRAMPercentage }}
+-XX:+UseG1GC
 -XX:G1HeapRegionSize=32M
 -XX:+ExplicitGCInvokesConcurrent
 -XX:+HeapDumpOnOutOfMemoryError
@@ -233,8 +234,11 @@ file.password-file=/etc/trino/password.db
 {{- if not (has .Values.internalAccess.type (list "none" "same-gvc" "same-org" "workload-list")) -}}
 {{- fail (printf "trino: internalAccess.type must be none, same-gvc, same-org, or workload-list — got '%s'" .Values.internalAccess.type) -}}
 {{- end -}}
-{{- if and (eq .Values.internalAccess.type "none") (gt (int .Values.workers.replicas) 0) -}}
-{{- fail "trino: internalAccess.type 'none' blocks worker->coordinator discovery, so every query would fail with 'insufficient active worker nodes'. Use same-gvc, same-org, or workload-list (the coordinator auto-allows its own workers), or set workers.replicas: 0 for a single-node install where 'none' is safe." -}}
+{{- if eq .Values.internalAccess.type "none" -}}
+{{- fail "trino: internalAccess.type 'none' breaks Trino even with no workers — the coordinator addresses ITSELF by service DNS, so its own task and status calls leave the pod and re-enter through this firewall, and every query fails with 403 RBAC: access denied. Use same-gvc, same-org, or workload-list (the coordinator allows itself and its workers automatically)." -}}
+{{- end -}}
+{{- if and .Values.auth.enabled (not .Values.publicAccess.enabled) -}}
+{{- fail "trino: auth.enabled requires publicAccess.enabled — Trino refuses password authentication over plain HTTP, so an internal-only cluster with auth on cannot be queried by anyone (in-GVC clients get 401 'Password not allowed for insecure authentication'). Either enable publicAccess (TLS terminates at the edge) or leave auth off and rely on the internal firewall." -}}
 {{- end -}}
 {{- if and .Values.publicAccess.enabled (not .Values.auth.enabled) -}}
 {{- fail "trino: publicAccess.enabled requires auth.enabled — an unauthenticated Trino on the public internet is an arbitrary-read primitive over every connected data source" -}}

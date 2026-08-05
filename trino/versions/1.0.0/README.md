@@ -114,7 +114,7 @@ internalAccess:
   workloads: [] # used with workload-list, e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME
 ```
 
-`internalAccess` controls who may reach the coordinator — including its own workers, which announce themselves over that same internal path. `workload-list` is safe because the coordinator automatically allows its worker workload in addition to whatever you list. **`none` is rejected whenever `workers.replicas > 0`**, since it would cut worker discovery and every query would fail with *insufficient active worker nodes*; it is available only for a single-node install (`workers.replicas: 0`). The worker tier keeps its own least-privilege firewall (coordinator and sibling workers only).
+`internalAccess` controls who may reach the coordinator — including its own workers, which announce themselves over that same internal path. `workload-list` is safe because the coordinator automatically allows its worker workload in addition to whatever you list. **`none` is rejected outright**: the coordinator addresses itself by service DNS, so even a single-node install routes its own task and status calls through this firewall and every query fails with *403 RBAC: access denied*. The worker tier keeps its own least-privilege firewall (coordinator and sibling workers only).
 
 ## Connecting data sources
 
@@ -199,6 +199,8 @@ Object-storage catalogs (Hive, Iceberg, Delta Lake) are not offered in this vers
 | Built-in catalogs | `tpch`, `tpcds`, `memory`, `jmx`, `system` | none |
 
 ## Important Notes
+
+- **Authentication requires public access.** Trino refuses password authentication over plain HTTP, so `auth.enabled` without `publicAccess.enabled` leaves the cluster unqueryable by anyone — in-GVC clients get `401 Password not allowed for insecure authentication`. Use auth with the public endpoint (TLS terminates at the edge), or leave auth off and let the internal firewall be the boundary.
 
 - The default install has no authentication; it is reachable only inside the GVC. Turning on `publicAccess` requires `auth.enabled` and the render fails otherwise.
 - With `auth.enabled`, the Trino CLI and JDBC driver refuse to send credentials over plain HTTP, so in-GVC clients must switch to the public HTTPS endpoint.

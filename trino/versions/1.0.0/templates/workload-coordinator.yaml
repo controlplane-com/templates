@@ -91,6 +91,10 @@ spec:
         {{- range .Values.internalAccess.workloads }}
         - {{ . }}
         {{- end }}
+        # The coordinator addresses itself by service DNS (node.internal-address),
+        # so its own task/status calls leave the pod and re-enter here. Without
+        # this self-entry, system.* and jmx.* queries fail 403 under workload-list.
+        - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "trino.name" . }}
         {{- if gt (int .Values.workers.replicas) 0 }}
         - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "trino.worker.name" . }}
         {{- end }}

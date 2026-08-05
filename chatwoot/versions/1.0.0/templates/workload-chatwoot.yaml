@@ -28,14 +28,16 @@ spec:
           protocol: http
       readinessProbe:
         # /api reports Postgres and Redis status, so a broken dependency
-        # de-registers the replica. The budget (10 + 20×15 = 310s) covers the
-        # first-install wait for the worker's migrations.
+        # de-registers the replica. Budget 10 + 20×25 = 510s: the HA database
+        # (the default) needs ~145s to converge before the worker can even
+        # start migrations, so a 310s budget was sized for the single-instance
+        # path and could expire on a first HA install.
         httpGet:
           path: /api
           port: 3000
           scheme: HTTP
         initialDelaySeconds: 10
-        periodSeconds: 15
+        periodSeconds: 25
         failureThreshold: 20
         successThreshold: 1
         timeoutSeconds: 5

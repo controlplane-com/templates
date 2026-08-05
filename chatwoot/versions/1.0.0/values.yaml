@@ -105,6 +105,11 @@ postgresHA:
     password: change-me-chatwoot-pg   # template-managed cred for the bundled DB — change before install
     database: chatwoot
   replicas: 3
+  resources:                  # per Patroni replica; the default install runs 3 of these
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 2Gi
   volumeset:
     capacity: 10              # GiB per replica (minimum 10)
   backup:                     # optional database backups — see README storage setup

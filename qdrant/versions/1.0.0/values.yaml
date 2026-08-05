@@ -34,7 +34,7 @@ auth:
 # ─── Service ──────────────────────────────────────────────────────
 service:
   dashboard: true # serve the built-in web UI at /dashboard (its static shell is unauthenticated)
-  maxRequestSizeMb: 32 # max POST body in MB — raise for large batch upserts
+  maxRequestSizeMb: 32 # max POST body in MB; an over-size upsert is rejected with HTTP 400 and writes nothing
   telemetryDisabled: true # true = send no anonymous usage reports upstream
 
 # ─── Access ───────────────────────────────────────────────────────

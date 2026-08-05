@@ -74,7 +74,7 @@ Empty `secretName` leaves the API unauthenticated and is allowed **only** while 
 ```yaml
 service:
   dashboard: true          # serve the built-in web UI at /dashboard (its static shell is unauthenticated)
-  maxRequestSizeMb: 32     # max POST body in MB — raise for large batch upserts
+  maxRequestSizeMb: 32     # max POST body in MB; an over-size upsert is rejected with HTTP 400 and writes nothing
   telemetryDisabled: true  # true = send no anonymous usage reports upstream
 ```
 
@@ -152,7 +152,7 @@ httpx.post(f"http://my-litellm.{GVC}.cpln.local:4000/v1/chat/completions", json=
 - **Public access requires an API key** — installing with `publicAccess.enabled: true` and an empty `auth.secretName` fails at render time. Create the dictionary secret first.
 - **In-GVC clients must disable TLS** (`https=False` in `qdrant-client`, plain `http://` URLs) — the client silently switches to TLS when an `api_key` is supplied and then hangs against the internal endpoint (the symptom is a gRPC `DEADLINE_EXCEEDED`).
 - **The `/dashboard` shell loads without an API key** (its API calls do not). Set `service.dashboard: false` when Qdrant is publicly exposed.
-- **Single replica by design** — data survives restarts and upgrades on the volumeset, but a rolling restart is a brief availability gap. Distributed/raft mode is not in this version.
+- **Single replica by design** — data survives restarts and upgrades on the volumeset, but any upgrade or reschedule is a **real outage of roughly 60–90 seconds** (measured: 79 s / 313 consecutive failed requests), not a blip. Plan writes around it. Distributed/raft mode is not in this version.
 - **Uninstall deletes the volumeset** (a final snapshot is kept for `backup.retention`); your own API-key secret is left untouched.
 - **Memory is the sizing constraint** — vectors and HNSW graphs stay in RAM unless a collection is created with `on_disk` vectors/index. Raise `resources.maxMemory` before loading large collections.
 

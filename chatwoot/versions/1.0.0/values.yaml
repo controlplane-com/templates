@@ -185,7 +185,7 @@ postgres:
 # install-onboarding flag. Chatwoot is Sentinel-aware, so failover is transparent.
 redis:
   redis:
-    image: redis:7.4
+    image: redis:8
     replicas: 2
     # Auth toggle. Default off = the redis template's proven authless default
     # (the same-GVC firewall is the boundary). On = Chatwoot authenticates the
@@ -197,7 +197,7 @@ redis:
     persistence:
       enabled: true
   sentinel:
-    image: redis:7.4
+    image: redis:8
     replicas: 3
     persistence:
       enabled: true

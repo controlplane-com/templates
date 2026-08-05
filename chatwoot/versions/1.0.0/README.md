@@ -152,7 +152,7 @@ postgres:                     # single-instance alternative (dev/lightweight)
 ```yaml
 redis:
   redis:
-    image: redis:7.4
+    image: redis:8
     replicas: 2
     auth:
       password:
@@ -161,7 +161,7 @@ redis:
     persistence:
       enabled: true
   sentinel:
-    image: redis:7.4
+    image: redis:8
     replicas: 3
     persistence:
       enabled: true

@@ -25,5 +25,5 @@ dependencies:
     repository: "oci://ghcr.io/controlplane-com/templates"
     condition: postgres.enabled
   - name: redis
-    version: 3.4.3
+    version: 3.5.0
     repository: "oci://ghcr.io/controlplane-com/templates"

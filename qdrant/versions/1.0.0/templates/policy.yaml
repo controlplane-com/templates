@@ -1,0 +1,14 @@
+{{- if .Values.auth.secretName }}
+kind: policy
+name: {{ include "qdrant.policy.name" . }}
+description: Qdrant API-key secret access
+tags: {{- include "qdrant.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "qdrant.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ .Values.auth.secretName }}
+{{- end }}

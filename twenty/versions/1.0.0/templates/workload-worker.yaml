@@ -1,0 +1,71 @@
+---
+kind: workload
+name: {{ include "twenty.worker.name" . }}
+description: Twenty CRM background worker — BullMQ job processing and cron jobs
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "twenty.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "twenty.identity.name" . }}
+  containers:
+    - name: twenty-worker
+      image: {{ .Values.twenty.image }}
+      # args only — the image ENTRYPOINT (/app/entrypoint.sh) must still run so
+      # the DISABLE_* flags below are honoured; it execs these args at the end.
+      args:
+        - yarn
+        - worker:prod
+      inheritEnv: false
+      minCpu: {{ .Values.worker.resources.minCpu | quote }}
+      cpu: {{ .Values.worker.resources.maxCpu | quote }}
+      minMemory: {{ .Values.worker.resources.minMemory | quote }}
+      memory: {{ .Values.worker.resources.maxMemory | quote }}
+      env:
+        {{- include "twenty.env.common" . | trim | nindent 8 }}
+        {{- if eq (include "twenty.migrationOwner" .) "worker" }}
+        # ── twenty.replicas > 1: this single-replica worker is the sole owner of
+        #    boot migrations and cron registration; no server replica runs them.
+        #    On a FRESH multi-replica install the servers may serve errors until
+        #    this container finishes migrating. ──
+        - name: DISABLE_DB_MIGRATIONS
+          value: "false"
+        - name: DISABLE_CRON_JOBS_REGISTRATION
+          value: "false"
+        {{- else }}
+        # ── twenty.replicas == 1: the server owns migrations and cron
+        #    registration (upstream's compose shape); the worker skips both.
+        #    `database:migrate:prod` takes no lock — never run it in two places. ──
+        - name: DISABLE_DB_MIGRATIONS
+          value: "true"
+        - name: DISABLE_CRON_JOBS_REGISTRATION
+          value: "true"
+        {{- end }}
+      # No probes: the worker exposes no port; its failure mode is process exit,
+      # which restarts the container.
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      # Fixed single replica: it registers repeatable cron jobs, and owns boot
+      # migrations whenever twenty.replicas > 1.
+      minScale: 1
+      maxScale: 1
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 300
+  firewallConfig:
+    external:
+      # Outbound only — webhooks, SMTP and AI providers configured in the app.
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      inboundAllowCIDR: []
+    internal:
+      inboundAllowType: none
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  supportDynamicTags: false

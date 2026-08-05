@@ -1,0 +1,179 @@
+# ─── Twenty server (UI + REST + GraphQL) ──────────────────────────
+twenty:
+  # One image serves the React front end and the NestJS API on :3000.
+  # Docker tag keeps the leading "v"; Chart appVersion drops it.
+  image: twentycrm/twenty:v2.26.1
+  # Stateless web tier. >1 REQUIRES storage.type: s3 and moves boot migrations
+  # to the worker (they must run in exactly one container).
+  replicas: 1
+  # Public base URL. MUST match the URL browsers use or auth/CORS fail with
+  # opaque errors. Empty = the platform canonical endpoint. Set WITH https://
+  # only for a custom domain.
+  serverUrl: ""
+  # Postgres connections per pool, per process. Raise replicas and this together
+  # with care — the database has a finite connection limit.
+  dbPoolMaxConnections: 10
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 2Gi   # headroom for first-boot migrations and upgrade backfills
+
+# ─── Background worker ────────────────────────────────────────────
+# Same image, `yarn worker:prod`. Always exactly one replica: it owns cron
+# registration, and boot migrations when twenty.replicas > 1.
+worker:
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 2Gi
+
+# ─── Prerequisite secret (USER-CREATED — MUST EXIST BEFORE INSTALL) ─
+# Opaque secret (encoding: plain) whose payload is a random string
+# (openssl rand -base64 32). Supplied to Twenty as both APP_SECRET and
+# ENCRYPTION_KEY. Create it FIRST — the deployment WEDGES on a missing secret
+# and looks broken. Treat as write-once: changing it without fallbackName makes
+# stored OAuth/TOTP secrets undecryptable and logs everyone out.
+secrets:
+  name: my-twenty-app-secret
+  # Optional: opaque secret holding the PREVIOUS key, only during a rotation
+  # (e.g. my-twenty-app-secret-old). Empty = no fallback.
+  fallbackName: ""
+
+# ─── Attachment storage ───────────────────────────────────────────
+storage:
+  type: local                 # local | s3  (s3 required for twenty.replicas > 1)
+  local:
+    volumeset:
+      capacity: 10            # GiB (minimum 10); mounted at /app/packages/twenty-server/.local-storage
+  s3:
+    bucket: my-twenty-bucket
+    region: us-east-1
+    endpoint: ""              # set for S3-compatible servers (e.g. http://my-minio:9000)
+    # Keyless auth (AWS, preferred): Control Plane cloud account + your
+    # pre-created IAM policy scoped to the bucket (full JSON in the README).
+    # Used only when auth.secretName is empty.
+    cloudAccountName: my-s3-cloud-account
+    policyName: my-twenty-s3-policy
+    auth:
+      # Static-key dictionary secret (STORAGE_S3_ACCESS_KEY_ID +
+      # STORAGE_S3_SECRET_ACCESS_KEY) — ONLY for S3-compatible servers
+      # (requires endpoint set). AWS S3 is always keyless via the cloud account.
+      secretName: ""
+
+# ─── Access ───────────────────────────────────────────────────────
+publicAccess:
+  enabled: true               # HTTPS UI + API on the auto *.cpln.app endpoint; false = internal-only
+internalAccess:
+  type: same-gvc              # none | same-gvc | same-org | workload-list
+  workloads: []               # used only with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Redis (bundled single node) — job queues + cache ─────────────
+# REQUIRED — Twenty will not boot without REDIS_URL. Twenty speaks only a plain
+# redis:// URL, so the Sentinel-based redis template is not used. noeviction is
+# mandatory: an evicted key silently drops queued jobs.
+redis:
+  image: redis:8.10.0
+  auth:
+    password: change-me-twenty-redis   # template-managed; wired into REDIS_URL — letters/digits/-/_ only
+  resources:
+    minCpu: 100m
+    maxCpu: 400m
+    minMemory: 256Mi
+    maxMemory: 512Mi
+  volumeset:
+    capacity: 10              # GiB (minimum 10); AOF at /data
+
+# ─── Database: Single-instance PostgreSQL 18 (default) ────────────
+# One Postgres workload — the light default. Disable this and enable postgresHA
+# for a redundant database tier.
+postgres:
+  enabled: true
+  image: postgres:18          # PostgreSQL 18 (the HA path below runs 17 — the majors differ)
+  config:
+    username: twenty
+    password: change-me-twenty-db     # change before install; letters/digits/-/_ only (it is embedded in a URL)
+    database: twenty
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 1Gi
+  volumeset:
+    capacity: 10              # GiB (minimum 10)
+
+  backup:                     # optional database backups — see README storage setup
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0   # tag must match the postgres major above
+    schedule: "0 2 * * *"
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    provider: aws             # options: aws, gcp, minio
+    aws:
+      bucket: my-twenty-pg-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: my-twenty-pg-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: my-twenty-pg-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: my-twenty-pg-backup-bucket
+      accessKey: my-minio-username
+      secretKey: my-minio-password
+      prefix: postgres/backups
+
+# ─── Database: Highly Available PostgreSQL 17 (opt-in) ────────────
+# Deploys the postgres-highly-available template: 3 Patroni replicas, 3 etcd
+# replicas, and an HAProxy leader endpoint Twenty connects to. Enable this and
+# set postgres.enabled: false.
+postgresHA:
+  enabled: false
+  postgres:
+    username: twenty
+    password: change-me-twenty-db     # change before install; letters/digits/-/_ only (it is embedded in a URL)
+    database: twenty
+  replicas: 3
+  resources:
+    minCpu: 500m
+    maxCpu: 1000m
+    minMemory: 1Gi
+    maxMemory: 2Gi
+  volumeset:
+    capacity: 10              # GiB per replica (minimum 10)
+
+  backup:                     # optional database backups — see README storage setup
+    enabled: false
+    mode: logical             # logical or wal-g
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    logical:
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      schedule: "0 2 * * *"
+    walg:
+      intervalSeconds: 21600
+    provider: aws             # options: aws, gcp, minio
+    aws:
+      bucket: my-twenty-pg-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: my-twenty-pg-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: my-twenty-pg-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: my-twenty-pg-backup-bucket
+      accessKey: my-minio-username
+      secretKey: my-minio-password
+      prefix: postgres/backups

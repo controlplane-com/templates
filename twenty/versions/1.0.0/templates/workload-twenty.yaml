@@ -1,0 +1,116 @@
+---
+kind: workload
+name: {{ include "twenty.name" . }}
+description: Twenty CRM server — React UI + REST + GraphQL, HTTP :3000
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "twenty.tags" . | nindent 4 }}
+spec:
+  # stateful in BOTH storage modes: it mounts a volumeset in local mode, and
+  # workload type is immutable — a type that varied with storage.type would make
+  # switching modes on an existing release impossible.
+  type: stateful
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "twenty.identity.name" . }}
+  containers:
+    - name: twenty
+      image: {{ .Values.twenty.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.twenty.resources.minCpu | quote }}
+      cpu: {{ .Values.twenty.resources.maxCpu | quote }}
+      minMemory: {{ .Values.twenty.resources.minMemory | quote }}
+      memory: {{ .Values.twenty.resources.maxMemory | quote }}
+      env:
+        {{- include "twenty.env.common" . | trim | nindent 8 }}
+        {{- if eq (include "twenty.migrationOwner" .) "server" }}
+        # ── Boot migrations + cron registration run HERE (twenty.replicas == 1).
+        #    `node dist/main` does not start until they finish, so a ready probe
+        #    means the schema is ready. ──
+        - name: DISABLE_DB_MIGRATIONS
+          value: "false"
+        - name: DISABLE_CRON_JOBS_REGISTRATION
+          value: "false"
+        {{- else }}
+        # ── twenty.replicas > 1: the single-replica worker owns migrations and
+        #    cron registration. `database:migrate:prod` takes no lock, so no
+        #    server replica may ever run it. ──
+        - name: DISABLE_DB_MIGRATIONS
+          value: "true"
+        - name: DISABLE_CRON_JOBS_REGISTRATION
+          value: "true"
+        {{- end }}
+      ports:
+        - number: 3000
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /healthz
+          port: 3000
+          scheme: HTTP
+        initialDelaySeconds: 30
+        periodSeconds: 15
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /healthz
+          port: 3000
+          scheme: HTTP
+        # long initial delay: at the default shape the server does not listen
+        # until boot migrations finish, and a liveness kill mid-migration would
+        # restart the whole cycle
+        initialDelaySeconds: 300
+        periodSeconds: 30
+        failureThreshold: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+      {{- if eq .Values.storage.type "local" }}
+      volumes:
+        - path: /app/packages/twenty-server/.local-storage
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "twenty.storage.volumeset.name" . }}
+      {{- end }}
+  securityOptions:
+    # the image runs as uid/gid 1000; without this the volumeset mounts
+    # root-owned and every attachment upload fails with EACCES
+    filesystemGroupId: 1000
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: {{ .Values.twenty.replicas }}
+      maxScale: {{ .Values.twenty.replicas }}
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 300   # headroom for large attachment uploads and imports
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  rolloutOptions:
+    # never drop below the requested replica count during an upgrade
+    maxSurgeReplicas: "0%"
+    maxUnavailableReplicas: "1"
+    minReadySeconds: 10
+    scalingPolicy: OrderedReady
+  supportDynamicTags: false

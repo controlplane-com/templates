@@ -84,7 +84,7 @@ internalAccess:
 | S3 API, in-GVC (FQDN) | `http://<release>-seaweedfs.<gvc>.cpln.local:8333` | Same host, fully qualified. |
 | S3 API, host:port form | `<release>-seaweedfs.<gvc>.cpln.local:8333` | For clients that take a bare host:port (Thanos, Mimir); pair with `insecure: true`. |
 | S3 API, public | `https://<canonical>.cpln.app` | Only when `publicAccess.enabled`; port 443, no port suffix. Find it under `status.canonicalEndpoint` (`cpln workload get <release>-seaweedfs -o yaml`). |
-| Admin UI | `http://<release>-seaweedfs.<gvc>.cpln.local:23646` | In-GVC only; log in with `adminUI.username` / `adminUI.password`. |
+| Admin UI | `http://<release>-seaweedfs.<gvc>.cpln.local:23646` | In-GVC only; log in with `adminUI.username` / `adminUI.password`. With `adminUI.enabled: false` the port, credentials and secret are all removed so nothing is reachable — the upstream binary still starts the component in-process, it simply has no route and no declared port. |
 | S3 credentials | your prerequisite secret | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`. |
 
 ## Using SeaweedFS as the S3 backend for other templates
@@ -119,7 +119,7 @@ aws --endpoint-url http://<release>-seaweedfs:8333 s3 cp ./file s3://<bucket>/fi
 - **Create the S3 credentials secret before installing** — the deployment waits indefinitely on a missing secret, and SeaweedFS would serve S3 unauthenticated if the credentials were simply omitted.
 - **Change `adminUI.password` before installing** — the shipped default is an illustrative placeholder.
 - **Rotating the S3 credentials secret and redeploying actually rotates the keys** — the S3 identity is rebuilt from the environment on every boot, not stored on disk.
-- **Single replica by design** — `weed mini` runs one master, one filer and one volume server in a single process, so raising the replica count would create separate, divergent object stores. A redeploy or upgrade is therefore a brief S3 outage. Multi-node clustering is a planned follow-up.
+- **Single replica by design** — `weed mini` runs one master, one filer and one volume server in a single process, so raising the replica count would create separate, divergent object stores. A redeploy or upgrade is therefore a full S3 outage: measured at **337 failed requests over an 80.8 s gap** (≈5 req/s polling), with the store reachable again about 128 s after the trigger. Schedule upgrades accordingly, and expect the same window when the platform reschedules the replica. Multi-node clustering is a planned follow-up.
 - **Data lives on the volumeset** and survives redeploys and upgrades under the same release name. `helm uninstall` deletes the volumeset and every stored object.
 - **Volume file size is derived from disk capacity at startup**, so growing the volumeset takes effect on the next restart. This is harmless — SeaweedFS simply creates more volume files.
 - **Only the S3 API is publicly routable.** The admin UI is the workload's second port, so `publicAccess` exposes port 8333 only; reach the admin UI from inside the GVC.

@@ -235,6 +235,8 @@ The backing database template's own README carries the full per-provider walkthr
 
 ## Important Notes
 
+- **First boot takes a few minutes, and logs some alarming-looking errors on the way.** A single-instance install reaches ready in roughly 4 minutes; the highly-available path takes closer to 9, because the server retries against the HAProxy endpoint until Patroni has elected a leader. During that window you will see `relation "core.appToken" does not exist` and similar for about a minute — that is the migration race resolving itself, not a failure. Give it the full window before intervening.
+
 - **`local` storage uses a shared (read-write-many) volume mounted by both the server and the worker**, so attachments are visible to background jobs. Shared volumes support expansion only — **no snapshots** — and exist in a single location, so `storage.type: s3` remains the durable choice for production and is required for `twenty.replicas > 1`.
 
 - **Create the app-key secret before installing.** Without it the deployment sits waiting on a missing secret and looks broken.

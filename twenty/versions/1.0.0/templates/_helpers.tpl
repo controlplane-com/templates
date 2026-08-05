@@ -140,10 +140,11 @@ DB-backed and editable in Settings → Admin Panel → Configuration Variables.
 - name: FALLBACK_ENCRYPTION_KEY
   value: cpln://secret/{{ .Values.secrets.fallbackName }}.payload
 {{- end }}
-# ── Public base URL — empty serverUrl derives from the platform canonical
-#    endpoint, which is already a full https:// URL (never prepend a scheme) ──
+# ── Public base URL. CPLN_GLOBAL_ENDPOINT is per-workload, so on the WORKER it
+#    would resolve to the worker's own (unreachable) endpoint; both tiers must
+#    advertise the SERVER's URL, built from the GVC alias. ──
 - name: SERVER_URL
-  value: {{ if .Values.twenty.serverUrl }}{{ .Values.twenty.serverUrl | quote }}{{ else }}"$(CPLN_GLOBAL_ENDPOINT)"{{ end }}
+  value: {{ if .Values.twenty.serverUrl }}{{ .Values.twenty.serverUrl | quote }}{{ else }}"https://{{ include "twenty.name" . }}-$(CPLN_GVC_ALIAS).cpln.app"{{ end }}
 {{- if .Values.postgresHA.enabled }}
 # ── Database (postgres-highly-available subchart, HAProxy leader endpoint) ──
 {{- else }}

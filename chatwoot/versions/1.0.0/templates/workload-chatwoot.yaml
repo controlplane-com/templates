@@ -23,6 +23,12 @@ spec:
       memory: {{ .Values.chatwoot.resources.maxMemory | quote }}
       env:
         {{- include "chatwoot.env.common" . | trim | nindent 8 }}
+        {{- if eq (include "chatwoot.frontendUrl.derived" .) "true" }}
+        # This tier IS the public one, so its own canonical endpoint is correct.
+        # Already a full URL (https://…) — never prepend a scheme.
+        - name: FRONTEND_URL
+          value: "$(CPLN_GLOBAL_ENDPOINT)"
+        {{- end }}
       ports:
         - number: 3000
           protocol: http

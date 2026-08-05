@@ -1,6 +1,6 @@
 apiVersion: v2
 name: chatwoot
-description: Chatwoot open-source customer engagement platform — live-chat widget, shared email inbox, and omni-channel agent desk with a Sidekiq worker, backed by a highly available pgvector-capable PostgreSQL and Redis
+description: Chatwoot open-source customer engagement platform — live-chat widget, shared email inbox, and omni-channel agent desk with a Sidekiq worker, backed by a highly available pgvector-capable PostgreSQL and a bundled Redis
 type: application
 version: 1.0.0
 appVersion: "4.16.2-ce"
@@ -24,6 +24,3 @@ dependencies:
     version: 3.3.0
     repository: "oci://ghcr.io/controlplane-com/templates"
     condition: postgres.enabled
-  - name: redis
-    version: 3.5.0
-    repository: "oci://ghcr.io/controlplane-com/templates"

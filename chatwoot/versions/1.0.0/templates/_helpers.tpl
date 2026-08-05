@@ -15,10 +15,50 @@ Chatwoot Sidekiq Worker Workload Name
 {{- end }}
 
 {{/*
+Bundled Redis workload name
+*/}}
+{{- define "chatwoot.redis.name" -}}
+{{- printf "%s-chatwoot-redis" .Release.Name }}
+{{- end }}
+
+{{/*
+Whether FRONTEND_URL must be derived from the platform canonical endpoint at
+runtime (no explicit chatwoot.frontendUrl, public access on). The canonical
+hostname embeds the ORG alias, which is not injected as its own variable — it
+only exists inside CPLN_GLOBAL_ENDPOINT — so it cannot be built at render time.
+*/}}
+{{- define "chatwoot.frontendUrl.derived" -}}
+{{- if and (not .Values.chatwoot.frontendUrl) .Values.publicAccess.enabled -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
+Bundled Redis hostname, on port 6379.
+*/}}
+{{- define "chatwoot.redis.host" -}}
+{{- printf "%s.%s.cpln.local" (include "chatwoot.redis.name" .) .Values.global.cpln.gvc }}
+{{- end }}
+
+{{/*
 Local attachment storage volumeset name (/app/storage)
 */}}
 {{- define "chatwoot.storage.volumeset.name" -}}
 {{- printf "%s-chatwoot-storage" .Release.Name }}
+{{- end }}
+
+{{/*
+Redis AOF persistence volumeset name (/data)
+*/}}
+{{- define "chatwoot.redis.volumeset.name" -}}
+{{- printf "%s-chatwoot-redis-vs" .Release.Name }}
+{{- end }}
+
+{{/*
+Template-managed credentials secret (bundled Redis password)
+*/}}
+{{- define "chatwoot.secret.creds.name" -}}
+{{- printf "%s-chatwoot-creds" .Release.Name }}
 {{- end }}
 
 {{/*
@@ -79,31 +119,6 @@ Credentials secret of the active database, created by the dependency chart
 {{- end }}
 {{- end }}
 
-{{/*
-Sentinel address (host:port). Must match the redis chart's redis.sentinel.name
-helper ({release}-sentinel); its sentinels monitor master name `mymaster`.
-*/}}
-{{- define "chatwoot.redis.sentinelHosts" -}}
-{{- printf "%s-sentinel.%s.cpln.local:26379" .Release.Name .Values.global.cpln.gvc }}
-{{- end }}
-
-{{/*
-Redis auth password secret (created by the redis subchart when data-node auth is
-on; key: password). Must match the redis chart's redis.secretPassword.name.
-*/}}
-{{- define "chatwoot.redis.secretPassword.name" -}}
-{{- printf "%s-redis-auth-password" .Release.Name }}
-{{- end }}
-
-{{/*
-Whether Redis data-node auth is enabled in the redis subchart values.
-*/}}
-{{- define "chatwoot.redis.authEnabled" -}}
-{{- if dig "auth" "password" "enabled" false .Values.redis.redis -}}
-true
-{{- end -}}
-{{- end }}
-
 
 {{/* Shared Environment */}}
 
@@ -149,36 +164,27 @@ configured entirely through env vars — there is no config file to mount.
   value: cpln://secret/{{ include "chatwoot.postgres.secret.name" . }}.username
 - name: POSTGRES_PASSWORD
   value: cpln://secret/{{ include "chatwoot.postgres.secret.name" . }}.password
-# ── Redis via Sentinel (redis subchart) — Sidekiq, ActionCable, cache ──
-# lib/redis/config.rb rewrites REDIS_URL to redis://<master-name> when sentinels
-# are set; setting it explicitly makes a sentinel misconfiguration fail loudly
-# instead of silently falling back to the redis://redis:6379 default.
-- name: REDIS_URL
-  value: redis://mymaster
-- name: REDIS_SENTINELS
-  value: {{ include "chatwoot.redis.sentinelHosts" . }}
-- name: REDIS_SENTINEL_MASTER_NAME
-  value: mymaster
-{{- if eq (include "chatwoot.redis.authEnabled" .) "true" }}
+# ── Redis (bundled single node) — Sidekiq, ActionCable, cache, onboarding flag ──
+# A SINGLE node, deliberately: config/cable.yml builds its own connection from
+# REDIS_URL/REDIS_PASSWORD and has no Sentinel support, so a Sentinel master name
+# is taken literally and every ActionCable broadcast dies on DNS. A plain,
+# resolvable URL is also the only way pub/sub stays on one authoritative node —
+# Redis does not propagate published messages from a replica.
 - name: REDIS_PASSWORD
-  value: cpln://secret/{{ include "chatwoot.redis.secretPassword.name" . }}.password
-# the subchart's sentinels are authless; without this empty override
-# lib/redis/config.rb would reuse REDIS_PASSWORD for them and discovery fails
-- name: REDIS_SENTINEL_PASSWORD
-  value: ""
-{{- end }}
+  value: cpln://secret/{{ include "chatwoot.secret.creds.name" . }}.redisPassword
+- name: REDIS_URL
+  value: redis://:$(REDIS_PASSWORD)@{{ include "chatwoot.redis.host" . }}:6379
 # ── Public base URL (widget snippet, email links, callbacks) ──
+# Only the two tier-independent cases are set here. The derived-public case is
+# set per tier: CPLN_GLOBAL_ENDPOINT is per-workload, and the worker's own
+# endpoint is not publicly reachable — see chatwoot.frontendUrl.derived.
+{{- if .Values.chatwoot.frontendUrl }}
 - name: FRONTEND_URL
-  {{- if .Values.chatwoot.frontendUrl }}
   value: {{ .Values.chatwoot.frontendUrl | quote }}
-  {{- else if .Values.publicAccess.enabled }}
-  # CPLN_GLOBAL_ENDPOINT is already a full URL (https://…) — never prepend a scheme
-  value: "$(CPLN_GLOBAL_ENDPOINT)"
-  {{- else }}
+{{- else if not .Values.publicAccess.enabled }}
+- name: FRONTEND_URL
   value: http://{{ include "chatwoot.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:3000
-  {{- end }}
-- name: ENABLE_ACCOUNT_SIGNUP
-  value: {{ ternary "true" "false" .Values.chatwoot.signupEnabled | quote }}
+{{- end }}
 # ── Attachment storage (ActiveStorage) ──
 {{- if eq .Values.storage.type "local" }}
 - name: ACTIVE_STORAGE_SERVICE
@@ -302,13 +308,11 @@ configured entirely through env vars — there is no config file to mount.
 {{- if and .Values.postgres.enabled (hasPrefix "postgres:" .Values.postgres.image) -}}
 {{- fail (printf "chatwoot: postgres.image '%s' is the stock PostgreSQL image, which does not ship pgvector — Chatwoot's schema load runs CREATE EXTENSION \"vector\" and would fail. Use a pgvector-carrying image (default: pgvector/pgvector:pg18) or switch to postgresHA.enabled" .Values.postgres.image) -}}
 {{- end -}}
-{{- if eq (include "chatwoot.redis.authEnabled" .) "true" -}}
-{{- if not (dig "auth" "password" "value" "" .Values.redis.redis) -}}
-{{- fail "chatwoot: redis.redis.auth.password.value is required when redis.redis.auth.password.enabled is true" -}}
+{{- if not .Values.redis.auth.password -}}
+{{- fail "chatwoot: redis.auth.password is required — it secures the bundled Redis and is embedded in REDIS_URL" -}}
 {{- end -}}
-{{- if or (dig "auth" "password" "enabled" false .Values.redis.sentinel) (dig "auth" "fromSecret" "enabled" false .Values.redis.sentinel) -}}
-{{- fail "chatwoot: redis.sentinel.auth must stay disabled — Chatwoot reuses REDIS_PASSWORD for sentinel AUTH unless the sentinels are authless, and this template pins REDIS_SENTINEL_PASSWORD to empty" -}}
-{{- end -}}
+{{- if not (regexMatch "^[A-Za-z0-9_-]+$" .Values.redis.auth.password) -}}
+{{- fail "chatwoot: redis.auth.password must contain only letters, digits, '-' and '_' — it is embedded in REDIS_URL and other characters break the connection URL" -}}
 {{- end -}}
 {{- end }}
 

@@ -10,9 +10,6 @@ chatwoot:
   # Empty = derive from the platform canonical endpoint. Set WITH https:// only
   # when you front the workload with a custom domain.
   frontendUrl: ""
-  # Open self-serve signup at /app/auth/signup. The first admin is created by the
-  # one-time onboarding wizard regardless of this setting.
-  signupEnabled: false
   resources:
     minCpu: 250m
     maxCpu: 1000m
@@ -180,24 +177,19 @@ postgres:
       secretKey: my-minio-password
       prefix: postgres/backups
 
-# ─── Redis + Sentinel (subchart: redis) ───────────────────────────
+# ─── Redis (bundled, single node) ─────────────────────────────────
 # REQUIRED — Sidekiq queues, ActionCable pub/sub, cache, and the one-time
-# install-onboarding flag. Chatwoot is Sentinel-aware, so failover is transparent.
+# install-onboarding flag. One node by design: Chatwoot's ActionCable adapter
+# has no Sentinel support, and Redis does not propagate pub/sub between
+# replicas, so a multi-node topology silently drops live updates.
 redis:
-  redis:
-    image: redis:8
-    replicas: 2
-    # Auth toggle. Default off = the redis template's proven authless default
-    # (the same-GVC firewall is the boundary). On = Chatwoot authenticates the
-    # data nodes via REDIS_PASSWORD; the sentinels stay authless.
-    auth:
-      password:
-        enabled: false
-        value: change-me-chatwoot-redis
-    persistence:
-      enabled: true
-  sentinel:
-    image: redis:8
-    replicas: 3
-    persistence:
-      enabled: true
+  image: redis:8
+  auth:
+    password: change-me-chatwoot-redis   # template-managed; wired into REDIS_URL — letters/digits/-/_ only
+  resources:
+    minCpu: 100m
+    maxCpu: 400m
+    minMemory: 256Mi
+    maxMemory: 512Mi
+  volumeset:
+    capacity: 10              # GiB (minimum 10); AOF at /data

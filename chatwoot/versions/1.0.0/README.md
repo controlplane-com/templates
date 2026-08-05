@@ -1,15 +1,17 @@
 # Chatwoot
 
-Chatwoot is an open-source customer engagement platform — a live-chat widget, shared email inbox, and omni-channel agent desk. This template deploys the **Community Edition** (MIT core) as a Rails web tier plus a Sidekiq worker, backed by a highly available pgvector-capable PostgreSQL and a Redis/Sentinel cluster, with local or object-storage attachments.
+Chatwoot is an open-source customer engagement platform — a live-chat widget, shared email inbox, and omni-channel agent desk. This template deploys the **Community Edition** (MIT core) as a Rails web tier plus a Sidekiq worker, backed by a highly available pgvector-capable PostgreSQL and a bundled Redis, with local or object-storage attachments.
 
 ## Architecture
 
 - **Chatwoot web** — a `stateful` HTTP workload (`{release}-chatwoot`, port 3000) serving the dashboard, API, chat widget, and ActionCable WebSockets; scale with `chatwoot.replicas` (requires object storage).
 - **Chatwoot worker** — a `standard` workload (`{release}-chatwoot-worker`) running Sidekiq; it also runs the database migrations and the first-run onboarding bootstrap, so it stays at one replica.
 - **PostgreSQL** — highly available by default (`postgres-highly-available` subchart: 3 Patroni replicas on PostgreSQL 17.5, 3 etcd replicas, an HAProxy leader endpoint). Its image ships **pgvector**, which Chatwoot's schema requires. A single-instance `postgres` alternative is available for dev.
-- **Redis + Sentinel** (`redis` subchart) — 2 data nodes and 3 sentinels with persistence; Sidekiq queues, ActionCable pub/sub, cache, and the one-time install-onboarding flag. Chatwoot is Sentinel-aware, so failover is transparent.
+- **Redis** — a single-node `stateful` workload (`{release}-chatwoot-redis`, port 6379) with AOF persistence and password auth; Sidekiq queues, ActionCable pub/sub, cache, and the one-time install-onboarding flag.
 - **Attachment volumeset** — local attachment storage at `/app/storage`; rendered only when `storage.type: local`.
+- **Redis volumeset** — AOF persistence at `/data`.
 - **Start-script secrets** — the Chatwoot image declares no entrypoint, so the web and worker containers each mount their own start script.
+- **Credentials secret** — the template-managed Redis password.
 - **Identity + policy** — one identity shared by web and worker, granted `reveal` on exactly the secrets they mount; it also carries the AWS cloud-account link in keyless S3 mode.
 
 ## Prerequisites
@@ -43,7 +45,6 @@ chatwoot:
   image: chatwoot/chatwoot:v4.16.2-ce   # Community Edition (MIT core); pin a released tag
   replicas: 1                 # >1 requires object storage — local attachments are per-replica
   frontendUrl: ""             # empty = derive from the canonical *.cpln.app endpoint; set (with https://) for a custom domain
-  signupEnabled: false        # open self-serve signup; the first admin is created by the onboarding wizard regardless
   resources:
     minCpu: 250m
     maxCpu: 1000m
@@ -147,24 +148,20 @@ postgres:                     # single-instance alternative (dev/lightweight)
     capacity: 10              # GiB (minimum 10)
 ```
 
-### Redis + Sentinel
+### Redis
 
 ```yaml
 redis:
-  redis:
-    image: redis:8
-    replicas: 2
-    auth:
-      password:
-        enabled: false        # on = Chatwoot authenticates the data nodes; the sentinels stay authless
-        value: change-me-chatwoot-redis
-    persistence:
-      enabled: true
-  sentinel:
-    image: redis:8
-    replicas: 3
-    persistence:
-      enabled: true
+  image: redis:8
+  auth:
+    password: change-me-chatwoot-redis   # wired into REDIS_URL — letters/digits/-/_ only; change before install
+  resources:
+    minCpu: 100m
+    maxCpu: 400m
+    minMemory: 256Mi
+    maxMemory: 512Mi
+  volumeset:
+    capacity: 10              # GiB (minimum 10); AOF at /data
 ```
 
 ## Storage setup
@@ -241,6 +238,8 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`c
 - **In `local` storage mode the Sidekiq worker cannot read attachments** — the volumeset is attached to the web workload only, so attachment emails and ActiveStorage analyze/purge jobs fail. Use object storage for production.
 - **With SMTP off, no mail is delivered** — agent invites, password resets, and email-channel replies fail. Configure `smtp.*` before inviting agents.
 - **The worker stays at one replica** — it also runs migrations and the first-run bootstrap. Scale background throughput with `worker.concurrency` instead.
+- **Redis is a single node and cannot be scaled** — Chatwoot's ActionCable adapter reads `REDIS_URL` directly (no Sentinel support), and Redis does not propagate pub/sub between replicas, so a second node would silently drop live updates.
+- **Self-serve signup is toggled after install, not in values** — Chatwoot stores the flag in its database, so sign in as the super admin at `/super_admin`, open **Settings**, and set `ENABLE_ACCOUNT_SIGNUP`. It is disabled on a fresh install.
 - **Enterprise features are not included** — the `-ce` image omits SSO/SAML, audit logs, agent capacity management, custom branding, SLA policies, and Captain AI.
 - **Data survives reinstall** — conversations live in the database volumeset and local attachments in the storage volumeset; delete those volumesets to wipe all data.
 

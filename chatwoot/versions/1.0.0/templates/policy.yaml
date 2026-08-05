@@ -14,9 +14,7 @@ targetLinks:
   - //secret/{{ include "chatwoot.secret.webStart.name" . }}
   - //secret/{{ include "chatwoot.secret.workerStart.name" . }}
   - //secret/{{ .Values.secrets.name }}
-  {{- if eq (include "chatwoot.redis.authEnabled" .) "true" }}
-  - //secret/{{ include "chatwoot.redis.secretPassword.name" . }}
-  {{- end }}
+  - //secret/{{ include "chatwoot.secret.creds.name" . }}
   {{- if eq .Values.storage.type "s3-compatible" }}
   - //secret/{{ .Values.storage.s3Compatible.auth.secretName }}
   {{- end }}

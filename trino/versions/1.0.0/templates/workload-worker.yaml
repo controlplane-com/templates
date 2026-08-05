@@ -1,0 +1,77 @@
+{{- if gt (int .Values.workers.replicas) 0 }}
+kind: workload
+name: {{ include "trino.worker.name" . }}
+description: Trino worker tier — stateless query execution
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "trino.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "trino.identity.name" . }}
+  containers:
+    - name: trino
+      image: {{ .Values.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.workers.resources.minCpu | quote }}
+      cpu: {{ .Values.workers.resources.maxCpu | quote }}
+      minMemory: {{ .Values.workers.resources.minMemory | quote }}
+      memory: {{ .Values.workers.resources.maxMemory | quote }}
+      ports:
+        # tcp, not http: workers are addressed directly by the coordinator and
+        # by sibling replicas, so L4 passthrough avoids authority-based HTTP
+        # routing entirely.
+        - number: 8080
+          protocol: tcp
+      {{- $env := include "trino.env.common" . | trim }}
+      {{- if $env }}
+      env:
+        {{- $env | nindent 8 }}
+      {{- end }}
+      volumes:
+        - path: /etc/trino/config.properties
+          uri: cpln://secret/{{ include "trino.secret.workerConfig.name" . }}.payload
+        {{- include "trino.volumes.common" . | nindent 8 }}
+      readinessProbe:
+        exec:
+          command:
+            - /usr/lib/trino/bin/health-check
+        initialDelaySeconds: 20
+        periodSeconds: 10
+        failureThreshold: 18
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /v1/info
+          port: 8080
+          scheme: HTTP
+        initialDelaySeconds: 60
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: {{ int .Values.workers.replicas }}
+      maxScale: {{ int .Values.workers.replicas }}
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 300
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      inboundAllowCIDR: []
+    # Never public, and deliberately independent of internalAccess.type: only
+    # the coordinator and sibling worker replicas may reach a worker, whatever
+    # the user sets for who may query the cluster.
+    internal:
+      inboundAllowType: workload-list
+      inboundAllowWorkload:
+        - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "trino.name" . }}
+        - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "trino.worker.name" . }}
+{{- end }}

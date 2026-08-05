@@ -1,0 +1,77 @@
+image: trinodb/trino:483
+
+# ─── Coordinator ──────────────────────────────────────────────────────────────
+# One coordinator per cluster (Trino's design): plans queries, serves the Web UI,
+# the JDBC/REST endpoint, and worker discovery.
+coordinator:
+  resources:
+    minCpu: 500m
+    maxCpu: 1000m
+    minMemory: 2Gi
+    maxMemory: 4Gi # JVM heap is a percentage OF THIS — see jvm.maxRAMPercentage
+
+# ─── Workers ──────────────────────────────────────────────────────────────────
+# Stateless query-execution tier. Raise replicas for more query capacity and to
+# keep capacity through a rolling restart.
+workers:
+  replicas: 1 # 0 = single-node mode (the coordinator executes queries itself)
+  resources:
+    minCpu: 500m
+    maxCpu: 2000m
+    minMemory: 2Gi
+    maxMemory: 4Gi # JVM heap is a percentage OF THIS — see jvm.maxRAMPercentage
+
+# ─── JVM ──────────────────────────────────────────────────────────────────────
+# Heap = this percentage of each tier's maxMemory. Trino derives per-node query
+# memory (30% of heap) and headroom (30% of heap) from it, so maxMemory is the
+# only number you normally change. Allowed range 40–80.
+jvm:
+  maxRAMPercentage: 70
+
+# ─── Catalogs (data sources) ──────────────────────────────────────────────────
+# One entry per data source. `properties` is a Trino connector properties file —
+# copy it from the connector's documentation page. Never put a password here:
+# create a Control Plane secret first and reference it as ${ENV:NAME} plus a
+# `secrets` entry below. The image already ships the tpch, tpcds, memory and jmx
+# catalogs, so a default install is queryable with no catalogs configured.
+catalogs: []
+# catalogs:
+#   - name: pg # queried as pg.<schema>.<table>
+#     properties: |
+#       connector.name=postgresql
+#       connection-url=jdbc:postgresql://my-postgres.my-gvc.cpln.local:5432/postgres
+#       connection-user=postgres
+#       connection-password=${ENV:PG_PASSWORD}
+#     secrets:
+#       - env: PG_PASSWORD
+#         secretName: my-postgres-credentials # must exist BEFORE install
+#         secretKey: password # omit for an opaque secret (uses its payload)
+#   - name: mysql
+#     properties: |
+#       connector.name=mysql
+#       connection-url=jdbc:mysql://my-mysql.my-gvc.cpln.local:3306
+#       connection-user=root
+#       connection-password=${ENV:MYSQL_PASSWORD}
+#     secrets:
+#       - env: MYSQL_PASSWORD
+#         secretName: my-mysql-credentials
+#         secretKey: password
+
+# ─── Authentication ───────────────────────────────────────────────────────────
+# Off by default: Trino is then unauthenticated and reachable only inside the
+# GVC. REQUIRED before publicAccess can be enabled. Both secrets must exist
+# BEFORE install (see README Prerequisites). Note: with auth on, the Trino CLI
+# and JDBC driver refuse to send credentials over plain HTTP, so in-GVC clients
+# must use the public HTTPS endpoint.
+auth:
+  enabled: false
+  passwordFileSecretName: "" # opaque secret, payload = bcrypt password file (e.g. my-trino-passwords)
+  sharedSecretName: "" # opaque secret, payload = random string shared by all nodes (e.g. my-trino-shared-secret)
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: false # true = Web UI + JDBC on the automatic *.cpln.app HTTPS endpoint; requires auth.enabled
+
+internalAccess: # who may reach the coordinator from inside Control Plane
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # used with workload-list, e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME

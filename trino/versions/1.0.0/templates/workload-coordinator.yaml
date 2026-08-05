@@ -1,0 +1,97 @@
+{{- include "trino.validate" . }}
+kind: workload
+name: {{ include "trino.name" . }}
+description: Trino coordinator — client endpoint, Web UI, query planner and worker discovery
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "trino.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "trino.identity.name" . }}
+  containers:
+    - name: trino
+      image: {{ .Values.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.coordinator.resources.minCpu | quote }}
+      cpu: {{ .Values.coordinator.resources.maxCpu | quote }}
+      minMemory: {{ .Values.coordinator.resources.minMemory | quote }}
+      memory: {{ .Values.coordinator.resources.maxMemory | quote }}
+      ports:
+        - number: 8080
+          protocol: http
+      {{- $env := include "trino.env.common" . | trim }}
+      {{- if $env }}
+      env:
+        {{- $env | nindent 8 }}
+      {{- end }}
+      volumes:
+        - path: /etc/trino/config.properties
+          uri: cpln://secret/{{ include "trino.secret.coordinatorConfig.name" . }}.payload
+        {{- include "trino.volumes.common" . | nindent 8 }}
+        {{- if .Values.auth.enabled }}
+        - path: /etc/trino/password-authenticator.properties
+          uri: cpln://secret/{{ include "trino.secret.passwordAuthenticator.name" . }}.payload
+        - path: /etc/trino/password.db
+          uri: cpln://secret/{{ .Values.auth.passwordFileSecretName }}.payload
+        {{- end }}
+      # Readiness uses the image's own health-check: it is the only check that
+      # distinguishes "HTTP server up" from Trino's "starting": false. A plain
+      # GET /v1/info returns 200 while the server is still initializing.
+      readinessProbe:
+        exec:
+          command:
+            - /usr/lib/trino/bin/health-check
+        initialDelaySeconds: 20
+        periodSeconds: 10
+        failureThreshold: 18
+        successThreshold: 1
+        timeoutSeconds: 5
+      # Liveness is deliberately the weaker /v1/info (PUBLIC even with auth on):
+      # it stays 200 through a long initialization, so it can never restart-loop
+      # a slow boot.
+      livenessProbe:
+        httpGet:
+          path: /v1/info
+          port: 8080
+          scheme: HTTP
+        initialDelaySeconds: 60
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+    # The JVM sizes its heap from the cgroup limit at startup; letting the
+    # platform shrink the container afterwards is an OOM kill with no diagnostic.
+    capacityAI: false
+    debug: false
+    suspend: false
+    # Result pages stream over a single request and internal task calls
+    # long-poll — 30s would truncate a large fetch on a slow link.
+    timeoutSeconds: 300
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+        {{- if gt (int .Values.workers.replicas) 0 }}
+        - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "trino.worker.name" . }}
+        {{- end }}
+      {{- end }}

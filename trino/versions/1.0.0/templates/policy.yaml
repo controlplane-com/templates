@@ -1,0 +1,35 @@
+kind: policy
+name: {{ include "trino.policy.name" . }}
+description: Trino config, catalog credential and authentication secret access
+tags: {{- include "trino.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "trino.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "trino.secret.coordinatorConfig.name" . }}
+  {{- if gt (int .Values.workers.replicas) 0 }}
+  - //secret/{{ include "trino.secret.workerConfig.name" . }}
+  {{- end }}
+  - //secret/{{ include "trino.secret.jvm.name" . }}
+  - //secret/{{ include "trino.secret.node.name" . }}
+  {{- range .Values.catalogs }}
+  - //secret/{{ include "trino.secret.catalog.name" (dict "root" $ "catalog" .name) }}
+  {{- end }}
+  {{- if .Values.auth.enabled }}
+  - //secret/{{ include "trino.secret.passwordAuthenticator.name" . }}
+  - //secret/{{ .Values.auth.passwordFileSecretName }}
+  - //secret/{{ .Values.auth.sharedSecretName }}
+  {{- end }}
+  {{- /* user-supplied catalog credential secrets, deduplicated */}}
+  {{- $seen := dict }}
+  {{- range $c := .Values.catalogs }}
+  {{- range $s := $c.secrets }}
+  {{- if not (hasKey $seen $s.secretName) }}
+  - //secret/{{ $s.secretName }}
+  {{- $_ := set $seen $s.secretName true }}
+  {{- end }}
+  {{- end }}
+  {{- end }}

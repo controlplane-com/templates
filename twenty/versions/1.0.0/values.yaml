@@ -43,10 +43,11 @@ secrets:
 
 # ─── Attachment storage ───────────────────────────────────────────
 storage:
-  # Use s3 for production. In local mode the volumeset binds to the SERVER only,
-  # so the worker's file-maintenance jobs cannot see attachments (upstream runs
-  # both off one shared volume, which this platform does not do).
-  type: local                 # local | s3  (s3 required for twenty.replicas > 1)
+  # local uses a SHARED (read-write-many) volumeset mounted by both the server
+  # and the worker, so file-maintenance jobs see uploads. Shared volumes support
+  # expand only — no snapshots — and live in one location, so s3 is still the
+  # durable choice for production and is required for twenty.replicas > 1.
+  type: local                 # local | s3
   local:
     volumeset:
       capacity: 10            # GiB (minimum 10); mounted at /app/packages/twenty-server/.local-storage

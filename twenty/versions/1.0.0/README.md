@@ -235,7 +235,7 @@ The backing database template's own README carries the full per-provider walkthr
 
 ## Important Notes
 
-- **Use `storage.type: s3` for production.** In `local` mode the attachment volume binds to the server workload only, so the worker's file-maintenance jobs cannot reach uploaded files (upstream's compose shares one volume between both, which this platform does not do). Local mode is fine for evaluation and single-user use.
+- **`local` storage uses a shared (read-write-many) volume mounted by both the server and the worker**, so attachments are visible to background jobs. Shared volumes support expansion only — **no snapshots** — and exist in a single location, so `storage.type: s3` remains the durable choice for production and is required for `twenty.replicas > 1`.
 
 - **Create the app-key secret before installing.** Without it the deployment sits waiting on a missing secret and looks broken.
 - **On a public endpoint, whoever reaches the URL first owns the CRM.** Sign up immediately after install, or set `publicAccess.enabled: false` until you are ready.

@@ -42,6 +42,14 @@ spec:
         {{- end }}
       # No probes: the worker exposes no port; its failure mode is process exit,
       # which restarts the container.
+      {{- if eq .Values.storage.type "local" }}
+      # Same SHARED volumeset the server mounts — read-write-many, so the
+      # worker's file-maintenance jobs can see uploaded attachments.
+      volumes:
+        - path: /app/packages/twenty-server/.local-storage
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "twenty.storage.volumeset.name" . }}
+      {{- end }}
   defaultOptions:
     autoscaling:
       metric: disabled

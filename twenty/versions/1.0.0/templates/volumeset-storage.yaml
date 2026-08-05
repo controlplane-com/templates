@@ -6,7 +6,9 @@ description: Twenty local attachment storage (/app/packages/twenty-server/.local
 tags: {{- include "twenty.tags" . | nindent 4 }}
 gvc: {{ .Values.global.cpln.gvc }}
 spec:
-  fileSystemType: ext4
+  # shared = read-write-many, so the server AND the worker can both mount it
+  # (upstream runs both off one volume). performanceClass is auto-set to
+  # "shared"; note shared volumes support expand only — no snapshots.
+  fileSystemType: shared
   initialCapacity: {{ .Values.storage.local.volumeset.capacity }}
-  performanceClass: general-purpose-ssd
 {{- end }}

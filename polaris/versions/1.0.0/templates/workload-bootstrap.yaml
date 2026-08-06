@@ -1,0 +1,64 @@
+kind: workload
+name: {{ include "polaris.bootstrap.name" . }}
+description: Polaris bootstrap — creates the realm schema and root principal with the official admin tool, then idles
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "polaris.tags" . | nindent 4 }}
+spec:
+  # A separate workload rather than a sidecar: at replicas > 1 a sidecar would
+  # race N admin tools against an empty schema on a first install. Not a cron
+  # either — cron workloads cannot be triggered at install time.
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "polaris.bootstrap.identity.name" . }}
+  containers:
+    - name: bootstrap
+      image: {{ .Values.bootstrap.image }}
+      command: /bin/bash
+      args:
+        - /polaris/bootstrap.sh
+      inheritEnv: false
+      minCpu: {{ .Values.bootstrap.resources.minCpu | quote }}
+      cpu: {{ .Values.bootstrap.resources.maxCpu | quote }}
+      minMemory: {{ .Values.bootstrap.resources.minMemory | quote }}
+      memory: {{ .Values.bootstrap.resources.maxMemory | quote }}
+      env:
+        {{- include "polaris.env.datasource" . | nindent 8 }}
+        # ── Bootstrap target ──
+        # The root credentials are interpolated by the script, so they never
+        # appear in this workload spec — only the secret reference does.
+        - name: POLARIS_REALM
+          value: {{ .Values.realm | quote }}
+        - name: CLIENT_ID
+          value: cpln://secret/{{ .Values.rootCredentials.secretName }}.CLIENT_ID
+        - name: CLIENT_SECRET
+          value: cpln://secret/{{ .Values.rootCredentials.secretName }}.CLIENT_SECRET
+        - name: JAVA_MAX_MEM_RATIO
+          value: {{ .Values.jvm.maxRAMPercentage | quote }}
+      volumes:
+        - path: /polaris/bootstrap.sh
+          uri: cpln://secret/{{ include "polaris.secret.bootstrapScript.name" . }}.payload
+      # No probes: the container serves nothing, and its success signal is the
+      # log line plus the server answering. A probe here could only invent a
+      # way to fail.
+  defaultOptions:
+    autoscaling:
+      # Always exactly one, whatever the server's replica count: bootstrapping a
+      # realm is a single operation.
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      inboundAllowCIDR: []
+    internal:
+      # Nothing ever calls this workload.
+      inboundAllowType: none
+  supportDynamicTags: false

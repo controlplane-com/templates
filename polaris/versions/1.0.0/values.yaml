@@ -1,0 +1,163 @@
+# ─── Polaris server ───────────────────────────────────────────────
+# Official upstream image. Stateless: every byte of catalog state lives in
+# Postgres. Pin a concrete released tag; never latest.
+image: apache/polaris:1.7.0
+
+# Stateless replicas behind one metastore. All replicas share the token signing
+# key below, so a token minted by one is accepted by every other.
+replicas: 1
+
+resources:
+  minCpu: 500m
+  maxCpu: 1000m
+  minMemory: 1Gi
+  maxMemory: 2Gi # JVM heap is a percentage OF THIS — see jvm.maxRAMPercentage
+
+# ─── JVM ──────────────────────────────────────────────────────────
+# Max heap = this percentage of resources.maxMemory (JAVA_MAX_MEM_RATIO), so
+# maxMemory is the only number you normally change. Allowed range 40–80.
+jvm:
+  maxRAMPercentage: 70
+
+# ─── Realm ────────────────────────────────────────────────────────
+# Polaris isolates tenants by realm. This template ships exactly one, and does
+# NOT require the Polaris-Realm header — Trino's Iceberg REST connector cannot
+# send it. PERMANENT after first install: renaming it bootstraps an empty realm
+# and hides the existing catalogs.
+realm: POLARIS
+
+# ─── Root credentials (PREREQUISITE — MUST EXIST BEFORE INSTALL) ──
+# Dictionary secret with CLIENT_ID and CLIENT_SECRET. These become the realm's
+# root principal at bootstrap and are what Trino/Spark authenticate with.
+# Neither value may contain a comma. Write-once: changing them after the first
+# install has no effect (bootstrap is a no-op on a bootstrapped realm).
+#   cpln secret create-dictionary --name my-polaris-root-credentials \
+#     --entry CLIENT_ID=root --entry CLIENT_SECRET="$(openssl rand -hex 24)"
+rootCredentials:
+  secretName: my-polaris-root-credentials
+
+# ─── Token signing key (PREREQUISITE — MUST EXIST BEFORE INSTALL) ─
+# Opaque secret (encoding: plain) whose payload is a random string of 32+ chars.
+# Every replica signs and validates access tokens with it, so tokens survive
+# restarts and work across replicas. Rotating it invalidates outstanding tokens.
+#   printf '%s' "$(openssl rand -hex 32)" | \
+#     cpln secret create-opaque --name my-polaris-signing-key --encoding plain -f -
+tokenSigningKey:
+  secretName: my-polaris-signing-key
+
+# ─── Object storage credentials (optional) ────────────────────────
+# Credentials Polaris uses for its OWN metadata I/O against S3-compatible
+# storage. Empty = not configured (the server still runs; catalogs on S3 cannot
+# read or write). Point it at the SAME dictionary secret your seaweedfs/minio
+# deployment uses — keys AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.
+# Query engines keep their own copy of these credentials; this template does not
+# use STS credential vending (see README).
+storage:
+  credentialsSecretName: "" # e.g. my-seaweedfs-s3-credentials
+  region: us-east-1 # AWS_REGION; S3-compatible servers ignore the value but the SDK requires one
+
+# ─── Bootstrap (realm + schema initialization) ────────────────────
+# Runs the official admin tool once against the metastore, then idles. The
+# operation is idempotent, so restarts and upgrades are safe. Keep this tag in
+# lockstep with `image`.
+bootstrap:
+  image: apache/polaris-admin-tool:1.7.0
+  resources:
+    minCpu: 100m
+    maxCpu: 400m
+    minMemory: 128Mi
+    maxMemory: 1Gi
+
+# ─── Access ───────────────────────────────────────────────────────
+publicAccess:
+  enabled: false # true = Iceberg REST + management API on the auto *.cpln.app HTTPS endpoint
+
+internalAccess: # who may reach Polaris from inside Control Plane
+  type: same-gvc # options: none, same-gvc, same-org, workload-list ('none' hides it from in-GVC engines)
+  workloads: [] # used with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Metastore: single-instance PostgreSQL (default) ──────────────
+# One Postgres instance on a persistent volume — every catalog, namespace,
+# table pointer and grant lives here.
+postgres:
+  enabled: true
+  config:
+    username: polaris
+    password: change-me-polaris-db # change before installing
+    database: polaris
+  resources:
+    minCpu: 200m
+    maxCpu: 500m
+    minMemory: 256Mi
+    maxMemory: 512Mi
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+  backup: # optional database backups (Postgres 17+) — see README storage setup
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
+    schedule: "0 2 * * *"
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    provider: aws # options: aws, gcp, minio
+    aws:
+      bucket: my-polaris-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: my-polaris-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: my-polaris-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: my-polaris-backup-bucket
+      accessKey: my-minio-username
+      secretKey: my-minio-password
+      prefix: postgres/backups
+
+# ─── Metastore: Highly Available PostgreSQL ───────────────────────
+# Enable this and disable postgres for near-zero-downtime upgrades and automatic
+# failover: 3 Patroni replicas, 3 etcd replicas, and an HAProxy leader endpoint.
+postgresHA:
+  enabled: false
+  postgres:
+    username: polaris
+    password: change-me-polaris-db # change before installing
+    database: polaris
+  replicas: 3
+  volumeset:
+    capacity: 10 # initial capacity in GiB per replica (minimum is 10)
+
+  backup: # optional database backups — see README storage setup
+    enabled: false
+    mode: logical # logical or wal-g
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    logical:
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      schedule: "0 2 * * *"
+    walg:
+      intervalSeconds: 21600
+    provider: aws # options: aws, gcp, minio
+    aws:
+      bucket: my-polaris-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: my-polaris-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: my-polaris-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: my-polaris-backup-bucket
+      accessKey: my-minio-username
+      secretKey: my-minio-password
+      prefix: postgres/backups

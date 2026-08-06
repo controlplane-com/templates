@@ -1,0 +1,136 @@
+{{- include "polaris.validate" . }}
+kind: workload
+name: {{ include "polaris.name" . }}
+description: Apache Polaris — Iceberg REST catalog and management API on 8181, Quarkus health and metrics on 8182
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "polaris.tags" . | nindent 4 }}
+spec:
+  # Stateless by design: catalogs, namespaces, table pointers, principals and
+  # grants all live in the Postgres metastore — no volumeset anywhere.
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "polaris.identity.name" . }}
+  containers:
+    - name: polaris
+      image: {{ .Values.image }}
+      # No command override: the image's entrypoint (run-java.sh) starts the
+      # packaged Quarkus application, which is configured entirely through the
+      # environment below plus the mounted signing key.
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      env:
+        {{- include "polaris.env.datasource" . | nindent 8 }}
+        # ── Realm ──
+        # Exactly one realm, and the Polaris-Realm header stays optional: a
+        # header-less request resolves to this realm, which is what Trino's
+        # Iceberg REST connector needs (it cannot send an arbitrary header).
+        - name: POLARIS_REALM_CONTEXT_REALMS
+          value: {{ .Values.realm | quote }}
+        # ── Token signing ──
+        # Set unconditionally, not only at replicas > 1: the upstream default
+        # (rsa-key-pair) generates a key per JVM process, so even a single
+        # replica would hand out tokens that its own restart rejects with 401.
+        - name: POLARIS_AUTHENTICATION_TOKEN_BROKER_TYPE
+          value: symmetric-key
+        - name: POLARIS_AUTHENTICATION_TOKEN_BROKER_SYMMETRIC_KEY_FILE
+          value: /polaris/symmetric.key
+        {{- if .Values.storage.credentialsSecretName }}
+        # ── Object storage (Polaris's own metadata I/O) ──
+        # Standard AWS SDK credential-chain variables, so the same secret works
+        # for AWS S3, SeaweedFS, MinIO and any other S3-compatible server.
+        - name: AWS_ACCESS_KEY_ID
+          value: cpln://secret/{{ .Values.storage.credentialsSecretName }}.AWS_ACCESS_KEY_ID
+        - name: AWS_SECRET_ACCESS_KEY
+          value: cpln://secret/{{ .Values.storage.credentialsSecretName }}.AWS_SECRET_ACCESS_KEY
+        - name: AWS_REGION
+          value: {{ .Values.storage.region | quote }}
+        {{- end }}
+        # ── Runtime ──
+        # Max heap = this percentage of `memory` above (run-java.sh translates it
+        # to -XX:MaxRAMPercentage), so heap and the memory knob cannot drift.
+        - name: JAVA_MAX_MEM_RATIO
+          value: {{ .Values.jvm.maxRAMPercentage | quote }}
+        # The packaged default also writes ./logs/polaris.log into the
+        # container's ephemeral filesystem; the console log is what cpln reads.
+        - name: QUARKUS_LOG_FILE_ENABLED
+          value: 'false'
+      # 8181 is declared FIRST so the canonical endpoint routes to the APIs;
+      # 8182 (health, metrics) is a second port and is not published on it.
+      ports:
+        - number: 8181
+          protocol: http
+        - number: 8182
+          protocol: http
+      volumes:
+        # Shared HMAC signing key. Every replica signs and validates access
+        # tokens with it, so tokens survive restarts and cross replicas.
+        - path: /polaris/symmetric.key
+          uri: cpln://secret/{{ .Values.tokenSigningKey.secretName }}.payload
+      # /q/health/ready includes the datasource check, so a replica that has
+      # lost the metastore leaves the rotation.
+      readinessProbe:
+        httpGet:
+          path: /q/health/ready
+          port: 8182
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        failureThreshold: 12
+        successThreshold: 1
+        timeoutSeconds: 5
+      # Liveness is the weaker /q/health/live with a long initial delay, so a
+      # slow start can never restart-loop.
+      livenessProbe:
+        httpGet:
+          path: /q/health/live
+          port: 8182
+          scheme: HTTP
+        initialDelaySeconds: 60
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      # A fixed replica count, not reactive autoscaling: the catalog sits in the
+      # latency path of every query, and scaling a JVM on request rate would add
+      # cold starts there.
+      metric: disabled
+      minScale: {{ int .Values.replicas }}
+      maxScale: {{ int .Values.replicas }}
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+    # The JVM sizes its heap from the cgroup limit at startup; letting the
+    # platform shrink the container afterwards is an OOM kill with no diagnostic.
+    capacityAI: false
+    debug: false
+    suspend: false
+    # Table commits and large namespace listings run well past the 5s default.
+    timeoutSeconds: 60
+  firewallConfig:
+    external:
+      # Outbound reaches the object store holding Iceberg metadata.
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  supportDynamicTags: false

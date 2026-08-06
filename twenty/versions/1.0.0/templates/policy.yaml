@@ -11,6 +11,7 @@ bindings:
 targetKind: secret
 targetLinks:
   - //secret/{{ include "twenty.secret.creds.name" . }}
+  - //secret/{{ include "twenty.secret.workerStart.name" . }}
   - //secret/{{ include "twenty.postgres.secret.name" . }}
   - //secret/{{ .Values.secrets.name }}
   {{- if .Values.secrets.fallbackName }}

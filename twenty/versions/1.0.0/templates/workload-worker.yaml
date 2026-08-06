@@ -10,11 +10,13 @@ spec:
   containers:
     - name: twenty-worker
       image: {{ .Values.twenty.image }}
-      # args only — the image ENTRYPOINT (/app/entrypoint.sh) must still run so
-      # the DISABLE_* flags below are honoured; it execs these args at the end.
+      # The start script derives SERVER_URL, then execs the image entrypoint
+      # (/app/entrypoint.sh) with the worker command — the entrypoint MUST still
+      # run, it is what honours the DISABLE_* flags below and it ends in
+      # `exec "$@"`, so migration ownership is unchanged.
+      command: /bin/sh
       args:
-        - yarn
-        - worker:prod
+        - /cpln/start.sh
       inheritEnv: false
       minCpu: {{ .Values.worker.resources.minCpu | quote }}
       cpu: {{ .Values.worker.resources.maxCpu | quote }}
@@ -42,14 +44,17 @@ spec:
         {{- end }}
       # No probes: the worker exposes no port; its failure mode is process exit,
       # which restarts the container.
-      {{- if eq .Values.storage.type "local" }}
-      # Same SHARED volumeset the server mounts — read-write-many, so the
-      # worker's file-maintenance jobs can see uploaded attachments.
       volumes:
+        - path: /cpln/start.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "twenty.secret.workerStart.name" . }}.payload
+        {{- if eq .Values.storage.type "local" }}
+        # Same SHARED volumeset the server mounts — read-write-many, so the
+        # worker's file-maintenance jobs can see uploaded attachments.
         - path: /app/packages/twenty-server/.local-storage
           recoveryPolicy: retain
           uri: cpln://volumeset/{{ include "twenty.storage.volumeset.name" . }}
-      {{- end }}
+        {{- end }}
   defaultOptions:
     autoscaling:
       metric: disabled

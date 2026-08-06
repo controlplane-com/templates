@@ -24,6 +24,10 @@
 {{- printf "%s-twenty-creds" .Release.Name }}
 {{- end }}
 
+{{- define "twenty.secret.workerStart.name" -}}
+{{- printf "%s-twenty-worker-start" .Release.Name }}
+{{- end }}
+
 {{- define "twenty.identity.name" -}}
 {{- printf "%s-twenty-identity" .Release.Name }}
 {{- end }}
@@ -105,6 +109,19 @@ true
 {{- end }}
 
 {{/*
+Whether SERVER_URL must be derived from the platform canonical endpoint at
+runtime (no explicit twenty.serverUrl, public access on). The canonical hostname
+is {workload}-{gvcAlias}.{orgAlias}.cpln.app, and the ORG alias is not injected
+as its own variable — it exists only inside CPLN_GLOBAL_ENDPOINT — so the URL
+cannot be assembled at render time.
+*/}}
+{{- define "twenty.serverUrl.derived" -}}
+{{- if and (not .Values.twenty.serverUrl) .Values.publicAccess.enabled -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
 Migration / cron-registration owner. Twenty's `database:migrate:prod` takes no
 advisory lock, so exactly ONE container may run boot migrations:
   twenty.replicas == 1  → the server owns them (upstream's compose shape)
@@ -140,11 +157,17 @@ DB-backed and editable in Settings → Admin Panel → Configuration Variables.
 - name: FALLBACK_ENCRYPTION_KEY
   value: cpln://secret/{{ .Values.secrets.fallbackName }}.payload
 {{- end }}
-# ── Public base URL. CPLN_GLOBAL_ENDPOINT is per-workload, so on the WORKER it
-#    would resolve to the worker's own (unreachable) endpoint; both tiers must
-#    advertise the SERVER's URL, built from the GVC alias. ──
+# ── Public base URL (front-end origin, auth callbacks, links jobs build) ──
+# Only the two tier-independent cases are set here. The derived-public case is
+# set per tier: CPLN_GLOBAL_ENDPOINT is per-workload, and the worker's own
+# endpoint is not publicly reachable — see twenty.serverUrl.derived.
+{{- if .Values.twenty.serverUrl }}
 - name: SERVER_URL
-  value: {{ if .Values.twenty.serverUrl }}{{ .Values.twenty.serverUrl | quote }}{{ else }}"https://{{ include "twenty.name" . }}-$(CPLN_GVC_ALIAS).cpln.app"{{ end }}
+  value: {{ .Values.twenty.serverUrl | quote }}
+{{- else if not .Values.publicAccess.enabled }}
+- name: SERVER_URL
+  value: http://{{ include "twenty.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:3000
+{{- end }}
 {{- if .Values.postgresHA.enabled }}
 # ── Database (postgres-highly-available subchart, HAProxy leader endpoint) ──
 {{- else }}

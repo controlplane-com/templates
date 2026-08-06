@@ -20,6 +20,12 @@ spec:
       memory: {{ .Values.twenty.resources.maxMemory | quote }}
       env:
         {{- include "twenty.env.common" . | trim | nindent 8 }}
+        {{- if eq (include "twenty.serverUrl.derived" .) "true" }}
+        # This tier IS the public one, so its own canonical endpoint is correct.
+        # Already a full URL (https://…) — never prepend a scheme.
+        - name: SERVER_URL
+          value: "$(CPLN_GLOBAL_ENDPOINT)"
+        {{- end }}
         {{- if eq (include "twenty.migrationOwner" .) "server" }}
         # ── Boot migrations + cron registration run HERE (twenty.replicas == 1).
         #    `node dist/main` does not start until they finish, so a ready probe

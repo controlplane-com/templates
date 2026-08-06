@@ -7,12 +7,15 @@ DuckDB is an in-process analytical SQL engine that reads and writes Parquet, CSV
 - **Cron workload** — runs the official `duckdb/duckdb` image once per schedule and exits; no ports, no inbound traffic.
 - **Preamble secret** — template-generated `SET` statements mounted at `/etc/duckdb/preamble.sql` and run before your script.
 - **Script secret** — your SQL, mounted at `/etc/duckdb/job.sql`. Created from `sql.inline`, or skipped entirely when you bring your own secret via `sql.secretName`.
-- **Volumeset** (optional, on by default) — shared volume at `/data` holding the extension cache and larger-than-memory query spill.
 - **Identity + policy** — grants the job `reveal` on exactly the secrets it mounts, plus the AWS cloud-account binding when `objectStore.type: aws`.
+
+No volume is attached. Each run starts from an empty in-memory database and writes its extensions to `/tmp/duckdb-extensions` and its scratch to `/tmp/duckdb-temp` inside the container.
 
 ## Prerequisites
 
 None for a default install — it runs a self-test script with no credentials and no cloud account.
+
+The job needs outbound access to `extensions.duckdb.org:443` on **every** run — see Important Notes. The template's firewall allows all outbound traffic, so this works out of the box unless your organization restricts egress.
 
 Required only for the features you turn on:
 
@@ -87,13 +90,7 @@ tuning:
 
 DuckDB reads the host machine's RAM and core count, not the container's limits, so the template derives `memory_limit` and `threads` from these values and sets them explicitly in the preamble. At the defaults that is `memory_limit = '2457MiB'` and `threads = 2`. A `SET` in your own script still wins, because the preamble runs first.
 
-### Storage
-
-```yaml
-storage:
-  enabled: true
-  capacity: 10 # GiB (platform minimum is 10)
-```
+`maxMemory` is the knob that sizes what the job can process — see Important Notes.
 
 ### Object storage
 
@@ -201,8 +198,9 @@ This template exposes nothing to connect to — it is a job, not a server. Obser
 - **This is a batch job, not a query service.** Nothing is listening after install; that is correct behavior. For an always-on SQL endpoint that BI tools connect to, use the `trino` template.
 - **Alert on the absence of `duckdb-job-complete`, not on the exit status.** DuckDB's CLI can exit 0 on some failed scripts ([upstream issue #16574](https://github.com/duckdb/duckdb/issues/16574)). The template sets `.bail on`, so the marker prints only after your script finishes cleanly.
 - **Never `SET memory_limit` higher than the container.** Change `tuning.memoryLimitPercent` instead — the template derives the real limit from `resources.maxMemory`, and DuckDB left to itself targets 80% of the *host* machine and gets OOM-killed.
-- **No `.duckdb` database file is kept.** Every run starts from an empty in-memory database; write results to object storage or an attached database. `/data` holds only the extension cache and query spill.
-- **The first run downloads extensions** from `extensions.duckdb.org`. With `storage.enabled: true` they are cached on `/data` and later runs skip the download; with it off, every run re-downloads them.
+- **Every job must fit in memory.** No volume is attached, so size the work with `resources.maxMemory` (and `tuning.memoryLimitPercent`) rather than relying on spill. DuckDB's out-of-core operators still work, but they spill to container-local scratch bounded by container disk, not to a sized volume — do not plan around it.
+- **No `.duckdb` database file is kept.** Every run starts from an empty in-memory database; write results to object storage or an attached database.
+- **Extensions are re-downloaded on every run** from `extensions.duckdb.org:443`, since there is no cache volume. Every execution therefore depends on that host being reachable — a job that runs fine today will fail if egress to it is later blocked. `httpfs` and `aws` autoload on first use of an `s3://` path.
 - **Runs never overlap** (`concurrencyPolicy: Forbid`) and a failed run is not retried (`restartPolicy: Never`) — the next scheduled run starts normally.
 - **Installing this template several times is scale-out, not high availability.** N releases with different scripts or schedules run independently, but there is no failover: if tonight's container dies, tonight's job did not happen.
 - **One script per install, by design.** Multi-step, conditional or retrying pipelines belong in `airflow`.

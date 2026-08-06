@@ -43,12 +43,6 @@ spec:
           uri: cpln://secret/{{ include "duckdb.secret.preamble.name" . }}.payload
         - path: /etc/duckdb/job.sql
           uri: cpln://secret/{{ include "duckdb.scriptSecretRef" . }}.payload
-        {{- if .Values.storage.enabled }}
-        {{- /* NEVER mount at /duckdb — that path is the binary in the official image. */}}
-        - path: /data
-          uri: cpln://volumeset/{{ include "duckdb.volume.name" . }}
-          recoveryPolicy: retain
-        {{- end }}
   defaultOptions:
     autoscaling:
       maxScale: 1

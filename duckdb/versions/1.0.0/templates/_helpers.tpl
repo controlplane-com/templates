@@ -12,10 +12,6 @@
 {{- printf "%s-duckdb-script" .Release.Name }}
 {{- end }}
 
-{{- define "duckdb.volume.name" -}}
-{{- printf "%s-duckdb-data" .Release.Name }}
-{{- end }}
-
 {{- define "duckdb.identity.name" -}}
 {{- printf "%s-duckdb-identity" .Release.Name }}
 {{- end }}
@@ -63,13 +59,36 @@
      container's actual resources. DuckDB reads the HOST's RAM and core count
      (upstream issues #15080, #6519, #7651), so both must be set explicitly. */}}
 
-{{/* Where the extension cache and spill live. */}}
-{{- define "duckdb.dataDir" -}}
-{{- if .Values.storage.enabled -}}
-/data
-{{- else -}}
-/tmp/duckdb
+{{/*
+Where the extension cache and query spill live.
+
+This template mounts NO volume: Control Plane block volumesets are accepted only
+by `stateful` and `vm` workloads ("volumeset ... uses fileSystemType ext4, which
+can only be used by workloads of type: stateful or vm", verified 2026-08-06), and
+network-attached storage is the wrong fit for a scratch path. So both settings
+point at container-local scratch under /tmp, which is writable in the distroless
+image (verified 2026-08-06: INSTALL httpfs lands in /tmp/duckdb/extensions with
+no volume attached). Consequences — extensions re-download every run, and spill
+is bounded by container disk — are documented in the README.
+
+Leaving these at their defaults would be worse: temp_directory would default to
+`.tmp` relative to the process's working directory, which is not a path this
+template controls.
+
+Both paths are ONE level under /tmp, and that is load-bearing. DuckDB creates
+temp_directory only one level deep, so a nested path whose parent does not exist
+fails at the moment the query first spills — verified 2026-08-06:
+`SET temp_directory='/tmp/duckdb/temp'` gives
+`IO Error: Failed to create directory "/tmp/duckdb/temp": No such file or
+directory`, while `/tmp/duckdb-temp` spills a 30M-row sort under a 200MB
+memory_limit cleanly.
+*/}}
+{{- define "duckdb.extensionDir" -}}
+/tmp/duckdb-extensions
 {{- end -}}
+
+{{- define "duckdb.tempDir" -}}
+/tmp/duckdb-temp
 {{- end -}}
 
 {{/* One worker thread per whole core of maxCpu, minimum 1. */}}
@@ -104,8 +123,8 @@ prevents from ever printing after an error.
 .bail on
 SET memory_limit = '{{ include "duckdb.memoryLimitMiB" . }}MiB';
 SET threads = {{ include "duckdb.threads" . }};
-SET temp_directory = '{{ include "duckdb.dataDir" . }}/temp';
-SET extension_directory = '{{ include "duckdb.dataDir" . }}/extensions';
+SET temp_directory = '{{ include "duckdb.tempDir" . }}';
+SET extension_directory = '{{ include "duckdb.extensionDir" . }}';
 {{- if eq .Values.objectStore.type "aws" }}
 {{- /*
   CHAIN 'instance' — and only 'instance'. Control Plane delivers the workload
@@ -197,12 +216,6 @@ CREATE OR REPLACE SECRET cpln_object_store (TYPE s3, PROVIDER credential_chain, 
 {{- if not $e.secretName -}}
 {{- fail (printf "duckdb: secretEnv[%d] ('%s') needs a secretName — the Control Plane secret must exist BEFORE install" $i $e.name) -}}
 {{- end -}}
-{{- end -}}
-{{- if not (regexMatch "^[0-9]+$" (printf "%v" .Values.storage.capacity)) -}}
-{{- fail (printf "duckdb: storage.capacity must be a whole number of GiB — got '%v'" .Values.storage.capacity) -}}
-{{- end -}}
-{{- if lt (int .Values.storage.capacity) 10 -}}
-{{- fail (printf "duckdb: storage.capacity must be at least 10 GiB (the platform minimum) — got %v" .Values.storage.capacity) -}}
 {{- end -}}
 {{- end -}}
 

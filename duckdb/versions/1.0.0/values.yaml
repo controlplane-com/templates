@@ -26,7 +26,8 @@ secretEnv: []
 # ─── Resources ────────────────────────────────────────────────────────────────
 # DuckDB reads the HOST's RAM and core count, not the container's limits, so the
 # template derives memory_limit and threads from these and sets them explicitly.
-# maxCpu:minCpu may not exceed 4:1.
+# The job mounts no volume, so every job must fit in memory — raise maxMemory
+# rather than relying on spill. maxCpu:minCpu may not exceed 4:1.
 resources:
   minCpu: 500m
   maxCpu: 2000m # also sets DuckDB threads: one per whole core, minimum 1
@@ -35,15 +36,6 @@ resources:
 
 tuning:
   memoryLimitPercent: 60 # DuckDB memory_limit = this percent of maxMemory (20–80)
-
-# ─── Storage ──────────────────────────────────────────────────────────────────
-# Shared (network) volume at /data holding the extension cache and larger-than-
-# memory spill — cron workloads cannot mount a block volume. No .duckdb database
-# file is kept: write results to object storage or an attached database.
-# Disable only if every job fits in memory and can re-download extensions.
-storage:
-  enabled: true
-  capacity: 10 # GiB (platform minimum is 10)
 
 # ─── Object storage ───────────────────────────────────────────────────────────
 # Registers a DuckDB S3 secret so your SQL can read and write s3:// paths.

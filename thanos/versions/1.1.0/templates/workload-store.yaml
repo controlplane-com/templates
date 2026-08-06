@@ -19,8 +19,8 @@ spec:
         - --grpc-address=0.0.0.0:10901
       minCpu: {{ .Values.storeGateway.resources.minCpu | quote }}
       minMemory: {{ .Values.storeGateway.resources.minMemory | quote }}
-      cpu: {{ .Values.storeGateway.resources.cpu | quote }}
-      memory: {{ .Values.storeGateway.resources.memory | quote }}
+      cpu: {{ .Values.storeGateway.resources.maxCpu | quote }}
+      memory: {{ .Values.storeGateway.resources.maxMemory | quote }}
       ports:
         - number: 10902
           protocol: http

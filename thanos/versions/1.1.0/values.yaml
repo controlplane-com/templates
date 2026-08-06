@@ -1,8 +1,8 @@
 image: quay.io/thanos/thanos:v0.42.2
 
 resources: # Thanos Query
-  cpu: 500m
-  memory: 1Gi
+  maxCpu: 500m
+  maxMemory: 1Gi
   minCpu: 250m
   minMemory: 512Mi
 
@@ -36,8 +36,8 @@ internalAccess:
 storeGateway:
   enabled: false # serves historical bucket blocks to Query
   resources:
-    cpu: 500m
-    memory: 1Gi
+    maxCpu: 500m
+    maxMemory: 1Gi
     minCpu: 250m
     minMemory: 512Mi
   volumeset:
@@ -46,8 +46,8 @@ storeGateway:
 compactor:
   enabled: false # compacts + downsamples bucket blocks — MUST be the ONLY compactor on the bucket, across all installs
   resources:
-    cpu: 500m
-    memory: 1Gi
+    maxCpu: 500m
+    maxMemory: 1Gi
     minCpu: 250m
     minMemory: 512Mi
   volumeset:

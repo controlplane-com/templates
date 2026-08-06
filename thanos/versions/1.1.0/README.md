@@ -28,8 +28,8 @@ For the optional storage tier, an existing bucket in one of the supported backen
 image: quay.io/thanos/thanos:v0.42.2
 
 resources:
-  cpu: 500m
-  memory: 1Gi
+  maxCpu: 500m
+  maxMemory: 1Gi
   minCpu: 250m
   minMemory: 512Mi
 

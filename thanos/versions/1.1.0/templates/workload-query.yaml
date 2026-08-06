@@ -30,8 +30,8 @@ spec:
         {{- end }}
       minCpu: {{ .Values.resources.minCpu | quote }}
       minMemory: {{ .Values.resources.minMemory | quote }}
-      cpu: {{ .Values.resources.cpu | quote }}
-      memory: {{ .Values.resources.memory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
       ports:
         - number: 10902
           protocol: http

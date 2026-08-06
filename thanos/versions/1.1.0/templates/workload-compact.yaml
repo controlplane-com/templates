@@ -22,8 +22,8 @@ spec:
         - --retention.resolution-1h={{ .Values.compactor.retention.oneHour }}
       minCpu: {{ .Values.compactor.resources.minCpu | quote }}
       minMemory: {{ .Values.compactor.resources.minMemory | quote }}
-      cpu: {{ .Values.compactor.resources.cpu | quote }}
-      memory: {{ .Values.compactor.resources.memory | quote }}
+      cpu: {{ .Values.compactor.resources.maxCpu | quote }}
+      memory: {{ .Values.compactor.resources.maxMemory | quote }}
       ports:
         - number: 10902
           protocol: http

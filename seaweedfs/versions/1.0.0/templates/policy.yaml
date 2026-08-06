@@ -1,0 +1,16 @@
+kind: policy
+name: {{ include "seaweedfs.policy.name" . }}
+description: SeaweedFS policy — reveal on exactly the secrets the workload mounts
+tags:
+  {{- include "seaweedfs.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "seaweedfs.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ .Values.s3.credentialsSecretName }}
+  {{- if .Values.adminUI.enabled }}
+  - //secret/{{ include "seaweedfs.secret.admin.name" . }}
+  {{- end }}

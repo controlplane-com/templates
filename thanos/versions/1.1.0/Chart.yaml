@@ -1,0 +1,17 @@
+apiVersion: v2
+name: thanos
+description: Thanos Query global PromQL fan-out over Prometheus Thanos sidecars and Store API endpoints with HA deduplication, plus an optional Store Gateway and singleton Compactor for object-storage-backed long-term retention
+type: application
+version: 1.0.0
+appVersion: "0.42.2"
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+
+annotations:
+  created: "2026-07-29"
+  lastModified: "2026-07-30"
+  category: "observability"
+  createsGvc: false

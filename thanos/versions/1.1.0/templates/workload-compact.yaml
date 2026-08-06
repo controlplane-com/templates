@@ -1,0 +1,83 @@
+{{- if .Values.compactor.enabled }}
+kind: workload
+name: {{ include "thanos.compact.name" . }}
+description: Thanos Compactor — singleton compaction, downsampling, and retention on the object-storage bucket
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "thanos.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "thanos.identity.name" . }}
+  containers:
+    - name: thanos-compact
+      image: {{ .Values.image }}
+      inheritEnv: false
+      args:
+        - compact
+        - --wait
+        - --data-dir=/data
+        - --objstore.config-file=/etc/thanos/objstore.yml
+        - --http-address=0.0.0.0:10902
+        - --retention.resolution-raw={{ .Values.compactor.retention.raw }}
+        - --retention.resolution-5m={{ .Values.compactor.retention.fiveMinutes }}
+        - --retention.resolution-1h={{ .Values.compactor.retention.oneHour }}
+      minCpu: {{ .Values.compactor.resources.minCpu | quote }}
+      minMemory: {{ .Values.compactor.resources.minMemory | quote }}
+      cpu: {{ .Values.compactor.resources.cpu | quote }}
+      memory: {{ .Values.compactor.resources.memory | quote }}
+      ports:
+        - number: 10902
+          protocol: http
+      volumes:
+        - path: /etc/thanos/objstore.yml
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "thanos.secret.objstore.name" . }}.payload
+        - path: /data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "thanos.compact.volume.name" . }}
+      readinessProbe:
+        httpGet:
+          path: /-/ready
+          port: 10902
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        failureThreshold: 12
+        successThreshold: 1
+        timeoutSeconds: 3
+      livenessProbe:
+        httpGet:
+          path: /-/healthy
+          port: 10902
+          scheme: HTTP
+        initialDelaySeconds: 30
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+  # The Compactor is an upstream-mandated singleton per bucket: exactly one,
+  # ever, across all installs. Scale is hard-pinned to 1 and is not a value.
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  # The thanos image runs non-root (USER 1001); make the fresh work volumeset
+  # writable by it (mkdir /data/meta-syncer failed without this).
+  securityOptions:
+    runAsUser: 1001
+    filesystemGroupId: 1001
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      inboundAllowCIDR: []
+    internal:
+      inboundAllowType: none
+{{- end }}

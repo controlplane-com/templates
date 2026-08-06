@@ -132,6 +132,7 @@ The canonical endpoint is in `status.canonicalEndpoint` of `cpln workload get {r
 - mTLS uses the direct load balancer (raw TCP), not the canonical endpoint; in mTLS mode the canonical `https://` endpoint intentionally stops accepting traffic.
 - **In mTLS mode, in-GVC senders must use the plain internal gRPC port `:4317`** — the TLS-terminating ingest ports (4318/4319) are not reachable through the internal service mesh (handshake fails); they are for external clients via the direct LB only.
 - One collector pushes to one remote-write store; run multiple installs for multiple targets.
+- **Remote-write appends a unit suffix to metric names.** A metric sent as `my_metric` is stored as `my_metric_ratio`, `my_metric_seconds` and so on, following the OTLP unit — so query the suffixed name in Prometheus, not the one your app emits.
 
 ## Links
 

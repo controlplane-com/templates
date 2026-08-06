@@ -1,0 +1,131 @@
+{{- include "meilisearch.validate" . }}
+kind: workload
+name: {{ include "meilisearch.name" . }}
+description: Meilisearch instant search engine — REST API :7700
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "meilisearch.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "meilisearch.identity.name" . }}
+  containers:
+    - name: meilisearch
+      image: {{ .Values.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      env:
+        # Master key from the user's prerequisite opaque secret. It is mandatory:
+        # every route except GET /health is refused without it.
+        - name: MEILI_MASTER_KEY
+          value: 'cpln://secret/{{ .Values.auth.secretName }}.payload'
+        # All three durable paths are absolute. Upstream's defaults (./data.ms,
+        # snapshots/, dumps/) are relative to WORKDIR, which is the ephemeral
+        # container layer if the image ever moves it.
+        - name: MEILI_DB_PATH
+          value: /meili_data/data.ms
+        - name: MEILI_SNAPSHOT_DIR
+          value: /meili_data/snapshots
+        - name: MEILI_DUMP_DIR
+          value: /meili_data/dumps
+        # Set explicitly so a future image change cannot silently rebind to localhost.
+        - name: MEILI_HTTP_ADDR
+          value: 0.0.0.0:7700
+        - name: MEILI_ENV
+          value: {{ .Values.server.env | quote }}
+        - name: MEILI_LOG_LEVEL
+          value: {{ .Values.server.logLevel | quote }}
+        - name: MEILI_HTTP_PAYLOAD_SIZE_LIMIT
+          value: {{ .Values.server.maxPayloadSize | quote }}
+        # Never left to the default: Meilisearch budgets two thirds of the HOST's
+        # RAM, not the container limit, and OOM-kills itself while indexing.
+        - name: MEILI_MAX_INDEXING_MEMORY
+          value: {{ .Values.server.maxIndexingMemory | quote }}
+        {{- if not .Values.server.telemetry }}
+        - name: MEILI_NO_ANALYTICS
+          value: "true"
+        {{- end }}
+        {{- if .Values.metrics.enabled }}
+        - name: MEILI_EXPERIMENTAL_ENABLE_METRICS
+          value: "true"
+        {{- end }}
+        {{- if .Values.server.upgradeDb }}
+        - name: MEILI_UPGRADE_DB
+          value: "true"
+        {{- end }}
+        {{- if .Values.snapshots.enabled }}
+        - name: MEILI_SCHEDULE_SNAPSHOT
+          value: {{ .Values.snapshots.intervalSeconds | quote }}
+        {{- end }}
+      ports:
+        # 7700 carries the REST API, /metrics and the search preview — there is no
+        # second port, and it is the port the canonical endpoint routes to.
+        - number: 7700
+          protocol: http
+      volumes:
+        - path: /meili_data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "meilisearch.volume.name" . }}
+      # GET /health is the one route the master key does not protect, so the
+      # probes keep working with authentication on.
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 7700
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 15
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      # Deliberately slack: a --upgrade-db run is not atomic, so a liveness
+      # restart part-way through it would corrupt the database.
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: 7700
+          scheme: HTTP
+        initialDelaySeconds: 120
+        periodSeconds: 30
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+  # Exactly one replica, always. Replication and sharding are Enterprise-Edition
+  # features and are not compiled into the Community image, so a second replica
+  # would serve a separate, empty index behind the same endpoint.
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 60
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  supportDynamicTags: false

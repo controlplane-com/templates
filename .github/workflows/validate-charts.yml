@@ -17,9 +17,14 @@ on:
         required: false
         default: ''
 
+concurrency:
+  group: validate-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,6 +66,20 @@ jobs:
           base_sha="${{ steps.versions.outputs.base_sha }}"
           failed=0
 
+          # The OCI registry throttles when several runs pull cpln-common at once.
+          # Bound each attempt and retry with backoff; a real failure must be visible,
+          # not swallowed into a step that appears to hang.
+          helm_dep_update() {
+            local dir="$1" n=1
+            while [ "$n" -le 3 ]; do
+              if timeout 300 helm dependency update "$dir"; then return 0; fi
+              echo "helm dependency update failed for $dir (attempt $n/3)"
+              [ "$n" -lt 3 ] && sleep $((n * 15))
+              n=$((n + 1))
+            done
+            return 1
+          }
+
           validate_version_dir() {
             local version_dir="${1%/}"
             [ ! -f "$version_dir/Chart.yaml" ] && return
@@ -92,7 +111,11 @@ jobs:
               helm_flags="--set global.cpln.gvc=validation-gvc"
             fi
 
-            helm dependency update "$version_dir" 2>/dev/null || true
+            if ! helm_dep_update "$version_dir"; then
+              echo "FAIL [$template @ $version]: helm dependency update failed (registry unreachable or throttled)"
+              failed=1
+              return
+            fi
             if ! rendered=$(helm template "validation" "$version_dir" $helm_flags 2>&1); then
               echo "FAIL [$template @ $version]: helm template failed with default values"
               echo "$rendered"

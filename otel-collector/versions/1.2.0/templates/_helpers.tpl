@@ -57,7 +57,7 @@ Validation — required-field, enum, and mode-compatibility checks.
 {{- end -}}
 {{- if .Values.publicAccess.enabled -}}
 {{- if eq $auth "none" -}}
-{{- fail "otel-collector: public ingestion requires auth — set auth.method to bearer or mtls; the collector must never be an open relay" -}}
+{{- fail "otel-collector: you set publicAccess.enabled: true with auth.method: none.\nThat combination would put an unauthenticated OTLP ingestion endpoint on the public internet — it will be found and abused as an open relay, filling your traces and metrics with anyone's data.\nPick one of these three:\n  1. auth.method: bearer — also set auth.bearer.secretName to an opaque secret holding the token, created BEFORE install.\n  2. auth.method: mtls   — also set auth.mtls.secretName to a dictionary secret with keys cert, key, and ca, created BEFORE install.\n  3. publicAccess.enabled: false — leave the collector internal and send from workloads inside the GVC, where no auth is needed." -}}
 {{- end -}}
 {{- if empty .Values.publicAccess.allowedCidrs -}}
 {{- fail "otel-collector: publicAccess.allowedCidrs must be non-empty when publicAccess.enabled — list your sender CIDRs, or [\"0.0.0.0/0\"] to explicitly allow all" -}}

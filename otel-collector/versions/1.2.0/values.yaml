@@ -6,8 +6,8 @@ otelCollector:
   mode: simple # simple: structured config from the knobs below | advanced: advanced.config is used verbatim
   replicas: 1 # stateless; 2+ runs an HA ingestion pool behind the same endpoint
   resources:
-    cpu: 200m
-    memory: 256Mi
+    maxCpu: 200m
+    maxMemory: 256Mi
 
   # Simple Mode
   simple:

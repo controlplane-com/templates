@@ -44,8 +44,8 @@ otelCollector:
   mode: simple    # simple: config generated from the knobs below | advanced: advanced.config used verbatim
   replicas: 1     # stateless; 2+ = HA ingestion pool behind the same endpoint
   resources:
-    cpu: 200m
-    memory: 256Mi
+    maxCpu: 200m
+    maxMemory: 256Mi
   simple:
     processors:
       transform:
@@ -53,7 +53,9 @@ otelCollector:
           - replace_pattern(span.attributes["http.url"], "^.*(PLACEHOLDER).*$", "/PLACEHOLDER")
     spanmetrics:
       histogram:
-        buckets: [1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000]  # span-duration buckets — tune to your SLOs
+        # span-duration buckets — tune to your SLOs; duration strings only
+        # (a bare number is read as NANOSECONDS and silently breaks the histogram)
+        buckets: ["1ms", "5ms", "10ms", "25ms", "50ms", "100ms", "250ms", "500ms", "1s", "2.5s", "5s"]
         unit: ms              # ms or s
 ```
 

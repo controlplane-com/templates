@@ -1,0 +1,191 @@
+---
+kind: workload
+name: {{ include "nocodb.name" . }}
+description: NocoDB server — UI + REST/GraphQL API + socket.io realtime, HTTP :8080
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "nocodb.tags" . | nindent 4 }}
+spec:
+  # stateful in BOTH storage modes: it mounts a volumeset in local mode, and
+  # workload type is immutable — a type that varied with storage.type would make
+  # switching modes on an existing release impossible.
+  type: stateful
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "nocodb.identity.name" . }}
+  containers:
+    - name: nocodb
+      image: {{ .Values.nocodb.image }}
+      # Single image (UI + API + realtime); runs meta-database migrations
+      # automatically on boot.
+      inheritEnv: false
+      minCpu: {{ .Values.nocodb.resources.minCpu | quote }}
+      cpu: {{ .Values.nocodb.resources.maxCpu | quote }}
+      minMemory: {{ .Values.nocodb.resources.minMemory | quote }}
+      memory: {{ .Values.nocodb.resources.maxMemory | quote }}
+      env:
+        # ── Root-of-trust keys (user prerequisite dictionary secret) ──
+        # NC_AUTH_JWT_SECRET signs auth tokens (unset = the literal string
+        # "undefined" at this tag); NC_CONNECTION_ENCRYPT_KEY encrypts the
+        # credentials of external data sources at rest. Both are write-once.
+        - name: NC_AUTH_JWT_SECRET
+          value: cpln://secret/{{ .Values.secrets.name }}.NC_AUTH_JWT_SECRET
+        - name: NC_CONNECTION_ENCRYPT_KEY
+          value: cpln://secret/{{ .Values.secrets.name }}.NC_CONNECTION_ENCRYPT_KEY
+        # ── Public base URL — feeds invite/reset links, the auth cookie secure
+        #    flag AND the socket.io namespace. CPLN_GLOBAL_ENDPOINT is already a
+        #    full URL (https://…); never prepend a scheme. ──
+        {{- if .Values.nocodb.siteUrl }}
+        - name: NC_SITE_URL
+          value: {{ .Values.nocodb.siteUrl | quote }}
+        {{- else if eq (include "nocodb.siteUrl.derived" .) "true" }}
+        - name: NC_SITE_URL
+          value: "$(CPLN_GLOBAL_ENDPOINT)"
+        {{- else }}
+        - name: NC_SITE_URL
+          value: http://{{ include "nocodb.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:8080
+        {{- end }}
+        {{- if .Values.postgresHA.enabled }}
+        # ── Meta database (postgres-highly-available subchart, HAProxy leader endpoint) ──
+        {{- else }}
+        # ── Meta database (postgres subchart, single instance) ──
+        {{- end }}
+        # NC_DB is parsed by metaUrlToDbConfig: the u/p/d query params map to
+        # user/password/database, so the credentials stay in the secret.
+        - name: NC_PG_USER
+          value: cpln://secret/{{ include "nocodb.postgres.secret.name" . }}.username
+        - name: NC_PG_PASSWORD
+          value: cpln://secret/{{ include "nocodb.postgres.secret.name" . }}.password
+        - name: NC_DB
+          value: pg://{{ include "nocodb.postgres.host" . }}:5432/?u=$(NC_PG_USER)&p=$(NC_PG_PASSWORD)&d={{ include "nocodb.postgres.database" . }}
+        # ── Redis (bundled single node) — one URL covers cache, jobs and rate limiting ──
+        - name: NC_REDIS_PASSWORD
+          value: cpln://secret/{{ include "nocodb.secret.creds.name" . }}.redisPassword
+        - name: NC_REDIS_URL
+          value: redis://:$(NC_REDIS_PASSWORD)@{{ include "nocodb.redis.host" . }}:6379
+        # ── Tool dir: local attachments and thumbnails resolve under this ──
+        - name: NC_APP_DATA_DIR
+          value: /usr/app/data
+        {{- if .Values.admin.secretName }}
+        # ── Super-admin bootstrap (optional prerequisite dictionary secret).
+        #    Re-applied on EVERY boot: a password changed in the UI is reverted. ──
+        - name: NC_ADMIN_EMAIL
+          value: cpln://secret/{{ .Values.admin.secretName }}.NC_ADMIN_EMAIL
+        - name: NC_ADMIN_PASSWORD
+          value: cpln://secret/{{ .Values.admin.secretName }}.NC_ADMIN_PASSWORD
+        {{- end }}
+        {{- if eq .Values.storage.type "s3" }}
+        # ── S3 attachment storage — the plugin activates on bucket + (region OR endpoint) ──
+        - name: NC_S3_BUCKET_NAME
+          value: {{ .Values.storage.s3.bucket | quote }}
+        - name: NC_S3_REGION
+          value: {{ .Values.storage.s3.region | quote }}
+        {{- if .Values.storage.s3.endpoint }}
+        - name: NC_S3_ENDPOINT
+          value: {{ .Values.storage.s3.endpoint | quote }}
+        {{- end }}
+        - name: NC_S3_FORCE_PATH_STYLE
+          value: {{ .Values.storage.s3.forcePathStyle | quote }}
+        {{- if .Values.storage.s3.auth.secretName }}
+        # Static S3 keys (S3-compatible servers only); omitted = keyless AWS SDK
+        # chain resolved from the identity's cloud account.
+        - name: NC_S3_ACCESS_KEY
+          value: cpln://secret/{{ .Values.storage.s3.auth.secretName }}.NC_S3_ACCESS_KEY
+        - name: NC_S3_ACCESS_SECRET
+          value: cpln://secret/{{ .Values.storage.s3.auth.secretName }}.NC_S3_ACCESS_SECRET
+        {{- end }}
+        {{- end }}
+        {{- if .Values.smtp.enabled }}
+        # ── SMTP / email — the plugin activates on from + host + port ──
+        - name: NC_SMTP_FROM
+          value: {{ .Values.smtp.from | quote }}
+        - name: NC_SMTP_HOST
+          value: {{ .Values.smtp.host | quote }}
+        - name: NC_SMTP_PORT
+          value: {{ .Values.smtp.port | quote }}
+        - name: NC_SMTP_SECURE
+          value: {{ .Values.smtp.secure | quote }}
+        - name: NC_SMTP_IGNORE_TLS
+          value: {{ .Values.smtp.ignoreTls | quote }}
+        - name: NC_SMTP_REJECT_UNAUTHORIZED
+          value: {{ .Values.smtp.rejectUnauthorized | quote }}
+        {{- if .Values.smtp.auth.secretName }}
+        - name: NC_SMTP_USERNAME
+          value: cpln://secret/{{ .Values.smtp.auth.secretName }}.NC_SMTP_USERNAME
+        - name: NC_SMTP_PASSWORD
+          value: cpln://secret/{{ .Values.smtp.auth.secretName }}.NC_SMTP_PASSWORD
+        {{- end }}
+        {{- end }}
+      ports:
+        - number: 8080
+          protocol: http
+      readinessProbe:
+        # routes are registered only after Noco.init() finishes, so a 2xx here
+        # means migrations are done — 20 × 15s = a 300s first-boot budget
+        httpGet:
+          path: /api/v1/health
+          port: 8080
+          scheme: HTTP
+        initialDelaySeconds: 15
+        periodSeconds: 15
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /api/v1/health
+          port: 8080
+          scheme: HTTP
+        # long initial delay: never kill an instance part-way through a
+        # first-run meta-database migration
+        initialDelaySeconds: 300
+        periodSeconds: 30
+        failureThreshold: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+      {{- if eq .Values.storage.type "local" }}
+      volumes:
+        - path: /usr/app/data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "nocodb.storage.volumeset.name" . }}
+      {{- end }}
+  # no securityOptions.filesystemGroupId: the nocodb image declares no USER, so
+  # the process runs as root and writes to the mounted volumeset directly
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: {{ .Values.nocodb.replicas }}
+      maxScale: {{ .Values.nocodb.replicas }}
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 300   # headroom for large CSV/Excel imports and exports
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  rolloutOptions:
+    # roll one replica at a time and never drop below count - 1
+    maxSurgeReplicas: "0%"
+    maxUnavailableReplicas: "1"
+    minReadySeconds: 10
+    scalingPolicy: OrderedReady
+  supportDynamicTags: false

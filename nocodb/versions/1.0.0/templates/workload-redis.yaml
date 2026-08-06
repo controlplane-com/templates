@@ -1,0 +1,70 @@
+---
+kind: workload
+name: {{ include "nocodb.redis.name" . }}
+description: NocoDB Redis — socket.io adapter, metadata cache, rate limiting, job events
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "nocodb.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "nocodb.identity.name" . }}
+  containers:
+    - name: redis
+      image: {{ .Values.redis.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.redis.resources.minCpu | quote }}
+      cpu: {{ .Values.redis.resources.maxCpu | quote }}
+      minMemory: {{ .Values.redis.resources.minMemory | quote }}
+      memory: {{ .Values.redis.resources.maxMemory | quote }}
+      command: redis-server
+      # AOF + noeviction: an evicted key silently drops realtime fan-out and
+      # job-progress events.
+      args:
+        - --requirepass
+        - $(REDIS_PASSWORD)
+        - --appendonly
+        - "yes"
+        - --maxmemory-policy
+        - noeviction
+      env:
+        - name: REDIS_PASSWORD
+          value: cpln://secret/{{ include "nocodb.secret.creds.name" . }}.redisPassword
+      ports:
+        - number: 6379
+          protocol: tcp
+      readinessProbe:
+        exec:
+          command:
+            - sh
+            - -c
+            - redis-cli -a "$REDIS_PASSWORD" ping | grep -q PONG
+        initialDelaySeconds: 10
+        periodSeconds: 5
+        failureThreshold: 10
+        successThreshold: 1
+        timeoutSeconds: 3
+      volumes:
+        - path: /data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "nocodb.redis.volumeset.name" . }}
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+    capacityAI: false
+    debug: false
+    suspend: false
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      outboundAllowCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  supportDynamicTags: false

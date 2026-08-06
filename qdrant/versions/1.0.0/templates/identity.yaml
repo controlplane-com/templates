@@ -1,0 +1,5 @@
+kind: identity
+name: {{ include "qdrant.identity.name" . }}
+description: Qdrant workload identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "qdrant.tags" . | nindent 4 }}

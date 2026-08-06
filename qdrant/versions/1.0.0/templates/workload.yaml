@@ -1,0 +1,110 @@
+{{- include "qdrant.validate" . }}
+kind: workload
+name: {{ include "qdrant.name" . }}
+description: Qdrant vector database — REST :6333, gRPC :6334
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "qdrant.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "qdrant.identity.name" . }}
+  containers:
+    - name: qdrant
+      image: {{ .Values.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      env:
+        # Both durable directories live on the one mounted volumeset. Upstream
+        # defaults (./storage, ./snapshots) sit under WORKDIR /qdrant, which is
+        # the ephemeral container layer — snapshots would be lost on restart.
+        - name: QDRANT__STORAGE__STORAGE_PATH
+          value: /qdrant/data/storage
+        - name: QDRANT__STORAGE__SNAPSHOTS_PATH
+          value: /qdrant/data/snapshots
+        - name: QDRANT__SERVICE__MAX_REQUEST_SIZE_MB
+          value: {{ .Values.service.maxRequestSizeMb | quote }}
+        - name: QDRANT__SERVICE__ENABLE_STATIC_CONTENT
+          value: {{ .Values.service.dashboard | quote }}
+        - name: QDRANT__TELEMETRY_DISABLED
+          value: {{ .Values.service.telemetryDisabled | quote }}
+        {{- if .Values.auth.secretName }}
+        # API key from the user's prerequisite dictionary secret
+        - name: QDRANT__SERVICE__API_KEY
+          value: 'cpln://secret/{{ .Values.auth.secretName }}.api-key'
+        {{- if .Values.auth.readOnlyKey }}
+        - name: QDRANT__SERVICE__READ_ONLY_API_KEY
+          value: 'cpln://secret/{{ .Values.auth.secretName }}.read-only-api-key'
+        {{- end }}
+        {{- end }}
+      ports:
+        # 6333 MUST stay first — the canonical endpoint routes to the first port
+        - number: 6333
+          protocol: http
+        - number: 6334
+          protocol: grpc
+      volumes:
+        - path: /qdrant/data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "qdrant.volume.name" . }}
+      # /readyz, /livez and /healthz are on Qdrant's API-key whitelist, so the
+      # probes keep working with authentication enabled.
+      readinessProbe:
+        httpGet:
+          path: /readyz
+          port: 6333
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /livez
+          port: 6333
+          scheme: HTTP
+        initialDelaySeconds: 120
+        periodSeconds: 30
+        failureThreshold: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+  # Exactly one replica, always: distributed mode needs stable per-peer raft
+  # addressing that is not proven on this platform yet, and volumesets are
+  # per-replica — a second replica would serve a separate, empty store.
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 60
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  supportDynamicTags: false

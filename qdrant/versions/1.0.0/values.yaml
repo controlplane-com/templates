@@ -1,0 +1,47 @@
+# ─── Image ────────────────────────────────────────────────────────
+image: qdrant/qdrant:v1.18.3
+
+# ─── Resources ────────────────────────────────────────────────────
+# HNSW vector indexes are RAM-resident by default. Rough sizing:
+#   memory ≈ vectors × dimensions × 4 bytes × 1.5
+#   (200k vectors × 1536 dims ≈ 1.8 GiB)
+resources:
+  minCpu: 250m
+  maxCpu: 1000m
+  minMemory: 1Gi
+  maxMemory: 4Gi
+
+# ─── Storage ──────────────────────────────────────────────────────
+volumeset:
+  capacity: 20 # GiB (platform minimum 10) — collections, segments, WAL, Qdrant snapshots
+
+# ─── Backup (platform volume snapshots — no cloud account needed) ─
+backup:
+  enabled: true
+  schedule: "0 3 * * *" # cron in UTC — daily 03:00 (hourly is the platform max)
+  retention: 7d         # how long each snapshot is kept (e.g. 7d, 720h, 30d)
+
+# ─── Authentication (optional, strongly recommended) ──────────────
+# PREREQUISITE dictionary secret — create it BEFORE install:
+#   cpln secret create-dictionary --name my-qdrant-keys \
+#     --entry api-key=$(openssl rand -hex 32) \
+#     --entry read-only-api-key=$(openssl rand -hex 32)
+# Empty = no authentication; allowed ONLY while publicAccess is off.
+auth:
+  secretName: "" # e.g. my-qdrant-keys — REQUIRED when publicAccess.enabled is true
+  readOnlyKey: false # true = also wire `read-only-api-key` from the same secret
+
+# ─── Service ──────────────────────────────────────────────────────
+service:
+  dashboard: true # serve the built-in web UI at /dashboard (its static shell is unauthenticated)
+  maxRequestSizeMb: 32 # max POST body in MB; an over-size upsert is rejected with HTTP 400 and writes nothing
+  telemetryDisabled: true # true = send no anonymous usage reports upstream
+
+# ─── Access ───────────────────────────────────────────────────────
+publicAccess:
+  enabled: false # true = REST API (+ dashboard) over HTTPS on the auto *.cpln.app endpoint; gRPC stays internal
+internalAccess:
+  type: same-gvc # none | same-gvc | same-org | workload-list
+  workloads: [] # used only with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME

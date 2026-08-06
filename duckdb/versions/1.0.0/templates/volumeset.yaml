@@ -1,0 +1,19 @@
+{{- if .Values.storage.enabled }}
+{{- /*
+  fileSystemType MUST be `shared`. The platform rejects an `ext4` volumeset on a
+  cron workload outright — "volumeset ... uses fileSystemType ext4, which can
+  only be used by workloads of type: stateful or vm" (verified 2026-08-06).
+  `shared` is safe here only because this template keeps no .duckdb database
+  file: upstream advises against DuckDB's native format in read-write mode on
+  network-attached storage, and the volume holds nothing but the extension cache
+  and query spill.
+*/}}
+kind: volumeset
+name: {{ include "duckdb.volume.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: DuckDB extension cache and query spill
+tags: {{- include "duckdb.tags" . | nindent 4 }}
+spec:
+  fileSystemType: shared
+  initialCapacity: {{ int .Values.storage.capacity }}
+{{- end }}

@@ -1,0 +1,63 @@
+# DuckDB runs a SQL script on a schedule and exits. It binds no port and is NOT a
+# query service — if you want an always-on SQL endpoint, install `trino` instead.
+image: duckdb/duckdb:1.5.5
+
+# ─── Schedule ─────────────────────────────────────────────────────────────────
+schedule: "0 2 * * *" # cron expression in UTC — always quote it (e.g. "*/15 * * * *")
+suspend: false # true = never run automatically; start it with `cpln workload cron start`
+activeDeadlineSeconds: 3600 # a run still going after this many seconds is terminated
+
+# ─── SQL ──────────────────────────────────────────────────────────────────────
+# The script the job runs. `secretName` wins when both are set.
+sql:
+  inline: |
+    -- Default self-test. Replace with your own transform.
+    SELECT 'duckdb-template-ok' AS status, version() AS duckdb_version, now() AS run_at;
+  secretName: "" # opaque secret (encoding plain, payload = SQL) used INSTEAD of inline, e.g. my-duckdb-script
+
+# Environment variables sourced from Control Plane secrets and read in your SQL as
+# getenv('NAME'). Use this for database passwords — never write one into the SQL.
+secretEnv: []
+# secretEnv:
+#   - name: PG_PASSWORD
+#     secretName: my-postgres-credentials # must exist BEFORE install
+#     secretKey: password # omit for an opaque secret (uses its payload)
+
+# ─── Resources ────────────────────────────────────────────────────────────────
+# DuckDB reads the HOST's RAM and core count, not the container's limits, so the
+# template derives memory_limit and threads from these and sets them explicitly.
+# maxCpu:minCpu may not exceed 4:1.
+resources:
+  minCpu: 500m
+  maxCpu: 2000m # also sets DuckDB threads: one per whole core, minimum 1
+  minMemory: 1Gi
+  maxMemory: 4Gi
+
+tuning:
+  memoryLimitPercent: 60 # DuckDB memory_limit = this percent of maxMemory (20–80)
+
+# ─── Storage ──────────────────────────────────────────────────────────────────
+# Shared (network) volume at /data holding the extension cache and larger-than-
+# memory spill — cron workloads cannot mount a block volume. No .duckdb database
+# file is kept: write results to object storage or an attached database.
+# Disable only if every job fits in memory and can re-download extensions.
+storage:
+  enabled: true
+  capacity: 10 # GiB (platform minimum is 10)
+
+# ─── Object storage ───────────────────────────────────────────────────────────
+# Registers a DuckDB S3 secret so your SQL can read and write s3:// paths.
+objectStore:
+  type: none # options: none, aws, s3-compatible
+
+  aws: # keyless — credentials come from the workload identity, no keys anywhere
+    region: us-east-1
+    cloudAccountName: my-s3-cloud-account # must exist BEFORE install
+    policyName: my-duckdb-bucket-policy # IAM policy scoped to your bucket (see README)
+
+  s3Compatible: # SeaweedFS, MinIO, Cloudflare R2, GCS interoperability, Tigris
+    endpoint: my-seaweedfs.my-gvc.cpln.local:8333 # host:port, no http:// prefix
+    region: us-east-1
+    urlStyle: path # options: path, vhost
+    useSsl: false
+    credentialsSecretName: my-duckdb-s3-credentials # dictionary secret: access-key-id, secret-access-key

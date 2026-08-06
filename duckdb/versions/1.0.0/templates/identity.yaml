@@ -1,0 +1,13 @@
+{{- include "duckdb.validate" . -}}
+kind: identity
+name: {{ include "duckdb.identity.name" . }}
+description: DuckDB job identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "duckdb.tags" . | nindent 4 }}
+{{- if eq .Values.objectStore.type "aws" }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.objectStore.aws.cloudAccountName }}
+  policyRefs:
+    - cpln-connector
+    - {{ .Values.objectStore.aws.policyName | quote }}
+{{- end }}

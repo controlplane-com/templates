@@ -100,7 +100,8 @@ Endpoint and credentials for the common catalog consumers:
 | Consumer template | Values to set |
 |---|---|
 | `postgres-highly-available`, `timescaledb-highly-available` | `backup.provider: minio`, `backup.minio.endpoint: http://<release>-seaweedfs:8333`, `backup.minio.bucket`, `backup.minio.accessKey` / `backup.minio.secretKey` = the two values in the prerequisite secret |
-| `thanos`, `mimir`, `prometheus` | `storage.type: minio`, `storage.minio.endpoint: <release>-seaweedfs.<gvc>.cpln.local:8333` (no scheme), `storage.minio.insecure: true`, `storage.minio.region: us-east-1`, `accessKey` / `accessSecret` |
+| `thanos`, `mimir` | `storage.type: minio`, `storage.minio.endpoint: <release>-seaweedfs.<gvc>.cpln.local:8333` (no scheme), `storage.minio.insecure: true`, `storage.minio.region: us-east-1`, `accessKey` / `accessSecret` |
+| `prometheus` | same fields but under the Thanos sidecar: `thanos.objectStorage.enabled: true`, `thanos.objectStorage.type: minio`, `thanos.objectStorage.minio.*` — there is no top-level `storage:` key |
 | `docmost` | `storage.type: s3`, `storage.s3.endpoint: http://<release>-seaweedfs:8333`, `storage.s3.forcePathStyle: true`, `storage.s3.bucket`, `storage.s3.region: us-east-1`, and `storage.s3.auth.secretName` = a **separate** dictionary secret whose keys are `AWS_S3_ACCESS_KEY_ID` / `AWS_S3_SECRET_ACCESS_KEY` (docmost uses different key names than this template's secret — the values are the same, the keys are not) |
 | `sftpgo`, `n8n`, `metabase`, `keycloak`, `unleash` | their S3-compatible endpoint knob + the same static access/secret key pair |
 

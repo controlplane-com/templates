@@ -1,10 +1,10 @@
 image: prom/prometheus:v3.13.1
 
 resources: # Prometheus server; memory scales with active series
-  cpu: 1000m
-  memory: 2Gi
   minCpu: 500m
+  maxCpu: 1000m
   minMemory: 1Gi
+  maxMemory: 2Gi
 
 # ─── TSDB ──────────────────────────────────────────────────────────────────────
 retention:
@@ -33,10 +33,10 @@ thanos:
     enabled: true # co-located sidecar exposing the Store API (gRPC :10901) for a Thanos Query tier
     image: quay.io/thanos/thanos:v0.42.2
     resources:
-      cpu: 250m
-      memory: 512Mi
       minCpu: 100m
+      maxCpu: 250m
       minMemory: 128Mi
+      maxMemory: 512Mi
   # Sidecar uploads TSDB blocks to a bucket — recommended for production durability.
   objectStorage:
     enabled: false # requires thanos.sidecar.enabled
@@ -67,6 +67,8 @@ thanos:
 # ─── Access ────────────────────────────────────────────────────────────────────
 # Internal-only: Prometheus has no built-in authentication, so this template
 # never exposes a public endpoint. Scope which workloads may connect below.
+# Port 9095 also serves the built-in web UI (Targets, expression browser) — see
+# the README's Web UI section for reaching it from inside the GVC.
 internalAccess:
   type: same-gvc # options: none, same-gvc, same-org, workload-list
   workloads: [] # with workload-list, e.g. //gvc/GVC/workload/NAME — cross-GVC callers allowed

@@ -2,7 +2,7 @@ apiVersion: v2
 name: prometheus
 description: Prometheus metrics database with remote-write ingestion, durable TSDB storage, and an optional Thanos sidecar exposing a Store API and uploading blocks to object storage
 type: application
-version: 1.0.0
+version: 1.1.0
 appVersion: "3.13.1"
 
 dependencies:
@@ -12,6 +12,6 @@ dependencies:
 
 annotations:
   created: "2026-07-29"
-  lastModified: "2026-08-04"
+  lastModified: "2026-08-06"
   category: "observability"
   createsGvc: false

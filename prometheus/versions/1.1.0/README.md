@@ -27,10 +27,10 @@ None for a default install. Depending on the features you enable:
 image: prom/prometheus:v3.13.1
 
 resources:            # memory scales with active series
-  cpu: 1000m
-  memory: 2Gi
   minCpu: 500m
+  maxCpu: 1000m
   minMemory: 1Gi
+  maxMemory: 2Gi
 ```
 
 ### TSDB
@@ -80,6 +80,11 @@ thanos:
   sidecar:
     enabled: true     # Store API (gRPC :10901) for a Thanos Query tier
     image: quay.io/thanos/thanos:v0.42.2
+    resources:
+      minCpu: 100m
+      maxCpu: 250m
+      minMemory: 128Mi
+      maxMemory: 512Mi
   objectStorage:
     enabled: false    # sidecar uploads TSDB blocks to your bucket; requires sidecar.enabled
     type: aws         # aws | gcp | minio
@@ -155,12 +160,36 @@ internalAccess:
 |---|---|
 | Remote-write ingest (from your senders) | `http://RELEASE-prometheus.GVC.cpln.local:9095/api/v1/write` |
 | PromQL / Grafana datasource | `http://RELEASE-prometheus.GVC.cpln.local:9095` |
+| Built-in web UI (see [Web UI](#web-ui)) | `http://RELEASE-prometheus.GVC.cpln.local:9095/query` |
 | Thanos Store API, same GVC | `RELEASE-prometheus:10901` |
 | Thanos Store API, cross-GVC | `RELEASE-prometheus.GVC.cpln.local:10901` |
 
 For cross-GVC callers (e.g. a Thanos Query tier in another GVC), set `internalAccess.type` to `same-org`, or `workload-list` naming the caller. Cross-location internal traffic incurs egress charges — co-locate the query tier with its stores where practical.
 
 Use the service-level DNS name above — this workload is single-replica by design, so it addresses the one replica directly and is the most reliable path. (The per-replica form `replica-0.RELEASE-prometheus.LOCATION.GVC.cpln.local:10901` also exists but adds no value for a single-replica workload.)
+
+## Web UI
+
+Prometheus serves its own web interface on the same port as the API (`:9095`), with no extra configuration. The pages that matter most when something is wrong:
+
+| Page | Path | What it answers |
+|---|---|---|
+| Targets | `/targets` | Every scrape target, its last scrape time, and the exact error when a scrape fails — **the first place to look when an expected metric never appears.** |
+| Service discovery | `/service-discovery` | Discovered targets before and after relabeling — shows targets your relabel rules dropped. |
+| Expression browser | `/query` | Ad-hoc PromQL with table and graph views (`/` and `/graph` both redirect here). |
+| Configuration | `/config` | The running `prometheus.yml` exactly as Prometheus parsed it — confirms your `extraScrapeConfigs` landed. |
+| TSDB status | `/tsdb-status` | Head-block cardinality by metric and label — the answer to "why is memory growing?". |
+
+Access is internal-only, so reach it from inside the GVC. Each page also has a JSON API equivalent, which is the practical form from a shell:
+
+```bash
+# from any workload in the same GVC (substitute your own workload and GVC)
+cpln workload exec MY-WORKLOAD --gvc MY-GVC -- curl -s http://RELEASE-prometheus.GVC.cpln.local:9095/api/v1/targets
+```
+
+`/api/v1/targets`, `/api/v1/status/config`, and `/api/v1/status/tsdb` back the Targets, Configuration, and TSDB status pages respectively.
+
+**Prometheus has no authentication of its own** — anyone who can reach port 9095 gets full read access and can run arbitrary PromQL — which is why this template offers `internalAccess` only and no public exposure. For a browser-facing, authenticated query UI, install the **grafana** template in the same GVC and add a Prometheus datasource pointing at `http://RELEASE-prometheus.GVC.cpln.local:9095`.
 
 ## High availability
 

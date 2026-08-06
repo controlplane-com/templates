@@ -61,6 +61,7 @@ storage:
       # ONLY for S3-compatible servers (requires endpoint set). AWS S3 is always
       # keyless via the cloud account (e.g. my-nocodb-s3-keys).
       secretName: ""
+  fileUploadSizeLimit: 20971520   # max single attachment size in BYTES (NC_ATTACHMENT_FIELD_SIZE); 20971520 = 20 MiB
 
 # ─── SMTP / email (optional) ──────────────────────────────────────
 # Off by default. With SMTP off, member invitations and password-reset emails

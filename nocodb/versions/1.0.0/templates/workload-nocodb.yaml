@@ -63,6 +63,12 @@ spec:
         # ── Tool dir: local attachments and thumbnails resolve under this ──
         - name: NC_APP_DATA_DIR
           value: /usr/app/data
+        # ── Max single attachment size, in bytes (applies to both storage modes);
+        #    an upload over the limit is rejected with "File is too large" ──
+        # int64: a plain byte count in values.yaml is loaded as a float and
+        # would otherwise render as "2.097152e+07"
+        - name: NC_ATTACHMENT_FIELD_SIZE
+          value: {{ .Values.storage.fileUploadSizeLimit | int64 | quote }}
         {{- if .Values.admin.secretName }}
         # ── Super-admin bootstrap (optional prerequisite dictionary secret).
         #    Re-applied on EVERY boot: a password changed in the UI is reverted. ──

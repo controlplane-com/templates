@@ -138,6 +138,9 @@ true
 {{- if and (gt (int .Values.nocodb.replicas) 1) (ne .Values.storage.type "s3") -}}
 {{- fail "nocodb: nocodb.replicas > 1 requires storage.type: s3 — local attachments live on a per-replica volumeset and would 404 across replicas" -}}
 {{- end -}}
+{{- if lt (int .Values.storage.fileUploadSizeLimit) 1 -}}
+{{- fail (printf "nocodb: storage.fileUploadSizeLimit must be at least 1 (bytes), got '%v' — a value of 0 silently falls back to NocoDB's 20 MiB default" .Values.storage.fileUploadSizeLimit) -}}
+{{- end -}}
 {{- if eq .Values.storage.type "s3" -}}
 {{- if not .Values.storage.s3.bucket -}}
 {{- fail "nocodb: storage.s3.bucket is required when storage.type is s3" -}}

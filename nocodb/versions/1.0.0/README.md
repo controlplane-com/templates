@@ -83,6 +83,7 @@ storage:
     policyName: my-nocodb-s3-policy         # your pre-created IAM policy (JSON below)
     auth:
       secretName: ""          # optional dictionary secret with NC_S3_ACCESS_KEY + NC_S3_ACCESS_SECRET; required for MinIO
+  fileUploadSizeLimit: 20971520   # max single attachment size in BYTES (upstream default 20971520 = 20 MiB); applies to both storage modes
 ```
 
 ### SMTP / email (optional)
@@ -212,8 +213,7 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`c
 
 ## Important Notes
 
-- **The prerequisite secret must exist before install** — `secrets.name` is a dictionary secret holding `NC_AUTH_JWT_SECRET` and `NC_CONNECTION_ENCRYPT_KEY`; a missing secret wedges the deployment and looks like a broken install.
-- **Both of those keys are write-once** — rotating `NC_AUTH_JWT_SECRET` logs out every user; changing `NC_CONNECTION_ENCRYPT_KEY` makes stored external-data-source credentials undecryptable.
+- **The prerequisite secret must exist before install** — `secrets.name` is a dictionary secret holding `NC_AUTH_JWT_SECRET` and `NC_CONNECTION_ENCRYPT_KEY`; a missing secret wedges the deployment and looks like a broken install. Both keys are write-once: rotating `NC_AUTH_JWT_SECRET` logs out every user, and changing `NC_CONNECTION_ENCRYPT_KEY` makes stored external-data-source credentials undecryptable.
 - **Signup is open by default** — with public access on, anyone who reaches the URL can create an account. Invite-only is an in-app setting (Team & Settings), not an environment variable, so turn it on in the UI right after install.
 - **`admin.secretName` re-applies on every boot** — if set, the password in that secret is re-imposed at each restart, silently reverting a password changed in the UI. Either leave it empty or treat the secret as the source of truth.
 - **`nocodb.replicas > 1` requires `storage.type: s3`** — local attachments live on per-replica volumes and would 404 across replicas; the chart refuses to render otherwise.

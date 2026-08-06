@@ -4,6 +4,12 @@ High-level, user-facing catalog changes by month: new templates and notable vers
 
 ## 2026-08
 
+- **New template: seaweedfs 1.0.0** — S3-compatible object storage usable as the backup and attachment target for any catalog template that speaks S3
+- **New template: trino 1.0.0** — distributed SQL engine that answers a single query across PostgreSQL, MySQL, ClickHouse, MongoDB and more, with a scalable worker tier
+- **New template: qdrant 1.0.0** — vector database for semantic search and RAG, with API-key authentication, snapshots, and durable on-disk storage
+- **New template: chatwoot 1.0.0** — open-source customer-support platform with a shared inbox, live chat widget, and real-time agent updates, backed by PostgreSQL and Redis
+- **New template: twenty 1.0.0** — open-source CRM with a customizable data model, REST and GraphQL APIs, and a background worker for automations
+- **redis 3.5.0** — Redis 8 by default (adds an AGPL-licensed option), plus scheduled backups now accept `*/5`-style cron expressions
 - **New template: openbao 1.0.0** — OpenBao secrets engine (Vault-compatible: KV, dynamic secrets, PKI, transit) on raft storage, with auto-unseal via a static key or AWS/GCP KMS
 - **New template: grafana 1.0.0** — Grafana OSS dashboards over your own datasources, with datasource provisioning as code, horizontal scaling (`replicas`), and Redis-backed alerting HA
 - **New template: docmost 1.0.0** — open-source knowledge base and wiki with real-time collaborative editing, backed by PostgreSQL and Redis, with local or S3 attachment storage

@@ -229,6 +229,9 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`c
 
 ## Important Notes
 
+- **Restart the web workload after any Redis restart.** If the bundled Redis restarts (a redeploy, a reschedule, or an upgrade), background jobs and the cache reconnect on their own, but the web tier's real-time subscriber does **not** — live updates stop silently. Nothing is logged and the health endpoint stays green, so the only symptom is that agents and visitors stop seeing new messages until they refresh. Force-redeploy the `{release}-chatwoot` workload to restore it (about 3–4 minutes).
+- **Expect a few minutes of 503s during `helm upgrade`.** The upgrade restarts the bundled Redis, and the web readiness endpoint reports unhealthy without Redis, so every replica leaves the load balancer until Redis is back — measured at roughly 32% failed requests over a ~3 minute window. Upgrade during a quiet period.
+
 - **Choose the database mode before installing — it cannot be switched later.** Flipping `postgresHA.enabled` / `postgres.enabled` on a live release points Chatwoot at a different, empty database (separate volume set, and a different PostgreSQL major: 17.5 for the HA path, 18 for single-instance), so the app re-runs onboarding and your existing data is orphaned rather than migrated.
 
 - **The prerequisite secret must exist before install** — a missing `secrets.name` secret wedges the deployment and looks broken.

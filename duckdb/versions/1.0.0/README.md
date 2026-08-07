@@ -37,8 +37,10 @@ image: duckdb/duckdb:1.5.5
 ```yaml
 schedule: "0 2 * * *" # cron expression in UTC — always quote it (e.g. "*/15 * * * *")
 suspend: false # true = never run automatically; start it with `cpln workload cron start`
-activeDeadlineSeconds: 3600 # a run still going after this many seconds is terminated
+activeDeadlineSeconds: 3600 # a run still going is terminated within ~2 min of this
 ```
+
+The deadline is detected on time but enforced with some lag — observed terminations ran roughly one to two minutes past it. Size schedules with that slack in mind rather than treating it as a hard cut.
 
 ### SQL
 
@@ -61,17 +63,28 @@ printf '%s' "SELECT 42 AS answer;" | cpln secret create-opaque --name my-duckdb-
 ```yaml
 secretEnv: []
 # secretEnv:
-#   - name: PG_PASSWORD
+#   - name: PGPASSWORD
 #     secretName: my-postgres-credentials # must exist BEFORE install
 #     secretKey: password # omit for an opaque secret (uses its payload)
 ```
 
-Each entry becomes a container environment variable sourced from a Control Plane secret, read in your SQL with `getenv('NAME')`. This is how an `ATTACH` of an in-GVC database gets its password without the password ever appearing in your values file:
+Each entry becomes a container environment variable sourced from a Control Plane secret, and is readable in your SQL with `getenv('NAME')`.
+
+**`getenv()` cannot be concatenated into an `ATTACH` string.** `ATTACH` takes a string *literal*, not an expression, so `'... password=' || getenv('PGPASSWORD')` fails with `Parser Error: syntax error at or near "||"`. This applies equally to the `postgres`, `mysql` and `sqlite` attach types.
+
+Instead, name the variable after the database driver's own password variable and leave the password out of the `ATTACH` string entirely — the driver picks it up from the environment:
+
+| Attach type | Name the `secretEnv` entry |
+|---|---|
+| `postgres` | `PGPASSWORD` |
+| `mysql` | `MYSQL_PWD` |
 
 ```sql
-ATTACH 'dbname=postgres user=postgres host=my-postgres.my-gvc.cpln.local password=' || getenv('PG_PASSWORD') AS pg (TYPE postgres);
+ATTACH 'dbname=postgres user=postgres host=my-postgres.my-gvc.cpln.local' AS pg (TYPE postgres, READ_ONLY);
 COPY (SELECT * FROM pg.public.events) TO 's3://my-bucket/events.parquet' (FORMAT parquet);
 ```
+
+`getenv('NAME')` still works anywhere an ordinary expression is allowed — a `WHERE` clause, a computed column, a `COPY` destination built with `||`. The restriction is specific to `ATTACH`.
 
 The four AWS credential variable names are rejected here — object-store credentials are owned by `objectStore`.
 
@@ -196,7 +209,7 @@ This template exposes nothing to connect to — it is a job, not a server. Obser
 ## Important Notes
 
 - **This is a batch job, not a query service.** Nothing is listening after install; that is correct behavior. For an always-on SQL endpoint that BI tools connect to, use the `trino` template.
-- **Alert on the absence of `duckdb-job-complete`, not on the exit status.** DuckDB's CLI can exit 0 on some failed scripts ([upstream issue #16574](https://github.com/duckdb/duckdb/issues/16574)). The template sets `.bail on`, so the marker prints only after your script finishes cleanly.
+- **A run succeeded only if `duckdb-job-complete` is in the log AND the run status is `Successful`** — check both, never either alone. DuckDB's CLI can exit 0 on some failed scripts ([upstream issue #16574](https://github.com/duckdb/duckdb/issues/16574)), and a run killed at its deadline can still print the marker on the way out.
 - **Never `SET memory_limit` higher than the container.** Change `tuning.memoryLimitPercent` instead — the template derives the real limit from `resources.maxMemory`, and DuckDB left to itself targets 80% of the *host* machine and gets OOM-killed.
 - **Every job must fit in memory.** No volume is attached, so size the work with `resources.maxMemory` (and `tuning.memoryLimitPercent`) rather than relying on spill. DuckDB's out-of-core operators still work, but they spill to container-local scratch bounded by container disk, not to a sized volume — do not plan around it.
 - **No `.duckdb` database file is kept.** Every run starts from an empty in-memory database; write results to object storage or an attached database.

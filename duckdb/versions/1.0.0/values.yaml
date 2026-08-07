@@ -5,7 +5,7 @@ image: duckdb/duckdb:1.5.5
 # ─── Schedule ─────────────────────────────────────────────────────────────────
 schedule: "0 2 * * *" # cron expression in UTC — always quote it (e.g. "*/15 * * * *")
 suspend: false # true = never run automatically; start it with `cpln workload cron start`
-activeDeadlineSeconds: 3600 # a run still going after this many seconds is terminated
+activeDeadlineSeconds: 3600 # a run still going is terminated within ~2 min of this
 
 # ─── SQL ──────────────────────────────────────────────────────────────────────
 # The script the job runs. `secretName` wins when both are set.
@@ -15,11 +15,13 @@ sql:
     SELECT 'duckdb-template-ok' AS status, version() AS duckdb_version, now() AS run_at;
   secretName: "" # opaque secret (encoding plain, payload = SQL) used INSTEAD of inline, e.g. my-duckdb-script
 
-# Environment variables sourced from Control Plane secrets and read in your SQL as
-# getenv('NAME'). Use this for database passwords — never write one into the SQL.
+# Environment variables sourced from Control Plane secrets, readable in your SQL
+# as getenv('NAME'). For an ATTACHed database name the entry after the driver's
+# own password variable (PGPASSWORD, MYSQL_PWD) — ATTACH takes a string literal,
+# so getenv() cannot be concatenated into its connection string.
 secretEnv: []
 # secretEnv:
-#   - name: PG_PASSWORD
+#   - name: PGPASSWORD
 #     secretName: my-postgres-credentials # must exist BEFORE install
 #     secretKey: password # omit for an opaque secret (uses its payload)
 

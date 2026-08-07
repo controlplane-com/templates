@@ -67,7 +67,7 @@ by `stateful` and `vm` workloads ("volumeset ... uses fileSystemType ext4, which
 can only be used by workloads of type: stateful or vm", verified 2026-08-06), and
 network-attached storage is the wrong fit for a scratch path. So both settings
 point at container-local scratch under /tmp, which is writable in the distroless
-image (verified 2026-08-06: INSTALL httpfs lands in /tmp/duckdb/extensions with
+image (verified 2026-08-06: INSTALL httpfs lands in /tmp/duckdb-extensions with
 no volume attached). Consequences — extensions re-download every run, and spill
 is bounded by container disk — are documented in the README.
 

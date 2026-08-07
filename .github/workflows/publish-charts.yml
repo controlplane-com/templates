@@ -22,9 +22,17 @@ on:
         type: string
         default: ''
 
+# One run per branch at a time: a new push supersedes its own stale run instead of
+# queueing behind it. main is never cancelled — a half-finished production publish
+# is worse than a slow one.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   setup:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       version_dirs: ${{ steps.charts.outputs.version_dirs }}
       charts: ${{ steps.charts.outputs.charts }}
@@ -63,6 +71,7 @@ jobs:
     needs: [setup, validate]
     if: always() && (needs.setup.outputs.version_dirs != '' || needs.setup.outputs.charts != '') && (needs.validate.result == 'success' || needs.validate.result == 'skipped')
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -92,6 +101,19 @@ jobs:
         run: |
           mkdir -p .packaged
 
+          # The OCI registry throttles when several runs pull cpln-common at once.
+          # Bound each attempt and retry with backoff, and never hide the reason.
+          helm_dep_update() {
+            local dir="$1" n=1
+            while [ "$n" -le 3 ]; do
+              if timeout 300 helm dependency update "$dir"; then return 0; fi
+              echo "helm dependency update failed for $dir (attempt $n/3)"
+              [ "$n" -lt 3 ] && sleep $((n * 15))
+              n=$((n + 1))
+            done
+            return 1
+          }
+
           package_and_push() {
             local version_dir="${1%/}"
             if [ -f "$version_dir/Chart.yaml" ]; then
@@ -102,7 +124,10 @@ jobs:
                 return
               fi
               echo "Packaging $template @ $version..."
-              helm dependency update "$version_dir" || true
+              if ! helm_dep_update "$version_dir"; then
+                echo "Skipping $template @ $version - dependency update failed"
+                return
+              fi
               helm package "$version_dir" -d .packaged/ || { echo "Skipping $template @ $version - package error"; return; }
               helm push ".packaged/$template-$version.tgz" \
                 ${{ steps.registry.outputs.path }} || { echo "Skipping push $template @ $version"; return; }

@@ -1,0 +1,59 @@
+# ─── Image ────────────────────────────────────────────────────────────────────
+image: getmeili/meilisearch:v1.52.0
+
+# ─── Resources ────────────────────────────────────────────────────────────────
+# Searches are served from a memory-mapped index, so steady-state RAM is modest;
+# indexing is the hungry phase. Upstream sizing guide: RAM ≈ ⅓ of on-disk index.
+resources:
+  minCpu: 250m
+  maxCpu: 1000m
+  minMemory: 512Mi
+  maxMemory: 2Gi
+
+tuning:
+  indexingMemoryPercent: 50 # MEILI_MAX_INDEXING_MEMORY = this percent of maxMemory (20–80)
+
+# ─── Storage ──────────────────────────────────────────────────────────────────
+volumeset:
+  capacity: 20 # GiB (platform minimum 10) — index, snapshots and dumps share it
+
+# ─── Master key (REQUIRED — create the secret BEFORE installing) ──────────────
+# The workload will NOT start until this opaque secret exists. Create it with:
+#   printf '%s' "$(openssl rand -base64 32)" | \
+#     cpln secret create-opaque --name my-meilisearch-master-key --encoding plain -f -
+# Must be at least 16 bytes while server.env is production.
+# Changing it later regenerates every Meilisearch API key derived from it.
+auth:
+  secretName: my-meilisearch-master-key # name of your pre-created opaque secret
+
+# ─── Server ───────────────────────────────────────────────────────────────────
+server:
+  env: production            # production | development — development also serves the search-preview UI at /
+  logLevel: INFO             # ERROR | WARN | INFO | DEBUG | TRACE
+  maxPayloadSize: "100 MB"   # largest accepted request body; a bigger import is rejected with HTTP 413
+  telemetry: false           # true = send anonymous usage data upstream
+  upgradeDb: false           # true for ONE deploy when moving to a newer image tag, then set back to false
+
+# ─── Metrics (experimental upstream) ──────────────────────────────────────────
+metrics:
+  enabled: false # true = Prometheus /metrics on port 7700 (needs an API key with the metrics.get action)
+
+# ─── Meilisearch snapshots (app-consistent files on the volumeset) ────────────
+snapshots:
+  enabled: false         # scheduled .snapshot files in /meili_data/snapshots — only the newest is kept
+  intervalSeconds: 86400 # seconds between snapshots
+
+# ─── Backup (platform volume snapshots — no cloud account needed) ─────────────
+backup:
+  enabled: true
+  schedule: "0 3 * * *" # cron in UTC — daily 03:00 (hourly is the platform max)
+  retention: 7d         # how long each snapshot is kept (e.g. 7d, 720h, 30d)
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: false # true = REST API over HTTPS on the auto *.cpln.app endpoint
+internalAccess:
+  type: same-gvc # none | same-gvc | same-org | workload-list
+  workloads: []  # used only with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME

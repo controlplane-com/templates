@@ -1,0 +1,5 @@
+kind: identity
+name: {{ include "meilisearch.identity.name" . }}
+description: Meilisearch workload identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "meilisearch.tags" . | nindent 4 }}

@@ -1,0 +1,22 @@
+kind: policy
+name: {{ include "grafana.policy.name" . }}
+description: Grafana secret access
+tags: {{- include "grafana.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "grafana.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "grafana.secretAdmin.name" . }}
+  - //secret/{{ include "grafana.postgres.secret.name" . }}
+  {{- if .Values.datasources.definitions }}
+  - //secret/{{ include "grafana.secretDatasources.name" . }}
+  {{- end }}
+  {{- range .Values.datasources.credentialSecrets }}
+  - //secret/{{ .name }}
+  {{- end }}
+  {{- if and .Values.smtp.enabled .Values.smtp.passwordSecretName }}
+  - //secret/{{ .Values.smtp.passwordSecretName }}
+  {{- end }}

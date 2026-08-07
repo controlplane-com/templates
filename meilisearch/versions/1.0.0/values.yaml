@@ -10,6 +10,9 @@ resources:
   minMemory: 512Mi
   maxMemory: 2Gi
 
+tuning:
+  indexingMemoryPercent: 50 # MEILI_MAX_INDEXING_MEMORY = this percent of maxMemory (20–80)
+
 # ─── Storage ──────────────────────────────────────────────────────────────────
 volumeset:
   capacity: 20 # GiB (platform minimum 10) — index, snapshots and dumps share it
@@ -28,7 +31,6 @@ server:
   env: production            # production | development — development also serves the search-preview UI at /
   logLevel: INFO             # ERROR | WARN | INFO | DEBUG | TRACE
   maxPayloadSize: "100 MB"   # largest accepted request body; a bigger import is rejected with HTTP 413
-  maxIndexingMemory: "1 GiB" # keep at ≈½ of resources.maxMemory — unset, Meilisearch budgets from HOST RAM
   telemetry: false           # true = send anonymous usage data upstream
   upgradeDb: false           # true for ONE deploy when moving to a newer image tag, then set back to false
 

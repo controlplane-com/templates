@@ -42,7 +42,12 @@ resources:
   maxCpu: 1000m
   minMemory: 512Mi
   maxMemory: 2Gi
+
+tuning:
+  indexingMemoryPercent: 50 # MEILI_MAX_INDEXING_MEMORY = this percent of maxMemory (20–80)
 ```
+
+Left to itself Meilisearch budgets two thirds of the RAM it detects — in a container that is routinely the node's, not your limit — and OOM-kills itself part-way through an indexing task. So the template derives the budget from `resources.maxMemory` and sets it explicitly: at the defaults that is `MEILI_MAX_INDEXING_MEMORY=1024MiB`, and with `maxMemory: 8Gi` it becomes `4096MiB`. There is deliberately no absolute override, so the two can never drift apart. Raise `maxMemory` to index faster; raise `indexingMemoryPercent` only if the instance is indexing far more often than it searches.
 
 ### Storage
 
@@ -65,7 +70,6 @@ server:
   env: production            # production | development — development also serves the search-preview UI at /
   logLevel: INFO             # ERROR | WARN | INFO | DEBUG | TRACE
   maxPayloadSize: "100 MB"   # largest accepted request body; a bigger import is rejected with HTTP 413
-  maxIndexingMemory: "1 GiB" # keep at ≈½ of resources.maxMemory — unset, Meilisearch budgets from HOST RAM
   telemetry: false           # true = send anonymous usage data upstream
   upgradeDb: false           # true for ONE deploy when moving to a newer image tag, then set back to false
 ```
@@ -140,7 +144,7 @@ curl -H "Authorization: Bearer <master-key>" http://{release}-meilisearch.{gvc}.
 - **`server.env: production` does not serve the search-preview UI.** `GET /` returns `{"status":"Meilisearch is running"}` — that is a healthy instance, not a failed one. Set `server.env: development` if you want the browser search playground at `/`; the master key still protects every route either way.
 - **Rotating the master key changes every API key.** Meilisearch derives all four keys from it, so a rotation silently breaks every deployed client. Treat it as write-once, or plan to redistribute all keys.
 - **Raising the image tag on a populated volume fails by design** — Meilisearch refuses to open a database written by an older version. Set `server.upgradeDb: true` for exactly one deploy, then set it back to `false`. The upgrade is **not atomic**: confirm a recent backup exists first.
-- **Move `server.maxIndexingMemory` whenever you move `resources.maxMemory`.** Meilisearch sizes its indexing budget from the *host's* RAM, not the container limit, which is why this template sets it explicitly. Too high and indexing gets OOM-killed; too low and it under-uses the container.
+- **Size indexing with `resources.maxMemory`, not with a Meilisearch setting.** The indexing budget is derived from it (`tuning.indexingMemoryPercent`, default 50%) and there is no absolute override, so the two cannot drift apart — Meilisearch left to itself over-budgets from detected RAM and gets OOM-killed while indexing.
 - **Single replica, by design and by edition.** Replication and sharding are Meilisearch Enterprise features and are not compiled into the Community image this template ships, so there is no `replicas` knob and no failover. A restart or upgrade is a real outage of the search endpoint — have your application fall back to a database query when search is unavailable.
 - **Install into a single-location GVC.** A workload runs in every location its GVC has, and each location gets its own volume — two locations means two independent indexes diverging silently behind one endpoint.
 - **Uninstall deletes the volumeset** (a final snapshot is kept for `backup.retention`); your master-key secret is left untouched.

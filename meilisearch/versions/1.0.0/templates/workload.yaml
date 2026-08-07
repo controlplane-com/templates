@@ -38,10 +38,12 @@ spec:
           value: {{ .Values.server.logLevel | quote }}
         - name: MEILI_HTTP_PAYLOAD_SIZE_LIMIT
           value: {{ .Values.server.maxPayloadSize | quote }}
-        # Never left to the default: Meilisearch budgets two thirds of the HOST's
-        # RAM, not the container limit, and OOM-kills itself while indexing.
+        # Never left to the default, and never hand-written: derived from
+        # resources.maxMemory so it cannot drift from the container's own limit.
+        # Left alone, Meilisearch budgets two thirds of the RAM it detects and
+        # OOM-kills itself while indexing.
         - name: MEILI_MAX_INDEXING_MEMORY
-          value: {{ .Values.server.maxIndexingMemory | quote }}
+          value: {{ printf "%vMiB" (include "meilisearch.indexingMemoryMiB" .) | quote }}
         {{- if not .Values.server.telemetry }}
         - name: MEILI_NO_ANALYTICS
           value: "true"

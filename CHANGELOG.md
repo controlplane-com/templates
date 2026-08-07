@@ -4,6 +4,11 @@ High-level, user-facing catalog changes by month: new templates and notable vers
 
 ## 2026-08
 
+- **New template: duckdb 1.0.0** — scheduled SQL analytics over Parquet, CSV and JSON in object storage, run as a cron job that starts, transforms and exits (no always-on server)
+- **New template: polaris 1.0.0** — Apache Iceberg REST catalog, letting Trino and other engines share governed lakehouse tables backed by S3-compatible storage
+- **New template: meilisearch 1.0.0** — fast, typo-tolerant search engine with instant indexing and a simple REST API
+- **New template: nocodb 1.0.0** — no-code database and spreadsheet UI over PostgreSQL, with REST and GraphQL APIs and horizontal scaling (`replicas`)
+- **tidb 1.7.0** — TiDB v8.5.7 across the cluster and the backup image; GCS backups now work (they previously failed on every attempt), development-mode installs now reach ready, and region-aware data placement is applied for the first time
 - **prometheus 1.1.0** — the built-in Prometheus web UI (expression browser, targets, alerts) is now documented with its internal endpoint, and resource knobs are named `minCpu`/`maxCpu`/`minMemory`/`maxMemory`
 - **otel-collector 1.2.1** — installing with public ingestion but no authentication now fails immediately with an explanation and the three ways to resolve it, instead of quietly publishing an open OTLP endpoint
 - **thanos 1.1.0** — resource limits are now named `maxCpu`/`maxMemory` alongside the existing `minCpu`/`minMemory`, so it is clear which value is the limit (update these keys if you set them)

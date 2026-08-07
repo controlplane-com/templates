@@ -26,7 +26,17 @@ on:
 # queueing behind it. main is never cancelled — a half-finished production publish
 # is worse than a slow one.
 concurrency:
-  group: publish-${{ github.ref }}
+  # main gets a group PER COMMIT, not per ref. `cancel-in-progress: false` only
+  # protects the run that is already executing — GitHub still permits just ONE
+  # pending run per group and cancels the older pending one when a newer arrives.
+  # With a shared `publish-refs/heads/main` group, merging five PRs in under a
+  # minute silently cancelled two of them ("Canceling since a higher priority
+  # waiting request for publish-refs/heads/main exists") and duckdb 1.0.0 and
+  # polaris 1.0.0 were never published, while their PRs showed green. A skipped
+  # publish is far worse than a slow one, so on main nothing may ever contend.
+  # Branches still dedupe by ref and cancel stale runs — that is where pile-ups
+  # actually cost something and where losing a run is harmless.
+  group: ${{ github.ref == 'refs/heads/main' && format('publish-main-{0}', github.sha) || format('publish-{0}', github.ref) }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:

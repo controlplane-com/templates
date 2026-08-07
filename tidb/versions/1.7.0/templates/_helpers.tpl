@@ -109,8 +109,21 @@ Validation: Ensure pdReplicas is 3, 5, or 7
 */}}
 {{- define "tidb.validatePdReplicas" -}}
 {{- $pdReplicas := int .Values.gvc.pdReplicas -}}
+{{- if .Values.devMode -}}
+{{/*
+devMode additionally allows pdReplicas: 1. A single-location dev install has
+nowhere to place a 3-member PD quorum, so requiring 3 here defeats the whole
+purpose of devMode — it is a replica requirement, not a correctness one. Odd
+counts only, because PD is raft-based and an even count buys no extra
+fault tolerance while costing an extra node.
+*/}}
+{{- if not (or (eq $pdReplicas 1) (eq $pdReplicas 3) (eq $pdReplicas 5) (eq $pdReplicas 7)) -}}
+{{- fail (printf "pdReplicas must be 1, 3, 5, or 7 in devMode. Found %d." $pdReplicas) -}}
+{{- end -}}
+{{- else -}}
 {{- if not (or (eq $pdReplicas 3) (eq $pdReplicas 5) (eq $pdReplicas 7)) -}}
 {{- fail (printf "pdReplicas must be 3, 5, or 7. Found %d." $pdReplicas) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 
@@ -170,3 +183,20 @@ app.cpln.io/instance: {{ .Release.Name }}
 {{- end }}
 {{- end }}
 {{- end }}
+
+{{/*
+devMode replication factor: the total TiKV replicas the install actually has,
+clamped to [1,3]. PD cannot place more copies than there are stores, so asking
+for its default of 3 on a 1-store dev install leaves every region permanently
+under-replicated and tidb-server never becomes ready.
+*/}}
+{{- define "tidb.devModeMaxReplicas" -}}
+{{- $total := 0 -}}
+{{- range .Values.gvc.locations -}}
+{{- $total = add $total (default 1 .replicas) -}}
+{{- end -}}
+{{- if lt $total 1 -}}1
+{{- else if gt $total 3 -}}3
+{{- else -}}{{ $total }}
+{{- end -}}
+{{- end -}}

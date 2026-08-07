@@ -106,7 +106,7 @@ smtp:
 
 ```yaml
 publicAccess:
-  enabled: true               # HTTPS UI, API, shared views/forms and websockets on the auto *.cpln.app endpoint
+  enabled: true               # HTTPS UI, API and shared views/forms on the auto *.cpln.app endpoint
 internalAccess:
   type: same-gvc              # none | same-gvc | same-org | workload-list
   workloads: []               # used only with workload-list

@@ -56,7 +56,11 @@ spec:
                 up_count=$(echo "$stores_clean" | grep -o '"state_name":"Up"' | wc -l | tr -d ' ');
                 total_count=$(echo "$stores_clean" | grep -o '"state_name":' | wc -l | tr -d ' ');
                 echo "$up_count / $total_count TiKV stores Up at $endpoint";
-                if [ "$up_count" -ge 2 ]; then echo "Sufficient TiKV stores healthy."; exit 0; fi;
+                {{- /* devMode: as many stores as the install actually has (often 1).
+                       Production: 2 = quorum of the 3-way replication, NOT 3 — requiring
+                       every store up would mean one location down keeps tidb-server
+                       permanently unready, which is the opposite of what HA is for. */}}
+                if [ "$up_count" -ge {{ if .Values.devMode }}{{ include "tidb.devModeMaxReplicas" . }}{{ else }}2{{ end }} ]; then echo "Sufficient TiKV stores healthy."; exit 0; fi;
               done;
               echo "TiKV not ready yet"; exit 1
         failureThreshold: 12

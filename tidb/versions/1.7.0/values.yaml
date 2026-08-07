@@ -13,9 +13,9 @@ gvc:
   pdReplicas: 3 # options: 3, 5, 7
 
 images:
-  server: pingcap/tidb:v8.5.3
-  tikv: pingcap/tikv:v8.5.3
-  pd: pingcap/pd:v8.5.3
+  server: pingcap/tidb:v8.5.7
+  tikv: pingcap/tikv:v8.5.7
+  pd: pingcap/pd:v8.5.7
 
 resources:
   pd:
@@ -74,7 +74,7 @@ internal_access:
 
 backup:
   enabled: false
-  image: ghcr.io/controlplane-com/backup-images/tidb-backup:v8.5.3
+  image: ghcr.io/controlplane-com/backup-images/tidb-backup:8.5.7
   schedule: "0 2 * * *"  # daily at 2am UTC
   activeDeadlineSeconds: 14400  # 4 hours max per backup job
   location: aws-us-east-1  # Run backup in the location closest to your storage bucket/region

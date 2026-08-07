@@ -1,0 +1,70 @@
+kind: workload
+name: {{ include "duckdb.name" . }}
+description: DuckDB scheduled batch SQL job
+tags: {{- include "duckdb.tags" . | nindent 4 }}
+spec:
+  type: cron
+  containers:
+    - name: duckdb
+      image: {{ .Values.image }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      inheritEnv: false
+      {{- /* The image is distroless with no shell, so the command is pure argv.
+             Arguments are processed in order: the preamble runs first, then the
+             user's script, then the completion marker. */}}
+      command: /duckdb
+      args:
+        - "-batch"
+        - "-no-stdin"
+        - "-init"
+        - "/etc/duckdb/preamble.sql"
+        - "-f"
+        - "/etc/duckdb/job.sql"
+        - "-c"
+        - "SELECT 'duckdb-job-complete' AS status"
+      {{- if or .Values.secretEnv (eq .Values.objectStore.type "s3-compatible") }}
+      env:
+        {{- if eq .Values.objectStore.type "s3-compatible" }}
+        - name: AWS_ACCESS_KEY_ID
+          value: cpln://secret/{{ .Values.objectStore.s3Compatible.credentialsSecretName }}.access-key-id
+        - name: AWS_SECRET_ACCESS_KEY
+          value: cpln://secret/{{ .Values.objectStore.s3Compatible.credentialsSecretName }}.secret-access-key
+        {{- end }}
+        {{- range .Values.secretEnv }}
+        - name: {{ .name }}
+          value: cpln://secret/{{ .secretName }}.{{ .secretKey | default "payload" }}
+        {{- end }}
+      {{- end }}
+      volumes:
+        - path: /etc/duckdb/preamble.sql
+          uri: cpln://secret/{{ include "duckdb.secret.preamble.name" . }}.payload
+        - path: /etc/duckdb/job.sql
+          uri: cpln://secret/{{ include "duckdb.scriptSecretRef" . }}.payload
+  defaultOptions:
+    autoscaling:
+      maxScale: 1
+      minScale: 1
+      metric: disabled
+    capacityAI: false
+    debug: false
+    suspend: {{ .Values.suspend }}
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+    internal:
+      inboundAllowType: none
+  identityLink: //identity/{{ include "duckdb.identity.name" . }}
+  job:
+    activeDeadlineSeconds: {{ int .Values.activeDeadlineSeconds }}
+    concurrencyPolicy: Forbid
+    historyLimit: 5
+    restartPolicy: Never
+    schedule: {{ .Values.schedule | quote }}
+  supportDynamicTags: false

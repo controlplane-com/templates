@@ -1,0 +1,24 @@
+kind: policy
+name: {{ include "duckdb.policy.name" . }}
+description: DuckDB job script and credential secret access
+tags: {{- include "duckdb.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "duckdb.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "duckdb.secret.preamble.name" . }}
+  - //secret/{{ include "duckdb.scriptSecretRef" . }}
+  {{- if eq .Values.objectStore.type "s3-compatible" }}
+  - //secret/{{ .Values.objectStore.s3Compatible.credentialsSecretName }}
+  {{- end }}
+  {{- /* user-supplied credential secrets, deduplicated */}}
+  {{- $seen := dict }}
+  {{- range $e := .Values.secretEnv }}
+  {{- if not (hasKey $seen $e.secretName) }}
+  - //secret/{{ $e.secretName }}
+  {{- $_ := set $seen $e.secretName true }}
+  {{- end }}
+  {{- end }}

@@ -1,0 +1,22 @@
+kind: identity
+name: {{ include "prometheus.identity.name" . }}
+description: Prometheus workload identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "prometheus.tags" . | nindent 4 }}
+{{- if .Values.thanos.objectStorage.enabled }}
+{{- if eq .Values.thanos.objectStorage.type "aws" }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.thanos.objectStorage.aws.cloudAccountName }}
+  policyRefs:
+    - cpln-connector
+    - {{ .Values.thanos.objectStorage.aws.policyName | quote }}
+{{- end }}
+{{- if eq .Values.thanos.objectStorage.type "gcp" }}
+gcp:
+  cloudAccountLink: //cloudaccount/{{ .Values.thanos.objectStorage.gcp.cloudAccountName }}
+  bindings:
+    - resource: //storage.googleapis.com/projects/_/buckets/{{ .Values.thanos.objectStorage.gcp.bucket }}
+      roles:
+        - roles/storage.objectAdmin
+{{- end }}
+{{- end }}

@@ -110,7 +110,7 @@ publicAccess:
   enabled: false # true = Web UI + JDBC on the automatic *.cpln.app HTTPS endpoint; requires auth.enabled
 
 internalAccess:
-  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  type: same-gvc # options: same-gvc, same-org, workload-list ('none' is rejected — the coordinator calls itself over this path)
   workloads: [] # used with workload-list, e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME
 ```
 

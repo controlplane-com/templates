@@ -1,0 +1,74 @@
+image: prom/prometheus:v3.13.1
+
+resources: # Prometheus server; memory scales with active series
+  minCpu: 500m
+  maxCpu: 1000m
+  minMemory: 1Gi
+  maxMemory: 2Gi
+
+# ─── TSDB ──────────────────────────────────────────────────────────────────────
+retention:
+  time: 15d # how long samples are kept on the local volume
+  size: "" # optional local size cap, e.g. 15GB — empty means no cap
+volumeset:
+  capacity: 20 # GiB — TSDB volume mounted at /prometheus
+
+# ─── Metrics ───────────────────────────────────────────────────────────────────
+scrapeInterval: 30s # global scrape interval (self-scrape and extraScrapeConfigs)
+externalLabels: {} # identity labels on all uploaded/forwarded series, e.g. region: us-east-1, replica: a
+extraScrapeConfigs: "" # raw YAML list of additional scrape_configs entries (see README)
+
+# ─── Remote Write ──────────────────────────────────────────────────────────────
+# Push metrics to Mimir or any Prometheus-remote-write-compatible store — the
+# recommended shape when the Thanos sidecar is disabled.
+remoteWrite: [] # entries: url (required) + optional basicAuth
+# - url: http://my-mimir.my-gvc.cpln.local:8080/api/v1/push
+#   basicAuth:
+#     username: my-user
+#     passwordSecretName: my-remote-write-password # opaque secret, must exist BEFORE install
+
+# ─── Thanos Sidecar ────────────────────────────────────────────────────────────
+thanos:
+  sidecar:
+    enabled: true # co-located sidecar exposing the Store API (gRPC :10901) for a Thanos Query tier
+    image: quay.io/thanos/thanos:v0.42.2
+    resources:
+      minCpu: 100m
+      maxCpu: 250m
+      minMemory: 128Mi
+      maxMemory: 512Mi
+  # Sidecar uploads TSDB blocks to a bucket — recommended for production durability.
+  objectStorage:
+    enabled: false # requires thanos.sidecar.enabled
+    type: aws # options: aws, gcp, minio
+    blockDuration: 2h # advanced: TSDB block interval (min=max disables local compaction)
+
+    # AWS S3 — keyless via Control Plane cloud identity.
+    aws:
+      bucket: my-prometheus-bucket # bucket must already exist
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account # Control Plane AWS cloud account
+      policyName: my-prometheus-s3-policy # custom IAM policy granting bucket access (bare name)
+
+    # Google Cloud Storage — keyless via Control Plane cloud identity.
+    gcp:
+      bucket: my-prometheus-bucket # bucket must already exist
+      cloudAccountName: my-gcs-cloud-account # Control Plane GCP cloud account
+
+    # Any S3-compatible server (MinIO, R2, Wasabi, …) — static keys + endpoint.
+    minio:
+      endpoint: my-minio:9000 # host:port, NO scheme
+      insecure: true # true when the endpoint is plain HTTP
+      bucket: my-prometheus-bucket # bucket must already exist
+      region: us-east-1
+      accessKey: my-minio-username
+      accessSecret: my-minio-password
+
+# ─── Access ────────────────────────────────────────────────────────────────────
+# Internal-only: Prometheus has no built-in authentication, so this template
+# never exposes a public endpoint. Scope which workloads may connect below.
+# Port 9095 also serves the built-in web UI (Targets, expression browser) — see
+# the README's Web UI section for reaching it from inside the GVC.
+internalAccess:
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # with workload-list, e.g. //gvc/GVC/workload/NAME — cross-GVC callers allowed

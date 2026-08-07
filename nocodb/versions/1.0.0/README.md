@@ -4,9 +4,9 @@ NocoDB is a no-code database and spreadsheet-style app builder — the self-host
 
 ## Architecture
 
-- **NocoDB server** — a `stateful` HTTP workload (`{release}-nocodb`, port 8080) serving the UI, REST/GraphQL API and socket.io realtime; scale with `nocodb.replicas` (requires S3 storage). Runs meta-database migrations automatically on boot.
+- **NocoDB server** — a `stateful` HTTP workload (`{release}-nocodb`, port 8080) serving the UI, REST/GraphQL API and live updates; scale with `nocodb.replicas` (requires S3 storage). Runs meta-database migrations automatically on boot.
 - **PostgreSQL** — the metadata store holding every base, table, view, user and automation. Either the `postgres` subchart (single instance, default) or the `postgres-highly-available` subchart (3 Patroni replicas + 3 etcd + HAProxy, opt-in).
-- **Redis** — bundled single-node workload with AOF persistence; socket.io adapter, metadata cache, rate limiter and job-event bus. Required — it is what makes more than one replica coherent.
+- **Redis** — bundled single-node workload with AOF persistence; job/event pub-sub, metadata cache and rate limiter. Required — it is what makes more than one replica coherent. Live updates reach the browser over HTTP long-poll (`POST /jobs/listen`) backed by this pub-sub, not over websockets.
 - **Attachment volumeset** — local attachment storage at `/usr/app/data`; created only when `storage.type: local`.
 - **Creds secret** — template-created dictionary secret holding the bundled Redis password used to assemble `NC_REDIS_URL`.
 - **Identity + policy** — grants the workloads `reveal` on exactly the secrets they mount; carries the AWS cloud-account link in keyless S3 mode.
@@ -29,6 +29,7 @@ NocoDB is a no-code database and spreadsheet-style app builder — the self-host
   ```
 
 - **(Only for S3 attachment storage)** a bucket on AWS S3 (keyless via a Control Plane cloud account + a bucket-scoped IAM policy) or a MinIO/S3-compatible server plus a static-key dictionary secret — see Storage setup.
+- **(Only for database backups)** a bucket on AWS S3, Google Cloud Storage or a MinIO/S3-compatible server, plus a Control Plane cloud account for the first two — see Storage setup.
 - **(Optional, only for authenticated SMTP)** a dictionary secret with `NC_SMTP_USERNAME` + `NC_SMTP_PASSWORD`, referenced via `smtp.auth.secretName`.
 
   ```bash
@@ -43,7 +44,7 @@ NocoDB is a no-code database and spreadsheet-style app builder — the self-host
 ```yaml
 nocodb:
   image: nocodb/nocodb:2026.07.0
-  replicas: 1                 # >1 requires storage.type: s3; replicas coordinate through Redis
+  replicas: 1                 # >1 requires storage.type: s3; replicas coordinate through Redis. 2 absorbs the first-upgrade Redis restart — see Important Notes
   siteUrl: ""                 # empty = derive from the canonical *.cpln.app endpoint; set (with https://) for a custom domain
   resources:
     minCpu: 250m
@@ -143,7 +144,7 @@ postgres:
   volumeset:
     capacity: 10              # GiB (minimum 10)
   backup:
-    enabled: false            # optional scheduled backups — see the postgres template's own storage setup
+    enabled: false            # see Storage setup; provider: aws | gcp | minio
 
 postgresHA:
   enabled: false              # 3 Patroni replicas + 3 etcd + an HAProxy leader endpoint
@@ -154,11 +155,13 @@ postgresHA:
   replicas: 3
   volumeset:
     capacity: 10              # GiB per replica (minimum 10)
+  backup:
+    enabled: false            # see Storage setup; mode: logical | wal-g, provider: aws | gcp | minio
 ```
 
 ## Storage setup
 
-Only needed for `storage.type: s3` (required for `nocodb.replicas > 1`); the default local mode needs none of this. Database backups (`postgres.backup.*` / `postgresHA.backup.*`) are passed straight through to the database subchart and are configured the same way.
+Needed for `storage.type: s3` (required when `nocodb.replicas > 1`) and for database backups. The default install — local attachments, backups off — needs none of it.
 
 ### AWS S3 (keyless, preferred)
 
@@ -200,6 +203,22 @@ cpln secret create-dictionary --name my-nocodb-s3-keys \
   --entry NC_S3_ACCESS_KEY=minioadmin --entry NC_S3_ACCESS_SECRET=minioadmin
 ```
 
+### Database backups (AWS S3 and MinIO)
+
+Scheduled backups are configured on whichever database path you enabled — `postgres.backup.*` (single instance) or `postgresHA.backup.*` (highly available). They are off by default.
+
+**AWS S3** — create the bucket, a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account), and an IAM policy scoped to that bucket, then set `…backup.enabled: true`, `…backup.provider: aws`, and `…backup.aws.{bucket,region,cloudAccountName,policyName}`. The policy JSON is the same bucket-scoped document shown above for attachment storage.
+
+**MinIO / S3-compatible** — set `…backup.provider: minio` and `…backup.minio.{endpoint,bucket,accessKey,secretKey}`; no cloud account is involved because the keys authenticate directly.
+
+The HA path additionally chooses `postgresHA.backup.mode`: `logical` (scheduled `pg_dump`) or `wal-g` (continuous WAL archiving).
+
+### Google Cloud Storage (database backups only)
+
+1. Create the bucket and set `postgres.backup.gcp.bucket` (or `postgresHA.backup.gcp.bucket`).
+2. Create a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) for GCP and set `…backup.gcp.cloudAccountName`.
+3. Grant that account's service account the **Storage Object Admin** role (`roles/storage.objectAdmin`) on the bucket — not on the whole project. GCP has no equivalent of the AWS `policyName` field, so the grant is the whole configuration.
+
 ## Connecting
 
 | Target | Address | Credentials |
@@ -217,8 +236,11 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`c
 - **Signup is open by default** — with public access on, anyone who reaches the URL can create an account. Invite-only is an in-app setting (Team & Settings), not an environment variable, so turn it on in the UI right after install.
 - **`admin.secretName` re-applies on every boot** — if set, the password in that secret is re-imposed at each restart, silently reverting a password changed in the UI. Either leave it empty or treat the secret as the source of truth.
 - **`nocodb.replicas > 1` requires `storage.type: s3`** — local attachments live on per-replica volumes and would 404 across replicas; the chart refuses to render otherwise.
+- **The first `helm upgrade` after an install briefly restarts the bundled Redis**, even when nothing about Redis changed; NocoDB exits rather than reconnecting and is restarted. At `replicas: 1` that is a short outage on a routine config change (the endpoint returns `503 no healthy upstream` for roughly a minute); at `replicas: 2` it was not user-visible. Later upgrades of the same release do not restart Redis.
+- **Rolling upgrades are seamless; an abruptly killed replica is not** — measured at `replicas: 2`: a full rolling upgrade served **434 of 434 requests with HTTP 200**, while a hard `kill -9` of one replica produced **6 × HTTP 503 out of 289 requests within an ~11 s window** before traffic settled. Running two replicas is what absorbs both cases.
+- **Live updates arrive over HTTP long-poll, not websockets** — `POST /jobs/listen` backed by Redis pub-sub is the real path (socket.io at this version carries telemetry only), so debug a stalled live update at Redis and that endpoint.
 - **Background jobs run inside the web process** — Community Edition ships only an in-process queue, so a long import, export or base duplication dies with the replica running it and must be re-run. Multi-replica buys request availability and rolling upgrades, not job durability.
-- **`nocodb.siteUrl` must match the URL browsers use** — it drives invite/reset links, the auth cookie secure flag and the socket.io channel; leave it empty unless a custom domain is in play.
+- **`nocodb.siteUrl` must match the URL browsers use** — it drives invite/reset links and the auth cookie secure flag; leave it empty unless a custom domain is in play.
 - **With SMTP off, invitations and password resets cannot be delivered** — configure `smtp.*` before inviting collaborators.
 - **Data survives reinstall** — bases live in the database volumeset and local attachments in the storage volumeset; to wipe an instance, delete those volumesets too.
 - **SSO/SAML/OIDC, audit logs and row-level security are Enterprise features** — they are in the same image but need a purchased licence key that this template never sets.

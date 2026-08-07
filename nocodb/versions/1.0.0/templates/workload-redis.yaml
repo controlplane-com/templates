@@ -1,7 +1,7 @@
 ---
 kind: workload
 name: {{ include "nocodb.redis.name" . }}
-description: NocoDB Redis — socket.io adapter, metadata cache, rate limiting, job events
+description: NocoDB Redis — job/event pub-sub, metadata cache, rate limiting
 gvc: {{ .Values.global.cpln.gvc }}
 tags: {{- include "nocodb.tags" . | nindent 4 }}
 spec:
@@ -16,8 +16,8 @@ spec:
       minMemory: {{ .Values.redis.resources.minMemory | quote }}
       memory: {{ .Values.redis.resources.maxMemory | quote }}
       command: redis-server
-      # AOF + noeviction: an evicted key silently drops realtime fan-out and
-      # job-progress events.
+      # AOF + noeviction: an evicted key silently drops job/event pub-sub
+      # messages, which is what carries live updates across replicas.
       args:
         - --requirepass
         - $(REDIS_PASSWORD)

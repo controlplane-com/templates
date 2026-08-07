@@ -1,7 +1,7 @@
 ---
 kind: workload
 name: {{ include "nocodb.name" . }}
-description: NocoDB server — UI + REST/GraphQL API + socket.io realtime, HTTP :8080
+description: NocoDB server — UI + REST/GraphQL API + live updates, HTTP :8080
 gvc: {{ .Values.global.cpln.gvc }}
 tags: {{- include "nocodb.tags" . | nindent 4 }}
 spec:
@@ -29,9 +29,9 @@ spec:
           value: cpln://secret/{{ .Values.secrets.name }}.NC_AUTH_JWT_SECRET
         - name: NC_CONNECTION_ENCRYPT_KEY
           value: cpln://secret/{{ .Values.secrets.name }}.NC_CONNECTION_ENCRYPT_KEY
-        # ── Public base URL — feeds invite/reset links, the auth cookie secure
-        #    flag AND the socket.io namespace. CPLN_GLOBAL_ENDPOINT is already a
-        #    full URL (https://…); never prepend a scheme. ──
+        # ── Public base URL — feeds invite/reset links and the auth cookie
+        #    secure flag. CPLN_GLOBAL_ENDPOINT is already a full URL
+        #    (https://…); never prepend a scheme. ──
         {{- if .Values.nocodb.siteUrl }}
         - name: NC_SITE_URL
           value: {{ .Values.nocodb.siteUrl | quote }}
@@ -64,7 +64,7 @@ spec:
         - name: NC_APP_DATA_DIR
           value: /usr/app/data
         # ── Max single attachment size, in bytes (applies to both storage modes);
-        #    an upload over the limit is rejected with "File is too large" ──
+        #    an upload over the limit is rejected with HTTP 413 "File too large" ──
         # int64: a plain byte count in values.yaml is loaded as a float and
         # would otherwise render as "2.097152e+07"
         - name: NC_ATTACHMENT_FIELD_SIZE

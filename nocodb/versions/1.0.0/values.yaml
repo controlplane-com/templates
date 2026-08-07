@@ -1,16 +1,16 @@
 # ─── NocoDB server ────────────────────────────────────────────────
 nocodb:
-  # Single image: UI + REST/GraphQL API + socket.io realtime on :8080.
+  # Single image: UI + REST/GraphQL API + live updates on :8080.
   # Runs meta-database migrations automatically on boot. Never use latest.
   image: nocodb/nocodb:2026.07.0
   # Stateless app tier over shared Postgres + Redis. >1 REQUIRES storage.type: s3
   # (local attachments are per-replica and would 404). Jobs run in-process, so a
-  # replica restart abandons any import/export it was running.
+  # replica restart abandons any import/export it was running. 2 absorbs the
+  # short Redis restart on the first upgrade after install (see README).
   replicas: 1
   # Public base URL. MUST match the URL browsers use — it drives invite/reset
-  # links, the auth cookie secure flag, AND the socket.io namespace. Empty =
-  # derive from the platform canonical endpoint. Set WITH https:// only for a
-  # custom domain.
+  # links and the auth cookie secure flag. Empty = derive from the platform
+  # canonical endpoint. Set WITH https:// only for a custom domain.
   siteUrl: ""
   resources:
     # Upstream recommends 4 vCPU / 8 GB for a busy multi-team instance; these are
@@ -89,10 +89,12 @@ internalAccess:
   #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
 # ─── Redis (bundled single node) — REQUIRED ───────────────────────
-# Drives the socket.io adapter (cross-replica realtime), the metadata cache, the
-# rate limiter and job-progress pub/sub. NocoDB speaks only a plain redis:// URL,
-# so the Sentinel-based redis template is not used. noeviction is mandatory —
-# an evicted key silently drops realtime and job events.
+# Carries job/event pub-sub, the metadata cache and the rate limiter — all three
+# required once nocodb.replicas > 1. Live updates reach the browser over HTTP
+# long-poll (POST /jobs/listen) backed by this pub-sub, NOT over websockets:
+# socket.io at this version is telemetry-only and carries no data events.
+# NocoDB speaks only a plain redis:// URL, so the Sentinel-based redis template
+# is not used. noeviction is mandatory — an evicted key silently drops job events.
 redis:
   image: redis:8.10.0
   auth:

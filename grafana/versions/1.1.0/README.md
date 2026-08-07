@@ -28,8 +28,8 @@ image: grafana/grafana:13.1.1
 replicas: 1                   # >=2 = HA over the shared Postgres; requires redis.enabled: true
 
 resources:
-  cpu: 1000m
-  memory: 1Gi
+  maxCpu: 1000m
+  maxMemory: 1Gi
   minCpu: 500m
   minMemory: 512Mi
 

@@ -67,8 +67,8 @@ spec:
   identityLink: //identity/{{ include "oc.name" . }}
   containers:
     - name: opentelemetry-collector-contrib
-      cpu: {{ .Values.otelCollector.resources.maxCpu | quote }}
-      memory: {{ .Values.otelCollector.resources.maxMemory | quote }}
+      cpu: {{ .Values.otelCollector.resources.cpu | quote }}
+      memory: {{ .Values.otelCollector.resources.memory | quote }}
       image: {{ .Values.otelCollector.image }}
       inheritEnv: false
       args:

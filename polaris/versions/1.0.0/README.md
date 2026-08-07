@@ -29,8 +29,41 @@ printf '%s' "$(openssl rand -hex 32)" | \
 
 Optional:
 
-- **Object storage credentials**: a dictionary secret with `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` for the bucket that holds your Iceberg data. If you run the `seaweedfs` template, point `storage.credentialsSecretName` at the same secret it uses.
+- **Object storage credentials** for the bucket that holds your Iceberg data — see **Iceberg bucket setup** below.
 - **Cloud account + bucket** only if you enable the Postgres backup pass-through (see **Storage setup**).
+
+## Iceberg bucket setup
+
+Skip this if you have no object storage yet — Polaris runs without it, and catalogs can be added later.
+
+Polaris reads and writes table metadata in the bucket with static credentials (this version does not vend STS credentials), so the same dictionary secret works for every S3-compatible backend:
+
+```bash
+cpln secret create-dictionary --name my-polaris-s3-credentials \
+  --entry AWS_ACCESS_KEY_ID=... --entry AWS_SECRET_ACCESS_KEY=...
+```
+
+Then set `storage.credentialsSecretName` to that name.
+
+**SeaweedFS / MinIO (in-GVC)** — point `storage.credentialsSecretName` at the *same* secret your `seaweedfs` (`s3.credentialsSecretName`) or MinIO deployment already uses; there is nothing else to create. Use the workload's internal endpoint (`http://{release}-seaweedfs.{gvc}.cpln.local:8333`) with `pathStyleAccess: true` when creating the catalog.
+
+**AWS S3** — create the bucket and an access key scoped to it:
+
+1. Create the bucket (e.g. `my-polaris-bucket`) in the region you will use, block public access, and leave default encryption on.
+2. Create an IAM user (or role with static keys) for Polaris and attach this bucket-scoped policy — Polaris needs no other permission:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Effect": "Allow", "Action": ["s3:ListBucket", "s3:GetBucketLocation"], "Resource": "arn:aws:s3:::my-polaris-bucket" },
+    { "Effect": "Allow", "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"], "Resource": "arn:aws:s3:::my-polaris-bucket/*" }
+  ]
+}
+```
+
+3. Create an access key for it and put both halves in the dictionary secret above, then set `storage.region` to the bucket's region.
+4. Give your query engine the same (or a similarly scoped) key — with vending off, each engine authenticates to the bucket itself.
 
 ## Configuration
 
@@ -159,8 +192,10 @@ Each Polaris replica opens up to 20 JDBC connections, plus the bootstrap workloa
 | Management API | `{base}/api/management/v1` |
 | OAuth2 token endpoint | `{base}/api/catalog/v1/oauth/tokens` |
 | In-GVC (internal) | `http://{release}-polaris.{gvc}.cpln.local:8181` |
-| Health and metrics | `http://{release}-polaris.{gvc}.cpln.local:8182/q/health`, `/q/metrics` (internal only — never published on the public endpoint) |
+| Health and metrics | `http://{release}-polaris.{gvc}.cpln.local:8182/q/health`, `/q/metrics` — reachable in-GVC only |
 | Credentials | `CLIENT_ID` / `CLIENT_SECRET` from your `rootCredentials` secret |
+
+Only the **first declared container port is published** on the canonical endpoint, and this template declares `8181` first. That is what keeps `8182` — the unauthenticated Quarkus health and metrics interface — off the internet even with `publicAccess.enabled`: publicly, `/q/metrics`, `/q/health` and `/q/info` all return 404, while `:8182/q/metrics` answers in-GVC. The port order in the workload template is a security boundary, not cosmetics.
 
 Every API call needs a bearer token:
 
@@ -266,6 +301,8 @@ Then set `provider: aws` and `aws.{bucket,region,cloudAccountName,policyName}`.
 ## Important Notes
 
 - **Create both prerequisite secrets before installing** — without them the workloads wait on a secret that does not exist and the install looks broken.
+- **Expect a warm-up while the metastore comes up, and do not interrupt it.** The server restarts a couple of times logging `Failed to initialize DatasourceOperations` (measured: 2 restarts by 32 s) and the bootstrap workload retries on the same schedule; both self-heal. A default install is ready in about **90 s**; the `postgresHA` metastore takes about **6 minutes** (measured 348 s) before Polaris answers.
+- **Scaling is real, and measured.** With `replicas: 2`, a request loop through the service DNS name saw **403/403 2xx (0 non-2xx) across a rolling `helm upgrade`** (rollout converged in 95 s) and **384/384 2xx (0 non-2xx) while scaling back to one replica** — because all replicas share the signing key and the metastore.
 - **Root credentials are write-once.** They are applied when the realm is first bootstrapped; changing them afterwards has no effect. Rotate by creating a new principal through the management API.
 - **Rotating `tokenSigningKey` invalidates every outstanding token** — clients must obtain a new one.
 - **`realm` is permanent.** Renaming it bootstraps a new, empty realm and hides the existing catalogs; changing it back makes them visible again.

@@ -56,8 +56,13 @@ spec:
         # container's ephemeral filesystem; the console log is what cpln reads.
         - name: QUARKUS_LOG_FILE_ENABLED
           value: 'false'
-      # 8181 is declared FIRST so the canonical endpoint routes to the APIs;
-      # 8182 (health, metrics) is a second port and is not published on it.
+      # PORT ORDER IS LOAD-BEARING — DO NOT SWAP THESE TWO.
+      # Only the FIRST declared port is published on the canonical endpoint, so
+      # 8181 first is what routes the APIs there AND what keeps the management
+      # port off the public internet. Verified 2026-08-07: with publicAccess on,
+      # /q/metrics, /q/health and /q/info all return 404 publicly while
+      # :8182/q/metrics returns 200 in-GVC. Reordering would silently publish
+      # unauthenticated metrics and health endpoints.
       ports:
         - number: 8181
           protocol: http

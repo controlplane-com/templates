@@ -1,0 +1,14 @@
+{{- include "nocodb.validate" . }}
+---
+kind: identity
+name: {{ include "nocodb.identity.name" . }}
+description: NocoDB identity (shared by the app and Redis workloads)
+tags: {{- include "nocodb.tags" . | nindent 4 }}
+gvc: {{ .Values.global.cpln.gvc }}
+{{- if eq (include "nocodb.s3.keyless" .) "true" }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.storage.s3.cloudAccountName }}
+  policyRefs:
+    - cpln-connector
+    - "{{ .Values.storage.s3.policyName }}"
+{{- end }}

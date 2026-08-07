@@ -4,6 +4,10 @@ High-level, user-facing catalog changes by month: new templates and notable vers
 
 ## 2026-08
 
+- **prometheus 1.1.0** — the built-in Prometheus web UI (expression browser, targets, alerts) is now documented with its internal endpoint, and resource knobs are named `minCpu`/`maxCpu`/`minMemory`/`maxMemory`
+- **otel-collector 1.2.1** — installing with public ingestion but no authentication now fails immediately with an explanation and the three ways to resolve it, instead of quietly publishing an open OTLP endpoint
+- **thanos 1.1.0** — resource limits are now named `maxCpu`/`maxMemory` alongside the existing `minCpu`/`minMemory`, so it is clear which value is the limit (update these keys if you set them)
+- **grafana 1.1.0** — Grafana's own resource limits are now named `maxCpu`/`maxMemory` (the bundled PostgreSQL and Redis keep their existing key names)
 - **New template: seaweedfs 1.0.0** — S3-compatible object storage usable as the backup and attachment target for any catalog template that speaks S3
 - **New template: trino 1.0.0** — distributed SQL engine that answers a single query across PostgreSQL, MySQL, ClickHouse, MongoDB and more, with a scalable worker tier
 - **New template: qdrant 1.0.0** — vector database for semantic search and RAG, with API-key authentication, snapshots, and durable on-disk storage

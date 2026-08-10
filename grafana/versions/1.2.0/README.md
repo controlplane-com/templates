@@ -237,7 +237,7 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
 ## Important Notes
 
 - **Create the admin-password and encryption-key secrets BEFORE installing** (see Prerequisites) — the deployment wedges waiting on a secret that does not exist. Change the bundled database password too.
-- **After your first login, set `admin.applyPassword: false` and upgrade** — the chart then stops referencing the password secret, so you can delete it. The admin password applies only when the account is first created; change it in the Grafana UI thereafter.
+- **After your first login, set `admin.applyPassword: false` and upgrade** — the chart then stops referencing the password secret, so you can delete it. The admin password applies only when the account is first created; change it in the Grafana UI thereafter. Expect logins to return 401 and `/api/health` 503 for **a minute or two** after the upgrade while the bundled database restarts — this is not the toggle breaking authentication; logins work again once the database is back.
 - **The encryption-key secret must remain forever, and must never be rotated.** It is read on every boot to decrypt stored datasource credentials; deleting it wedges the workload and changing its payload makes every saved datasource secret undecryptable — back it up instead.
 - **Don't point Grafana at Control Plane's built-in workload metrics** — those dashboards already exist in the console; this template is for your own datasources.
 - **Scaling**: set `replicas >= 2` together with `redis.enabled: true` — the chart refuses to render multi-replica without Redis, which coordinates alerting so only one notification is sent per alert.

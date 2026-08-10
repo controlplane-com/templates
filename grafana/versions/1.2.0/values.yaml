@@ -8,14 +8,16 @@ resources:
   minCpu: 500m
   minMemory: 512Mi
 
-# ─── Admin Bootstrap & Encryption ─────────────────────────────────────────────
-# Applied on FIRST boot only; change both passwords BEFORE installing.
+# ─── Admin Bootstrap & Encryption (prerequisite secrets) ──────────────────────
+# BOTH secrets must EXIST BEFORE INSTALL — opaque, encoding: plain (see README).
+# The admin login is on the public internet when publicAccess.enabled is true,
+# so its password never transits values or the Helm release.
 admin:
-  user: admin
-  password: change-me-grafana-1 # initial admin login password
-  # Encrypts datasource credentials stored in the DB (AES-256). Set once BEFORE
-  # install and never change it — rotating breaks every saved datasource secret.
-  secretKey: change-me-grafana-secret-key
+  user: admin # initial admin login name (not sensitive)
+  passwordSecretName: my-grafana-admin-password # opaque secret holding the first-boot admin password
+  # Encrypts datasource credentials stored in the DB (AES-256). Write-once:
+  # rotating it breaks every saved datasource secret.
+  secretKeySecretName: my-grafana-secret-key # opaque secret holding the encryption key
 
 # ─── Datasources as Code (optional) ───────────────────────────────────────────
 # Grafana datasource provisioning entries, passed through verbatim. Point them at
@@ -41,8 +43,13 @@ datasources:
   #   secureJsonData:
   #     password: $PG_PASSWORD # interpolated from credentialSecrets below
 
-  # Credential env exposure: user-created dictionary secrets (MUST EXIST BEFORE
-  # INSTALL when listed). Each key becomes an env var referenced as $KEY above.
+  # The credentials Grafana uses to AUTHENTICATE TO each datasource above (your
+  # Postgres password, a bearer token for a metrics endpoint) — not user access
+  # to Grafana. `definitions` is rendered verbatim into a provisioning file, so a
+  # password typed there would sit in plaintext in values and in the Helm release;
+  # put it in a pre-created dictionary secret instead and write $KEY. Each key
+  # below is exposed to Grafana as an env var of that name, so every $KEY used
+  # above needs an entry here — and every secret listed MUST EXIST BEFORE INSTALL.
   credentialSecrets: []
   # - name: my-grafana-ds-credentials
   #   keys: [PG_PASSWORD]

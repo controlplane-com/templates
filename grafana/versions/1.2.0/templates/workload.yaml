@@ -55,12 +55,14 @@ spec:
         - name: GF_DATABASE_SSL_MODE
           value: disable
         # ── Admin bootstrap (first boot only) + datasource-secret encryption key ──
+        # Password and secret key come from prerequisite opaque secrets the user
+        # creates before install — neither value ever transits the Helm release.
         - name: GF_SECURITY_ADMIN_USER
-          value: 'cpln://secret/{{ include "grafana.secretAdmin.name" . }}.user'
+          value: {{ .Values.admin.user | quote }}
         - name: GF_SECURITY_ADMIN_PASSWORD
-          value: 'cpln://secret/{{ include "grafana.secretAdmin.name" . }}.password'
+          value: 'cpln://secret/{{ .Values.admin.passwordSecretName }}.payload'
         - name: GF_SECURITY_SECRET_KEY
-          value: 'cpln://secret/{{ include "grafana.secretAdmin.name" . }}.secretKey'
+          value: 'cpln://secret/{{ .Values.admin.secretKeySecretName }}.payload'
         # ── Hardening: no signup, no anonymous access, no telemetry ──
         - name: GF_USERS_ALLOW_SIGN_UP
           value: 'false'

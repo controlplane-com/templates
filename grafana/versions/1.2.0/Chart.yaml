@@ -2,7 +2,7 @@ apiVersion: v2
 name: grafana
 description: Grafana OSS dashboards and alerting over your own datasources — Prometheus-compatible stores, SQL databases, and external systems — backed by PostgreSQL, with optional Redis-coordinated HA
 type: application
-version: 1.1.0
+version: 1.2.0
 appVersion: "13.1.1"
 
 annotations:

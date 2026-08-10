@@ -8,13 +8,6 @@ Grafana Workload Name
 {{- end }}
 
 {{/*
-Admin Bootstrap + Encryption Secret Name
-*/}}
-{{- define "grafana.secretAdmin.name" -}}
-{{- printf "%s-grafana-admin" .Release.Name }}
-{{- end }}
-
-{{/*
 Datasource Provisioning Secret Name
 */}}
 {{- define "grafana.secretDatasources.name" -}}
@@ -83,11 +76,11 @@ master name `mymaster` (litellm precedent).
 {{/* Validation */}}
 
 {{- define "grafana.validate" -}}
-{{- if not .Values.admin.password -}}
-{{- fail "grafana: admin.password is required — the initial admin login password (applied on first boot only)" -}}
+{{- if not .Values.admin.passwordSecretName -}}
+{{- fail "grafana: admin.passwordSecretName is required — the name of a pre-created opaque secret (encoding: plain) holding the first-boot admin login password" -}}
 {{- end -}}
-{{- if not .Values.admin.secretKey -}}
-{{- fail "grafana: admin.secretKey is required — encrypts datasource credentials stored in the database; set once before install and never rotate it" -}}
+{{- if not .Values.admin.secretKeySecretName -}}
+{{- fail "grafana: admin.secretKeySecretName is required — the name of a pre-created opaque secret (encoding: plain) holding the key that encrypts datasource credentials in the database; never rotate it" -}}
 {{- end -}}
 {{- if lt (int .Values.replicas) 1 -}}
 {{- fail (printf "grafana: replicas must be at least 1, got '%v'" .Values.replicas) -}}

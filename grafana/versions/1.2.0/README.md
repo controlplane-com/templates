@@ -8,12 +8,27 @@ This app deploys [Grafana](https://grafana.com/oss/grafana/) OSS — dashboards 
 - **PostgreSQL (HA, default)** (subchart): the `postgres-highly-available` template — 3× Patroni Postgres, 3× etcd, and an HAProxy leader endpoint Grafana connects through.
 - **PostgreSQL (dev/lightweight, optional)** (subchart): the single-instance `postgres` template instead, for lighter deployments.
 - **Redis Sentinel (optional)** (subchart): alerting-HA coordination — required when `replicas >= 2` so exactly one alert notification is sent.
-- **Secrets, identity, and policy**: admin bootstrap credentials, an optional datasource-provisioning file, and a least-privilege policy granting the Grafana identity `reveal` on exactly the secrets it uses.
+- **Secrets, identity, and policy**: an optional datasource-provisioning file, and a least-privilege policy granting the Grafana identity `reveal` on exactly the secrets it uses — including your two prerequisite secrets.
 - **Optional database backups** (subchart): logical dumps or WAL-G archiving to S3, GCS, or an S3-compatible endpoint.
 
 ## Prerequisites
 
-- None for a default install.
+**Two opaque secrets must exist BEFORE you install** — the install will wedge waiting on them otherwise. Neither value ever passes through Helm values, so neither lands in the release.
+
+1. **Admin password** (`admin.passwordSecretName`) — the first-boot password for the `admin` login, which is reachable from the public internet while `publicAccess.enabled: true`. Use your own strong password:
+
+   ```bash
+   printf '%s' 'YOUR-STRONG-PASSWORD' | cpln secret create-opaque --name my-grafana-admin-password --encoding plain -f -
+   ```
+
+2. **Encryption key** (`admin.secretKeySecretName`) — encrypts every datasource credential Grafana stores in the database. Generate a random one, and **back it up**:
+
+   ```bash
+   printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name my-grafana-secret-key --encoding plain -f -
+   ```
+
+Other prerequisites, only if you use the matching feature:
+
 - For credentialed provisioned datasources: a **dictionary** secret per `datasources.credentialSecrets` entry, created **before install** (see [Provisioning datasources](#provisioning-datasources)).
 - For authenticated SMTP: an **opaque** secret (encoding `plain`) holding the SMTP password, created **before install**.
 - For optional database backups: a bucket and access setup on AWS S3, Google Cloud Storage, or a MinIO/S3-compatible server (see [Backup storage setup](#backup-storage-setup)).
@@ -33,10 +48,10 @@ resources:
   minCpu: 500m
   minMemory: 512Mi
 
-admin:
-  user: admin
-  password: change-me-grafana-1 # first-boot admin password — change before installing
-  secretKey: change-me-grafana-secret-key # encrypts stored datasource secrets; set once, NEVER rotate
+admin:                        # both secrets must exist BEFORE install — see Prerequisites
+  user: admin                 # initial admin login name (not sensitive)
+  passwordSecretName: my-grafana-admin-password # opaque secret holding the first-boot admin password
+  secretKeySecretName: my-grafana-secret-key # opaque secret holding the datasource-encryption key; NEVER rotate
 ```
 
 ### Access
@@ -121,10 +136,17 @@ datasources:
       url: http://RELEASE-thanos.GVC.cpln.local:10902    # thanos Query template
 ```
 
-For datasources that need credentials, create a **dictionary** secret before installing and reference its keys as `$KEY` — the value never transits Helm values:
+`datasources.credentialSecrets` supplies the credentials **Grafana uses to authenticate to each datasource** — the password it logs into your Postgres with, the bearer token it sends to a metrics endpoint. It has nothing to do with user access to Grafana, and nothing to do with datasources talking to each other.
 
-1. Create the secret, e.g. `my-grafana-ds-credentials` with key `PG_PASSWORD`.
-2. List it under `datasources.credentialSecrets` — each key becomes an env var, and the chart grants the workload `reveal` on exactly that secret.
+It exists because `definitions` is rendered verbatim into a provisioning file: a password typed there would sit in plaintext in your values and in the Helm release. Put it in a pre-created **dictionary** secret instead and write `$KEY` in the definition. Every `$KEY` you use in `definitions` must be supplied by a `credentialSecrets` entry.
+
+1. Create the secret, e.g. `my-grafana-ds-credentials` with key `PG_PASSWORD`:
+
+   ```bash
+   cpln secret create-dictionary --name my-grafana-ds-credentials --entry PG_PASSWORD=YOUR-DB-PASSWORD
+   ```
+
+2. List it under `datasources.credentialSecrets` — each key becomes an env var of that name, and the chart grants the workload `reveal` on exactly that secret.
 3. Reference `$PG_PASSWORD` in the provisioning entry (Grafana interpolates env vars in provisioning files).
 
 ```yaml
@@ -173,7 +195,7 @@ This complements the built-in workload dashboards rather than replacing them —
 |---|---|
 | UI / API (public) | `https://<canonical>.cpln.app` — `status.canonicalEndpoint` of `{release}-grafana` |
 | Internal (same GVC) | `http://{release}-grafana.{gvc}.cpln.local:3000` |
-| Login | `admin.user` / `admin.password` |
+| Login | `admin.user` / the payload of the `admin.passwordSecretName` secret |
 | Postgres (internal, HA mode) | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432`, credentials in the `{release}-postgres-config` secret |
 | Postgres (internal, single mode) | `{release}-postgres.{gvc}.cpln.local:5432`, credentials in the `{release}-pg-config` secret |
 
@@ -213,7 +235,9 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
 
 ## Important Notes
 
-- **Change `admin.password`, `admin.secretKey`, and the database password before installing.** `admin.user`/`admin.password` apply on first boot only; `admin.secretKey` is effectively write-once — rotating it breaks every stored datasource secret.
+- **Create the admin-password and encryption-key secrets BEFORE installing** (see Prerequisites) — the deployment wedges waiting on a secret that does not exist. Change the bundled database password too.
+- **Never rotate the encryption-key secret.** It encrypts every datasource credential Grafana has stored; changing its payload makes all of them undecryptable — back it up instead.
+- **The admin user and password apply on FIRST boot only** — later changes to `admin.user` or to the password secret do not update the stored account; change the password in the Grafana UI.
 - **Don't point Grafana at Control Plane's built-in workload metrics** — those dashboards already exist in the console; this template is for your own datasources.
 - **Scaling**: set `replicas >= 2` together with `redis.enabled: true` — the chart refuses to render multi-replica without Redis, which coordinates alerting so only one notification is sent per alert.
 - **Dashboards you create persist in Postgres** and survive Grafana restarts and redeploys; **uninstall deletes the database volumesets** — enable backups if the data matters.

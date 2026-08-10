@@ -15,7 +15,7 @@
 | Resource | Purpose |
 |---|---|
 | `{release}-grafana` (standard, :3000) | Grafana server; stateless (no volumeset), `replicas` instances over the shared DB |
-| `{release}-grafana-admin` secret (dictionary) | admin user/password + `secret_key` (encrypts stored datasource credentials) |
+| user-created opaque secrets (×2, **prerequisite**) | admin password + datasource-encryption key; consumed as `.payload`, never created by the chart (1.2.0) |
 | `{release}-grafana-datasources` secret | rendered datasource provisioning YAML, file-mounted at `/etc/grafana/provisioning/datasources/` — only when `datasources.definitions` is set |
 | identity + policy | `reveal` on exactly the mounted secrets (admin, datasources, user credential secrets, SMTP password) |
 | `postgresHA` subchart (default) / `postgres` subchart (alt) | app DB — ALL state lives here; exactly one must be enabled (XOR validated at render) |
@@ -28,10 +28,11 @@
 | Knob | Default | Meaning |
 |---|---|---|
 | `replicas` | `1` | ≥2 = HA tier; **render-blocked unless `redis.enabled: true`** |
-| `admin.user` / `admin.password` | `admin` / `change-me-grafana-1` | first-boot bootstrap only |
-| `admin.secretKey` | `change-me-grafana-secret-key` | AES key for stored datasource secrets — write-once |
+| `admin.user` | `admin` | login name, plain value; first-boot bootstrap only |
+| `admin.passwordSecretName` | `my-grafana-admin-password` | **prerequisite** opaque secret with the first-boot admin password |
+| `admin.secretKeySecretName` | `my-grafana-secret-key` | **prerequisite** opaque secret with the AES key for stored datasource secrets — write-once |
 | `datasources.definitions` | `[]` | Grafana provisioning entries, passed through verbatim |
-| `datasources.credentialSecrets` | `[]` | user-created dictionary secrets; each key becomes an env var referenced as `$KEY` |
+| `datasources.credentialSecrets` | `[]` | the credentials Grafana authenticates TO each datasource with; user-created dictionary secrets, each key exposed as an env var referenced as `$KEY` in `definitions` |
 | `smtp.enabled` (+ `host/user/passwordSecretName/fromAddress/fromName`) | `false` | alert email; password via a prerequisite opaque secret |
 | `publicAccess.enabled` / `internalAccess.type` | `true` / `same-gvc` | `none` and `workload-list` both enforced live |
 | `postgresHA.enabled` / `postgres.enabled` | `true` / `false` | HA (3 Patroni + 3 etcd + HAProxy) vs single-instance; `postgresHA.proxy.enabled` must stay true |
@@ -43,12 +44,13 @@
 - Measured at `replicas: 2`: distinct peers registered in Redis, **exactly one notification per window (4 singles, zero doubles)**, and **0 non-200** across a full rolling restart (255 probes) and a replica kill (169 probes, replacement ready ~98 s).
 
 ## Troubleshooting / considerations
-- **`admin.secretKey` is write-once.** It encrypts datasource credentials in the DB; changing it after install breaks every saved datasource secret ("Save & test" fails to decrypt). Set before first install, never rotate casually.
-- **Admin user/password apply on FIRST boot only.** Later values changes do not update the stored account — change the password in the UI. Change both `change-me` defaults before install.
+- **Admin password and encryption key are PREREQUISITE opaque secrets as of 1.2.0** (`admin.passwordSecretName` / `admin.secretKeySecretName`, consumed as `.payload`, n8n pattern). Neither value transits values or the Helm release — the admin login is public-internet-facing whenever `publicAccess.enabled: true`, and the encryption key cannot be rotated. **Both must exist BEFORE install or the deployment wedges** on a missing secret. 1.1.0's `admin.password` / `admin.secretKey` values and the chart-created `{release}-grafana-admin` dictionary secret are gone; the version bump is the migration (existing 1.1.0 installs are untouched).
+- **The encryption-key secret is write-once.** It encrypts datasource credentials in the DB; changing its payload breaks every saved datasource secret ("Save & test" fails to decrypt). Back it up rather than rotating it.
+- **Admin user/password apply on FIRST boot only.** Later changes to `admin.user` or to the password secret do not update the stored account — change the password in the UI.
 - **`replicas >= 2` without `redis.enabled` is blocked at render** ("Redis Sentinel coordinates alerting HA…") — without it every replica evaluates rules independently and notifications double.
 - **`root_url` is NOT derived when `publicAccess.enabled: false`** — `GF_SERVER_ROOT_URL` is simply not exported, so Grafana falls back to localhost and absolute links in alert emails from an internal-only + SMTP install point at localhost. Known v1 limitation; an internal-DNS fallback is a possible follow-up.
 - **User confused about missing CPU/memory dashboards:** by design — workload metrics live in the console's built-in Grafana. If they want them in this pane, the README's *Platform metrics as a datasource* section covers it: create a **service account with the `readMetrics` org permission** and use its key (a workload's built-in `CPLN_TOKEN` will NOT authenticate to `metrics.cpln.io`), carried in a credential secret as a bearer header.
-- **Credentialed datasources:** credentials never go in values — the user creates the dictionary secret first (`cpln secret create-dictionary --name my-grafana-ds-credentials --entry PG_PASSWORD=…`), lists its name + keys under `datasources.credentialSecrets`, and references `$KEY` in `secureJsonData`. The secret must exist before install or the deployment wedges. Provisioned datasources are read-only in the UI. Uninstall correctly leaves the user's secret alone.
+- **Credentialed datasources:** `datasources.credentialSecrets` is the single most-misread knob — it is what Grafana logs in to a datasource WITH (your Postgres password, a metrics bearer token), not user access to Grafana. It exists because `definitions` renders verbatim into a provisioning file, so a password typed there would be plaintext in values. Credentials never go in values — the user creates the dictionary secret first (`cpln secret create-dictionary --name my-grafana-ds-credentials --entry PG_PASSWORD=…`), lists its name + keys under `datasources.credentialSecrets`, and references `$KEY` in `secureJsonData`. The secret must exist before install or the deployment wedges. Provisioned datasources are read-only in the UI. Uninstall correctly leaves the user's secret alone.
 - **SMTP is render- and policy-verified only** (no live mail server in the test run) — live send is unproven; `smtp.user` without `smtp.passwordSecretName` fails validation.
 - **DB reinstall wipes everything** (dashboards, users, alert rules live in Postgres). Uninstall deletes the subchart volumesets; workload-only restarts/redeploys are safe (dashboard persistence across a full replica cycle verified).
 - **Multi-replica: Grafana Live push updates degrade** (per-instance websockets land on one replica). Dashboards, queries, and alerting are unaffected.

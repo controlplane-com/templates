@@ -9,7 +9,8 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "grafana.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "grafana.secretAdmin.name" . }}
+  - //secret/{{ .Values.admin.passwordSecretName }}
+  - //secret/{{ .Values.admin.secretKeySecretName }}
   - //secret/{{ include "grafana.postgres.secret.name" . }}
   {{- if .Values.datasources.definitions }}
   - //secret/{{ include "grafana.secretDatasources.name" . }}

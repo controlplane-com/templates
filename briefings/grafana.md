@@ -15,7 +15,7 @@
 | Resource | Purpose |
 |---|---|
 | `{release}-grafana` (standard, :3000) | Grafana server; stateless (no volumeset), `replicas` instances over the shared DB |
-| user-created opaque secrets (×2, **prerequisite**) | admin password + datasource-encryption key; consumed as `.payload`, never created by the chart (1.2.0) |
+| user-created opaque secrets (×2, **prerequisite**) | admin password (droppable via `admin.applyPassword: false` after first login) + datasource-encryption key (permanent); consumed as `.payload`, never created by the chart (1.2.0) |
 | `{release}-grafana-datasources` secret | rendered datasource provisioning YAML, file-mounted at `/etc/grafana/provisioning/datasources/` — only when `datasources.definitions` is set |
 | identity + policy | `reveal` on exactly the mounted secrets (admin, datasources, user credential secrets, SMTP password) |
 | `postgresHA` subchart (default) / `postgres` subchart (alt) | app DB — ALL state lives here; exactly one must be enabled (XOR validated at render) |
@@ -29,8 +29,9 @@
 |---|---|---|
 | `replicas` | `1` | ≥2 = HA tier; **render-blocked unless `redis.enabled: true`** |
 | `admin.user` | `admin` | login name, plain value; first-boot bootstrap only |
-| `admin.passwordSecretName` | `my-grafana-admin-password` | **prerequisite** opaque secret with the first-boot admin password |
-| `admin.secretKeySecretName` | `my-grafana-secret-key` | **prerequisite** opaque secret with the AES key for stored datasource secrets — write-once |
+| `admin.applyPassword` | `true` | false = stop referencing the password secret (no env var, no policy grant) so it can be deleted after first login |
+| `admin.passwordSecretName` | `my-grafana-admin-password` | **prerequisite** opaque secret with the first-boot admin password; required only while `applyPassword` is true |
+| `admin.secretKeySecretName` | `my-grafana-secret-key` | **prerequisite** opaque secret with the AES key for stored datasource secrets — permanent, no toggle, write-once |
 | `datasources.definitions` | `[]` | Grafana provisioning entries, passed through verbatim |
 | `datasources.credentialSecrets` | `[]` | the credentials Grafana authenticates TO each datasource with; user-created dictionary secrets, each key exposed as an env var referenced as `$KEY` in `definitions` |
 | `smtp.enabled` (+ `host/user/passwordSecretName/fromAddress/fromName`) | `false` | alert email; password via a prerequisite opaque secret |
@@ -45,6 +46,7 @@
 
 ## Troubleshooting / considerations
 - **Admin password and encryption key are PREREQUISITE opaque secrets as of 1.2.0** (`admin.passwordSecretName` / `admin.secretKeySecretName`, consumed as `.payload`, n8n pattern). Neither value transits values or the Helm release — the admin login is public-internet-facing whenever `publicAccess.enabled: true`, and the encryption key cannot be rotated. **Both must exist BEFORE install or the deployment wedges** on a missing secret. 1.1.0's `admin.password` / `admin.secretKey` values and the chart-created `{release}-grafana-admin` dictionary secret are gone; the version bump is the migration (existing 1.1.0 installs are untouched).
+- **The two prerequisite secrets have DIFFERENT lifecycles — this is the thing users get wrong.** `GF_SECURITY_ADMIN_PASSWORD` is honored only when the admin account is first created (upstream behavior; afterwards only the UI or `grafana-cli admin reset-admin-password` changes it), so `admin.applyPassword: false` drops both the env var and the policy target and the user may then delete that secret — tidb's `deployInitWorkload` shape. The **encryption key has no such toggle**: it is read on every boot, so deleting it wedges the workload on a missing `cpln://secret/…` reference. If someone reports a wedge after "cleaning up secrets", this is why.
 - **The encryption-key secret is write-once.** It encrypts datasource credentials in the DB; changing its payload breaks every saved datasource secret ("Save & test" fails to decrypt). Back it up rather than rotating it.
 - **Admin user/password apply on FIRST boot only.** Later changes to `admin.user` or to the password secret do not update the stored account — change the password in the UI.
 - **`replicas >= 2` without `redis.enabled` is blocked at render** ("Redis Sentinel coordinates alerting HA…") — without it every replica evaluates rules independently and notifications double.

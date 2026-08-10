@@ -76,8 +76,8 @@ master name `mymaster` (litellm precedent).
 {{/* Validation */}}
 
 {{- define "grafana.validate" -}}
-{{- if not .Values.admin.passwordSecretName -}}
-{{- fail "grafana: admin.passwordSecretName is required — the name of a pre-created opaque secret (encoding: plain) holding the first-boot admin login password" -}}
+{{- if and .Values.admin.applyPassword (not .Values.admin.passwordSecretName) -}}
+{{- fail "grafana: admin.passwordSecretName is required while admin.applyPassword is true — the name of a pre-created opaque secret (encoding: plain) holding the first-boot admin login password; set admin.applyPassword=false once you have logged in and the secret is no longer needed" -}}
 {{- end -}}
 {{- if not .Values.admin.secretKeySecretName -}}
 {{- fail "grafana: admin.secretKeySecretName is required — the name of a pre-created opaque secret (encoding: plain) holding the key that encrypts datasource credentials in the database; never rotate it" -}}

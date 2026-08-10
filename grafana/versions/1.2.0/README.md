@@ -15,13 +15,13 @@ This app deploys [Grafana](https://grafana.com/oss/grafana/) OSS — dashboards 
 
 **Two opaque secrets must exist BEFORE you install** — the install will wedge waiting on them otherwise. Neither value ever passes through Helm values, so neither lands in the release.
 
-1. **Admin password** (`admin.passwordSecretName`) — the first-boot password for the `admin` login, which is reachable from the public internet while `publicAccess.enabled: true`. Use your own strong password:
+1. **Admin password** (`admin.passwordSecretName`) — the first-boot password for the `admin` login, which is reachable from the public internet while `publicAccess.enabled: true`. Use your own strong password. Needed only for the initial install: after your first login you can set `admin.applyPassword: false` and delete it.
 
    ```bash
    printf '%s' 'YOUR-STRONG-PASSWORD' | cpln secret create-opaque --name my-grafana-admin-password --encoding plain -f -
    ```
 
-2. **Encryption key** (`admin.secretKeySecretName`) — encrypts every datasource credential Grafana stores in the database. Generate a random one, and **back it up**:
+2. **Encryption key** (`admin.secretKeySecretName`) — encrypts every datasource credential Grafana stores in the database. Unlike the password, this one is read on every boot and must stay for the life of the install. Generate a random one, and **back it up**:
 
    ```bash
    printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name my-grafana-secret-key --encoding plain -f -
@@ -50,9 +50,12 @@ resources:
 
 admin:                        # both secrets must exist BEFORE install — see Prerequisites
   user: admin                 # initial admin login name (not sensitive)
-  passwordSecretName: my-grafana-admin-password # opaque secret holding the first-boot admin password
-  secretKeySecretName: my-grafana-secret-key # opaque secret holding the datasource-encryption key; NEVER rotate
+  applyPassword: true         # Set to false after your first login to stop referencing the password secret, which can then be deleted
+  passwordSecretName: my-grafana-admin-password # opaque secret holding the first-boot admin password; read only while applyPassword is true
+  secretKeySecretName: my-grafana-secret-key # opaque secret holding the datasource-encryption key; permanent — never delete, never rotate
 ```
+
+The two secrets have **different lifecycles**. `GF_SECURITY_ADMIN_PASSWORD` is honored only when the admin account is first created — afterwards Grafana ignores it, and the password can only be changed in the UI or with `grafana-cli admin reset-admin-password`. So once you have logged in, set `applyPassword: false` and upgrade; the chart then stops referencing that secret entirely (no env var, no policy grant) and you can delete it. The encryption-key secret is read on **every** boot to decrypt stored datasource credentials, so it has no such toggle and must stay for the life of the install.
 
 ### Access
 
@@ -136,9 +139,7 @@ datasources:
       url: http://RELEASE-thanos.GVC.cpln.local:10902    # thanos Query template
 ```
 
-`datasources.credentialSecrets` supplies the credentials **Grafana uses to authenticate to each datasource** — the password it logs into your Postgres with, the bearer token it sends to a metrics endpoint. It has nothing to do with user access to Grafana, and nothing to do with datasources talking to each other.
-
-It exists because `definitions` is rendered verbatim into a provisioning file: a password typed there would sit in plaintext in your values and in the Helm release. Put it in a pre-created **dictionary** secret instead and write `$KEY` in the definition. Every `$KEY` you use in `definitions` must be supplied by a `credentialSecrets` entry.
+`datasources.credentialSecrets` holds the credentials **Grafana authenticates to each datasource with** — not user access to Grafana. `definitions` renders into a plaintext provisioning file, so put the password in a pre-created **dictionary** secret and write `$KEY` in the definition instead. Every `$KEY` you use needs an entry here, and the secrets must exist before install.
 
 1. Create the secret, e.g. `my-grafana-ds-credentials` with key `PG_PASSWORD`:
 
@@ -236,8 +237,8 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
 ## Important Notes
 
 - **Create the admin-password and encryption-key secrets BEFORE installing** (see Prerequisites) — the deployment wedges waiting on a secret that does not exist. Change the bundled database password too.
-- **Never rotate the encryption-key secret.** It encrypts every datasource credential Grafana has stored; changing its payload makes all of them undecryptable — back it up instead.
-- **The admin user and password apply on FIRST boot only** — later changes to `admin.user` or to the password secret do not update the stored account; change the password in the Grafana UI.
+- **After your first login, set `admin.applyPassword: false` and upgrade** — the chart then stops referencing the password secret, so you can delete it. The admin password applies only when the account is first created; change it in the Grafana UI thereafter.
+- **The encryption-key secret must remain forever, and must never be rotated.** It is read on every boot to decrypt stored datasource credentials; deleting it wedges the workload and changing its payload makes every saved datasource secret undecryptable — back it up instead.
 - **Don't point Grafana at Control Plane's built-in workload metrics** — those dashboards already exist in the console; this template is for your own datasources.
 - **Scaling**: set `replicas >= 2` together with `redis.enabled: true` — the chart refuses to render multi-replica without Redis, which coordinates alerting so only one notification is sent per alert.
 - **Dashboards you create persist in Postgres** and survive Grafana restarts and redeploys; **uninstall deletes the database volumesets** — enable backups if the data matters.

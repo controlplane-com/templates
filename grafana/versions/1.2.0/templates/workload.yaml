@@ -59,8 +59,12 @@ spec:
         # creates before install — neither value ever transits the Helm release.
         - name: GF_SECURITY_ADMIN_USER
           value: {{ .Values.admin.user | quote }}
+        {{- if .Values.admin.applyPassword }}
+        # Only honored when the admin account is first created; dropping the
+        # reference (applyPassword: false) lets the user delete that secret.
         - name: GF_SECURITY_ADMIN_PASSWORD
           value: 'cpln://secret/{{ .Values.admin.passwordSecretName }}.payload'
+        {{- end }}
         - name: GF_SECURITY_SECRET_KEY
           value: 'cpln://secret/{{ .Values.admin.secretKeySecretName }}.payload'
         # ── Hardening: no signup, no anonymous access, no telemetry ──

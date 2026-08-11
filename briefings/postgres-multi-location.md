@@ -130,3 +130,17 @@
 - **`etcd3.hosts`, never `etcd3.host`.** Patroni's `host` takes ONE endpoint; a comma-joined list makes it exit with `ValueError` before Postgres starts, crash-looping every member in every location. This shipped and was caught only by running it — the chart renders perfectly either way.
 - **wal-g's first base backup used to be up to 6 h late** (the sidecar slept the full interval when Patroni had not yet taken the lock). Fixed: it now retries every 60 s until a push succeeds, so a newly promoted leader also backs up promptly.
 - **Enabling wal-g mid-flight can leave one location on the old spec for ~10 minutes**, archiving nothing while appearing enabled. Check `archive_mode` per location.
+
+## Shipped untested — deliberate maintainer decision (2026-08-11)
+Recorded so it can be closed retroactively rather than forgotten. None of these blocked the core availability story, which was measured.
+
+| Gap | Why it was accepted | What would close it |
+|---|---|---|
+| `backup.provider: gcp` and `minio` | Only `aws` was exercised end to end. Accepted to keep the cycle moving | A bucket + cloud account per provider, then one backup each |
+| **wal-g and logical RESTORE** | Backups proven to exist, be well-formed and be listable; restore is largely independent of this chart's topology | `wal-g backup-fetch` into an empty PGDATA; `psql` restore of the dump |
+| Replica-down (crash a NON-primary member) | The harder case — losing the leader — was measured (3.19 s switchover) | Crash a follower and confirm the primary and surviving replica are unaffected |
+| Replication lag under sustained write load | No load generator in the run; `maximum_lag_on_failover` is 32 MiB and unverified against real lag | Sustained writes, then p95 lag per location |
+| Volumeset growth event | Configuration verified; filling ~9 GiB to trigger it is disproportionate | Fill past the free-space trigger |
+| 2-location manual promotion | Needs a separate 2-location install | Install with 2 locations, lose one, promote by hand |
+
+**Note this conflicts with the standing rule that an untested knob is removed from `values.yaml` rather than shipped.** `gcp` and `minio` are shipped untested by explicit decision, not oversight — if either turns out broken, that is the reason.

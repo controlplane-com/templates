@@ -67,7 +67,7 @@
 | Firewall propagation | 147 s to deny, 124 s to re-allow |
 | **`helm upgrade`** | **all three locations restart together — 66 s of lost quorum** |
 
-- **The upgrade window is the one thing to plan around.** Root cause (confirmed 2026-08-11 on the live workload): **the API does not retain `rolloutOptions.maxUnavailableReplicas`** — it is absent from the stored spec, while `maxSurgeReplicas`, `minReadySeconds` and `scalingPolicy` survive. So the chart's request to restart one member at a time never takes effect and nothing constrains the rollout. This is a platform behaviour affecting every multi-location workload, not an etcd bug.
+- **The upgrade window is the one thing to plan around.** Root cause (confirmed 2026-08-11 on the live workload): **the API does not retain `rolloutOptions.maxUnavailableReplicas`** — it is absent from the stored spec, while `maxSurgeReplicas`, `minReadySeconds` and `scalingPolicy` survive. Nothing constrains the rollout, so from 1.0.1 the chart deliberately does not send the field at all (see the zero-drift section below). This is a platform behaviour affecting every multi-location workload, not an etcd bug.
 - **Do NOT claim more members per location fixes it.** That was an early inference made while assuming `maxUnavailableReplicas` worked; with the field dropped there is no evidence it helps, and it is untested.
 - For `postgres-multi-location`, `failsafe_mode: true` is what keeps the Patroni primary alive through that window — it holds only while the primary can reach ALL members via REST.
 - `IS LEADER: true` persists ~**6 s** after isolation with this chart's 5 s election timeout (an earlier 50 s figure came from the single-location chart's 50 s timeout).

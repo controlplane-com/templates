@@ -30,7 +30,8 @@
 
 | Knob | Default | Meaning |
 |---|---|---|
-| `createGvc` | `true` | `false` = use a GVC you already manage (also how subchart mode works) |
+| `createGvc` | `true` | `false` = use a GVC you already manage |
+| `managedByParent` | `false` | Set to `true` only by a parent chart; relaxes the one-member-per-location check |
 | `global.gvc.name` | `etcd-multi-location-gvc` | The GVC all resources land in — **not** `global.cpln.gvc`, which this chart ignores |
 | `global.gvc.locations[]` | 3 AWS locations | The member map; **≥2 required**, `replicas` must be `1` |
 | `image` | `controlplanecorporation/etcd:0.1` | etcd **3.6.5** inside (verified `etcd --version` in the image) |
@@ -40,7 +41,7 @@
 | `internalAccess.type` / `.workloads` | `same-gvc` / `[]` | Who may reach `:2379` |
 | `recovery.forceNewClusterInLocation` | `""` | Emergency single-member rebuild after permanent quorum loss |
 
-- `global.gvc` sits under `global` **on purpose**: it is the only channel by which `postgres-multi-location` propagates one GVC + location list to this chart as a subchart. `global.gvc.locations[].replicas` is read only by the parent — etcd always runs one member per location — so the `replicas != 1` guard fires **only in standalone mode** (`createGvc: true`).
+- `global.gvc` sits under `global` **on purpose**: it is the only channel by which `postgres-multi-location` propagates one GVC + location list to this chart as a subchart. `global.gvc.locations[].replicas` is read only by the parent — etcd always runs one member per location — so the `replicas != 1` guard fires **only in standalone mode**, which is discriminated by `managedByParent` — NOT by `createGvc`. Gating it on `createGvc` was the original design and it was wrong: a standalone user pointed at an existing GVC also sets `createGvc: false`, which silently disabled the guard in a configuration the README recommends.
 - Auto-compaction (`periodic`, `1h`) is hard-coded, not a knob. Confirmed accepted by the image: `"auto-compaction-mode":"periodic","auto-compaction-retention":"1h0m0s"`.
 
 ## Troubleshooting / considerations

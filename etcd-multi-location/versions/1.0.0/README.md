@@ -38,6 +38,11 @@ None. No cloud account, no bucket, no pre-created secret, no custom domain.
 ```yaml
 createGvc: true # false = deploy into a GVC you already manage
 
+# Set to true ONLY by a parent chart consuming this as a subchart (it makes the
+# parent's own per-location replica counts legal in the shared locations list).
+# Leave false when installing this chart directly.
+managedByParent: false
+
 global:
   gvc:
     name: etcd-multi-location-gvc # GVC created by this chart when createGvc is true

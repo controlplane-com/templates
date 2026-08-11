@@ -53,10 +53,15 @@ Validate locations, replicas and raft timers.
 {{- if not .Values.global.gvc.name -}}
 {{- fail "global.gvc.name is required — it names the GVC this chart deploys into" -}}
 {{- end -}}
-{{- if lt (len .Values.global.gvc.locations) 2 -}}
+{{- if lt (len (.Values.global.gvc.locations | default list)) 2 -}}
 {{- fail "etcd-multi-location requires at least 2 locations in global.gvc.locations. For a single-location cluster, use the etcd template instead." -}}
 {{- end -}}
-{{- if .Values.createGvc -}}
+{{/*
+Standalone mode is "no parent chart set managedByParent", NOT "createGvc is true":
+a standalone user pointed at an existing GVC also sets createGvc: false, and
+gating on that made this guard vanish in a configuration the README recommends.
+*/}}
+{{- if not .Values.managedByParent -}}
 {{- range .Values.global.gvc.locations -}}
 {{- if and (hasKey . "replicas") (ne (int .replicas) 1) -}}
 {{- fail "etcd-multi-location runs exactly one member per location, so global.gvc.locations[].replicas must be 1. A second member in a location adds cost and reduces fault tolerance: it makes that location's loss a quorum loss." -}}
@@ -70,6 +75,19 @@ Validate locations, replicas and raft timers.
 {{- end -}}
 {{- if gt $election 50000 -}}
 {{- fail (printf "tuning.electionTimeoutMs (%d) exceeds etcd's hard maximum of 50000 ms." $election) -}}
+{{- end -}}
+{{/*
+A typo here is a silent no-op, and it is read for the first time during an
+outage — so it must fail at render, not at 3am.
+*/}}
+{{- with .Values.recovery.forceNewClusterInLocation -}}
+{{- $names := list -}}
+{{- range $.Values.global.gvc.locations -}}
+{{- $names = append $names .name -}}
+{{- end -}}
+{{- if not (has . $names) -}}
+{{- fail (printf "recovery.forceNewClusterInLocation (%s) is not one of the configured locations (%s)." . (join ", " $names)) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 

@@ -101,6 +101,9 @@ spec:
           path: /liveness
           port: 8008
           scheme: HTTP
+        # Declared because the API backfills it; omitting it means every install
+        # drifts from its own manifest the moment it is created.
+        initialDelaySeconds: 60
         periodSeconds: 10
         timeoutSeconds: 5
         failureThreshold: 6
@@ -110,6 +113,8 @@ spec:
           path: /readiness
           port: 8008
           scheme: HTTP
+        # Declared because the API backfills it (see the liveness probe above).
+        initialDelaySeconds: 10
         periodSeconds: 5
         timeoutSeconds: 3
         failureThreshold: 3
@@ -210,10 +215,16 @@ spec:
       timeoutSeconds: 5
     {{- end }}
   rolloutOptions:
+    {{- /*
+    maxUnavailableReplicas is deliberately NOT set: the API does not retain it,
+    so sending it produced permanent drift AND implied the rolling restart was
+    limited. It is not — an upgrade restarts every location together.
+    terminationGracePeriodSeconds is declared because the API backfills 90.
+    */}}
     maxSurgeReplicas: 0%
-    maxUnavailableReplicas: '1'
     minReadySeconds: 60
     scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
   firewallConfig:
     external:
       inboundAllowCIDR: []

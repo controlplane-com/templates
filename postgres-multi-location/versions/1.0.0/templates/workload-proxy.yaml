@@ -1,5 +1,5 @@
 {{- include "pg-ml.validate" . -}}
-{{- if .Values.proxy.enabled }}
+{{- if or .Values.proxy.enabled .Values.pgbouncer.enabled }}
 kind: workload
 name: {{ include "pg-ml.proxy.name" . }}
 description: HAProxy leader-only PostgreSQL endpoint, present in every location

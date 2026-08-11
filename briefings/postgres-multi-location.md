@@ -159,3 +159,19 @@ A default install originally showed configuration drift against its own manifest
 Why it matters beyond tidiness: a template that drifts from creation teaches its users that drift is normal, which is exactly how a real, unintended change later goes unnoticed. Check with a no-op `helm upgrade` — every resource must report `Unchanged`.
 
 The bundled etcd subchart must be pinned to **1.0.1 or later**, or the etcd tier still drifts even when this chart's own resources are clean.
+
+## 1.0.1 — two defects found by the deferred-row test round (2026-08-11)
+- **`backup.resources.memory` raised 128Mi → 512Mi.** The GCP path OOMs at 128Mi with **no log output at all**: logical jobs merely report `failed`, and the wal-g sidecar loops on `OOMKilled` while WAL archives with no base backup — a backup feature that looks configured and silently produces nothing restorable. AWS and MinIO are fine at 128Mi; the default has to work for every provider. 256Mi fixes logical, 512Mi fixes wal-g, both verified end to end.
+- **wal-g's `restore_command` runs on EVERY member**, so the archive endpoint must be reachable from every location. A MinIO workload living in ONE location answers 503 from the others, and a member that cannot reach the archive **never finishes starting** — its container is recycled every 160 s indefinitely, while writes on the surviving primary never fail. Proven causally: disabling backups healed it in ~2 min. For wal-g use a multi-location endpoint or an external S3-compatible service.
+
+## What 1.0.0 testing actually proved (restores included)
+| Row | Result |
+|---|---|
+| wal-g restore | base backup + WAL replay into an empty PGDATA; checksum identical to source, open in 24 s |
+| Logical restore | `pg_dumpall` replayed into a fresh cluster, **0 errors**, roles/ownership/sequences intact |
+| Non-primary crash | **0 write failures** in all 3 locations, member rejoined streaming in 15.6 s |
+| Replication lag, 675 TPS | p95 **1.9%** of the 32 MiB `maximum_lag_on_failover` — the raise from pg-ha's 1 MiB is validated |
+| `pgbouncer.poolMode` | behaviourally distinguished: 10 idle clients → 2 backends (transaction) vs 10 (session) |
+
+- Side finding: switching `backup.provider` leaves **both** cloud blocks on the stored identity (`usable: true` for each) even though the render contains only the new one.
+- Still not run: a volumeset growth event (needs ~80-90 min of sustained load).

@@ -93,7 +93,11 @@ backup:
   location: aws-us-east-1
   resources: # applies to whichever mode is enabled
     cpu: 100m
-    memory: 128Mi
+    # 512Mi, not 128Mi: the GCP path OOMs at 128Mi with NO log output —
+    # logical jobs merely report `failed`, and the wal-g sidecar loops on
+    # OOMKilled while WAL archives with no base backup. AWS and MinIO are
+    # fine at 128Mi; a default has to work for every provider.
+    memory: 512Mi
 
   logical:
     image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0 # 17.1.0 = Postgres 17, 18.1.0 = Postgres 18
@@ -118,6 +122,11 @@ backup:
     prefix: postgres/backups # folder within the bucket
 
   minio: # a self-hosted MinIO workload, or any S3-compatible endpoint
+    # MUST be reachable from EVERY location: wal-g's restore_command runs on
+    # every member, and a member that cannot reach the archive never finishes
+    # starting — its container is recycled every 160s indefinitely. A MinIO
+    # workload in ONE location answers 503 from the others, so for wal-g use
+    # a multi-location endpoint or an external S3-compatible service.
     endpoint: http://my-minio-workload:9000 # e.g. http://WORKLOAD_NAME:9000 in the same GVC
     bucket: my-postgres-ml-bucket
     # REQUIRED PREREQUISITE SECRET when provider is `minio` — a `dictionary`

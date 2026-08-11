@@ -192,7 +192,11 @@ backup:
   location: aws-us-east-1
   resources: # applies to whichever mode is enabled
     cpu: 100m
-    memory: 128Mi
+    # 512Mi, not 128Mi: the GCP path OOMs at 128Mi with NO log output —
+    # logical jobs merely report `failed`, and the wal-g sidecar loops on
+    # OOMKilled while WAL archives with no base backup. AWS and MinIO are
+    # fine at 128Mi; a default has to work for every provider.
+    memory: 512Mi
 
   logical:
     image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0 # 17.1.0 = Postgres 17, 18.1.0 = Postgres 18

@@ -113,3 +113,20 @@
   back.** Moving a primary is `patronictl switchover --candidate <member>`.
 - **Cost scales with `write_volume × remote members`** — each receives a full copy of the WAL
   stream, and cross-region traffic is billed. Read-mostly is cheap to stretch; write-heavy is not.
+
+## Measured behaviour (test run 2026-08-11, 3 locations, clean install)
+| Event | Result |
+|---|---|
+| Clean install to all-3-ready | **169 s**, leader elected, both replicas streaming at 0 lag |
+| Graceful loss of the leader | switchover in **3.19 s**, write outage **4.7-5.8 s**, old member rejoined streaming in 2 m 16 s |
+| **Any `helm upgrade`, even a no-op** | **~117 s of failed writes in every location** — all members restart together |
+| etcd tier restart | failsafe held ~60 s with 0 failed writes, then demoted; **~19 s** total write loss, auto-recovers |
+| AWS backup, least privilege | **works with `cpln-connector` + a bucket-scoped policy only** — `aws::ReadOnlyAccess` is NOT required. A real `pg_dumpall` landed in S3 |
+| `backup.location` | logical cron fired in **exactly one** location (without it, one duplicate backup per location) |
+
+## Troubleshooting traps
+- **The upgrade outage is the headline risk.** `rolloutOptions.maxUnavailableReplicas` is silently dropped by the API, so nothing serialises the restart. This is platform behaviour, not something the chart can fix; do not promise rolling upgrades.
+- **`failsafe_mode` is not a guarantee.** It needs the primary to reach EVERY member's REST API; replica readiness flipping is enough to break that and demote the primary.
+- **`etcd3.hosts`, never `etcd3.host`.** Patroni's `host` takes ONE endpoint; a comma-joined list makes it exit with `ValueError` before Postgres starts, crash-looping every member in every location. This shipped and was caught only by running it — the chart renders perfectly either way.
+- **wal-g's first base backup used to be up to 6 h late** (the sidecar slept the full interval when Patroni had not yet taken the lock). Fixed: it now retries every 60 s until a push succeeds, so a newly promoted leader also backs up promptly.
+- **Enabling wal-g mid-flight can leave one location on the old spec for ~10 minutes**, archiving nothing while appearing enabled. Check `archive_mode` per location.

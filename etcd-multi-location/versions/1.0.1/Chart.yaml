@@ -2,7 +2,7 @@ apiVersion: v2
 name: etcd-multi-location
 description: A stretched etcd cluster with one member per location, for cross-region coordination and as the consensus store behind postgres-multi-location
 type: application
-version: 1.0.0
+version: 1.0.1
 appVersion: "3.6.5"
 
 annotations:

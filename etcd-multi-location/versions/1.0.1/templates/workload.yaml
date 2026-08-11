@@ -57,10 +57,17 @@ spec:
       timeoutSeconds: 5
     {{- end }}
   rolloutOptions:
+    {{- /*
+    maxUnavailableReplicas is deliberately NOT set: the API does not retain it
+    (confirmed on a live workload — it is absent from the stored spec while its
+    neighbours survive), so sending it bought nothing except permanent drift and
+    a false impression that the rollout was limited. It is not.
+    terminationGracePeriodSeconds is declared because the API backfills 90.
+    */}}
     maxSurgeReplicas: 0%
-    maxUnavailableReplicas: '1'
     minReadySeconds: 60
     scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
   firewallConfig:
     external:
       inboundAllowCIDR: []

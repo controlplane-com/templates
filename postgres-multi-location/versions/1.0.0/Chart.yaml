@@ -18,8 +18,4 @@ dependencies:
   - name: etcd-multi-location
     alias: etcd
     version: 1.0.0
-    # PRE-MERGE TESTING ONLY — resolves to
-    # ghcr.io/controlplane-com/templates/test/etcd-multi-location:1.0.0
-    # Switch to oci://ghcr.io/controlplane-com/templates before merge
-    # (template-lint R15 FAILs until it is switched back).
-    repository: "oci://ghcr.io/controlplane-com/templates/test"
+    repository: "oci://ghcr.io/controlplane-com/templates"

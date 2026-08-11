@@ -101,9 +101,11 @@ postgres:
   # exact `cpln secret create-dictionary` command.
   credentialsSecretName: my-postgres-ml-credentials
 
-# Preferred location for the primary. Patroni prefers a healthy member here when
-# electing a new leader; it does not move an existing leader (use patronictl
-# switchover for that). Empty = no preference.
+# Preferred location for the primary. CHANGING THIS ON A LIVE CLUSTER MOVES THE
+# LEADER: the value is baked into the startup script, so editing it restarts every
+# member (~2 min of interrupted writes) and the election that follows picks this
+# location. To move a primary WITHOUT a restart, use patronictl switchover.
+# Empty = no preference.
 primaryLocation: ""
 
 volumeset:

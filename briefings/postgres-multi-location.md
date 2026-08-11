@@ -109,8 +109,13 @@
   600 s), because HAProxy resolves server names once and mesh DNS never returns NXDOMAIN.
 - **The first `helm upgrade` after install bounces the bundled etcd tier** even when the render is
   byte-identical. Check whether the consensus store is restarting before diagnosing Postgres.
-- **`primaryLocation` biases the leader race; it does not move a live primary and does not fail
-  back.** Moving a primary is `patronictl switchover --candidate <member>`.
+- **`primaryLocation` DOES move a live primary — that claim was wrong until 2026-08-11.** Patroni's own
+  semantics are "priority biases the race, it does not move a live leader", and that is true of the tag.
+  But the template's knob is baked into the startup script, so changing it rewrites the secret and rolls
+  every member; the election that follows then picks the preferred location. Observed: leader moved
+  us-west-2 → eu-central-1 (timeline 7 → 8). So it is NOT a safe inert edit — it costs the full ~117 s
+  upgrade interruption. To move a primary without a restart, use `patronictl switchover --candidate`.
+  It still does not fail back automatically after an outage.
 - **Cost scales with `write_volume × remote members`** — each receives a full copy of the WAL
   stream, and cross-region traffic is billed. Read-mostly is cheap to stretch; write-heavy is not.
 

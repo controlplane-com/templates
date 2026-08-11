@@ -1,0 +1,17 @@
+apiVersion: v2
+name: etcd-multi-location
+description: A stretched etcd cluster with one member per location, for cross-region coordination and as the consensus store behind postgres-multi-location
+type: application
+version: 1.0.0
+appVersion: "3.6.5"
+
+annotations:
+  created: "2026-08-10"
+  lastModified: "2026-08-11"
+  category: "key-value store"
+  createsGvc: true
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

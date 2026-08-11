@@ -110,6 +110,8 @@ proxy:
 ```yaml
 etcd:
   createGvc: false # this chart creates the GVC — do not change
+  managedByParent: true # tells etcd the shared locations list carries THIS chart's
+  # replica counts, not its own — do not change
   image: controlplanecorporation/etcd:0.1
   resources:
     cpu: 500m

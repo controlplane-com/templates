@@ -85,13 +85,3 @@
 - **The GVC is created unconditionally and Helm will adopt one that already exists — then delete it
   on uninstall**, taking unrelated workloads with it. Always a fresh name.
 
-## Build-time verifications (2026-08-11, pre-test)
-
-| Claim | Result |
-|---|---|
-| `localOptions` 0/0 scale-to-zero, no `suspend` | **Works** — stored verbatim, 0 replicas in the zero-scaled locations |
-| Positive `rolloutOptions.maxSurgeReplicas: "1"` | Accepted and stored (catalog had only `0%` before) |
-| `CPLN_GLOBAL_ENDPOINT` on a workload with `inboundAllowCIDR: []` | **Injected** — hence the prefix rewrite rather than a fallback |
-| Endpoint prefix rewrite → the UI tier's URL | Verified inside `grafana/grafana:13.1.3` against both real endpoint forms, plus the fallback branch |
-| bash `/dev/tcp` for the 180 s database gate | Present (bash 5.3.9); so are `curl`, `sed` and `nc` |
-| Simultaneous boot against an empty database | Loser exits 1 with `Failed to lock database`, succeeds on restart |

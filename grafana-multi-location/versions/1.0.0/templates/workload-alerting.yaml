@@ -178,6 +178,7 @@ spec:
   loadBalancer:
     direct:
       enabled: false
+      ports: []
     replicaDirect: false
   supportDynamicTags: false
 {{- end }}

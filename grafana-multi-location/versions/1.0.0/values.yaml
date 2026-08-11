@@ -36,9 +36,11 @@ database:
 
 # ─── Alerting ─────────────────────────────────────────────────────────────────
 # Alert rules are evaluated by a SEPARATE single-replica workload that runs only
-# in this location and is never exposed publicly. Grafana's own alerting HA
-# gossips over UDP, which is not available between workloads here, so a second
-# evaluator anywhere would duplicate every notification.
+# in this location and is never exposed publicly. Nothing dedupes two evaluators
+# here: Grafana's memberlist alerting HA gossips over UDP, which is unavailable
+# between workloads on this platform. (Grafana also supports a Redis-backed
+# alerting HA path, which WOULD work here — it is deferred to a later version
+# because it needs a stretched Redis tier, not because it is impossible.)
 # A replica failure self-heals; losing this whole LOCATION stops evaluation until
 # you point this elsewhere and upgrade. The UI tier is unaffected either way.
 alerting:

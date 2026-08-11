@@ -106,7 +106,7 @@ resources:
   minMemory: 512Mi
 
 database:
-  maxOpenConn: 10 # per instance; (replicas × locations + 1) × this must stay under 80
+  maxOpenConn: 10 # per instance; (replicas × locations + 1) × this must stay at 80 or less
 ```
 
 The `maxOpenConn` budget is enforced at render time, and the `+ 1` is the alert evaluator. Exceed it
@@ -307,9 +307,11 @@ No cloud account is needed.
 
 ## Alerting
 
-Grafana's own alerting HA coordinates instances over a UDP gossip channel that is not available
-between workloads on this platform, so if every instance evaluated rules you would get one
-notification per instance. This template instead makes exactly-once evaluation a property of the
+Grafana's memberlist alerting HA coordinates instances over a UDP gossip channel that is not
+available between workloads on this platform, so if every instance evaluated rules you would get one
+notification per instance. Grafana also supports a Redis-backed alerting HA path, which **would**
+work here — it is deferred to a later version because it needs a stretched Redis tier, not because
+alerting HA is impossible on Control Plane. This template instead makes exactly-once evaluation a property of the
 **topology**: rule execution is disabled on the UI tier and enabled on a separate workload that is
 pinned to one replica in `alerting.location`. Nothing is elected at runtime, and no value of
 `replicas` can produce a second evaluator.
@@ -351,6 +353,8 @@ never evaluated.
 - **Grafana Live has no HA engine here**, so a live-streamed message reaches only the browsers connected to the same instance. Interval-refreshing dashboards, queries, alerting, provisioning, login and the API are unaffected.
 - **Never suspend a location.** Suspending and resuming one permanently withdraws its endpoints from the other locations' service discovery while every status surface still reads healthy. To remove a location, remove it from `global.gvc.locations`.
 - **Allow up to about four minutes after changing an access knob** before believing it did not work, and about two minutes after a cold install before believing a location is unreachable.
+
+- **With `publicAccess.enabled: false`, links in alert notifications point at the internal GVC address** (`…cpln.local:3000`) and will not open from a browser outside the GVC. Give the UI tier a public endpoint, or expect notification links to be unusable off-network.
 
 ## Links
 

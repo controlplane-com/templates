@@ -154,5 +154,6 @@ spec:
     # per replica either.
     direct:
       enabled: false
+      ports: []
     replicaDirect: false
   supportDynamicTags: false

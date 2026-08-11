@@ -1,0 +1,22 @@
+{{- include "pg-ml.validate" . -}}
+{{/*
+This chart CREATES its GVC (createsGvc: true) — it is not optional, because the
+GVC is what pins the deployment's locations. The only exception is being consumed
+as a subchart, where the parent renders the one GVC for the release.
+.Chart.IsRoot is a Helm built-in, true only for the top-level chart. The bundled
+etcd-multi-location subchart gates its own GVC the same way, so exactly one
+`kind: gvc` document exists per release.
+*/}}
+{{- if .Chart.IsRoot }}
+kind: gvc
+name: {{ .Values.global.gvc.name }}
+description: PostgreSQL multi-location GVC
+tags:
+  {{- include "pg-ml.tags" . | nindent 2 }}
+spec:
+  staticPlacement:
+    locationLinks:
+    {{- range .Values.global.gvc.locations }}
+      - //location/{{ .name }}
+    {{- end }}
+{{- end }}

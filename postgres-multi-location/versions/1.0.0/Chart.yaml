@@ -1,0 +1,21 @@
+apiVersion: v2
+name: postgres-multi-location
+description: A single PostgreSQL 17 Patroni cluster stretched across locations, with one primary, asynchronous replicas elsewhere, automatic promotion in a surviving location, optional connection pooling and optional backups to object storage
+type: application
+version: 1.0.0
+appVersion: "17"
+
+annotations:
+  created: "2026-08-10"
+  lastModified: "2026-08-11"
+  category: "database"
+  createsGvc: true
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+  - name: etcd-multi-location
+    alias: etcd
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

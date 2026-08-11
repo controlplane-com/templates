@@ -17,5 +17,5 @@ dependencies:
     repository: "oci://ghcr.io/controlplane-com/templates"
   - name: etcd-multi-location
     alias: etcd
-    version: 1.0.0
+    version: 1.0.1
     repository: "oci://ghcr.io/controlplane-com/templates"

@@ -149,3 +149,13 @@ Recorded so it can be closed retroactively rather than forgotten. None of these 
 | 2-location manual promotion | Needs a separate 2-location install | Install with 2 locations, lose one, promote by hand |
 
 **Note this conflicts with the standing rule that an untested knob is removed from `values.yaml` rather than shipped.** `gcp` and `minio` are shipped untested by explicit decision, not oversight — if either turns out broken, that is the reason.
+
+## Zero-drift rendering (1.0.1 for etcd; folded into 1.0.0 for postgres)
+A default install originally showed configuration drift against its own manifest the moment it was created. Both causes were ours, and the fix is the same principle everywhere: **render what the API actually stores.**
+- `staticPlacement.locationLinks` must be rendered **alphabetically sorted** — the API stores them that way, so values order never matched.
+- **Stop sending `rolloutOptions.maxUnavailableReplicas`.** The API does not retain it. Sending it produced permanent drift AND implied a limited rolling restart that is not in force.
+- **Declare what the API backfills**: `rolloutOptions.terminationGracePeriodSeconds: 90`, and probe `initialDelaySeconds` (60 liveness / 10 readiness on Patroni).
+
+Why it matters beyond tidiness: a template that drifts from creation teaches its users that drift is normal, which is exactly how a real, unintended change later goes unnoticed. Check with a no-op `helm upgrade` — every resource must report `Unchanged`.
+
+The bundled etcd subchart must be pinned to **1.0.1 or later**, or the etcd tier still drifts even when this chart's own resources are clean.

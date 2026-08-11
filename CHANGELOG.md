@@ -4,6 +4,9 @@ High-level, user-facing catalog changes by month: new templates and notable vers
 
 ## 2026-08
 
+- **New template: postgres-multi-location 1.0.0** — one PostgreSQL cluster stretched across regions: a single primary, asynchronous replicas elsewhere, and automatic promotion of a replica in a surviving region when the primary's region is lost
+- **New template: etcd-multi-location 1.0.0** — stretched etcd cluster with one member per location, for cross-region coordination and as the consensus store behind postgres-multi-location
+- **etcd-multi-location 1.0.1** — a fresh install no longer shows configuration drift against its own manifest
 - **New template: duckdb 1.0.0** — scheduled SQL analytics over Parquet, CSV and JSON in object storage, run as a cron job that starts, transforms and exits (no always-on server)
 - **New template: polaris 1.0.0** — Apache Iceberg REST catalog, letting Trino and other engines share governed lakehouse tables backed by S3-compatible storage
 - **New template: meilisearch 1.0.0** — fast, typo-tolerant search engine with instant indexing and a simple REST API

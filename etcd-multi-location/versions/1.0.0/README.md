@@ -44,11 +44,8 @@ global:
     # 5 survives losing two. See the quorum table in the README.
     locations:
       - name: aws-us-east-1
-        replicas: 1 # fixed at 1 — etcd runs one member per location
       - name: aws-eu-central-1
-        replicas: 1
       - name: aws-us-west-2
-        replicas: 1
 ```
 
 This block lives under `global` so a parent chart — `postgres-multi-location` consumes this one as a subchart — sets the GVC and location list once and Helm propagates it here. `replicas` is fixed at `1`; anything else fails the render.
@@ -136,13 +133,14 @@ Never set this to more than one location, and never leave it set: two members bo
 ## Important Notes
 
 - **Quorum arithmetic decides your failure tolerance, not the template.** Two locations survive zero losses. If you want automatic failover, use three.
-- **`IS LEADER: true` is not proof of leadership.** An isolated survivor keeps reporting itself leader for up to ~50 seconds while unable to commit anything. Health-check with a linearizable read (`etcdctl get <key>`, no `--consistency=s`), never with `endpoint status`.
+- **`IS LEADER: true` is not proof of leadership.** An isolated survivor keeps reporting itself leader for about **6 seconds** (measured) while unable to commit anything. Health-check with a linearizable read (`etcdctl get <key>`, no `--consistency=s`), never with `endpoint status`.
 - **Under quorum loss, writes time out rather than failing fast**, and serializable reads keep succeeding against stale data. Always give clients a short `--command-timeout` or the equivalent, or they will pile up connections against a cluster that cannot commit.
 - **Never suspend a location on this workload.** Suspending and resuming a location permanently withdraws its endpoints from the other locations' service discovery while every status surface still reads healthy. This template therefore exposes no suspend knob; add or remove locations by editing `global.gvc.locations`.
 - **Allow about two minutes of convergence after a cold install** before concluding a member is unreachable — cross-region service discovery can lag `ready: true` by well over a minute.
 - **Changing `global.gvc.locations` reprovisions the cluster.** Every member restarts with a new cluster list; this is not etcd's graceful `member add`/`member remove` path. Plan it as a maintenance window.
 - **Helm owns the GVC this chart creates, so `global.gvc.name` must NOT name a GVC that already exists.** Helm would adopt it and `helm uninstall` would then delete it along with everything else inside. Pick a name no other release uses.
 - **No TLS, no authentication.** Anything permitted by `internalAccess` has full read/write on the keyspace. Scope it with `workload-list` if the GVC holds workloads that should not have it. Firewall changes take up to a couple of minutes to take effect.
+- **A `helm upgrade` briefly takes the whole cluster down.** Members in every location restart together — per-location rollout limits do not serialize across locations — so quorum is lost for about **66 seconds** (measured, 3 locations). Writes time out for that window; the cluster recovers on its own. Plan upgrades accordingly. If you cannot tolerate it, run **3 members per location** (2 is not enough: it leaves exactly half the cluster up, which is never a majority).
 - **Auto-compaction is on by design** (periodic, 1 hour). Without it a continuously-written cluster grows revisions until it hits etcd's 2 GiB backend quota and goes read-only — weeks after install, with no warning.
 
 ## Links

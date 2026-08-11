@@ -9,11 +9,8 @@ global:
     # 5 survives losing two. See the quorum table in the README.
     locations:
       - name: aws-us-east-1
-        replicas: 1 # fixed at 1 — etcd runs one member per location
       - name: aws-eu-central-1
-        replicas: 1
       - name: aws-us-west-2
-        replicas: 1
 
 # ─── etcd ─────────────────────────────────────────────────────────────────────
 image: controlplanecorporation/etcd:0.1

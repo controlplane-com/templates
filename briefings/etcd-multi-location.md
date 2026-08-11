@@ -39,7 +39,7 @@
 | `internalAccess.type` / `.workloads` | `same-gvc` / `[]` | Who may reach `:2379` |
 | `recovery.forceNewClusterInLocation` | `""` | Emergency single-member rebuild after permanent quorum loss |
 
-- `global.gvc` sits under `global` **on purpose**: it is the only channel by which `postgres-multi-location` propagates one GVC + location list to this chart as a subchart. `global.gvc.locations[].replicas` is read only by the parent — etcd always runs one member per location — so the `replicas != 1` guard fires **only in standalone mode**, discriminated by Helm's `.Chart.IsRoot`. The same built-in gates `gvc.yaml`, so a standalone install always creates its GVC while a parent release renders exactly one. Verified on `cpln helm` specifically — a Helm older than 3.13 returns nil for `IsRoot` and would silently render no GVC at all.
+- `global.gvc` sits under `global` **on purpose**: it is the only channel by which `postgres-multi-location` propagates one GVC + location list to this chart as a subchart. `global.gvc.locations[].replicas` is read only by the parent — etcd always runs one member per location — so the `replicas != 1` guard fires **only in standalone mode**, discriminated by Helm's `.Chart.IsRoot`. The same built-in gates `gvc.yaml`, so a standalone install always creates its GVC while a parent release renders exactly one. Verified on `cpln helm` specifically, because a Helm that does not support `IsRoot` returns nil, which is falsy — the chart would then silently render NO GVC rather than failing loudly. (Helm does not document which version introduced `IsRoot`; it is a real method on the Chart type but is absent from the Built-in Objects page, so treat it as low-discoverability rather than well-known.)
 - Auto-compaction (`periodic`, `1h`) is hard-coded, not a knob. Confirmed accepted by the image: `"auto-compaction-mode":"periodic","auto-compaction-retention":"1h0m0s"`.
 
 ## Troubleshooting / considerations
@@ -55,3 +55,18 @@
 - **This chart is `createsGvc: true`.** Pointing it at a GVC that already exists makes Helm adopt it, and `helm uninstall` will then **delete** that GVC and everything in it (this destroyed `test-gvc` on 2026-08-07 despite a `resource-policy: keep` annotation). So `global.gvc.name` must name a GVC that does NOT already exist; testing uses a `test-`prefixed name the release creates and `helm uninstall` removes.
 - **Removing auto-compaction is a slow-fuse outage.** Under continuous writes the backend grows revisions until it hits etcd's 2 GiB default quota (`quota-backend-bytes: 2147483648`, confirmed in the image) and the cluster goes read-only — weeks after install, with no warning.
 - **Changing `global.gvc.locations` reprovisions**, restarting every member with a new `--initial-cluster`. etcd's graceful `member add`/`member remove` path is a follow-up, not what this chart does.
+
+## Measured behaviour (test run 2026-08-11, 3 locations)
+| Event | Result |
+|---|---|
+| Idle stability | **10.8 h, zero spontaneous elections** (raft term unchanged) |
+| Leader crash | new leader in **5.59 s**, 0 failed writes on a follower-pinned client |
+| Planned `replica stop` | **502 ms** handoff, 0 failures in 570 samples; API call lags termination by ~46 s |
+| Write latency (leader in eu-central) | p50 **95.7 / 185.7 / 236.4 ms** from eu / east / west — one cross-region RTT is the floor |
+| Auto-compaction | fired at the 1 h mark, freed 569 KB, `dbSize` flat afterwards under load |
+| Firewall propagation | 147 s to deny, 124 s to re-allow |
+| **`helm upgrade`** | **all three locations restart together — 66 s of lost quorum.** `maxUnavailableReplicas` does NOT serialize across locations |
+
+- **The upgrade window is the one thing to plan around.** It is a platform behaviour, not an etcd one, and it affects every multi-location workload. 3 members per location avoids it; **2 does not** (half the cluster is never a majority).
+- For `postgres-multi-location`, `failsafe_mode: true` is what keeps the Patroni primary alive through that window — it holds only while the primary can reach ALL members via REST.
+- `IS LEADER: true` persists ~**6 s** after isolation with this chart's 5 s election timeout (an earlier 50 s figure came from the single-location chart's 50 s timeout).

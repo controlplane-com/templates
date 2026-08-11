@@ -16,7 +16,14 @@ tags:
 spec:
   staticPlacement:
     locationLinks:
-    {{- range .Values.global.gvc.locations }}
-      - //location/{{ .name }}
+    {{- /*
+    Sorted, because the API STORES locationLinks alphabetically. Rendering them
+    in values order makes every install drift against its own manifest from the
+    moment it is created.
+    */}}
+    {{- $names := list }}
+    {{- range .Values.global.gvc.locations }}{{ $names = append $names .name }}{{ end }}
+    {{- range (sortAlpha $names) }}
+      - //location/{{ . }}
     {{- end }}
 {{- end }}

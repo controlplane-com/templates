@@ -6,7 +6,7 @@ For a single-location cluster, use the **`etcd`** template instead — this one 
 
 ## Architecture
 
-- **GVC** — a multi-location GVC pinned to `global.gvc.locations` via `staticPlacement`. Created by this chart only when `createGvc: true`; set it to `false` to deploy into a GVC you already manage.
+- **GVC** — a multi-location GVC pinned to `global.gvc.locations` via `staticPlacement`. This chart creates it; the GVC is what pins the deployment's locations, so it is not optional. (Consumed as a subchart, the parent chart renders the one GVC for the release.)
 - **etcd workload** — a `stateful` workload (`{release}-etcd`) with `replicaDirect` enabled and exactly one replica in each location. Client API on 2379, raft peer traffic on 2380.
 - **Volumeset** — 10 GiB `ext4` per member at `/var/lib/etcd` (raft WAL and snapshots), with a final snapshot on uninstall and 7-day retention.
 - **Identity** and **policy** — the workload identity, granted `reveal` on exactly the startup secret and nothing else.
@@ -36,16 +36,10 @@ None. No cloud account, no bucket, no pre-created secret, no custom domain.
 ### GVC and locations
 
 ```yaml
-createGvc: true # false = deploy into a GVC you already manage
-
-# Set to true ONLY by a parent chart consuming this as a subchart (it makes the
-# parent's own per-location replica counts legal in the shared locations list).
-# Leave false when installing this chart directly.
-managedByParent: false
 
 global:
   gvc:
-    name: etcd-multi-location-gvc # GVC created by this chart when createGvc is true
+    name: etcd-multi-location-gvc # the GVC this chart creates
     # One etcd member per location. Minimum 2; 3 survives losing one location,
     # 5 survives losing two. See the quorum table in the README.
     locations:
@@ -147,7 +141,7 @@ Never set this to more than one location, and never leave it set: two members bo
 - **Never suspend a location on this workload.** Suspending and resuming a location permanently withdraws its endpoints from the other locations' service discovery while every status surface still reads healthy. This template therefore exposes no suspend knob; add or remove locations by editing `global.gvc.locations`.
 - **Allow about two minutes of convergence after a cold install** before concluding a member is unreachable — cross-region service discovery can lag `ready: true` by well over a minute.
 - **Changing `global.gvc.locations` reprovisions the cluster.** Every member restarts with a new cluster list; this is not etcd's graceful `member add`/`member remove` path. Plan it as a maintenance window.
-- **`createGvc: true` means Helm owns the GVC.** Pointed at a GVC that already exists, Helm adopts it and `helm uninstall` will then delete it along with everything else inside. Use `createGvc: false` for any GVC you did not create with this chart.
+- **Helm owns the GVC this chart creates, so `global.gvc.name` must NOT name a GVC that already exists.** Helm would adopt it and `helm uninstall` would then delete it along with everything else inside. Pick a name no other release uses.
 - **No TLS, no authentication.** Anything permitted by `internalAccess` has full read/write on the keyspace. Scope it with `workload-list` if the GVC holds workloads that should not have it. Firewall changes take up to a couple of minutes to take effect.
 - **Auto-compaction is on by design** (periodic, 1 hour). Without it a continuously-written cluster grows revisions until it hits etcd's 2 GiB backend quota and goes read-only — weeks after install, with no warning.
 

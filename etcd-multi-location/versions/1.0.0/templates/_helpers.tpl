@@ -57,11 +57,12 @@ Validate locations, replicas and raft timers.
 {{- fail "etcd-multi-location requires at least 2 locations in global.gvc.locations. For a single-location cluster, use the etcd template instead." -}}
 {{- end -}}
 {{/*
-Standalone mode is "no parent chart set managedByParent", NOT "createGvc is true":
-a standalone user pointed at an existing GVC also sets createGvc: false, and
-gating on that made this guard vanish in a configuration the README recommends.
+Standalone mode is "this chart is the top-level chart", which .Chart.IsRoot
+answers directly. Gating on createGvc was wrong (a standalone user pointed at an
+existing GVC also set it false, silently disabling the guard), and a parent-set
+values flag was a weaker version of the same idea.
 */}}
-{{- if not .Values.managedByParent -}}
+{{- if .Chart.IsRoot -}}
 {{- range .Values.global.gvc.locations -}}
 {{- if and (hasKey . "replicas") (ne (int .replicas) 1) -}}
 {{- fail "etcd-multi-location runs exactly one member per location, so global.gvc.locations[].replicas must be 1. A second member in a location adds cost and reduces fault tolerance: it makes that location's loss a quorum loss." -}}

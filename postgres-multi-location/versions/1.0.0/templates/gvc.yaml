@@ -1,0 +1,14 @@
+{{- include "pg-ml.validate" . -}}
+{{- if .Values.createGvc }}
+kind: gvc
+name: {{ .Values.global.gvc.name }}
+description: PostgreSQL multi-location GVC
+tags:
+  {{- include "pg-ml.tags" . | nindent 2 }}
+spec:
+  staticPlacement:
+    locationLinks:
+    {{- range .Values.global.gvc.locations }}
+      - //location/{{ .name }}
+    {{- end }}
+{{- end }}

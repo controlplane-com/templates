@@ -1,0 +1,80 @@
+# ─── GVC and locations ────────────────────────────────────────────────────────
+# Lives under `global` so the etcd subchart gets the same GVC and locations
+# automatically — never edit the two lists separately.
+createGvc: true # false = deploy into a GVC you already manage
+
+global:
+  gvc:
+    name: postgres-multi-location-gvc # GVC created by this chart when createGvc is true
+    # Minimum 2 locations. 3 gives automatic failover, 5 survives losing two;
+    # 2 gives a warm standby with MANUAL promotion. See the README table.
+    # `replicas` is Patroni members per location; etcd always runs 1 per location.
+    locations:
+      - name: aws-us-east-1
+        replicas: 1
+      - name: aws-eu-central-1
+        replicas: 1
+      - name: aws-us-west-2
+        replicas: 1
+
+# ─── PostgreSQL / Patroni ─────────────────────────────────────────────────────
+image: controlplanecorporation/patroni-postgres:0.7
+
+resources:
+  minCpu: 500m
+  minMemory: 1Gi
+  maxCpu: 1
+  maxMemory: 2Gi
+
+postgres:
+  username: postgres
+  password: change-me-postgres-ml-db # used as-is — change before installing
+  database: mydb
+
+# Preferred location for the primary. Patroni prefers a healthy member here when
+# electing a new leader; it does not move an existing leader (use patronictl
+# switchover for that). Empty = no preference.
+primaryLocation: ""
+
+volumeset:
+  capacity: 10 # initial capacity in GiB (minimum is 10)
+  autoscaling:
+    enabled: false
+    maxCapacity: 100 # GiB, when autoscaling is enabled
+    minFreePercentage: 10 # free-space trigger
+    scalingFactor: 1.2 # growth multiplier
+
+internalAccess:
+  type: same-gvc # options: same-gvc, same-org, workload-list
+  workloads: [] # only used when type is workload-list
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Leader-routing proxy ─────────────────────────────────────────────────────
+# One HAProxy tier per location; every one routes to the single current primary.
+proxy:
+  enabled: true
+  image: haproxy:2.9
+  resources:
+    cpu: 100m
+    memory: 128Mi
+  minReplicas: 2
+  maxReplicas: 2
+
+# ─── etcd (subchart: etcd-multi-location) ─────────────────────────────────────
+etcd:
+  createGvc: false # this chart creates the GVC — do not change
+  image: controlplanecorporation/etcd:0.1
+  resources:
+    cpu: 500m
+    memory: 512Mi
+  tuning:
+    heartbeatIntervalMs: 250
+    electionTimeoutMs: 5000
+  volumeset:
+    capacity: 10
+  internalAccess:
+    type: same-gvc
+    workloads: []
+  recovery:
+    # EMERGENCY ONLY — see "Recovering from a lost location" in the README.
+    forceNewClusterInLocation: ""

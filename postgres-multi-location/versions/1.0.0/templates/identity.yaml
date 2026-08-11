@@ -1,0 +1,7 @@
+{{- include "pg-ml.validate" . -}}
+kind: identity
+name: {{ include "pg-ml.identity.name" . }}
+gvc: {{ .Values.global.gvc.name }}
+description: PostgreSQL multi-location identity
+tags:
+  {{- include "pg-ml.tags" . | nindent 2 }}

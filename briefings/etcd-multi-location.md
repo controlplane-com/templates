@@ -71,3 +71,11 @@
 - **Do NOT claim more members per location fixes it.** That was an early inference made while assuming `maxUnavailableReplicas` worked; with the field dropped there is no evidence it helps, and it is untested.
 - For `postgres-multi-location`, `failsafe_mode: true` is what keeps the Patroni primary alive through that window — it holds only while the primary can reach ALL members via REST.
 - `IS LEADER: true` persists ~**6 s** after isolation with this chart's 5 s election timeout (an earlier 50 s figure came from the single-location chart's 50 s timeout).
+
+## Zero-drift rendering (1.0.1 for etcd; folded into 1.0.0 for postgres)
+A default install originally showed configuration drift against its own manifest the moment it was created. Both causes were ours, and the fix is the same principle everywhere: **render what the API actually stores.**
+- `staticPlacement.locationLinks` must be rendered **alphabetically sorted** — the API stores them that way, so values order never matched.
+- **Stop sending `rolloutOptions.maxUnavailableReplicas`.** The API does not retain it. Sending it produced permanent drift AND implied a limited rolling restart that is not in force.
+- **Declare what the API backfills**: `rolloutOptions.terminationGracePeriodSeconds: 90`, and probe `initialDelaySeconds` (60 liveness / 10 readiness on Patroni).
+
+Why it matters beyond tidiness: a template that drifts from creation teaches its users that drift is normal, which is exactly how a real, unintended change later goes unnoticed. Check with a no-op `helm upgrade` — every resource must report `Unchanged`.

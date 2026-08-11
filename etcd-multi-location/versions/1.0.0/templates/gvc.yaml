@@ -1,0 +1,12 @@
+{{- if .Values.createGvc }}
+kind: gvc
+name: {{ .Values.global.gvc.name }}
+description: etcd multi-location GVC
+tags: {{- include "etcd-ml.tags" . | nindent 4 }}
+spec:
+  staticPlacement:
+    locationLinks:
+    {{- range .Values.global.gvc.locations }}
+      - //location/{{ .name }}
+    {{- end }}
+{{- end }}

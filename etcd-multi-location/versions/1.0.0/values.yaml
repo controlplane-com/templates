@@ -1,0 +1,45 @@
+# ─── GVC and locations ────────────────────────────────────────────────────────
+# Lives under `global` so a parent chart (postgres-multi-location) sets it once
+# and Helm propagates it here. See README before changing.
+createGvc: true # false = deploy into a GVC you already manage
+
+global:
+  gvc:
+    name: etcd-multi-location-gvc # GVC created by this chart when createGvc is true
+    # One etcd member per location. Minimum 2; 3 survives losing one location,
+    # 5 survives losing two. See the quorum table in the README.
+    locations:
+      - name: aws-us-east-1
+        replicas: 1 # fixed at 1 — etcd runs one member per location
+      - name: aws-eu-central-1
+        replicas: 1
+      - name: aws-us-west-2
+        replicas: 1
+
+# ─── etcd ─────────────────────────────────────────────────────────────────────
+image: controlplanecorporation/etcd:0.1
+
+resources:
+  cpu: 500m
+  memory: 512Mi
+
+# Raft timers, tuned for cross-region round trips (measured 63-140 ms).
+# Raise both if your locations are more than ~250 ms apart.
+tuning:
+  heartbeatIntervalMs: 250 # ~0.5-1.5x the worst round trip between locations
+  electionTimeoutMs: 5000 # must be >= 10x heartbeatIntervalMs; maximum 50000
+
+volumeset:
+  capacity: 10 # initial capacity in GiB (minimum is 10)
+
+internalAccess:
+  type: same-gvc # options: same-gvc, same-org, workload-list
+  workloads: [] # only used when type is workload-list
+  #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Disaster recovery ────────────────────────────────────────────────────────
+recovery:
+  # EMERGENCY ONLY. Set to the surviving location's name to restart that member
+  # as a new single-member cluster after permanently losing quorum. Read the
+  # "Recovering from a lost location" section of the README first.
+  forceNewClusterInLocation: ""

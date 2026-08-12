@@ -1,16 +1,16 @@
-{{- include "redis.validate" . -}}
+{{- include "redis-ml.validate" . -}}
 kind: policy
-name: {{ include "redis.policy.name" . }}
+name: {{ include "redis-ml.policy.name" . }}
 description: Redis Policy
-tags: {{- include "redis.tags" . | nindent 4 }}
+tags: {{- include "redis-ml.tags" . | nindent 4 }}
 bindings:
   - permissions:
       - reveal
     principalLinks:
-      - //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "redis.identity.name" . }}
+      - //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "redis-ml.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "redis.secretConfig.name" . }}
+  - //secret/{{ include "redis-ml.secretConfig.name" . }}
   {{- /*
   Exactly the user-created secrets this release actually reads, and only when
   the feature that reads them is on. The Redis container needs the Sentinel

@@ -1,4 +1,4 @@
-{{- include "redis.validate" . -}}
+{{- include "redis-ml.validate" . -}}
 {{- /*
 This chart CREATES its GVC (createsGvc: true) — it is not optional, because the
 GVC is what pins the deployment's locations. The only exception is being consumed
@@ -14,7 +14,7 @@ NOTE for a parent chart: the dedicated load balancer below is what makes
 kind: gvc
 name: {{ .Values.global.gvc.name }}
 description: Redis multi-location GVC
-tags: {{- include "redis.tags" . | nindent 4 }}
+tags: {{- include "redis-ml.tags" . | nindent 4 }}
 spec:
   {{- if or .Values.redis.publicAccess.enabled .Values.sentinel.publicAccess.enabled }}
   loadBalancer:

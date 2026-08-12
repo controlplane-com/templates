@@ -226,12 +226,12 @@ Complete these before installing with `backup.enabled: true`.
 
 ### Restoring a backup
 
-Download and decompress the file, copy it to `/data/dump.rdb` on the replica you want to restore, and
-restart that replica:
+Download and decompress the file, then copy it over `/data/dump.rdb` on the replica you want to
+restore and restart that replica — Redis loads `dump.rdb` from its data directory at start:
 
 ```sh
-aws s3 cp s3://BUCKET_NAME/PREFIX/BACKUP_FILE.rdb.gz - | gunzip > /tmp/dump.rdb   # AWS S3
-gsutil cp gs://BUCKET_NAME/PREFIX/BACKUP_FILE.rdb.gz - | gunzip > /tmp/dump.rdb   # GCS
+aws s3 cp s3://BUCKET_NAME/PREFIX/BACKUP_FILE.rdb.gz - | gunzip > /data/dump.rdb   # AWS S3
+gsutil cp gs://BUCKET_NAME/PREFIX/BACKUP_FILE.rdb.gz - | gunzip > /data/dump.rdb   # GCS
 ```
 
 ## Public access
@@ -250,6 +250,8 @@ redis-cli -h redis.my-domain.com -p 6380 ping            # Redis replica 0
 redis-cli -h redis-sentinel.my-domain.com -p 26380 ping  # Sentinel in the first location
 ```
 
+Add `--no-auth-warning -a "$PASSWORD"` to either if you set the matching password.
+
 ## Connecting
 
 | What | Where |
@@ -260,15 +262,17 @@ redis-cli -h redis-sentinel.my-domain.com -p 26380 ping  # Sentinel in the first
 | Redis, public (when enabled) | `redis.my-domain.com:6380+i` |
 | Credentials | the opaque secrets named by `redis.passwordSecretName` / `sentinel.passwordSecretName` — `cpln secret reveal <name>` |
 
-Writes must go to the **current master**, which moves on failover. Ask Sentinel where it is:
+Writes must go to the **current master**, which moves on failover. Ask Sentinel where it is. Drop the
+`-a` flags if you did not set the matching password:
 
 ```bash
-MASTER_INFO=$(redis-cli -h {release}-sentinel -p 26379 SENTINEL get-master-addr-by-name mymaster)
+MASTER_INFO=$(redis-cli -h {release}-sentinel -p 26379 --no-auth-warning -a "$SENTINEL_PASSWORD" \
+  SENTINEL get-master-addr-by-name mymaster)
 MASTER_HOST=$(echo $MASTER_INFO | cut -d' ' -f1)
 MASTER_PORT=$(echo $MASTER_INFO | cut -d' ' -f2)
 
-redis-cli -h $MASTER_HOST -p $MASTER_PORT SET my-key "Hello world"
-redis-cli -h {release}-redis -p 6379 GET my-key
+redis-cli -h $MASTER_HOST -p $MASTER_PORT --no-auth-warning -a "$REDIS_PASSWORD" SET my-key "Hello world"
+redis-cli -h {release}-redis -p 6379 --no-auth-warning -a "$REDIS_PASSWORD" GET my-key
 ```
 
 ## Important Notes
@@ -276,8 +280,9 @@ redis-cli -h {release}-redis -p 6379 GET my-key
 - **Create the password secrets before installing.** `redis.passwordSecretName` and
   `sentinel.passwordSecretName` name secrets the chart does not create; pointing either at a secret
   that does not exist wedges the deployment waiting on it.
-- **Rotating a password secret takes effect on the next restart**, not immediately — both tiers read
-  it at container start. Restart Sentinel first, then Redis.
+- **Changing or removing a password takes effect on the next restart**, not immediately — both tiers
+  read the secret at container start, and Sentinel rewrites its own config from it every start.
+  Restart Sentinel first, then Redis.
 - **The GVC in `global.gvc.name` must not already exist** on a standalone install. Helm adopts an
   existing one and deletes it on uninstall, taking every unrelated workload with it.
 - **`global.gvc.locations[].replicas` is deliberately not read** — set `redis.replicasPerLocation`,

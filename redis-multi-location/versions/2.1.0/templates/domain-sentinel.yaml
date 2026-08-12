@@ -1,13 +1,13 @@
-{{- include "redis.validate" . -}}
+{{- include "redis-ml.validate" . -}}
 {{- if .Values.sentinel.publicAccess.enabled }}
 kind: domain
 name: {{ .Values.sentinel.publicAccess.address }}
 description: {{ .Values.sentinel.publicAccess.address }}
-tags: {{- include "redis.tags" . | nindent 2 }}
+tags: {{- include "redis-ml.tags" . | nindent 2 }}
 spec:
   acceptAllHosts: false
   dnsMode: cname
-  {{- $total := include "redis.sentinel.totalReplicas" . | int }}
+  {{- $total := include "redis-ml.sentinel.totalReplicas" . | int }}
   {{- if gt $total 0 }}
   ports:
     {{- range $i := until $total }}
@@ -17,7 +17,7 @@ spec:
         - port: 26379
           prefix: /
           replica: {{ $i }}
-          workloadLink: //gvc/{{ $.Values.global.gvc.name }}/workload/{{ include "redis.sentinel.name" $ }}
+          workloadLink: //gvc/{{ $.Values.global.gvc.name }}/workload/{{ include "redis-ml.sentinel.name" $ }}
     {{- end }}
   {{- end }}
 {{- end }}

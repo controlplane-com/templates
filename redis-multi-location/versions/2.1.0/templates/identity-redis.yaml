@@ -1,8 +1,8 @@
-{{- include "redis.validate" . -}}
+{{- include "redis-ml.validate" . -}}
 kind: identity
-name: {{ include "redis.identity.name" . }}
+name: {{ include "redis-ml.identity.name" . }}
 description: Redis Identity
-tags: {{- include "redis.tags" . | nindent 4 }}
+tags: {{- include "redis-ml.tags" . | nindent 4 }}
 gvc: {{ .Values.global.gvc.name }}
 {{- if and .Values.backup.enabled (eq .Values.backup.provider "aws") }}
 {{- /*

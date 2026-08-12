@@ -1,8 +1,8 @@
-{{- include "redis.validate" . -}}
+{{- include "redis-ml.validate" . -}}
 kind: volumeset
-name: {{ include "redis.volume.name" . }}
+name: {{ include "redis-ml.volume.name" . }}
 description: Redis Volumeset
-tags: {{- include "redis.tags" . | nindent 4 }}
+tags: {{- include "redis-ml.tags" . | nindent 4 }}
 gvc: {{ .Values.global.gvc.name }}
 spec:
   fileSystemType: ext4

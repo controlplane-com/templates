@@ -3,77 +3,77 @@
 {{/*
 Redis Workload Name
 */}}
-{{- define "redis.name" -}}
+{{- define "redis-ml.name" -}}
 {{- printf "%s-redis" .Release.Name }}
 {{- end }}
 
 {{/*
 Redis Sentinel Workload Name
 */}}
-{{- define "redis.sentinel.name" -}}
+{{- define "redis-ml.sentinel.name" -}}
 {{- printf "%s-sentinel" .Release.Name }}
 {{- end }}
 
 {{/*
 Redis Secret Config Name
 */}}
-{{- define "redis.secretConfig.name" -}}
+{{- define "redis-ml.secretConfig.name" -}}
 {{- printf "%s-redis-config" .Release.Name }}
 {{- end }}
 
 {{/*
 Redis Sentinel Secret Config Name
 */}}
-{{- define "redis.sentinelSecretConfig.name" -}}
+{{- define "redis-ml.sentinelSecretConfig.name" -}}
 {{- printf "%s-sentinel-config" .Release.Name }}
 {{- end }}
 
 {{/*
 Redis Identity Name
 */}}
-{{- define "redis.identity.name" -}}
+{{- define "redis-ml.identity.name" -}}
 {{- printf "%s-redis-identity" .Release.Name }}
 {{- end }}
 
 {{/*
 Redis Sentinel Identity Name
 */}}
-{{- define "redis.sentinelIdentity.name" -}}
+{{- define "redis-ml.sentinelIdentity.name" -}}
 {{- printf "%s-sentinel-identity" .Release.Name }}
 {{- end }}
 
 {{/*
 Redis Policy Name
 */}}
-{{- define "redis.policy.name" -}}
+{{- define "redis-ml.policy.name" -}}
 {{- printf "%s-redis-policy" .Release.Name }}
 {{- end }}
 
 {{/*
 Redis Sentinel Policy Name
 */}}
-{{- define "redis.sentinelPolicy.name" -}}
+{{- define "redis-ml.sentinelPolicy.name" -}}
 {{- printf "%s-sentinel-policy" .Release.Name }}
 {{- end }}
 
 {{/*
 Redis Volume Set Name
 */}}
-{{- define "redis.volume.name" -}}
+{{- define "redis-ml.volume.name" -}}
 {{- printf "%s-redis-vs" .Release.Name }}
 {{- end }}
 
 {{/*
 Redis Sentinel Volume Set Name
 */}}
-{{- define "redis.sentinelVolume.name" -}}
+{{- define "redis-ml.sentinelVolume.name" -}}
 {{- printf "%s-sentinel-vs" .Release.Name }}
 {{- end }}
 
 {{/*
 Redis Backup Workload Name
 */}}
-{{- define "redis.backup.name" -}}
+{{- define "redis-ml.backup.name" -}}
 {{- printf "%s-redis-backup" .Release.Name }}
 {{- end }}
 
@@ -83,14 +83,14 @@ Redis Backup Workload Name
 {{/*
 Total Redis Replica Count — every location runs redis.replicasPerLocation.
 */}}
-{{- define "redis.totalReplicas" -}}
+{{- define "redis-ml.totalReplicas" -}}
 {{- mul (len .Values.global.gvc.locations) (int .Values.redis.replicasPerLocation) -}}
 {{- end }}
 
 {{/*
 Total Sentinel Replica Count (exactly 1 per location)
 */}}
-{{- define "redis.sentinel.totalReplicas" -}}
+{{- define "redis-ml.sentinel.totalReplicas" -}}
 {{- len .Values.global.gvc.locations -}}
 {{- end }}
 
@@ -100,7 +100,7 @@ Total Sentinel Replica Count (exactly 1 per location)
 {{/*
 Every failure below is something the user can act on from the message alone.
 */}}
-{{- define "redis.validate" -}}
+{{- define "redis-ml.validate" -}}
 {{- if not .Values.global.gvc -}}
 {{- fail "global.gvc must be set with a `name` and a `locations` list" -}}
 {{- end -}}
@@ -121,21 +121,29 @@ Every failure below is something the user can act on from the message alone.
 {{/*
 Redis takes its count from its OWN knob. Reading global.gvc.locations[].replicas
 would give that shared field two meanings inside one release, because
-postgres-multi-location already uses it for its own members per location.
+postgres-multi-location already uses it for its own Patroni members per location.
+
+STANDALONE ONLY, gated on .Chart.IsRoot. `global` is release-wide in Helm, so a
+parent CANNOT scope a different locations list to one subchart: a parent that
+also ships postgres-multi-location legitimately carries `replicas` on every
+location entry, and failing on it here would abort the parent's render over a
+field its database tier requires. Nested, the field is simply ignored.
 */}}
+{{- if .Chart.IsRoot -}}
 {{- range .Values.global.gvc.locations -}}
 {{- if hasKey . "replicas" -}}
 {{- fail "global.gvc.locations[].replicas is not read by redis-multi-location — set redis.replicasPerLocation instead (it applies to every location). Remove `replicas` from the locations list." -}}
 {{- end -}}
 {{- end -}}
-{{- include "redis.validatePublicAccess" . -}}
-{{- include "redis.validateBackupConfig" . -}}
+{{- end -}}
+{{- include "redis-ml.validatePublicAccess" . -}}
+{{- include "redis-ml.validateBackupConfig" . -}}
 {{- end -}}
 
 {{/*
 Validate public access
 */}}
-{{- define "redis.validatePublicAccess" -}}
+{{- define "redis-ml.validatePublicAccess" -}}
 {{- if .Values.redis.publicAccess.enabled -}}
 {{- if not .Values.redis.publicAccess.address -}}
 {{- fail "redis.publicAccess.address is required when redis.publicAccess.enabled is true — set it to a subdomain you control, e.g. redis.my-domain.com" -}}
@@ -151,7 +159,7 @@ Validate public access
 {{/*
 Validate backup config
 */}}
-{{- define "redis.validateBackupConfig" -}}
+{{- define "redis-ml.validateBackupConfig" -}}
 {{- if .Values.backup.enabled }}
 {{- if not (or (eq .Values.backup.provider "aws") (eq .Values.backup.provider "gcp")) }}
 {{- fail "backup.provider must be \"aws\" or \"gcp\"" }}
@@ -187,6 +195,6 @@ Validate backup config
 {{/*
 Common labels — delegated to cpln-common
 */}}
-{{- define "redis.tags" -}}
+{{- define "redis-ml.tags" -}}
 {{- include "cpln-common.tags" . }}
 {{- end }}

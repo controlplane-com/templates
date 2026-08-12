@@ -1,10 +1,10 @@
-{{- include "redis.validate" . -}}
+{{- include "redis-ml.validate" . -}}
 kind: workload
-name: {{ include "redis.sentinel.name" . }}
+name: {{ include "redis-ml.sentinel.name" . }}
 description: Sentinel
 tags:
   cpln/publishNotReadyAddresses: "true"
-  {{- include "redis.tags" . | nindent 2 }}
+  {{- include "redis-ml.tags" . | nindent 2 }}
 gvc: {{ .Values.global.gvc.name }}
 spec:
   type: stateful
@@ -38,32 +38,34 @@ spec:
             # All sentinels agree on the same initial master: replica-0 of the primary (first) location.
             # After any failover, sentinel persists the elected master via CONFIG REWRITE so this
             # bootstrap line only matters on a completely fresh (never-started) sentinel.
-            echo "sentinel monitor mymaster replica-0.{{ include "redis.name" . }}.{{ (index .Values.global.gvc.locations 0).name }}.${CPLN_GVC}.cpln.local 6379 {{ add (div (len .Values.global.gvc.locations) 2) 1 }}" >> /etc/sentinel/sentinel.conf
+            echo "sentinel monitor mymaster replica-0.{{ include "redis-ml.name" . }}.{{ (index .Values.global.gvc.locations 0).name }}.${CPLN_GVC}.cpln.local 6379 {{ add (div (len .Values.global.gvc.locations) 2) 1 }}" >> /etc/sentinel/sentinel.conf
           }
-          {{- if or .Values.redis.passwordSecretName .Values.sentinel.passwordSecretName }}
 
           # Passwords come from user-created secrets, so they cannot live in the
-          # config secret. They are re-applied on EVERY start (stripping whatever
-          # sentinel last rewrote) so rotating a secret takes effect on a restart
-          # rather than only on a fresh volume. Both lines must follow the
-          # `sentinel monitor` line, which is why this runs after bootstrap.
+          # config secret. This runs UNCONDITIONALLY and strips first: sentinel.conf
+          # lives on a retained volume set, so a gated version would leave a stale
+          # credential in force after a password was turned off — sentinel would keep
+          # AUTHing with it and could no longer reach the master. Stripping every time
+          # makes rotation AND removal take effect on the next restart. Both lines must
+          # follow the `sentinel monitor` line, hence running after bootstrap.
+          # Values are written quoted and escaped, so a password containing a space,
+          # a `#` or a quote cannot corrupt the config.
+          conf_escape() { printf '%s' "$1" | sed 's/[\\"]/\\&/g'; }
+
           apply_auth() {
             CONF=/etc/sentinel/sentinel.conf
             grep -v '^sentinel auth-pass mymaster ' "$CONF" | grep -v '^requirepass ' > "$CONF.tmp"
             mv "$CONF.tmp" "$CONF"
             if [ -n "$REDIS_PASSWORD" ]; then
-              echo "sentinel auth-pass mymaster $REDIS_PASSWORD" >> "$CONF"
+              printf 'sentinel auth-pass mymaster "%s"\n' "$(conf_escape "$REDIS_PASSWORD")" >> "$CONF"
             fi
             if [ -n "$SENTINEL_PASSWORD" ]; then
-              echo "requirepass $SENTINEL_PASSWORD" >> "$CONF"
+              printf 'requirepass "%s"\n' "$(conf_escape "$SENTINEL_PASSWORD")" >> "$CONF"
             fi
           }
-          {{- end }}
 
           bootstrap_sentinel_conf
-          {{- if or .Values.redis.passwordSecretName .Values.sentinel.passwordSecretName }}
           apply_auth
-          {{- end }}
           exec redis-sentinel /etc/sentinel/sentinel.conf {{ .Values.sentinel.extraArgs | default "" }}
       cpu: {{ .Values.sentinel.resources.cpu | quote }}
       memory: {{ .Values.sentinel.resources.memory | quote }}
@@ -88,10 +90,10 @@ spec:
       volumes:
         - path: /config/sentinel.conf
           recoveryPolicy: retain
-          uri: cpln://secret/{{ include "redis.sentinelSecretConfig.name" . }}
+          uri: cpln://secret/{{ include "redis-ml.sentinelSecretConfig.name" . }}
         - path: /etc/sentinel
           recoveryPolicy: retain
-          uri: cpln://volumeset/{{ include "redis.sentinelVolume.name" . }}
+          uri: cpln://volumeset/{{ include "redis-ml.sentinelVolume.name" . }}
   defaultOptions:
     autoscaling:
       maxConcurrency: 0
@@ -101,6 +103,8 @@ spec:
       scaleToZeroDelay: 300
       target: 100
     capacityAI: false
+    debug: false
+    suspend: false
     timeoutSeconds: 5
   rolloutOptions:
     {{- /*
@@ -110,14 +114,8 @@ spec:
     scalingPolicy: Parallel
     terminationGracePeriodSeconds: 90
   firewallConfig:
-    {{- if or .Values.firewall.externalOutboundAllowCIDR .Values.firewall.externalInboundAllowCIDR .Values.sentinel.publicAccess.enabled }}
+    {{- /* Always rendered and fully declared — see the Redis workload. */}}
     external:
-      {{- if .Values.firewall.externalOutboundAllowCIDR }}
-      outboundAllowCIDR:
-        {{- range (splitList "," .Values.firewall.externalOutboundAllowCIDR) }}
-        - {{ . | trim }}
-        {{- end }}
-      {{- end }}
       {{- if or .Values.firewall.externalInboundAllowCIDR .Values.sentinel.publicAccess.enabled }}
       inboundAllowCIDR:
         {{- if .Values.firewall.externalInboundAllowCIDR }}
@@ -127,14 +125,27 @@ spec:
         {{- else }}
         - 0.0.0.0/0
         {{- end }}
+      {{- else }}
+      inboundAllowCIDR: []
       {{- end }}
-    {{- end }}
+      {{- if .Values.firewall.externalOutboundAllowCIDR }}
+      outboundAllowCIDR:
+        {{- range (splitList "," .Values.firewall.externalOutboundAllowCIDR) }}
+        - {{ . | trim }}
+        {{- end }}
+      {{- else }}
+      outboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
     internal:
       inboundAllowType: {{ .Values.firewall.internalAllowType }}
       {{- if .Values.firewall.workloads }}
       inboundAllowWorkload: {{ .Values.firewall.workloads | toYaml | nindent 8 }}
       {{- end }}
-  identityLink: //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "redis.sentinelIdentity.name" . }}
+  identityLink: //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "redis-ml.sentinelIdentity.name" . }}
   loadBalancer:
     replicaDirect: true
   localOptions:
@@ -152,5 +163,8 @@ spec:
         scaleToZeroDelay: 300
         target: 100
       capacityAI: false
+      debug: false
+      suspend: false
       timeoutSeconds: 5
     {{- end }}
+  supportDynamicTags: false

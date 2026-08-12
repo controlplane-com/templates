@@ -1,10 +1,10 @@
-{{- include "redis.validate" . -}}
+{{- include "redis-ml.validate" . -}}
 kind: workload
-name: {{ include "redis.name" . }}
+name: {{ include "redis-ml.name" . }}
 description: Redis
 tags:
   cpln/publishNotReadyAddresses: "true"
-  {{- include "redis.tags" . | nindent 2 }}
+  {{- include "redis-ml.tags" . | nindent 2 }}
 gvc: {{ .Values.global.gvc.name }}
 spec:
   type: stateful
@@ -21,7 +21,11 @@ spec:
           # Auth is appended to this per-boot COPY rather than baked into the
           # config secret: the password comes from a user-created secret and must
           # never be rendered into the chart's own secret or the Helm release.
-          printf '\nrequirepass %s\nmasterauth %s\n' "$REDIS_PASSWORD" "$REDIS_PASSWORD" >> /etc/redis/redis.conf
+          # (No strip needed here, unlike sentinel.conf — the config is re-copied
+          # from the secret on every boot, so turning the password off is clean.)
+          # Written quoted and escaped so a space, `#` or quote cannot corrupt it.
+          REDIS_PASSWORD_ESC=$(printf '%s' "$REDIS_PASSWORD" | sed 's/[\\"]/\\&/g')
+          printf '\nrequirepass "%s"\nmasterauth "%s"\n' "$REDIS_PASSWORD_ESC" "$REDIS_PASSWORD_ESC" >> /etc/redis/redis.conf
           {{- end }}
 
           POD_ID=$(echo "$HOSTNAME" | rev | cut -d'-' -f1 | rev)
@@ -34,7 +38,7 @@ spec:
           echo "\nreplica-announce-port ${SELF_PORT}" >> /etc/redis/redis.conf
 
           # Sentinel endpoints — one per location, rendered at template time
-          SENTINELS="{{ range $loc := .Values.global.gvc.locations }}replica-0.{{ include "redis.sentinel.name" $ }}.{{ $loc.name }}.{{ $.Values.global.gvc.name }}.cpln.local {{ end }}"
+          SENTINELS="{{ range $loc := .Values.global.gvc.locations }}replica-0.{{ include "redis-ml.sentinel.name" $ }}.{{ $loc.name }}.{{ $.Values.global.gvc.name }}.cpln.local {{ end }}"
 
           # Ask any sentinel who the master is, retrying until one responds.
           # On cold start, sentinels respond from their static config (replica-0 of the
@@ -89,10 +93,10 @@ spec:
       volumes:
         - path: /data
           recoveryPolicy: retain
-          uri: cpln://volumeset/{{ include "redis.volume.name" . }}
+          uri: cpln://volumeset/{{ include "redis-ml.volume.name" . }}
         - path: /config/redis.conf
           recoveryPolicy: retain
-          uri: cpln://secret/{{ include "redis.secretConfig.name" . }}
+          uri: cpln://secret/{{ include "redis-ml.secretConfig.name" . }}
   defaultOptions:
     autoscaling:
       maxConcurrency: 0
@@ -102,6 +106,8 @@ spec:
       scaleToZeroDelay: 300
       target: 100
     capacityAI: false
+    debug: false
+    suspend: false
     timeoutSeconds: 15
   rolloutOptions:
     {{- /*
@@ -113,14 +119,12 @@ spec:
     scalingPolicy: Parallel
     terminationGracePeriodSeconds: 90
   firewallConfig:
-    {{- if or .Values.firewall.externalOutboundAllowCIDR .Values.firewall.externalInboundAllowCIDR .Values.redis.publicAccess.enabled }}
+    {{- /*
+    The `external` block is ALWAYS rendered, and every field in it declared —
+    the API backfills the empty lists, so omitting the block made a default
+    install drift against its own manifest from the moment it was created.
+    */}}
     external:
-      {{- if .Values.firewall.externalOutboundAllowCIDR }}
-      outboundAllowCIDR:
-        {{- range (splitList "," .Values.firewall.externalOutboundAllowCIDR) }}
-        - {{ . | trim }}
-        {{- end }}
-      {{- end }}
       {{- if or .Values.firewall.externalInboundAllowCIDR .Values.redis.publicAccess.enabled }}
       inboundAllowCIDR:
         {{- if .Values.firewall.externalInboundAllowCIDR }}
@@ -130,14 +134,27 @@ spec:
         {{- else }}
         - 0.0.0.0/0
         {{- end }}
+      {{- else }}
+      inboundAllowCIDR: []
       {{- end }}
-    {{- end }}
+      {{- if .Values.firewall.externalOutboundAllowCIDR }}
+      outboundAllowCIDR:
+        {{- range (splitList "," .Values.firewall.externalOutboundAllowCIDR) }}
+        - {{ . | trim }}
+        {{- end }}
+      {{- else }}
+      outboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
     internal:
       inboundAllowType: {{ .Values.firewall.internalAllowType }}
       {{- if .Values.firewall.workloads }}
       inboundAllowWorkload: {{ .Values.firewall.workloads | toYaml | nindent 8 }}
       {{- end }}
-  identityLink: //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "redis.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "redis-ml.identity.name" . }}
   loadBalancer:
     replicaDirect: true
   localOptions:
@@ -156,5 +173,8 @@ spec:
         scaleToZeroDelay: 300
         target: 100
       capacityAI: false
+      debug: false
+      suspend: false
       timeoutSeconds: 15
     {{- end }}
+  supportDynamicTags: false

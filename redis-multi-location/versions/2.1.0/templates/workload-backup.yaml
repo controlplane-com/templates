@@ -1,9 +1,9 @@
-{{- include "redis.validate" . -}}
+{{- include "redis-ml.validate" . -}}
 {{- if .Values.backup.enabled }}
 kind: workload
-name: {{ include "redis.backup.name" . }}
+name: {{ include "redis-ml.backup.name" . }}
 description: Redis Backup
-tags: {{- include "redis.tags" . | nindent 4 }}
+tags: {{- include "redis-ml.tags" . | nindent 4 }}
 gvc: {{ .Values.global.gvc.name }}
 spec:
   type: cron
@@ -29,7 +29,7 @@ spec:
           value: {{ .Values.backup.gcp.prefix | quote }}
       {{- end }}
         - name: REDIS_HOST
-          value: {{ include "redis.name" . }}.{{ .Values.global.gvc.name }}.cpln.local
+          value: {{ include "redis-ml.name" . }}.{{ .Values.global.gvc.name }}.cpln.local
         - name: REDIS_PORT
           value: "6379"
       {{- if .Values.redis.passwordSecretName }}
@@ -56,9 +56,22 @@ spec:
     A cron workload runs in EVERY location of its GVC, so it is suspended by
     default above and resumed in exactly one location — otherwise every location
     would write its own copy of the same dump into one bucket every night.
+    Written in FULL: a minimal entry makes the API backfill ITS OWN defaults
+    rather than the workload's, which would silently cut a long dump short at the
+    platform default instead of this job's timeoutSeconds: 3600.
     */}}
     - location: //location/{{ (index .Values.global.gvc.locations 0).name }}
+      autoscaling:
+        maxConcurrency: 0
+        maxScale: 1
+        metric: disabled
+        minScale: 1
+        scaleToZeroDelay: 300
+        target: 95
+      capacityAI: false
+      debug: false
       suspend: false
+      timeoutSeconds: 3600
   firewallConfig:
     external:
       inboundAllowCIDR: []
@@ -71,7 +84,7 @@ spec:
     internal:
       inboundAllowType: none
       inboundAllowWorkload: []
-  identityLink: //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "redis.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "redis-ml.identity.name" . }}
   job:
     concurrencyPolicy: Forbid
     historyLimit: 5

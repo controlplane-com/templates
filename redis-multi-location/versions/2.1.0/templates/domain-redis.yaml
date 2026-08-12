@@ -1,13 +1,13 @@
-{{- include "redis.validate" . -}}
+{{- include "redis-ml.validate" . -}}
 {{- if .Values.redis.publicAccess.enabled }}
 kind: domain
 name: {{ .Values.redis.publicAccess.address }}
 description: {{ .Values.redis.publicAccess.address }}
-tags: {{- include "redis.tags" . | nindent 2 }}
+tags: {{- include "redis-ml.tags" . | nindent 2 }}
 spec:
   acceptAllHosts: false
   dnsMode: cname
-  {{- $total := include "redis.totalReplicas" . | int }}
+  {{- $total := include "redis-ml.totalReplicas" . | int }}
   {{- if gt $total 0 }}
   ports:
     {{- range $i := until $total }}
@@ -17,7 +17,7 @@ spec:
         - port: 6379
           prefix: /
           replica: {{ $i }}
-          workloadLink: //gvc/{{ $.Values.global.gvc.name }}/workload/{{ include "redis.name" $ }}
+          workloadLink: //gvc/{{ $.Values.global.gvc.name }}/workload/{{ include "redis-ml.name" $ }}
     {{- end }}
   {{- end }}
 {{- end }}

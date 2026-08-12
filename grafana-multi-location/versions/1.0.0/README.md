@@ -161,11 +161,24 @@ pre-created `dictionary` secret and write `$KEY` in the definition. Every `$KEY`
 
 ### SMTP for alert emails
 
+<Note>
+Authenticated SMTP requires a relay offering **STARTTLS or TLS**. Grafana will not send
+credentials over an unencrypted connection — it fails with `unencrypted connection` and every
+notification is lost, with the only signal a log line in the alerting workload, which is not
+publicly reachable. Hosted relays are unaffected; a plain in-GVC relay is not. Leave `smtp.user`
+empty to send unauthenticated against such a relay.
+</Note>
+
 ```yaml
 smtp:
   enabled: false
   host: smtp.example.com:587 # host:port
-  user: "" # empty = unauthenticated SMTP
+  user: "" # empty = unauthenticated SMTP. IF YOU SET THIS, the relay MUST offer
+  # STARTTLS or TLS: Grafana refuses to send credentials over an unencrypted
+  # connection ("failed to send email: unencrypted connection") and every
+  # notification is then lost, with the only signal a log line in the
+  # alerting workload. Hosted relays (SES, SendGrid, Mailgun, M365, Gmail)
+  # are fine; a plain in-GVC relay is not — leave this empty for those.
   passwordSecretName: "" # opaque secret (encoding: plain) with the SMTP password; create BEFORE install
   fromAddress: grafana@example.com
   fromName: Grafana

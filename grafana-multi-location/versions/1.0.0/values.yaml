@@ -149,7 +149,11 @@ postgresML:
     location: aws-us-east-1 # logical mode only: the ONE location the nightly job runs in
     resources:
       cpu: 100m
-      memory: 128Mi
+      # 512Mi, matching postgres-multi-location's own default. At 128Mi the GCP
+      # path OOMs with NO log output: logical jobs merely report `failed` and the
+      # wal-g sidecar loops on OOMKilled while WAL archives with no base backup.
+      # Do not lower this without re-testing the GCS path.
+      memory: 512Mi
     logical:
       image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
       schedule: "0 2 * * *"

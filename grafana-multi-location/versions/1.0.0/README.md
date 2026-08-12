@@ -217,7 +217,11 @@ postgresML:
     location: aws-us-east-1 # logical mode only: the ONE location the nightly job runs in
     resources:
       cpu: 100m
-      memory: 128Mi
+      # 512Mi, matching postgres-multi-location's own default. At 128Mi the GCP
+      # path OOMs with NO log output: logical jobs merely report `failed` and the
+      # wal-g sidecar loops on OOMKilled while WAL archives with no base backup.
+      # Do not lower this without re-testing the GCS path.
+      memory: 512Mi
     logical:
       image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
       schedule: "0 2 * * *"
@@ -325,7 +329,8 @@ Two consequences worth knowing before you rely on it:
 - **Silences do not propagate between instances.** A silence created against the UI tier is not
   guaranteed to be honoured by the evaluator. Create silences against the evaluator directly, from a
   workload in the same GVC:
-  `curl http://{release}-grafana-ml-alerting.{global.gvc.name}.cpln.local:3000/api/alertmanager/grafana/api/v2/silences`.
+  `curl -u admin:PASSWORD http://{release}-grafana-ml-alerting.{global.gvc.name}.cpln.local:3000/api/alertmanager/grafana/api/v2/silences`
+  lists them; creating one is a POST with a body. The API requires credentials — unauthenticated returns 401.
   **That address only answers from inside `alerting.location`** — the name resolves to the GVC VIP
   everywhere, but there is no local upstream in the other locations, so they get a 503. Run the
   command from a workload in the alerting location.
@@ -348,7 +353,9 @@ never evaluated.
 - **Create the admin password, encryption key and database credentials secrets before installing.** The chart does not create them; without them the deployment waits forever on secrets that do not exist.
 - **The GVC in `global.gvc.name` must not already exist.** Helm adopts an existing one and deletes it on uninstall, taking every unrelated workload with it.
 - **Never rotate or delete the encryption key.** It decrypts every stored datasource credential, in every location. Rotating it makes them all unreadable and every alert rule that queries them fails silently.
-- **Any `helm upgrade` interrupts database writes in every location for about two minutes.** The bundled database members do not restart one at a time — the platform does not retain the field that would limit the rollout — so all of them go down together (**~117 s** measured on an upgrade that changed nothing). Both Grafana tiers return errors for that window. Treat every upgrade as a planned outage, not a rolling one.
+- **Any `helm upgrade` interrupts service in every location.** Database writes fail for about
+  **117 s**, but the Grafana tier is unavailable for longer than that because reads fail too —
+  measured recovery took about **4 minutes**, with one location down for **5-6 minutes**. The bundled database members do not restart one at a time — the platform does not retain the field that would limit the rollout — so all of them go down together (**~117 s** measured on an upgrade that changed nothing). Both Grafana tiers return errors for that window. Treat every upgrade as a planned outage, not a rolling one.
 - **Alert evaluation stops if you lose `alerting.location`, and the UI will not show it.** Repoint the knob and upgrade; that restarts only the evaluator.
 - **Every location except the database primary's pays a cross-region round trip per query.** Grafana has no read/write splitting, so a dashboard load in a distant region is slower by the inter-region latency (measured 96 ms us-east ↔ eu-central, up to 236 ms worst case). Set `postgresML.primaryLocation` where most of your users are.
 - **Scaling `replicas` has no alerting-related restriction** — it applies to the UI tier only, in every location including `alerting.location`. Watch the connection budget instead.

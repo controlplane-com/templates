@@ -267,7 +267,7 @@ arithmetic is spelled out rather than left implicit.
 {{- end -}}
 {{- $total := mul $instances (int .Values.database.maxOpenConn) -}}
 {{- if gt $total 80 -}}
-{{- fail (printf "grafana-multi-location: the database connection budget is exceeded — %d Grafana instances (replicas %v × %d locations, plus the alert evaluator) × database.maxOpenConn %v = %d, above the 80-connection ceiling of the bundled cluster (max_connections is 100, leaving headroom for Patroni and administration). Lower database.maxOpenConn, lower replicas, or enable the subchart's PgBouncer pooler (postgresML.pgbouncer.enabled)." $instances .Values.replicas (len .Values.global.gvc.locations) .Values.database.maxOpenConn $total) -}}
+{{- fail (printf "grafana-multi-location: the database connection budget is exceeded — %d Grafana instances (replicas %v × %d locations, plus the alert evaluator) × database.maxOpenConn %v = %d, above the 80-connection ceiling of the bundled cluster (max_connections is 100, leaving headroom for Patroni and administration). Lower database.maxOpenConn or lower replicas." $instances .Values.replicas (len .Values.global.gvc.locations) .Values.database.maxOpenConn $total) -}}
 {{- end -}}
 {{- end }}
 

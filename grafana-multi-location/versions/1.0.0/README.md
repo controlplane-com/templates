@@ -111,7 +111,7 @@ database:
 
 The `maxOpenConn` budget is enforced at render time, and the `+ 1` is the alert evaluator. Exceed it
 and the chart refuses to install, telling you the arithmetic — raising `replicas` past that point
-means lowering `maxOpenConn` or enabling `postgresML.pgbouncer.enabled`.
+means lowering `maxOpenConn`.
 
 ### Alerting
 

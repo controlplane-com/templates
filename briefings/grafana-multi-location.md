@@ -146,3 +146,11 @@ Both **proven and shipping**; neither was a removal candidate under the test-eve
 
 ### The one real limitation
 **Authenticated SMTP needs a relay offering STARTTLS/TLS.** Go's `net/smtp.PlainAuth` refuses to send credentials over cleartext, so against a plain relay every notification is lost with `failed to send email: unencrypted connection` — and the only signal is a log line in the alerting workload, which is deliberately not publicly reachable. Hosted relays (SES, SendGrid, Mailgun, M365, Gmail) are unaffected; a plain in-GVC relay is not. The chart exposes neither `skipVerify` nor `startTLSPolicy`, so the remedy is to leave `smtp.user` empty for such relays. Documented in values.yaml and the README rather than fixed with a knob.
+
+## Round 5 — rename + gate verification (2026-08-12)
+- **The 300 s gate was necessary, and 180 s was genuinely too short.** Two of three UI instances held the gate **190-198 s on a perfectly healthy install** — both would have timed out under the old bound. ~100 s of headroom remains.
+- **The gate released ~126 ms too EARLY, not too late.** `/healthz` returns 200 the moment Patroni answers `/primary`, but Postgres then reloads bootstrap parameters and resets connections opened in that window, so two instances still exited 1 on `connection reset by peer`. Fixed by requiring **3 consecutive** healthy polls (~6 s) before proceeding.
+- Grafana's own migration-lock race (`Failed to lock database`, exit 1, self-heals) is upstream and remains — 5 of the 7 restarts. Count it separately from database-connection failures or the gate looks broken when it is not.
+- `livenessProbe.initialDelaySeconds: 360` confirmed in the **stored** spec; every exit was `exitCode: 1`, no `137`, so nothing was killed by liveness during the longer wait.
+- **Drift after the rename: clean.** Upgrade #1 labelled 9 of 17 `Updated` but **0 of 17 had any spec difference** (only `version`, `cpln/release`, `lastModified` and status); upgrade #2 was all `Unchanged` with 34/34 HTTP 200 throughout.
+- First install measured 5 m 30 s here vs 4 m 44 s in round 2 — run-to-run variance in the database tier (3 m 23 s vs 2 m 33 s), not a regression. Every Grafana instance released its gate within 9 s of the last Patroni member in both runs.

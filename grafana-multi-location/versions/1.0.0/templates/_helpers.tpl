@@ -189,13 +189,26 @@ _db_host="{{ include "grafana-ml.postgres.host" . }}"
 # health-checked against Patroni's /primary — so 200 means a real primary is
 # serving, which is the condition Grafana actually needs.
 _db_health="http://${_db_host}:8404/healthz"
+# Require CONSECUTIVE successes, not the first one. /healthz flips to 200 the
+# instant Patroni answers /primary, but Postgres then reloads its bootstrap
+# parameters and RESETS connections opened in that window — measured: Grafana
+# connected 126 ms after the gate released and died on "connection reset by
+# peer". Confirming the endpoint stays healthy across three polls costs ~6 s at
+# boot and removes that race.
+_db_ok=0
 echo "waiting up to 300s for the app database to serve a primary (${_db_host})"
 for _i in $(seq 1 100); do
   if curl -fsS --max-time 3 "${_db_health}" >/dev/null 2>&1; then
-    echo "app database is serving a primary (attempt ${_i})"
-    break
+    _db_ok=$((_db_ok + 1))
+    if [ "${_db_ok}" -ge 3 ]; then
+      echo "app database is serving a primary and stable (attempt ${_i})"
+      break
+    fi
+    echo "app database serving; confirming stability (${_db_ok}/3)"
+  else
+    _db_ok=0
+    echo "app database not serving a primary yet (attempt ${_i}/100)"
   fi
-  echo "app database not serving a primary yet (attempt ${_i}/100)"
   sleep 3
 done
 {{- end }}

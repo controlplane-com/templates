@@ -391,6 +391,9 @@ never evaluated.
   ready and up to ~12 minutes for every individual replica. Nothing is wrong — there is simply more
   to schedule.
 
+- **A first install takes 4-6 minutes**, most of it the stretched database electing a primary. Grafana waits for it rather than crash-looping, and logs what it is waiting for on every poll.
+- **The FIRST `helm upgrade` after an install re-applies every tier once**, even a no-op, and the database is briefly in recovery while it comes back — measured **4 m 43 s** to reconverge on a 3-location cluster. Later upgrades report `Unchanged` and cost nothing.
+
 ## Links
 
 - [Grafana high availability setup](https://grafana.com/docs/grafana/latest/setup-grafana/set-up-for-high-availability/)

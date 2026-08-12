@@ -101,3 +101,18 @@
 - **An upgrade adding a secret reference pauses the rollout ~9-10 minutes while Helm reports success**, then self-heals with no action. Platform-side propagation — do not re-run the upgrade or edit policies.
 - **The evaluator answers only from inside `alerting.location`.** The name resolves to the GVC VIP everywhere, but the other locations have no local upstream and return 503. Matters for the silence workaround.
 - **A `helm upgrade` can report `Updated` without any spec drift** — the difference is platform-computed `health` fields, and it is non-deterministic across installs. Diff the stored specs before treating an `Updated` label as a chart defect.
+
+## Cross-location shared state — PROVEN (round 3, 2026-08-12)
+The template's central promise, tested rather than reasoned about. 3 locations x `replicas: 2` (6 UI instances + 1 evaluator), every result attributed to a named instance two independent ways (loopback `curl` inside a chosen replica, and a unique marker in the request PATH traced through `cpln logs` replica/location labels).
+
+| Row | Result |
+|---|---|
+| Dashboard created in us-east-1 | read back **byte-identical** (same md5, same internal id) from all 6 UI instances and the evaluator |
+| Edit made in eu-central-1 | authoritative everywhere, including its birthplace — not one-directional |
+| User + org created in one location | logs in against every other instance (wrong-password 401 as control) |
+| Session cookie issued in us-east-1 | accepted by every other instance, correct identity returned |
+| Same-location sibling replica | sees its peer's write |
+| **Datasource credentials** | decrypt on every instance — `Database Connection OK` vs `failed SASL auth` for a deliberate wrong-password control; ciphertext confirmed in the DB; identical key fingerprint on all instances checked |
+
+- **Why it is structural, not luck:** the primary carries all 28 application connections and both standbys carry zero. There is no replication hop between a write and a remote read, so visibility is immediate (measured ≤1-3 s, bounded by 1-second container clocks rather than by the system).
+- **The addressing trap for anyone re-testing this:** one service-DNS name probed from three locations is served by three DIFFERENT replicas, each local to the caller. An unattributed 200 proves nothing — attribute every response to an instance or the test is meaningless.

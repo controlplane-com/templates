@@ -365,6 +365,11 @@ never evaluated.
   **self-heals with no action** (measured 9 m 0 s - 9 m 30 s); do not re-run the upgrade or start
   editing policies. This is platform-side propagation, not a chart setting.
 
+- **`replicas: 2` or higher lengthens the cold install.** A single-replica 3-location install reaches
+  ready in about 5 minutes; at `replicas: 2` expect roughly 7 minutes for every location to report
+  ready and up to ~12 minutes for every individual replica. Nothing is wrong — there is simply more
+  to schedule.
+
 ## Links
 
 - [Grafana high availability setup](https://grafana.com/docs/grafana/latest/setup-grafana/set-up-for-high-availability/)

@@ -101,11 +101,17 @@ postgres:
   # exact `cpln secret create-dictionary` command.
   credentialsSecretName: my-postgres-ml-credentials
 
-# Preferred location for the primary. CHANGING THIS ON A LIVE CLUSTER MOVES THE
-# LEADER: the value is baked into the startup script, so editing it restarts every
-# member (~2 min of interrupted writes) and the election that follows picks this
-# location. To move a primary WITHOUT a restart, use patronictl switchover.
-# Empty = no preference.
+# Preferred location for the primary. It does three things:
+#   1. On a FRESH install it decides where the primary starts — members in other
+#      locations wait up to 90s for this one to initialise the cluster first.
+#      If it is down or slow they bootstrap anyway (logged as a WARNING) and the
+#      primary starts elsewhere; move it later with patronictl switchover.
+#   2. It biases FAILOVER elections toward this location (failover_priority).
+#   3. CHANGING IT ON A LIVE CLUSTER MOVES THE LEADER: the value is baked into
+#      the startup script, so editing it restarts every member (~2 min of
+#      interrupted writes) and the election that follows picks this location.
+#      To move a primary WITHOUT a restart, use patronictl switchover.
+# Empty = no preference, and the primary starts wherever a member gets there first.
 primaryLocation: ""
 
 volumeset:
@@ -390,6 +396,7 @@ this is never needed — losing one location is an automatic failover.
 
 - **Create the credentials secret before installing.** `postgres.credentialsSecretName` names a secret the chart does not create; without it the deployment waits forever on a secret that does not exist.
 - **The GVC in `global.gvc.name` must not already exist.** Helm adopts an existing one and deletes it on uninstall, taking every unrelated workload with it.
+- **Set `primaryLocation` before the first install if you care where the primary is.** It places the primary on a fresh install, biases later failover elections, and — changed on a live cluster — moves the leader at the cost of a full restart. If the preferred location is unavailable at bootstrap, another location initialises the cluster after 90 s and logs a WARNING; move the primary afterwards with `patronictl switchover`.
 - **Rotating the credentials secret does not change the database.** The password is written into `PGDATA` at first bootstrap; change it afterwards with `ALTER ROLE`, then update the secret to match.
 - **Replication is asynchronous, so a failover can lose recent transactions** — the replication lag at the instant of failure, bounded by 32 MiB of WAL. A replica lagging more than that is also excluded from the leader race, so check `pg_stat_replication` first if a failover does not happen with three healthy locations.
 - **Consensus-level settings are not values knobs.** `ttl`, `loop_wait`, `retry_timeout`, `maximum_lag_on_failover` and failsafe mode are written once, when the cluster is first initialised; change them with `patronictl edit-config`.

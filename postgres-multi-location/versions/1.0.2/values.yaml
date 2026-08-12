@@ -35,11 +35,17 @@ postgres:
   # exact `cpln secret create-dictionary` command.
   credentialsSecretName: my-postgres-ml-credentials
 
-# Preferred location for the primary. CHANGING THIS ON A LIVE CLUSTER MOVES THE
-# LEADER: the value is baked into the startup script, so editing it restarts every
-# member (~2 min of interrupted writes) and the election that follows picks this
-# location. To move a primary WITHOUT a restart, use patronictl switchover.
-# Empty = no preference.
+# Preferred location for the primary. It does three things:
+#   1. On a FRESH install it decides where the primary starts — members in other
+#      locations wait up to 90s for this one to initialise the cluster first.
+#      If it is down or slow they bootstrap anyway (logged as a WARNING) and the
+#      primary starts elsewhere; move it later with patronictl switchover.
+#   2. It biases FAILOVER elections toward this location (failover_priority).
+#   3. CHANGING IT ON A LIVE CLUSTER MOVES THE LEADER: the value is baked into
+#      the startup script, so editing it restarts every member (~2 min of
+#      interrupted writes) and the election that follows picks this location.
+#      To move a primary WITHOUT a restart, use patronictl switchover.
+# Empty = no preference, and the primary starts wherever a member gets there first.
 primaryLocation: ""
 
 volumeset:

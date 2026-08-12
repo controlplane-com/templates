@@ -45,7 +45,7 @@
 | `global.gvc.name` / `.locations[]` | `postgres-multi-location-gvc`, 3 AWS locations × 1 | **≥2 required**; `replicas` = Patroni members per location. The GVC **must not already exist** |
 | `image` | `controlplanecorporation/patroni-postgres:0.7` | PostgreSQL 17 / Patroni 4.0.4 |
 | `postgres.credentialsSecretName` | `my-postgres-ml-credentials` | **Required prerequisite** `dictionary` secret with `username`, `password`, `database`. Nothing else carries the credentials |
-| `primaryLocation` | `""` | Preferred location for the primary (`failover_priority`); empty = no tags rendered |
+| `primaryLocation` | `""` | Preferred location for the primary. Since 1.0.2 it places the primary on a **fresh install** (bootstrap head start) as well as biasing failover (`failover_priority`); empty = neither renders |
 | `resources.minCpu/minMemory/maxCpu/maxMemory` | `500m` / `1Gi` / `1` / `2Gi` | Per Patroni member; ratio 2:1 |
 | `volumeset.capacity` / `.autoscaling.*` | `10` GiB / off | Data volume |
 | `internalAccess.type` / `.workloads` | `same-gvc` / `[]` | Who may connect (all tiers) |
@@ -109,6 +109,29 @@
   600 s), because HAProxy resolves server names once and mesh DNS never returns NXDOMAIN.
 - **The first `helm upgrade` after install bounces the bundled etcd tier** even when the render is
   byte-identical. Check whether the consensus store is restarting before diagnosing Postgres.
+- **`failover_priority` alone never placed the primary on a fresh install — fixed in 1.0.2.** Patroni
+  documents the tag as a **failover tiebreaker** between candidates that "received/replayed the same
+  amount of WAL"; it says nothing about who initialises an empty cluster. Every member writes the
+  `bootstrap:` block when `PGDATA` is empty, so all of them raced and the primary landed wherever one
+  got there first (observed: `primaryLocation: aws-us-east-1`, leader bootstrapped in
+  `aws-eu-central-1`; a 2-location install happened to land correctly, which is what made it look
+  like it worked). Not cosmetic — in the `grafana-multi-location` round the misplaced primary made
+  713 schema migrations run cross-region, part of a 22-minute crash-looping cold install.
+  1.0.2 adds a **bootstrap head start**: with `PGDATA` empty and `primaryLocation` set, members
+  OUTSIDE that location poll `replica-N.{workload}.{primaryLocation}.{gvc}.cpln.local:8008` and hold
+  back until it answers 200 on `/primary` (it is the leader) or `/replica` (the cluster is already
+  initialised and the leader is elsewhere, so waiting cannot help). **The wait is 90 s and then they
+  bootstrap anyway**, logging `WARNING: no leader in <location> ... bootstrapping here instead` — a
+  misplaced primary is far better than a deadlocked install.
+- **The 90 s is set by the liveness probe, not by taste — do not raise it.** Patroni does not bind
+  :8008 until the wait returns, and liveness kills the container at `initialDelaySeconds` 60 +
+  `failureThreshold` 6 × `periodSeconds` 10 ≈ 110 s after container start. A longer wait restart-loops
+  the member instead of placing the primary. Raising it means also raising the probe, which would slow
+  crash detection on every ordinary restart. The deadline is re-checked **per host** inside the poll so
+  a preferred location running several replicas cannot overshoot by one curl timeout per replica.
+- **Timing out is always safe.** The DCS is the arbiter: a member that gives up early finds the
+  `initialize` key already set and clones as a replica. The head start can misplace a primary; it can
+  never split the cluster.
 - **`primaryLocation` DOES move a live primary — that claim was wrong until 2026-08-11.** Patroni's own
   semantics are "priority biases the race, it does not move a live leader", and that is true of the tag.
   But the template's knob is baked into the startup script, so changing it rewrites the secret and rolls
@@ -159,6 +182,17 @@ A default install originally showed configuration drift against its own manifest
 Why it matters beyond tidiness: a template that drifts from creation teaches its users that drift is normal, which is exactly how a real, unintended change later goes unnoticed. Check with a no-op `helm upgrade` — every resource must report `Unchanged`.
 
 The bundled etcd subchart must be pinned to **1.0.1 or later**, or the etcd tier still drifts even when this chart's own resources are clean.
+
+## 1.0.2 — `primaryLocation` now actually places the primary (2026-08-11)
+- `failover_priority` is a failover tiebreaker and had **no effect on initial bootstrap**, so a fresh
+  install raced and the primary landed anywhere. Non-preferred members now wait up to **90 s** for the
+  preferred location to take the leader lock before bootstrapping themselves. Details, including why
+  90 s and why timing out is safe, are in the troubleshooting list above.
+- Only the empty-`PGDATA` path changed: a restart of an initialised member is byte-for-byte the same
+  work it did in 1.0.1, and with `primaryLocation: ""` nothing renders at all.
+- The values comment and README description were also wrong-by-omission and now state all three
+  effects (fresh-install placement, failover bias, and that changing it on a live cluster moves the
+  leader at the cost of a full restart).
 
 ## 1.0.1 — two defects found by the deferred-row test round (2026-08-11)
 - **`backup.resources.memory` raised 128Mi → 512Mi.** The GCP path OOMs at 128Mi with **no log output at all**: logical jobs merely report `failed`, and the wal-g sidecar loops on `OOMKilled` while WAL archives with no base backup — a backup feature that looks configured and silently produces nothing restorable. AWS and MinIO are fine at 128Mi; the default has to work for every provider. 256Mi fixes logical, 512Mi fixes wal-g, both verified end to end.

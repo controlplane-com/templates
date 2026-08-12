@@ -31,6 +31,7 @@ spec:
           export GF_SERVER_ROOT_URL="http://{{ include "grafana-ml.name" . }}.{{ .Values.global.gvc.name }}.cpln.local:3000/"
           {{- end }}
           {{- include "grafana-ml.dbGate" . | nindent 10 }}
+            {{- include "grafana-ml.migrationStagger" . | nindent 10 }}
           exec /run.sh
       inheritEnv: false
       minCpu: {{ .Values.resources.minCpu | quote }}

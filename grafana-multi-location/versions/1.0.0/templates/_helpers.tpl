@@ -179,6 +179,49 @@ gate must be able to run to its full bound before liveness starts killing, or a
 slow database tier turns a patient boot into a restart loop. Raise one and you
 must raise the other.
 */}}
+{{/*
+Migration-lock stagger, UI tier only. Grafana runs its 713 schema migrations
+under `pg_try_advisory_lock`, which is NON-BLOCKING, attempted ONCE, with no
+retry — `locking_attempt_timeout_sec` is never read by the Postgres dialect. So
+when several instances reach an empty database together, the losers exit 1 and
+restart. Measured: 5 of 7 restarts on a cold install.
+
+Nothing in Grafana can be configured around it, so the fix is to stop them
+arriving together. The evaluator (single replica, no stagger) reaches the
+database first and completes the migrations — measured at 4.4 s — and each UI
+location then starts a further step behind it, finding the schema already
+present. Ordered by the location list so the offset is deterministic, not a
+race of its own.
+
+Bounded and cheap: {{ len .Values.global.gvc.locations }} locations means at
+most {{ mul (sub (len .Values.global.gvc.locations) 1) 15 }}s added to the
+slowest location's boot. It cannot deadlock — a location that is late simply
+migrates itself.
+
+This does NOT help two replicas in the SAME location, which still start
+together; at replicas > 1 expect one loser restart per extra replica, which
+self-heals.
+*/}}
+{{- define "grafana-ml.migrationStagger" -}}
+{{- $offset := 0 -}}
+{{- $i := 0 -}}
+{{- range .Values.global.gvc.locations -}}
+{{- $i = add $i 1 -}}
+{{- end -}}
+_stagger=0
+case "${CPLN_LOCATION##*/}" in
+{{- $n := 0 }}
+{{- range .Values.global.gvc.locations }}
+  {{ .name }}) _stagger={{ mul $n 15 }} ;;
+{{- $n = add $n 1 }}
+{{- end }}
+esac
+if [ "${_stagger}" -gt 0 ]; then
+  echo "staggering start by ${_stagger}s so one instance runs the schema migrations (see chart notes)"
+  sleep "${_stagger}"
+fi
+{{- end }}
+
 {{- define "grafana-ml.dbGate" -}}
 _db_host="{{ include "grafana-ml.postgres.host" . }}"
 # Gate on HAProxy's /healthz, NOT on a TCP connect to :5432. HAProxy accepts a

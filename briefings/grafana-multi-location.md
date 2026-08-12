@@ -85,3 +85,19 @@
 - **The GVC is created unconditionally and Helm will adopt one that already exists — then delete it
   on uninstall**, taking unrelated workloads with it. Always a fresh name.
 
+## Measured behaviour (test rounds 1-2, 2026-08-11)
+| Event | Result |
+|---|---|
+| Cold install, 3 locations | **4 m 44 s** (was 22 m 13 s before the readiness-gate and primary-placement fixes) |
+| Schema migrations | **713 in 5.79 s** with the primary local; ~15 min when it bootstrapped cross-region |
+| Exactly-one evaluator at `replicas: 3` | 9 replicas `false`, 1 `true`, 0 elsewhere; 8 deliveries, 8 distinct `x-request-id`, all into the evaluator's location |
+| Moving `alerting.location` | **no** two-evaluator window — 57 s between the old evaluator's last notification and the new one's readiness |
+| Grafana-only upgrade (`replicas: 1→3`) | 1160 probe samples, **0** failures |
+| Public endpoint | proximity-routed — 100/100 requests served by one location, not spread |
+
+## Troubleshooting traps
+- **The readiness gate must probe HAProxy's `/healthz` (8404), never a TCP connect to 5432.** HAProxy accepts the socket with no healthy backend, so a TCP gate passes ~24 s into a cold install and Grafana then crash-loops on `connection reset by peer`. `/healthz` is backed by `monitor fail if nbsrv(patroni_primary) lt 1`, so 200 means a real primary is serving.
+- **Pin `postgresML` at 1.0.2 or later.** 1.0.0 places the primary by race, which sends every schema migration cross-region; 1.0.1 and earlier also OOM GCP backups at 128Mi.
+- **An upgrade adding a secret reference pauses the rollout ~9-10 minutes while Helm reports success**, then self-heals with no action. Platform-side propagation — do not re-run the upgrade or edit policies.
+- **The evaluator answers only from inside `alerting.location`.** The name resolves to the GVC VIP everywhere, but the other locations have no local upstream and return 503. Matters for the silence workaround.
+- **A `helm upgrade` can report `Updated` without any spec drift** — the difference is platform-computed `health` fields, and it is non-deterministic across installs. Diff the stored specs before treating an `Updated` label as a chart defect.

@@ -42,7 +42,7 @@ live in the shared database. There is no volume, no session affinity and nothing
      --entry database=grafana
    ```
 
-   Read any of them back with `cpln secret reveal <name>`. Use plain identifiers for `username` and
+   Read any of them back with `cpln secret reveal <name> -o json` (without `-o json` the output is a table containing no secret data). Use plain identifiers for `username` and
    `database` — they are used unquoted when the database is created.
 
 3. **Optional secrets**, if you use those features: a `dictionary` secret per entry in
@@ -326,6 +326,9 @@ Two consequences worth knowing before you rely on it:
   guaranteed to be honoured by the evaluator. Create silences against the evaluator directly, from a
   workload in the same GVC:
   `curl http://{release}-grafana-ml-alerting.{global.gvc.name}.cpln.local:3000/api/alertmanager/grafana/api/v2/silences`.
+  **That address only answers from inside `alerting.location`** — the name resolves to the GVC VIP
+  everywhere, but there is no local upstream in the other locations, so they get a 503. Run the
+  command from a workload in the alerting location.
 
 Setting `alerting.location: ""` renders no evaluator at all: rules can be created and viewed, and are
 never evaluated.
@@ -338,7 +341,7 @@ never evaluated.
 | Grafana UI / API (internal) | `{release}-grafana-ml.{global.gvc.name}.cpln.local:3000` |
 | Alert evaluator (internal only) | `{release}-grafana-ml-alerting.{global.gvc.name}.cpln.local:3000` |
 | App database | `{release}-postgres-ml-proxy.{global.gvc.name}.cpln.local:5432` — always the current primary |
-| Admin login | `admin.user`, and the password in the secret named by `admin.passwordSecretName` — `cpln secret reveal <name>` |
+| Admin login | `admin.user`, and the password in the secret named by `admin.passwordSecretName` — `cpln secret reveal <name> -o json` |
 
 ## Important Notes
 
@@ -355,6 +358,12 @@ never evaluated.
 - **Allow up to about four minutes after changing an access knob** before believing it did not work, and about two minutes after a cold install before believing a location is unreachable.
 
 - **With `publicAccess.enabled: false`, links in alert notifications point at the internal GVC address** (`…cpln.local:3000`) and will not open from a browser outside the GVC. Give the UI tier a public endpoint, or expect notification links to be unusable off-network.
+
+- **An upgrade that adds a new secret reference can pause the rollout for about 9-10 minutes while
+  Helm reports success.** Affected locations log `The identity … is not allowed to reveal the secret …`
+  even though the policy grant is already in place and visible in `cpln secret access-report`. It
+  **self-heals with no action** (measured 9 m 0 s - 9 m 30 s); do not re-run the upgrade or start
+  editing policies. This is platform-side propagation, not a chart setting.
 
 ## Links
 

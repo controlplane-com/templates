@@ -1,14 +1,19 @@
+{{- include "redis.validate" . -}}
 kind: identity
 name: {{ include "redis.identity.name" . }}
 description: Redis Identity
 tags: {{- include "redis.tags" . | nindent 4 }}
-gvc: {{ .Values.gvc.name }}
+gvc: {{ .Values.global.gvc.name }}
 {{- if and .Values.backup.enabled (eq .Values.backup.provider "aws") }}
+{{- /*
+`cpln-connector` plus the user's own bucket-scoped policy, and nothing else.
+The broad `aws::ReadOnlyAccess` this template used to attach granted read access
+to the whole AWS account for a job that only writes one prefix of one bucket.
+*/}}
 aws:
   cloudAccountLink: //cloudaccount/{{ .Values.backup.aws.cloudAccountName }}
   policyRefs:
     - cpln-connector
-    - aws::ReadOnlyAccess
     - {{ .Values.backup.aws.policyName | quote }}
 {{- end }}
 {{- if and .Values.backup.enabled (eq .Values.backup.provider "gcp") }}

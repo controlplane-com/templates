@@ -1,3 +1,4 @@
+{{- include "redis.validate" . -}}
 kind: policy
 name: {{ include "redis.policy.name" . }}
 description: Redis Policy
@@ -6,7 +7,18 @@ bindings:
   - permissions:
       - reveal
     principalLinks:
-      - //gvc/{{ .Values.gvc.name }}/identity/{{ include "redis.identity.name" . }}
+      - //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "redis.identity.name" . }}
 targetKind: secret
 targetLinks:
   - //secret/{{ include "redis.secretConfig.name" . }}
+  {{- /*
+  Exactly the user-created secrets this release actually reads, and only when
+  the feature that reads them is on. The Redis container needs the Sentinel
+  password too — it queries Sentinel for the current master before it boots.
+  */}}
+  {{- if .Values.redis.passwordSecretName }}
+  - //secret/{{ .Values.redis.passwordSecretName }}
+  {{- end }}
+  {{- if .Values.sentinel.passwordSecretName }}
+  - //secret/{{ .Values.sentinel.passwordSecretName }}
+  {{- end }}

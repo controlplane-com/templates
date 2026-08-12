@@ -1,13 +1,13 @@
 apiVersion: v2
 name: redis-multi-location
-description: A master-replica Redis configuration with Redis Sentinel, using Valkey, in multiple locations
+description: One Redis master-replica cluster stretched across locations, with Redis Sentinel electing a new master when a location is lost, optional public TCP access and optional backups to object storage
 type: application
-version: 2.0.2
+version: 2.1.0
 appVersion: "7.4"
 
 annotations:
   created: "2025-12-13"
-  lastModified: "2026-07-07"
+  lastModified: "2026-08-12"
   category: "cache"
   createsGvc: true
 

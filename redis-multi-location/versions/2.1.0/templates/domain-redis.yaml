@@ -1,4 +1,5 @@
-{{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled }}
+{{- include "redis.validate" . -}}
+{{- if .Values.redis.publicAccess.enabled }}
 kind: domain
 name: {{ .Values.redis.publicAccess.address }}
 description: {{ .Values.redis.publicAccess.address }}
@@ -16,7 +17,7 @@ spec:
         - port: 6379
           prefix: /
           replica: {{ $i }}
-          workloadLink: //gvc/{{ $.Values.gvc.name }}/workload/{{ include "redis.name" $ }}
+          workloadLink: //gvc/{{ $.Values.global.gvc.name }}/workload/{{ include "redis.name" $ }}
     {{- end }}
   {{- end }}
 {{- end }}

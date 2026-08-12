@@ -1,10 +1,11 @@
+{{- include "redis.validate" . -}}
 kind: workload
 name: {{ include "redis.name" . }}
 description: Redis
 tags:
   cpln/publishNotReadyAddresses: "true"
   {{- include "redis.tags" . | nindent 2 }}
-gvc: {{ .Values.gvc.name }}
+gvc: {{ .Values.global.gvc.name }}
 spec:
   type: stateful
   containers:
@@ -15,6 +16,13 @@ spec:
         - |-
           mkdir -p /etc/redis
           cp /config/redis.conf /etc/redis/redis.conf
+          {{- if .Values.redis.passwordSecretName }}
+
+          # Auth is appended to this per-boot COPY rather than baked into the
+          # config secret: the password comes from a user-created secret and must
+          # never be rendered into the chart's own secret or the Helm release.
+          printf '\nrequirepass %s\nmasterauth %s\n' "$REDIS_PASSWORD" "$REDIS_PASSWORD" >> /etc/redis/redis.conf
+          {{- end }}
 
           POD_ID=$(echo "$HOSTNAME" | rev | cut -d'-' -f1 | rev)
           LOCATION=${CPLN_LOCATION##*/}
@@ -26,7 +34,7 @@ spec:
           echo "\nreplica-announce-port ${SELF_PORT}" >> /etc/redis/redis.conf
 
           # Sentinel endpoints — one per location, rendered at template time
-          SENTINELS="{{ range $loc := .Values.gvc.locations }}replica-0.{{ include "redis.sentinel.name" $ }}.{{ $loc.name }}.{{ $.Values.gvc.name }}.cpln.local {{ end }}"
+          SENTINELS="{{ range $loc := .Values.global.gvc.locations }}replica-0.{{ include "redis.sentinel.name" $ }}.{{ $loc.name }}.{{ $.Values.global.gvc.name }}.cpln.local {{ end }}"
 
           # Ask any sentinel who the master is, retrying until one responds.
           # On cold start, sentinels respond from their static config (replica-0 of the
@@ -61,10 +69,17 @@ spec:
       memory: {{ .Values.redis.resources.memory | quote }}
       image: {{ .Values.redis.image | default "redis:7.4" }}
       inheritEnv: false
-      {{- if .Values.sentinel.password }}
+      {{- if or .Values.redis.passwordSecretName .Values.sentinel.passwordSecretName }}
       env:
+        {{- /* Both come from user-created secrets, so neither transits values. */}}
+        {{- if .Values.redis.passwordSecretName }}
+        - name: REDIS_PASSWORD
+          value: cpln://secret/{{ .Values.redis.passwordSecretName }}.payload
+        {{- end }}
+        {{- if .Values.sentinel.passwordSecretName }}
         - name: SENTINEL_PASSWORD
-          value: {{ .Values.sentinel.password | quote }}
+          value: cpln://secret/{{ .Values.sentinel.passwordSecretName }}.payload
+        {{- end }}
       {{- else }}
       env: []
       {{- end }}
@@ -82,16 +97,23 @@ spec:
     autoscaling:
       maxConcurrency: 0
       metric: disabled
-      minScale: {{ (index .Values.gvc.locations 0).replicas | int }}
-      maxScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      minScale: {{ .Values.redis.replicasPerLocation | int }}
+      maxScale: {{ .Values.redis.replicasPerLocation | int }}
       scaleToZeroDelay: 300
       target: 100
     capacityAI: false
     timeoutSeconds: 15
   rolloutOptions:
+    {{- /*
+    maxUnavailableReplicas is deliberately NOT set: the API drops it on a
+    stateful workload, so sending it produced permanent drift AND implied a
+    rolling-restart limit that is not in force.
+    terminationGracePeriodSeconds is declared because the API backfills 90.
+    */}}
     scalingPolicy: Parallel
+    terminationGracePeriodSeconds: 90
   firewallConfig:
-    {{- if or .Values.firewall.externalOutboundAllowCIDR .Values.firewall.externalInboundAllowCIDR (and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled) }}
+    {{- if or .Values.firewall.externalOutboundAllowCIDR .Values.firewall.externalInboundAllowCIDR .Values.redis.publicAccess.enabled }}
     external:
       {{- if .Values.firewall.externalOutboundAllowCIDR }}
       outboundAllowCIDR:
@@ -99,7 +121,7 @@ spec:
         - {{ . | trim }}
         {{- end }}
       {{- end }}
-      {{- if or .Values.firewall.externalInboundAllowCIDR (and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled) }}
+      {{- if or .Values.firewall.externalInboundAllowCIDR .Values.redis.publicAccess.enabled }}
       inboundAllowCIDR:
         {{- if .Values.firewall.externalInboundAllowCIDR }}
         {{- range (splitList "," .Values.firewall.externalInboundAllowCIDR) }}
@@ -115,17 +137,22 @@ spec:
       {{- if .Values.firewall.workloads }}
       inboundAllowWorkload: {{ .Values.firewall.workloads | toYaml | nindent 8 }}
       {{- end }}
-  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "redis.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "redis.identity.name" . }}
   loadBalancer:
     replicaDirect: true
   localOptions:
-    {{- range $location := .Values.gvc.locations }}
+    {{- /*
+    Written in FULL for every location: a minimal localOptions entry makes the
+    API backfill its OWN defaults, which would leave a location eligible to
+    scale on concurrency and boot Redis instances nobody asked for.
+    */}}
+    {{- range $location := .Values.global.gvc.locations }}
     - location: //location/{{ $location.name }}
       autoscaling:
         maxConcurrency: 0
         metric: disabled
-        minScale: {{ $location.replicas | int }}
-        maxScale: {{ $location.replicas | int }}
+        minScale: {{ $.Values.redis.replicasPerLocation | int }}
+        maxScale: {{ $.Values.redis.replicasPerLocation | int }}
         scaleToZeroDelay: 300
         target: 100
       capacityAI: false

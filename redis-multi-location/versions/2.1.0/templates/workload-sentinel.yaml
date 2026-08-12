@@ -1,10 +1,11 @@
+{{- include "redis.validate" . -}}
 kind: workload
 name: {{ include "redis.sentinel.name" . }}
 description: Sentinel
 tags:
   cpln/publishNotReadyAddresses: "true"
   {{- include "redis.tags" . | nindent 2 }}
-gvc: {{ .Values.gvc.name }}
+gvc: {{ .Values.global.gvc.name }}
 spec:
   type: stateful
   containers:
@@ -37,16 +38,50 @@ spec:
             # All sentinels agree on the same initial master: replica-0 of the primary (first) location.
             # After any failover, sentinel persists the elected master via CONFIG REWRITE so this
             # bootstrap line only matters on a completely fresh (never-started) sentinel.
-            echo "sentinel monitor mymaster replica-0.{{ include "redis.name" . }}.{{ (index .Values.gvc.locations 0).name }}.${CPLN_GVC}.cpln.local 6379 {{ add (div (len .Values.gvc.locations) 2) 1 }}" >> /etc/sentinel/sentinel.conf
+            echo "sentinel monitor mymaster replica-0.{{ include "redis.name" . }}.{{ (index .Values.global.gvc.locations 0).name }}.${CPLN_GVC}.cpln.local 6379 {{ add (div (len .Values.global.gvc.locations) 2) 1 }}" >> /etc/sentinel/sentinel.conf
           }
+          {{- if or .Values.redis.passwordSecretName .Values.sentinel.passwordSecretName }}
+
+          # Passwords come from user-created secrets, so they cannot live in the
+          # config secret. They are re-applied on EVERY start (stripping whatever
+          # sentinel last rewrote) so rotating a secret takes effect on a restart
+          # rather than only on a fresh volume. Both lines must follow the
+          # `sentinel monitor` line, which is why this runs after bootstrap.
+          apply_auth() {
+            CONF=/etc/sentinel/sentinel.conf
+            grep -v '^sentinel auth-pass mymaster ' "$CONF" | grep -v '^requirepass ' > "$CONF.tmp"
+            mv "$CONF.tmp" "$CONF"
+            if [ -n "$REDIS_PASSWORD" ]; then
+              echo "sentinel auth-pass mymaster $REDIS_PASSWORD" >> "$CONF"
+            fi
+            if [ -n "$SENTINEL_PASSWORD" ]; then
+              echo "requirepass $SENTINEL_PASSWORD" >> "$CONF"
+            fi
+          }
+          {{- end }}
 
           bootstrap_sentinel_conf
+          {{- if or .Values.redis.passwordSecretName .Values.sentinel.passwordSecretName }}
+          apply_auth
+          {{- end }}
           exec redis-sentinel /etc/sentinel/sentinel.conf {{ .Values.sentinel.extraArgs | default "" }}
       cpu: {{ .Values.sentinel.resources.cpu | quote }}
       memory: {{ .Values.sentinel.resources.memory | quote }}
       image: {{ .Values.sentinel.image | default "redis:7.4" }}
       inheritEnv: false
+      {{- if or .Values.redis.passwordSecretName .Values.sentinel.passwordSecretName }}
+      env:
+        {{- if .Values.redis.passwordSecretName }}
+        - name: REDIS_PASSWORD
+          value: cpln://secret/{{ .Values.redis.passwordSecretName }}.payload
+        {{- end }}
+        {{- if .Values.sentinel.passwordSecretName }}
+        - name: SENTINEL_PASSWORD
+          value: cpln://secret/{{ .Values.sentinel.passwordSecretName }}.payload
+        {{- end }}
+      {{- else }}
       env: []
+      {{- end }}
       ports:
         - number: 26379
           protocol: tcp
@@ -68,9 +103,14 @@ spec:
     capacityAI: false
     timeoutSeconds: 5
   rolloutOptions:
+    {{- /*
+    See the Redis workload: maxUnavailableReplicas is dropped by the API on a
+    stateful workload, and terminationGracePeriodSeconds is backfilled to 90.
+    */}}
     scalingPolicy: Parallel
+    terminationGracePeriodSeconds: 90
   firewallConfig:
-    {{- if or .Values.firewall.externalOutboundAllowCIDR .Values.firewall.externalInboundAllowCIDR (and (hasKey .Values.sentinel "publicAccess") .Values.sentinel.publicAccess.enabled) }}
+    {{- if or .Values.firewall.externalOutboundAllowCIDR .Values.firewall.externalInboundAllowCIDR .Values.sentinel.publicAccess.enabled }}
     external:
       {{- if .Values.firewall.externalOutboundAllowCIDR }}
       outboundAllowCIDR:
@@ -78,7 +118,7 @@ spec:
         - {{ . | trim }}
         {{- end }}
       {{- end }}
-      {{- if or .Values.firewall.externalInboundAllowCIDR (and (hasKey .Values.sentinel "publicAccess") .Values.sentinel.publicAccess.enabled) }}
+      {{- if or .Values.firewall.externalInboundAllowCIDR .Values.sentinel.publicAccess.enabled }}
       inboundAllowCIDR:
         {{- if .Values.firewall.externalInboundAllowCIDR }}
         {{- range (splitList "," .Values.firewall.externalInboundAllowCIDR) }}
@@ -94,11 +134,15 @@ spec:
       {{- if .Values.firewall.workloads }}
       inboundAllowWorkload: {{ .Values.firewall.workloads | toYaml | nindent 8 }}
       {{- end }}
-  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "redis.sentinelIdentity.name" . }}
+  identityLink: //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "redis.sentinelIdentity.name" . }}
   loadBalancer:
     replicaDirect: true
   localOptions:
-    {{- range $location := .Values.gvc.locations }}
+    {{- /*
+    Written in FULL for every location, for the same reason as the Redis tier:
+    a minimal entry makes the API backfill its own autoscaling defaults.
+    */}}
+    {{- range $location := .Values.global.gvc.locations }}
     - location: //location/{{ $location.name }}
       autoscaling:
         maxConcurrency: 0

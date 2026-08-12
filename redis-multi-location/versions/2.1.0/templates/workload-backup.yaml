@@ -1,10 +1,10 @@
-{{- include "redis.validateBackupConfig" . }}
+{{- include "redis.validate" . -}}
 {{- if .Values.backup.enabled }}
 kind: workload
 name: {{ include "redis.backup.name" . }}
 description: Redis Backup
 tags: {{- include "redis.tags" . | nindent 4 }}
-gvc: {{ .Values.gvc.name }}
+gvc: {{ .Values.global.gvc.name }}
 spec:
   type: cron
   containers:
@@ -29,12 +29,13 @@ spec:
           value: {{ .Values.backup.gcp.prefix | quote }}
       {{- end }}
         - name: REDIS_HOST
-          value: {{ include "redis.name" . }}.{{ .Values.gvc.name }}.cpln.local
+          value: {{ include "redis.name" . }}.{{ .Values.global.gvc.name }}.cpln.local
         - name: REDIS_PORT
           value: "6379"
-      {{- if .Values.redis.password }}
+      {{- if .Values.redis.passwordSecretName }}
+        {{- /* From the user-created secret — never rendered into the release. */}}
         - name: REDIS_PASSWORD
-          value: {{ .Values.redis.password | quote }}
+          value: cpln://secret/{{ .Values.redis.passwordSecretName }}.payload
       {{- end }}
       image: {{ .Values.backup.image }}
       inheritEnv: false
@@ -51,7 +52,12 @@ spec:
     suspend: true
     timeoutSeconds: 3600
   localOptions:
-    - location: //location/{{ (index .Values.gvc.locations 0).name }}
+    {{- /*
+    A cron workload runs in EVERY location of its GVC, so it is suspended by
+    default above and resumed in exactly one location — otherwise every location
+    would write its own copy of the same dump into one bucket every night.
+    */}}
+    - location: //location/{{ (index .Values.global.gvc.locations 0).name }}
       suspend: false
   firewallConfig:
     external:
@@ -65,7 +71,7 @@ spec:
     internal:
       inboundAllowType: none
       inboundAllowWorkload: []
-  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "redis.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "redis.identity.name" . }}
   job:
     concurrencyPolicy: Forbid
     historyLimit: 5

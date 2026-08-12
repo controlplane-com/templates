@@ -29,14 +29,14 @@ live in the shared database. There is no volume, no session affinity and nothing
    ```bash
    # First-boot admin password (opaque, encoding plain)
    printf '%s' "$(openssl rand -hex 24)" \
-     | cpln secret create-opaque --name my-grafana-ml-admin-password --encoding plain -f -
+     | cpln secret create-opaque --name my-grafana-admin-password --encoding plain -f -
 
    # Datasource encryption key (opaque, encoding plain) — PERMANENT, never rotate it
    printf '%s' "$(openssl rand -hex 32)" \
-     | cpln secret create-opaque --name my-grafana-ml-secret-key --encoding plain -f -
+     | cpln secret create-opaque --name my-grafana-secret-key --encoding plain -f -
 
    # App database credentials (dictionary) — exactly these three keys
-   cpln secret create-dictionary --name my-grafana-ml-db-credentials \
+   cpln secret create-dictionary --name my-grafana-db-credentials \
      --entry username=grafana \
      --entry password="$(openssl rand -hex 24)" \
      --entry database=grafana
@@ -131,8 +131,8 @@ alerting:
 admin:
   user: admin # initial admin login name (not sensitive)
   applyPassword: true # set false after your first login to stop referencing the password secret
-  passwordSecretName: my-grafana-ml-admin-password # opaque secret holding the first-boot admin password
-  secretKeySecretName: my-grafana-ml-secret-key # opaque secret holding the encryption key
+  passwordSecretName: my-grafana-admin-password # opaque secret holding the first-boot admin password
+  secretKeySecretName: my-grafana-secret-key # opaque secret holding the encryption key
 ```
 
 The password applies only when the admin account is **first created**; change it in the UI afterwards
@@ -151,7 +151,7 @@ datasources:
   #   url: http://RELEASE-prometheus.GVC.cpln.local:9095
   #   isDefault: true
   credentialSecrets: []
-  # - name: my-grafana-ml-ds-credentials
+  # - name: my-grafana-ds-credentials
   #   keys: [PG_PASSWORD]
 ```
 
@@ -205,7 +205,7 @@ it honours `internalAccess` so you can reach it inside the GVC.
 ```yaml
 postgresML:
   postgres:
-    credentialsSecretName: my-grafana-ml-db-credentials
+    credentialsSecretName: my-grafana-db-credentials
 
   # Preferred location for the database primary. Keep it aligned with
   # alerting.location so the hot path has no cross-region hop.
@@ -242,19 +242,19 @@ postgresML:
       intervalSeconds: 21600
     provider: aws # options: aws, gcp, minio
     aws:
-      bucket: my-grafana-ml-bucket
+      bucket: my-grafana-bucket
       region: us-east-1
       cloudAccountName: my-s3-cloud-account
-      policyName: my-grafana-ml-backup-policy
+      policyName: my-grafana-backup-policy
       prefix: grafana/backups
     gcp:
-      bucket: my-grafana-ml-bucket
+      bucket: my-grafana-bucket
       cloudAccountName: my-gcs-cloud-account
       prefix: grafana/backups
     minio:
       endpoint: http://my-minio-workload:9000
-      bucket: my-grafana-ml-bucket
-      credentialsSecretName: my-grafana-ml-minio-credentials
+      bucket: my-grafana-bucket
+      credentialsSecretName: my-grafana-minio-credentials
       prefix: grafana/backups
 ```
 
@@ -317,7 +317,7 @@ No cloud account is needed.
 3. Create the credentials secret and set `postgresML.backup.minio.credentialsSecretName`:
 
    ```bash
-   cpln secret create-dictionary --name my-grafana-ml-minio-credentials \
+   cpln secret create-dictionary --name my-grafana-minio-credentials \
      --entry accessKey=MINIO_ACCESS_KEY \
      --entry secretKey=MINIO_SECRET_KEY
    ```

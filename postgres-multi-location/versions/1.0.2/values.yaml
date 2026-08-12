@@ -33,7 +33,7 @@ postgres:
   # `database`. If it does not exist at install time the deployment WEDGES
   # waiting on it and looks broken. See Prerequisites in the README for the
   # exact `cpln secret create-dictionary` command.
-  credentialsSecretName: my-postgres-ml-credentials
+  credentialsSecretName: my-postgres-credentials
 
 # Preferred location for the primary. It does three things:
 #   1. On a FRESH install it decides where the primary starts — members in other
@@ -116,14 +116,14 @@ backup:
   provider: aws # options: aws, gcp, minio
 
   aws:
-    bucket: my-postgres-ml-bucket
+    bucket: my-postgres-bucket
     region: us-east-1
     cloudAccountName: my-s3-cloud-account
-    policyName: my-postgres-ml-backup-policy # bucket-scoped IAM policy, see README
+    policyName: my-postgres-backup-policy # bucket-scoped IAM policy, see README
     prefix: postgres/backups # folder within the bucket
 
   gcp:
-    bucket: my-postgres-ml-bucket
+    bucket: my-postgres-bucket
     cloudAccountName: my-gcs-cloud-account
     prefix: postgres/backups # folder within the bucket
 
@@ -134,10 +134,10 @@ backup:
     # workload in ONE location answers 503 from the others, so for wal-g use
     # a multi-location endpoint or an external S3-compatible service.
     endpoint: http://my-minio-workload:9000 # e.g. http://WORKLOAD_NAME:9000 in the same GVC
-    bucket: my-postgres-ml-bucket
+    bucket: my-postgres-bucket
     # REQUIRED PREREQUISITE SECRET when provider is `minio` — a `dictionary`
     # secret holding `accessKey` and `secretKey`. See Storage setup in the README.
-    credentialsSecretName: my-postgres-ml-minio-credentials
+    credentialsSecretName: my-postgres-minio-credentials
     prefix: postgres/backups # folder within the bucket
 
 # ─── etcd (subchart: etcd-multi-location) ─────────────────────────────────────

@@ -27,14 +27,14 @@ primary's location is lost. For a single-location cluster, use `postgres-highly-
    deployment wedges waiting on it and looks broken.
 
    ```bash
-   cpln secret create-dictionary --name my-postgres-ml-credentials \
+   cpln secret create-dictionary --name my-postgres-credentials \
      --entry username=postgres \
      --entry password="$(openssl rand -hex 24)" \
      --entry database=mydb
    ```
 
    Then set `postgres.credentialsSecretName` to that name. Reveal it later with
-   `cpln secret reveal my-postgres-ml-credentials`. Use a plain identifier for `database` and
+   `cpln secret reveal my-postgres-credentials`. Use a plain identifier for `database` and
    `username` — they are used unquoted when the database is created.
 
 3. **For backups only** — a bucket and, for AWS or GCP, a Control Plane
@@ -99,7 +99,7 @@ postgres:
   # `database`. If it does not exist at install time the deployment WEDGES
   # waiting on it and looks broken. See Prerequisites in the README for the
   # exact `cpln secret create-dictionary` command.
-  credentialsSecretName: my-postgres-ml-credentials
+  credentialsSecretName: my-postgres-credentials
 
 # Preferred location for the primary. It does three things:
 #   1. On a FRESH install it decides where the primary starts — members in other
@@ -215,23 +215,23 @@ backup:
   provider: aws # options: aws, gcp, minio
 
   aws:
-    bucket: my-postgres-ml-bucket
+    bucket: my-postgres-bucket
     region: us-east-1
     cloudAccountName: my-s3-cloud-account
-    policyName: my-postgres-ml-backup-policy # bucket-scoped IAM policy, see README
+    policyName: my-postgres-backup-policy # bucket-scoped IAM policy, see README
     prefix: postgres/backups # folder within the bucket
 
   gcp:
-    bucket: my-postgres-ml-bucket
+    bucket: my-postgres-bucket
     cloudAccountName: my-gcs-cloud-account
     prefix: postgres/backups # folder within the bucket
 
   minio: # a self-hosted MinIO workload, or any S3-compatible endpoint
     endpoint: http://my-minio-workload:9000 # e.g. http://WORKLOAD_NAME:9000 in the same GVC
-    bucket: my-postgres-ml-bucket
+    bucket: my-postgres-bucket
     # REQUIRED PREREQUISITE SECRET when provider is `minio` — a `dictionary`
     # secret holding `accessKey` and `secretKey`. See Storage setup in the README.
-    credentialsSecretName: my-postgres-ml-minio-credentials
+    credentialsSecretName: my-postgres-minio-credentials
     prefix: postgres/backups # folder within the bucket
 ```
 
@@ -319,7 +319,7 @@ No cloud account is needed — credentials are supplied as a secret.
    `minio` template these are its `admin.username` and `admin.password`:
 
    ```bash
-   cpln secret create-dictionary --name my-postgres-ml-minio-credentials \
+   cpln secret create-dictionary --name my-postgres-minio-credentials \
      --entry accessKey=MINIO_ACCESS_KEY \
      --entry secretKey=MINIO_SECRET_KEY
    ```

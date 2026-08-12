@@ -60,11 +60,11 @@ admin:
   # The password applies only when the admin account is FIRST created; on later
   # boots Grafana ignores it (change it in the UI instead).
   applyPassword: true # set false after your first login to stop referencing the password secret
-  passwordSecretName: my-grafana-ml-admin-password # opaque secret holding the first-boot admin password
+  passwordSecretName: my-grafana-admin-password # opaque secret holding the first-boot admin password
   # DIFFERENT LIFECYCLE — permanent. Read on EVERY boot by EVERY instance to
   # decrypt datasource credentials stored in the shared database: never delete
   # it, never rotate it.
-  secretKeySecretName: my-grafana-ml-secret-key # opaque secret holding the encryption key
+  secretKeySecretName: my-grafana-secret-key # opaque secret holding the encryption key
 
 # ─── Datasources as Code (optional) ───────────────────────────────────────────
 # Grafana datasource provisioning entries, passed through verbatim. Every
@@ -89,7 +89,7 @@ datasources:
   # pre-created dictionary secret and write $KEY above. Every $KEY needs an entry
   # here, and the secrets MUST EXIST BEFORE INSTALL.
   credentialSecrets: []
-  # - name: my-grafana-ml-ds-credentials
+  # - name: my-grafana-ds-credentials
   #   keys: [PG_PASSWORD]
 
 # ─── SMTP for Alert Emails (optional) ─────────────────────────────────────────
@@ -129,7 +129,7 @@ postgresML:
     # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL.
     # A `dictionary` secret holding exactly `username`, `password` and
     # `database`. If it does not exist the deployment wedges waiting on it.
-    credentialsSecretName: my-grafana-ml-db-credentials
+    credentialsSecretName: my-grafana-db-credentials
 
   # Preferred location for the database primary. Keep it aligned with
   # alerting.location so the hot path has no cross-region hop.
@@ -166,17 +166,17 @@ postgresML:
       intervalSeconds: 21600
     provider: aws # options: aws, gcp, minio
     aws:
-      bucket: my-grafana-ml-bucket
+      bucket: my-grafana-bucket
       region: us-east-1
       cloudAccountName: my-s3-cloud-account
-      policyName: my-grafana-ml-backup-policy
+      policyName: my-grafana-backup-policy
       prefix: grafana/backups
     gcp:
-      bucket: my-grafana-ml-bucket
+      bucket: my-grafana-bucket
       cloudAccountName: my-gcs-cloud-account
       prefix: grafana/backups
     minio:
       endpoint: http://my-minio-workload:9000
-      bucket: my-grafana-ml-bucket
-      credentialsSecretName: my-grafana-ml-minio-credentials
+      bucket: my-grafana-bucket
+      credentialsSecretName: my-grafana-minio-credentials
       prefix: grafana/backups

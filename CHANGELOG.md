@@ -4,6 +4,7 @@ High-level, user-facing catalog changes by month: new templates and notable vers
 
 ## 2026-08
 
+- **New template: grafana-multi-location 1.0.0** — Grafana running in several locations against one stretched PostgreSQL cluster, so dashboards, users and data sources are shared everywhere and a region can be lost without losing the service
 - **grafana 1.2.0** — the admin password and the encryption key are now user-created secrets referenced by name, instead of values (create them before installing or upgrading), and Grafana's own resource limits are named `maxCpu`/`maxMemory`
 - **New template: postgres-multi-location 1.0.0** — one PostgreSQL cluster stretched across regions: a single primary, asynchronous replicas elsewhere, and automatic promotion of a replica in a surviving region when the primary's region is lost
 - **New template: etcd-multi-location 1.0.0** — stretched etcd cluster with one member per location, for cross-region coordination and as the consensus store behind postgres-multi-location

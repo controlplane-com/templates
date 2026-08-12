@@ -395,8 +395,16 @@ never evaluated.
   non-blocking lock with no retry, so instances arriving together make the losers exit and restart.
   The alert evaluator migrates first and each location follows 15 s behind it, which removes those
   restarts at the default one replica per location. Two replicas in the SAME location still start
-  together — at `replicas: 2` expect one to two self-healing restarts per extra replica, mostly in
-  the alerting location. They clear themselves; nothing needs doing.
+  together — at `replicas: 2` expect under one self-healing restart per extra replica. They clear
+  themselves; nothing needs doing.
+- **If the database primary does not land in `postgresML.primaryLocation`, the first install is
+  noisy.** That knob is a preference with a 90-second bound, not a guarantee — if the preferred
+  location is slow to start, another bootstraps instead and says so in its log. Grafana's schema
+  migrations then run cross-region at roughly **215 ms per statement instead of 5 ms**, so the
+  713-migration run takes minutes rather than seconds and instances restart while it finishes.
+  Measured: 11 m 41 s and 15 restarts in that case, against 4 m 19 s and 2 with the primary in
+  place. It converges on its own and needs no action, but if you want the fast path, check the
+  Patroni leader landed where you asked before judging the install.
 - **A first install takes 4-6 minutes**, most of it the stretched database electing a primary. Grafana waits for it rather than crash-looping, and logs what it is waiting for on every poll.
 - **The FIRST `helm upgrade` after an install re-applies every tier once**, even a no-op, and the database is briefly in recovery while it comes back — measured **4 m 43 s** to reconverge on a 3-location cluster. Later upgrades report `Unchanged` and cost nothing.
 

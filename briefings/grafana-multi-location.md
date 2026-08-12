@@ -154,3 +154,22 @@ Both **proven and shipping**; neither was a removal candidate under the test-eve
 - `livenessProbe.initialDelaySeconds: 360` confirmed in the **stored** spec; every exit was `exitCode: 1`, no `137`, so nothing was killed by liveness during the longer wait.
 - **Drift after the rename: clean.** Upgrade #1 labelled 9 of 17 `Updated` but **0 of 17 had any spec difference** (only `version`, `cpln/release`, `lastModified` and status); upgrade #2 was all `Unchanged` with 34/34 HTTP 200 throughout.
 - First install measured 5 m 30 s here vs 4 m 44 s in round 2 — run-to-run variance in the database tier (3 m 23 s vs 2 m 33 s), not a regression. Every Grafana instance released its gate within 9 s of the last Patroni member in both runs.
+
+## Rounds 6-7 — startup noise, and where it actually comes from (2026-08-12)
+Cold-install exits went **7 → 2** once the gate required 3 consecutive healthy polls (killing the `connection reset by peer` class outright) and the UI tier staggered behind the single-replica evaluator.
+
+Two design errors found by testing, both mine:
+- The stagger's first offset was **0**, which collided with the evaluator — `alerting.location` defaults to the first location in the list, so both released on the same signal at the same millisecond and raced. Offsets now start at 15 s. **Do not "optimise" the first one back to zero.**
+- The stagger's premise is "the migration run fits inside 15 s". That holds **only when the Patroni primary is co-located with the evaluator.**
+
+**The dominant variable is where the primary lands, not anything in this chart.** `postgresML.primaryLocation` is a preference with a 90 s bound (necessarily — an unbounded wait could deadlock the install). When the fallback fires, migrations run cross-region at ~215 ms/statement instead of ~4.7 ms, the 713-migration run stretches from ~5 s to minutes, and every instance restarts while it finishes:
+
+| | Primary as configured | Primary elsewhere |
+|---|---|---|
+| Migrations | **713 in 5.22 s** | minutes |
+| Cold install | 4 m 19 s | 11 m 41 s |
+| Exits | 2 | 15 |
+
+Both converge and self-heal. Before treating a noisy install as a defect, **check where the Patroni leader actually bootstrapped** — the fallback logs `no leader in <location> after 90s — bootstrapping here instead`.
+
+Remaining exits are Grafana's own migration lock (`pg_try_advisory_lock`, non-blocking, one attempt, and `locking_attempt_timeout_sec` is never read by the Postgres dialect). There is no configuration that removes them; only not arriving together helps.

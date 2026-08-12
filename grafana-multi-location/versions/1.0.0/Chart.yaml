@@ -17,5 +17,5 @@ dependencies:
     repository: "oci://ghcr.io/controlplane-com/templates"
   - name: postgres-multi-location
     alias: postgresML
-    version: 1.0.0
+    version: 1.0.2
     repository: "oci://ghcr.io/controlplane-com/templates"

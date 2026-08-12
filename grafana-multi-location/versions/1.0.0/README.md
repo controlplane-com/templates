@@ -8,10 +8,10 @@ single-location Grafana, use the `grafana` template instead.
 ## Architecture
 
 - **GVC** — multi-location, pinned to `global.gvc.locations`. **Created by this chart**, always.
-- **Grafana UI workload** (`{release}-grafana-ml`, standard) — `replicas` instances per location, HTTP :3000, public by default. Alert execution is off here.
-- **Alert evaluator workload** (`{release}-grafana-ml-alerting`, standard) — the same image, **exactly one replica**, in `alerting.location` only, never public. This is the only instance that evaluates rules. Optional (`alerting.location: ""`).
+- **Grafana UI workload** (`{release}-grafana`, standard) — `replicas` instances per location, HTTP :3000, public by default. Alert execution is off here.
+- **Alert evaluator workload** (`{release}-grafana-alerting`, standard) — the same image, **exactly one replica**, in `alerting.location` only, never public. This is the only instance that evaluates rules. Optional (`alerting.location: ""`).
 - **Identity and policy** — one identity shared by both workloads, with `reveal` on exactly the secrets they mount.
-- **Datasource secret** (`{release}-grafana-ml-datasources`) — the provisioning file, mounted by both workloads. Optional (`datasources.definitions`).
+- **Datasource secret** (`{release}-grafana-datasources`) — the provisioning file, mounted by both workloads. Optional (`datasources.definitions`).
 - **App database** (`postgres-multi-location` subchart) — one Patroni cluster stretched across the same locations, with its own HAProxy tier per location and an etcd consensus store.
 
 Grafana is stateless here: users, dashboards, datasources, alert rules, alert state and sessions all
@@ -29,14 +29,14 @@ live in the shared database. There is no volume, no session affinity and nothing
    ```bash
    # First-boot admin password (opaque, encoding plain)
    printf '%s' "$(openssl rand -hex 24)" \
-     | cpln secret create-opaque --name my-grafana-ml-admin-password --encoding plain -f -
+     | cpln secret create-opaque --name my-grafana-admin-password --encoding plain -f -
 
    # Datasource encryption key (opaque, encoding plain) — PERMANENT, never rotate it
    printf '%s' "$(openssl rand -hex 32)" \
-     | cpln secret create-opaque --name my-grafana-ml-secret-key --encoding plain -f -
+     | cpln secret create-opaque --name my-grafana-secret-key --encoding plain -f -
 
    # App database credentials (dictionary) — exactly these three keys
-   cpln secret create-dictionary --name my-grafana-ml-db-credentials \
+   cpln secret create-dictionary --name my-grafana-db-credentials \
      --entry username=grafana \
      --entry password="$(openssl rand -hex 24)" \
      --entry database=grafana
@@ -131,8 +131,8 @@ alerting:
 admin:
   user: admin # initial admin login name (not sensitive)
   applyPassword: true # set false after your first login to stop referencing the password secret
-  passwordSecretName: my-grafana-ml-admin-password # opaque secret holding the first-boot admin password
-  secretKeySecretName: my-grafana-ml-secret-key # opaque secret holding the encryption key
+  passwordSecretName: my-grafana-admin-password # opaque secret holding the first-boot admin password
+  secretKeySecretName: my-grafana-secret-key # opaque secret holding the encryption key
 ```
 
 The password applies only when the admin account is **first created**; change it in the UI afterwards
@@ -151,7 +151,7 @@ datasources:
   #   url: http://RELEASE-prometheus.GVC.cpln.local:9095
   #   isDefault: true
   credentialSecrets: []
-  # - name: my-grafana-ml-ds-credentials
+  # - name: my-grafana-ds-credentials
   #   keys: [PG_PASSWORD]
 ```
 
@@ -205,7 +205,7 @@ it honours `internalAccess` so you can reach it inside the GVC.
 ```yaml
 postgresML:
   postgres:
-    credentialsSecretName: my-grafana-ml-db-credentials
+    credentialsSecretName: my-grafana-db-credentials
 
   # Preferred location for the database primary. Keep it aligned with
   # alerting.location so the hot path has no cross-region hop.
@@ -242,19 +242,19 @@ postgresML:
       intervalSeconds: 21600
     provider: aws # options: aws, gcp, minio
     aws:
-      bucket: my-grafana-ml-bucket
+      bucket: my-grafana-bucket
       region: us-east-1
       cloudAccountName: my-s3-cloud-account
-      policyName: my-grafana-ml-backup-policy
+      policyName: my-grafana-backup-policy
       prefix: grafana/backups
     gcp:
-      bucket: my-grafana-ml-bucket
+      bucket: my-grafana-bucket
       cloudAccountName: my-gcs-cloud-account
       prefix: grafana/backups
     minio:
       endpoint: http://my-minio-workload:9000
-      bucket: my-grafana-ml-bucket
-      credentialsSecretName: my-grafana-ml-minio-credentials
+      bucket: my-grafana-bucket
+      credentialsSecretName: my-grafana-minio-credentials
       prefix: grafana/backups
 ```
 
@@ -317,7 +317,7 @@ No cloud account is needed.
 3. Create the credentials secret and set `postgresML.backup.minio.credentialsSecretName`:
 
    ```bash
-   cpln secret create-dictionary --name my-grafana-ml-minio-credentials \
+   cpln secret create-dictionary --name my-grafana-minio-credentials \
      --entry accessKey=MINIO_ACCESS_KEY \
      --entry secretKey=MINIO_SECRET_KEY
    ```
@@ -342,7 +342,7 @@ Two consequences worth knowing before you rely on it:
 - **Silences do not propagate between instances.** A silence created against the UI tier is not
   guaranteed to be honoured by the evaluator. Create silences against the evaluator directly, from a
   workload in the same GVC:
-  `curl -u admin:PASSWORD http://{release}-grafana-ml-alerting.{global.gvc.name}.cpln.local:3000/api/alertmanager/grafana/api/v2/silences`
+  `curl -u admin:PASSWORD http://{release}-grafana-alerting.{global.gvc.name}.cpln.local:3000/api/alertmanager/grafana/api/v2/silences`
   lists them; creating one is a POST with a body. The API requires credentials — unauthenticated returns 401.
   **That address only answers from inside `alerting.location`** — the name resolves to the GVC VIP
   everywhere, but there is no local upstream in the other locations, so they get a 503. Run the
@@ -355,14 +355,15 @@ never evaluated.
 
 | What | Where |
 |---|---|
-| Grafana UI / API (public) | `status.canonicalEndpoint` of `{release}-grafana-ml` — `cpln workload get {release}-grafana-ml --gvc {global.gvc.name} -o yaml` |
-| Grafana UI / API (internal) | `{release}-grafana-ml.{global.gvc.name}.cpln.local:3000` |
-| Alert evaluator (internal only) | `{release}-grafana-ml-alerting.{global.gvc.name}.cpln.local:3000` |
-| App database | `{release}-postgres-ml-proxy.{global.gvc.name}.cpln.local:5432` — always the current primary |
+| Grafana UI / API (public) | `status.canonicalEndpoint` of `{release}-grafana` — `cpln workload get {release}-grafana --gvc {global.gvc.name} -o yaml` |
+| Grafana UI / API (internal) | `{release}-grafana.{global.gvc.name}.cpln.local:3000` |
+| Alert evaluator (internal only) | `{release}-grafana-alerting.{global.gvc.name}.cpln.local:3000` |
+| App database | `{release}-postgres-proxy.{global.gvc.name}.cpln.local:5432` — always the current primary |
 | Admin login | `admin.user`, and the password in the secret named by `admin.passwordSecretName` — `cpln secret reveal <name> -o json` |
 
 ## Important Notes
 
+- **Resource names no longer carry the `-ml` infix, and that is a FRESH-INSTALL-ONLY change.** Both Grafana workloads, the identity, policy and datasource secret are now named `{release}-grafana…` instead of `{release}-grafana-ml…`, and the bundled database tier renamed the same way — including its **volume set**. Running `helm upgrade` over an install created before this change creates a **new, empty volume set** and leaves the old one behind holding your dashboards, users and alert rules (and still billing). There is no in-place upgrade path: back up the database, uninstall, reinstall, restore, then delete the orphaned volume set.
 - **Create the admin password, encryption key and database credentials secrets before installing.** The chart does not create them; without them the deployment waits forever on secrets that do not exist.
 - **The GVC in `global.gvc.name` must not already exist.** Helm adopts an existing one and deletes it on uninstall, taking every unrelated workload with it.
 - **Never rotate or delete the encryption key.** It decrypts every stored datasource credential, in every location. Rotating it makes them all unreadable and every alert rule that queries them fails silently.
@@ -389,6 +390,23 @@ never evaluated.
   ready in about 5 minutes; at `replicas: 2` expect roughly 7 minutes for every location to report
   ready and up to ~12 minutes for every individual replica. Nothing is wrong — there is simply more
   to schedule.
+
+- **UI instances start a few seconds apart on purpose.** Grafana runs its schema migrations under a
+  non-blocking lock with no retry, so instances arriving together make the losers exit and restart.
+  The alert evaluator migrates first and each location follows 15 s behind it, which removes those
+  restarts at the default one replica per location. Two replicas in the SAME location still start
+  together — at `replicas: 2` expect under one self-healing restart per extra replica. They clear
+  themselves; nothing needs doing.
+- **If the database primary does not land in `postgresML.primaryLocation`, the first install is
+  noisy.** That knob is a preference with a 90-second bound, not a guarantee — if the preferred
+  location is slow to start, another bootstraps instead and says so in its log. Grafana's schema
+  migrations then run cross-region at roughly **215 ms per statement instead of 5 ms**, so the
+  713-migration run takes minutes rather than seconds and instances restart while it finishes.
+  Measured: 11 m 41 s and 15 restarts in that case, against 4 m 19 s and 2 with the primary in
+  place. It converges on its own and needs no action, but if you want the fast path, check the
+  Patroni leader landed where you asked before judging the install.
+- **A first install takes 4-6 minutes**, most of it the stretched database electing a primary. Grafana waits for it rather than crash-looping, and logs what it is waiting for on every poll.
+- **The FIRST `helm upgrade` after an install re-applies every tier once**, even a no-op, and the database is briefly in recovery while it comes back — measured **4 m 43 s** to reconverge on a 3-location cluster. Later upgrades report `Unchanged` and cost nothing.
 
 ## Links
 

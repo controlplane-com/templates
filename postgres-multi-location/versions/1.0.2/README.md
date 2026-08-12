@@ -7,12 +7,12 @@ primary's location is lost. For a single-location cluster, use `postgres-highly-
 ## Architecture
 
 - **GVC** — multi-location, pinned to `global.gvc.locations`. **Created by this chart**, always.
-- **Patroni workload** (`{release}-postgres-ml`, stateful) — PostgreSQL 17 + Patroni, one or more members per location.
-- **HAProxy workload** (`{release}-postgres-ml-proxy`, standard) — one tier per location, every one routing to the single current primary. Optional (`proxy.enabled`).
-- **PgBouncer workload** (`{release}-postgres-ml-pgbouncer`, standard) — one tier per location, pooling into HAProxy. Optional (`pgbouncer.enabled`).
-- **Logical backup workload** (`{release}-postgres-ml-backup`, cron) — nightly `pg_dumpall` to object storage, in one location. Optional (`backup.mode: logical`).
+- **Patroni workload** (`{release}-postgres`, stateful) — PostgreSQL 17 + Patroni, one or more members per location.
+- **HAProxy workload** (`{release}-postgres-proxy`, standard) — one tier per location, every one routing to the single current primary. Optional (`proxy.enabled`).
+- **PgBouncer workload** (`{release}-postgres-pgbouncer`, standard) — one tier per location, pooling into HAProxy. Optional (`pgbouncer.enabled`).
+- **Logical backup workload** (`{release}-postgres-backup`, cron) — nightly `pg_dumpall` to object storage, in one location. Optional (`backup.mode: logical`).
 - **WAL-G sidecar** — continuous WAL archiving plus periodic base backups from whichever member is primary. Optional (`backup.mode: wal-g`).
-- **Volume set** (`{release}-postgres-ml-vs`) — `PGDATA`, `ext4`, snapshots with 7-day retention.
+- **Volume set** (`{release}-postgres-vs`) — `PGDATA`, `ext4`, snapshots with 7-day retention.
 - **etcd** (`etcd-multi-location` subchart) — the consensus store, one member per location.
 - **Identity, policy and secrets** — `reveal` on exactly the secrets this release uses, plus a bucket-scoped cloud binding when backups are on.
 
@@ -27,14 +27,14 @@ primary's location is lost. For a single-location cluster, use `postgres-highly-
    deployment wedges waiting on it and looks broken.
 
    ```bash
-   cpln secret create-dictionary --name my-postgres-ml-credentials \
+   cpln secret create-dictionary --name my-postgres-credentials \
      --entry username=postgres \
      --entry password="$(openssl rand -hex 24)" \
      --entry database=mydb
    ```
 
    Then set `postgres.credentialsSecretName` to that name. Reveal it later with
-   `cpln secret reveal my-postgres-ml-credentials`. Use a plain identifier for `database` and
+   `cpln secret reveal my-postgres-credentials`. Use a plain identifier for `database` and
    `username` — they are used unquoted when the database is created.
 
 3. **For backups only** — a bucket and, for AWS or GCP, a Control Plane
@@ -99,7 +99,7 @@ postgres:
   # `database`. If it does not exist at install time the deployment WEDGES
   # waiting on it and looks broken. See Prerequisites in the README for the
   # exact `cpln secret create-dictionary` command.
-  credentialsSecretName: my-postgres-ml-credentials
+  credentialsSecretName: my-postgres-credentials
 
 # Preferred location for the primary. It does three things:
 #   1. On a FRESH install it decides where the primary starts — members in other
@@ -215,23 +215,23 @@ backup:
   provider: aws # options: aws, gcp, minio
 
   aws:
-    bucket: my-postgres-ml-bucket
+    bucket: my-postgres-bucket
     region: us-east-1
     cloudAccountName: my-s3-cloud-account
-    policyName: my-postgres-ml-backup-policy # bucket-scoped IAM policy, see README
+    policyName: my-postgres-backup-policy # bucket-scoped IAM policy, see README
     prefix: postgres/backups # folder within the bucket
 
   gcp:
-    bucket: my-postgres-ml-bucket
+    bucket: my-postgres-bucket
     cloudAccountName: my-gcs-cloud-account
     prefix: postgres/backups # folder within the bucket
 
   minio: # a self-hosted MinIO workload, or any S3-compatible endpoint
     endpoint: http://my-minio-workload:9000 # e.g. http://WORKLOAD_NAME:9000 in the same GVC
-    bucket: my-postgres-ml-bucket
+    bucket: my-postgres-bucket
     # REQUIRED PREREQUISITE SECRET when provider is `minio` — a `dictionary`
     # secret holding `accessKey` and `secretKey`. See Storage setup in the README.
-    credentialsSecretName: my-postgres-ml-minio-credentials
+    credentialsSecretName: my-postgres-minio-credentials
     prefix: postgres/backups # folder within the bucket
 ```
 
@@ -319,7 +319,7 @@ No cloud account is needed — credentials are supplied as a secret.
    `minio` template these are its `admin.username` and `admin.password`:
 
    ```bash
-   cpln secret create-dictionary --name my-postgres-ml-minio-credentials \
+   cpln secret create-dictionary --name my-postgres-minio-credentials \
      --entry accessKey=MINIO_ACCESS_KEY \
      --entry secretKey=MINIO_SECRET_KEY
    ```
@@ -327,7 +327,7 @@ No cloud account is needed — credentials are supplied as a secret.
 ## Restoring a backup
 
 **Logical** — stream the dump back through the proxy, which writes to the current primary. Set
-`WORKLOAD_NAME` to `{release}-postgres-ml-proxy` and run from a client with bucket access:
+`WORKLOAD_NAME` to `{release}-postgres-proxy` and run from a client with bucket access:
 
 ```bash
 export PGPASSWORD="PASSWORD"
@@ -357,9 +357,9 @@ for MinIO.
 
 | What | Where |
 |---|---|
-| PostgreSQL, pooled (when `pgbouncer.enabled`) | `{release}-postgres-ml-pgbouncer.{global.gvc.name}.cpln.local:5432` |
-| PostgreSQL (recommended otherwise) | `{release}-postgres-ml-proxy.{global.gvc.name}.cpln.local:5432` — always the current primary, from any location |
-| PostgreSQL, direct to one member | `replica-{i}.{release}-postgres-ml.{location}.{global.gvc.name}.cpln.local:5432` |
+| PostgreSQL, pooled (when `pgbouncer.enabled`) | `{release}-postgres-pgbouncer.{global.gvc.name}.cpln.local:5432` |
+| PostgreSQL (recommended otherwise) | `{release}-postgres-proxy.{global.gvc.name}.cpln.local:5432` — always the current primary, from any location |
+| PostgreSQL, direct to one member | `replica-{i}.{release}-postgres.{location}.{global.gvc.name}.cpln.local:5432` |
 | Patroni REST API | port `8008` on the same per-member names (`/primary`, `/replica`, `/health`, `/liveness`) |
 | HAProxy health / stats | `:8404/healthz` and `:8405/stats` on the proxy |
 | Credentials | the `dictionary` secret named by `postgres.credentialsSecretName` — `cpln secret reveal <name>` |
@@ -368,17 +368,17 @@ Internal only — there is no public access in this version.
 
 ## Operating the cluster
 
-Member names are `{workload}-{location}-{index}`, e.g. `my-db-postgres-ml-aws-us-east-1-0`.
+Member names are `{workload}-{location}-{index}`, e.g. `my-db-postgres-aws-us-east-1-0`.
 `patronictl` reads the config the startup script writes at `/tmp/patroni_config.yml`:
 
 ```bash
 # Every member, its location, role and replication lag
-cpln workload exec {release}-postgres-ml --gvc {global.gvc.name} --container patroni-postgres \
+cpln workload exec {release}-postgres --gvc {global.gvc.name} --container patroni-postgres \
   -- patronictl -c /tmp/patroni_config.yml list
 
 # Move a live primary to another location (a planned, near-zero-downtime handover)
-cpln workload exec {release}-postgres-ml --gvc {global.gvc.name} --container patroni-postgres \
-  -- patronictl -c /tmp/patroni_config.yml switchover --candidate {release}-postgres-ml-{location}-0 --force
+cpln workload exec {release}-postgres --gvc {global.gvc.name} --container patroni-postgres \
+  -- patronictl -c /tmp/patroni_config.yml switchover --candidate {release}-postgres-{location}-0 --force
 ```
 
 Use `patronictl edit-config` the same way to change consensus-level settings on a live cluster.
@@ -394,6 +394,7 @@ this is never needed — losing one location is an automatic failover.
 
 ## Important Notes
 
+- **Resource names no longer carry the `-ml` infix, and that is a FRESH-INSTALL-ONLY change.** Every workload, secret, identity, policy and — critically — the **volume set** is now named `{release}-postgres…` instead of `{release}-postgres-ml…`. Running `helm upgrade` over an install created before this change creates a **new, empty volume set** and leaves the old one behind holding your data (and still billing). There is no in-place upgrade path: back up (`backup.mode: logical` or a `pg_dumpall`), uninstall, reinstall, restore, then delete the orphaned volume set.
 - **Create the credentials secret before installing.** `postgres.credentialsSecretName` names a secret the chart does not create; without it the deployment waits forever on a secret that does not exist.
 - **The GVC in `global.gvc.name` must not already exist.** Helm adopts an existing one and deletes it on uninstall, taking every unrelated workload with it.
 - **Set `primaryLocation` before the first install if you care where the primary is.** It places the primary on a fresh install, biases later failover elections, and — changed on a live cluster — moves the leader at the cost of a full restart. If the preferred location is unavailable at bootstrap, another location initialises the cluster after 90 s and logs a WARNING; move the primary afterwards with `patronictl switchover`.

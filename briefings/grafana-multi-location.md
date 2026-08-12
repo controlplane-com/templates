@@ -25,10 +25,10 @@
 | Resource | Purpose |
 |---|---|
 | `gvc` | **Always created**, gated only by `{{ if .Chart.IsRoot }}`. There is no `createGvc` knob — the GVC is what pins the locations. Both subcharts suppress theirs, so a release renders exactly one |
-| `workload` (standard) `{release}-grafana-ml` | UI/API tier, `replicas` per location, `execute_alerts=false`, public by default |
-| `workload` (standard) `{release}-grafana-ml-alerting` | The evaluator: 1 replica, `alerting.location` only, `execute_alerts=true`, **never public**. Suppressed entirely when `alerting.location: ""` |
+| `workload` (standard) `{release}-grafana` | UI/API tier, `replicas` per location, `execute_alerts=false`, public by default |
+| `workload` (standard) `{release}-grafana-alerting` | The evaluator: 1 replica, `alerting.location` only, `execute_alerts=true`, **never public**. Suppressed entirely when `alerting.location: ""` |
 | `identity` + `policy` | **One** identity shared by both workloads; `reveal` on exactly the secrets they mount. No cloud bindings — this chart touches no object storage |
-| `secret` `{release}-grafana-ml-datasources` | Datasource provisioning file, mounted by both. Only when `datasources.definitions` is set |
+| `secret` `{release}-grafana-datasources` | Datasource provisioning file, mounted by both. Only when `datasources.definitions` is set |
 | subchart `postgres-multi-location` (aliased `postgresML`) | The app database: HAProxy leader endpoint per location, one Patroni primary, async replicas |
 
 ## Key knobs
@@ -40,11 +40,33 @@
 | `replicas` | `1` | Grafana UI instances **per location**. No alerting-related restriction of any kind |
 | `database.maxOpenConn` | `10` | Per instance. `(replicas × locations + 1) × this` must stay ≤ 80; the `+1` is the evaluator. Enforced at render time |
 | `alerting.location` / `.resources.*` | `aws-us-east-1` / 500m–1000m, 512Mi–1Gi | The one location the evaluator runs in. `""` = no evaluator, alerting disabled |
-| `admin.passwordSecretName` / `.secretKeySecretName` / `.applyPassword` / `.user` | `my-grafana-ml-admin-password` / `my-grafana-ml-secret-key` / `true` / `admin` | **Required prerequisite opaque secrets** (`encoding: plain`). Both workloads carry the admin env |
+| `admin.passwordSecretName` / `.secretKeySecretName` / `.applyPassword` / `.user` | `my-grafana-admin-password` / `my-grafana-secret-key` / `true` / `admin` | **Required prerequisite opaque secrets** (`encoding: plain`). Both workloads carry the admin env |
 | `datasources.definitions` / `.credentialSecrets` | `[]` / `[]` | Datasources as code; `$KEY` interpolation from prerequisite dictionary secrets |
 | `smtp.*` | off | The evaluator is what actually sends |
 | `publicAccess.enabled` / `internalAccess.type` | `true` / `same-gvc` | Public applies to the UI tier only |
 | `postgresML.primaryLocation` | `aws-us-east-1` | Deviates from the subchart's `""` on purpose — Grafana has no read/write splitting |
+
+## The `-ml` infix was dropped, and the DB gate was raised (2026-08-12, edited into 1.0.0 in place)
+
+- Rendered resources are now `{release}-grafana`, `-alerting`, `-datasources`, `-identity`,
+  `-policy`, and the database tier renamed the same way (`{release}-postgres-proxy`, `-vs`, …). The
+  Helm helper namespace is still `grafana-ml.*` — internal, deliberately unchanged.
+- **BREAKING, fresh-install-only**, because the subchart's **volume set** renamed too: a `helm upgrade`
+  over an install created before this change binds a NEW, EMPTY volume set and orphans the old one
+  holding every dashboard, user and alert rule. Back up, uninstall, reinstall, restore.
+- **The cross-chart invariant is the thing to not break.** `grafana-ml.postgres.host` duplicates the
+  subchart's derived proxy name (`{release}-postgres-proxy`) because a parent cannot call a
+  subchart's helper. Both helpers carry a comment saying so. Change one side only and the chart still
+  renders and installs — it just never reaches a database.
+- **`grafana-ml.dbGate` 180 s → 300 s, and `livenessProbe.initialDelaySeconds` 240 → 360 on BOTH
+  workloads. These are COUPLED.** Cold installs still showed containers exiting 1 because the gate
+  gave up while the database tier was legitimately still coming up. Raise the gate without raising
+  liveness and the container restart-loops instead of waiting. The gate is still *bounded* and then
+  CONTINUES regardless, so a genuine misconfiguration surfaces as Grafana's own error, not a hang.
+- **The readiness probe was deliberately NOT changed** (10 s + 20 × 10 s = 210 s, shorter than the
+  gate). It is the fast unhealthy signal: an instance still waiting on the database must read
+  not-ready rather than look fine. Only liveness needs to outlast the gate.
+- `postgresML` stays pinned at **1.0.2**, which was edited in place with the same rename.
 
 ## Troubleshooting traps
 
@@ -61,7 +83,7 @@
   Dashboards look perfectly healthy the whole time.
 - **Silences do not propagate.** With no gossip, a silence created against the UI tier is not
   guaranteed to reach the evaluator. Create them against
-  `{release}-grafana-ml-alerting.{gvc}.cpln.local:3000` — the evaluator is a named single-replica
+  `{release}-grafana-alerting.{gvc}.cpln.local:3000` — the evaluator is a named single-replica
   workload, so that instruction is exact at any value of `replicas`.
 - **Do not promise rolling upgrades.** Any `helm upgrade` restarts the bundled database in every
   location at once (**~117 s** of failed writes, measured on the dependency) because the API does not
@@ -124,3 +146,30 @@ Both **proven and shipping**; neither was a removal candidate under the test-eve
 
 ### The one real limitation
 **Authenticated SMTP needs a relay offering STARTTLS/TLS.** Go's `net/smtp.PlainAuth` refuses to send credentials over cleartext, so against a plain relay every notification is lost with `failed to send email: unencrypted connection` — and the only signal is a log line in the alerting workload, which is deliberately not publicly reachable. Hosted relays (SES, SendGrid, Mailgun, M365, Gmail) are unaffected; a plain in-GVC relay is not. The chart exposes neither `skipVerify` nor `startTLSPolicy`, so the remedy is to leave `smtp.user` empty for such relays. Documented in values.yaml and the README rather than fixed with a knob.
+
+## Round 5 — rename + gate verification (2026-08-12)
+- **The 300 s gate was necessary, and 180 s was genuinely too short.** Two of three UI instances held the gate **190-198 s on a perfectly healthy install** — both would have timed out under the old bound. ~100 s of headroom remains.
+- **The gate released ~126 ms too EARLY, not too late.** `/healthz` returns 200 the moment Patroni answers `/primary`, but Postgres then reloads bootstrap parameters and resets connections opened in that window, so two instances still exited 1 on `connection reset by peer`. Fixed by requiring **3 consecutive** healthy polls (~6 s) before proceeding.
+- Grafana's own migration-lock race (`Failed to lock database`, exit 1, self-heals) is upstream and remains — 5 of the 7 restarts. Count it separately from database-connection failures or the gate looks broken when it is not.
+- `livenessProbe.initialDelaySeconds: 360` confirmed in the **stored** spec; every exit was `exitCode: 1`, no `137`, so nothing was killed by liveness during the longer wait.
+- **Drift after the rename: clean.** Upgrade #1 labelled 9 of 17 `Updated` but **0 of 17 had any spec difference** (only `version`, `cpln/release`, `lastModified` and status); upgrade #2 was all `Unchanged` with 34/34 HTTP 200 throughout.
+- First install measured 5 m 30 s here vs 4 m 44 s in round 2 — run-to-run variance in the database tier (3 m 23 s vs 2 m 33 s), not a regression. Every Grafana instance released its gate within 9 s of the last Patroni member in both runs.
+
+## Rounds 6-7 — startup noise, and where it actually comes from (2026-08-12)
+Cold-install exits went **7 → 2** once the gate required 3 consecutive healthy polls (killing the `connection reset by peer` class outright) and the UI tier staggered behind the single-replica evaluator.
+
+Two design errors found by testing, both mine:
+- The stagger's first offset was **0**, which collided with the evaluator — `alerting.location` defaults to the first location in the list, so both released on the same signal at the same millisecond and raced. Offsets now start at 15 s. **Do not "optimise" the first one back to zero.**
+- The stagger's premise is "the migration run fits inside 15 s". That holds **only when the Patroni primary is co-located with the evaluator.**
+
+**The dominant variable is where the primary lands, not anything in this chart.** `postgresML.primaryLocation` is a preference with a 90 s bound (necessarily — an unbounded wait could deadlock the install). When the fallback fires, migrations run cross-region at ~215 ms/statement instead of ~4.7 ms, the 713-migration run stretches from ~5 s to minutes, and every instance restarts while it finishes:
+
+| | Primary as configured | Primary elsewhere |
+|---|---|---|
+| Migrations | **713 in 5.22 s** | minutes |
+| Cold install | 4 m 19 s | 11 m 41 s |
+| Exits | 2 | 15 |
+
+Both converge and self-heal. Before treating a noisy install as a defect, **check where the Patroni leader actually bootstrapped** — the fallback logs `no leader in <location> after 90s — bootstrapping here instead`.
+
+Remaining exits are Grafana's own migration lock (`pg_try_advisory_lock`, non-blocking, one attempt, and `locking_attempt_timeout_sec` is never read by the Postgres dialect). There is no configuration that removes them; only not arriving together helps.

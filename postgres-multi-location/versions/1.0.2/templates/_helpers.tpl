@@ -4,7 +4,7 @@
 Patroni Postgres Workload Name
 */}}
 {{- define "pg-ml.name" -}}
-{{- printf "%s-postgres-ml" .Release.Name }}
+{{- printf "%s-postgres" .Release.Name }}
 {{- end }}
 
 {{/*
@@ -22,65 +22,71 @@ wiring — the cluster renders and installs, then never elects a leader.
 
 {{/*
 HAProxy Leader-Routing Workload Name
+
+CROSS-CHART INVARIANT: `grafana-multi-location` uses this chart as a subchart and
+builds its `GF_DATABASE_HOST` from the derived name ({release}-postgres-proxy) in
+its own `grafana-ml.postgres.host` helper, because a parent cannot call a
+subchart's helper. Rename this and that chart still renders and installs — it
+just never reaches a database. Change both sides together.
 */}}
 {{- define "pg-ml.proxy.name" -}}
-{{- printf "%s-postgres-ml-proxy" .Release.Name }}
+{{- printf "%s-postgres-proxy" .Release.Name }}
 {{- end }}
 
 {{/*
 PgBouncer Workload Name
 */}}
 {{- define "pg-ml.pgbouncer.name" -}}
-{{- printf "%s-postgres-ml-pgbouncer" .Release.Name }}
+{{- printf "%s-postgres-pgbouncer" .Release.Name }}
 {{- end }}
 
 {{/*
 Logical Backup Cron Workload Name
 */}}
 {{- define "pg-ml.backup.name" -}}
-{{- printf "%s-postgres-ml-backup" .Release.Name }}
+{{- printf "%s-postgres-backup" .Release.Name }}
 {{- end }}
 
 {{/*
 WAL-G Sidecar Script Secret Name
 */}}
 {{- define "pg-ml.secretWALG.name" -}}
-{{- printf "%s-postgres-ml-wal-g" .Release.Name }}
+{{- printf "%s-postgres-wal-g" .Release.Name }}
 {{- end }}
 
 {{/*
 Patroni Startup Script Secret Name
 */}}
 {{- define "pg-ml.secretStartup.name" -}}
-{{- printf "%s-postgres-ml-startup" .Release.Name }}
+{{- printf "%s-postgres-startup" .Release.Name }}
 {{- end }}
 
 {{/*
 HAProxy Startup Script Secret Name
 */}}
 {{- define "pg-ml.secretProxyStartup.name" -}}
-{{- printf "%s-postgres-ml-proxy-startup" .Release.Name }}
+{{- printf "%s-postgres-proxy-startup" .Release.Name }}
 {{- end }}
 
 {{/*
 Identity Name
 */}}
 {{- define "pg-ml.identity.name" -}}
-{{- printf "%s-postgres-ml-identity" .Release.Name }}
+{{- printf "%s-postgres-identity" .Release.Name }}
 {{- end }}
 
 {{/*
 Policy Name
 */}}
 {{- define "pg-ml.policy.name" -}}
-{{- printf "%s-postgres-ml-policy" .Release.Name }}
+{{- printf "%s-postgres-policy" .Release.Name }}
 {{- end }}
 
 {{/*
 Volume Set Name
 */}}
 {{- define "pg-ml.volume.name" -}}
-{{- printf "%s-postgres-ml-vs" .Release.Name }}
+{{- printf "%s-postgres-vs" .Release.Name }}
 {{- end }}
 
 

@@ -31,6 +31,7 @@ spec:
           export GF_SERVER_ROOT_URL="http://{{ include "grafana-ml.name" . }}.{{ .Values.global.gvc.name }}.cpln.local:3000/"
           {{- end }}
           {{- include "grafana-ml.dbGate" . | nindent 10 }}
+            {{- include "grafana-ml.migrationStagger" . | nindent 10 }}
           exec /run.sh
       inheritEnv: false
       minCpu: {{ .Values.resources.minCpu | quote }}
@@ -58,8 +59,11 @@ spec:
         # Declared because the API backfills it; omitting it means every install
         # drifts from its own manifest the moment it is created.
         initialDelaySeconds: 10
-        # 20 × 10 s = 200 s, covering the 180 s database gate plus boot. 20 is the
-        # platform MAXIMUM for failureThreshold — raise periodSeconds, never this.
+        # 20 × 10 s = 200 s. Deliberately SHORTER than the 300 s database gate:
+        # readiness is the fast unhealthy signal, so a boot still waiting on the
+        # database shows as not-ready instead of looking fine. Liveness is what
+        # must outlast the gate. 20 is the platform MAXIMUM for failureThreshold
+        # — raise periodSeconds, never this.
         periodSeconds: 10
         failureThreshold: 20
         successThreshold: 1
@@ -73,7 +77,9 @@ spec:
           port: 3000
           scheme: HTTP
         # Declared because the API backfills it (see the readiness probe above).
-        initialDelaySeconds: 240
+        # 360 s > the 300 s database gate: liveness must not start killing while
+        # the gate is still legitimately waiting. Coupled to grafana-ml.dbGate.
+        initialDelaySeconds: 360
         periodSeconds: 30
         failureThreshold: 5
         successThreshold: 1

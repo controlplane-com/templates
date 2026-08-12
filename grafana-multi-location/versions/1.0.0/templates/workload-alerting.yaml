@@ -85,7 +85,10 @@ spec:
           scheme: HTTP
         # Declared because the API backfills it.
         initialDelaySeconds: 10
-        # 20 is the platform MAXIMUM for failureThreshold — raise periodSeconds.
+        # 20 × 10 s = 200 s, deliberately SHORTER than the 300 s database gate so
+        # a boot still waiting on the database reads as not-ready (see the UI
+        # tier). 20 is the platform MAXIMUM for failureThreshold — raise
+        # periodSeconds.
         periodSeconds: 10
         failureThreshold: 20
         successThreshold: 1
@@ -95,9 +98,10 @@ spec:
           path: /api/health
           port: 3000
           scheme: HTTP
-        # Declared because the API backfills it. Long enough to cover the 180 s
-        # database gate plus migrations waiting behind another instance's lock.
-        initialDelaySeconds: 240
+        # Declared because the API backfills it. 360 s > the 300 s database gate,
+        # with headroom for migrations waiting behind another instance's lock.
+        # Coupled to grafana-ml.dbGate — raise one and you must raise the other.
+        initialDelaySeconds: 360
         periodSeconds: 30
         failureThreshold: 5
         successThreshold: 1
@@ -169,7 +173,7 @@ spec:
       outboundBlockedCIDR: []
     internal:
       # Honoured deliberately: in-GVC reachability at
-      # {release}-grafana-ml-alerting.{gvc}.cpln.local:3000 is what makes the
+      # {release}-grafana-alerting.{gvc}.cpln.local:3000 is what makes the
       # silence workaround an exact instruction (see the README).
       inboundAllowType: {{ .Values.internalAccess.type }}
       {{- if and (eq .Values.internalAccess.type "workload-list") .Values.internalAccess.workloads }}

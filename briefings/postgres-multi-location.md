@@ -24,16 +24,16 @@
 | Resource | Purpose |
 |---|---|
 | `gvc` | **Always created** by this chart — it is what pins the locations. Rendered under `{{ if .Chart.IsRoot }}`; the etcd subchart gates its own GVC the same way, so a release has exactly one |
-| `workload` (stateful) `{release}-postgres-ml` | Patroni + PostgreSQL 17; `replicas` per location, `replicaDirect: true`. Gains a `wal-g-backup` sidecar in wal-g mode |
-| `workload` (standard) `{release}-postgres-ml-proxy` | HAProxy in **every** location, all routing to the one current primary via Patroni's `/primary` check |
-| `workload` (standard) `{release}-postgres-ml-pgbouncer` | Optional pooler, one tier per location, pooling into that location's HAProxy |
-| `workload` (cron) `{release}-postgres-ml-backup` | Optional nightly `pg_dumpall`; suspended in every location except `backup.location` |
-| `volumeset` `{release}-postgres-ml-vs` | `PGDATA`, `ext4`, 10 GiB, final snapshot + 7-day retention |
+| `workload` (stateful) `{release}-postgres` | Patroni + PostgreSQL 17; `replicas` per location, `replicaDirect: true`. Gains a `wal-g-backup` sidecar in wal-g mode |
+| `workload` (standard) `{release}-postgres-proxy` | HAProxy in **every** location, all routing to the one current primary via Patroni's `/primary` check |
+| `workload` (standard) `{release}-postgres-pgbouncer` | Optional pooler, one tier per location, pooling into that location's HAProxy |
+| `workload` (cron) `{release}-postgres-backup` | Optional nightly `pg_dumpall`; suspended in every location except `backup.location` |
+| `volumeset` `{release}-postgres-vs` | `PGDATA`, `ext4`, 10 GiB, final snapshot + 7-day retention |
 | `identity` + `policy` | `reveal` on exactly the secrets in play; `aws`/`gcp` bucket-scoped binding only when backups are on |
 | secrets | Patroni `start.sh`, HAProxy `start.sh`, wal-g `backup.sh` (all opaque/plain). **No credential secret is created by the chart** |
 | subchart `etcd-multi-location` (aliased `etcd`) | The consensus store — one member per location |
 
-- Applications connect to `{release}-postgres-ml-proxy.{global.gvc.name}.cpln.local:5432` (or the
+- Applications connect to `{release}-postgres-proxy.{global.gvc.name}.cpln.local:5432` (or the
   pgbouncer workload when enabled) and never need to know where the primary is. Internal only.
 - GVC name and location list live under **`global.gvc`** so Helm propagates them to the etcd
   subchart — the two lists are never edited separately.
@@ -44,7 +44,7 @@
 |---|---|---|
 | `global.gvc.name` / `.locations[]` | `postgres-multi-location-gvc`, 3 AWS locations × 1 | **≥2 required**; `replicas` = Patroni members per location. The GVC **must not already exist** |
 | `image` | `controlplanecorporation/patroni-postgres:0.7` | PostgreSQL 17 / Patroni 4.0.4 |
-| `postgres.credentialsSecretName` | `my-postgres-ml-credentials` | **Required prerequisite** `dictionary` secret with `username`, `password`, `database`. Nothing else carries the credentials |
+| `postgres.credentialsSecretName` | `my-postgres-credentials` | **Required prerequisite** `dictionary` secret with `username`, `password`, `database`. Nothing else carries the credentials |
 | `primaryLocation` | `""` | Preferred location for the primary. Since 1.0.2 it places the primary on a **fresh install** (bootstrap head start) as well as biasing failover (`failover_priority`); empty = neither renders |
 | `resources.minCpu/minMemory/maxCpu/maxMemory` | `500m` / `1Gi` / `1` / `2Gi` | Per Patroni member; ratio 2:1 |
 | `volumeset.capacity` / `.autoscaling.*` | `10` GiB / off | Data volume |
@@ -54,6 +54,24 @@
 | `backup.enabled` / `.mode` / `.location` | `false` / `logical` / `aws-us-east-1` | `logical` = nightly cron, `wal-g` = sidecar. `location` is **logical-only** |
 | `backup.provider` + `.aws` / `.gcp` / `.minio` | `aws` | `minio.credentialsSecretName` is a second required prerequisite secret (`accessKey`, `secretKey`) |
 | `etcd.*` | see the chart's own README | Subchart; it decides its own GVC/replica guards from `.Chart.IsRoot`, so the parent passes nothing |
+
+## The `-ml` infix was dropped from every rendered name (2026-08-12, edited into 1.0.2 in place)
+
+- Rendered resources are now `{release}-postgres`, `-proxy`, `-pgbouncer`, `-backup`, `-vs`,
+  `-identity`, `-policy`, `-startup`, `-proxy-startup`, `-wal-g`. The maintainer found the old names
+  hard to scan in the UI, and "ml" read as *machine learning*. `{release}-etcd` (the subchart) was
+  already correct and did not change.
+- **The Helm helper namespace is still `pg-ml.*`** — internal, never surfaced, deliberately left alone.
+- **BREAKING, fresh-install-only.** The **volume set** renamed with everything else, so a `helm upgrade`
+  over an install created before this change binds a NEW, EMPTY volume set and orphans the old one
+  (still holding the data, still billing). Back up, uninstall, reinstall, restore, delete the orphan.
+  There is no in-place path and the README says so.
+- **Cross-chart:** `grafana-multi-location` builds `GF_DATABASE_HOST` from the derived proxy name
+  (`{release}-postgres-proxy`) because a parent cannot call a subchart's helper. Both helpers carry
+  the invariant in a comment. Break one side and Grafana renders, installs, and never reaches a
+  database — there is no render-time error.
+- Done as an **in-place edit of 1.0.2**, not a new version, by maintainer ruling: there are no users
+  yet, so republishing the same version number was acceptable and simpler.
 
 ## Troubleshooting / considerations
 

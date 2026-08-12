@@ -4,7 +4,7 @@
 Grafana UI/API Workload Name — present in EVERY location.
 */}}
 {{- define "grafana-ml.name" -}}
-{{- printf "%s-grafana-ml" .Release.Name }}
+{{- printf "%s-grafana" .Release.Name }}
 {{- end }}
 
 {{/*
@@ -18,28 +18,28 @@ over. Keep that in mind before adding replicas here: two evaluators means every
 notification is sent twice.
 */}}
 {{- define "grafana-ml.alerting.name" -}}
-{{- printf "%s-grafana-ml-alerting" .Release.Name }}
+{{- printf "%s-grafana-alerting" .Release.Name }}
 {{- end }}
 
 {{/*
 Datasource Provisioning Secret Name
 */}}
 {{- define "grafana-ml.secretDatasources.name" -}}
-{{- printf "%s-grafana-ml-datasources" .Release.Name }}
+{{- printf "%s-grafana-datasources" .Release.Name }}
 {{- end }}
 
 {{/*
 Identity Name — SHARED by both workloads; they mount the same secrets.
 */}}
 {{- define "grafana-ml.identity.name" -}}
-{{- printf "%s-grafana-ml-identity" .Release.Name }}
+{{- printf "%s-grafana-identity" .Release.Name }}
 {{- end }}
 
 {{/*
 Policy Name
 */}}
 {{- define "grafana-ml.policy.name" -}}
-{{- printf "%s-grafana-ml-policy" .Release.Name }}
+{{- printf "%s-grafana-policy" .Release.Name }}
 {{- end }}
 
 
@@ -48,13 +48,13 @@ Policy Name
 {{/*
 CROSS-CHART INVARIANT: the HAProxy leader-routing endpoint of the
 postgres-multi-location subchart, which must stay identical to that chart's own
-`pg-ml.proxy.name` helper ({release}-postgres-ml-proxy). Its helper is
+`pg-ml.proxy.name` helper ({release}-postgres-proxy). Its helper is
 deterministic on .Release.Name, so the parent duplicates the derived name
 (metabase/tyk/grafana precedent). Break either side and the chart still renders
 and installs — it just never reaches a database.
 */}}
 {{- define "grafana-ml.postgres.host" -}}
-{{- printf "%s-postgres-ml-proxy.%s.cpln.local" .Release.Name .Values.global.gvc.name }}
+{{- printf "%s-postgres-proxy.%s.cpln.local" .Release.Name .Values.global.gvc.name }}
 {{- end }}
 
 {{/*
@@ -169,11 +169,64 @@ in: `executeAlerts`. Call as:
 Database readiness gate, shared by both boot wrappers. A cold install brings the
 stretched Patroni cluster up in ~169 s; without a gate Grafana exits and
 restart-backs-off through that whole window, which reads like a broken install.
-Bounded at 180 s and then CONTINUES regardless, so Grafana's own error is what
+Bounded at 300 s and then CONTINUES regardless, so Grafana's own error is what
 the user sees rather than a silent hang. Uses curl against HAProxy's /healthz
 (curl verified present in grafana/grafana:13.1.3) — see the gate body for why a
 TCP connect to :5432 is not an acceptable readiness signal.
+
+COUPLED to livenessProbe.initialDelaySeconds (360) on BOTH Grafana workloads: the
+gate must be able to run to its full bound before liveness starts killing, or a
+slow database tier turns a patient boot into a restart loop. Raise one and you
+must raise the other.
 */}}
+{{/*
+Migration-lock stagger, UI tier only. Grafana runs its 713 schema migrations
+under `pg_try_advisory_lock`, which is NON-BLOCKING, attempted ONCE, with no
+retry — `locking_attempt_timeout_sec` is never read by the Postgres dialect. So
+when several instances reach an empty database together, the losers exit 1 and
+restart. Measured: 5 of 7 restarts on a cold install.
+
+Nothing in Grafana can be configured around it, so the fix is to stop them
+arriving together. The evaluator (single replica, no stagger) reaches the
+database first and completes the migrations — measured at 5 s — and each UI
+location then starts a further step behind it, finding the schema already
+present. Ordered by the location list so the offset is deterministic, not a
+race of its own.
+
+Offsets start at 15 s, NOT 0. A first attempt gave the first location 0 and it
+collided with the evaluator, which defaults to that same location: both released
+on the same signal at the identical millisecond and raced for the lock, which is
+exactly what this exists to prevent. The evaluator must have a clear head start.
+
+Bounded and cheap: {{ len .Values.global.gvc.locations }} locations means at
+most {{ mul (len .Values.global.gvc.locations) 15 }}s added to the slowest
+location's boot. It cannot deadlock — a location that is late simply
+migrates itself.
+
+This does NOT help two replicas in the SAME location, which still start
+together; at replicas > 1 expect one loser restart per extra replica, which
+self-heals.
+*/}}
+{{- define "grafana-ml.migrationStagger" -}}
+{{- $offset := 0 -}}
+{{- $i := 0 -}}
+{{- range .Values.global.gvc.locations -}}
+{{- $i = add $i 1 -}}
+{{- end -}}
+_stagger=0
+case "${CPLN_LOCATION##*/}" in
+{{- $n := 0 }}
+{{- range .Values.global.gvc.locations }}
+  {{ .name }}) _stagger={{ mul (add $n 1) 15 }} ;;
+{{- $n = add $n 1 }}
+{{- end }}
+esac
+if [ "${_stagger}" -gt 0 ]; then
+  echo "staggering start by ${_stagger}s so one instance runs the schema migrations (see chart notes)"
+  sleep "${_stagger}"
+fi
+{{- end }}
+
 {{- define "grafana-ml.dbGate" -}}
 _db_host="{{ include "grafana-ml.postgres.host" . }}"
 # Gate on HAProxy's /healthz, NOT on a TCP connect to :5432. HAProxy accepts a
@@ -184,13 +237,26 @@ _db_host="{{ include "grafana-ml.postgres.host" . }}"
 # health-checked against Patroni's /primary — so 200 means a real primary is
 # serving, which is the condition Grafana actually needs.
 _db_health="http://${_db_host}:8404/healthz"
-echo "waiting up to 180s for the app database to serve a primary (${_db_host})"
-for _i in $(seq 1 60); do
+# Require CONSECUTIVE successes, not the first one. /healthz flips to 200 the
+# instant Patroni answers /primary, but Postgres then reloads its bootstrap
+# parameters and RESETS connections opened in that window — measured: Grafana
+# connected 126 ms after the gate released and died on "connection reset by
+# peer". Confirming the endpoint stays healthy across three polls costs ~6 s at
+# boot and removes that race.
+_db_ok=0
+echo "waiting up to 300s for the app database to serve a primary (${_db_host})"
+for _i in $(seq 1 100); do
   if curl -fsS --max-time 3 "${_db_health}" >/dev/null 2>&1; then
-    echo "app database is serving a primary (attempt ${_i})"
-    break
+    _db_ok=$((_db_ok + 1))
+    if [ "${_db_ok}" -ge 3 ]; then
+      echo "app database is serving a primary and stable (attempt ${_i})"
+      break
+    fi
+    echo "app database serving; confirming stability (${_db_ok}/3)"
+  else
+    _db_ok=0
+    echo "app database not serving a primary yet (attempt ${_i}/100)"
   fi
-  echo "app database not serving a primary yet (attempt ${_i}/60)"
   sleep 3
 done
 {{- end }}

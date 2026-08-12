@@ -1,0 +1,112 @@
+kind: workload
+name: {{ include "redis.sentinel.name" . }}
+description: Sentinel
+tags:
+  cpln/publishNotReadyAddresses: "true"
+  {{- include "redis.tags" . | nindent 2 }}
+gvc: {{ .Values.gvc.name }}
+spec:
+  type: stateful
+  containers:
+    - name: sentinel
+      command: /bin/sh
+      args:
+        - '-c'
+        - |-
+          mkdir -p /etc/sentinel
+
+          # Only write sentinel.conf if sentinel hasn't already taken ownership.
+          # The marker is `sentinel myid <hex>`, which sentinel writes via CONFIG REWRITE
+          # within milliseconds of first startup. Preserving sentinel-managed state across
+          # restarts ensures the post-failover master survives a sentinel pod restart.
+          bootstrap_sentinel_conf() {
+            if [ -s /etc/sentinel/sentinel.conf ] && grep -q "^sentinel myid " /etc/sentinel/sentinel.conf; then
+              echo "sentinel.conf already bootstrapped; preserving sentinel-managed state"
+              return 0
+            fi
+            echo "Bootstrapping sentinel.conf from static config"
+            cp /config/sentinel.conf /etc/sentinel/sentinel.conf
+
+            POD_ID=$(echo "$HOSTNAME" | rev | cut -d'-' -f1 | rev)
+            LOCATION=${CPLN_LOCATION##*/}
+            SENTINEL_WORKLOAD=${CPLN_WORKLOAD##*/}
+
+            echo "\nport 26379" >> /etc/sentinel/sentinel.conf
+            echo "\nsentinel announce-ip replica-${POD_ID}.${SENTINEL_WORKLOAD}.${LOCATION}.${CPLN_GVC}.cpln.local" >> /etc/sentinel/sentinel.conf
+            echo "\nsentinel announce-port 26379" >> /etc/sentinel/sentinel.conf
+            # All sentinels agree on the same initial master: replica-0 of the primary (first) location.
+            # After any failover, sentinel persists the elected master via CONFIG REWRITE so this
+            # bootstrap line only matters on a completely fresh (never-started) sentinel.
+            echo "sentinel monitor mymaster replica-0.{{ include "redis.name" . }}.{{ (index .Values.gvc.locations 0).name }}.${CPLN_GVC}.cpln.local 6379 {{ add (div (len .Values.gvc.locations) 2) 1 }}" >> /etc/sentinel/sentinel.conf
+          }
+
+          bootstrap_sentinel_conf
+          exec redis-sentinel /etc/sentinel/sentinel.conf {{ .Values.sentinel.extraArgs | default "" }}
+      cpu: {{ .Values.sentinel.resources.cpu | quote }}
+      memory: {{ .Values.sentinel.resources.memory | quote }}
+      image: {{ .Values.sentinel.image | default "redis:7.4" }}
+      inheritEnv: false
+      env: []
+      ports:
+        - number: 26379
+          protocol: tcp
+      volumes:
+        - path: /config/sentinel.conf
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "redis.sentinelSecretConfig.name" . }}
+        - path: /etc/sentinel
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "redis.sentinelVolume.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    timeoutSeconds: 5
+  rolloutOptions:
+    scalingPolicy: Parallel
+  firewallConfig:
+    {{- if or .Values.firewall.externalOutboundAllowCIDR .Values.firewall.externalInboundAllowCIDR (and (hasKey .Values.sentinel "publicAccess") .Values.sentinel.publicAccess.enabled) }}
+    external:
+      {{- if .Values.firewall.externalOutboundAllowCIDR }}
+      outboundAllowCIDR:
+        {{- range (splitList "," .Values.firewall.externalOutboundAllowCIDR) }}
+        - {{ . | trim }}
+        {{- end }}
+      {{- end }}
+      {{- if or .Values.firewall.externalInboundAllowCIDR (and (hasKey .Values.sentinel "publicAccess") .Values.sentinel.publicAccess.enabled) }}
+      inboundAllowCIDR:
+        {{- if .Values.firewall.externalInboundAllowCIDR }}
+        {{- range (splitList "," .Values.firewall.externalInboundAllowCIDR) }}
+        - {{ . | trim }}
+        {{- end }}
+        {{- else }}
+        - 0.0.0.0/0
+        {{- end }}
+      {{- end }}
+    {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.firewall.internalAllowType }}
+      {{- if .Values.firewall.workloads }}
+      inboundAllowWorkload: {{ .Values.firewall.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "redis.sentinelIdentity.name" . }}
+  loadBalancer:
+    replicaDirect: true
+  localOptions:
+    {{- range $location := .Values.gvc.locations }}
+    - location: //location/{{ $location.name }}
+      autoscaling:
+        maxConcurrency: 0
+        metric: disabled
+        minScale: 1
+        maxScale: 1
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      timeoutSeconds: 5
+    {{- end }}

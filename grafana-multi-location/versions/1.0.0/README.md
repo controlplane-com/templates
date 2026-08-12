@@ -8,10 +8,10 @@ single-location Grafana, use the `grafana` template instead.
 ## Architecture
 
 - **GVC** — multi-location, pinned to `global.gvc.locations`. **Created by this chart**, always.
-- **Grafana UI workload** (`{release}-grafana-ml`, standard) — `replicas` instances per location, HTTP :3000, public by default. Alert execution is off here.
-- **Alert evaluator workload** (`{release}-grafana-ml-alerting`, standard) — the same image, **exactly one replica**, in `alerting.location` only, never public. This is the only instance that evaluates rules. Optional (`alerting.location: ""`).
+- **Grafana UI workload** (`{release}-grafana`, standard) — `replicas` instances per location, HTTP :3000, public by default. Alert execution is off here.
+- **Alert evaluator workload** (`{release}-grafana-alerting`, standard) — the same image, **exactly one replica**, in `alerting.location` only, never public. This is the only instance that evaluates rules. Optional (`alerting.location: ""`).
 - **Identity and policy** — one identity shared by both workloads, with `reveal` on exactly the secrets they mount.
-- **Datasource secret** (`{release}-grafana-ml-datasources`) — the provisioning file, mounted by both workloads. Optional (`datasources.definitions`).
+- **Datasource secret** (`{release}-grafana-datasources`) — the provisioning file, mounted by both workloads. Optional (`datasources.definitions`).
 - **App database** (`postgres-multi-location` subchart) — one Patroni cluster stretched across the same locations, with its own HAProxy tier per location and an etcd consensus store.
 
 Grafana is stateless here: users, dashboards, datasources, alert rules, alert state and sessions all
@@ -342,7 +342,7 @@ Two consequences worth knowing before you rely on it:
 - **Silences do not propagate between instances.** A silence created against the UI tier is not
   guaranteed to be honoured by the evaluator. Create silences against the evaluator directly, from a
   workload in the same GVC:
-  `curl -u admin:PASSWORD http://{release}-grafana-ml-alerting.{global.gvc.name}.cpln.local:3000/api/alertmanager/grafana/api/v2/silences`
+  `curl -u admin:PASSWORD http://{release}-grafana-alerting.{global.gvc.name}.cpln.local:3000/api/alertmanager/grafana/api/v2/silences`
   lists them; creating one is a POST with a body. The API requires credentials — unauthenticated returns 401.
   **That address only answers from inside `alerting.location`** — the name resolves to the GVC VIP
   everywhere, but there is no local upstream in the other locations, so they get a 503. Run the
@@ -355,14 +355,15 @@ never evaluated.
 
 | What | Where |
 |---|---|
-| Grafana UI / API (public) | `status.canonicalEndpoint` of `{release}-grafana-ml` — `cpln workload get {release}-grafana-ml --gvc {global.gvc.name} -o yaml` |
-| Grafana UI / API (internal) | `{release}-grafana-ml.{global.gvc.name}.cpln.local:3000` |
-| Alert evaluator (internal only) | `{release}-grafana-ml-alerting.{global.gvc.name}.cpln.local:3000` |
-| App database | `{release}-postgres-ml-proxy.{global.gvc.name}.cpln.local:5432` — always the current primary |
+| Grafana UI / API (public) | `status.canonicalEndpoint` of `{release}-grafana` — `cpln workload get {release}-grafana --gvc {global.gvc.name} -o yaml` |
+| Grafana UI / API (internal) | `{release}-grafana.{global.gvc.name}.cpln.local:3000` |
+| Alert evaluator (internal only) | `{release}-grafana-alerting.{global.gvc.name}.cpln.local:3000` |
+| App database | `{release}-postgres-proxy.{global.gvc.name}.cpln.local:5432` — always the current primary |
 | Admin login | `admin.user`, and the password in the secret named by `admin.passwordSecretName` — `cpln secret reveal <name> -o json` |
 
 ## Important Notes
 
+- **Resource names no longer carry the `-ml` infix, and that is a FRESH-INSTALL-ONLY change.** Both Grafana workloads, the identity, policy and datasource secret are now named `{release}-grafana…` instead of `{release}-grafana-ml…`, and the bundled database tier renamed the same way — including its **volume set**. Running `helm upgrade` over an install created before this change creates a **new, empty volume set** and leaves the old one behind holding your dashboards, users and alert rules (and still billing). There is no in-place upgrade path: back up the database, uninstall, reinstall, restore, then delete the orphaned volume set.
 - **Create the admin password, encryption key and database credentials secrets before installing.** The chart does not create them; without them the deployment waits forever on secrets that do not exist.
 - **The GVC in `global.gvc.name` must not already exist.** Helm adopts an existing one and deletes it on uninstall, taking every unrelated workload with it.
 - **Never rotate or delete the encryption key.** It decrypts every stored datasource credential, in every location. Rotating it makes them all unreadable and every alert rule that queries them fails silently.

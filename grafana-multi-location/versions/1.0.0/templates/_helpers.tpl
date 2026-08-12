@@ -4,7 +4,7 @@
 Grafana UI/API Workload Name — present in EVERY location.
 */}}
 {{- define "grafana-ml.name" -}}
-{{- printf "%s-grafana-ml" .Release.Name }}
+{{- printf "%s-grafana" .Release.Name }}
 {{- end }}
 
 {{/*
@@ -18,28 +18,28 @@ over. Keep that in mind before adding replicas here: two evaluators means every
 notification is sent twice.
 */}}
 {{- define "grafana-ml.alerting.name" -}}
-{{- printf "%s-grafana-ml-alerting" .Release.Name }}
+{{- printf "%s-grafana-alerting" .Release.Name }}
 {{- end }}
 
 {{/*
 Datasource Provisioning Secret Name
 */}}
 {{- define "grafana-ml.secretDatasources.name" -}}
-{{- printf "%s-grafana-ml-datasources" .Release.Name }}
+{{- printf "%s-grafana-datasources" .Release.Name }}
 {{- end }}
 
 {{/*
 Identity Name — SHARED by both workloads; they mount the same secrets.
 */}}
 {{- define "grafana-ml.identity.name" -}}
-{{- printf "%s-grafana-ml-identity" .Release.Name }}
+{{- printf "%s-grafana-identity" .Release.Name }}
 {{- end }}
 
 {{/*
 Policy Name
 */}}
 {{- define "grafana-ml.policy.name" -}}
-{{- printf "%s-grafana-ml-policy" .Release.Name }}
+{{- printf "%s-grafana-policy" .Release.Name }}
 {{- end }}
 
 
@@ -48,13 +48,13 @@ Policy Name
 {{/*
 CROSS-CHART INVARIANT: the HAProxy leader-routing endpoint of the
 postgres-multi-location subchart, which must stay identical to that chart's own
-`pg-ml.proxy.name` helper ({release}-postgres-ml-proxy). Its helper is
+`pg-ml.proxy.name` helper ({release}-postgres-proxy). Its helper is
 deterministic on .Release.Name, so the parent duplicates the derived name
 (metabase/tyk/grafana precedent). Break either side and the chart still renders
 and installs — it just never reaches a database.
 */}}
 {{- define "grafana-ml.postgres.host" -}}
-{{- printf "%s-postgres-ml-proxy.%s.cpln.local" .Release.Name .Values.global.gvc.name }}
+{{- printf "%s-postgres-proxy.%s.cpln.local" .Release.Name .Values.global.gvc.name }}
 {{- end }}
 
 {{/*
@@ -169,10 +169,15 @@ in: `executeAlerts`. Call as:
 Database readiness gate, shared by both boot wrappers. A cold install brings the
 stretched Patroni cluster up in ~169 s; without a gate Grafana exits and
 restart-backs-off through that whole window, which reads like a broken install.
-Bounded at 180 s and then CONTINUES regardless, so Grafana's own error is what
+Bounded at 300 s and then CONTINUES regardless, so Grafana's own error is what
 the user sees rather than a silent hang. Uses curl against HAProxy's /healthz
 (curl verified present in grafana/grafana:13.1.3) — see the gate body for why a
 TCP connect to :5432 is not an acceptable readiness signal.
+
+COUPLED to livenessProbe.initialDelaySeconds (360) on BOTH Grafana workloads: the
+gate must be able to run to its full bound before liveness starts killing, or a
+slow database tier turns a patient boot into a restart loop. Raise one and you
+must raise the other.
 */}}
 {{- define "grafana-ml.dbGate" -}}
 _db_host="{{ include "grafana-ml.postgres.host" . }}"
@@ -184,13 +189,13 @@ _db_host="{{ include "grafana-ml.postgres.host" . }}"
 # health-checked against Patroni's /primary — so 200 means a real primary is
 # serving, which is the condition Grafana actually needs.
 _db_health="http://${_db_host}:8404/healthz"
-echo "waiting up to 180s for the app database to serve a primary (${_db_host})"
-for _i in $(seq 1 60); do
+echo "waiting up to 300s for the app database to serve a primary (${_db_host})"
+for _i in $(seq 1 100); do
   if curl -fsS --max-time 3 "${_db_health}" >/dev/null 2>&1; then
     echo "app database is serving a primary (attempt ${_i})"
     break
   fi
-  echo "app database not serving a primary yet (attempt ${_i}/60)"
+  echo "app database not serving a primary yet (attempt ${_i}/100)"
   sleep 3
 done
 {{- end }}

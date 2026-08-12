@@ -25,10 +25,10 @@
 | Resource | Purpose |
 |---|---|
 | `gvc` | **Always created**, gated only by `{{ if .Chart.IsRoot }}`. There is no `createGvc` knob — the GVC is what pins the locations. Both subcharts suppress theirs, so a release renders exactly one |
-| `workload` (standard) `{release}-grafana-ml` | UI/API tier, `replicas` per location, `execute_alerts=false`, public by default |
-| `workload` (standard) `{release}-grafana-ml-alerting` | The evaluator: 1 replica, `alerting.location` only, `execute_alerts=true`, **never public**. Suppressed entirely when `alerting.location: ""` |
+| `workload` (standard) `{release}-grafana` | UI/API tier, `replicas` per location, `execute_alerts=false`, public by default |
+| `workload` (standard) `{release}-grafana-alerting` | The evaluator: 1 replica, `alerting.location` only, `execute_alerts=true`, **never public**. Suppressed entirely when `alerting.location: ""` |
 | `identity` + `policy` | **One** identity shared by both workloads; `reveal` on exactly the secrets they mount. No cloud bindings — this chart touches no object storage |
-| `secret` `{release}-grafana-ml-datasources` | Datasource provisioning file, mounted by both. Only when `datasources.definitions` is set |
+| `secret` `{release}-grafana-datasources` | Datasource provisioning file, mounted by both. Only when `datasources.definitions` is set |
 | subchart `postgres-multi-location` (aliased `postgresML`) | The app database: HAProxy leader endpoint per location, one Patroni primary, async replicas |
 
 ## Key knobs
@@ -46,6 +46,28 @@
 | `publicAccess.enabled` / `internalAccess.type` | `true` / `same-gvc` | Public applies to the UI tier only |
 | `postgresML.primaryLocation` | `aws-us-east-1` | Deviates from the subchart's `""` on purpose — Grafana has no read/write splitting |
 
+## The `-ml` infix was dropped, and the DB gate was raised (2026-08-12, edited into 1.0.0 in place)
+
+- Rendered resources are now `{release}-grafana`, `-alerting`, `-datasources`, `-identity`,
+  `-policy`, and the database tier renamed the same way (`{release}-postgres-proxy`, `-vs`, …). The
+  Helm helper namespace is still `grafana-ml.*` — internal, deliberately unchanged.
+- **BREAKING, fresh-install-only**, because the subchart's **volume set** renamed too: a `helm upgrade`
+  over an install created before this change binds a NEW, EMPTY volume set and orphans the old one
+  holding every dashboard, user and alert rule. Back up, uninstall, reinstall, restore.
+- **The cross-chart invariant is the thing to not break.** `grafana-ml.postgres.host` duplicates the
+  subchart's derived proxy name (`{release}-postgres-proxy`) because a parent cannot call a
+  subchart's helper. Both helpers carry a comment saying so. Change one side only and the chart still
+  renders and installs — it just never reaches a database.
+- **`grafana-ml.dbGate` 180 s → 300 s, and `livenessProbe.initialDelaySeconds` 240 → 360 on BOTH
+  workloads. These are COUPLED.** Cold installs still showed containers exiting 1 because the gate
+  gave up while the database tier was legitimately still coming up. Raise the gate without raising
+  liveness and the container restart-loops instead of waiting. The gate is still *bounded* and then
+  CONTINUES regardless, so a genuine misconfiguration surfaces as Grafana's own error, not a hang.
+- **The readiness probe was deliberately NOT changed** (10 s + 20 × 10 s = 210 s, shorter than the
+  gate). It is the fast unhealthy signal: an instance still waiting on the database must read
+  not-ready rather than look fine. Only liveness needs to outlast the gate.
+- `postgresML` stays pinned at **1.0.2**, which was edited in place with the same rename.
+
 ## Troubleshooting traps
 
 - **A wedged install is almost always a missing prerequisite secret.** Three must exist before
@@ -61,7 +83,7 @@
   Dashboards look perfectly healthy the whole time.
 - **Silences do not propagate.** With no gossip, a silence created against the UI tier is not
   guaranteed to reach the evaluator. Create them against
-  `{release}-grafana-ml-alerting.{gvc}.cpln.local:3000` — the evaluator is a named single-replica
+  `{release}-grafana-alerting.{gvc}.cpln.local:3000` — the evaluator is a named single-replica
   workload, so that instruction is exact at any value of `replicas`.
 - **Do not promise rolling upgrades.** Any `helm upgrade` restarts the bundled database in every
   location at once (**~117 s** of failed writes, measured on the dependency) because the API does not

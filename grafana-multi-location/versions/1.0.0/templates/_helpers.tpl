@@ -170,18 +170,27 @@ Database readiness gate, shared by both boot wrappers. A cold install brings the
 stretched Patroni cluster up in ~169 s; without a gate Grafana exits and
 restart-backs-off through that whole window, which reads like a broken install.
 Bounded at 180 s and then CONTINUES regardless, so Grafana's own error is what
-the user sees rather than a silent hang. Uses bash's /dev/tcp (verified present
-in grafana/grafana:13.1.3, bash 5.3.9).
+the user sees rather than a silent hang. Uses curl against HAProxy's /healthz
+(curl verified present in grafana/grafana:13.1.3) — see the gate body for why a
+TCP connect to :5432 is not an acceptable readiness signal.
 */}}
 {{- define "grafana-ml.dbGate" -}}
 _db_host="{{ include "grafana-ml.postgres.host" . }}"
-echo "waiting up to 180s for the app database at ${_db_host}:5432"
+# Gate on HAProxy's /healthz, NOT on a TCP connect to :5432. HAProxy accepts a
+# connection on 5432 whether or not any backend is up, so the old /dev/tcp check
+# passed ~24s into a cold install and Grafana then died on "connection reset by
+# peer", crash-looping until Postgres finally elected a primary. /healthz is
+# backed by `monitor fail if nbsrv(patroni_primary) lt 1`, and that backend is
+# health-checked against Patroni's /primary — so 200 means a real primary is
+# serving, which is the condition Grafana actually needs.
+_db_health="http://${_db_host}:8404/healthz"
+echo "waiting up to 180s for the app database to serve a primary (${_db_host})"
 for _i in $(seq 1 60); do
-  if (exec 3<>"/dev/tcp/${_db_host}/5432") 2>/dev/null; then
-    echo "app database endpoint reachable after attempt ${_i}"
+  if curl -fsS --max-time 3 "${_db_health}" >/dev/null 2>&1; then
+    echo "app database is serving a primary (attempt ${_i})"
     break
   fi
-  echo "app database not reachable yet (attempt ${_i}/60)"
+  echo "app database not serving a primary yet (attempt ${_i}/60)"
   sleep 3
 done
 {{- end }}

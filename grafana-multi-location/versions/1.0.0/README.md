@@ -395,7 +395,8 @@ never evaluated.
   non-blocking lock with no retry, so instances arriving together make the losers exit and restart.
   The alert evaluator migrates first and each location follows 15 s behind it, which removes those
   restarts at the default one replica per location. Two replicas in the SAME location still start
-  together — expect one self-healing restart per extra replica.
+  together — at `replicas: 2` expect one to two self-healing restarts per extra replica, mostly in
+  the alerting location. They clear themselves; nothing needs doing.
 - **A first install takes 4-6 minutes**, most of it the stretched database electing a primary. Grafana waits for it rather than crash-looping, and logs what it is waiting for on every poll.
 - **The FIRST `helm upgrade` after an install re-applies every tier once**, even a no-op, and the database is briefly in recovery while it comes back — measured **4 m 43 s** to reconverge on a 3-location cluster. Later upgrades report `Unchanged` and cost nothing.
 

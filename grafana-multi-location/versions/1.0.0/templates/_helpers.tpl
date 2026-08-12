@@ -188,14 +188,19 @@ restart. Measured: 5 of 7 restarts on a cold install.
 
 Nothing in Grafana can be configured around it, so the fix is to stop them
 arriving together. The evaluator (single replica, no stagger) reaches the
-database first and completes the migrations — measured at 4.4 s — and each UI
+database first and completes the migrations — measured at 5 s — and each UI
 location then starts a further step behind it, finding the schema already
 present. Ordered by the location list so the offset is deterministic, not a
 race of its own.
 
+Offsets start at 15 s, NOT 0. A first attempt gave the first location 0 and it
+collided with the evaluator, which defaults to that same location: both released
+on the same signal at the identical millisecond and raced for the lock, which is
+exactly what this exists to prevent. The evaluator must have a clear head start.
+
 Bounded and cheap: {{ len .Values.global.gvc.locations }} locations means at
-most {{ mul (sub (len .Values.global.gvc.locations) 1) 15 }}s added to the
-slowest location's boot. It cannot deadlock — a location that is late simply
+most {{ mul (len .Values.global.gvc.locations) 15 }}s added to the slowest
+location's boot. It cannot deadlock — a location that is late simply
 migrates itself.
 
 This does NOT help two replicas in the SAME location, which still start
@@ -212,7 +217,7 @@ _stagger=0
 case "${CPLN_LOCATION##*/}" in
 {{- $n := 0 }}
 {{- range .Values.global.gvc.locations }}
-  {{ .name }}) _stagger={{ mul $n 15 }} ;;
+  {{ .name }}) _stagger={{ mul (add $n 1) 15 }} ;;
 {{- $n = add $n 1 }}
 {{- end }}
 esac

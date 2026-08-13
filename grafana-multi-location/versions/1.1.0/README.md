@@ -498,6 +498,18 @@ render time; with HA on, `alerting.location` and `alerting.resources` are ignore
 - **A first install takes 4-6 minutes**, most of it the stretched database electing a primary. Grafana waits for it rather than crash-looping, and logs what it is waiting for on every poll.
 - **The FIRST `helm upgrade` after an install re-applies every tier once**, even a no-op, and the database is briefly in recovery while it comes back — measured **4 m 43 s** to reconverge on a 3-location cluster. Later upgrades report `Unchanged` and cost nothing. With alerting HA on, that first upgrade bounces the Redis tier too, so expect a brief duplicate-notification window alongside it.
 
+- **An upgrade delivers duplicate notifications for about 80 seconds when HA is on.** The Redis tier
+  is patched during any upgrade, so coordination lapses briefly and several instances notify for the
+  same firing. It re-converges on its own — measured at ~40 s after Redis returns.
+- **After a location is lost, hand-off is not instant.** Redis peer keys carry a 5-minute TTL, so a
+  dead location's peers hold their positions until it expires. Alerting continues from the survivors
+  throughout; what varies is which instance sends.
+- **The notification does not necessarily come from `alerting.location` when HA is on.** The sender is
+  chosen by sorted peer name and moves between instances across rollouts. Do not build routing or
+  filtering on the assumption that a particular location sends.
+- **Restarting the evaluator with HA OFF re-notifies.** Anything currently firing is delivered again
+  when the single evaluator comes back.
+
 ## Links
 
 - [Grafana high availability setup](https://grafana.com/docs/grafana/latest/setup-grafana/set-up-for-high-availability/)

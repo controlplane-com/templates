@@ -43,8 +43,10 @@ database:
 # SEPARATE single-replica workload that runs only in `location` and is never
 # exposed publicly. Exactly-once is a property of the topology: there is only one
 # evaluator, and it queries your datasources ONCE per rule. A replica failure
-# self-heals; losing that whole LOCATION stops evaluation until you point it
-# elsewhere and upgrade, and the UI shows no sign of it.
+# self-heals, but the healing RE-NOTIFIES: restarting the evaluator delivers a
+# duplicate of anything currently firing (measured). Losing that whole LOCATION
+# stops evaluation until you point it elsewhere and upgrade, and the UI shows no
+# sign of it.
 #
 # highAvailability.enabled: true — the separate workload is NOT created; every UI
 # instance evaluates, and a stretched Redis (redisML below) coordinates so

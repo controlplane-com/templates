@@ -270,3 +270,24 @@ the tagged source on a key name.)
 the Redis master in another region; surviving the loss of the location that would have been
 `alerting.location`; the no-op-upgrade drift gate in both modes; Redis-down duplicate degradation;
 notification-link correctness in HA mode; and `redisML.redis.replicasPerLocation` live.
+
+## 1.1.0 — Redis-backed alerting HA, PROVEN on real infrastructure (2026-08-13)
+`alerting.highAvailability.enabled`, default **false**. OFF is byte-identical to 1.0.0 apart from version tags (diffed, not inspected).
+
+| Row | Result |
+|---|---|
+| **Exactly-once with HA on** | **18 deliveries / 18 cycles, 18 distinct `x-request-id`, vs 108 if uncoordinated** — 3 locations x `replicas: 2`, all six instances confirmed `EXECUTE_ALERTS=true` and firing |
+| **Losing the would-be `alerting.location`** | 25 min of continuous replica destruction: no drop, no duplicate; west later carried alerting **alone, exactly once, for 5 min** |
+| Redis unavailable | degrades to 6x duplicates, **never silent** (longest gap 15 s), re-converges ~40 s |
+| Notification links | `externalURL`/`generatorURL`/`silenceURL` all the UI canonical endpoint, 200 |
+| HA OFF | 3 UI `false` / 1 evaluator `true`, 41/41 deliveries from the evaluator |
+| Install | HA ON 6 m 11 s / 3 exits; HA OFF 5 m 07 s / **0 exits** (primary in `aws-us-east-1` both) |
+| Drift | clean in BOTH modes on the second no-op upgrade |
+
+**Traps worth knowing:**
+- **Redis peer keys carry a 5-minute TTL.** A dead location's peers hold their positions until expiry, so post-outage hand-off is not instant. Alerting continues from survivors; only the sender changes.
+- **The sender is chosen by sorted peer name and moves across rollouts.** "The notification comes from `alerting.location`" is NOT true in HA mode — do not route or filter on it.
+- **A no-op upgrade costs ~80 s of duplicate notifications** with HA on, because the Redis tier is patched.
+- **With HA OFF, restarting the evaluator re-notifies** everything currently firing. The old wording said a replica failure "self-heals", which was true but omitted the duplicate.
+- The API does **not** backfill `loadBalancer.direct` — Redis/Sentinel store exactly `{"replicaDirect": true}`. Declaring it explicitly (as etcd/postgres do) is also stored verbatim, so **both styles are drift-free** and neither needs changing.
+- Redis/Sentinel `passwordSecretName` are **hard-rejected at render** by this chart by design; set them on a standalone `redis-multi-location` install instead.

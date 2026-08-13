@@ -29,6 +29,8 @@ High-level, user-facing catalog changes by month: new templates and notable vers
 - **New template: docmost 1.0.0** — open-source knowledge base and wiki with real-time collaborative editing, backed by PostgreSQL and Redis, with local or S3 attachment storage
 - **New template: tooljet 1.0.0** — open-source low-code internal-tools builder (visual app builder, 50+ connectors, built-in ToolJet Database) backed by PostgreSQL
 - **New template: listmonk 1.0.0** — self-hosted newsletter and mailing-list manager with public subscription pages, backed by highly-available or single-instance PostgreSQL
+- **redis-multi-location 2.1.0** — Redis and Sentinel passwords are now user-created secrets referenced by name instead of values, and the template can be used as a building block inside other multi-location templates
+- **grafana-multi-location 1.1.0** — alerting can now keep running when a region is lost: set `alerting.highAvailability.enabled` and every location evaluates alert rules, with a stretched Redis making sure a notification is still sent only once. Alerting can also be turned off entirely with `alerting.enabled`
 
 ## 2026-07
 

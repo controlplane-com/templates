@@ -31,7 +31,7 @@
 |---|---|
 | `gvc` | **Always created**, gated only by `{{ if .Chart.IsRoot }}`. There is no `createGvc` knob — the GVC is what pins the locations. Both subcharts suppress theirs, so a release renders exactly one |
 | `workload` (standard) `{release}-grafana` | UI/API tier, `replicas` per location, `execute_alerts=false`, public by default |
-| `workload` (standard) `{release}-grafana-alerting` | The dedicated evaluator: 1 replica, `alerting.location` only, `execute_alerts=true`, **never public**. Suppressed entirely when `alerting.location: ""` **or when `alerting.highAvailability.enabled` is true** |
+| `workload` (standard) `{release}-grafana-alerting` | The dedicated evaluator: 1 replica, `alerting.location` only, `execute_alerts=true`, **never public**. Suppressed entirely when `alerting.enabled: false` **or when `alerting.highAvailability.enabled` is true** |
 | `identity` + `policy` | **One** identity shared by every Grafana workload; `reveal` on exactly the secrets they mount. No cloud bindings — this chart touches no object storage. **The rendered policy is byte-identical in both alerting modes** (verified) |
 | `secret` `{release}-grafana-datasources` | Datasource provisioning file, mounted by every Grafana workload. Only when `datasources.definitions` is set |
 | subchart `postgres-multi-location` (aliased `postgresML`) | The app database: HAProxy leader endpoint per location, one Patroni primary, async replicas |
@@ -51,10 +51,12 @@
 | `replicas` | `1` | Grafana UI instances **per location**. No alerting-related restriction of any kind |
 | `database.maxOpenConn` | `10` | Per instance, enforced at render time against an 80 ceiling. HA off: `(replicas × locations + 1) × this`, the `+1` being the evaluator. **HA on: the `+1` is dropped** because that workload does not exist |
 | `alerting.highAvailability.enabled` | `false` | `false` = dedicated evaluator (1.0.0 behaviour); `true` = every instance evaluates, Redis coordinates. **Needs 3+ locations** |
-| `alerting.location` / `.resources.*` | `aws-us-east-1` / 500m–1000m, 512Mi–1Gi | The one location the dedicated evaluator runs in. `""` = no evaluator, alerting disabled. **Both are IGNORED when HA is on**; `true` + `location: ""` fails at render |
+| `alerting.enabled` | `true` | `false` = no evaluator workload and `EXECUTE_ALERTS=false` everywhere; rules stay creatable, nothing evaluates them. `false` + HA `true` fails at render |
+| `alerting.location` / `.resources.*` | `aws-us-east-1` / 500m–1000m, 512Mi–1Gi | The one location the dedicated evaluator runs in — **required** in that mode. **Both are IGNORED when HA is on** |
 | `redisML.redis.replicasPerLocation` | `1` | Redis members per location. One is plenty — the data is a few KB of coordination keys |
 | `redisML.redis.volumeset.initialCapacity` | `10` GiB | Platform minimum, deliberately below the dependency's own 20 |
 | `redisML.{redis,sentinel}.{image,resources}` | `redis:7.4`, `200m` / `256Mi` | Pass-through. Limits only, so no `cpu:minCpu` ratio applies |
+| `redisML.{redis,sentinel}.passwordSecretName` | `my-grafana-redis-password` / `my-grafana-sentinel-password` | **Must exist before install.** Grafana reads them too, so a wrong name stops the UI tier as well. `""` = authless |
 | `admin.passwordSecretName` / `.secretKeySecretName` / `.applyPassword` / `.user` | `my-grafana-admin-password` / `my-grafana-secret-key` / `true` / `admin` | **Required prerequisite opaque secrets** (`encoding: plain`). Both workloads carry the admin env |
 | `datasources.definitions` / `.credentialSecrets` | `[]` / `[]` | Datasources as code; `$KEY` interpolation from prerequisite dictionary secrets |
 | `smtp.*` | off | Whichever instance evaluates is what sends — the dedicated evaluator, or the coordinating UI instance with HA on |
@@ -241,10 +243,12 @@ the tagged source on a key name.)
   `redis-multi-location`'s `redis-ml.sentinel.name`, and the master name `mymaster` must match its
   `sentinel monitor` line. Break either and the chart still renders, installs and boots — Grafana just
   never finds a Redis, and alerting quietly duplicates.
-- **Redis/Sentinel auth is blocked at render.** `redisML.redis.passwordSecretName` and
-  `redisML.sentinel.passwordSecretName` both fail with a message; Grafana's `ha_redis_password`
-  wiring is untested here, so allowing them would produce a Redis Grafana can never reach. Note these
-  are 2.1.0's prerequisite-secret knobs — 2.0.2's plain `password` values no longer exist.
+- **Redis/Sentinel auth is ON by default and the secrets gate the UI tier, not just alerting.**
+  `redisML.redis.passwordSecretName` / `.sentinel.passwordSecretName` default to placeholder names and
+  must exist before install; Grafana reads the same secrets to authenticate as a client, so a misspelt
+  name stops the **Grafana UI** at 0 replicas too. `helm install` still reports SUCCESS — the message
+  is on `status.versions[].message`, and it self-heals ~5-6 min after the secret is created. These are
+  2.1.0's prerequisite-secret knobs; 2.0.2's plain `password` values no longer exist.
 - **The migration stagger is re-based in HA mode.** HA off: the evaluator goes first, UI locations at
   15/30/45 s (unchanged). HA on: the location matching `postgresML.primaryLocation` goes first at
   offset 0, the rest at 15/30. An empty `primaryLocation` falls back to plain list order — it is a
@@ -271,7 +275,7 @@ the Redis master in another region; surviving the loss of the location that woul
 `alerting.location`; the no-op-upgrade drift gate in both modes; Redis-down duplicate degradation;
 notification-link correctness in HA mode; and `redisML.redis.replicasPerLocation` live.
 
-## 1.1.0 — Redis-backed alerting HA, PROVEN on real infrastructure (2026-08-13)
+### Round 1 — Redis-backed alerting HA, proven on real infrastructure (2026-08-13)
 `alerting.highAvailability.enabled`, default **false**. OFF is byte-identical to 1.0.0 apart from version tags (diffed, not inspected).
 
 | Row | Result |
@@ -290,4 +294,38 @@ notification-link correctness in HA mode; and `redisML.redis.replicasPerLocation
 - **A no-op upgrade costs ~80 s of duplicate notifications** with HA on, because the Redis tier is patched.
 - **With HA OFF, restarting the evaluator re-notifies** everything currently firing. The old wording said a replica failure "self-heals", which was true but omitted the duplicate.
 - The API does **not** backfill `loadBalancer.direct` — Redis/Sentinel store exactly `{"replicaDirect": true}`. Declaring it explicitly (as etcd/postgres do) is also stored verbatim, so **both styles are drift-free** and neither needs changing.
-- Redis/Sentinel `passwordSecretName` are **hard-rejected at render** by this chart by design; set them on a standalone `redis-multi-location` install instead.
+
+### Round 2 — `alerting.enabled` and Redis auth, deploy-proven (2026-08-13)
+
+Two maintainer findings on the values surface, both then tested on real infrastructure (**7 PASS / 0 FAIL**).
+
+**`alerting.enabled` (default `true`) is now the off switch.** Previously the only way to disable
+alerting was `alerting.location: ""`, which was undiscoverable *and* not an off switch at all in HA
+mode (validation rejected that combination). `location` now means only "where the evaluator runs" and
+is **required** when alerting is on and HA is off. `enabled: false` + `highAvailability.enabled: true`
+fails at render. The evaluator-renders condition lives in ONE helper (`grafana-ml.evaluatorRenders`) —
+it had been hand-written in the workload, the connection budget and validation.
+
+**Redis/Sentinel auth is wired and enforced.** Grafana 13.1.3 has `ha_redis_password` /
+`ha_redis_sentinel_password` (checked against `conf/defaults.ini` at the tag). Measured: `NOAUTH`
+unauthenticated on both `:6379` and `:26379`, `PONG` authenticated, `WRONGPASS` on a bad password; all
+6 instances registered peer keys **inside** the authenticated keyspace; in-container SHA-256 of both
+password envs matched the created secrets.
+
+| Row | Result |
+|---|---|
+| **Exactly-once, auth ON** | **21 deliveries / 21 cycles / 21 distinct `x-request-id` over 9 m 59 s, vs 126 if uncoordinated** |
+| `alerting.enabled: false` | no evaluator workload, Redis tier gone, 6/6 `EXECUTE_ALERTS=false`, rules creatable but `lastEvaluation=0001-01-01`, **0 deliveries in 6 m 24 s** |
+| Missing password secret | `helm install` **exits 0 and reports success**; redis + sentinel + **the Grafana UI tier** then sit at 0 replicas with no containers and no logs |
+| Drift | zero spec drift; second no-op upgrade fully `Unchanged` |
+| Teardown | no orphans, no rollback needed |
+
+- **The no-op upgrade duplicate window is 80-95 s, and it fires on an upgrade that changes nothing** —
+  the platform stamps a release tag on every resource it touches, so the chart cannot render its way
+  out of it. 4 extra notifications over a 93 s window; never silent.
+- **Which location sends is unpinnable.** The elected sender moved `us-east-1` → `us-west-2` between
+  two installs of the same chart: sorted peer name, and a standard workload's name carries a
+  ReplicaSet hash that changes every rollout. Matters most for egress-IP allowlisting.
+- Placeholder defaults were kept over `""` deliberately: the failure is precise, actionable, visible
+  in the plain CLI table and self-healing, whereas `""` would ship an unauthenticated coordination bus
+  by default.

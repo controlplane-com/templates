@@ -303,8 +303,9 @@ Rendered **only** when `alerting.highAvailability.enabled` is true; ignored enti
 ```yaml
 redisML:
   redis:
-    # Opaque secret (encoding: plain) whose payload is the password. Create it
-    # BEFORE install; "" ships an authless Redis.
+    # Opaque secret (encoding: plain) whose payload is the password. MUST EXIST
+    # BEFORE INSTALL — Grafana reads it too, so a wrong name stops the UI tier as
+    # well. "" ships an authless Redis.
     passwordSecretName: my-grafana-redis-password
     image: redis:7.4
     replicasPerLocation: 1 # Redis members per location; 1 is plenty for alert coordination
@@ -324,8 +325,14 @@ redisML:
 ```
 
 **Enabling alerting HA therefore means creating two more secrets, not just flipping the knob.** Both
-default to placeholder names, so an install that skips them fails at the missing secret rather than
-quietly bringing up an unauthenticated coordination bus:
+default to placeholder names, so an install that skips them stops rather than quietly bringing up an
+unauthenticated coordination bus — but note *how* it stops: `helm install` reports **success**, and the
+Redis, Sentinel and **Grafana UI** tiers then sit at 0 replicas with no containers and therefore no
+logs. The explanation is on each workload's `status.versions[].message` (not the top-level
+`status.message`, which is empty) and reads `The secret <name> no longer exists. Workload updates are
+paused until the secret is added or the reference to the secret removed.` Create the secret and it
+recovers on its own in about 5-6 minutes — no helm action, and re-running the upgrade does not speed it
+up.
 
 ```bash
 printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name my-grafana-redis-password --encoding plain -f -
@@ -483,6 +490,10 @@ time; with HA on, `alerting.location` and `alerting.resources` are ignored.
   **117 s**, but the Grafana tier is unavailable for longer than that because reads fail too —
   measured recovery took about **4 minutes**, with one location down for **5-6 minutes**. The bundled database members do not restart one at a time — the platform does not retain the field that would limit the rollout — so all of them go down together (**~117 s** measured on an upgrade that changed nothing). Both Grafana tiers return errors for that window. Treat every upgrade as a planned outage, not a rolling one.
 - **Alert evaluation stops if you lose `alerting.location`, and the UI will not show it.** Repoint the knob and upgrade; that restarts only the evaluator. Set `alerting.highAvailability.enabled: true` to remove that failure — read the cost in [Alerting](#alerting) first, because it multiplies data-source query load by the instance count.
+- **With alerting HA on, the two Redis password secrets gate the Grafana UI too.** Grafana reads the
+  same secrets to authenticate as a client, so a missing or misspelt `redisML.redis.passwordSecretName`
+  costs you dashboards, not just alert coordination — and `helm install` still reports success. If a
+  tier sits at 0 replicas after install, read `status.versions[].message` on the workload.
 - **Turning alerting HA on or off changes which workloads exist.** Enabling it deletes the `{release}-grafana-alerting` workload and adds a Redis and a Sentinel workload per location; disabling it does the reverse. It is a normal `helm upgrade`, but treat it as a planned change, not a toggle to flip while investigating an incident.
 - **Alerting HA is blocked below 3 locations, on purpose.** Sentinel elects a master by a majority of locations, so at 2 locations losing either one leaves no quorum — the exact event the knob exists for.
 - **With alerting HA on, an unhealthy Redis means DUPLICATE notifications, never silence.** Check the `{release}-redis` and `{release}-sentinel` workloads before suspecting your alert rules.
@@ -525,15 +536,20 @@ time; with HA on, `alerting.location` and `alerting.resources` are ignored.
 - **A first install takes 4-6 minutes**, most of it the stretched database electing a primary. Grafana waits for it rather than crash-looping, and logs what it is waiting for on every poll.
 - **The FIRST `helm upgrade` after an install re-applies every tier once**, even a no-op, and the database is briefly in recovery while it comes back — measured **4 m 43 s** to reconverge on a 3-location cluster. Later upgrades report `Unchanged` and cost nothing. With alerting HA on, that first upgrade bounces the Redis tier too, so expect a brief duplicate-notification window alongside it.
 
-- **An upgrade delivers duplicate notifications for about 80 seconds when HA is on.** The Redis tier
-  is patched during any upgrade, so coordination lapses briefly and several instances notify for the
-  same firing. It re-converges on its own — measured at ~40 s after Redis returns.
+- **An upgrade delivers duplicate notifications for 80-95 seconds when HA is on — including an upgrade
+  that changes nothing.** The platform stamps a release tag on every resource it touches, so a
+  byte-identical no-op still rolls every workload; the chart cannot render its way out of it. While the
+  Redis tier is patched, coordination lapses and several instances notify for the same firing (4 extra
+  notifications measured over a 93 s window). It re-converges on its own — ~40 s after Redis returns —
+  and it never goes silent.
 - **After a location is lost, hand-off is not instant.** Redis peer keys carry a 5-minute TTL, so a
   dead location's peers hold their positions until it expires. Alerting continues from the survivors
   throughout; what varies is which instance sends.
-- **The notification does not necessarily come from `alerting.location` when HA is on.** The sender is
-  chosen by sorted peer name and moves between instances across rollouts. Do not build routing or
-  filtering on the assumption that a particular location sends.
+- **The notification does not necessarily come from `alerting.location` when HA is on, and which
+  location sends is not pinnable.** The sender is chosen by sorted peer name, and a standard workload's
+  name carries a ReplicaSet hash that changes on every rollout — the elected sender moved from
+  `us-east-1` to `us-west-2` between two installs of the same chart. Do not build routing, filtering or
+  egress-IP allowlisting on the assumption that a particular location sends.
 - **Restarting the evaluator with HA OFF re-notifies.** Anything currently firing is delivered again
   when the single evaluator comes back.
 

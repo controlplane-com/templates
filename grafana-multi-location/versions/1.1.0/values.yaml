@@ -203,9 +203,11 @@ postgresML:
 # HA requires 3+ locations.
 redisML:
   redis:
-    # RECOMMENDED. Opaque secret (encoding: plain) whose payload is the password,
-    # created BEFORE install. Empty = authless, and then anything else you deploy
-    # into this GVC can suppress your alert notifications.
+    # MUST EXIST BEFORE INSTALL — opaque secret (encoding: plain) whose payload is
+    # the password. Grafana reads it too, so a missing or misspelt name leaves the
+    # UI TIER AT 0 REPLICAS, not just alerting: helm reports success and the
+    # explanation is on the workload's status.versions[].message.
+    # "" ships authless — then anything else in this GVC can silence your alerts.
     passwordSecretName: my-grafana-redis-password
     image: redis:7.4
     replicasPerLocation: 1 # Redis members per location; 1 is plenty for alert coordination
@@ -215,8 +217,8 @@ redisML:
     volumeset:
       initialCapacity: 10 # GiB per member (platform minimum); coordination data is tiny
   sentinel:
-    # Same shape as redis.passwordSecretName and independent of it — Sentinel is
-    # what Grafana asks for the current master.
+    # Same shape and same failure mode as redis.passwordSecretName, independent of
+    # it — Sentinel is what Grafana asks for the current master.
     passwordSecretName: my-grafana-sentinel-password
     image: redis:7.4
     resources:

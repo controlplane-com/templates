@@ -1,4 +1,10 @@
 {{- include "grafana-ml.validate" . -}}
+{{- /*
+With alerting HA on there is no dedicated evaluator workload, so THIS tier is
+what evaluates alert rules — in every location, on every replica — and Redis is
+what makes exactly one of them send the notification.
+*/ -}}
+{{- $executeAlerts := ternary "true" "false" .Values.alerting.highAvailability.enabled -}}
 kind: workload
 name: {{ include "grafana-ml.name" . }}
 description: Grafana OSS UI/API tier, present in every location, HTTP :3000
@@ -30,6 +36,15 @@ spec:
           # documented form and is safe to build from parts.
           export GF_SERVER_ROOT_URL="http://{{ include "grafana-ml.name" . }}.{{ .Values.global.gvc.name }}.cpln.local:3000/"
           {{- end }}
+          {{- if .Values.alerting.highAvailability.enabled }}
+          # Peer identity in the Redis-coordinated alerting cluster. It needs
+          # UNIQUENESS, not order: positions come from sorting the member list,
+          # so any total order works. A standard workload's HOSTNAME is
+          # {workload}-{replicaset}-{random} — the replicaset hash already
+          # differs per location and the suffix per replica. There is no index to
+          # be had here, so do not try to derive one.
+          export GF_UNIFIED_ALERTING_HA_REDIS_PEER_NAME="$(hostname)"
+          {{- end }}
           {{- include "grafana-ml.dbGate" . | nindent 10 }}
             {{- include "grafana-ml.migrationStagger" . | nindent 10 }}
           exec /run.sh
@@ -39,7 +54,7 @@ spec:
       cpu: {{ .Values.resources.maxCpu | quote }}
       memory: {{ .Values.resources.maxMemory | quote }}
       env:
-        {{- include "grafana-ml.env" (dict "root" . "executeAlerts" "false") | nindent 8 }}
+        {{- include "grafana-ml.env" (dict "root" . "executeAlerts" $executeAlerts) | nindent 8 }}
       ports:
         - number: 3000
           protocol: http

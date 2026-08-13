@@ -9,13 +9,19 @@ Grafana UI/API Workload Name — present in EVERY location.
 
 {{/*
 Alert-Evaluator Workload Name — exactly ONE replica, in alerting.location only.
+Rendered ONLY when alerting.highAvailability.enabled is false.
 
 Exactly-once evaluation is a property of this workload's TOPOLOGY (one workload,
-one replica, one location), not something the containers negotiate. Grafana's own
-alerting HA gossips over TCP *and* UDP 9094, and container ports here accept only
-grpc/http/http2/tcp, so there is nothing to elect and no peer channel to elect it
-over. Keep that in mind before adding replicas here: two evaluators means every
-notification is sent twice.
+one replica, one location), not something the containers negotiate. Grafana's
+MEMBERLIST alerting HA gossips over TCP *and* UDP 9094, and container ports here
+accept only grpc/http/http2/tcp, so there is no peer channel to elect over. Keep
+that in mind before adding replicas here: two evaluators means every notification
+is sent twice.
+
+The one clustering path that IS available on this platform is Grafana's
+REDIS-backed coordination, which needs no peer port at all — that is what
+alerting.highAvailability.enabled turns on, and when it does this workload is not
+rendered at all.
 */}}
 {{- define "grafana-ml.alerting.name" -}}
 {{- printf "%s-grafana-alerting" .Release.Name }}
@@ -68,12 +74,49 @@ this chart must grant its own identity `reveal` on it.
 {{- end }}
 
 
+{{/* Alerting-HA coordination helpers (redis-multi-location subchart) */}}
+
+{{/*
+CROSS-CHART INVARIANT ×2, and the failure mode is silent — the chart renders,
+installs and boots, Grafana just never finds a Redis and alerting quietly
+duplicates. Both sides must stay in step with redis-multi-location 2.1.0:
+
+  1. The workload name {release}-sentinel must match its `redis-ml.sentinel.name`
+     helper (templates/_helpers.tpl).
+  2. The master name `mymaster` below must match the `sentinel monitor mymaster …`
+     line its templates/workload-sentinel.yaml writes.
+
+Why the EXPLICIT per-location list rather than the sentinel service VIP (which is
+what the single-location `grafana` template uses): same-GVC service DNS is served
+LOCATION-LOCALLY and does not fail over. The 1.0.0 test round measured 200 from a
+target's own location and 503 from the other two when a location had no local
+replica. A single VIP would therefore give each Grafana instance exactly one
+Sentinel — its local one — with no fallback at all, which is the opposite of what
+this feature is for.
+
+Grafana splits the value on commas (`strings.Split` in
+pkg/services/ngalert/notifier/redis_peer.go at v13.1.3) and hands the result to
+go-redis as `Addrs` with `MasterName` set. The per-location per-replica address
+form is the one redis-multi-location's own Redis containers already use to reach
+their Sentinels, so it is proven addressing rather than invention. Emitted in
+global.gvc.locations order.
+*/}}
+{{- define "grafana-ml.redis.sentinelAddrs" -}}
+{{- $root := . -}}
+{{- $addrs := list -}}
+{{- range $root.Values.global.gvc.locations -}}
+{{- $addrs = append $addrs (printf "replica-0.%s-sentinel.%s.%s.cpln.local:26379" $root.Release.Name .name $root.Values.global.gvc.name) -}}
+{{- end -}}
+{{- join "," $addrs -}}
+{{- end }}
+
+
 {{/* Shared container configuration */}}
 
 {{/*
-Environment shared by BOTH workloads. Divergent configuration between two
-instances of one application is a support trap, so the only difference is passed
-in: `executeAlerts`. Call as:
+Environment shared by EVERY Grafana workload this chart renders. Divergent
+configuration between two instances of one application is a support trap, so the
+only difference is passed in: `executeAlerts`. Call as:
   {{ include "grafana-ml.env" (dict "root" . "executeAlerts" "false") }}
 */}}
 {{- define "grafana-ml.env" -}}
@@ -122,11 +165,44 @@ in: `executeAlerts`. Call as:
 # fails every rule that queries it.
 - name: GF_SECURITY_SECRET_KEY
   value: 'cpln://secret/{{ $v.admin.secretKeySecretName }}.payload'
+{{- /*
+Rendered comments are part of the manifest text, so the HA-off branch below is
+kept VERBATIM from 1.0.0: the default render of this chart must stay
+byte-identical to 1.0.0's apart from the chart-version tags.
+*/ -}}
+{{- if $v.alerting.highAvailability.enabled }}
+# ── Alert rule evaluation ──
+# 'true' on EVERY instance in this mode — with alerting HA on there is no
+# dedicated evaluator workload. Nothing derives it at runtime; the HA Redis
+# settings below are what make exactly one instance SEND.
+{{- else }}
 # ── Alert rule evaluation ──
 # STATIC per workload — 'true' on the single-replica alerting workload only.
 # This is the entire exactly-once mechanism; nothing derives it at runtime.
+{{- end }}
 - name: GF_UNIFIED_ALERTING_EXECUTE_ALERTS
   value: {{ .executeAlerts | quote }}
+{{- if $v.alerting.highAvailability.enabled }}
+# ── Alerting HA coordination (redis-multi-location subchart, Sentinel mode) ──
+# Peers order themselves by position in a shared member list and share a
+# notification log, so exactly one of them sends. They dedupe the NOTIFICATION,
+# never the datasource query — every instance still evaluates every rule.
+# No ha_advertise_address and no port 9094 on purpose. Grafana's docs tell you to
+# set them alongside Redis; the single-location `grafana` template measured
+# exactly-once delivery without them, and UDP between workloads does not exist on
+# this platform, so adding them would only make Grafana try to bind a listener we
+# cannot express.
+- name: GF_UNIFIED_ALERTING_HA_REDIS_ADDRESS
+  value: {{ include "grafana-ml.redis.sentinelAddrs" $root | quote }}
+- name: GF_UNIFIED_ALERTING_HA_REDIS_SENTINEL_MODE_ENABLED
+  value: 'true'
+- name: GF_UNIFIED_ALERTING_HA_REDIS_SENTINEL_MASTER_NAME
+  value: mymaster
+# Namespaces every key and channel, so two releases sharing one Redis never
+# collide. Grafana appends the ':' delimiter itself.
+- name: GF_UNIFIED_ALERTING_HA_REDIS_PREFIX
+  value: {{ include "grafana-ml.name" $root }}
+{{- end }}
 # ── Hardening: no signup, no anonymous access, no telemetry ──
 - name: GF_USERS_ALLOW_SIGN_UP
   value: 'false'
@@ -193,10 +269,14 @@ location then starts a further step behind it, finding the schema already
 present. Ordered by the location list so the offset is deterministic, not a
 race of its own.
 
-Offsets start at 15 s, NOT 0. A first attempt gave the first location 0 and it
-collided with the evaluator, which defaults to that same location: both released
-on the same signal at the identical millisecond and raced for the lock, which is
-exactly what this exists to prevent. The evaluator must have a clear head start.
+With alerting HA OFF, offsets start at 15 s, NOT 0. A first attempt gave the
+first location 0 and it collided with the evaluator, which defaults to that same
+location: both released on the same signal at the identical millisecond and raced
+for the lock, which is exactly what this exists to prevent. The evaluator must
+have a clear head start.
+
+With alerting HA ON there is no evaluator, so offset 0 is free and the ORDER is
+chosen rather than inherited — see grafana-ml.staggerOrder.
 
 Bounded and cheap: {{ len .Values.global.gvc.locations }} locations means at
 most {{ mul (len .Values.global.gvc.locations) 15 }}s added to the slowest
@@ -208,16 +288,15 @@ together; at replicas > 1 expect one loser restart per extra replica, which
 self-heals.
 */}}
 {{- define "grafana-ml.migrationStagger" -}}
-{{- $offset := 0 -}}
-{{- $i := 0 -}}
-{{- range .Values.global.gvc.locations -}}
-{{- $i = add $i 1 -}}
+{{- $base := 15 -}}
+{{- if .Values.alerting.highAvailability.enabled -}}
+{{- $base = 0 -}}
 {{- end -}}
 _stagger=0
 case "${CPLN_LOCATION##*/}" in
 {{- $n := 0 }}
-{{- range .Values.global.gvc.locations }}
-  {{ .name }}) _stagger={{ mul (add $n 1) 15 }} ;;
+{{- range (include "grafana-ml.staggerOrder" . | fromJsonArray) }}
+  {{ . }}) _stagger={{ add $base (mul $n 15) }} ;;
 {{- $n = add $n 1 }}
 {{- end }}
 esac
@@ -225,6 +304,45 @@ if [ "${_stagger}" -gt 0 ]; then
   echo "staggering start by ${_stagger}s so one instance runs the schema migrations (see chart notes)"
   sleep "${_stagger}"
 fi
+{{- end }}
+
+{{/*
+The ORDER the migration stagger walks, as a JSON array of location names.
+
+alerting HA OFF: plain global.gvc.locations order, and offsets start at 15 so the
+dedicated evaluator (no stagger) keeps its head start. Unchanged from 1.0.0.
+
+alerting HA ON: there is no evaluator, so offset 0 belongs to whichever location
+finishes the migrations fastest — and round 7 measured exactly what decides that.
+The migration run is 713 statements: co-located with the Patroni primary it takes
+5.22 s, and cross-region it takes MINUTES at ~215 ms per statement, during which
+every other instance crash-loops behind the lock (15 container exits vs 2). So
+postgresML.primaryLocation goes first.
+
+It is a preference, not a guarantee — primaryLocation is a 90 s bootstrap
+preference by the database chart's own design, and the leader can land elsewhere.
+This makes the good case the default instead of a coin flip; it is a latency
+optimisation, so an empty or unconfigured primaryLocation falls back to plain
+list order rather than failing.
+*/}}
+{{- define "grafana-ml.staggerOrder" -}}
+{{- $names := list -}}
+{{- range .Values.global.gvc.locations -}}
+{{- $names = append $names .name -}}
+{{- end -}}
+{{- if .Values.alerting.highAvailability.enabled -}}
+{{- $primary := .Values.postgresML.primaryLocation | default "" -}}
+{{- if and $primary (has $primary $names) -}}
+{{- $ordered := list $primary -}}
+{{- range $names -}}
+{{- if ne . $primary -}}
+{{- $ordered = append $ordered . -}}
+{{- end -}}
+{{- end -}}
+{{- $names = $ordered -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $names -}}
 {{- end }}
 
 {{- define "grafana-ml.dbGate" -}}
@@ -283,13 +401,14 @@ done
 {{- end -}}
 {{- end -}}
 {{- if lt (int .Values.replicas) 1 -}}
-{{- fail (printf "grafana-multi-location: replicas must be at least 1, got '%v'. It is the number of Grafana UI instances per location and carries no alerting-related restriction — alert evaluation is a separate single-replica workload." .Values.replicas) -}}
+{{- fail (printf "grafana-multi-location: replicas must be at least 1, got '%v'. It is the number of Grafana UI instances per location and carries no alerting-related restriction — alert evaluation is either a separate single-replica workload or, with alerting.highAvailability.enabled, Redis-coordinated across every instance." .Values.replicas) -}}
 {{- end -}}
 {{- $names := list -}}
 {{- range .Values.global.gvc.locations -}}
 {{- $names = append $names .name -}}
 {{- end -}}
-{{- if .Values.alerting.location -}}
+{{- include "grafana-ml.validateAlertingHA" (dict "root" . "names" $names) -}}
+{{- if and .Values.alerting.location (not .Values.alerting.highAvailability.enabled) -}}
 {{- if not (has .Values.alerting.location $names) -}}
 {{- fail (printf "grafana-multi-location: alerting.location '%s' is not one of the configured global.gvc.locations (%s). The alert evaluator would run nowhere and no rule would ever be evaluated. Set it to \"\" only if you deliberately want alerting disabled." .Values.alerting.location (join ", " $names)) -}}
 {{- end -}}
@@ -321,19 +440,54 @@ done
 {{- end }}
 
 {{/*
+Alerting-HA validation. Both failures are hard blocks rather than documented
+caveats, because both combinations promise something the chart cannot deliver.
+*/}}
+{{- define "grafana-ml.validateAlertingHA" -}}
+{{- $root := .root -}}
+{{- $names := .names -}}
+{{- if $root.Values.alerting.highAvailability.enabled -}}
+{{- if not $root.Values.alerting.location -}}
+{{- fail "grafana-multi-location: alerting.location: \"\" means \"no alerting at all\", which contradicts alerting.highAvailability.enabled: true. Leave location at its default (it is ignored in HA mode), or set alerting.highAvailability.enabled: false to keep the single dedicated evaluator." -}}
+{{- end -}}
+{{- if lt (len $names) 3 -}}
+{{- fail (printf "grafana-multi-location: alerting.highAvailability.enabled requires at least 3 entries in global.gvc.locations, got %d. The Redis tier that coordinates it elects a master by a MAJORITY of locations (one Sentinel each), so with 2 locations the loss of either one — the exact event this knob exists to survive — leaves no quorum and every instance then sends duplicate notifications. Add a third location, or set alerting.highAvailability.enabled: false and use the single dedicated evaluator in alerting.location." (len $names)) -}}
+{{- end -}}
+{{/*
+Grafana can authenticate to Redis and to Sentinel (ha_redis_password /
+ha_redis_sentinel_password exist at v13.1.3), but that wiring is untested here,
+so a password that the Redis tier WOULD enforce is blocked rather than silently
+producing a Grafana that can never connect. Same stance as the single-location
+`grafana` template. The keys are redis-multi-location 2.1.0's prerequisite-secret
+knobs; `dig` so an override that drops the block still renders.
+*/}}
+{{- if dig "redis" "passwordSecretName" "" $root.Values.redisML -}}
+{{- fail "grafana-multi-location: redisML.redis.passwordSecretName is not supported in this version — leave it empty. Grafana's ha_redis_password wiring for alerting HA is untested here, so a password-protected Redis would simply never be reachable; the same-GVC firewall is the boundary, as it is for the app database." -}}
+{{- end -}}
+{{- if dig "sentinel" "passwordSecretName" "" $root.Values.redisML -}}
+{{- fail "grafana-multi-location: redisML.sentinel.passwordSecretName is not supported in this version — leave it empty. Grafana's ha_redis_sentinel_password wiring for alerting HA is untested here, so a password-protected Sentinel would simply never be reachable; the same-GVC firewall is the boundary." -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Connection budget. Grafana opens up to maxOpenConn per INSTANCE, and the
-stretched Patroni cluster runs at max_connections: 100. The `+ 1` is the alerting
-workload's own instance and must not be forgotten — it is the reason the
-arithmetic is spelled out rather than left implicit.
+stretched Patroni cluster runs at max_connections: 100. The `+ 1` is the
+dedicated evaluator's own instance and must not be forgotten — it is the reason
+the arithmetic is spelled out rather than left implicit. It is counted ONLY when
+that workload actually renders: with alerting HA on there is no evaluator, and
+charging the budget for an instance that does not exist would reject values that
+are in fact fine.
 */}}
 {{- define "grafana-ml.validateConnectionBudget" -}}
 {{- $instances := mul (int .Values.replicas) (len .Values.global.gvc.locations) -}}
-{{- if .Values.alerting.location -}}
+{{- $evaluator := and .Values.alerting.location (not .Values.alerting.highAvailability.enabled) -}}
+{{- if $evaluator -}}
 {{- $instances = add1 $instances -}}
 {{- end -}}
 {{- $total := mul $instances (int .Values.database.maxOpenConn) -}}
 {{- if gt $total 80 -}}
-{{- fail (printf "grafana-multi-location: the database connection budget is exceeded — %d Grafana instances (replicas %v × %d locations, plus the alert evaluator) × database.maxOpenConn %v = %d, above the 80-connection ceiling of the bundled cluster (max_connections is 100, leaving headroom for Patroni and administration). Lower database.maxOpenConn or lower replicas." $instances .Values.replicas (len .Values.global.gvc.locations) .Values.database.maxOpenConn $total) -}}
+{{- fail (printf "grafana-multi-location: the database connection budget is exceeded — %d Grafana instances (replicas %v × %d locations%s) × database.maxOpenConn %v = %d, above the 80-connection ceiling of the bundled cluster (max_connections is 100, leaving headroom for Patroni and administration). Lower database.maxOpenConn or lower replicas." $instances .Values.replicas (len .Values.global.gvc.locations) (ternary ", plus the alert evaluator" "" $evaluator) .Values.database.maxOpenConn $total) -}}
 {{- end -}}
 {{- end }}
 

@@ -5,14 +5,19 @@
 - Grafana OSS **13.1.3** running in every location of a chart-created multi-location GVC, behind one
   georouted `*.cpln.app` endpoint, with all app state in a **stretched Patroni cluster**
   (`postgres-multi-location` subchart, which itself consumes `etcd-multi-location` — three levels).
-- **Two workloads from one image.** The UI tier scales freely per location with alert execution OFF;
-  a separate **single-replica** workload in one location has it ON. Exactly-once evaluation is a
-  property of the topology, not of container agreement — nothing is elected, and no value of
-  `replicas` can create a second evaluator.
+- **Two alerting shapes, one knob: `alerting.highAvailability.enabled`, default `false`.**
+  - **OFF (default, 1.0.0 behaviour).** Two workloads from one image: the UI tier scales freely per
+    location with alert execution OFF; a separate **single-replica** workload in one location has it
+    ON. Exactly-once evaluation is a property of the topology — nothing is elected, and no value of
+    `replicas` can create a second evaluator.
+  - **ON (added in 1.1.0).** The separate workload is **not created at all**; every UI instance
+    evaluates and a stretched Redis (`redis-multi-location` subchart) coordinates exactly-once
+    *notification* delivery. Alert evaluation then survives losing a location. **Requires 3+
+    locations, hard-failed below that.**
 - Grafana is **stateless** here (no volumeset, no sticky sessions). AGPL-3.0, free to self-host,
   nothing enterprise-gated in what we ship.
-- For a single location, `grafana` 1.2.0 is the template — it also offers Redis-coordinated alerting
-  HA, which this one deliberately does not (see the traps).
+- For a single location, `grafana` 1.2.0 is the template; 1.1.0 here uses exactly that template's
+  proven Redis mechanism, stretched across locations.
 
 ## Common use cases
 
@@ -26,23 +31,33 @@
 |---|---|
 | `gvc` | **Always created**, gated only by `{{ if .Chart.IsRoot }}`. There is no `createGvc` knob — the GVC is what pins the locations. Both subcharts suppress theirs, so a release renders exactly one |
 | `workload` (standard) `{release}-grafana` | UI/API tier, `replicas` per location, `execute_alerts=false`, public by default |
-| `workload` (standard) `{release}-grafana-alerting` | The evaluator: 1 replica, `alerting.location` only, `execute_alerts=true`, **never public**. Suppressed entirely when `alerting.location: ""` |
-| `identity` + `policy` | **One** identity shared by both workloads; `reveal` on exactly the secrets they mount. No cloud bindings — this chart touches no object storage |
-| `secret` `{release}-grafana-datasources` | Datasource provisioning file, mounted by both. Only when `datasources.definitions` is set |
+| `workload` (standard) `{release}-grafana-alerting` | The dedicated evaluator: 1 replica, `alerting.location` only, `execute_alerts=true`, **never public**. Suppressed entirely when `alerting.location: ""` **or when `alerting.highAvailability.enabled` is true** |
+| `identity` + `policy` | **One** identity shared by every Grafana workload; `reveal` on exactly the secrets they mount. No cloud bindings — this chart touches no object storage. **The rendered policy is byte-identical in both alerting modes** (verified) |
+| `secret` `{release}-grafana-datasources` | Datasource provisioning file, mounted by every Grafana workload. Only when `datasources.definitions` is set |
 | subchart `postgres-multi-location` (aliased `postgresML`) | The app database: HAProxy leader endpoint per location, one Patroni primary, async replicas |
+| subchart `redis-multi-location` (aliased `redisML`) | **Only with alerting HA on.** `{release}-redis` + `{release}-sentinel`, 1 each per location, plus 2 volumesets, 2 identities, 2 policies, 2 config secrets |
+
+- Document count: **17** with HA off (identical to 1.0.0), **26** with HA on at 3 locations.
+- Four charts in the release, three of them `.Chart.IsRoot`-gated — still **exactly one `kind: gvc`**
+  (verified by render). Chart *depth* is unchanged at 3 (grafana → postgres → etcd); Redis sits beside
+  postgres at depth 2.
 
 ## Key knobs
 
 | Knob | Default | Meaning |
 |---|---|---|
-| `global.gvc.name` / `.locations[]` | `grafana-multi-location-gvc`, 3 AWS locations × 1 | **≥2 required**; `replicas` here is DATABASE members per location. The GVC **must not already exist** |
+| `global.gvc.name` / `.locations[]` | `grafana-multi-location-gvc`, 3 AWS locations × 1 | **≥2 required, ≥3 with alerting HA**; `replicas` here is DATABASE members per location, ignored by the Redis tier. The GVC **must not already exist** |
 | `image` | `grafana/grafana:13.1.3` | Alpine variant required — the boot wrapper needs a shell |
 | `replicas` | `1` | Grafana UI instances **per location**. No alerting-related restriction of any kind |
-| `database.maxOpenConn` | `10` | Per instance. `(replicas × locations + 1) × this` must stay ≤ 80; the `+1` is the evaluator. Enforced at render time |
-| `alerting.location` / `.resources.*` | `aws-us-east-1` / 500m–1000m, 512Mi–1Gi | The one location the evaluator runs in. `""` = no evaluator, alerting disabled |
+| `database.maxOpenConn` | `10` | Per instance, enforced at render time against an 80 ceiling. HA off: `(replicas × locations + 1) × this`, the `+1` being the evaluator. **HA on: the `+1` is dropped** because that workload does not exist |
+| `alerting.highAvailability.enabled` | `false` | `false` = dedicated evaluator (1.0.0 behaviour); `true` = every instance evaluates, Redis coordinates. **Needs 3+ locations** |
+| `alerting.location` / `.resources.*` | `aws-us-east-1` / 500m–1000m, 512Mi–1Gi | The one location the dedicated evaluator runs in. `""` = no evaluator, alerting disabled. **Both are IGNORED when HA is on**; `true` + `location: ""` fails at render |
+| `redisML.redis.replicasPerLocation` | `1` | Redis members per location. One is plenty — the data is a few KB of coordination keys |
+| `redisML.redis.volumeset.initialCapacity` | `10` GiB | Platform minimum, deliberately below the dependency's own 20 |
+| `redisML.{redis,sentinel}.{image,resources}` | `redis:7.4`, `200m` / `256Mi` | Pass-through. Limits only, so no `cpu:minCpu` ratio applies |
 | `admin.passwordSecretName` / `.secretKeySecretName` / `.applyPassword` / `.user` | `my-grafana-admin-password` / `my-grafana-secret-key` / `true` / `admin` | **Required prerequisite opaque secrets** (`encoding: plain`). Both workloads carry the admin env |
 | `datasources.definitions` / `.credentialSecrets` | `[]` / `[]` | Datasources as code; `$KEY` interpolation from prerequisite dictionary secrets |
-| `smtp.*` | off | The evaluator is what actually sends |
+| `smtp.*` | off | Whichever instance evaluates is what sends — the dedicated evaluator, or the coordinating UI instance with HA on |
 | `publicAccess.enabled` / `internalAccess.type` | `true` / `same-gvc` | Public applies to the UI tier only |
 | `postgresML.primaryLocation` | `aws-us-east-1` | Deviates from the subchart's `""` on purpose — Grafana has no read/write splitting |
 
@@ -94,8 +109,7 @@
   **not read by the Postgres dialect at all**, so setting it would be a no-op.
 - **Alerting HA via gossip is architecturally unavailable**, not merely unconfigured: it needs UDP
   9094 between workloads and container ports accept only grpc/http/http2/tcp. The Redis path
-  (`ha_redis_address`, shipped in `grafana` 1.2.0) works but needs a cross-region Redis tier — a
-  four-level chart, staged as 1.1.0.
+  (`ha_redis_address`) needs no peer port at all and **shipped in 1.1.0** — see the 1.1.0 section.
 - **Non-primary locations pay a cross-region round trip per query.** Grafana has no read/write
   splitting, so every dashboard load hits the one primary (96 ms us-east ↔ eu-central measured on the
   dependency, 236 ms worst case).
@@ -173,3 +187,86 @@ Two design errors found by testing, both mine:
 Both converge and self-heal. Before treating a noisy install as a defect, **check where the Patroni leader actually bootstrapped** — the fallback logs `no leader in <location> after 90s — bootstrapping here instead`.
 
 Remaining exits are Grafana's own migration lock (`pg_try_advisory_lock`, non-blocking, one attempt, and `locking_attempt_timeout_sec` is never read by the Postgres dialect). There is no configuration that removes them; only not arriving together helps.
+
+## 1.1.0 — optional Redis-backed alerting HA (2026-08-13)
+
+**One knob, `alerting.highAvailability.enabled`, default `false`. Default installs are unchanged from
+1.0.0 and that is enforced mechanically:** the OFF render was diffed against 1.0.0's and differs in
+exactly 20 lines, all of them `helm.sh/chart` / `cpln/marketplace-template-version` tags. Requires
+`redis-multi-location` **2.1.0** — 2.0.2 rendered its own GVC unconditionally and read `.Values.gvc`,
+so it could not be a subchart.
+
+**The single strongest reason to leave it off: HA multiplies DATA-SOURCE QUERY LOAD by
+(locations × replicas).** Every instance evaluates every rule; Redis dedupes the **notification**, not
+the **query**. At the default 3 locations that is 3× the queries against the user's Prometheus, Mimir
+or SQL server, permanently. For someone whose data source is already the bottleneck that is a worse
+trade than losing alert evaluation when a region dies. Say this before recommending HA. (Grafana
+13.1.3 does have `ha_single_node_evaluation`, which would cut it back to 1× — deliberately out of
+scope for 1.1.0 and staged for a later version, because it is untested and its own docs disagree with
+the tagged source on a key name.)
+
+### Traps specific to the ON path
+
+- **"We're getting every alert twice" almost always means Redis is unhealthy.** With Redis
+  unreachable each member list expires after 1 minute, every peer falls back to **position 0** and the
+  shared notification log stops propagating, so each instance sends its own copy. Grafana logs
+  `Failed to look up position, falling back to position 0`. **It never goes silent** — check the
+  `{release}-redis` / `{release}-sentinel` workloads first, not the alert rules. Grafana also boots
+  fine with Redis down (`newRedisPeer` logs and continues; it does not return an error).
+- **Blocked below 3 locations, on purpose.** Sentinel elects a master by a majority of locations (one
+  Sentinel each), so at 2 locations losing either — the exact event the knob exists for — leaves no
+  quorum. The render-time message names both remedies.
+- **The Sentinel address is the EXPLICIT per-location list, not the VIP.** Same-GVC service DNS is
+  served location-locally and does not fail over (round 1 measured 200 locally, 503 from the other two
+  locations). A single VIP would give each Grafana instance exactly one Sentinel — its local one —
+  with no fallback, which is the opposite of the point. Grafana splits the value on commas and hands
+  the result to go-redis as `Addrs`.
+- **The peer name is `$(hostname)` and that is correct.** A standard workload has no deterministic
+  replica identity (`{workload}-{replicaset}-{random}`); the HA peer name needs **uniqueness, not
+  order**, since positions come from sorting the member list. **Do not "fix" it into an index — there
+  is no index to be had.**
+- **No port 9094, no `ha_advertise_address`, ever.** Grafana's docs tell you to set them even with
+  Redis; that is not load-bearing (measured on `grafana` 1.2.0), and UDP between workloads does not
+  exist here, so adding them would only make Grafana try to bind a listener we cannot express.
+- **Notification links come from the UI tier's own `CPLN_GLOBAL_ENDPOINT` in HA mode.** The
+  evaluator's endpoint-rewriting wrapper exists **only** on the OFF path, because there the sender has
+  no inbound access and would otherwise emit a dead link. **Do not copy that rewrite onto the UI
+  tier** — it would rewrite a correct URL into a wrong one.
+- **Rule evaluation runs on the UI tier in HA mode**, which was sized for serving dashboards. A large
+  rule set may need `resources.maxCpu` raised; `alerting.resources` is unused in that mode.
+- **Silences behave differently between the modes.** HA off: they do not reliably reach the evaluator,
+  and the evaluator only answers in-GVC from its own location. HA on: they propagate through the
+  shared peer, and the 1.0.0 silence workaround is unnecessary.
+- **The cross-chart invariants are the things not to break:** `{release}-sentinel` must match
+  `redis-multi-location`'s `redis-ml.sentinel.name`, and the master name `mymaster` must match its
+  `sentinel monitor` line. Break either and the chart still renders, installs and boots — Grafana just
+  never finds a Redis, and alerting quietly duplicates.
+- **Redis/Sentinel auth is blocked at render.** `redisML.redis.passwordSecretName` and
+  `redisML.sentinel.passwordSecretName` both fail with a message; Grafana's `ha_redis_password`
+  wiring is untested here, so allowing them would produce a Redis Grafana can never reach. Note these
+  are 2.1.0's prerequisite-secret knobs — 2.0.2's plain `password` values no longer exist.
+- **The migration stagger is re-based in HA mode.** HA off: the evaluator goes first, UI locations at
+  15/30/45 s (unchanged). HA on: the location matching `postgresML.primaryLocation` goes first at
+  offset 0, the rest at 15/30. An empty `primaryLocation` falls back to plain list order — it is a
+  latency optimisation, not a correctness dependency.
+- **The first `helm upgrade` after install bounces the bundled subcharts** — with HA on that now
+  includes Redis, so expect a brief duplicate-notification window on that one upgrade.
+
+### Verified at build time (renders, not deploys)
+
+| Check | Result |
+|---|---|
+| OFF render vs 1.0.0 | 17 documents both sides; 20 differing lines, **all** chart-version tags |
+| ON render | 26 documents, **exactly one `kind: gvc`**, no `-grafana-alerting`, all 15 gvc-bearing docs on `global.gvc.name` |
+| `kind: policy` in both modes | **byte-identical** (identity too) |
+| Validation | HA+`location:""`, HA+2 locations, and both password-secret knobs each fail with their named message; 2 locations with HA off still renders |
+| Connection budget | `replicas:3`, `maxOpenConn:9` → 90 fails HA-off / 81 fails HA-on; `maxOpenConn:8` → 80 and 72 both pass |
+| Platform limits | `cpu:minCpu` ≤ 2:1 everywhere, no reserved ports, probe `failureThreshold` ≤ 20, all container port protocols lowercase |
+| Drift fields | `locationLinks` sorted, no `maxUnavailableReplicas`, `terminationGracePeriodSeconds: 90` and probe `initialDelaySeconds` declared, `direct.ports: []`, secret volumes `recoveryPolicy: retain` |
+| `bash -n` | every rendered boot wrapper in both modes |
+| Lint | clean |
+
+**Not yet verified — the test round settles these:** exactly-once delivery measured from a sink with
+the Redis master in another region; surviving the loss of the location that would have been
+`alerting.location`; the no-op-upgrade drift gate in both modes; Redis-down duplicate degradation;
+notification-link correctness in HA mode; and `redisML.redis.replicasPerLocation` live.

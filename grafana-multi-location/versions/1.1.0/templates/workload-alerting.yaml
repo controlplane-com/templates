@@ -1,15 +1,24 @@
 {{- include "grafana-ml.validate" . -}}
 {{/*
-THE ALERT EVALUATOR. Exactly-once evaluation is a property of this workload's
-TOPOLOGY — one workload, exactly one replica, exactly one location — not
-something the containers negotiate. There is nothing to elect, nothing to derive
-from a hostname (a standard workload's HOSTNAME carries a random suffix, not an
-index), and no value of `.Values.replicas` can create a second evaluator because
-that knob belongs to a different workload.
+THE DEDICATED ALERT EVALUATOR — the default shape. Exactly-once evaluation is a
+property of this workload's TOPOLOGY — one workload, exactly one replica, exactly
+one location — not something the containers negotiate. There is nothing to elect,
+nothing to derive from a hostname (a standard workload's HOSTNAME carries a
+random suffix, not an index), and no value of `.Values.replicas` can create a
+second evaluator because that knob belongs to a different workload.
 An empty alerting.location renders NOTHING here: alert rules can still be created
 and viewed, they are simply never evaluated.
+
+NOT RENDERED AT ALL when alerting.highAvailability.enabled is true. There, every
+UI instance evaluates and Redis coordinates the send, so a dedicated evaluator
+would not merely be redundant — it would be a second class of instance behaving
+differently for no reason, one more peer, and one more database connection.
+Nothing in its body is copied to the UI tier; in particular the
+CPLN_GLOBAL_ENDPOINT rewrite below exists ONLY because this workload has no
+inbound access of its own, and applying it to a UI instance would rewrite a
+correct public URL into a wrong one.
 */}}
-{{- if .Values.alerting.location }}
+{{- if and .Values.alerting.location (not .Values.alerting.highAvailability.enabled) }}
 kind: workload
 name: {{ include "grafana-ml.alerting.name" . }}
 description: Grafana alert-rule evaluator — exactly one replica, in one location, never public

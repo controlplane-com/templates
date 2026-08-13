@@ -1,17 +1,19 @@
 # ─── GVC and locations ────────────────────────────────────────────────────────
-# Lives under `global` so the postgres-multi-location subchart — and its own etcd
-# subchart, two levels down — get the same GVC and locations automatically.
-# Never maintain two location lists.
+# Lives under `global` so the postgres-multi-location subchart — its own etcd
+# subchart, two levels down — and the optional redis-multi-location subchart get
+# the same GVC and locations automatically. Never maintain two location lists.
 
 global:
   gvc:
     # This chart CREATES this GVC. It must NOT already exist: Helm adopts a GVC
     # that does, and `helm uninstall` then DELETES it and everything in it.
     name: grafana-multi-location-gvc
-    # Minimum 2 locations. The database tier needs 3 for automatic failover and
-    # 5 to survive losing two — see the survival table in the README.
+    # Minimum 2 locations, and minimum 3 with alerting HA enabled below. The
+    # database tier needs 3 for automatic failover and 5 to survive losing two —
+    # see the survival table in the README.
     # `replicas` here is DATABASE members per location. Grafana's own count per
-    # location is the top-level `replicas` below.
+    # location is the top-level `replicas` below; the optional Redis tier has its
+    # own count (redisML.redis.replicasPerLocation) and ignores this number.
     locations:
       - name: aws-us-east-1
         replicas: 1
@@ -23,7 +25,7 @@ global:
 # ─── Grafana UI tier ──────────────────────────────────────────────────────────
 image: grafana/grafana:13.1.3
 
-replicas: 1 # Grafana UI instances PER LOCATION; scale freely, alerting is a separate workload
+replicas: 1 # Grafana UI instances PER LOCATION
 
 resources:
   maxCpu: 1000m
@@ -32,19 +34,39 @@ resources:
   minMemory: 512Mi
 
 database:
-  maxOpenConn: 10 # per instance; (replicas × locations + 1) × this must stay under 80
+  maxOpenConn: 10 # per instance; see the README budget
 
 # ─── Alerting ─────────────────────────────────────────────────────────────────
-# Alert rules are evaluated by a SEPARATE single-replica workload that runs only
-# in this location and is never exposed publicly. Nothing dedupes two evaluators
-# here: Grafana's memberlist alerting HA gossips over UDP, which is unavailable
-# between workloads on this platform. (Grafana also supports a Redis-backed
-# alerting HA path, which WOULD work here — it is deferred to a later version
-# because it needs a stretched Redis tier, not because it is impossible.)
-# A replica failure self-heals; losing this whole LOCATION stops evaluation until
-# you point this elsewhere and upgrade. The UI tier is unaffected either way.
+# TWO shapes, and the default is the simpler one.
+#
+# DEFAULT (highAvailability.enabled: false) — alert rules are evaluated by a
+# SEPARATE single-replica workload that runs only in `location` and is never
+# exposed publicly. Exactly-once is a property of the topology: there is only one
+# evaluator, and it queries your datasources ONCE per rule. A replica failure
+# self-heals; losing that whole LOCATION stops evaluation until you point it
+# elsewhere and upgrade, and the UI shows no sign of it.
+#
+# highAvailability.enabled: true — the separate workload is NOT created; every UI
+# instance evaluates, and a stretched Redis (redisML below) coordinates so
+# exactly one NOTIFICATION is sent. Alert evaluation then survives losing a
+# location. Requires at least 3 locations (Redis elects its master by a majority
+# of locations). Read the cost before enabling it:
+#   * EVERY instance evaluates EVERY rule, so DATA-SOURCE QUERY LOAD MULTIPLIES
+#     BY (locations × replicas) — 3x at these defaults. Redis dedupes the
+#     notification, NOT the query. If your Prometheus is already the bottleneck,
+#     this is the worse trade.
+#   * A fourth stretched tier: +6 containers and +6 volumes at 3 locations.
+#   * If Redis is unhealthy, alerting keeps working but may send DUPLICATE
+#     notifications — it never goes silent.
+#   * Rule evaluation runs on the UI tier, so a large rule set may need
+#     `resources.maxCpu` raised above the default.
 alerting:
-  location: aws-us-east-1 # must be one of global.gvc.locations; "" = no evaluator workload, alerting disabled
+  highAvailability:
+    enabled: false
+  # Dedicated-evaluator mode ONLY — IGNORED when highAvailability.enabled is true.
+  # Must be one of global.gvc.locations; "" = no evaluator workload, alerting disabled.
+  location: aws-us-east-1
+  # Dedicated-evaluator mode ONLY — in HA mode the UI tier's `resources` apply.
   resources:
     maxCpu: 1000m
     maxMemory: 1Gi
@@ -68,7 +90,7 @@ admin:
 
 # ─── Datasources as Code (optional) ───────────────────────────────────────────
 # Grafana datasource provisioning entries, passed through verbatim. Every
-# instance of both workloads applies the same file on boot.
+# instance of every workload applies the same file on boot.
 datasources:
   definitions: []
   # - name: Prometheus
@@ -93,7 +115,8 @@ datasources:
   #   keys: [PG_PASSWORD]
 
 # ─── SMTP for Alert Emails (optional) ─────────────────────────────────────────
-# The alerting workload is what actually sends.
+# Whichever instance evaluates is what actually sends: the dedicated evaluator
+# workload by default, or the coordinating UI instance when alerting HA is on.
 smtp:
   enabled: false
   host: smtp.example.com:587 # host:port
@@ -101,15 +124,15 @@ smtp:
   # STARTTLS or TLS: Grafana refuses to send credentials over an unencrypted
   # connection ("failed to send email: unencrypted connection") and every
   # notification is then lost, with the only signal a log line in the
-  # alerting workload. Hosted relays (SES, SendGrid, Mailgun, M365, Gmail)
+  # sending workload. Hosted relays (SES, SendGrid, Mailgun, M365, Gmail)
   # are fine; a plain in-GVC relay is not — leave this empty for those.
   passwordSecretName: "" # opaque secret (encoding: plain) with the SMTP password; create BEFORE install
   fromAddress: grafana@example.com
   fromName: Grafana
 
 # ─── Access ───────────────────────────────────────────────────────────────────
-# Applies to the UI tier. The alerting workload is NEVER public; it honours
-# internalAccess only, so you can reach it in-GVC to manage silences.
+# Applies to the UI tier. The dedicated evaluator workload is NEVER public; it
+# honours internalAccess only, so you can reach it in-GVC to manage silences.
 publicAccess:
   enabled: true # UI on the canonical *.cpln.app HTTPS endpoint
 
@@ -132,7 +155,8 @@ postgresML:
     credentialsSecretName: my-grafana-db-credentials
 
   # Preferred location for the database primary. Keep it aligned with
-  # alerting.location so the hot path has no cross-region hop.
+  # alerting.location so the hot path has no cross-region hop. With alerting HA
+  # on, this also decides which Grafana location runs the schema migrations.
   primaryLocation: aws-us-east-1
 
   resources:
@@ -180,3 +204,24 @@ postgresML:
       bucket: my-grafana-bucket
       credentialsSecretName: my-grafana-minio-credentials
       prefix: grafana/backups
+
+# ─── Alerting-HA coordination (subchart: redis-multi-location) ────────────────
+# Rendered ONLY when alerting.highAvailability.enabled is true. One Redis and one
+# Sentinel per location; Sentinel failover needs a MAJORITY of locations, which
+# is why alerting HA requires 3 or more. Ships authless — the same-GVC firewall
+# is the boundary, and Redis/Sentinel passwords are rejected at render time in
+# this version because the Grafana side of that wiring is untested.
+redisML:
+  redis:
+    image: redis:7.4
+    replicasPerLocation: 1 # Redis members per location; 1 is plenty for alert coordination
+    resources:
+      cpu: 200m
+      memory: 256Mi
+    volumeset:
+      initialCapacity: 10 # GiB per member (platform minimum); coordination data is tiny
+  sentinel:
+    image: redis:7.4
+    resources:
+      cpu: 200m
+      memory: 256Mi

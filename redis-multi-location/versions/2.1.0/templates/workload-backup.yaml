@@ -1,0 +1,94 @@
+{{- include "redis-ml.validate" . -}}
+{{- if .Values.backup.enabled }}
+kind: workload
+name: {{ include "redis-ml.backup.name" . }}
+description: Redis Backup
+tags: {{- include "redis-ml.tags" . | nindent 4 }}
+gvc: {{ .Values.global.gvc.name }}
+spec:
+  type: cron
+  containers:
+    - name: backup-redis
+      cpu: {{ .Values.backup.resources.cpu | quote }}
+      memory: {{ .Values.backup.resources.memory | quote }}
+      env:
+        - name: BACKUP_PROVIDER
+          value: {{ .Values.backup.provider }}
+      {{- if eq .Values.backup.provider "aws" }}
+        - name: AWS_REGION
+          value: {{ .Values.backup.aws.region | trimPrefix "aws-" }}
+        - name: BACKUP_BUCKET
+          value: {{ .Values.backup.aws.bucket }}
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.aws.prefix | quote }}
+      {{- end }}
+      {{- if eq .Values.backup.provider "gcp" }}
+        - name: BACKUP_BUCKET
+          value: {{ .Values.backup.gcp.bucket }}
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.gcp.prefix | quote }}
+      {{- end }}
+        - name: REDIS_HOST
+          value: {{ include "redis-ml.name" . }}.{{ .Values.global.gvc.name }}.cpln.local
+        - name: REDIS_PORT
+          value: "6379"
+      {{- if .Values.redis.passwordSecretName }}
+        {{- /* From the user-created secret — never rendered into the release. */}}
+        - name: REDIS_PASSWORD
+          value: cpln://secret/{{ .Values.redis.passwordSecretName }}.payload
+      {{- end }}
+      image: {{ .Values.backup.image }}
+      inheritEnv: false
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: true
+    timeoutSeconds: 3600
+  localOptions:
+    {{- /*
+    A cron workload runs in EVERY location of its GVC, so it is suspended by
+    default above and resumed in exactly one location — otherwise every location
+    would write its own copy of the same dump into one bucket every night.
+    Written in FULL: a minimal entry makes the API backfill ITS OWN defaults
+    rather than the workload's, which would silently cut a long dump short at the
+    platform default instead of this job's timeoutSeconds: 3600.
+    */}}
+    - location: //location/{{ (index .Values.global.gvc.locations 0).name }}
+      autoscaling:
+        maxConcurrency: 0
+        maxScale: 1
+        metric: disabled
+        minScale: 1
+        scaleToZeroDelay: 300
+        target: 95
+      capacityAI: false
+      debug: false
+      suspend: false
+      timeoutSeconds: 3600
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: none
+      inboundAllowWorkload: []
+  identityLink: //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "redis-ml.identity.name" . }}
+  job:
+    concurrencyPolicy: Forbid
+    historyLimit: 5
+    restartPolicy: Never
+    schedule: {{ .Values.backup.schedule }}
+  supportDynamicTags: false
+{{- end }}

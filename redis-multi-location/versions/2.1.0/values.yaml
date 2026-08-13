@@ -1,0 +1,96 @@
+# ─── GVC and locations ────────────────────────────────────────────────────────
+# Lives under `global` so a parent chart sets it once and Helm propagates it
+# here — that is the only channel that reaches an aliased subchart.
+
+global:
+  gvc:
+    # This chart CREATES this GVC when it is installed standalone, and creates
+    # nothing when it is a subchart (the parent owns the GVC). Standalone, the
+    # name must NOT already exist: Helm adopts a GVC that does, and
+    # `helm uninstall` then DELETES it and everything in it.
+    name: redis-multi-location-gvc
+    # Minimum 2 locations. Sentinel runs exactly one instance per location and
+    # a failover needs a majority of them, so an odd count is what buys
+    # automatic failover: 3 locations survive losing one, 5 survive losing two.
+    locations:
+      - name: aws-us-east-1
+      - name: aws-eu-central-1
+      - name: aws-us-west-2
+
+# ─── Redis ────────────────────────────────────────────────────────────────────
+redis:
+  image: redis:7.4
+  # Redis instances in EVERY location. Deliberately its own knob rather than
+  # `global.gvc.locations[].replicas`: that list is shared with a parent chart,
+  # where `replicas` already means the parent's own members per location.
+  replicasPerLocation: 2
+  resources:
+    cpu: 200m
+    memory: 256Mi
+  serverCommand: redis-server # valkey-server for a Valkey image
+  extraArgs: "" # e.g. "--maxmemory 200mb --maxmemory-policy allkeys-lru"
+  # OPTIONAL PREREQUISITE SECRET — empty means no Redis password at all.
+  # An `opaque` secret (encoding `plain`) whose payload IS the password; it is
+  # never a values entry, so it never lands in the Helm release. Create it
+  # BEFORE install — see Prerequisites in the README.
+  passwordSecretName: "" # e.g. my-redis-password
+  publicAccess:
+    enabled: false
+    address: redis.my-domain.com # a domain you own; prove ownership before enabling
+  volumeset:
+    initialCapacity: 20 # GiB
+    autoscaling:
+      enabled: false
+      maxCapacity: 100 # GiB
+      minFreePercentage: 10
+      scalingFactor: 1.2
+
+# ─── Sentinel ─────────────────────────────────────────────────────────────────
+# Exactly one Sentinel per location — the count is not configurable.
+sentinel:
+  image: redis:7.4
+  resources:
+    cpu: 200m
+    memory: 256Mi
+  extraArgs: "" # e.g. "--sentinel down-after-milliseconds mymaster 5000"
+  # OPTIONAL PREREQUISITE SECRET — empty means Sentinel itself is unauthenticated.
+  # Same shape as redis.passwordSecretName, and independent of it.
+  passwordSecretName: "" # e.g. my-redis-sentinel-password
+  publicAccess:
+    enabled: false
+    address: redis-sentinel.my-domain.com # a domain you own
+
+# ─── Networking (applies to both the Redis and Sentinel workloads) ────────────
+firewall:
+  internalAllowType: same-gvc # options: same-gvc, same-org, workload-list
+  workloads: [] # only used when internalAllowType is workload-list
+  #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+  externalInboundAllowCIDR: "" # comma-separated; defaults to 0.0.0.0/0 when publicAccess is on
+  externalOutboundAllowCIDR: "" # comma-separated
+
+# ─── Backups ──────────────────────────────────────────────────────────────────
+# A nightly RDB snapshot to object storage. The cron workload runs in the FIRST
+# location only — a cron workload otherwise fires in every location of its GVC
+# and writes N copies of the same dump into one bucket.
+backup:
+  enabled: false
+  image: ghcr.io/controlplane-com/backup-images/redis-backup:1.0.0
+  schedule: "0 2 * * *" # cron schedule, default is daily at 02:00 UTC
+
+  resources:
+    cpu: 100m
+    memory: 128Mi
+
+  provider: aws # options: aws or gcp
+
+  aws:
+    bucket: my-redis-bucket
+    region: us-east-1
+    cloudAccountName: my-s3-cloud-account
+    policyName: my-redis-backup-policy # bucket-scoped IAM policy, see README
+    prefix: redis/backups # folder within the bucket
+
+  gcp:
+    bucket: my-redis-bucket
+    cloudAccountName: my-gcs-cloud-account
+    prefix: redis/backups # folder within the bucket

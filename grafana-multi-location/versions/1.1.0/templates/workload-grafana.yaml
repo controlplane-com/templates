@@ -4,7 +4,7 @@ With alerting HA on there is no dedicated evaluator workload, so THIS tier is
 what evaluates alert rules — in every location, on every replica — and Redis is
 what makes exactly one of them send the notification.
 */ -}}
-{{- $executeAlerts := ternary "true" "false" .Values.alerting.highAvailability.enabled -}}
+{{- $executeAlerts := ternary "true" "false" (and .Values.alerting.enabled .Values.alerting.highAvailability.enabled) -}}
 kind: workload
 name: {{ include "grafana-ml.name" . }}
 description: Grafana OSS UI/API tier, present in every location, HTTP :3000

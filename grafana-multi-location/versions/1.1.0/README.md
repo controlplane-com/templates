@@ -10,7 +10,7 @@ Grafana, use the `grafana` template instead.
 
 - **GVC** — multi-location, pinned to `global.gvc.locations`. **Created by this chart**, always.
 - **Grafana UI workload** (`{release}-grafana`, standard) — `replicas` instances per location, HTTP :3000, public by default. Alert execution is off here by default, and on in every instance when alerting HA is enabled.
-- **Alert evaluator workload** (`{release}-grafana-alerting`, standard) — the same image, **exactly one replica**, in `alerting.location` only, never public. This is the only instance that evaluates rules. Optional: not created when `alerting.highAvailability.enabled` is true, or when `alerting.location` is `""`.
+- **Alert evaluator workload** (`{release}-grafana-alerting`, standard) — the same image, **exactly one replica**, in `alerting.location` only, never public. This is the only instance that evaluates rules. Optional: not created when `alerting.highAvailability.enabled` is true, or when `alerting.enabled` is false.
 - **Identity and policy** — one identity shared by every Grafana workload, with `reveal` on exactly the secrets they mount. Identical in both alerting modes.
 - **Datasource secret** (`{release}-grafana-datasources`) — the provisioning file, mounted by every Grafana workload. Optional (`datasources.definitions`).
 - **App database** (`postgres-multi-location` subchart) — one Patroni cluster stretched across the same locations, with its own HAProxy tier per location and an etcd consensus store.
@@ -49,6 +49,10 @@ live in the shared database. There is no volume, no session affinity and nothing
 
 3. **Optional secrets**, if you use those features: a `dictionary` secret per entry in
    `datasources.credentialSecrets`, and an opaque secret for `smtp.passwordSecretName`.
+
+   **With `alerting.highAvailability.enabled: true`, two more are required** — opaque secrets named by
+   `redisML.redis.passwordSecretName` and `redisML.sentinel.passwordSecretName`. See
+   [Alerting-HA coordination](#alerting-ha-coordination-subchart).
 
 4. **For database backups only** — a bucket and, for AWS or GCP, a Control Plane
    [cloud account](https://docs.controlplane.com/guides/create-cloud-account). Supported providers:
@@ -117,9 +121,9 @@ database:
   maxOpenConn: 10 # per instance; see the README budget
 ```
 
-The connection budget is enforced at render time against an 80-connection ceiling. With alerting HA
-**off** it is `(replicas × locations + 1) × maxOpenConn`, the `+ 1` being the dedicated evaluator; with
-alerting HA **on** there is no evaluator, so it is `(replicas × locations) × maxOpenConn`. Exceed it and
+The connection budget is enforced at render time against an 80-connection ceiling. It is
+`(replicas × locations + 1) × maxOpenConn`, the `+ 1` being the dedicated evaluator — dropped when
+there isn't one, i.e. with alerting HA **on** or `alerting.enabled: false`. Exceed it and
 the chart refuses to install, telling you the arithmetic — raising `replicas` past that point means
 lowering `maxOpenConn`.
 
@@ -130,14 +134,16 @@ rule set may need `resources.maxCpu` raised above the default.
 
 ```yaml
 alerting:
+  # false = rules can still be created and viewed, nothing evaluates them.
+  enabled: true
   # false = a dedicated single-replica evaluator in `location` (the default).
   # true  = every UI instance evaluates and a stretched Redis coordinates the
   #         send. Needs 3+ locations and MULTIPLIES DATA-SOURCE QUERY LOAD by
   #         (locations × replicas) — read the Alerting section before enabling.
   highAvailability:
     enabled: false
-  # Dedicated-evaluator mode ONLY — IGNORED when highAvailability.enabled is true.
-  # Must be one of global.gvc.locations; "" = no evaluator workload, alerting disabled.
+  # Dedicated-evaluator mode ONLY — where the one evaluator runs. Required in
+  # that mode, must be one of global.gvc.locations, IGNORED when HA is on.
   location: aws-us-east-1
   # Dedicated-evaluator mode ONLY — in HA mode the UI tier's `resources` apply.
   resources:
@@ -297,6 +303,9 @@ Rendered **only** when `alerting.highAvailability.enabled` is true; ignored enti
 ```yaml
 redisML:
   redis:
+    # Opaque secret (encoding: plain) whose payload is the password. Create it
+    # BEFORE install; "" ships an authless Redis.
+    passwordSecretName: my-grafana-redis-password
     image: redis:7.4
     replicasPerLocation: 1 # Redis members per location; 1 is plenty for alert coordination
     resources:
@@ -305,16 +314,30 @@ redisML:
     volumeset:
       initialCapacity: 10 # GiB per member (platform minimum); coordination data is tiny
   sentinel:
+    # Independent of the Redis password — Sentinel is what Grafana asks for the
+    # current master.
+    passwordSecretName: my-grafana-sentinel-password
     image: redis:7.4
     resources:
       cpu: 200m
       memory: 256Mi
 ```
 
-This tier ships **without authentication** — the same-GVC firewall is the boundary, as it is for the
-app database. Setting `redisML.redis.passwordSecretName` or `redisML.sentinel.passwordSecretName` fails
-at render time rather than producing a Redis that Grafana can never reach: Grafana's own
-`ha_redis_password` wiring is untested in this version.
+**Enabling alerting HA therefore means creating two more secrets, not just flipping the knob.** Both
+default to placeholder names, so an install that skips them fails at the missing secret rather than
+quietly bringing up an unauthenticated coordination bus:
+
+```bash
+printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name my-grafana-redis-password --encoding plain -f -
+printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name my-grafana-sentinel-password --encoding plain -f -
+```
+
+Setting either to `""` is supported and ships that half authless, relying on the same-GVC firewall.
+That firewall is a real boundary but not one this chart controls after install — anything else you
+deploy into the GVC can reach an authless Redis, and write access to it is enough to **suppress your
+alert notifications** by claiming another peer already sent them. Grafana authenticates with
+`ha_redis_password` and `ha_redis_sentinel_password`, reading the same secrets the Redis tier does, so
+the two sides cannot drift.
 
 ## Storage setup
 
@@ -377,11 +400,15 @@ No cloud account is needed.
 
 ## Alerting
 
+`alerting.enabled: false` turns rule evaluation off entirely: no evaluator workload is created and no
+instance executes rules, so rules and contact points can still be created and viewed but nothing ever
+fires. Everything below concerns the two shapes available while alerting is on.
+
 Grafana's memberlist alerting HA coordinates instances over a UDP gossip channel that is not available
 between workloads on this platform. Grafana's **Redis-backed** coordination needs no peer port at all,
 and that is what `alerting.highAvailability.enabled` turns on. Pick a mode:
 
-| | `enabled: false` (default) | `enabled: true` |
+| | `highAvailability.enabled: false` (default) | `highAvailability.enabled: true` |
 |---|---|---|
 | Who evaluates rules | the dedicated `{release}-grafana-alerting` workload — 1 replica, 1 location | **every UI instance**, in every location |
 | Exactly-once delivery | a property of the topology: there is only one evaluator | Redis-coordinated: peers order themselves and share a notification log |
@@ -430,9 +457,9 @@ evaluator. Two consequences:
   everywhere, but there is no local upstream in the other locations, so they get a 503. Run the
   command from a workload in the alerting location.
 
-Setting `alerting.location: ""` renders no evaluator at all: rules can be created and viewed, and are
-never evaluated. Combining that with `highAvailability.enabled: true` is a contradiction and fails at
-render time; with HA on, `alerting.location` and `alerting.resources` are ignored.
+`alerting.enabled: false` renders no evaluator at all: rules can be created and viewed, and are never
+evaluated. Combining it with `highAvailability.enabled: true` is a contradiction and fails at render
+time; with HA on, `alerting.location` and `alerting.resources` are ignored.
 
 ## Connecting
 

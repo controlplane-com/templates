@@ -6,7 +6,7 @@ one location — not something the containers negotiate. There is nothing to ele
 nothing to derive from a hostname (a standard workload's HOSTNAME carries a
 random suffix, not an index), and no value of `.Values.replicas` can create a
 second evaluator because that knob belongs to a different workload.
-An empty alerting.location renders NOTHING here: alert rules can still be created
+alerting.enabled: false renders NOTHING here: alert rules can still be created
 and viewed, they are simply never evaluated.
 
 NOT RENDERED AT ALL when alerting.highAvailability.enabled is true. There, every
@@ -18,7 +18,7 @@ CPLN_GLOBAL_ENDPOINT rewrite below exists ONLY because this workload has no
 inbound access of its own, and applying it to a UI instance would rewrite a
 correct public URL into a wrong one.
 */}}
-{{- if and .Values.alerting.location (not .Values.alerting.highAvailability.enabled) }}
+{{- if include "grafana-ml.evaluatorRenders" . }}
 kind: workload
 name: {{ include "grafana-ml.alerting.name" . }}
 description: Grafana alert-rule evaluator — exactly one replica, in one location, never public

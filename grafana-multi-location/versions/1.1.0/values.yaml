@@ -37,36 +37,26 @@ database:
   maxOpenConn: 10 # per instance; see the README budget
 
 # ─── Alerting ─────────────────────────────────────────────────────────────────
-# TWO shapes, and the default is the simpler one.
+# enabled: false turns rule evaluation off entirely — rules can still be created
+# and viewed, nothing ever evaluates them.
 #
-# DEFAULT (highAvailability.enabled: false) — alert rules are evaluated by a
-# SEPARATE single-replica workload that runs only in `location` and is never
-# exposed publicly. Exactly-once is a property of the topology: there is only one
-# evaluator, and it queries your datasources ONCE per rule. A replica failure
-# self-heals, but the healing RE-NOTIFIES: restarting the evaluator delivers a
-# duplicate of anything currently firing (measured). Losing that whole LOCATION
-# stops evaluation until you point it elsewhere and upgrade, and the UI shows no
-# sign of it.
+# highAvailability.enabled: false (default) — a SEPARATE single-replica workload
+# in `location` evaluates every rule, and exactly-once follows from there being
+# only one of it. Restarting it re-notifies whatever is firing at the time, and
+# losing that location stops evaluation with no sign of it in the UI.
 #
-# highAvailability.enabled: true — the separate workload is NOT created; every UI
-# instance evaluates, and a stretched Redis (redisML below) coordinates so
-# exactly one NOTIFICATION is sent. Alert evaluation then survives losing a
-# location. Requires at least 3 locations (Redis elects its master by a majority
-# of locations). Read the cost before enabling it:
-#   * EVERY instance evaluates EVERY rule, so DATA-SOURCE QUERY LOAD MULTIPLIES
-#     BY (locations × replicas) — 3x at these defaults. Redis dedupes the
-#     notification, NOT the query. If your Prometheus is already the bottleneck,
-#     this is the worse trade.
-#   * A fourth stretched tier: +6 containers and +6 volumes at 3 locations.
-#   * If Redis is unhealthy, alerting keeps working but may send DUPLICATE
-#     notifications — it never goes silent.
-#   * Rule evaluation runs on the UI tier, so a large rule set may need
-#     `resources.maxCpu` raised above the default.
+# highAvailability.enabled: true — no separate workload; every UI instance
+# evaluates and a stretched Redis (redisML below) picks exactly one to SEND, so
+# alerting survives losing a location. Needs 3+ locations. The costs: datasource
+# query load multiplies by (locations × replicas) because Redis dedupes the
+# notification and not the query; a large rule set may need resources.maxCpu
+# raised; and if Redis is unhealthy alerting DUPLICATES rather than going silent.
 alerting:
+  enabled: true
   highAvailability:
     enabled: false
-  # Dedicated-evaluator mode ONLY — IGNORED when highAvailability.enabled is true.
-  # Must be one of global.gvc.locations; "" = no evaluator workload, alerting disabled.
+  # Dedicated-evaluator mode ONLY — where the one evaluator runs. Must be one of
+  # global.gvc.locations. IGNORED when highAvailability.enabled is true.
   location: aws-us-east-1
   # Dedicated-evaluator mode ONLY — in HA mode the UI tier's `resources` apply.
   resources:
@@ -209,12 +199,14 @@ postgresML:
 
 # ─── Alerting-HA coordination (subchart: redis-multi-location) ────────────────
 # Rendered ONLY when alerting.highAvailability.enabled is true. One Redis and one
-# Sentinel per location; Sentinel failover needs a MAJORITY of locations, which
-# is why alerting HA requires 3 or more. Ships authless — the same-GVC firewall
-# is the boundary, and Redis/Sentinel passwords are rejected at render time in
-# this version because the Grafana side of that wiring is untested.
+# Sentinel per location; failover needs a majority of them, which is why alerting
+# HA requires 3+ locations.
 redisML:
   redis:
+    # RECOMMENDED. Opaque secret (encoding: plain) whose payload is the password,
+    # created BEFORE install. Empty = authless, and then anything else you deploy
+    # into this GVC can suppress your alert notifications.
+    passwordSecretName: my-grafana-redis-password
     image: redis:7.4
     replicasPerLocation: 1 # Redis members per location; 1 is plenty for alert coordination
     resources:
@@ -223,6 +215,9 @@ redisML:
     volumeset:
       initialCapacity: 10 # GiB per member (platform minimum); coordination data is tiny
   sentinel:
+    # Same shape as redis.passwordSecretName and independent of it — Sentinel is
+    # what Grafana asks for the current master.
+    passwordSecretName: my-grafana-sentinel-password
     image: redis:7.4
     resources:
       cpu: 200m

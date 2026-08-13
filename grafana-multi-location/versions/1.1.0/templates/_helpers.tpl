@@ -28,6 +28,18 @@ rendered at all.
 {{- end }}
 
 {{/*
+Does the dedicated evaluator workload render? THE single definition of that
+condition — the workload itself, the connection budget and validation all ask
+here, because three hand-written copies of the same `and` is how they drift.
+
+Returns a non-empty string for true and "" for false; a Helm template cannot
+return a real boolean, so callers must use `include`, never a bare `if`.
+*/}}
+{{- define "grafana-ml.evaluatorRenders" -}}
+{{- if and .Values.alerting.enabled (not .Values.alerting.highAvailability.enabled) -}}yes{{- end -}}
+{{- end }}
+
+{{/*
 Datasource Provisioning Secret Name
 */}}
 {{- define "grafana-ml.secretDatasources.name" -}}
@@ -202,6 +214,22 @@ byte-identical to 1.0.0's apart from the chart-version tags.
 # collide. Grafana appends the ':' delimiter itself.
 - name: GF_UNIFIED_ALERTING_HA_REDIS_PREFIX
   value: {{ include "grafana-ml.name" $root }}
+{{- /*
+Two INDEPENDENT credentials, and Grafana needs both when both are set: it
+authenticates to Sentinel to ask which node is master, then to that node. Setting
+only one is a legitimate configuration (redis-multi-location enforces neither),
+so each is gated separately rather than on a single toggle. The secrets are the
+same ones the Redis tier reads, so the payload is guaranteed to match — there is
+no second copy to drift.
+*/ -}}
+{{- if dig "redis" "passwordSecretName" "" $v.redisML }}
+- name: GF_UNIFIED_ALERTING_HA_REDIS_PASSWORD
+  value: 'cpln://secret/{{ dig "redis" "passwordSecretName" "" $v.redisML }}.payload'
+{{- end }}
+{{- if dig "sentinel" "passwordSecretName" "" $v.redisML }}
+- name: GF_UNIFIED_ALERTING_HA_REDIS_SENTINEL_PASSWORD
+  value: 'cpln://secret/{{ dig "sentinel" "passwordSecretName" "" $v.redisML }}.payload'
+{{- end }}
 {{- end }}
 # ── Hardening: no signup, no anonymous access, no telemetry ──
 - name: GF_USERS_ALLOW_SIGN_UP
@@ -408,9 +436,12 @@ done
 {{- $names = append $names .name -}}
 {{- end -}}
 {{- include "grafana-ml.validateAlertingHA" (dict "root" . "names" $names) -}}
-{{- if and .Values.alerting.location (not .Values.alerting.highAvailability.enabled) -}}
+{{- if include "grafana-ml.evaluatorRenders" . -}}
+{{- if not .Values.alerting.location -}}
+{{- fail (printf "grafana-multi-location: alerting.location is required while alerting.enabled is true and alerting.highAvailability.enabled is false — it names the ONE location the dedicated evaluator runs in, and there is nowhere sensible to default it to. Set it to one of %s, or set alerting.enabled: false to turn rule evaluation off." (join ", " $names)) -}}
+{{- end -}}
 {{- if not (has .Values.alerting.location $names) -}}
-{{- fail (printf "grafana-multi-location: alerting.location '%s' is not one of the configured global.gvc.locations (%s). The alert evaluator would run nowhere and no rule would ever be evaluated. Set it to \"\" only if you deliberately want alerting disabled." .Values.alerting.location (join ", " $names)) -}}
+{{- fail (printf "grafana-multi-location: alerting.location '%s' is not one of the configured global.gvc.locations (%s). The alert evaluator would run nowhere and no rule would ever be evaluated." .Values.alerting.location (join ", " $names)) -}}
 {{- end -}}
 {{- end -}}
 {{- if not .Values.admin.secretKeySecretName -}}
@@ -447,25 +478,11 @@ caveats, because both combinations promise something the chart cannot deliver.
 {{- $root := .root -}}
 {{- $names := .names -}}
 {{- if $root.Values.alerting.highAvailability.enabled -}}
-{{- if not $root.Values.alerting.location -}}
-{{- fail "grafana-multi-location: alerting.location: \"\" means \"no alerting at all\", which contradicts alerting.highAvailability.enabled: true. Leave location at its default (it is ignored in HA mode), or set alerting.highAvailability.enabled: false to keep the single dedicated evaluator." -}}
+{{- if not $root.Values.alerting.enabled -}}
+{{- fail "grafana-multi-location: alerting.highAvailability.enabled: true contradicts alerting.enabled: false — HA is a choice about HOW rules are evaluated, not whether they are. Set alerting.enabled: true to coordinate evaluation across every location, or leave highAvailability.enabled: false to keep alerting off entirely." -}}
 {{- end -}}
 {{- if lt (len $names) 3 -}}
 {{- fail (printf "grafana-multi-location: alerting.highAvailability.enabled requires at least 3 entries in global.gvc.locations, got %d. The Redis tier that coordinates it elects a master by a MAJORITY of locations (one Sentinel each), so with 2 locations the loss of either one — the exact event this knob exists to survive — leaves no quorum and every instance then sends duplicate notifications. Add a third location, or set alerting.highAvailability.enabled: false and use the single dedicated evaluator in alerting.location." (len $names)) -}}
-{{- end -}}
-{{/*
-Grafana can authenticate to Redis and to Sentinel (ha_redis_password /
-ha_redis_sentinel_password exist at v13.1.3), but that wiring is untested here,
-so a password that the Redis tier WOULD enforce is blocked rather than silently
-producing a Grafana that can never connect. Same stance as the single-location
-`grafana` template. The keys are redis-multi-location 2.1.0's prerequisite-secret
-knobs; `dig` so an override that drops the block still renders.
-*/}}
-{{- if dig "redis" "passwordSecretName" "" $root.Values.redisML -}}
-{{- fail "grafana-multi-location: redisML.redis.passwordSecretName is not supported in this version — leave it empty. Grafana's ha_redis_password wiring for alerting HA is untested here, so a password-protected Redis would simply never be reachable; the same-GVC firewall is the boundary, as it is for the app database." -}}
-{{- end -}}
-{{- if dig "sentinel" "passwordSecretName" "" $root.Values.redisML -}}
-{{- fail "grafana-multi-location: redisML.sentinel.passwordSecretName is not supported in this version — leave it empty. Grafana's ha_redis_sentinel_password wiring for alerting HA is untested here, so a password-protected Sentinel would simply never be reachable; the same-GVC firewall is the boundary." -}}
 {{- end -}}
 {{- end -}}
 {{- end }}
@@ -481,7 +498,8 @@ are in fact fine.
 */}}
 {{- define "grafana-ml.validateConnectionBudget" -}}
 {{- $instances := mul (int .Values.replicas) (len .Values.global.gvc.locations) -}}
-{{- $evaluator := and .Values.alerting.location (not .Values.alerting.highAvailability.enabled) -}}
+{{/* A real bool: `ternary` below rejects the helper's string. */}}
+{{- $evaluator := ne (include "grafana-ml.evaluatorRenders" .) "" -}}
 {{- if $evaluator -}}
 {{- $instances = add1 $instances -}}
 {{- end -}}

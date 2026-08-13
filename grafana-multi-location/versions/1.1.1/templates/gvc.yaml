@@ -1,0 +1,31 @@
+{{- include "grafana-ml.validate" . -}}
+{{/*
+This chart CREATES its GVC (createsGvc: true) — it is not optional, because the
+GVC is what pins the deployment's locations. The only exception is being consumed
+as a subchart, where the parent renders the one GVC for the release.
+.Chart.IsRoot is a Helm built-in, true only for the top-level chart. It is absent
+from Helm's Built-in Objects documentation page, so do not "fix" it away. The
+bundled postgres-multi-location subchart — and its own etcd-multi-location
+subchart, two levels down — gate their GVCs the same way, so exactly one
+`kind: gvc` document exists per release.
+*/}}
+{{- if .Chart.IsRoot }}
+kind: gvc
+name: {{ .Values.global.gvc.name }}
+description: Grafana multi-location GVC
+tags:
+  {{- include "grafana-ml.tags" . | nindent 2 }}
+spec:
+  staticPlacement:
+    locationLinks:
+    {{- /*
+    Sorted, because the API STORES locationLinks alphabetically. Rendering them
+    in values order makes every install drift against its own manifest from the
+    moment it is created.
+    */}}
+    {{- $names := list }}
+    {{- range .Values.global.gvc.locations }}{{ $names = append $names .name }}{{ end }}
+    {{- range (sortAlpha $names) }}
+      - //location/{{ . }}
+    {{- end }}
+{{- end }}

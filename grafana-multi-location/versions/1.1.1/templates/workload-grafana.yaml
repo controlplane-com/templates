@@ -1,0 +1,180 @@
+{{- include "grafana-ml.validate" . -}}
+{{- /*
+With alerting HA on there is no dedicated evaluator workload, so THIS tier is
+what evaluates alert rules — in every location, on every replica — and Redis is
+what makes exactly one of them send the notification.
+*/ -}}
+{{- $executeAlerts := ternary "true" "false" (and .Values.alerting.enabled .Values.alerting.highAvailability.enabled) -}}
+kind: workload
+name: {{ include "grafana-ml.name" . }}
+description: Grafana OSS UI/API tier, present in every location, HTTP :3000
+gvc: {{ .Values.global.gvc.name }}
+tags:
+  {{- include "grafana-ml.tags" . | nindent 2 }}
+spec:
+  # Stateless by design: all app state (users, dashboards, datasources, alert
+  # rules, alert state, sessions) lives in the stretched Postgres cluster — no
+  # volumeset, no sticky sessions, nothing to hand over between locations.
+  type: standard
+  identityLink: //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "grafana-ml.identity.name" . }}
+  containers:
+    - name: grafana
+      image: {{ .Values.image }}
+      # Boot wrapper: cpln env values cannot interpolate other env vars, so the
+      # runtime-derived exports happen in bash before exec'ing the image
+      # entrypoint (/run.sh; bash is in the alpine-based image).
+      command: /bin/bash
+      args:
+        - -c
+        - |-
+          {{- if .Values.publicAccess.enabled }}
+          # This tier's own canonical endpoint is the public URL. Already a FULL
+          # url (https://…) — never prepend a scheme.
+          export GF_SERVER_ROOT_URL="${CPLN_GLOBAL_ENDPOINT}"
+          {{- else }}
+          # No public endpoint to advertise; same-GVC internal DNS is a stable,
+          # documented form and is safe to build from parts.
+          export GF_SERVER_ROOT_URL="http://{{ include "grafana-ml.name" . }}.{{ .Values.global.gvc.name }}.cpln.local:3000/"
+          {{- end }}
+          {{- if .Values.alerting.highAvailability.enabled }}
+          # Peer identity in the Redis-coordinated alerting cluster. It needs
+          # UNIQUENESS, not order: positions come from sorting the member list,
+          # so any total order works. A standard workload's HOSTNAME is
+          # {workload}-{replicaset}-{random} — the replicaset hash already
+          # differs per location and the suffix per replica. There is no index to
+          # be had here, so do not try to derive one.
+          export GF_UNIFIED_ALERTING_HA_REDIS_PEER_NAME="$(hostname)"
+          {{- end }}
+          {{- include "grafana-ml.dbGate" . | nindent 10 }}
+            {{- include "grafana-ml.migrationStagger" . | nindent 10 }}
+          exec /run.sh
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      env:
+        {{- include "grafana-ml.env" (dict "root" . "executeAlerts" $executeAlerts) | nindent 8 }}
+      ports:
+        - number: 3000
+          protocol: http
+      {{- if .Values.datasources.definitions }}
+      volumes:
+        - path: /etc/grafana/provisioning/datasources/cpln-datasources.yaml
+          # Declared because the API backfills it on secret volumes.
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "grafana-ml.secretDatasources.name" . }}.payload
+      {{- end }}
+      readinessProbe:
+        httpGet:
+          path: /api/health
+          port: 3000
+          # explicit server default — prevents cosmetic drift vs the live workload
+          scheme: HTTP
+        # Declared because the API backfills it; omitting it means every install
+        # drifts from its own manifest the moment it is created.
+        initialDelaySeconds: 10
+        # 20 × 10 s = 200 s. Deliberately SHORTER than the 300 s database gate:
+        # readiness is the fast unhealthy signal, so a boot still waiting on the
+        # database shows as not-ready instead of looking fine. Liveness is what
+        # must outlast the gate. 20 is the platform MAXIMUM for failureThreshold
+        # — raise periodSeconds, never this.
+        periodSeconds: 10
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 3
+      # Every boot runs app-DB migrations under a Postgres advisory lock, and on
+      # a cold start an instance may also be waiting behind another instance's
+      # lock. A liveness kill in that window is the classic crash-loop.
+      livenessProbe:
+        httpGet:
+          path: /api/health
+          port: 3000
+          scheme: HTTP
+        # Declared because the API backfills it (see the readiness probe above).
+        # 360 s > the 300 s database gate: liveness must not start killing while
+        # the gate is still legitimately waiting. Coupled to grafana-ml.dbGate.
+        initialDelaySeconds: 360
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.replicas | int }}
+      # Fixed counts are a correctness requirement here, not a preference:
+      # demand-driven scaling and capacityAI would both resize this tier
+      # underneath the connection budget.
+      metric: disabled
+      minScale: {{ .Values.replicas | int }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  localOptions:
+    # Written in FULL for every location: a minimal localOptions entry makes the
+    # API backfill its OWN defaults, which would leave a location eligible to
+    # scale on concurrency and boot Grafana instances nobody asked for.
+    {{- range $location := .Values.global.gvc.locations }}
+    - location: //location/{{ $location.name }}
+      autoscaling:
+        maxConcurrency: 0
+        maxScale: {{ $.Values.replicas | int }}
+        metric: disabled
+        minScale: {{ $.Values.replicas | int }}
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      suspend: false
+      timeoutSeconds: 30
+    {{- end }}
+  rolloutOptions:
+    {{- /*
+    maxUnavailableReplicas is deliberately NOT set. It has been observed absent
+    from the stored spec on a live workload, so sending it risks permanent drift
+    and implies a rolling-restart limit that may not be in force. Surge is the
+    lever we do rely on; terminationGracePeriodSeconds is declared because the
+    API backfills 90.
+    NOTE: an upgrade also restarts the bundled database tier in every location at
+    once (~117 s of failed writes, platform behaviour) — these options cannot
+    make a chart-wide upgrade seamless, and the README does not claim they do.
+    */}}
+    maxSurgeReplicas: "1"
+    minReadySeconds: 30
+    scalingPolicy: Parallel
+    terminationGracePeriodSeconds: 90
+  firewallConfig:
+    external:
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      # Grafana must reach the user's datasources, which are by definition
+      # outside the GVC.
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      # Declared empty because the API backfills these.
+      inboundBlockedCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if and (eq .Values.internalAccess.type "workload-list") .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  loadBalancer:
+    # Grafana is HTTP, so the canonical *.cpln.app endpoint is the public path;
+    # direct ports exist for non-HTTP exposure only. No peer traffic to address
+    # per replica either.
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

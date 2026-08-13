@@ -1,0 +1,42 @@
+{{- include "grafana-ml.validate" . -}}
+kind: policy
+name: {{ include "grafana-ml.policy.name" . }}
+description: Grafana multi-location secret access
+tags:
+  {{- include "grafana-ml.tags" . | nindent 2 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "grafana-ml.identity.name" . }}
+targetKind: secret
+{{/* Exactly the secrets the two workloads mount, and nothing else. */}}
+targetLinks:
+  {{- if .Values.admin.applyPassword }}
+  - //secret/{{ .Values.admin.passwordSecretName }}
+  {{- end }}
+  - //secret/{{ .Values.admin.secretKeySecretName }}
+  - //secret/{{ include "grafana-ml.postgres.secret.name" . }}
+  {{- if .Values.datasources.definitions }}
+  - //secret/{{ include "grafana-ml.secretDatasources.name" . }}
+  {{- end }}
+  {{- range .Values.datasources.credentialSecrets }}
+  - //secret/{{ .name }}
+  {{- end }}
+  {{- if and .Values.smtp.enabled .Values.smtp.passwordSecretName }}
+  - //secret/{{ .Values.smtp.passwordSecretName }}
+  {{- end }}
+  {{- /*
+  Alerting-HA Redis credentials. The Redis tier grants its OWN identity reveal on
+  these; this grant is for the Grafana identity, which reads the same secrets to
+  authenticate as a client. Gated on HA so a default install's policy does not
+  name secrets that were never required.
+  */}}
+  {{- if .Values.alerting.highAvailability.enabled }}
+  {{- if dig "redis" "passwordSecretName" "" .Values.redisML }}
+  - //secret/{{ dig "redis" "passwordSecretName" "" .Values.redisML }}
+  {{- end }}
+  {{- if dig "sentinel" "passwordSecretName" "" .Values.redisML }}
+  - //secret/{{ dig "sentinel" "passwordSecretName" "" .Values.redisML }}
+  {{- end }}
+  {{- end }}

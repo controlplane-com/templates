@@ -24,9 +24,9 @@ spec:
         - name: DB_USER
           value: postgres
         - name: DB_PASSWORD
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
         - name: DB_NAME
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresDatabase
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.database
         - name: POOL_MODE
           value: {{ .Values.pgbouncer.poolMode | quote }}
         - name: DEFAULT_POOL_SIZE

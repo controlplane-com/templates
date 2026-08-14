@@ -2,7 +2,7 @@
 ---
 kind: workload
 name: {{ include "supabase.studio.name" . }}
-description: Supabase Studio — web dashboard and pg_meta API (jwt-{{ .Values.jwt.serviceRoleKey | sha256sum | trunc 8 }})
+description: Supabase Studio — web dashboard and pg_meta API
 tags: {{- include "supabase.tags" . | nindent 2 }}
 gvc: {{ .Values.global.cpln.gvc }}
 spec:
@@ -20,11 +20,11 @@ spec:
         - name: STUDIO_PG_META_URL
           value: http://localhost:8080
         - name: DASHBOARD_USERNAME
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.studioUsername
+          value: {{ .Values.studio.username | quote }}
         - name: DASHBOARD_PASSWORD
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.studioPassword
+          value: cpln://secret/{{ .Values.studio.passwordSecretName }}.payload
         - name: POSTGRES_PASSWORD
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
         - name: DEFAULT_ORGANIZATION_NAME
           value: Default Organization
         - name: DEFAULT_PROJECT_NAME
@@ -34,11 +34,11 @@ spec:
         - name: SUPABASE_PUBLIC_URL
           value: {{ include "supabase.siteUrl" . }}
         - name: SUPABASE_ANON_KEY
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.anonKey
+          value: cpln://secret/{{ .Values.jwt.secretName }}.anonKey
         - name: SUPABASE_SERVICE_KEY
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.serviceRoleKey
+          value: cpln://secret/{{ .Values.jwt.secretName }}.serviceRoleKey
         - name: AUTH_JWT_SECRET
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.jwtSecret
+          value: cpln://secret/{{ .Values.jwt.secretName }}.secret
         - name: NEXT_PUBLIC_ENABLE_LOGS
           value: "false"
       ports:
@@ -68,11 +68,11 @@ spec:
         - name: PG_META_DB_PORT
           value: "5432"
         - name: PG_META_DB_NAME
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresDatabase
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.database
         - name: PG_META_DB_USER
           value: supabase_admin
         - name: PG_META_DB_PASSWORD
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
         - name: PG_META_DB_SSL_MODE
           value: disable
       ports:

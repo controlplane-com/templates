@@ -3,8 +3,13 @@
 # (pgvector, pg_graphql, pg_net, pgjwt, etc.) not present in the official image.
 postgres:
   image: supabase/postgres:15.8.1.060
-  password: change-me-postgres
-  database: postgres
+
+  # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL.
+  # A `dictionary` secret holding exactly two keys: `password` and `database`.
+  # If it does not exist at install time the deployment WEDGES waiting on it and
+  # looks broken. See Prerequisites in the README for the exact command.
+  # The superuser name is fixed at `postgres` by the Supabase image — not configurable.
+  credentialsSecretName: my-supabase-postgres-credentials
 
   resources:
     minCpu: 500m
@@ -82,7 +87,9 @@ auth:
     host: smtp.example.com
     port: 587
     user: smtp-user
-    password: smtp-password
+    # REQUIRED WHEN smtp.enabled — an `opaque` secret (encoding: plain) holding
+    # only the SMTP password, created BEFORE install. Example: my-supabase-smtp-password
+    passwordSecretName: ""
     senderName: Supabase
     senderEmail: noreply@example.com
 
@@ -138,10 +145,10 @@ storage:
       scalingFactor: 1.2
 
   s3:             # only used when backend is s3
-    bucket: cpln-backup-bucket
+    bucket: my-supabase-storage-bucket
     region: us-east-1
     cloudAccountName: my-s3-cloudaccount
-    policyName: my-backup-policy  # IAM policy granting s3:GetObject, s3:PutObject, s3:DeleteObject on the bucket
+    policyName: my-supabase-storage-policy  # IAM policy granting s3:GetObject, s3:PutObject, s3:DeleteObject on the bucket
 
   gcs:            # only used when backend is gcs
     # GCS is accessed via S3-compatible API using HMAC keys (no cloud account needed)
@@ -155,8 +162,11 @@ storage:
 studio:
   enabled: true
   image: supabase/studio:2025.06.02-sha-8f2993d
-  username: supabase
-  password: change-me-studio
+  username: supabase  # dashboard login name (not sensitive)
+  # REQUIRED PREREQUISITE SECRET when studio.enabled — an `opaque` secret
+  # (encoding: plain) holding only the dashboard password, created BEFORE install.
+  # This login is reachable from the internet whenever studio.allowedCidrs is set.
+  passwordSecretName: my-supabase-studio-password
   resources:
     minCpu: 100m
     minMemory: 256Mi
@@ -186,17 +196,17 @@ studio:
       maxMemory: 256Mi
 
 # ── JWT ───────────────────────────────────────────────────────────────────────
-# anonKey and serviceRoleKey are JWTs signed with jwtSecret. The defaults below
-# are Supabase's official published development values and work together out of
-# the box. CHANGE ALL THREE before deploying to production.
-# To generate your own: https://supabase.com/docs/guides/self-hosting/docker#generate-api-keys
+# REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL.
+# A `dictionary` secret holding exactly four keys:
+#   secret         — the HMAC-SHA256 signing key (≥ 32 chars)
+#   anonKey        — a JWT with role "anon", signed by `secret`
+#   serviceRoleKey — a JWT with role "service_role", signed by `secret`
+#                    (bypasses row-level security — treat it as a root password)
+#   secretKeyBase  — Realtime (Phoenix) cookie-signing key (≥ 64 chars)
+# The keys must be signed by `secret` or every service returns bad_jwt. The README
+# has a copy-paste snippet that mints all four consistently.
 jwt:
-  secret: your-super-secret-jwt-token-with-at-least-32-characters-long
-  # secretKeyBase is used by Realtime (Phoenix) for cookie signing — must be ≥ 64 chars.
-  # Generate with: openssl rand -base64 64
-  secretKeyBase: your-super-secret-key-base-used-by-realtime-must-be-at-least-64-characters-long!!
-  anonKey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlLWRlbW8iLCJpYXQiOjE2NDE3NjkyMDAsImV4cCI6MTc5OTUzNTYwMH0.zQomPPgIVgwVRMh3NJhhAl2cJ-GKQgNXpMTbIKxKyoo
-  serviceRoleKey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UtZGVtbyIsImlhdCI6MTY0MTc2OTIwMCwiZXhwIjoxNzk5NTM1NjAwfQ.4HviqYnTKiRK-RJvWzgAAuaFiq8--foTrXQpl7HYMU4
+  secretName: my-supabase-jwt
 
 # ── PgBouncer (connection pooling) ───────────────────────────────────────────
 pgbouncer:

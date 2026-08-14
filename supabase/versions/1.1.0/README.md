@@ -1,29 +1,91 @@
 # Supabase
 
-This app deploys a self-hosted Supabase instance on Control Plane — a PostgreSQL backend-as-a-service with built-in authentication, auto-generated REST and GraphQL APIs, realtime subscriptions, file storage, and a web dashboard. All services run in your own GVC with no dependency on Supabase cloud.
+Self-hosted Supabase — a PostgreSQL backend-as-a-service with built-in authentication, auto-generated REST and GraphQL APIs, realtime subscriptions, file storage, and a web dashboard. Everything runs in your own GVC with no dependency on Supabase cloud.
 
 ## Architecture
 
 - **Postgres**: Supabase-patched PostgreSQL 15 with pgvector, pg_graphql, pg_net, pgjwt, and other required extensions pre-installed
-- **Kong**: API gateway — the single public entry point that routes traffic to PostgREST, Auth, Realtime, and Storage
+- **Kong**: API gateway — the single entry point that routes traffic to PostgREST, Auth, Realtime, and Storage, and the only workload they accept traffic from
 - **PostgREST**: Auto-generated REST and GraphQL API served from your Postgres schema
-- **Auth (GoTrue)**: Full-featured auth service supporting email/password, magic links, OAuth providers, and JWT sessions
-- **Realtime**: WebSocket server that streams database change events to subscribed clients
-- **Storage**: Object storage API backed by S3, GCS, or a local volume
-- **Studio**: Web dashboard for managing your database, auth users, storage, and API settings
-- **pg_meta**: Postgres metadata API (runs as a sidecar inside the Studio workload)
+- **Auth (GoTrue)**: Email/password, magic links, OAuth providers, and JWT sessions
+- **Realtime** (optional): WebSocket server that streams database change events to subscribed clients
+- **Storage** (optional): Object storage API backed by S3, GCS, or a local volume
+- **Studio** (optional): Web dashboard, with the **pg_meta** metadata API as a sidecar in the same workload
 - **PgBouncer** (optional): Connection pooler that multiplexes app connections into a smaller pool of real database connections
 - **Backup** (optional): Logical (`pg_dump` cron) or WAL-G (continuous WAL archiving with base backups)
+- **Secrets, identity, and policy**: the Kong routing config plus database init scripts, and a least-privilege policy granting the shared identity `reveal` on exactly the secrets it uses — including your prerequisite secrets
+
+## Prerequisites
+
+**Three secrets must exist BEFORE you install** — the deployment wedges waiting on them otherwise. None of these values ever passes through Helm values, so none of them lands in the Helm release.
+
+1. **JWT keys** (`jwt.secretName`) — a **dictionary** secret with exactly the keys `secret`, `anonKey`, `serviceRoleKey`, and `secretKeyBase`. `anonKey` and `serviceRoleKey` must be HMAC-SHA256 JWTs **signed by** `secret`; you cannot invent them independently. This snippet mints all four consistently — run it as-is:
+
+   ```bash
+   JWT_SECRET="$(openssl rand -hex 32)"
+
+   b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+   mint_key() {
+     header=$(printf '%s' '{"alg":"HS256","typ":"JWT"}' | b64url)
+     iat=$(date +%s); exp=$((iat + 157680000))   # 5 years
+     payload=$(printf '{"role":"%s","iss":"supabase","iat":%s,"exp":%s}' "$1" "$iat" "$exp" | b64url)
+     sig=$(printf '%s.%s' "$header" "$payload" | openssl dgst -sha256 -hmac "$JWT_SECRET" -binary | b64url)
+     printf '%s.%s.%s' "$header" "$payload" "$sig"
+   }
+
+   cpln secret create-dictionary --name my-supabase-jwt \
+     --entry secret="$JWT_SECRET" \
+     --entry anonKey="$(mint_key anon)" \
+     --entry serviceRoleKey="$(mint_key service_role)" \
+     --entry secretKeyBase="$(openssl rand -hex 32)"
+   ```
+
+   Keep `anonKey` — your client apps need it. Read the values back later with `cpln secret reveal my-supabase-jwt`.
+
+2. **Postgres credentials** (`postgres.credentialsSecretName`) — a **dictionary** secret with exactly the keys `password` and `database`. The superuser name is **fixed at `postgres`** by the Supabase image and is not configurable, so it is not part of the secret:
+
+   ```bash
+   cpln secret create-dictionary --name my-supabase-postgres-credentials \
+     --entry password="$(openssl rand -hex 24)" \
+     --entry database=postgres
+   ```
+
+3. **Studio password** (`studio.passwordSecretName`, required while `studio.enabled: true`) — an **opaque** secret (encoding `plain`) holding only the dashboard password. This login is reachable from the internet as soon as you set `studio.allowedCidrs`:
+
+   ```bash
+   printf '%s' 'YOUR-STRONG-PASSWORD' | cpln secret create-opaque --name my-supabase-studio-password --encoding plain -f -
+   ```
+
+Other prerequisites, only if you use the matching feature:
+
+- **Authenticated SMTP** — an **opaque** secret (encoding `plain`) holding the SMTP password, created before install:
+
+  ```bash
+  printf '%s' 'YOUR-SMTP-PASSWORD' | cpln secret create-opaque --name my-supabase-smtp-password --encoding plain -f -
+  ```
+
+- **S3 storage backend or backups** — a bucket, a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account), and a bucket-scoped IAM policy. See [Storage setup](#storage-setup).
+- **GCS storage backend** — a bucket and a pair of HMAC keys. See [Storage setup](#storage-setup).
+- **A custom domain** — only if you want Kong on your own hostname rather than the assigned `*.cpln.app` endpoint.
 
 ## Configuration
+
+### JWT
+
+```yaml
+jwt:
+  secretName: my-supabase-jwt   # dictionary secret: secret, anonKey, serviceRoleKey, secretKeyBase
+```
+
+`serviceRoleKey` bypasses row-level security — treat it as a root password, keep it server-side, and never ship it to a browser or mobile client. Use `anonKey` there instead.
 
 ### Postgres
 
 ```yaml
 postgres:
   image: supabase/postgres:15.8.1.060
-  password: change-me-postgres
-  database: postgres
+
+  credentialsSecretName: my-supabase-postgres-credentials  # dictionary secret: password, database
 
   resources:
     minCpu: 500m
@@ -32,84 +94,81 @@ postgres:
     maxMemory: 2Gi
 
   volumeset:
-    capacity: 10  # initial capacity in GiB (minimum 10)
+    capacity: 10  # initial capacity in GiB (minimum is 10)
     autoscaling:
       enabled: false
       maxCapacity: 100
       minFreePercentage: 10
       scalingFactor: 1.2
-```
 
-> **Important**: You must use the `supabase/postgres` image. The standard `postgres` image is missing required extensions (pgvector, pg_graphql, pg_net, pgjwt, etc.) that Supabase services depend on.
-
-Configure which workloads can connect directly to Postgres:
-
-```yaml
-postgres:
   internalAccess:
     type: same-gvc  # options: none, same-gvc, same-org, workload-list
     workloads:
-      # - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
 ```
 
-All Supabase services in the same deployment connect to Postgres internally. Use `workload-list` to additionally grant access to your own application workloads.
+Use `workload-list` to grant your own application workloads direct database access.
 
-### JWT Keys
-
-Supabase uses JWT to authenticate requests between services and from clients. The `anonKey` is used for public (unauthenticated) access; the `serviceRoleKey` bypasses row-level security and is for trusted server-side code only.
-
-```yaml
-jwt:
-  secret: your-super-secret-jwt-token-with-at-least-32-characters-long
-  secretKeyBase: your-super-secret-key-base-used-by-realtime-must-be-at-least-64-characters-long!!
-  anonKey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlLWRlbW8iLCJpYXQiOjE2NDE3NjkyMDAsImV4cCI6MTc5OTUzNTYwMH0.zQomPPgIVgwVRMh3NJhhAl2cJ-GKQgNXpMTbIKxKyoo
-  serviceRoleKey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UtZGVtbyIsImlhdCI6MTY0MTc2OTIwMCwiZXhwIjoxNzk5NTM1NjAwfQ.4HviqYnTKiRK-RJvWzgAAuaFiq8--foTrXQpl7HYMU4
-```
-
-The default values are Supabase's official published development keys and work together out of the box. **Change all three before any production deployment.**
-
-To generate your own keys: https://supabase.com/docs/guides/self-hosting/docker#generate-api-keys
-
-> **Important**: `anonKey` and `serviceRoleKey` must be HMAC-SHA256 JWTs signed with `jwt.secret`. Using mismatched keys causes `bad_jwt` errors across all services.
-
-### Kong (API Gateway)
-
-Kong is the single entry point for all Supabase API traffic. Enable public access to expose it on a stable external URL:
+### Kong (API gateway)
 
 ```yaml
 kong:
+  image: kong:2.8.1
+  resources:
+    minCpu: 100m
+    minMemory: 256Mi
+    maxCpu: 1000m
+    maxMemory: 1Gi
+  minReplicas: 1
+  maxReplicas: 3
+
   publicAccess:
-    enabled: true
-    siteUrl: https://api.my-app.com  # required when publicAccess is enabled
+    enabled: false
+    siteUrl: ""  # e.g. https://api.my-app.com — required when publicAccess is enabled
 ```
 
-`siteUrl` is used by GoTrue for OAuth redirect callbacks and magic link emails. It must be the full URL that clients will reach Kong at. When `publicAccess` is disabled, the template uses the internal Kong hostname and OAuth/magic links will only work from within the GVC.
+`siteUrl` is what GoTrue puts in OAuth redirects and magic-link emails, so it must be the URL your clients actually reach Kong at. With `publicAccess` disabled the template falls back to the internal Kong hostname and email/OAuth links only work inside the GVC.
 
-### Auth (GoTrue)
+### PostgREST, Auth, and Realtime
+
+```yaml
+postgrest:
+  image: postgrest/postgrest:v12.2.3
+  minReplicas: 1
+  maxReplicas: 3
+
+auth:
+  image: supabase/gotrue:v2.170.0
+  minReplicas: 1
+  maxReplicas: 3
+  disableSignup: false  # set true to prevent new user registration
+
+realtime:
+  enabled: true
+  image: supabase/realtime:v2.34.47
+  minReplicas: 1
+  maxReplicas: 3
+```
+
+Each also takes a `resources` block (`minCpu`, `minMemory`, `maxCpu`, `maxMemory`).
 
 #### SMTP
 
-Enable SMTP to support magic link login, email confirmation on signup, and password reset flows:
+Required for magic links, signup confirmation, and password reset. With SMTP disabled, signups are auto-confirmed and email flows are unavailable.
 
 ```yaml
 auth:
   smtp:
-    enabled: true
+    enabled: false
     host: smtp.example.com
     port: 587
     user: smtp-user
-    password: smtp-password
+    passwordSecretName: ""  # opaque secret with the SMTP password — required when enabled
     senderName: Supabase
     senderEmail: noreply@example.com
 ```
 
-Any SMTP provider works: Gmail, SendGrid, Mailgun, Postmark, Mailtrap, etc.
-
-When SMTP is disabled, all new signups are auto-confirmed and email-based flows are unavailable.
-
-#### OAuth Providers
-
-Enable one or more OAuth providers by uncommenting and filling in credentials:
+#### OAuth providers
 
 ```yaml
 auth:
@@ -122,136 +181,86 @@ auth:
       clientSecret: ""
 ```
 
-Supported providers: Apple, Azure, Bitbucket, Discord, Facebook, Figma, GitHub, GitLab, Google, Kakao, Keycloak, LinkedIn, Notion, Slack, Spotify, Twitch, Twitter/X, WorkOS, Zoom.
-
-When setting up OAuth credentials in your provider's developer console:
-- **Authorized JavaScript Origin**: `{kong.publicAccess.siteUrl}` (e.g. `https://api.my-app.com`)
-- **Authorized Redirect URI**: `{kong.publicAccess.siteUrl}/auth/v1/callback` (e.g. `https://api.my-app.com/auth/v1/callback`)
-
-> **Note**: OAuth requires `kong.publicAccess.enabled: true` and a valid `siteUrl`. Providers will not redirect to internal hostnames.
+Supported: Apple, Azure, Bitbucket, Discord, Facebook, Figma, GitHub, GitLab, Google, Kakao, Keycloak, LinkedIn, Notion, Slack, Spotify, Twitch, Twitter/X, WorkOS, Zoom. In your provider's console set the JavaScript origin to `kong.publicAccess.siteUrl` and the redirect URI to `{siteUrl}/auth/v1/callback`. OAuth requires `kong.publicAccess.enabled: true` — providers will not redirect to internal hostnames.
 
 ### Storage
 
-Storage supports three backends:
-
 ```yaml
 storage:
-  backend: s3  # options: local, s3, gcs
-```
+  enabled: true
+  image: supabase/storage-api:v1.14.6
+  minReplicas: 1
+  maxReplicas: 3
 
-- **`local`**: Stateful single-replica workload backed by a persistent volume. Suitable for development. Does not scale horizontally.
-- **`s3`**: Stateless, horizontally scalable. Recommended for production.
-- **`gcs`**: GCS accessed via the S3-compatible API using HMAC keys.
+  backend: s3    # local = stateful single replica on a volume; s3/gcs = stateless and scalable
 
-**S3 backend:**
-```yaml
-storage:
-  s3:
-    bucket: cpln-backup-bucket
+  volumeset:     # only used when backend is local
+    capacity: 10
+    autoscaling:
+      enabled: false
+      maxCapacity: 100
+      minFreePercentage: 10
+      scalingFactor: 1.2
+
+  s3:            # only used when backend is s3
+    bucket: my-supabase-storage-bucket
     region: us-east-1
     cloudAccountName: my-s3-cloudaccount
-    policyName: my-backup-policy  # IAM policy granting GetObject, PutObject, DeleteObject on the bucket
-```
+    policyName: my-supabase-storage-policy  # IAM policy granting GetObject, PutObject, DeleteObject on the bucket
 
-**GCS backend:**
-```yaml
-storage:
-  gcs:
+  gcs:           # only used when backend is gcs — S3-compatible API, no cloud account needed
     bucket: my-supabase-storage-bucket
     accessKeyId: my-gcs-hmac-access-key-id
     secretAccessKey: my-gcs-hmac-secret-access-key
 ```
 
-GCS HMAC keys can be created in the GCP console under Cloud Storage → Settings → Interoperability.
-
-### Studio (Web Dashboard)
-
-Studio is protected by username and password:
+### Studio (web dashboard)
 
 ```yaml
 studio:
-  username: supabase
-  password: change-me-studio
+  enabled: true
+  image: supabase/studio:2025.06.02-sha-8f2993d
+  username: supabase                              # dashboard login name (not sensitive)
+  passwordSecretName: my-supabase-studio-password # opaque secret with the dashboard password
+
+  allowedCidrs: []      # empty = no external access; e.g. 203.0.113.0/24, or 0.0.0.0/0 to open it up
+
+  internalAccess:
+    type: same-gvc      # options: none, same-gvc, same-org, workload-list
+    workloads:
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+  meta:
+    image: supabase/postgres-meta:v0.86.0
 ```
 
-By default, Studio has no external access — use `cpln workload connect` to open a local tunnel. To expose Studio publicly, set `allowedCidrs`:
+With `allowedCidrs` empty, reach Studio with `cpln workload connect {release-name}-studio --gvc {gvc}`.
 
-```yaml
-studio:
-  allowedCidrs:
-    - 0.0.0.0/0          # open to all (protected by username + password)
-    - 203.0.113.0/24     # example: restrict to your office or VPN IP range
-```
-
-### PgBouncer (Optional)
-
-PgBouncer multiplexes application connections into a smaller pool of real database connections, reducing Postgres connection overhead under high concurrency:
+### PgBouncer (optional)
 
 ```yaml
 pgbouncer:
-  enabled: true
-  poolMode: transaction  # options: session, transaction, statement
+  enabled: false
+  image: edoburu/pgbouncer:v1.25.1-p0
+  poolMode: transaction  # session | transaction | statement
   defaultPoolSize: 25
   maxClientConn: 1000
   replicas: 1
 ```
 
-**Pool modes:**
-- `transaction` — connection held only for the duration of a transaction. Best for most web and API workloads. Not compatible with session-level features (`SET` variables, temporary tables, advisory locks).
-- `session` — connection held for the entire client session. Compatible with all Postgres features.
-- `statement` — connection returned after every statement. Transactions are not supported.
+`transaction` suits most web and API workloads but breaks session-level features (`SET` variables, temporary tables, advisory locks); use `session` if you need those.
 
-When PgBouncer is enabled, your application workloads should connect through PgBouncer rather than directly to Postgres.
-
-## Connecting
-
-All API traffic flows through Kong. Connect your application to the Kong workload:
-
-| Endpoint | Host |
-|---|---|
-| API (PostgREST, Auth, Storage, Realtime) | `{release-name}-kong.{gvc}.cpln.local:8000` (internal) |
-| API (public) | `{kong.publicAccess.siteUrl}` (when publicAccess enabled) |
-| Postgres (direct) | `{release-name}-postgres.{gvc}.cpln.local:5432` |
-| Postgres (via PgBouncer) | `{release-name}-pgbouncer.{gvc}.cpln.local:5432` |
-
-**Key API paths through Kong:**
-
-| Service | Path |
-|---|---|
-| PostgREST (REST API) | `/rest/v1/` |
-| Auth (GoTrue) | `/auth/v1/` |
-| Storage | `/storage/v1/` |
-| Realtime | `/realtime/v1/` |
-
-Pass `apikey: {anonKey}` (or `serviceRoleKey` for privileged server-side calls) as a header on all requests. Using the Supabase client library handles this automatically.
-
-**Example using the Supabase JS client:**
-```js
-import { createClient } from '@supabase/supabase-js'
-
-const supabase = createClient(
-  'https://api.my-app.com',  // kong.publicAccess.siteUrl
-  'YOUR_ANON_KEY'
-)
-```
-
-## Backing Up
-
-There are two backup modes:
-
-- **Logical** (`pg_dump`): Portable SQL dumps run on a cron schedule. Ideal for smaller databases and cross-version migrations.
-- **WAL-G**: Continuous WAL archiving plus periodic base backups, supporting point-in-time recovery (PITR). Recommended for production databases where data loss tolerance is low.
-
-Set `backup.enabled: true`, choose a `mode`, then set `backup.provider` and fill in the corresponding block:
+### Backup (optional)
 
 ```yaml
 backup:
-  enabled: true
-  mode: logical     # options: logical, walg
-  provider: aws     # options: aws, gcp
+  enabled: false
+  mode: logical  # logical = pg_dump cron; walg = continuous WAL archiving with PITR
+  provider: aws  # options: aws, gcp
 
   logical:
-    schedule: "0 2 * * *"  # daily at 2am UTC
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+    schedule: "0 2 * * *"   # daily at 2am UTC
 
   walg:
     intervalSeconds: 21600  # base backup interval (default: every 6 hours)
@@ -269,15 +278,15 @@ backup:
     prefix: supabase/backups
 ```
 
-### AWS S3
+## Storage setup
 
-For the workload to have access to an S3 bucket, ensure the following prerequisites are completed in your AWS account before installing:
+Storage buckets and backup buckets are independent — each needs its own bucket, cloud account, and policy. Never share one bucket between them.
 
-1. Create your bucket. Set `backup.aws.bucket` to its name and `backup.aws.region` to its region.
+### AWS S3 (storage backend and backups)
 
-2. If you do not have a Cloud Account set up, refer to the docs to [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account). Set `backup.aws.cloudAccountName` to its name.
-
-3. Create a new AWS IAM policy with the following JSON (replace `YOUR_BUCKET_NAME`) and set `backup.aws.policyName` to match:
+1. Create your bucket, and set the matching `bucket` and `region` values.
+2. If you do not already have one, [create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account) and set the matching `cloudAccountName`.
+3. Create an AWS IAM policy with the JSON below (replace `YOUR_BUCKET_NAME`) and set the matching `policyName`:
 
 ```json
 {
@@ -302,88 +311,96 @@ For the workload to have access to an S3 bucket, ensure the following prerequisi
 }
 ```
 
-### GCS
+### Google Cloud Storage — backups
 
-For the workload to have access to a GCS bucket, ensure the following prerequisites are completed before installing:
+1. Create your bucket and set `backup.gcp.bucket`.
+2. [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account) and set `backup.gcp.cloudAccountName`. Grant its service account the **Storage Admin** role.
 
-1. Create your bucket. Set `backup.gcp.bucket` to its name.
+### Google Cloud Storage — storage backend
 
-2. If you do not have a Cloud Account set up, refer to the docs to [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account). Set `backup.gcp.cloudAccountName` to its name.
+The Storage API reaches GCS over its S3-compatible API, so it uses HMAC keys instead of a cloud account.
 
-> **Important**: You must add the `Storage Admin` role to the created GCP service account.
+1. Create your bucket and set `storage.gcs.bucket`.
+2. In the GCP console go to **Cloud Storage → Settings → Interoperability**, create an access key for a service account that has **Storage Object Admin** on that bucket, and set `storage.gcs.accessKeyId` and `storage.gcs.secretAccessKey`.
 
-## Restoring a Backup
+## Connecting
 
-### Logical Restore
+| What | Where |
+|---|---|
+| API (public) | `{kong.publicAccess.siteUrl}`, or the assigned `*.cpln.app` endpoint on the Kong workload |
+| API (internal) | `{release-name}-kong.{gvc}.cpln.local:8000` |
+| Postgres (direct) | `{release-name}-postgres.{gvc}.cpln.local:5432`, user `postgres` |
+| Postgres (pooled) | `{release-name}-pgbouncer.{gvc}.cpln.local:5432`, user `postgres` |
+| Studio dashboard | port 3000 on the Studio workload — `cpln workload connect`, or your `allowedCidrs` |
+| API keys | `cpln secret reveal {jwt.secretName}` — keys `anonKey` and `serviceRoleKey` |
+| Database password | `cpln secret reveal {postgres.credentialsSecretName}` — key `password` |
+| Studio login | user `studio.username`, password from `cpln secret reveal {studio.passwordSecretName}` |
 
-Run the following from a machine with access to the bucket and network access to the Postgres workload (e.g. via `cpln workload connect`):
+API paths through Kong: `/rest/v1/` (PostgREST), `/auth/v1/` (GoTrue), `/storage/v1/` (Storage), `/realtime/v1/` (Realtime).
 
-**AWS S3:**
+Every request needs an `apikey` header — `anonKey` from clients, `serviceRoleKey` only from trusted server-side code. The Supabase client libraries handle this for you:
+
+```js
+import { createClient } from '@supabase/supabase-js'
+
+const supabase = createClient('https://api.my-app.com', 'YOUR_ANON_KEY')
+```
+
+## Rotating a credential
+
+The prerequisite secrets live outside Helm, so updating one changes nothing by itself — running workloads keep the value they booted with. After you update a secret, force the workloads that read it to pick it up:
+
+```bash
+cpln workload force-redeployment {release-name}-kong {release-name}-postgrest {release-name}-auth \
+  {release-name}-realtime {release-name}-storage {release-name}-studio --gvc {gvc}
+```
+
+Rotating the JWT `secret` means re-minting `anonKey` and `serviceRoleKey` from it in the same update (the snippet in Prerequisites does this) and re-issuing `anonKey` to your clients.
+
+Two values are consumed only once, when the Postgres data directory is first initialized, so rotating them later does not reach what is already stored in the database:
+
+- **Postgres password** — set it with `ALTER ROLE` against the running database first, then update the secret to match, or the services fail to authenticate.
+- **JWT values on the Postgres workload** — the database keeps the settings it was initialized with; a redeployment does not re-run the init scripts.
+
+## Restoring a backup
+
+**Logical** — run from a machine with bucket access and a tunnel to Postgres (`cpln workload connect`):
+
 ```sh
 export PGPASSWORD="YOUR_POSTGRES_PASSWORD"
 
 aws s3 cp "s3://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" - \
   | gunzip \
-  | psql \
-      --host={release-name}-postgres.{gvc}.cpln.local \
-      --port=5432 \
-      --username=postgres \
-      --dbname=postgres
+  | psql --host={release-name}-postgres.{gvc}.cpln.local --port=5432 --username=postgres --dbname=postgres
 
 unset PGPASSWORD
 ```
 
-**GCS:**
-```sh
-export PGPASSWORD="YOUR_POSTGRES_PASSWORD"
+For GCS, swap the first command for `gsutil cp "gs://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" -`.
 
-gsutil cp "gs://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" - \
-  | gunzip \
-  | psql \
-      --host={release-name}-postgres.{gvc}.cpln.local \
-      --port=5432 \
-      --username=postgres \
-      --dbname=postgres
+**WAL-G** — a restore needs an empty data directory:
 
-unset PGPASSWORD
-```
-
-### WAL-G Restore
-
-A WAL-G restore requires an empty data directory. Follow these steps:
-
-1. Exec into the `wal-g-backup` sidecar and list available backups:
-```sh
-cpln workload connect {release-name}-postgres --gvc {gvc} --container wal-g-backup -- wal-g backup-list
-```
-
-2. Stop the Postgres workload via the CPLN console or CLI.
-
-3. Create a new volume set to restore into (do not reuse the existing one — it must be empty).
-
-4. Run a one-off workload with the new volume set mounted at `/var/lib/postgresql/data` and restore:
-```sh
-wal-g backup-fetch /var/lib/postgresql/data/pg_data BACKUP_NAME
-```
-
-5. Re-point the Postgres workload to the restored volume set and restart.
-
-6. After restore, change `backup.aws.prefix` (or `backup.gcp.prefix`) to a new path before re-enabling backups to avoid WAL stream conflicts with the original cluster's archived segments.
+1. List backups: `cpln workload exec {release-name}-postgres --gvc {gvc} --container wal-g-backup -- wal-g backup-list`
+2. Stop the Postgres workload, and create a **new** volume set to restore into.
+3. Run a one-off workload with that volume set mounted at `/var/lib/postgresql/data` and run `wal-g backup-fetch /var/lib/postgresql/data/pg_data BACKUP_NAME`.
+4. Point the Postgres workload at the restored volume set and start it.
+5. Set a new `backup.aws.prefix` (or `backup.gcp.prefix`) before re-enabling backups, so the restored cluster does not collide with the original's WAL stream.
 
 ## Important Notes
 
-- **Use the Supabase Postgres image**: `supabase/postgres` ships with extensions (pgvector, pg_graphql, pg_net, pgjwt, etc.) that GoTrue, PostgREST, Realtime, and Storage require. Swapping in a standard Postgres image will break these services.
-- **JWT keys must match**: `anonKey` and `serviceRoleKey` must be valid HMAC-SHA256 JWTs signed with `jwt.secret`. Mismatched keys produce `bad_jwt` errors across all services. Use the official Supabase key generator linked above.
-- **Change default credentials before production**: The default `jwt.secret`, `postgres.password`, and `studio.password` are placeholder values. Replace all of them before any production deployment.
-- **OAuth requires a public siteUrl**: GoTrue must be able to redirect to a reachable URL after OAuth. Set `kong.publicAccess.enabled: true` and `kong.publicAccess.siteUrl` before configuring any OAuth provider.
-- **Storage S3 and backup S3 are independent**: Each requires its own bucket, cloud account, and IAM policy. Do not share a bucket between storage and backup.
-- **WAL-G changes Postgres startup flags**: Switching `backup.mode` between `logical` and `walg` changes the Postgres `archive_mode` and `wal_level` flags, which requires a Postgres restart. Plan accordingly.
-- **Studio allowedCidrs**: An empty list (default) means Studio has no external access. Use `cpln workload connect` for local access, or set `allowedCidrs: ["0.0.0.0/0"]` to open it publicly (login is still required).
+- **Create the three prerequisite secrets before installing.** A missing secret leaves the deployment waiting on it, which looks like a broken install rather than a missing prerequisite.
+- **`serviceRoleKey` bypasses row-level security.** It is the full-admin credential for your data — server-side only, never in client code.
+- **Keep the JWT keys and the signing secret in sync.** `anonKey` and `serviceRoleKey` must be HMAC-SHA256 JWTs signed by `secret`, or every service returns `bad_jwt`. Mint them together with the snippet in Prerequisites.
+- **Use the Supabase Postgres image.** `supabase/postgres` ships the extensions (pgvector, pg_graphql, pg_net, pgjwt) that GoTrue, PostgREST, Realtime, and Storage require; a stock Postgres image breaks them.
+- **The database superuser is `postgres`.** The Supabase image bakes that name into its init scripts, so the template does not offer a username knob.
+- **Changing a secret does not restart anything.** After rotating one, force a redeployment — see [Rotating a credential](#rotating-a-credential).
+- **Switching `backup.mode` restarts Postgres.** `logical` and `walg` need different `archive_mode`/`wal_level` flags, so the change is not hot.
+- **Firewall changes take up to a couple of minutes** to propagate, so `studio.allowedCidrs` and `kong.publicAccess` edits are not visible immediately.
 
-## Supported External Services
+## Links
 
-- [Supabase Self-Hosting Documentation](https://supabase.com/docs/guides/self-hosting)
-- [Supabase Client Libraries](https://supabase.com/docs/reference)
-- [GoTrue (Auth) Documentation](https://github.com/supabase/gotrue)
-- [PostgREST Documentation](https://postgrest.org/en/stable/)
-- [WAL-G Documentation](https://github.com/wal-g/wal-g)
+- [Supabase self-hosting documentation](https://supabase.com/docs/guides/self-hosting)
+- [Supabase client libraries](https://supabase.com/docs/reference)
+- [Auth (GoTrue) documentation](https://supabase.com/docs/guides/auth)
+- [PostgREST documentation](https://postgrest.org/en/stable/)
+- [WAL-G documentation](https://github.com/wal-g/wal-g)

@@ -2,7 +2,7 @@
 ---
 kind: workload
 name: {{ include "supabase.storage.name" . }}
-description: Supabase Storage API (jwt-{{ .Values.jwt.serviceRoleKey | sha256sum | trunc 8 }})
+description: Supabase Storage API
 tags: {{- include "supabase.tags" . | nindent 2 }}
 gvc: {{ .Values.global.cpln.gvc }}
 spec:
@@ -20,13 +20,13 @@ spec:
         - name: DB_USER
           value: supabase_storage_admin
         - name: DB_PASSWORD
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
         - name: DB_NAME
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresDatabase
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.database
         - name: ANON_KEY
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.anonKey
+          value: cpln://secret/{{ .Values.jwt.secretName }}.anonKey
         - name: SERVICE_KEY
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.serviceRoleKey
+          value: cpln://secret/{{ .Values.jwt.secretName }}.serviceRoleKey
         - name: TENANT_ID
           value: stub
         - name: DATABASE_URL
@@ -34,7 +34,7 @@ spec:
         - name: PGOPTIONS
           value: -c search_path=storage,public
         - name: PGRST_JWT_SECRET
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.jwtSecret
+          value: cpln://secret/{{ .Values.jwt.secretName }}.secret
         - name: FILE_SIZE_LIMIT
           value: "52428800"
         - name: POSTGREST_URL
@@ -67,9 +67,9 @@ spec:
         - name: REGION
           value: auto
         - name: AWS_ACCESS_KEY_ID
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.storageGcsAccessKeyId
+          value: cpln://secret/{{ include "supabase.storage.gcs.secret.name" . }}.accessKeyId
         - name: AWS_SECRET_ACCESS_KEY
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.storageGcsSecretAccessKey
+          value: cpln://secret/{{ include "supabase.storage.gcs.secret.name" . }}.secretAccessKey
         {{- end }}
       ports:
         - number: 5000

@@ -52,8 +52,8 @@
 {{- printf "%s-supabase-postinit" .Release.Name }}
 {{- end }}
 
-{{- define "supabase.secret.name" -}}
-{{- printf "%s-supabase-config" .Release.Name }}
+{{- define "supabase.storage.gcs.secret.name" -}}
+{{- printf "%s-supabase-storage-gcs" .Release.Name }}
 {{- end }}
 
 {{- define "supabase.kong.config.secret.name" -}}
@@ -110,6 +110,18 @@ http://{{ include "supabase.kong.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.l
 {{/* Validation */}}
 
 {{- define "supabase.validate" -}}
+{{- if not .Values.jwt.secretName -}}
+  {{- fail "jwt.secretName is required — it names the dictionary secret holding the `secret`, `anonKey`, `serviceRoleKey` and `secretKeyBase` keys. Create that secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- if not .Values.postgres.credentialsSecretName -}}
+  {{- fail "postgres.credentialsSecretName is required — it names the dictionary secret holding the `password` and `database` keys. Create that secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- if and .Values.studio.enabled (not .Values.studio.passwordSecretName) -}}
+  {{- fail "studio.passwordSecretName is required when studio.enabled is true — it names the opaque secret holding the dashboard password. Create that secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- if and .Values.auth.smtp.enabled (not .Values.auth.smtp.passwordSecretName) -}}
+  {{- fail "auth.smtp.passwordSecretName is required when auth.smtp.enabled is true — it names the opaque secret holding the SMTP password." -}}
+{{- end -}}
 {{- if and .Values.kong.publicAccess.enabled (not .Values.kong.publicAccess.siteUrl) -}}
   {{- fail "kong.publicAccess.siteUrl is required when kong.publicAccess.enabled is true" -}}
 {{- end -}}

@@ -27,17 +27,17 @@ spec:
         - name: DB_USER
           value: supabase_admin
         - name: DB_PASSWORD
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
         - name: DB_NAME
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresDatabase
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.database
         - name: DB_AFTER_CONNECT_QUERY
           value: "SET search_path TO _realtime"
         - name: DB_ENC_KEY
           value: supabaserealtime
         - name: API_JWT_SECRET
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.jwtSecret
+          value: cpln://secret/{{ .Values.jwt.secretName }}.secret
         - name: SECRET_KEY_BASE
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.secretKeyBase
+          value: cpln://secret/{{ .Values.jwt.secretName }}.secretKeyBase
         - name: ERL_AFLAGS
           value: -proto_dist inet_tcp
         - name: ENABLE_TAILSCALE

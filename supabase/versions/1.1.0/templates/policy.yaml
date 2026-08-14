@@ -10,10 +10,22 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "supabase.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "supabase.secret.name" . }}
+  # Prerequisite secrets — created by you, never by this chart
+  - //secret/{{ .Values.jwt.secretName }}
+  - //secret/{{ .Values.postgres.credentialsSecretName }}
+  {{- if .Values.studio.enabled }}
+  - //secret/{{ .Values.studio.passwordSecretName }}
+  {{- end }}
+  {{- if and .Values.auth.smtp.enabled .Values.auth.smtp.passwordSecretName }}
+  - //secret/{{ .Values.auth.smtp.passwordSecretName }}
+  {{- end }}
+  # Chart-created secrets
   - //secret/{{ include "supabase.kong.config.secret.name" . }}
   - //secret/{{ include "supabase.preinit.secret.name" . }}
   - //secret/{{ include "supabase.postinit.secret.name" . }}
+  {{- if and .Values.storage.enabled (eq .Values.storage.backend "gcs") }}
+  - //secret/{{ include "supabase.storage.gcs.secret.name" . }}
+  {{- end }}
   {{- if and .Values.backup.enabled (eq .Values.backup.mode "walg") }}
   - //secret/{{ include "supabase.walg.secret.name" . }}
   {{- end }}

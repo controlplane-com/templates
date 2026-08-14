@@ -23,14 +23,18 @@ spec:
         - name: PG_USER
           value: postgres
         - name: PG_PASSWORD
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
         - name: BACKUP_BUCKET
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.backupBucket
+          {{- if eq .Values.backup.provider "aws" }}
+          value: {{ .Values.backup.aws.bucket | quote }}
+          {{- else }}
+          value: {{ .Values.backup.gcp.bucket | quote }}
+          {{- end }}
         {{- if eq .Values.backup.provider "aws" }}
         - name: BACKUP_PROVIDER
           value: aws
         - name: AWS_REGION
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.backupAwsRegion
+          value: {{ .Values.backup.aws.region | quote }}
         - name: BACKUP_PREFIX
           value: {{ .Values.backup.aws.prefix | quote }}
         {{- end }}

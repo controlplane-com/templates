@@ -1,7 +1,7 @@
 ---
 kind: workload
 name: {{ include "supabase.kong.name" . }}
-description: Supabase Kong API gateway (jwt-{{ .Values.jwt.serviceRoleKey | sha256sum | trunc 8 }})
+description: Supabase Kong API gateway
 tags: {{- include "supabase.tags" . | nindent 2 }}
 gvc: {{ .Values.global.cpln.gvc }}
 spec:
@@ -15,11 +15,23 @@ spec:
       cpu: {{ .Values.kong.resources.maxCpu | quote }}
       minMemory: {{ .Values.kong.resources.minMemory | quote }}
       memory: {{ .Values.kong.resources.maxMemory | quote }}
+      # Kong 2.8 does not interpolate env vars in declarative config, so the API
+      # keys cannot be baked into the mounted file. The boot wrapper substitutes
+      # them from the jwt secret into a rendered copy, then hands off to Kong's
+      # own entrypoint.
+      command: /bin/sh
+      args:
+        - -c
+        - 'set -e; sed -e "s|__SUPABASE_ANON_KEY__|${SUPABASE_ANON_KEY}|g" -e "s|__SUPABASE_SERVICE_ROLE_KEY__|${SUPABASE_SERVICE_ROLE_KEY}|g" /usr/local/kong/declarative/kong.template.yaml > /tmp/kong.yaml; exec /docker-entrypoint.sh kong docker-start'
       env:
+        - name: SUPABASE_ANON_KEY
+          value: cpln://secret/{{ .Values.jwt.secretName }}.anonKey
+        - name: SUPABASE_SERVICE_ROLE_KEY
+          value: cpln://secret/{{ .Values.jwt.secretName }}.serviceRoleKey
         - name: KONG_DATABASE
           value: "off"
         - name: KONG_DECLARATIVE_CONFIG
-          value: /usr/local/kong/declarative/kong.yaml
+          value: /tmp/kong.yaml
         - name: KONG_DNS_ORDER
           value: LAST,A,CNAME
         - name: KONG_PLUGINS
@@ -36,7 +48,7 @@ spec:
         - number: 8000
           protocol: http
       volumes:
-        - path: /usr/local/kong/declarative/kong.yaml
+        - path: /usr/local/kong/declarative/kong.template.yaml
           uri: cpln://secret/{{ include "supabase.kong.config.secret.name" . }}.payload
       readinessProbe:
         httpGet:

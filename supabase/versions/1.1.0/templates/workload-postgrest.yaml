@@ -19,9 +19,9 @@ spec:
         - name: DB_USER
           value: authenticator
         - name: DB_PASSWORD
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
         - name: DB_NAME
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresDatabase
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.database
         - name: PGRST_DB_URI
           value: postgresql://$(DB_USER):$(DB_PASSWORD)@{{ include "supabase.postgresHost" . }}:5432/$(DB_NAME)
         - name: PGRST_DB_SCHEMAS
@@ -29,11 +29,11 @@ spec:
         - name: PGRST_DB_ANON_ROLE
           value: anon
         - name: PGRST_JWT_SECRET
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.jwtSecret
+          value: cpln://secret/{{ .Values.jwt.secretName }}.secret
         - name: PGRST_DB_USE_LEGACY_GUCS
           value: "false"
         - name: PGRST_APP_SETTINGS_JWT_SECRET
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.jwtSecret
+          value: cpln://secret/{{ .Values.jwt.secretName }}.secret
         - name: PGRST_APP_SETTINGS_JWT_EXP
           value: "3600"
       ports:

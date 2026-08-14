@@ -19,9 +19,9 @@ spec:
         - name: DB_USER
           value: supabase_auth_admin
         - name: DB_PASSWORD
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
         - name: DB_NAME
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresDatabase
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.database
         - name: GOTRUE_API_HOST
           value: "0.0.0.0"
         - name: GOTRUE_API_PORT
@@ -45,7 +45,7 @@ spec:
         - name: GOTRUE_JWT_EXP
           value: "3600"
         - name: GOTRUE_JWT_SECRET
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.jwtSecret
+          value: cpln://secret/{{ .Values.jwt.secretName }}.secret
         {{- if .Values.auth.smtp.enabled }}
         - name: GOTRUE_MAILER_AUTOCONFIRM
           value: "false"
@@ -54,9 +54,9 @@ spec:
         - name: GOTRUE_SMTP_PORT
           value: {{ .Values.auth.smtp.port | quote }}
         - name: GOTRUE_SMTP_USER
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.smtpUser
+          value: {{ .Values.auth.smtp.user | quote }}
         - name: GOTRUE_SMTP_PASS
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.smtpPassword
+          value: cpln://secret/{{ .Values.auth.smtp.passwordSecretName }}.payload
         - name: GOTRUE_SMTP_ADMIN_EMAIL
           value: {{ .Values.auth.smtp.senderEmail | quote }}
         - name: GOTRUE_SMTP_SENDER_NAME

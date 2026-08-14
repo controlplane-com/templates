@@ -27,17 +27,17 @@ spec:
         - name: PGDATA
           value: /var/lib/postgresql/data/pg_data
         - name: POSTGRES_DB
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresDatabase
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.database
         - name: POSTGRES_USER
           value: postgres
         - name: POSTGRES_PASSWORD
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
         - name: JWT_SECRET
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.jwtSecret
+          value: cpln://secret/{{ .Values.jwt.secretName }}.secret
         - name: ANON_KEY
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.anonKey
+          value: cpln://secret/{{ .Values.jwt.secretName }}.anonKey
         - name: SERVICE_ROLE_KEY
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.serviceRoleKey
+          value: cpln://secret/{{ .Values.jwt.secretName }}.serviceRoleKey
         {{- if and .Values.backup.enabled (eq .Values.backup.mode "walg") }}
         - name: WALG_COMPRESSION_METHOD
           value: zstd
@@ -92,7 +92,7 @@ spec:
         - name: PGUSER
           value: postgres
         - name: PGPASSWORD
-          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
         - name: WALG_BACKUP_INTERVAL_SECONDS
           value: {{ .Values.backup.walg.intervalSeconds | quote }}
         - name: WALG_COMPRESSION_METHOD

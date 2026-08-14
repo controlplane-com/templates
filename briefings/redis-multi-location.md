@@ -60,3 +60,40 @@
 ## Status
 
 2.1.0 is a conventions + subchart-consumability release: `global.gvc` (clean break from `.Values.gvc`, no fallback shim), the `.Chart.IsRoot` GVC gate, prerequisite password secrets, sorted `locationLinks`, `terminationGracePeriodSeconds: 90`, `aws::ReadOnlyAccess` dropped from the backup identity, service-scoped placeholders, and a rewritten README. **Not yet deployed** — the failover, backup, public-access and drift rows all come from the pending test round, so treat the measured-behaviour numbers above as inherited from sibling multi-location templates rather than measured here.
+
+## The sentinel `user default` ACL trap (found and fixed 2026-08-13, in place in 2.1.0)
+
+**The single most important thing to know before touching `apply_auth()` in
+`templates/workload-sentinel.yaml`.**
+
+Sentinel materialises its current auth state into an ACL line via `CONFIG REWRITE`:
+
+```
+user default on nopass sanitize-payload ~* &* +@all
+```
+
+**An ACL entry for `default` OVERRIDES `requirepass`.** `sentinel.conf` lives on a retained volume set,
+so a line written during an authless period survives every later boot — and the tier keeps answering
+unauthenticated no matter what `requirepass` says, while every status surface reports success.
+
+- **Symptom:** enabling `sentinel.passwordSecretName` on a running authless install leaves all sentinels
+  answering `PONG` to unauthenticated clients. Nothing anywhere reports a problem.
+- **It broke in BOTH directions**, which is what makes it more than an edge case: with the stale line
+  present, *removing* the password still demanded the old one, and *rotating* kept the OLD password
+  working while rejecting the new one. Sentinel's auth state was effectively frozen at first boot.
+- **Fix:** `apply_auth()` strips three lines, not two — `^sentinel auth-pass mymaster `, `^requirepass `
+  **and `^user default `**. The block's comment already claimed stripping made rotation and removal work;
+  before this it was aspirational.
+- **Redis was never affected** because `workload-redis.yaml` re-copies its whole config from the secret
+  every boot. Sentinel deliberately preserves its file to keep `myid`, epochs and the elected master —
+  which is exactly why the stale line rode along, and why the fix must not simply re-copy like Redis does.
+- **Verified the right way:** post-fix the ACL line *reappears* (sentinel rewrites it, as designed) but
+  now carries a password hash matching `sha256(env password)` rather than `nopass` — confirmed
+  in-container on all three replicas. Deleting the line is not the goal; the correct state being
+  persisted is. `sentinel myid` stayed byte-identical across 4 upgrades, a force-redeployment and 2
+  no-op upgrades, with no `+switch-master`.
+
+**Operational note that came out of the same round:** changing the **Redis** password restarts every
+Redis instance in every location at once, dropping the master out of quorum and starting a failover
+(`+odown` → `+try-failover`). It resolved harmlessly only because no replica was promotable. Changing
+the **Sentinel** password alone is safe — no vote at all. Documented in the README.

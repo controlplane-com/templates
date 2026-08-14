@@ -283,6 +283,12 @@ redis-cli -h {release}-redis -p 6379 --no-auth-warning -a "$REDIS_PASSWORD" GET 
 - **Changing or removing a password takes effect on the next restart**, not immediately — both tiers
   read the secret at container start, and Sentinel rewrites its own config from it every start.
   Restart Sentinel first, then Redis.
+- **Changing the REDIS password briefly takes the master out of quorum.** Every Redis instance in every
+  location restarts at once, so Sentinel loses the master and starts a failover (`+odown` →
+  `+try-failover`). Measured 2026-08-13: it resolved on its own with no data loss and no split, because
+  no replica was eligible for promotion — but treat a Redis password change as a planned restart of the
+  whole tier, not a rolling one. Changing the SENTINEL password alone is safe: sentinel-only restarts
+  produced no failover vote at all.
 - **The GVC in `global.gvc.name` must not already exist** on a standalone install. Helm adopts an
   existing one and deletes it on uninstall, taking every unrelated workload with it.
 - **`global.gvc.locations[].replicas` is deliberately not read** — set `redis.replicasPerLocation`,

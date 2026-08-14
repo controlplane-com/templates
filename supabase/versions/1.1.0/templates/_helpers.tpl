@@ -52,8 +52,9 @@
 {{- printf "%s-supabase-postinit" .Release.Name }}
 {{- end }}
 
+{{/* User-created: HMAC keys are issued by Google, so the chart never holds them. */}}
 {{- define "supabase.storage.gcs.secret.name" -}}
-{{- printf "%s-supabase-storage-gcs" .Release.Name }}
+{{- .Values.storage.gcs.credentialsSecretName }}
 {{- end }}
 
 {{- define "supabase.kong.config.secret.name" -}}
@@ -138,8 +139,7 @@ http://{{ include "supabase.kong.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.l
   {{- end -}}
   {{- if eq $b "gcs" -}}
     {{- if not .Values.storage.gcs.bucket -}}{{ fail "storage.gcs.bucket is required when storage.backend is gcs" }}{{- end -}}
-    {{- if not .Values.storage.gcs.accessKeyId -}}{{ fail "storage.gcs.accessKeyId is required when storage.backend is gcs" }}{{- end -}}
-    {{- if not .Values.storage.gcs.secretAccessKey -}}{{ fail "storage.gcs.secretAccessKey is required when storage.backend is gcs" }}{{- end -}}
+    {{- if not .Values.storage.gcs.credentialsSecretName -}}{{ fail "supabase: storage.gcs.credentialsSecretName is required when storage.backend is gcs — the name of a pre-created dictionary secret holding `accessKeyId` and `secretAccessKey`, the HMAC pair Google issues for the S3-compatible endpoint. Create it BEFORE installing; see Prerequisites in the README." }}{{- end -}}
   {{- end -}}
 {{- end -}}
 {{- if .Values.backup.enabled -}}

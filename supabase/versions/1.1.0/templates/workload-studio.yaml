@@ -48,6 +48,7 @@ spec:
         httpGet:
           path: /
           port: 3000
+          scheme: HTTP
         failureThreshold: 10
         initialDelaySeconds: 30
         periodSeconds: 10
@@ -82,6 +83,7 @@ spec:
         httpGet:
           path: /health
           port: 8080
+          scheme: HTTP
         failureThreshold: 10
         initialDelaySeconds: 10
         periodSeconds: 5

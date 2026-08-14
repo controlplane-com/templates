@@ -65,7 +65,8 @@ Other prerequisites, only if you use the matching feature:
   ```
 
 - **S3 storage backend or backups** — a bucket, a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account), and a bucket-scoped IAM policy. See [Storage setup](#storage-setup).
-- **GCS storage backend** — a bucket and a pair of HMAC keys. See [Storage setup](#storage-setup).
+- **GCS storage backend** — a bucket, plus a dictionary secret (`accessKeyId`, `secretAccessKey`) named by `storage.gcs.credentialsSecretName`. See [Storage setup](#storage-setup).
+- **OAuth providers** — one opaque secret per provider holding its client secret, named by `auth.providers.{name}.clientSecretName`.
 - **A custom domain** — only if you want Kong on your own hostname rather than the assigned `*.cpln.app` endpoint.
 
 ## Configuration
@@ -174,11 +175,19 @@ auth:
 auth:
   providers:
     google:
-      clientId: ""
-      clientSecret: ""
+      clientId: "1234567890-abc.apps.googleusercontent.com"
+      clientSecretName: my-supabase-google-oauth  # prerequisite opaque secret
     github:
-      clientId: ""
-      clientSecret: ""
+      clientId: "Iv1.0123456789abcdef"
+      clientSecretName: my-supabase-github-oauth  # prerequisite opaque secret
+```
+
+The client ID is not sensitive and stays in values. The client **secret** is issued by the
+provider, so it goes in a pre-created opaque secret whose payload is the secret itself — create
+one per provider before installing:
+
+```bash
+printf '%s' 'YOUR_GITHUB_CLIENT_SECRET' | cpln secret create-opaque --name my-supabase-github-oauth --encoding plain -f -
 ```
 
 Supported: Apple, Azure, Bitbucket, Discord, Facebook, Figma, GitHub, GitLab, Google, Kakao, Keycloak, LinkedIn, Notion, Slack, Spotify, Twitch, Twitter/X, WorkOS, Zoom. In your provider's console set the JavaScript origin to `kong.publicAccess.siteUrl` and the redirect URI to `{siteUrl}/auth/v1/callback`. OAuth requires `kong.publicAccess.enabled: true` — providers will not redirect to internal hostnames.
@@ -210,8 +219,17 @@ storage:
 
   gcs:           # only used when backend is gcs — S3-compatible API, no cloud account needed
     bucket: my-supabase-storage-bucket
-    accessKeyId: my-gcs-hmac-access-key-id
-    secretAccessKey: my-gcs-hmac-secret-access-key
+    credentialsSecretName: my-supabase-gcs-hmac  # prerequisite dictionary secret
+```
+
+Google issues the HMAC pair, so it never transits values. Create the secret before installing —
+generate the pair under **Cloud Storage → Settings → Interoperability → Access keys for your user
+account**:
+
+```bash
+cpln secret create-dictionary --name my-supabase-gcs-hmac \
+  --entry accessKeyId=GOOG1EXAMPLE... \
+  --entry secretAccessKey=YOUR_HMAC_SECRET
 ```
 
 ### Studio (web dashboard)

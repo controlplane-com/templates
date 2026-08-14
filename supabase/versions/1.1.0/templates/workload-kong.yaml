@@ -54,6 +54,7 @@ spec:
         httpGet:
           path: /auth/v1/health
           port: 8000
+          scheme: HTTP
         failureThreshold: 10
         initialDelaySeconds: 30
         periodSeconds: 10

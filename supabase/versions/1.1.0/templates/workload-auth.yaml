@@ -80,7 +80,7 @@ spec:
         - name: GOTRUE_EXTERNAL_GITHUB_CLIENT_ID
           value: {{ .clientId | quote }}
         - name: GOTRUE_EXTERNAL_GITHUB_SECRET
-          value: {{ .clientSecret | quote }}
+          value: 'cpln://secret/{{ .clientSecretName }}.payload'
         - name: GOTRUE_EXTERNAL_GITHUB_REDIRECT_URI
           value: {{ include "supabase.siteUrl" $ }}/auth/v1/callback
         {{- end }}
@@ -90,7 +90,7 @@ spec:
         - name: GOTRUE_EXTERNAL_GOOGLE_CLIENT_ID
           value: {{ .clientId | quote }}
         - name: GOTRUE_EXTERNAL_GOOGLE_SECRET
-          value: {{ .clientSecret | quote }}
+          value: 'cpln://secret/{{ .clientSecretName }}.payload'
         - name: GOTRUE_EXTERNAL_GOOGLE_REDIRECT_URI
           value: {{ include "supabase.siteUrl" $ }}/auth/v1/callback
         {{- end }}
@@ -102,6 +102,7 @@ spec:
         httpGet:
           path: /health
           port: 9999
+          scheme: HTTP
         failureThreshold: 10
         initialDelaySeconds: 15
         periodSeconds: 5

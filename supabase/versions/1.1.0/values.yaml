@@ -97,13 +97,16 @@ auth:
   # Supported: Apple, Azure, Bitbucket, Discord, Facebook, Figma, GitHub, GitLab,
   # Google, Kakao, Keycloak, LinkedIn, Notion, Slack, Spotify, Twitch, Twitter/X,
   # WorkOS, Zoom
+  # The client ID is not sensitive and stays here; the client SECRET is issued by
+  # the provider, so it goes in a PREREQUISITE opaque secret (encoding: plain)
+  # whose payload is the secret itself, named per provider.
   # providers:
   #   github:
-  #     clientId: ""
-  #     clientSecret: ""
+  #     clientId: "Iv1.0123456789abcdef"
+  #     clientSecretName: my-supabase-github-oauth
   #   google:
-  #     clientId: ""
-  #     clientSecret: ""
+  #     clientId: "1234567890-abc.apps.googleusercontent.com"
+  #     clientSecretName: my-supabase-google-oauth""
 
 # ── Realtime (WebSocket subscriptions to database changes) ────────────────────
 # Stateless — scales horizontally. Only reachable via Kong.
@@ -153,8 +156,9 @@ storage:
   gcs:            # only used when backend is gcs
     # GCS is accessed via S3-compatible API using HMAC keys (no cloud account needed)
     bucket: my-supabase-storage-bucket
-    accessKeyId: my-gcs-hmac-access-key-id
-    secretAccessKey: my-gcs-hmac-secret-access-key
+    # PREREQUISITE dictionary secret with keys `accessKeyId` and `secretAccessKey`
+    # — HMAC credentials are issued by Google, so they never transit values.
+    credentialsSecretName: my-supabase-gcs-hmac
 
 # ── Studio (web dashboard) + pg_meta ──────────────────────────────────────────
 # pg_meta is the Postgres metadata API used exclusively by Studio. It is

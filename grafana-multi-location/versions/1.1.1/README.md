@@ -514,10 +514,11 @@ time; with HA on, `alerting.location` and `alerting.resources` are ignored.
   Grafana reads the same secret — and `helm install` still reports success. If a tier sits at 0
   replicas after install, read `status.versions[].message` on the workload.
 - **Use the canonical `*.cpln.app` endpoint, not the per-location ones.** Grafana is configured with a
-  single absolute `root_url` (the canonical endpoint), which is what it scopes its session cookie and
-  CSRF origin checks to. On a per-location hostname the UI and dashboard layout load over GET, but the
-  POST that fetches panel data is rejected — you get a dashboard with empty panels and no error. The
-  canonical endpoint is georouted and already serves from the nearest location.
+  single absolute `root_url` (the canonical endpoint). On a per-location hostname the UI and dashboard
+  layout load, but the POST that fetches panel data is rejected — you get a dashboard with empty panels
+  and no error anywhere. Observed behaviour; the mechanism was never confirmed, which is why no
+  `csrf_trusted_origins` knob is exposed. The canonical endpoint is georouted and already serves from
+  the nearest location.
 - **A provisioned datasource that reports `upstream connect error ... connection timeout` is almost
   always an unsubstituted placeholder in its URL**, not a network or firewall problem. Check the GVC
   segment of `datasources.definitions[].url` first — a name that does not resolve times out rather

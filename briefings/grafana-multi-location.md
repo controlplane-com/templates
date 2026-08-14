@@ -247,6 +247,13 @@ the tagged source on a key name.)
   enabling alerting HA needs no extra secrets. 1.1.0 shipped placeholders (auth on by default) and it
   was reversed: forgetting a secret is far likelier than an attacker already running inside the GVC
   this chart creates, and the penalty was severe (below). Auth itself is wired and deploy-proven.
+- **Enabling Redis auth on an ALREADY-RUNNING authless install was silently broken until 2026-08-13.**
+  Sentinel persisted `user default on nopass` via `CONFIG REWRITE` and that ACL line overrode
+  `requirepass`, so sentinels kept answering unauthenticated while every surface reported success — and
+  it broke removal and rotation the same way. Fixed IN PLACE in `redis-multi-location` 2.1.0 (the strip
+  in `apply_auth()` now removes `^user default ` too), so this chart picks it up with no dependency
+  bump. Full detail in `briefings/redis-multi-location.md`. **If you ever see sentinel accepting
+  unauthenticated clients after auth was turned on, that strip is the first place to look.**
 - **If you DO set them, the secrets gate the Grafana UI tier, not just alerting.** Grafana reads the
   same secrets to authenticate as a client, so a misspelt name stops the **UI** at 0 replicas too.
   `helm install` still reports SUCCESS — the message is on `status.versions[].message`, and it

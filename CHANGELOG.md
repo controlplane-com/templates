@@ -40,6 +40,8 @@ High-level, user-facing catalog changes by month: new templates and notable vers
 - **etcd 1.4.2** — etcd now trims its own history automatically, so its storage no longer grows without limit and fill up the default 2 GiB after a couple of months, at which point the cluster went read-only and any database using it for coordination could start restart-looping. History retention and the storage quota are now configurable. **If you run `postgres-highly-available` or `timescaledb-highly-available`, upgrade those templates to pick this up**
 - **etcd-multi-location 1.0.2** — history retention and the storage quota are now configurable; behaviour at the defaults is unchanged
 - **grafana-multi-location 1.1.0** — alerting can now keep running when a region is lost: set `alerting.highAvailability.enabled` and every location evaluates alert rules, with a stretched Redis making sure a notification is still sent only once. Alerting can also be turned off entirely with `alerting.enabled`
+- **grafana-multi-location 1.1.1** — turning on alerting HA no longer requires creating any extra secrets; the coordinating Redis is unauthenticated by default and can be given passwords when you want them
+- **redis-multi-location 2.1.0** — fixes a defect where adding, changing or removing a Sentinel password on an existing deployment had no effect: Sentinel kept accepting its previous credentials while reporting success
 
 ## 2026-07
 

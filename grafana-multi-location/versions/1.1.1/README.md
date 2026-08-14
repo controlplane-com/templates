@@ -413,6 +413,12 @@ No cloud account is needed.
 1. Create the bucket and set `postgresML.backup.minio.bucket`.
 2. Set `postgresML.backup.minio.endpoint` to the S3 API address including the port — for the `minio`
    template in the same GVC that is `http://WORKLOAD_NAME:9000`.
+
+   **The endpoint must be reachable from EVERY location in the GVC.** In `wal-g` mode every member
+   runs `restore_command`, so a MinIO workload that exists in only one location leaves the members in
+   the other locations in a permanent restart loop — and it is silent, because the leader stays healthy
+   and writes keep succeeding. Run your S3-compatible endpoint in every location, or use S3/GCS, which
+   are global.
 3. Create the credentials secret and set `postgresML.backup.minio.credentialsSecretName`:
 
    ```bash

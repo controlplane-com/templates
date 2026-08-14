@@ -91,9 +91,12 @@ global:
     # Minimum 2 locations, and minimum 3 with alerting HA enabled below. The
     # database tier needs 3 for automatic failover and 5 to survive losing two —
     # see the survival table in the README.
-    # `replicas` here is DATABASE members per location. Grafana's own count per
-    # location is the top-level `replicas` below; the optional Redis tier has its
-    # own count (redisML.redis.replicasPerLocation) and ignores this number.
+    # `replicas` here sets the POSTGRES members in that location, and nothing else.
+    # Every other tier ignores it and has its own count:
+    #   etcd     — always exactly 1 per location, not configurable. Quorum is a
+    #              majority of LOCATIONS, so a second member in one buys nothing.
+    #   Grafana  — the top-level `replicas` below, applied to every location.
+    #   Redis    — redisML.redis.replicasPerLocation (alerting HA only).
     locations:
       - name: aws-us-east-1
         replicas: 1
@@ -159,7 +162,7 @@ admin:
   user: admin # initial admin login name (not sensitive)
   applyPassword: true # set false after your first login to stop referencing the password secret
   passwordSecretName: my-grafana-admin-password # opaque secret holding the first-boot admin password
-  secretKeySecretName: my-grafana-secret-key # opaque secret holding the encryption key
+  secretKeySecretName: my-grafana-secret-key # opaque secret; encrypts datasource passwords AT REST
 ```
 
 The password applies only when the admin account is **first created**; change it in the UI afterwards
@@ -513,7 +516,7 @@ time; with HA on, `alerting.location` and `alerting.resources` are ignored.
   The safe path is unchanged: back up the database, uninstall, reinstall, restore.
 - **Create the admin password, encryption key and database credentials secrets before installing.** The chart does not create them; without them the deployment waits forever on secrets that do not exist.
 - **The GVC in `global.gvc.name` must not already exist.** Helm adopts an existing one and deletes it on uninstall, taking every unrelated workload with it.
-- **Never rotate or delete the encryption key.** It decrypts every stored datasource credential, in every location. Rotating it makes them all unreadable and every alert rule that queries them fails silently.
+- **Never rotate or delete the encryption key.** It encrypts datasource passwords at rest in the shared database — it protects nothing in transit, which is TLS's job via the datasource URL. Rotating it makes every stored credential unreadable in every location, and each alert rule that queries them fails silently.
 - **Any `helm upgrade` interrupts service in every location.** Database writes fail for about
   **117 s**, but the Grafana tier is unavailable for longer than that because reads fail too —
   measured recovery took about **4 minutes**, with one location down for **5-6 minutes**. The bundled database members do not restart one at a time — the platform does not retain the field that would limit the rollout — so all of them go down together (**~117 s** measured on an upgrade that changed nothing). Both Grafana tiers return errors for that window. Treat every upgrade as a planned outage, not a rolling one.

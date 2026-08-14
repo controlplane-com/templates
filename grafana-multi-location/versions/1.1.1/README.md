@@ -504,7 +504,13 @@ time; with HA on, `alerting.location` and `alerting.resources` are ignored.
 
 ## Important Notes
 
-- **Resource names no longer carry the `-ml` infix, and that is a FRESH-INSTALL-ONLY change.** Both Grafana workloads, the identity, policy and datasource secret are now named `{release}-grafana…` instead of `{release}-grafana-ml…`, and the bundled database tier renamed the same way — including its **volume set**. Running `helm upgrade` over an install created before this change creates a **new, empty volume set** and leaves the old one behind holding your dashboards, users and alert rules (and still billing). There is no in-place upgrade path: back up the database, uninstall, reinstall, restore, then delete the orphaned volume set.
+- **Resource names no longer carry the `-ml` infix, and that is a FRESH-INSTALL-ONLY change.** Both Grafana workloads, the identity, policy and datasource secret are now named `{release}-grafana…` instead of `{release}-grafana-ml…`, and the bundled database tier renamed the same way — including its **volume set**. Running `helm upgrade` over an install created before this change **DELETES the old volume set** — `cpln helm upgrade` names it in its cleanup phase and it is gone seconds later, with no reachable final snapshot. **Back up before you upgrade.**
+
+  A measured 1.0.1 → 1.0.2 upgrade of the database tier did not lose data, but only by a race worth understanding: Helm creates the new workload before deleting the old one, and the bundled etcd's volume set was NOT renamed, so the cluster still had its DCS and the new members cloned from the still-running old primary. That old primary kept serving for **86 s** after Helm reported it deleted, and a 7.5 MB database cloned in **12 s**. A database that cannot be base-backed-up inside that window has no fallback, because the volume holding it is already destroyed. The large-database case is inferred, not observed — do not rely on the race.
+
+  **Your connection strings also break permanently:** `{release}-postgres-ml-proxy` is deleted and never returns, so every application pointing at it must move to `{release}-postgres-proxy`.
+
+  The safe path is unchanged: back up the database, uninstall, reinstall, restore.
 - **Create the admin password, encryption key and database credentials secrets before installing.** The chart does not create them; without them the deployment waits forever on secrets that do not exist.
 - **The GVC in `global.gvc.name` must not already exist.** Helm adopts an existing one and deletes it on uninstall, taking every unrelated workload with it.
 - **Never rotate or delete the encryption key.** It decrypts every stored datasource credential, in every location. Rotating it makes them all unreadable and every alert rule that queries them fails silently.

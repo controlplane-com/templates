@@ -1,0 +1,115 @@
+{{- if .Values.studio.enabled }}
+---
+kind: workload
+name: {{ include "supabase.studio.name" . }}
+description: Supabase Studio — web dashboard and pg_meta API (jwt-{{ .Values.jwt.serviceRoleKey | sha256sum | trunc 8 }})
+tags: {{- include "supabase.tags" . | nindent 2 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "supabase.identity.name" . }}
+  containers:
+    - name: studio
+      image: {{ .Values.studio.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.studio.resources.minCpu | quote }}
+      cpu: {{ .Values.studio.resources.maxCpu | quote }}
+      minMemory: {{ .Values.studio.resources.minMemory | quote }}
+      memory: {{ .Values.studio.resources.maxMemory | quote }}
+      env:
+        - name: STUDIO_PG_META_URL
+          value: http://localhost:8080
+        - name: DASHBOARD_USERNAME
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.studioUsername
+        - name: DASHBOARD_PASSWORD
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.studioPassword
+        - name: POSTGRES_PASSWORD
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
+        - name: DEFAULT_ORGANIZATION_NAME
+          value: Default Organization
+        - name: DEFAULT_PROJECT_NAME
+          value: Default Project
+        - name: SUPABASE_URL
+          value: http://{{ include "supabase.kong.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:8000
+        - name: SUPABASE_PUBLIC_URL
+          value: {{ include "supabase.siteUrl" . }}
+        - name: SUPABASE_ANON_KEY
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.anonKey
+        - name: SUPABASE_SERVICE_KEY
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.serviceRoleKey
+        - name: AUTH_JWT_SECRET
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.jwtSecret
+        - name: NEXT_PUBLIC_ENABLE_LOGS
+          value: "false"
+      ports:
+        - number: 3000
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /
+          port: 3000
+        failureThreshold: 10
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+    - name: meta
+      image: {{ .Values.studio.meta.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.studio.meta.resources.minCpu | quote }}
+      cpu: {{ .Values.studio.meta.resources.maxCpu | quote }}
+      minMemory: {{ .Values.studio.meta.resources.minMemory | quote }}
+      memory: {{ .Values.studio.meta.resources.maxMemory | quote }}
+      env:
+        - name: PG_META_PORT
+          value: "8080"
+        - name: PG_META_DB_HOST
+          value: {{ include "supabase.postgresHost" . }}
+        - name: PG_META_DB_PORT
+          value: "5432"
+        - name: PG_META_DB_NAME
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresDatabase
+        - name: PG_META_DB_USER
+          value: supabase_admin
+        - name: PG_META_DB_PASSWORD
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
+        - name: PG_META_DB_SSL_MODE
+          value: disable
+      ports:
+        - number: 8080
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 8080
+        failureThreshold: 10
+        initialDelaySeconds: 10
+        periodSeconds: 5
+        successThreshold: 1
+        timeoutSeconds: 3
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+    capacityAI: false
+  firewallConfig:
+    external:
+      inboundAllowCIDR:
+        {{- if .Values.studio.allowedCidrs }}
+        {{- range .Values.studio.allowedCidrs }}
+        - {{ . }}
+        {{- end }}
+        {{- else }}
+        []
+        {{- end }}
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: {{ .Values.studio.internalAccess.type }}
+      inboundAllowWorkload:
+        - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "supabase.kong.name" . }}
+        {{- range .Values.studio.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+{{- end }}

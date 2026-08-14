@@ -1,0 +1,19 @@
+---
+kind: policy
+name: {{ include "supabase.policy.name" . }}
+description: Supabase policy — grants the shared identity access to all secrets
+tags: {{- include "supabase.tags" . | nindent 2 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "supabase.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "supabase.secret.name" . }}
+  - //secret/{{ include "supabase.kong.config.secret.name" . }}
+  - //secret/{{ include "supabase.preinit.secret.name" . }}
+  - //secret/{{ include "supabase.postinit.secret.name" . }}
+  {{- if and .Values.backup.enabled (eq .Values.backup.mode "walg") }}
+  - //secret/{{ include "supabase.walg.secret.name" . }}
+  {{- end }}

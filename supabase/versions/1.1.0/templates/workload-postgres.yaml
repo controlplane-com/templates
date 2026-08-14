@@ -1,0 +1,130 @@
+---
+kind: workload
+name: {{ include "supabase.postgres.name" . }}
+description: Supabase Postgres database
+tags: {{- include "supabase.tags" . | nindent 2 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  type: stateful
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "supabase.identity.name" . }}
+  containers:
+    - name: postgres
+      image: {{ .Values.postgres.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.postgres.resources.minCpu | quote }}
+      cpu: {{ .Values.postgres.resources.maxCpu | quote }}
+      minMemory: {{ .Values.postgres.resources.minMemory | quote }}
+      memory: {{ .Values.postgres.resources.maxMemory | quote }}
+      command: /bin/bash
+      args:
+        - -c
+        {{- if and .Values.backup.enabled (eq .Values.backup.mode "walg") }}
+        - "chown -R postgres:postgres /var/lib/postgresql/data && exec docker-entrypoint.sh postgres -c listen_addresses='*' -c wal_level=replica -c archive_mode=on -c 'archive_command=wal-g wal-push %p' -c archive_timeout=60"
+        {{- else }}
+        - "chown -R postgres:postgres /var/lib/postgresql/data && exec docker-entrypoint.sh postgres -c listen_addresses='*' -c wal_level=logical"
+        {{- end }}
+      env:
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pg_data
+        - name: POSTGRES_DB
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresDatabase
+        - name: POSTGRES_USER
+          value: postgres
+        - name: POSTGRES_PASSWORD
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
+        - name: JWT_SECRET
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.jwtSecret
+        - name: ANON_KEY
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.anonKey
+        - name: SERVICE_ROLE_KEY
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.serviceRoleKey
+        {{- if and .Values.backup.enabled (eq .Values.backup.mode "walg") }}
+        - name: WALG_COMPRESSION_METHOD
+          value: zstd
+        {{- if eq .Values.backup.provider "aws" }}
+        - name: WALG_S3_PREFIX
+          value: s3://{{ .Values.backup.aws.bucket }}/{{ .Values.backup.aws.prefix }}
+        - name: AWS_REGION
+          value: {{ .Values.backup.aws.region | quote }}
+        {{- end }}
+        {{- if eq .Values.backup.provider "gcp" }}
+        - name: WALG_GS_PREFIX
+          value: gs://{{ .Values.backup.gcp.bucket }}/{{ .Values.backup.gcp.prefix }}
+        {{- end }}
+        {{- end }}
+      ports:
+        - number: 5432
+          protocol: tcp
+      volumes:
+        - path: /var/lib/postgresql/data
+          uri: cpln://volumeset/{{ include "supabase.postgres.volumeset.name" . }}
+        - path: /docker-entrypoint-initdb.d/00-supabase-init.sh
+          uri: cpln://secret/{{ include "supabase.preinit.secret.name" . }}.payload
+        - path: /docker-entrypoint-initdb.d/zzz-set-passwords.sh
+          uri: cpln://secret/{{ include "supabase.postinit.secret.name" . }}.payload
+      readinessProbe:
+        exec:
+          command:
+            - sh
+            - -c
+            - pg_isready -U $POSTGRES_USER -d $POSTGRES_DB
+        failureThreshold: 10
+        initialDelaySeconds: 20
+        periodSeconds: 5
+        successThreshold: 1
+        timeoutSeconds: 3
+    {{- if and .Values.backup.enabled (eq .Values.backup.mode "walg") }}
+    - name: wal-g-backup
+      image: {{ .Values.postgres.image }}
+      command: /bin/bash
+      args:
+        - /walg/backup.sh
+      cpu: {{ .Values.backup.resources.maxCpu | quote }}
+      memory: {{ .Values.backup.resources.maxMemory | quote }}
+      inheritEnv: false
+      env:
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pg_data
+        - name: PGHOST
+          value: "127.0.0.1"
+        - name: PGPORT
+          value: "5432"
+        - name: PGUSER
+          value: postgres
+        - name: PGPASSWORD
+          value: cpln://secret/{{ include "supabase.secret.name" . }}.postgresPassword
+        - name: WALG_BACKUP_INTERVAL_SECONDS
+          value: {{ .Values.backup.walg.intervalSeconds | quote }}
+        - name: WALG_COMPRESSION_METHOD
+          value: zstd
+        {{- if eq .Values.backup.provider "aws" }}
+        - name: WALG_S3_PREFIX
+          value: s3://{{ .Values.backup.aws.bucket }}/{{ .Values.backup.aws.prefix }}
+        - name: AWS_REGION
+          value: {{ .Values.backup.aws.region | quote }}
+        {{- end }}
+        {{- if eq .Values.backup.provider "gcp" }}
+        - name: WALG_GS_PREFIX
+          value: gs://{{ .Values.backup.gcp.bucket }}/{{ .Values.backup.gcp.prefix }}
+        {{- end }}
+      volumes:
+        - path: /var/lib/postgresql/data
+          uri: cpln://volumeset/{{ include "supabase.postgres.volumeset.name" . }}
+        - path: /walg/backup.sh
+          uri: cpln://secret/{{ include "supabase.walg.secret.name" . }}.payload
+    {{- end }}
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+    capacityAI: false
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: {{ .Values.postgres.internalAccess.type }}
+      {{- if .Values.postgres.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.postgres.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}

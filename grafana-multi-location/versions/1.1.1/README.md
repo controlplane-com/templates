@@ -439,7 +439,7 @@ and that is what `alerting.highAvailability.enabled` turns on. Pick a mode:
 | Losing a location | alert evaluation **stops** until you repoint `alerting.location` and upgrade | evaluation **continues** in the surviving locations |
 | Minimum locations | 2 | **3** — the chart refuses to render below that |
 | **Data-source query load** | **1×** | **(locations × replicas)×** |
-| Silences | do not reliably propagate — see the workaround below | expected to propagate through the shared peer (upstream behaviour, untested here) |
+| Silences | expected not to propagate reliably — see the workaround below (untested here) | expected to propagate through the shared peer (upstream behaviour, untested here) |
 
 ### Read this before enabling HA
 
@@ -471,7 +471,7 @@ evaluator. Two consequences:
   run `helm upgrade --set alerting.location=<surviving-location>`, and the UI is completely unaffected
   in the meantime — dashboards look perfectly healthy while nothing is being evaluated. This is the
   failure `alerting.highAvailability.enabled` exists to remove.
-- **Silences do not propagate between instances.** A silence created against the UI tier is not
+- **Silences are not expected to propagate between instances** (untested here). A silence created against the UI tier is not
   guaranteed to be honoured by the evaluator. Create silences against the evaluator directly, from a
   workload in the same GVC:
   `curl -u admin:PASSWORD http://{release}-grafana-alerting.{global.gvc.name}.cpln.local:3000/api/alertmanager/grafana/api/v2/silences`

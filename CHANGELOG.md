@@ -32,7 +32,7 @@ High-level, user-facing catalog changes by month: new templates and notable vers
 - **New template: docmost 1.0.0** — open-source knowledge base and wiki with real-time collaborative editing, backed by PostgreSQL and Redis, with local or S3 attachment storage
 - **New template: tooljet 1.0.0** — open-source low-code internal-tools builder (visual app builder, 50+ connectors, built-in ToolJet Database) backed by PostgreSQL
 - **New template: listmonk 1.0.0** — self-hosted newsletter and mailing-list manager with public subscription pages, backed by highly-available or single-instance PostgreSQL
-- **redis-multi-location 2.1.0** — Redis and Sentinel passwords are now user-created secrets referenced by name instead of values, and the template can be used as a building block inside other multi-location templates
+- **redis-multi-location 2.1.0** — Redis and Sentinel passwords are now user-created secrets referenced by name instead of values; adding, changing or removing a Sentinel password on an existing deployment now actually takes effect (previously Sentinel kept accepting its old credentials while reporting success); and the template can be used as a building block inside other multi-location templates
 - **supabase 1.1.0** — the API keys, database password, dashboard password and JWT signing secret are now user-created secrets you reference by name, instead of shared defaults published in this repository; the dashboard gains a real login, the public API key can no longer reach admin endpoints, and Realtime subscriptions and S3-compatible storage now work
 - **postgres-multi-location 1.0.3** — the stretched etcd cluster's history-compaction and storage-quota settings are now configurable, and documented alongside the symptom they prevent
 - **postgres-highly-available 2.4.2** — picks up the etcd fix below: the coordination store no longer fills its storage and forces the cluster read-only after a couple of months. **Upgrade if you are running any earlier version**
@@ -41,7 +41,6 @@ High-level, user-facing catalog changes by month: new templates and notable vers
 - **etcd-multi-location 1.0.2** — history retention and the storage quota are now configurable; behaviour at the defaults is unchanged
 - **grafana-multi-location 1.1.0** — alerting can now keep running when a region is lost: set `alerting.highAvailability.enabled` and every location evaluates alert rules, with a stretched Redis making sure a notification is still sent only once. Alerting can also be turned off entirely with `alerting.enabled`
 - **grafana-multi-location 1.1.1** — turning on alerting HA no longer requires creating any extra secrets; the coordinating Redis is unauthenticated by default and can be given passwords when you want them
-- **redis-multi-location 2.1.0** — fixes a defect where adding, changing or removing a Sentinel password on an existing deployment had no effect: Sentinel kept accepting its previous credentials while reporting success
 
 ## 2026-07
 

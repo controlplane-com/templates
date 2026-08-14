@@ -63,6 +63,43 @@ Validation — required-field, enum, and mode-compatibility checks.
 {{- fail "otel-collector: publicAccess.allowedCidrs must be non-empty when publicAccess.enabled — list your sender CIDRs, or [\"0.0.0.0/0\"] to explicitly allow all" -}}
 {{- end -}}
 {{- end -}}
+{{/*
+Unsubstituted-placeholder guard. The shipped example endpoint is a placeholder,
+and leaving part of it is INVISIBLE at every layer that reports success: the
+collector accepts and batches the data, then the remote-write exporter logs
+`Dropping data` against a hostname that does not resolve, and the metrics simply
+never appear. Grafana shows an empty metric picker with no error. Observed in a
+live install 2026-08-13, where the workload name had been substituted and the GVC
+segment left as the literal placeholder.
+
+Checked in BOTH shapes because they fail identically and only the simple one has
+a knob to validate: simple mode uses metrics.remoteWrite.endpoint, advanced mode
+buries the exporter in a free-form config blob — which is the path that actually
+bit. The old `my-prometheus.my-gvc` pair is caught too, since a user copying an
+example from 1.2.1 lands in exactly the same place.
+*/}}
+{{/* `my-gvc.cpln.local`, NOT the `my-prometheus.my-gvc` pair: the live failure had
+   the workload name correctly substituted and only the GVC segment left, so a
+   pair check misses the exact case this guard exists for. A GVC genuinely named
+   `my-gvc` trips it — a loud false failure with a clear message is the better
+   trade against a silent one that drops every metric. */}}
+{{- $ph := list "YOUR_GVC" "YOUR_WORKLOAD" "my-gvc.cpln.local" -}}
+{{- if and (eq $mode "simple") .Values.metrics.enabled -}}
+{{- $ep := .Values.metrics.remoteWrite.endpoint | default "" -}}
+{{- range $ph -}}
+{{- if contains . $ep -}}
+{{- fail (printf "otel-collector: metrics.remoteWrite.endpoint still contains the placeholder '%s' (%s). Substitute BOTH the workload name and the GVC — e.g. http://my-prom.my-gvc-name.cpln.local:9095/api/v1/write. Left as-is the hostname does not resolve, and the failure is silent: the collector accepts your data and drops it at the last hop, so metrics never appear and nothing reports an error." . $ep) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if eq $mode "advanced" -}}
+{{- $cfg := .Values.otelCollector.advanced.config | default "" -}}
+{{- range $ph -}}
+{{- if contains . $cfg -}}
+{{- fail (printf "otel-collector: otelCollector.advanced.config still contains the placeholder '%s'. Substitute BOTH the workload name and the GVC in your exporter endpoint. Left as-is the hostname does not resolve, and the failure is silent: the collector accepts your data and drops it at the last hop, so metrics never appear and nothing reports an error." .) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if not (has .Values.internalAccess.type (list "none" "same-gvc" "same-org")) -}}
 {{- fail (printf "otel-collector: internalAccess.type must be none, same-gvc, or same-org — got '%s'" .Values.internalAccess.type) -}}
 {{- end -}}

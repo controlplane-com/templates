@@ -67,7 +67,7 @@ otelCollector:
 metrics:
   enabled: true   # adds an OTLP → prometheus_remote_write pipeline (simple mode only)
   remoteWrite:
-    endpoint: http://my-prometheus.my-gvc.cpln.local:9095/api/v1/write  # any Prometheus-remote-write-compatible URL
+    endpoint: http://YOUR_WORKLOAD.YOUR_GVC.cpln.local:9095/api/v1/write  # any Prometheus-remote-write-compatible URL
 ```
 
 ### Ingestion auth
@@ -100,7 +100,7 @@ internalAccess:
 ```yaml
 exporters:
   prometheus_remote_write:
-    endpoint: http://my-prometheus.my-gvc.cpln.local:9095/api/v1/write
+    endpoint: http://YOUR_WORKLOAD.YOUR_GVC.cpln.local:9095/api/v1/write
 service:
   pipelines:
     metrics/otlp:
@@ -131,6 +131,12 @@ The canonical endpoint is in `status.canonicalEndpoint` of `cpln workload get {r
 - Create the auth secret before installing — a missing secret leaves the deployment waiting on it.
 - mTLS uses the direct load balancer (raw TCP), not the canonical endpoint; in mTLS mode the canonical `https://` endpoint intentionally stops accepting traffic.
 - **In mTLS mode, in-GVC senders must use the plain internal gRPC port `:4317`** — the TLS-terminating ingest ports (4318/4319) are not reachable through the internal service mesh (handshake fails); they are for external clients via the direct LB only.
+- **Substitute BOTH halves of the remote-write endpoint — the workload name AND the GVC.** A leftover
+  placeholder is rejected at install now, but the reason the check exists is worth knowing: an
+  unresolvable endpoint fails silently at the last hop. The collector accepts, authenticates and
+  batches your data, then logs `Dropping data` and discards it, so metrics never arrive and Grafana
+  shows an empty metric picker with no error anywhere. If metrics are missing and nothing looks wrong,
+  check the exporter endpoint before anything else — `cpln logs '{gvc="GVC", workload="WORKLOAD"}' | grep -i 'dropping data'`.
 - One collector pushes to one remote-write store; run multiple installs for multiple targets.
 - **Remote-write appends a unit suffix to metric names.** A metric sent as `my_metric` is stored as `my_metric_ratio`, `my_metric_seconds` and so on, following the OTLP unit — so query the suffixed name in Prometheus, not the one your app emits.
 

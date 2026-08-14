@@ -59,6 +59,14 @@ bind its authed receiver to 0.0.0.0:4318 (+ 0.0.0.0:4319 for gRPC). */}}
 
 kind: workload
 name: {{ include "oc.name" . }}
+{{- /* Mode-aware: the two shapes expose different ports and a blank description in
+     the UI is what prompted this. Advanced-mode ports are user-defined, so say
+     what the workload IS rather than assert numbers the config may not use. */ -}}
+{{- if eq $mode "simple" }}
+description: OpenTelemetry Collector — OTLP trace and metric ingestion{{ if ne $auth "none" }} (authenticated){{ end }}, gRPC :4317 and HTTP :4318, spanmetrics on :8889
+{{- else }}
+description: OpenTelemetry Collector — OTLP ingestion from a user-supplied advanced config, spanmetrics on :8889
+{{- end }}
 gvc: {{ .Values.global.cpln.gvc }}
 tags:
   {{- include "oc.tags" . | nindent 2 }}

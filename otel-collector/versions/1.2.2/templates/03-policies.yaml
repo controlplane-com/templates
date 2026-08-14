@@ -1,6 +1,6 @@
 kind: policy
 name: {{ include "oc.name" . }}
-description: {{ include "oc.name" . }}
+description: Grants the OpenTelemetry Collector identity reveal on exactly the secrets it mounts
 tags:
   {{- include "oc.tags" . | nindent 4 }}
 bindings:

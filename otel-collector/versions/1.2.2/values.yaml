@@ -92,7 +92,7 @@ otelCollector:
 metrics:
   enabled: false # adds an OTLP→remote-write metrics pipeline (simple mode; in advanced mode define it in advanced.config)
   remoteWrite:
-    endpoint: http://my-prometheus.my-gvc.cpln.local:9095/api/v1/write # any Prometheus-remote-write-compatible URL
+    endpoint: http://YOUR_WORKLOAD.YOUR_GVC.cpln.local:9095/api/v1/write # any Prometheus-remote-write-compatible URL
 
 # ─── Ingestion Auth ──────────────────────────────────────────────────────────
 auth:

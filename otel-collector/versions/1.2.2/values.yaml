@@ -1,0 +1,110 @@
+# IMPORTANT:
+# - Traces: after installing, enable tracing at the GVC level (triggers a restart of all workloads in the GVC).
+# - Metrics: set metrics.enabled=true and point remoteWrite.endpoint at any Prometheus-remote-write-compatible store.
+otelCollector:
+  image: otel/opentelemetry-collector-contrib:0.157.0
+  mode: simple # simple: structured config from the knobs below | advanced: advanced.config is used verbatim
+  replicas: 1 # stateless; 2+ runs an HA ingestion pool behind the same endpoint
+  resources:
+    cpu: 200m
+    memory: 256Mi
+
+  # Simple Mode
+  simple:
+    processors:
+      transform:
+        traceStatements: # Normalizes dynamic span URLs to a fixed value. Substitute PLACEHOLDER, e.g. 'user/profile'
+          - replace_pattern(span.attributes["http.url"], "^.*(PLACEHOLDER).*$", "/PLACEHOLDER")
+    spanmetrics:
+      histogram: # Span-duration histogram buckets — tune to your SLO thresholds
+        # Buckets MUST be duration strings ("250ms", "1s"). Bare numbers are
+        # parsed as NANOSECONDS by the collector, silently breaking the histogram.
+        buckets: ["1ms", "5ms", "10ms", "25ms", "50ms", "100ms", "250ms", "500ms", "1s", "2.5s", "5s"]
+        unit: ms # ms or s (output unit of the recorded histogram)
+
+  # Advanced Mode — full collector config, used verbatim when mode: advanced.
+  # Public ingestion contract in advanced mode: bind your authed receiver to
+  # 0.0.0.0:4318 (HTTP) / 0.0.0.0:4319 (gRPC); keep health_check on 0.0.0.0:13133 for probes.
+  advanced:
+    config: |
+      extensions:
+        health_check:
+          endpoint: 0.0.0.0:13133
+        pprof:
+          endpoint: 0.0.0.0:8180
+
+      receivers:
+        otlp:
+          protocols:
+            grpc:
+              endpoint: 0.0.0.0:4317
+            http:
+              endpoint: 0.0.0.0:4318
+
+      processors:
+        batch:
+        resource:
+          attributes:
+            - key: workload
+              from_attribute: service.name
+              action: insert
+        transform:
+          trace_statements:
+            - context: span
+              statements:
+                - replace_pattern(span.attributes["http.url"], "^.*(PLACEHOLDER).*$", "/PLACEHOLDER")
+
+      connectors:
+        spanmetrics:
+          dimensions:
+            - name: http.url
+            - name: http.method
+            - name: http.status_code
+          histogram:
+            explicit:
+              buckets: ["1ms", "5ms", "10ms", "25ms", "50ms", "100ms", "250ms", "500ms", "1s", "2.5s", "5s"]
+            unit: ms
+
+      exporters:
+        otlp:
+          endpoint: http://tracing.controlplane:80
+          tls:
+            insecure: true
+        prometheus:
+          endpoint: 0.0.0.0:8889
+
+      service:
+        pipelines:
+          traces:
+            receivers: [otlp]
+            processors: [resource, transform, batch]
+            exporters: [otlp, spanmetrics]
+          metrics:
+            receivers: [spanmetrics]
+            processors: [batch]
+            exporters: [prometheus]
+        extensions: [pprof, health_check]
+        telemetry:
+          logs:
+            level: INFO
+
+# ─── Metrics Ingestion (simple mode) ─────────────────────────────────────────
+metrics:
+  enabled: false # adds an OTLP→remote-write metrics pipeline (simple mode; in advanced mode define it in advanced.config)
+  remoteWrite:
+    endpoint: http://YOUR_WORKLOAD.YOUR_GVC.cpln.local:9095/api/v1/write # any Prometheus-remote-write-compatible URL
+
+# ─── Ingestion Auth ──────────────────────────────────────────────────────────
+auth:
+  method: none # none | bearer | mtls — must not be none when publicAccess is enabled
+  bearer:
+    secretName: "" # opaque secret holding the token (e.g. my-otel-ingest-token) — create BEFORE install
+  mtls:
+    secretName: "" # dictionary secret with keys cert, key, ca (server cert/key + client CA) — create BEFORE install
+
+# ─── Access ──────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: false # public ingestion: bearer → canonical https endpoint; mtls → direct TCP 4317/4318
+  allowedCidrs: [] # REQUIRED when enabled — sender CIDRs, e.g. ["203.0.113.0/24"]; use ["0.0.0.0/0"] to explicitly allow all
+internalAccess:
+  type: same-gvc # who inside the org can reach the collector internally: none | same-gvc | same-org

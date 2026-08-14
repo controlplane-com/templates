@@ -16,6 +16,7 @@ High-level, user-facing catalog changes by month: new templates and notable vers
 - **tidb 1.7.0** — TiDB v8.5.7 across the cluster and the backup image; GCS backups now work (they previously failed on every attempt), development-mode installs now reach ready, and region-aware data placement is applied for the first time
 - **prometheus 1.1.0** — the built-in Prometheus web UI (expression browser, targets, alerts) is now documented with its internal endpoint, and resource knobs are named `minCpu`/`maxCpu`/`minMemory`/`maxMemory`
 - **otel-collector 1.2.1** — installing with public ingestion but no authentication now fails immediately with an explanation and the three ways to resolve it, instead of quietly publishing an open OTLP endpoint
+- **otel-collector 1.2.2** — an unsubstituted placeholder left in the metrics endpoint is now rejected at install instead of being accepted and silently dropping every metric, and the collector's workload, identity, policy and secret now describe themselves in the console instead of showing a blank or their own name
 - **thanos 1.1.0** — resource limits are now named `maxCpu`/`maxMemory` alongside the existing `minCpu`/`minMemory`, so it is clear which value is the limit (update these keys if you set them)
 - **grafana 1.1.0** — Grafana's own resource limits are now named `maxCpu`/`maxMemory` (the bundled PostgreSQL and Redis keep their existing key names)
 - **New template: seaweedfs 1.0.0** — S3-compatible object storage usable as the backup and attachment target for any catalog template that speaks S3

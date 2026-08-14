@@ -315,6 +315,13 @@ No cloud account is needed — credentials are supplied as a secret.
 2. Set `backup.minio.endpoint` to the S3 API address including the port. For the `minio` template
    deployed in the same GVC that is `http://WORKLOAD_NAME:9000`.
 
+   **The endpoint must be reachable from EVERY location in the GVC.** In `wal-g` mode every member
+   runs `restore_command`, so a MinIO workload that exists in only one location leaves the members in
+   the other locations in a permanent restart loop — and it is silent, because the leader stays healthy
+   and writes keep succeeding. Measured: two of three members down for over 20 minutes while the
+   cluster looked fine from the client side. Run your S3-compatible endpoint in every location, or use
+   S3/GCS, which are global.
+
 3. Create the credentials secret and set `backup.minio.credentialsSecretName` to its name. For the
    `minio` template these are its `admin.username` and `admin.password`:
 

@@ -439,7 +439,7 @@ and that is what `alerting.highAvailability.enabled` turns on. Pick a mode:
 | Losing a location | alert evaluation **stops** until you repoint `alerting.location` and upgrade | evaluation **continues** in the surviving locations |
 | Minimum locations | 2 | **3** — the chart refuses to render below that |
 | **Data-source query load** | **1×** | **(locations × replicas)×** |
-| Silences | do not reliably propagate — see the workaround below | propagate through the shared peer |
+| Silences | do not reliably propagate — see the workaround below | expected to propagate through the shared peer (upstream behaviour, untested here) |
 
 ### Read this before enabling HA
 

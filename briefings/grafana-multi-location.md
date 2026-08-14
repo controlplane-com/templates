@@ -56,7 +56,7 @@
 | `redisML.redis.replicasPerLocation` | `1` | Redis members per location. One is plenty — the data is a few KB of coordination keys |
 | `redisML.redis.volumeset.initialCapacity` | `10` GiB | Platform minimum, deliberately below the dependency's own 20 |
 | `redisML.{redis,sentinel}.{image,resources}` | `redis:7.4`, `200m` / `256Mi` | Pass-through. Limits only, so no `cpu:minCpu` ratio applies |
-| `redisML.{redis,sentinel}.passwordSecretName` | `my-grafana-redis-password` / `my-grafana-sentinel-password` | **Must exist before install.** Grafana reads them too, so a wrong name stops the UI tier as well. `""` = authless |
+| `redisML.{redis,sentinel}.passwordSecretName` | `""` / `""` | **Opt-in as of 1.1.1** — authless by default. If set, the secrets must exist before install, and Grafana reads them too, so a wrong name stops the UI tier as well |
 | `admin.passwordSecretName` / `.secretKeySecretName` / `.applyPassword` / `.user` | `my-grafana-admin-password` / `my-grafana-secret-key` / `true` / `admin` | **Required prerequisite opaque secrets** (`encoding: plain`). Both workloads carry the admin env |
 | `datasources.definitions` / `.credentialSecrets` | `[]` / `[]` | Datasources as code; `$KEY` interpolation from prerequisite dictionary secrets |
 | `smtp.*` | off | Whichever instance evaluates is what sends — the dedicated evaluator, or the coordinating UI instance with HA on |
@@ -243,12 +243,15 @@ the tagged source on a key name.)
   `redis-multi-location`'s `redis-ml.sentinel.name`, and the master name `mymaster` must match its
   `sentinel monitor` line. Break either and the chart still renders, installs and boots — Grafana just
   never finds a Redis, and alerting quietly duplicates.
-- **Redis/Sentinel auth is ON by default and the secrets gate the UI tier, not just alerting.**
-  `redisML.redis.passwordSecretName` / `.sentinel.passwordSecretName` default to placeholder names and
-  must exist before install; Grafana reads the same secrets to authenticate as a client, so a misspelt
-  name stops the **Grafana UI** at 0 replicas too. `helm install` still reports SUCCESS — the message
-  is on `status.versions[].message`, and it self-heals ~5-6 min after the secret is created. These are
-  2.1.0's prerequisite-secret knobs; 2.0.2's plain `password` values no longer exist.
+- **Redis/Sentinel auth is OPT-IN as of 1.1.1** — both `passwordSecretName` knobs default to `""`, so
+  enabling alerting HA needs no extra secrets. 1.1.0 shipped placeholders (auth on by default) and it
+  was reversed: forgetting a secret is far likelier than an attacker already running inside the GVC
+  this chart creates, and the penalty was severe (below). Auth itself is wired and deploy-proven.
+- **If you DO set them, the secrets gate the Grafana UI tier, not just alerting.** Grafana reads the
+  same secrets to authenticate as a client, so a misspelt name stops the **UI** at 0 replicas too.
+  `helm install` still reports SUCCESS — the message is on `status.versions[].message`, and it
+  self-heals ~5-6 min after the secret is created. These are 2.1.0's prerequisite-secret knobs;
+  2.0.2's plain `password` values no longer exist.
 - **The migration stagger is re-based in HA mode.** HA off: the evaluator goes first, UI locations at
   15/30/45 s (unchanged). HA on: the location matching `postgresML.primaryLocation` goes first at
   offset 0, the rest at 15/30. An empty `primaryLocation` falls back to plain list order — it is a
@@ -329,3 +332,31 @@ password envs matched the created secrets.
 - Placeholder defaults were kept over `""` deliberately: the failure is precise, actionable, visible
   in the plain CLI table and self-healing, whereas `""` would ship an unauthenticated coordination bus
   by default.
+
+### 1.1.1 — auth reversed to opt-in, two placeholder traps closed (2026-08-13)
+
+- **`redisML.{redis,sentinel}.passwordSecretName` → `""`.** The decision was made on FAILURE
+  LIKELIHOOD, not on threat severity, and that reasoning is the part worth keeping: forgetting a
+  prerequisite secret is a common typo, while exploiting an authless Redis requires an attacker
+  already running inside the GVC this chart creates. The penalty for the typo is also disproportionate
+  — `helm install` exits 0 and reports success while three tiers, including the **UI**, sit at 0
+  replicas with no containers and therefore no logs. Auth stays wired, deploy-proven and one values
+  line away.
+- **`GVC` was not a legible placeholder.** The datasource example read
+  `http://RELEASE-prometheus.GVC.cpln.local:9095`; in a live install the workload name was substituted
+  and `GVC` was left literal. It resolves to nothing, so Envoy times out rather than failing fast, and
+  the user sees `upstream connect error ... connection timeout` — an error that points at the network
+  when the cause is a string. Now `YOUR_WORKLOAD.YOUR_GVC`. **The otel-collector template has the
+  identical trap with `my-gvc` in its `prometheus_remote_write` endpoint, and it silently dropped every
+  metric while reporting success at every other layer** — worth fixing there too.
+- **Per-location endpoints serve the UI but not panel data.** `root_url` is the canonical endpoint, so
+  a per-location hostname loads the dashboard layout over GET while the POST that fetches panel data is
+  rejected: empty panels, no error anywhere in the UI. Recorded as observed behaviour — the CSRF origin
+  check is the best explanation but was never confirmed with a 403, which is why **no
+  `csrf_trusted_origins` knob ships**. Confirm the status code before adding one.
+- **Cross-region service DNS to a single-location GVC WORKS.** Worth writing down because it was got
+  wrong mid-investigation: the "service DNS is location-local and does not fail over" finding applies
+  to a workload present in SEVERAL locations, where each caller prefers its local replica. A target
+  living in exactly one location holds the only endpoints, and callers elsewhere reach it — the same
+  shape as the proven Thanos east → Prometheus west path. Do not cite the failover caveat to claim a
+  single-location dependency is unreachable.

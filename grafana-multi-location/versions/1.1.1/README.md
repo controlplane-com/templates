@@ -557,8 +557,8 @@ time; with HA on, `alerting.location` and `alerting.resources` are ignored.
   With alerting HA off the evaluator migrates first and each location follows 15 s behind it; with
   alerting HA on there is no evaluator, so the location matching `postgresML.primaryLocation` goes
   first at zero delay and the rest follow at 15 s intervals. Either way this removes those restarts at
-  the default one replica per location. Two replicas in the SAME location still start together — at
-  `replicas: 2` expect under one self-healing restart per extra replica. They clear themselves;
+  the default one replica per location. Two replicas in the SAME location still start together, so a
+  few remain at `replicas: 2` — 2 were measured across three locations. They clear themselves;
   nothing needs doing.
 - **If the database primary does not land in `postgresML.primaryLocation`, the first install is
   noisy.** That knob is a preference with a 90-second bound, not a guarantee — if the preferred

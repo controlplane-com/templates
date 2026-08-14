@@ -88,7 +88,10 @@ datasources:
   # - name: Prometheus
   #   type: prometheus
   #   access: proxy
-  #   url: http://RELEASE-prometheus.GVC.cpln.local:9095
+  #   # Substitute BOTH parts: the workload name AND the GVC. A leftover
+  #   # placeholder resolves to nothing and the panel shows only
+  #   # "upstream connect error ... connection timeout".
+  #   url: http://YOUR_WORKLOAD.YOUR_GVC.cpln.local:9095
   #   isDefault: true
   # - name: AppDB
   #   type: postgres
@@ -203,12 +206,11 @@ postgresML:
 # HA requires 3+ locations.
 redisML:
   redis:
-    # MUST EXIST BEFORE INSTALL — opaque secret (encoding: plain) whose payload is
-    # the password. Grafana reads it too, so a missing or misspelt name leaves the
-    # UI TIER AT 0 REPLICAS, not just alerting: helm reports success and the
-    # explanation is on the workload's status.versions[].message.
-    # "" ships authless — then anything else in this GVC can silence your alerts.
-    passwordSecretName: my-grafana-redis-password
+    # OPTIONAL hardening, off by default. Opaque secret (encoding: plain) whose
+    # payload is the password; it MUST EXIST BEFORE INSTALL, and Grafana reads the
+    # same one, so a misspelt name stops the UI tier too. "" leans on the same-GVC
+    # firewall instead — fine for a GVC this chart owns.
+    passwordSecretName: ""
     image: redis:7.4
     replicasPerLocation: 1 # Redis members per location; 1 is plenty for alert coordination
     resources:
@@ -219,7 +221,7 @@ redisML:
   sentinel:
     # Same shape and same failure mode as redis.passwordSecretName, independent of
     # it — Sentinel is what Grafana asks for the current master.
-    passwordSecretName: my-grafana-sentinel-password
+    passwordSecretName: ""
     image: redis:7.4
     resources:
       cpu: 200m

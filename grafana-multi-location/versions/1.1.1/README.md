@@ -50,9 +50,8 @@ live in the shared database. There is no volume, no session affinity and nothing
 3. **Optional secrets**, if you use those features: a `dictionary` secret per entry in
    `datasources.credentialSecrets`, and an opaque secret for `smtp.passwordSecretName`.
 
-   **With `alerting.highAvailability.enabled: true`, two more are required** — opaque secrets named by
-   `redisML.redis.passwordSecretName` and `redisML.sentinel.passwordSecretName`. See
-   [Alerting-HA coordination](#alerting-ha-coordination-subchart).
+   **Alerting HA needs no extra secrets** — the Redis tier ships authless behind the GVC firewall. To
+   authenticate it anyway, see [Authenticating the Redis tier](#authenticating-the-redis-tier).
 
 4. **For database backups only** — a bucket and, for AWS or GCP, a Control Plane
    [cloud account](https://docs.controlplane.com/guides/create-cloud-account). Supported providers:
@@ -176,7 +175,10 @@ datasources:
   # - name: Prometheus
   #   type: prometheus
   #   access: proxy
-  #   url: http://RELEASE-prometheus.GVC.cpln.local:9095
+  #   # Substitute BOTH parts: the workload name AND the GVC. A leftover
+  #   # placeholder resolves to nothing and the panel shows only
+  #   # "upstream connect error ... connection timeout".
+  #   url: http://YOUR_WORKLOAD.YOUR_GVC.cpln.local:9095
   #   isDefault: true
   credentialSecrets: []
   # - name: my-grafana-ds-credentials
@@ -303,10 +305,9 @@ Rendered **only** when `alerting.highAvailability.enabled` is true; ignored enti
 ```yaml
 redisML:
   redis:
-    # Opaque secret (encoding: plain) whose payload is the password. MUST EXIST
-    # BEFORE INSTALL — Grafana reads it too, so a wrong name stops the UI tier as
-    # well. "" ships an authless Redis.
-    passwordSecretName: my-grafana-redis-password
+    # OPTIONAL, off by default. Opaque secret (encoding: plain) whose payload is
+    # the password — see "Authenticating the Redis tier" below.
+    passwordSecretName: ""
     image: redis:7.4
     replicasPerLocation: 1 # Redis members per location; 1 is plenty for alert coordination
     resources:
@@ -317,34 +318,49 @@ redisML:
   sentinel:
     # Independent of the Redis password — Sentinel is what Grafana asks for the
     # current master.
-    passwordSecretName: my-grafana-sentinel-password
+    passwordSecretName: ""
     image: redis:7.4
     resources:
       cpu: 200m
       memory: 256Mi
 ```
 
-**Enabling alerting HA therefore means creating two more secrets, not just flipping the knob.** Both
-default to placeholder names, so an install that skips them stops rather than quietly bringing up an
-unauthenticated coordination bus — but note *how* it stops: `helm install` reports **success**, and the
-Redis, Sentinel and **Grafana UI** tiers then sit at 0 replicas with no containers and therefore no
-logs. The explanation is on each workload's `status.versions[].message` (not the top-level
-`status.message`, which is empty) and reads `The secret <name> no longer exists. Workload updates are
-paused until the secret is added or the reference to the secret removed.` Create the secret and it
-recovers on its own in about 5-6 minutes — no helm action, and re-running the upgrade does not speed it
-up.
+#### Authenticating the Redis tier
+
+**Off by default: enabling alerting HA is one flag and needs no extra secrets.** The tier is reachable
+only from inside the GVC this chart creates, and that is the boundary it relies on.
+
+Turn authentication on if you deploy anything else into that GVC. The firewall is a real boundary but
+not one the chart controls after install, and write access to an authless Redis is enough to
+**suppress your alert notifications** — a hostile or simply buggy neighbour can claim another peer
+already sent them. Alert coordination is precisely the thing you do not want failing quietly.
+
+Create either or both secrets **before installing**, then name them:
 
 ```bash
 printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name my-grafana-redis-password --encoding plain -f -
 printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name my-grafana-sentinel-password --encoding plain -f -
 ```
 
-Setting either to `""` is supported and ships that half authless, relying on the same-GVC firewall.
-That firewall is a real boundary but not one this chart controls after install — anything else you
-deploy into the GVC can reach an authless Redis, and write access to it is enough to **suppress your
-alert notifications** by claiming another peer already sent them. Grafana authenticates with
-`ha_redis_password` and `ha_redis_sentinel_password`, reading the same secrets the Redis tier does, so
-the two sides cannot drift.
+```yaml
+redisML:
+  redis:
+    passwordSecretName: my-grafana-redis-password
+  sentinel:
+    passwordSecretName: my-grafana-sentinel-password
+```
+
+The two are independent — setting one without the other is valid. Grafana authenticates with
+`ha_redis_password` and `ha_redis_sentinel_password`, reading the **same secrets** the Redis tier
+reads, so the two sides cannot drift apart.
+
+**A name that does not resolve stops the Grafana UI, not just alerting**, because Grafana mounts the
+same secret. `cpln helm install` still reports **success**; the Redis, Sentinel and Grafana UI tiers
+then sit at 0 replicas with no containers and therefore no logs. The explanation is on each workload's
+`status.versions[].message` — not the top-level `status.message`, which is empty — and reads `The
+secret <name> no longer exists. Workload updates are paused until the secret is added or the reference
+to the secret removed.` Create the missing secret and it recovers on its own in about 5-6 minutes; no
+helm action, and re-running the upgrade does not speed it up.
 
 ## Storage setup
 
@@ -490,10 +506,22 @@ time; with HA on, `alerting.location` and `alerting.resources` are ignored.
   **117 s**, but the Grafana tier is unavailable for longer than that because reads fail too —
   measured recovery took about **4 minutes**, with one location down for **5-6 minutes**. The bundled database members do not restart one at a time — the platform does not retain the field that would limit the rollout — so all of them go down together (**~117 s** measured on an upgrade that changed nothing). Both Grafana tiers return errors for that window. Treat every upgrade as a planned outage, not a rolling one.
 - **Alert evaluation stops if you lose `alerting.location`, and the UI will not show it.** Repoint the knob and upgrade; that restarts only the evaluator. Set `alerting.highAvailability.enabled: true` to remove that failure — read the cost in [Alerting](#alerting) first, because it multiplies data-source query load by the instance count.
-- **With alerting HA on, the two Redis password secrets gate the Grafana UI too.** Grafana reads the
-  same secrets to authenticate as a client, so a missing or misspelt `redisML.redis.passwordSecretName`
-  costs you dashboards, not just alert coordination — and `helm install` still reports success. If a
-  tier sits at 0 replicas after install, read `status.versions[].message` on the workload.
+- **The alerting-HA Redis tier is unauthenticated by default**, reachable only from inside this
+  chart's GVC. If you deploy anything else into that GVC, authenticate it — write access to it is
+  enough to suppress alert notifications. See
+  [Authenticating the Redis tier](#authenticating-the-redis-tier).
+- **If you do set `redisML.*.passwordSecretName`, a wrong name stops the Grafana UI too**, because
+  Grafana reads the same secret — and `helm install` still reports success. If a tier sits at 0
+  replicas after install, read `status.versions[].message` on the workload.
+- **Use the canonical `*.cpln.app` endpoint, not the per-location ones.** Grafana is configured with a
+  single absolute `root_url` (the canonical endpoint), which is what it scopes its session cookie and
+  CSRF origin checks to. On a per-location hostname the UI and dashboard layout load over GET, but the
+  POST that fetches panel data is rejected — you get a dashboard with empty panels and no error. The
+  canonical endpoint is georouted and already serves from the nearest location.
+- **A provisioned datasource that reports `upstream connect error ... connection timeout` is almost
+  always an unsubstituted placeholder in its URL**, not a network or firewall problem. Check the GVC
+  segment of `datasources.definitions[].url` first — a name that does not resolve times out rather
+  than failing fast, and nothing in the Grafana UI names the cause.
 - **Turning alerting HA on or off changes which workloads exist.** Enabling it deletes the `{release}-grafana-alerting` workload and adds a Redis and a Sentinel workload per location; disabling it does the reverse. It is a normal `helm upgrade`, but treat it as a planned change, not a toggle to flip while investigating an incident.
 - **Alerting HA is blocked below 3 locations, on purpose.** Sentinel elects a master by a majority of locations, so at 2 locations losing either one leaves no quorum — the exact event the knob exists for.
 - **With alerting HA on, an unhealthy Redis means DUPLICATE notifications, never silence.** Check the `{release}-redis` and `{release}-sentinel` workloads before suspecting your alert rules.

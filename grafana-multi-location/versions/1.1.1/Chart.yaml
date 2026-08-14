@@ -2,7 +2,7 @@ apiVersion: v2
 name: grafana-multi-location
 description: Grafana OSS dashboards and alerting spread across locations, backed by one stretched PostgreSQL cluster, with optional Redis-coordinated alerting HA, surviving the loss of a region
 type: application
-version: 1.1.0
+version: 1.1.1
 appVersion: "13.1.3"
 
 annotations:

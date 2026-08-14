@@ -1,0 +1,19 @@
+kind: policy
+name: {{ include "oc.name" . }}
+description: {{ include "oc.name" . }}
+tags:
+  {{- include "oc.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "oc.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "oc.secretName" . }}
+{{- if and (eq .Values.auth.method "bearer") .Values.auth.bearer.secretName }}
+  - //secret/{{ .Values.auth.bearer.secretName }}
+{{- end }}
+{{- if and (eq .Values.auth.method "mtls") .Values.auth.mtls.secretName }}
+  - //secret/{{ .Values.auth.mtls.secretName }}
+{{- end }}

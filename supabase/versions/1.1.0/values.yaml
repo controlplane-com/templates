@@ -190,11 +190,13 @@ studio:
   allowedCidrs: []
   #  - 203.0.113.0/24   # example: office IP range (unauthenticated access!)
 
-  # Controls who can reach the Studio dashboard internally.
+  # Controls who can reach the Studio dashboard internally. Defaults to Kong only,
+  # matching every other backend tier — Studio holds the service_role key, and
+  # reaching it directly bypasses the Kong login. Widening this to same-gvc lets
+  # any workload in the GVC open the dashboard unauthenticated.
   internalAccess:
-    type: same-gvc  # options: none, same-gvc, same-org, workload-list
-    workloads:
-      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+    type: workload-list  # options: none, same-gvc, same-org, workload-list
+    workloads: []        # Kong is added automatically; list any extra callers here
 
   meta:
     image: supabase/postgres-meta:v0.86.0

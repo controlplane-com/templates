@@ -15,19 +15,39 @@ spec:
       cpu: {{ .Values.kong.resources.maxCpu | quote }}
       minMemory: {{ .Values.kong.resources.minMemory | quote }}
       memory: {{ .Values.kong.resources.maxMemory | quote }}
-      # Kong 2.8 does not interpolate env vars in declarative config, so the API
-      # keys cannot be baked into the mounted file. The boot wrapper substitutes
-      # them from the jwt secret into a rendered copy, then hands off to Kong's
-      # own entrypoint.
+      # Kong 2.8 does not interpolate env vars in declarative config, so the
+      # credentials cannot be baked into the mounted file. The boot wrapper
+      # substitutes them from the prerequisite secrets into a rendered copy, then
+      # hands off to Kong's own entrypoint. Values are escaped first: sed treats
+      # \, & and the | delimiter specially in replacement text, and the dashboard
+      # password lands inside a single-quoted YAML scalar.
       command: /bin/sh
       args:
         - -c
-        - 'set -e; sed -e "s|__SUPABASE_ANON_KEY__|${SUPABASE_ANON_KEY}|g" -e "s|__SUPABASE_SERVICE_ROLE_KEY__|${SUPABASE_SERVICE_ROLE_KEY}|g" /usr/local/kong/declarative/kong.template.yaml > /tmp/kong.yaml; exec /docker-entrypoint.sh kong docker-start'
+        - |
+          set -e
+          esc() { sed -e 's/[\\&|]/\\&/g'; }
+          ANON=$(printf '%s' "$SUPABASE_ANON_KEY" | esc)
+          SERVICE=$(printf '%s' "$SUPABASE_SERVICE_ROLE_KEY" | esc)
+          {{- if .Values.studio.enabled }}
+          DASHBOARD=$(printf '%s' "$DASHBOARD_PASSWORD" | sed -e "s/'/''/g" | esc)
+          {{- end }}
+          sed -e "s|__SUPABASE_ANON_KEY__|$ANON|g" \
+              -e "s|__SUPABASE_SERVICE_ROLE_KEY__|$SERVICE|g" \
+          {{- if .Values.studio.enabled }}
+              -e "s|__SUPABASE_DASHBOARD_PASSWORD__|$DASHBOARD|g" \
+          {{- end }}
+              /usr/local/kong/declarative/kong.template.yaml > /tmp/kong.yaml
+          exec /docker-entrypoint.sh kong docker-start
       env:
         - name: SUPABASE_ANON_KEY
           value: cpln://secret/{{ .Values.jwt.secretName }}.anonKey
         - name: SUPABASE_SERVICE_ROLE_KEY
           value: cpln://secret/{{ .Values.jwt.secretName }}.serviceRoleKey
+        {{- if .Values.studio.enabled }}
+        - name: DASHBOARD_PASSWORD
+          value: cpln://secret/{{ .Values.studio.passwordSecretName }}.payload
+        {{- end }}
         - name: KONG_DATABASE
           value: "off"
         - name: KONG_DECLARATIVE_CONFIG
@@ -35,7 +55,7 @@ spec:
         - name: KONG_DNS_ORDER
           value: LAST,A,CNAME
         - name: KONG_PLUGINS
-          value: request-transformer,cors,key-auth,acl
+          value: request-transformer,cors,key-auth,acl,basic-auth
         - name: KONG_NGINX_PROXY_PROXY_BUFFER_SIZE
           value: 160k
         - name: KONG_NGINX_PROXY_PROXY_BUFFERS

@@ -8,7 +8,7 @@ postgres:
   # A `dictionary` secret holding exactly two keys: `password` and `database`.
   # If it does not exist at install time the deployment WEDGES waiting on it and
   # looks broken. See Prerequisites in the README for the exact command.
-  # The superuser name is fixed at `postgres` by the Supabase image — not configurable.
+  # The login role name is fixed at `postgres` by the Supabase image — not configurable.
   credentialsSecretName: my-supabase-postgres-credentials
 
   resources:
@@ -46,7 +46,8 @@ kong:
   minReplicas: 1
   maxReplicas: 3
 
-  # When enabled, Kong gets a public-facing endpoint.
+  # When enabled, Kong gets a public-facing endpoint. This also publishes the
+  # Studio dashboard at `/` behind Kong's basic-auth login when studio.enabled.
   # siteUrl must be set to the resulting domain — GoTrue uses it for OAuth
   # redirect callbacks and magic link email links.
   publicAccess:
@@ -106,7 +107,7 @@ auth:
   #     clientSecretName: my-supabase-github-oauth
   #   google:
   #     clientId: "1234567890-abc.apps.googleusercontent.com"
-  #     clientSecretName: my-supabase-google-oauth""
+  #     clientSecretName: my-supabase-google-oauth
 
 # ── Realtime (WebSocket subscriptions to database changes) ────────────────────
 # Stateless — scales horizontally. Only reachable via Kong.
@@ -168,10 +169,13 @@ storage:
 studio:
   enabled: true
   image: supabase/studio:2025.06.02-sha-8f2993d
+  # Dashboard login, enforced by Kong's basic-auth plugin on the Studio route
+  # (Studio itself has no login) — so the dashboard is only password-protected
+  # when reached through Kong.
   username: supabase  # dashboard login name (not sensitive)
   # REQUIRED PREREQUISITE SECRET when studio.enabled — an `opaque` secret
   # (encoding: plain) holding only the dashboard password, created BEFORE install.
-  # This login is reachable from the internet whenever studio.allowedCidrs is set.
+  # Use a single-line password with no newline.
   passwordSecretName: my-supabase-studio-password
   resources:
     minCpu: 100m
@@ -179,13 +183,12 @@ studio:
     maxCpu: 500m
     maxMemory: 512Mi
 
-  # Restrict inbound access to Studio by CIDR. Empty list (default) means no
-  # external access — use `cpln workload connect` for local access. Set to your
-  # office/VPN CIDR or 0.0.0.0/0 to open to the internet (Studio requires
-  # username + password login regardless).
+  # DIRECT inbound access to the Studio workload, bypassing Kong — and therefore
+  # bypassing the dashboard login entirely. Leave empty (default) and reach the
+  # dashboard through Kong (`cpln port-forward` it if not public). Only add
+  # a CIDR you fully trust, and never 0.0.0.0/0.
   allowedCidrs: []
-  #  - 203.0.113.0/24   # example: office IP range
-  #  - 0.0.0.0/0        # open to all (protected by username/password only)
+  #  - 203.0.113.0/24   # example: office IP range (unauthenticated access!)
 
   # Controls who can reach the Studio dashboard internally.
   internalAccess:

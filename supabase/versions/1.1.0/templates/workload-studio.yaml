@@ -17,12 +17,12 @@ spec:
       minMemory: {{ .Values.studio.resources.minMemory | quote }}
       memory: {{ .Values.studio.resources.maxMemory | quote }}
       env:
+        # Studio has no login of its own — it does not read DASHBOARD_USERNAME or
+        # DASHBOARD_PASSWORD. The dashboard login is Kong's basic-auth plugin on
+        # the catch-all route (see secret-kong-config.yaml), so the credentials
+        # are injected into Kong, not here.
         - name: STUDIO_PG_META_URL
           value: http://localhost:8080
-        - name: DASHBOARD_USERNAME
-          value: {{ .Values.studio.username | quote }}
-        - name: DASHBOARD_PASSWORD
-          value: cpln://secret/{{ .Values.studio.passwordSecretName }}.payload
         - name: POSTGRES_PASSWORD
           value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
         - name: DEFAULT_ORGANIZATION_NAME

@@ -5,12 +5,12 @@ Self-hosted Supabase — a PostgreSQL backend-as-a-service with built-in authent
 ## Architecture
 
 - **Postgres**: Supabase-patched PostgreSQL 15 with pgvector, pg_graphql, pg_net, pgjwt, and other required extensions pre-installed
-- **Kong**: API gateway — the single entry point that routes traffic to PostgREST, Auth, Realtime, and Storage, and the only workload they accept traffic from
+- **Kong**: API gateway — the single entry point that routes traffic to PostgREST, Auth, Realtime, Storage, and the Studio dashboard, and the only workload they accept traffic from. It also enforces authorization: API keys map to consumer groups, so `anon` reaches the public API routes while the admin routes (`/auth/v1/admin/`, `/pg/`) and the dashboard login are restricted
 - **PostgREST**: Auto-generated REST and GraphQL API served from your Postgres schema
 - **Auth (GoTrue)**: Email/password, magic links, OAuth providers, and JWT sessions
 - **Realtime** (optional): WebSocket server that streams database change events to subscribed clients
 - **Storage** (optional): Object storage API backed by S3, GCS, or a local volume
-- **Studio** (optional): Web dashboard, with the **pg_meta** metadata API as a sidecar in the same workload
+- **Studio** (optional): Web dashboard, with the **pg_meta** metadata API as a sidecar in the same workload; it is served through Kong behind a username/password login
 - **PgBouncer** (optional): Connection pooler that multiplexes app connections into a smaller pool of real database connections
 - **Backup** (optional): Logical (`pg_dump` cron) or WAL-G (continuous WAL archiving with base backups)
 - **Secrets, identity, and policy**: the Kong routing config plus database init scripts, and a least-privilege policy granting the shared identity `reveal` on exactly the secrets it uses — including your prerequisite secrets
@@ -42,7 +42,7 @@ Self-hosted Supabase — a PostgreSQL backend-as-a-service with built-in authent
 
    Keep `anonKey` — your client apps need it. Read the values back later with `cpln secret reveal my-supabase-jwt`.
 
-2. **Postgres credentials** (`postgres.credentialsSecretName`) — a **dictionary** secret with exactly the keys `password` and `database`. The superuser name is **fixed at `postgres`** by the Supabase image and is not configurable, so it is not part of the secret:
+2. **Postgres credentials** (`postgres.credentialsSecretName`) — a **dictionary** secret with exactly the keys `password` and `database`. The login role name is **fixed at `postgres`** by the Supabase image and is not configurable, so it is not part of the secret:
 
    ```bash
    cpln secret create-dictionary --name my-supabase-postgres-credentials \
@@ -50,7 +50,7 @@ Self-hosted Supabase — a PostgreSQL backend-as-a-service with built-in authent
      --entry database=postgres
    ```
 
-3. **Studio password** (`studio.passwordSecretName`, required while `studio.enabled: true`) — an **opaque** secret (encoding `plain`) holding only the dashboard password. This login is reachable from the internet as soon as you set `studio.allowedCidrs`:
+3. **Studio password** (`studio.passwordSecretName`, required while `studio.enabled: true`) — an **opaque** secret (encoding `plain`) holding only the dashboard password, on a single line. Kong enforces it as HTTP basic auth in front of the dashboard, so it is the only thing standing between the internet and full database control once `kong.publicAccess.enabled: true`:
 
    ```bash
    printf '%s' 'YOUR-STRONG-PASSWORD' | cpln secret create-opaque --name my-supabase-studio-password --encoding plain -f -
@@ -129,6 +129,15 @@ kong:
 ```
 
 `siteUrl` is what GoTrue puts in OAuth redirects and magic-link emails, so it must be the URL your clients actually reach Kong at. With `publicAccess` disabled the template falls back to the internal Kong hostname and email/OAuth links only work inside the GVC.
+
+Kong is also where authorization happens. Requests are identified by the `apikey` they carry:
+
+| Path | Who may call it |
+|---|---|
+| `/auth/v1/verify`, `/auth/v1/callback`, `/auth/v1/authorize`, `/auth/v1/health` | anyone, no key |
+| `/rest/v1/`, `/auth/v1/`, `/realtime/v1/`, `/storage/v1/` | `anonKey` or `serviceRoleKey` |
+| `/auth/v1/admin/` (user administration), `/pg/` (pg_meta) | `serviceRoleKey` only |
+| `/` (Studio dashboard, when `studio.enabled`) | dashboard username + password |
 
 ### PostgREST, Auth, and Realtime
 
@@ -241,7 +250,7 @@ studio:
   username: supabase                              # dashboard login name (not sensitive)
   passwordSecretName: my-supabase-studio-password # opaque secret with the dashboard password
 
-  allowedCidrs: []      # empty = no external access; e.g. 203.0.113.0/24, or 0.0.0.0/0 to open it up
+  allowedCidrs: []      # DIRECT access to the Studio workload, which bypasses the login — keep empty
 
   internalAccess:
     type: same-gvc      # options: none, same-gvc, same-org, workload-list
@@ -252,7 +261,17 @@ studio:
     image: supabase/postgres-meta:v0.86.0
 ```
 
-With `allowedCidrs` empty, reach Studio with `cpln workload connect {release-name}-studio --gvc {gvc}`.
+The dashboard is served by Kong at `/`, behind a basic-auth login using `username` and the password
+secret — so browse it at Kong's public URL (`kong.publicAccess.siteUrl`), or without public access
+forward the port and open `http://localhost:8000`:
+
+```bash
+cpln port-forward {release-name}-kong 8000:8000 --gvc {gvc}
+```
+
+**Studio itself has no login.** `allowedCidrs` opens the Studio workload directly, which skips Kong
+and therefore skips the password — anyone in those CIDRs gets an unauthenticated dashboard holding
+the `serviceRoleKey`. Leave it empty unless you have a reason, and never set `0.0.0.0/0`.
 
 ### PgBouncer (optional)
 
@@ -339,7 +358,7 @@ Storage buckets and backup buckets are independent — each needs its own bucket
 The Storage API reaches GCS over its S3-compatible API, so it uses HMAC keys instead of a cloud account.
 
 1. Create your bucket and set `storage.gcs.bucket`.
-2. In the GCP console go to **Cloud Storage → Settings → Interoperability**, create an access key for a service account that has **Storage Object Admin** on that bucket, and set `storage.gcs.accessKeyId` and `storage.gcs.secretAccessKey`.
+2. In the GCP console go to **Cloud Storage → Settings → Interoperability**, create an access key for a service account that has **Storage Object Admin** on that bucket, and put the pair in the dictionary secret named by `storage.gcs.credentialsSecretName` (command above).
 
 ## Connecting
 
@@ -349,12 +368,11 @@ The Storage API reaches GCS over its S3-compatible API, so it uses HMAC keys ins
 | API (internal) | `{release-name}-kong.{gvc}.cpln.local:8000` |
 | Postgres (direct) | `{release-name}-postgres.{gvc}.cpln.local:5432`, user `postgres` |
 | Postgres (pooled) | `{release-name}-pgbouncer.{gvc}.cpln.local:5432`, user `postgres` |
-| Studio dashboard | port 3000 on the Studio workload — `cpln workload connect`, or your `allowedCidrs` |
+| Studio dashboard | `/` on the same Kong endpoint as the API — log in with `studio.username` and the password from `cpln secret reveal {studio.passwordSecretName}` |
 | API keys | `cpln secret reveal {jwt.secretName}` — keys `anonKey` and `serviceRoleKey` |
 | Database password | `cpln secret reveal {postgres.credentialsSecretName}` — key `password` |
-| Studio login | user `studio.username`, password from `cpln secret reveal {studio.passwordSecretName}` |
 
-API paths through Kong: `/rest/v1/` (PostgREST), `/auth/v1/` (GoTrue), `/storage/v1/` (Storage), `/realtime/v1/` (Realtime).
+API paths through Kong: `/rest/v1/` (PostgREST), `/auth/v1/` (GoTrue), `/storage/v1/` (Storage), `/realtime/v1/` (Realtime), `/pg/` (pg_meta, `serviceRoleKey` only).
 
 Every request needs an `apikey` header — `anonKey` from clients, `serviceRoleKey` only from trusted server-side code. The Supabase client libraries handle this for you:
 
@@ -382,7 +400,7 @@ Two values are consumed only once, when the Postgres data directory is first ini
 
 ## Restoring a backup
 
-**Logical** — run from a machine with bucket access and a tunnel to Postgres (`cpln workload connect`):
+**Logical** — run from a machine with bucket access and a tunnel to Postgres (`cpln port-forward {release-name}-postgres 5432:5432 --gvc {gvc}`, then use `--host=localhost`):
 
 ```sh
 export PGPASSWORD="YOUR_POSTGRES_PASSWORD"
@@ -407,10 +425,12 @@ For GCS, swap the first command for `gsutil cp "gs://BUCKET_NAME/PREFIX/BACKUP_F
 ## Important Notes
 
 - **Create the three prerequisite secrets before installing.** A missing secret leaves the deployment waiting on it, which looks like a broken install rather than a missing prerequisite.
-- **`serviceRoleKey` bypasses row-level security.** It is the full-admin credential for your data — server-side only, never in client code.
+- **`serviceRoleKey` bypasses row-level security.** It is the full-admin credential for your data — server-side only, never in client code. It is also the only key Kong admits to `/auth/v1/admin/` and `/pg/`; the published `anonKey` is refused there with `403 You cannot consume this service`.
+- **The dashboard login only applies through Kong.** Studio enforces nothing itself, so `studio.allowedCidrs` exposes it without a password — leave it empty and reach the dashboard at Kong's URL.
 - **Keep the JWT keys and the signing secret in sync.** `anonKey` and `serviceRoleKey` must be HMAC-SHA256 JWTs signed by `secret`, or every service returns `bad_jwt`. Mint them together with the snippet in Prerequisites.
 - **Use the Supabase Postgres image.** `supabase/postgres` ships the extensions (pgvector, pg_graphql, pg_net, pgjwt) that GoTrue, PostgREST, Realtime, and Storage require; a stock Postgres image breaks them.
-- **The database superuser is `postgres`.** The Supabase image bakes that name into its init scripts, so the template does not offer a username knob.
+- **The database login role is `postgres`.** The Supabase image bakes that name into its init scripts, so the template does not offer a username knob. (The image's own superuser role is `supabase_admin`, which the services use internally.)
+- **Storage restarts a few times on first boot** while Postgres finishes initializing, then settles — that is not a misconfiguration.
 - **Changing a secret does not restart anything.** After rotating one, force a redeployment — see [Rotating a credential](#rotating-a-credential).
 - **Switching `backup.mode` restarts Postgres.** `logical` and `walg` need different `archive_mode`/`wal_level` flags, so the change is not hot.
 - **Firewall changes take up to a couple of minutes** to propagate, so `studio.allowedCidrs` and `kong.publicAccess` edits are not visible immediately.

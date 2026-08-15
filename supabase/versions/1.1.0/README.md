@@ -8,7 +8,7 @@ Self-hosted Supabase — a PostgreSQL backend-as-a-service with built-in authent
 - **Kong**: API gateway — the single entry point that routes traffic to PostgREST, Auth, Realtime, Storage, and the Studio dashboard, and the only workload they accept traffic from. It also enforces authorization: API keys map to consumer groups, so `anon` reaches the public API routes while the admin routes (`/auth/v1/admin/`, `/pg/`) and the dashboard login are restricted
 - **PostgREST**: Auto-generated REST and GraphQL API served from your Postgres schema
 - **Auth (GoTrue)**: Email/password, magic links, OAuth providers, and JWT sessions
-- **Realtime** (optional): WebSocket server that streams database change events to subscribed clients
+- **Realtime** (optional): WebSocket server that streams database change events to subscribed clients; single replica, and it provisions its own tenant on boot
 - **Storage** (optional): Object storage API backed by S3, GCS, or a local volume
 - **Studio** (optional): Web dashboard, with the **pg_meta** metadata API as a sidecar in the same workload; it is served through Kong behind a username/password login
 - **PgBouncer** (optional): Connection pooler that multiplexes app connections into a smaller pool of real database connections
@@ -156,11 +156,16 @@ auth:
 realtime:
   enabled: true
   image: supabase/realtime:v2.34.47
-  minReplicas: 1
-  maxReplicas: 3
 ```
 
 Each also takes a `resources` block (`minCpu`, `minMemory`, `maxCpu`, `maxMemory`).
+
+Realtime runs as a **single replica** and has no replica knobs. It is multi-tenant even when
+self-hosted — it resolves a tenant from the request hostname — so the template has it seed its own
+tenant row on boot, keyed to the workload name and signed with your JWT `secret`. That seed is
+rewritten on every start, and multi-node Realtime would need Erlang peer clustering, so a second
+replica would break the first rather than share the load. PostgREST, Auth, Kong and Storage all
+scale horizontally as usual.
 
 #### SMTP
 
@@ -430,7 +435,9 @@ For GCS, swap the first command for `gsutil cp "gs://BUCKET_NAME/PREFIX/BACKUP_F
 - **Keep the JWT keys and the signing secret in sync.** `anonKey` and `serviceRoleKey` must be HMAC-SHA256 JWTs signed by `secret`, or every service returns `bad_jwt`. Mint them together with the snippet in Prerequisites.
 - **Use the Supabase Postgres image.** `supabase/postgres` ships the extensions (pgvector, pg_graphql, pg_net, pgjwt) that GoTrue, PostgREST, Realtime, and Storage require; a stock Postgres image breaks them.
 - **The database login role is `postgres`.** The Supabase image bakes that name into its init scripts, so the template does not offer a username knob. (The image's own superuser role is `supabase_admin`, which the services use internally.)
-- **Storage restarts a few times on first boot** while Postgres finishes initializing, then settles — that is not a misconfiguration.
+- **Storage and Realtime restart a few times on first boot** while Postgres finishes initializing, then settle — that is not a misconfiguration.
+- **Realtime does not scale out.** It runs as one replica by design (see [PostgREST, Auth, and Realtime](#postgrest-auth-and-realtime)); subscriptions reconnect after it restarts, so clients must handle a dropped socket.
+- **Rotating the JWT `secret` re-seeds Realtime's tenant on its next start**, so force-redeploy Realtime along with everything else — the tenant carries its own copy of the signing secret.
 - **Changing a secret does not restart anything.** After rotating one, force a redeployment — see [Rotating a credential](#rotating-a-credential).
 - **Switching `backup.mode` restarts Postgres.** `logical` and `walg` need different `archive_mode`/`wal_level` flags, so the change is not hot.
 - **Firewall changes take up to a couple of minutes** to propagate, so `studio.allowedCidrs` and `kong.publicAccess` edits are not visible immediately.

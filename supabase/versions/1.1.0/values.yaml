@@ -110,7 +110,10 @@ auth:
   #     clientSecretName: my-supabase-google-oauth
 
 # ── Realtime (WebSocket subscriptions to database changes) ────────────────────
-# Stateless — scales horizontally. Only reachable via Kong.
+# Only reachable via Kong. Runs as a SINGLE replica and offers no replica knobs:
+# the image seeds its own tenant row on every boot, so a second replica would
+# delete the row the first one is serving, and multi-node Realtime needs Erlang
+# peer clustering that a standard workload cannot provide.
 realtime:
   enabled: true
   image: supabase/realtime:v2.34.47
@@ -119,8 +122,6 @@ realtime:
     minMemory: 128Mi
     maxCpu: 500m
     maxMemory: 512Mi
-  minReplicas: 1
-  maxReplicas: 3
 
 # ── Storage (file/object storage) ─────────────────────────────────────────────
 # Disable if your app has no file upload requirements — saves a workload.

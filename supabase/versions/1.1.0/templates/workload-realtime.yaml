@@ -34,6 +34,17 @@ spec:
           value: "SET search_path TO _realtime"
         - name: DB_ENC_KEY
           value: supabaserealtime
+        # Realtime is multi-tenant even when self-hosted: it resolves a tenant from
+        # the first label of the request Host, and refuses every connection with
+        # `TenantNotFound` until a matching row exists in `_realtime.tenants`.
+        # Kong proxies to this workload's own hostname, so the tenant's external_id
+        # must be the workload name. The image's entrypoint seeds exactly that row
+        # on boot when SEED_SELF_HOST is true, using API_JWT_SECRET as the tenant's
+        # JWT secret and encrypting it with DB_ENC_KEY.
+        - name: SEED_SELF_HOST
+          value: "true"
+        - name: SELF_HOST_TENANT_NAME
+          value: {{ include "supabase.realtime.name" . }}
         - name: API_JWT_SECRET
           value: cpln://secret/{{ .Values.jwt.secretName }}.secret
         - name: SECRET_KEY_BASE
@@ -66,12 +77,14 @@ spec:
         successThreshold: 1
         timeoutSeconds: 3
   defaultOptions:
+    # Single replica, deliberately. The tenant seed above DELETES and re-inserts the
+    # tenant row on every container start, so a second replica starting would wipe
+    # the row the first one is serving. Multi-node Realtime needs Erlang clustering
+    # (DNS_NODES peer discovery), which a standard workload cannot provide.
     autoscaling:
-      metric: cpu
-      target: 70
-      minScale: {{ .Values.realtime.minReplicas }}
-      maxScale: {{ .Values.realtime.maxReplicas }}
-      scaleToZeroDelay: 300
+      metric: disabled
+      minScale: 1
+      maxScale: 1
     capacityAI: false
   firewallConfig:
     external:

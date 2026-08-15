@@ -268,9 +268,8 @@ studio:
   allowedCidrs: []      # DIRECT access to the Studio workload, which bypasses the login — keep empty
 
   internalAccess:
-    type: same-gvc      # options: none, same-gvc, same-org, workload-list
-    workloads:
-      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+    type: workload-list # options: none, same-gvc, same-org, workload-list
+    workloads: []       # Kong is added automatically; list any extra callers here
 
   meta:
     image: supabase/postgres-meta:v0.86.0

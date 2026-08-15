@@ -130,7 +130,9 @@ storage:
   enabled: true
   image: supabase/storage-api:v1.14.6
   resources:
-    minCpu: 100m
+    # backend: local makes this workload stateful, where the platform requires
+    # maxCpu:minCpu <= 4:1 — keep that ratio if you change these.
+    minCpu: 125m
     minMemory: 128Mi
     maxCpu: 500m
     maxMemory: 512Mi

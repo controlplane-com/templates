@@ -153,9 +153,18 @@ storage:
 
   s3:             # only used when backend is s3
     bucket: my-supabase-storage-bucket
-    region: us-east-1
+    region: us-east-1  # set `auto` for Cloudflare R2
+    # AWS S3 (endpoint empty) — keyless access through a cloud account, no keys anywhere
     cloudAccountName: my-s3-cloudaccount
     policyName: my-supabase-storage-policy  # IAM policy granting s3:GetObject, s3:PutObject, s3:DeleteObject on the bucket
+    # S3-COMPATIBLE (MinIO, Cloudflare R2, Wasabi, Backblaze B2) — set endpoint and
+    # credentialsSecretName; cloudAccountName/policyName are then unused, because
+    # keyless cloud identity is AWS-only.
+    endpoint: ""  # e.g. http://my-minio-workload:9000 — empty means AWS S3
+    forcePathStyle: true  # required by MinIO; harmless on R2, Wasabi and B2
+    # REQUIRED PREREQUISITE SECRET when endpoint is set — a `dictionary` secret
+    # holding `accessKeyId` and `secretAccessKey`, created BEFORE install.
+    credentialsSecretName: ""  # e.g. my-supabase-s3-credentials
 
   gcs:            # only used when backend is gcs
     # GCS is accessed via S3-compatible API using HMAC keys (no cloud account needed)

@@ -55,6 +55,19 @@ spec:
           value: {{ .Values.storage.s3.region | quote }}
         - name: GLOBAL_S3_BUCKET
           value: {{ .Values.storage.s3.bucket | quote }}
+        {{- if .Values.storage.s3.endpoint }}
+        # S3-compatible store. Cloud identity is AWS-only, so credentials come from
+        # the prerequisite secret named by storage.s3.credentialsSecretName — the
+        # AWS SDK picks them up from these two variables.
+        - name: GLOBAL_S3_ENDPOINT
+          value: {{ .Values.storage.s3.endpoint | quote }}
+        - name: GLOBAL_S3_FORCE_PATH_STYLE
+          value: {{ .Values.storage.s3.forcePathStyle | quote }}
+        - name: AWS_ACCESS_KEY_ID
+          value: cpln://secret/{{ .Values.storage.s3.credentialsSecretName }}.accessKeyId
+        - name: AWS_SECRET_ACCESS_KEY
+          value: cpln://secret/{{ .Values.storage.s3.credentialsSecretName }}.secretAccessKey
+        {{- end }}
         {{- else if eq .Values.storage.backend "gcs" }}
         - name: STORAGE_BACKEND
           value: s3

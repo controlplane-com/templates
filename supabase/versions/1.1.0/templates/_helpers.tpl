@@ -134,8 +134,12 @@ http://{{ include "supabase.kong.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.l
   {{- if eq $b "s3" -}}
     {{- if not .Values.storage.s3.bucket -}}{{ fail "storage.s3.bucket is required when storage.backend is s3" }}{{- end -}}
     {{- if not .Values.storage.s3.region -}}{{ fail "storage.s3.region is required when storage.backend is s3" }}{{- end -}}
-    {{- if not .Values.storage.s3.cloudAccountName -}}{{ fail "storage.s3.cloudAccountName is required when storage.backend is s3" }}{{- end -}}
-    {{- if not .Values.storage.s3.policyName -}}{{ fail "storage.s3.policyName is required when storage.backend is s3" }}{{- end -}}
+    {{- if .Values.storage.s3.endpoint -}}
+      {{- if not .Values.storage.s3.credentialsSecretName -}}{{ fail "supabase: storage.s3.credentialsSecretName is required when storage.s3.endpoint is set — the name of a pre-created dictionary secret holding `accessKeyId` and `secretAccessKey`. Keyless cloud identity is AWS-only, so an S3-compatible endpoint needs static keys. Create the secret BEFORE installing; see Storage setup in the README." }}{{- end -}}
+    {{- else -}}
+      {{- if not .Values.storage.s3.cloudAccountName -}}{{ fail "storage.s3.cloudAccountName is required when storage.backend is s3" }}{{- end -}}
+      {{- if not .Values.storage.s3.policyName -}}{{ fail "storage.s3.policyName is required when storage.backend is s3" }}{{- end -}}
+    {{- end -}}
   {{- end -}}
   {{- if eq $b "gcs" -}}
     {{- if not .Values.storage.gcs.bucket -}}{{ fail "storage.gcs.bucket is required when storage.backend is gcs" }}{{- end -}}

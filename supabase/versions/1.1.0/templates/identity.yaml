@@ -5,7 +5,8 @@ name: {{ include "supabase.identity.name" . }}
 description: Supabase shared identity
 tags: {{- include "supabase.tags" . | nindent 2 }}
 gvc: {{ .Values.global.cpln.gvc }}
-{{- if and .Values.storage.enabled (eq .Values.storage.backend "s3") }}
+{{- /* An S3-compatible endpoint authenticates with static keys, so it gets no AWS binding. */}}
+{{- if and .Values.storage.enabled (eq .Values.storage.backend "s3") (not .Values.storage.s3.endpoint) }}
 aws:
   cloudAccountLink: //cloudaccount/{{ .Values.storage.s3.cloudAccountName }}
   policyRefs:

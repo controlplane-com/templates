@@ -9,7 +9,7 @@ Self-hosted Supabase — a PostgreSQL backend-as-a-service with built-in authent
 - **PostgREST**: Auto-generated REST and GraphQL API served from your Postgres schema
 - **Auth (GoTrue)**: Email/password, magic links, OAuth providers, and JWT sessions
 - **Realtime** (optional): WebSocket server that streams database change events to subscribed clients; single replica, and it provisions its own tenant on boot
-- **Storage** (optional): Object storage API backed by S3, GCS, or a local volume
+- **Storage** (optional): Object storage API backed by AWS S3, any S3-compatible store (MinIO, Cloudflare R2, Wasabi, Backblaze B2), GCS, or a local volume
 - **Studio** (optional): Web dashboard, with the **pg_meta** metadata API as a sidecar in the same workload; it is served through Kong behind a username/password login
 - **PgBouncer** (optional): Connection pooler that multiplexes app connections into a smaller pool of real database connections
 - **Backup** (optional): Logical (`pg_dump` cron) or WAL-G (continuous WAL archiving with base backups)
@@ -64,7 +64,8 @@ Other prerequisites, only if you use the matching feature:
   printf '%s' 'YOUR-SMTP-PASSWORD' | cpln secret create-opaque --name my-supabase-smtp-password --encoding plain -f -
   ```
 
-- **S3 storage backend or backups** — a bucket, a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account), and a bucket-scoped IAM policy. See [Storage setup](#storage-setup).
+- **AWS S3 storage backend or backups** — a bucket, a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account), and a bucket-scoped IAM policy. See [Storage setup](#storage-setup).
+- **S3-compatible storage backend** (MinIO, Cloudflare R2, Wasabi, Backblaze B2) — a bucket, plus a dictionary secret (`accessKeyId`, `secretAccessKey`) named by `storage.s3.credentialsSecretName`. See [Storage setup](#storage-setup).
 - **GCS storage backend** — a bucket, plus a dictionary secret (`accessKeyId`, `secretAccessKey`) named by `storage.gcs.credentialsSecretName`. See [Storage setup](#storage-setup).
 - **OAuth providers** — one opaque secret per provider holding its client secret, named by `auth.providers.{name}.clientSecretName`.
 - **A custom domain** — only if you want Kong on your own hostname rather than the assigned `*.cpln.app` endpoint.
@@ -227,14 +228,23 @@ storage:
 
   s3:            # only used when backend is s3
     bucket: my-supabase-storage-bucket
-    region: us-east-1
-    cloudAccountName: my-s3-cloudaccount
-    policyName: my-supabase-storage-policy  # IAM policy granting GetObject, PutObject, DeleteObject on the bucket
+    region: us-east-1     # set `auto` for Cloudflare R2
+    cloudAccountName: my-s3-cloudaccount    # AWS only (endpoint empty)
+    policyName: my-supabase-storage-policy  # AWS only — IAM policy granting GetObject, PutObject, DeleteObject on the bucket
+    endpoint: ""            # S3-compatible store, e.g. http://my-minio-workload:9000 — empty means AWS S3
+    forcePathStyle: true    # required by MinIO; harmless on R2, Wasabi and B2
+    credentialsSecretName: ""  # prerequisite dictionary secret — required when endpoint is set
 
   gcs:           # only used when backend is gcs — S3-compatible API, no cloud account needed
     bucket: my-supabase-storage-bucket
     credentialsSecretName: my-supabase-gcs-hmac  # prerequisite dictionary secret
 ```
+
+`backend: s3` covers both AWS S3 and any S3-compatible store. Left as shipped (`endpoint: ""`) it is
+AWS S3, reached keylessly through the cloud account — no credentials exist anywhere. Set `endpoint`
+and the Storage API talks to MinIO, Cloudflare R2, Wasabi or Backblaze B2 instead; keyless cloud
+identity is AWS-only, so those authenticate with a static key pair from a prerequisite secret and
+`cloudAccountName`/`policyName` go unused. See [Storage setup](#storage-setup).
 
 Google issues the HMAC pair, so it never transits values. Create the secret before installing —
 generate the pair under **Cloud Storage → Settings → Interoperability → Access keys for your user
@@ -352,6 +362,43 @@ Storage buckets and backup buckets are independent — each needs its own bucket
     ]
 }
 ```
+
+### S3-compatible storage — MinIO, Cloudflare R2, Wasabi, Backblaze B2 (storage backend)
+
+Keep `storage.backend: s3` and point it at the other store. Cloud identity is AWS-only, so these
+authenticate with an access key pair held in a prerequisite secret.
+
+1. Create the bucket on your provider, and set `storage.s3.bucket`.
+2. Create an access key pair scoped to that bucket — read, write and delete objects, plus list the
+   bucket:
+   - **MinIO**: `mc admin user add`, then `mc admin policy attach` a policy allowing
+     `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` and `s3:ListBucket` on `arn:aws:s3:::BUCKET/*`
+     and `arn:aws:s3:::BUCKET`. Under **Access Keys** in the console works too.
+   - **Cloudflare R2**: **R2 → Manage R2 API Tokens → Create API token**, permission **Object Read &
+     Write**, scoped to the one bucket.
+   - **Wasabi**: **Users → Access Keys**, with a bucket-scoped policy of the same four actions.
+   - **Backblaze B2**: **Application Keys → Add a New Application Key**, restricted to the bucket,
+     with Read and Write access.
+3. Put the pair in a dictionary secret and name it in `storage.s3.credentialsSecretName`:
+
+   ```bash
+   cpln secret create-dictionary --name my-supabase-s3-credentials \
+     --entry accessKeyId=YOUR_ACCESS_KEY_ID \
+     --entry secretAccessKey=YOUR_SECRET_ACCESS_KEY
+   ```
+
+4. Set `storage.s3.endpoint` to the store's URL, and `storage.s3.region`:
+
+   | Provider | `endpoint` | `region` |
+   |---|---|---|
+   | MinIO in this GVC | `http://{minio-workload}.{gvc}.cpln.local:9000` | `us-east-1` |
+   | Cloudflare R2 | `https://{account-id}.r2.cloudflarestorage.com` | `auto` |
+   | Wasabi | `https://s3.{region}.wasabisys.com` | the bucket's region |
+   | Backblaze B2 | `https://s3.{region}.backblazeb2.com` | the bucket's region |
+
+Leave `forcePathStyle: true` unless your provider requires virtual-hosted addressing. A MinIO
+workload inside the GVC must accept traffic from the Storage workload — its `internalAccess` has to
+cover it.
 
 ### Google Cloud Storage — backups
 

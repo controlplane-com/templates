@@ -22,6 +22,9 @@ targetLinks:
   {{- if and .Values.storage.enabled (eq .Values.storage.backend "gcs") }}
   - //secret/{{ include "supabase.storage.gcs.secret.name" . }}
   {{- end }}
+  {{- if and .Values.storage.enabled (eq .Values.storage.backend "s3") .Values.storage.s3.endpoint }}
+  - //secret/{{ .Values.storage.s3.credentialsSecretName }}
+  {{- end }}
   {{- range $name, $cfg := (.Values.auth.providers | default dict) }}
   {{- if $cfg.clientSecretName }}
   - //secret/{{ $cfg.clientSecretName }}

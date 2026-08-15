@@ -112,58 +112,58 @@ http://{{ include "supabase.kong.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.l
 
 {{- define "supabase.validate" -}}
 {{- if not .Values.jwt.secretName -}}
-  {{- fail "jwt.secretName is required — it names the dictionary secret holding the `secret`, `anonKey`, `serviceRoleKey` and `secretKeyBase` keys. Create that secret BEFORE installing; see Prerequisites in the README." -}}
+  {{- fail "supabase: jwt.secretName is required — it names the dictionary secret holding the `secret`, `anonKey`, `serviceRoleKey` and `secretKeyBase` keys. Create that secret BEFORE installing; see Prerequisites in the README." -}}
 {{- end -}}
 {{- if not .Values.postgres.credentialsSecretName -}}
-  {{- fail "postgres.credentialsSecretName is required — it names the dictionary secret holding the `password` and `database` keys. Create that secret BEFORE installing; see Prerequisites in the README." -}}
+  {{- fail "supabase: postgres.credentialsSecretName is required — it names the dictionary secret holding the `password` and `database` keys. Create that secret BEFORE installing; see Prerequisites in the README." -}}
 {{- end -}}
 {{- if and .Values.studio.enabled (not .Values.studio.passwordSecretName) -}}
-  {{- fail "studio.passwordSecretName is required when studio.enabled is true — it names the opaque secret holding the dashboard password. Create that secret BEFORE installing; see Prerequisites in the README." -}}
+  {{- fail "supabase: studio.passwordSecretName is required when studio.enabled is true — it names the opaque secret holding the dashboard password. Create that secret BEFORE installing; see Prerequisites in the README." -}}
 {{- end -}}
 {{- if and .Values.auth.smtp.enabled (not .Values.auth.smtp.passwordSecretName) -}}
-  {{- fail "auth.smtp.passwordSecretName is required when auth.smtp.enabled is true — it names the opaque secret holding the SMTP password." -}}
+  {{- fail "supabase: auth.smtp.passwordSecretName is required when auth.smtp.enabled is true — it names the opaque secret holding the SMTP password." -}}
 {{- end -}}
 {{- if and .Values.kong.publicAccess.enabled (not .Values.kong.publicAccess.siteUrl) -}}
-  {{- fail "kong.publicAccess.siteUrl is required when kong.publicAccess.enabled is true" -}}
+  {{- fail "supabase: kong.publicAccess.siteUrl is required when kong.publicAccess.enabled is true" -}}
 {{- end -}}
 {{- if .Values.storage.enabled -}}
   {{- $b := .Values.storage.backend -}}
   {{- if not (or (eq $b "local") (eq $b "s3") (eq $b "gcs")) -}}
-    {{- fail "storage.backend must be 'local', 's3', or 'gcs'" -}}
+    {{- fail "supabase: storage.backend must be 'local', 's3', or 'gcs'" -}}
   {{- end -}}
   {{- if eq $b "s3" -}}
-    {{- if not .Values.storage.s3.bucket -}}{{ fail "storage.s3.bucket is required when storage.backend is s3" }}{{- end -}}
-    {{- if not .Values.storage.s3.region -}}{{ fail "storage.s3.region is required when storage.backend is s3" }}{{- end -}}
+    {{- if not .Values.storage.s3.bucket -}}{{ fail "supabase: storage.s3.bucket is required when storage.backend is s3" }}{{- end -}}
+    {{- if not .Values.storage.s3.region -}}{{ fail "supabase: storage.s3.region is required when storage.backend is s3" }}{{- end -}}
     {{- if .Values.storage.s3.endpoint -}}
       {{- if not .Values.storage.s3.credentialsSecretName -}}{{ fail "supabase: storage.s3.credentialsSecretName is required when storage.s3.endpoint is set — the name of a pre-created dictionary secret holding `accessKeyId` and `secretAccessKey`. Keyless cloud identity is AWS-only, so an S3-compatible endpoint needs static keys. Create the secret BEFORE installing; see Storage setup in the README." }}{{- end -}}
     {{- else -}}
-      {{- if not .Values.storage.s3.cloudAccountName -}}{{ fail "storage.s3.cloudAccountName is required when storage.backend is s3" }}{{- end -}}
-      {{- if not .Values.storage.s3.policyName -}}{{ fail "storage.s3.policyName is required when storage.backend is s3" }}{{- end -}}
+      {{- if not .Values.storage.s3.cloudAccountName -}}{{ fail "supabase: storage.s3.cloudAccountName is required when storage.backend is s3" }}{{- end -}}
+      {{- if not .Values.storage.s3.policyName -}}{{ fail "supabase: storage.s3.policyName is required when storage.backend is s3" }}{{- end -}}
     {{- end -}}
   {{- end -}}
   {{- if eq $b "gcs" -}}
-    {{- if not .Values.storage.gcs.bucket -}}{{ fail "storage.gcs.bucket is required when storage.backend is gcs" }}{{- end -}}
+    {{- if not .Values.storage.gcs.bucket -}}{{ fail "supabase: storage.gcs.bucket is required when storage.backend is gcs" }}{{- end -}}
     {{- if not .Values.storage.gcs.credentialsSecretName -}}{{ fail "supabase: storage.gcs.credentialsSecretName is required when storage.backend is gcs — the name of a pre-created dictionary secret holding `accessKeyId` and `secretAccessKey`, the HMAC pair Google issues for the S3-compatible endpoint. Create it BEFORE installing; see Prerequisites in the README." }}{{- end -}}
   {{- end -}}
 {{- end -}}
 {{- if .Values.backup.enabled -}}
   {{- $m := .Values.backup.mode -}}
   {{- if not (or (eq $m "logical") (eq $m "walg")) -}}
-    {{- fail "backup.mode must be 'logical' or 'walg'" -}}
+    {{- fail "supabase: backup.mode must be 'logical' or 'walg'" -}}
   {{- end -}}
   {{- $p := .Values.backup.provider -}}
   {{- if not (or (eq $p "aws") (eq $p "gcp")) -}}
-    {{- fail "backup.provider must be 'aws' or 'gcp'" -}}
+    {{- fail "supabase: backup.provider must be 'aws' or 'gcp'" -}}
   {{- end -}}
   {{- if eq $p "aws" -}}
-    {{- if not .Values.backup.aws.bucket -}}{{ fail "backup.aws.bucket is required" }}{{- end -}}
-    {{- if not .Values.backup.aws.region -}}{{ fail "backup.aws.region is required" }}{{- end -}}
-    {{- if not .Values.backup.aws.cloudAccountName -}}{{ fail "backup.aws.cloudAccountName is required" }}{{- end -}}
-    {{- if not .Values.backup.aws.policyName -}}{{ fail "backup.aws.policyName is required" }}{{- end -}}
+    {{- if not .Values.backup.aws.bucket -}}{{ fail "supabase: backup.aws.bucket is required" }}{{- end -}}
+    {{- if not .Values.backup.aws.region -}}{{ fail "supabase: backup.aws.region is required" }}{{- end -}}
+    {{- if not .Values.backup.aws.cloudAccountName -}}{{ fail "supabase: backup.aws.cloudAccountName is required" }}{{- end -}}
+    {{- if not .Values.backup.aws.policyName -}}{{ fail "supabase: backup.aws.policyName is required" }}{{- end -}}
   {{- end -}}
   {{- if eq $p "gcp" -}}
-    {{- if not .Values.backup.gcp.bucket -}}{{ fail "backup.gcp.bucket is required" }}{{- end -}}
-    {{- if not .Values.backup.gcp.cloudAccountName -}}{{ fail "backup.gcp.cloudAccountName is required" }}{{- end -}}
+    {{- if not .Values.backup.gcp.bucket -}}{{ fail "supabase: backup.gcp.bucket is required" }}{{- end -}}
+    {{- if not .Values.backup.gcp.cloudAccountName -}}{{ fail "supabase: backup.gcp.cloudAccountName is required" }}{{- end -}}
   {{- end -}}
 {{- end -}}
 {{- end }}

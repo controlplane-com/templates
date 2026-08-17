@@ -15,13 +15,6 @@ Open WebUI Volumeset Name
 {{- end }}
 
 {{/*
-Config Secret Name (dictionary — holds the stable WEBUI_SECRET_KEY)
-*/}}
-{{- define "open-webui.secretConfig.name" -}}
-{{- printf "%s-open-webui-config" .Release.Name }}
-{{- end }}
-
-{{/*
 Start Script Secret Name
 */}}
 {{- define "open-webui.secretStart.name" -}}
@@ -52,8 +45,11 @@ Open WebUI Policy Name
 {{- if lt (int .Values.volumeset.capacity) 10 -}}
 {{- fail (printf "open-webui: volumeset.capacity must be at least 10 (GiB, platform minimum), got '%v'" .Values.volumeset.capacity) -}}
 {{- end -}}
-{{- if not .Values.auth.webuiSecretKey -}}
-{{- fail "open-webui: auth.webuiSecretKey is required — it signs sessions/JWTs and must stay stable across upgrades (generate once with 'openssl rand -base64 32')" -}}
+{{- if hasKey .Values.auth "webuiSecretKey" -}}
+{{- fail "open-webui: auth.webuiSecretKey was removed in 1.1.0 — the session/JWT signing key is now a prerequisite opaque secret (encoding: plain) you create before install; set auth.secretKeyName to its name instead" -}}
+{{- end -}}
+{{- if not .Values.auth.secretKeyName -}}
+{{- fail "open-webui: auth.secretKeyName is required — it names the prerequisite opaque secret (encoding: plain) holding the session/JWT signing key, which must exist BEFORE install and stay the same forever" -}}
 {{- end -}}
 {{- if and .Values.ollama.enabled (not .Values.ollama.workloadName) -}}
 {{- fail "open-webui: ollama.workloadName is required when ollama.enabled is true — the in-GVC ollama workload to connect to" -}}

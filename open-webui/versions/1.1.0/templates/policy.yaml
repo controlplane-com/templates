@@ -9,7 +9,7 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "open-webui.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "open-webui.secretConfig.name" . }}
+  - //secret/{{ .Values.auth.secretKeyName }}
   - //secret/{{ include "open-webui.secretStart.name" . }}
   {{- if .Values.openai.apiKeySecretName }}
   - //secret/{{ .Values.openai.apiKeySecretName }}

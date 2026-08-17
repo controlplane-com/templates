@@ -23,10 +23,12 @@ backup:
 
 # ─── Authentication ───────────────────────────────────────────────────────────
 auth:
-  # Signs sessions/JWTs. Override ONCE at install (openssl rand -base64 32).
-  # Must stay STABLE across upgrades — changing it logs every user out.
-  webuiSecretKey: "CHANGE-ME-openssl-rand-base64-32-abcdEFGH1234"
-  enableSignup: true # first registered user becomes ADMIN — turn OFF after onboarding
+  # REQUIRED opaque secret (encoding: plain) holding the session/JWT signing key.
+  # It must EXIST BEFORE INSTALL — the deployment wedges waiting on it otherwise —
+  # and must stay the same forever: replacing it logs every user out.
+  # Create it with: printf '%s' "$(openssl rand -base64 32)" | cpln secret create-opaque --name my-openwebui-secret-key --encoding plain -f -
+  secretKeyName: my-openwebui-secret-key
+  enableSignup: true # the FIRST account registered becomes ADMIN — see the first-run steps in the README
 
 # ─── Model backends ───────────────────────────────────────────────────────────
 # Point at an existing `ollama` template deployment in this same GVC.
@@ -47,7 +49,10 @@ openai:
 customDomain: "" # full URL, e.g. https://chat.example.com ; empty = canonical *.cpln.app
 
 publicAccess:
-  enabled: true # serve the UI over public HTTPS on the canonical *.cpln.app endpoint
+  # false = not reachable from the internet. Turning this on publishes the chat
+  # UI, and its sign-in/sign-up form, to the whole internet — so register your
+  # admin account FIRST (see the README first-run steps), then turn it on.
+  enabled: false
 
 internalAccess: # inbound firewall scope for in-GVC callers of the Open WebUI API
   type: none # options: none, same-gvc, same-org, workload-list

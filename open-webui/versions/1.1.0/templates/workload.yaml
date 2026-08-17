@@ -22,9 +22,10 @@ spec:
       cpu: {{ .Values.resources.cpu | quote }}
       memory: {{ .Values.resources.memory | quote }}
       env:
-        # ── Session/JWT signing key (stable; from the config secret) ──
+        # ── Session/JWT signing key (prerequisite opaque secret, created by the
+        #    user before install so it never passes through Helm values) ──
         - name: WEBUI_SECRET_KEY
-          value: 'cpln://secret/{{ include "open-webui.secretConfig.name" . }}.webuiSecretKey'
+          value: 'cpln://secret/{{ .Values.auth.secretKeyName }}.payload'
         # ── Authentication ──
         - name: WEBUI_AUTH
           value: 'true'
@@ -75,6 +76,7 @@ spec:
         initialDelaySeconds: 30
         periodSeconds: 30
         failureThreshold: 5
+        successThreshold: 1
         timeoutSeconds: 5
   # Exactly one replica, always: the default embedded SQLite is single-writer
   # and volumesets are per-replica — active-active would corrupt/split state.
@@ -98,14 +100,19 @@ spec:
     filesystemGroupId: 1000
   firewallConfig:
     external:
+      # Open egress: the model backends may be any external OpenAI-compatible API.
       outboundAllowCIDR:
         - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
       {{- if .Values.publicAccess.enabled }}
       inboundAllowCIDR:
         - 0.0.0.0/0
       {{- else }}
       inboundAllowCIDR: []
       {{- end }}
+      inboundBlockedCIDR: []
     internal:
       inboundAllowType: {{ .Values.internalAccess.type }}
       {{- if eq .Values.internalAccess.type "workload-list" }}
@@ -113,4 +120,6 @@ spec:
         {{- range .Values.internalAccess.workloads }}
         - {{ . }}
         {{- end }}
+      {{- else }}
+      inboundAllowWorkload: []
       {{- end }}

@@ -1,0 +1,89 @@
+{{- include "etcd-ml.validate" . -}}
+kind: workload
+name: {{ include "etcd-ml.name" . }}
+description: etcd multi-location
+gvc: {{ .Values.global.gvc.name }}
+tags:
+  cpln/publishNotReadyAddresses: "true"
+  {{- include "etcd-ml.tags" . | nindent 2 }}
+spec:
+  type: stateful
+  containers:
+    - name: etcd
+      command: "/bin/bash"
+      args:
+        - "/etcd/start.sh"
+      cpu: {{ .Values.resources.cpu | quote }}
+      image: {{ .Values.image }}
+      inheritEnv: false
+      memory: {{ .Values.resources.memory | quote }}
+      ports:
+        - number: 2379
+          protocol: tcp
+        - number: 2380
+          protocol: tcp
+      volumes:
+        - path: /var/lib/etcd
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "etcd-ml.volume.name" . }}
+        - path: /etcd/start.sh
+          uri: cpln://secret/{{ include "etcd-ml.secretStartup.name" . }}
+  identityLink: //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "etcd-ml.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  localOptions:
+    {{- range .Values.global.gvc.locations }}
+    - location: //location/{{ .name }}
+      autoscaling:
+        maxConcurrency: 0
+        maxScale: 1
+        metric: disabled
+        minScale: 1
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      suspend: false
+      timeoutSeconds: 5
+    {{- end }}
+  rolloutOptions:
+    {{- /*
+    maxUnavailableReplicas is deliberately NOT set: the API does not retain it
+    (confirmed on a live workload — it is absent from the stored spec while its
+    neighbours survive), so sending it bought nothing except permanent drift and
+    a false impression that the rollout was limited. It is not.
+    terminationGracePeriodSeconds is declared because the API backfills 90.
+    */}}
+    maxSurgeReplicas: 0%
+    minReadySeconds: 60
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: true
+  supportDynamicTags: false

@@ -1,0 +1,18 @@
+apiVersion: v2
+name: etcd
+description: etcd distributed key-value store as an odd-sized quorum cluster in one location
+
+type: application
+version: 1.4.2
+appVersion: "3.6.5"
+
+annotations:
+  created: "2025-09-30"
+  lastModified: "2026-08-17"
+  category: "key-value store"
+  createsGvc: false
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

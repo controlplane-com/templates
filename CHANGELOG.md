@@ -32,6 +32,8 @@ High-level, user-facing catalog changes by month: new templates and notable vers
 - **New template: listmonk 1.0.0** — self-hosted newsletter and mailing-list manager with public subscription pages, backed by highly-available or single-instance PostgreSQL
 - **redis-multi-location 2.1.0** — Redis and Sentinel passwords are now user-created secrets referenced by name instead of values, and the template can be used as a building block inside other multi-location templates
 - **supabase 1.1.0** — the API keys, database password, dashboard password and JWT signing secret are now user-created secrets you reference by name, instead of shared defaults published in this repository; the dashboard gains a real login, the public API key can no longer reach admin endpoints, and Realtime subscriptions and S3-compatible storage now work
+- **etcd 1.4.2** — etcd now trims its own history automatically, so its storage no longer grows without limit and fill up the default 2 GiB after a couple of months, at which point the cluster went read-only and any database using it for coordination could start restart-looping. History retention and the storage quota are now configurable. **If you run `postgres-highly-available` or `timescaledb-highly-available`, upgrade those templates to pick this up**
+- **etcd-multi-location 1.0.2** — history retention and the storage quota are now configurable; behaviour at the defaults is unchanged
 - **grafana-multi-location 1.1.0** — alerting can now keep running when a region is lost: set `alerting.highAvailability.enabled` and every location evaluates alert rules, with a stretched Redis making sure a notification is still sent only once. Alerting can also be turned off entirely with `alerting.enabled`
 
 ## 2026-07

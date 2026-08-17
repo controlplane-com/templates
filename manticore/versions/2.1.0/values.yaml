@@ -3,7 +3,7 @@
 # =============================================================================
 # See README.md for Cloud Account and IAM policy setup instructions.
 buckets:
-  cloudAccountName: my-cloudaccount    # Name of your configured Cloud Account
+  cloudAccountName: my-manticore-cloudaccount    # Name of your configured Cloud Account
   awsPolicyRefs:                        # IAM policies for S3 access
     - my-manticore-policy       # Note: if using a custom policy, omit the aws:: prefix as this is only for AWS managed policies
   awsRegion: us-east-1                  # Region of your S3 bucket
@@ -74,7 +74,6 @@ manticore:
 
   rolloutOptions:
     maxSurgeReplicas: 25%
-    maxUnavailableReplicas: '0'
     minReadySeconds: 10
     scalingPolicy: OrderedReady
     terminationGracePeriodSeconds: 60
@@ -125,8 +124,10 @@ orchestrator:
   agent:
     version: v6.0.5
     image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-agent
-    # REQUIRED: Generate with `openssl rand -base64 32`
-    token: "6Gl5uO9KkKAh1u+ymoBW98WCtjTFpljuhpLdKb+tNAA="
+    # REQUIRED prerequisite: name of an opaque secret holding the bearer token.
+    # THE SECRET MUST EXIST BEFORE INSTALL — without it the deploy hangs waiting on a missing secret.
+    # printf '%s' "$(openssl rand -base64 32)" | cpln secret create-opaque --name my-manticore-agent-token --encoding plain -f -
+    tokenSecretName: my-manticore-agent-token
     resources:
       cpu: 250m
       minCpu: 100m
@@ -146,7 +147,13 @@ orchestrator:
     resources:
       cpu: 0.25
       memory: 0.25Gi
-    allowExternalAccess: true     # false = internal GVC access only
+    # DANGER: the UI has NO login of its own and injects the admin token for every caller.
+    # Enabling this publishes full cluster admin to the internet. Put an authenticating proxy in front.
+    publicAccess:
+      enabled: false
+    internalAccess:
+      type: same-gvc              # same-gvc, same-org, workload-list, none
+      workloads: []               # //gvc/{gvc}/workload/{name} links, used when type is workload-list
     autoscaling:
       maxScale: 2
       minScale: 1
@@ -158,10 +165,10 @@ orchestrator:
     enabled: false
     version: v6.0.5
     image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-backup
-    cloudAccountName: my-backup-cloud-account
-    s3Bucket: my-backup-bucket    # S3 bucket for backups
-    s3Policy:                     # IAM policies for S3 access
-      - my-backup-policy          # Custom policy created in S3 setup instructions
+    cloudAccountName: my-manticore-backup-cloudaccount
+    s3Bucket: my-manticore-backup-bucket    # S3 bucket for backups
+    s3Policy:                               # IAM policies for S3 access
+      - my-manticore-backup-policy          # Custom policy created in S3 setup instructions
     s3Region: us-east-1
     dataSet: addresses            # Data set to back up
     prefix: manticore-backups     # S3 prefix/folder for backups

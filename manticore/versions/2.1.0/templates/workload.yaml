@@ -79,7 +79,7 @@ spec:
         - name: LISTEN_ADDR
           value: ":8080"
         - name: AUTH_TOKEN
-          value: "cpln://secret/{{ include "manticore.secretAgentTokenName" . }}.payload"
+          value: "cpln://secret/{{ include "manticore.agentTokenSecretName" . }}.payload"
         # Cluster recovery settings
         - name: WORKLOAD_NAME
           value: "{{ include "manticore.name" . }}"
@@ -107,6 +107,7 @@ spec:
         httpGet:
           path: /api/ready
           port: 8080
+          scheme: HTTP
         timeoutSeconds: 5
       volumes:
         - path: /etc/manticore/schema.conf
@@ -120,6 +121,7 @@ spec:
           uri: cpln://volumeset/{{ include "manticore.volumeName" . }}
   defaultOptions:
     autoscaling:
+      maxConcurrency: 0
       maxScale: {{ .Values.manticore.autoscaling.maxScale }}
       metric: {{ .Values.manticore.autoscaling.metric }}
       minScale: {{ .Values.manticore.autoscaling.minScale }}
@@ -132,11 +134,16 @@ spec:
   firewallConfig:
     external:
       inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
       outboundAllowHostname: []
+      outboundBlockedCIDR: []
     internal:
       inboundAllowType: {{ .Values.manticore.firewall.internalAccess.type }}
       {{- if .Values.manticore.firewall.internalAccess.workloads }}
       inboundAllowWorkload: {{ .Values.manticore.firewall.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- else }}
+      inboundAllowWorkload: []
       {{- end }}
   identityLink: /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.identityName" . }}
   loadBalancer:
@@ -144,9 +151,11 @@ spec:
       enabled: false
       ports: []
     replicaDirect: true
+  # NOTE: maxUnavailableReplicas is deliberately NOT sent. The API silently drops it
+  # on a stateful workload, so rendering it produced permanent drift while implying a
+  # serialized rolling restart that was never in force. (Measured 2026-08-17.)
   rolloutOptions:
     maxSurgeReplicas: {{ .Values.manticore.rolloutOptions.maxSurgeReplicas }}
-    maxUnavailableReplicas: '{{ .Values.manticore.rolloutOptions.maxUnavailableReplicas }}'
     minReadySeconds: {{ .Values.manticore.rolloutOptions.minReadySeconds }}
     scalingPolicy: {{ .Values.manticore.rolloutOptions.scalingPolicy }}
     terminationGracePeriodSeconds: {{ .Values.manticore.rolloutOptions.terminationGracePeriodSeconds }}
@@ -191,7 +200,7 @@ spec:
         - name: STATE_FILE
           value: "/tmp/orchestrator_state.json"
         - name: AUTH_TOKEN
-          value: "cpln://secret/{{ include "manticore.secretAgentTokenName" . }}.payload"
+          value: "cpln://secret/{{ include "manticore.agentTokenSecretName" . }}.payload"
         - name: LOG_LEVEL
           value: "{{ .Values.orchestrator.logLevel }}"
         - name: IMPORT_MEM_LIMIT
@@ -211,8 +220,12 @@ spec:
           recoveryPolicy: retain
   defaultOptions:
     autoscaling:
+      maxConcurrency: 0
       maxScale: 1
+      metric: concurrency
       minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
     capacityAI: false
     debug: false
     suspend: {{ .Values.orchestrator.suspend }}
@@ -220,15 +233,19 @@ spec:
   firewallConfig:
     external:
       inboundAllowCIDR: []
+      inboundBlockedCIDR: []
       outboundAllowCIDR:
         - 0.0.0.0/0
       outboundAllowHostname: []
+      outboundBlockedCIDR: []
     internal:
       inboundAllowType: none
+      inboundAllowWorkload: []
   identityLink: /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.orchestratorJobIdentityName" . }}
   job:
     schedule: {{ .Values.orchestrator.schedule | quote }}
     concurrencyPolicy: Forbid
+    historyLimit: 5
     restartPolicy: Never
     activeDeadlineSeconds: {{ .Values.orchestrator.activeDeadlineSeconds }}
   supportDynamicTags: false
@@ -255,8 +272,12 @@ spec:
         httpGet:
           path: /api/status
           port: 8080
+          scheme: HTTP
+        initialDelaySeconds: 10
         periodSeconds: 10
         failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 1
       env:
         - name: MODE
           value: "server"
@@ -274,7 +295,7 @@ spec:
         - name: STATE_FILE
           value: "/tmp/orchestrator_state.json"
         - name: AUTH_TOKEN
-          value: "cpln://secret/{{ include "manticore.secretAgentTokenName" . }}.payload"
+          value: "cpln://secret/{{ include "manticore.agentTokenSecretName" . }}.payload"
         - name: LOG_LEVEL
           value: "{{ .Values.orchestrator.logLevel }}"
         # CPLN_TOKEN, CPLN_ORG, CPLN_GVC auto-injected by Control Plane
@@ -298,9 +319,11 @@ spec:
         {{- end }}
   defaultOptions:
     autoscaling:
+      maxConcurrency: 0
       maxScale: {{ .Values.orchestrator.api.autoscaling.maxScale }}
       minScale: {{ .Values.orchestrator.api.autoscaling.minScale }}
       metric: {{ .Values.orchestrator.api.autoscaling.metric }}
+      scaleToZeroDelay: 300
       target: {{ .Values.orchestrator.api.autoscaling.target }}
     capacityAI: false
     debug: false
@@ -309,10 +332,14 @@ spec:
   firewallConfig:
     external:
       inboundAllowCIDR: []
+      inboundBlockedCIDR: []
       outboundAllowCIDR:
         - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
     internal:
       inboundAllowType: same-gvc
+      inboundAllowWorkload: []
   identityLink: /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.orchestratorIdentityName" . }}
   supportDynamicTags: false
 ---
@@ -337,20 +364,26 @@ spec:
         - name: ORCHESTRATOR_API_URL
           value: "http://{{ include "manticore.orchestratorAPIName" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:8080"
         - name: ORCHESTRATOR_AUTH_TOKEN
-          value: "cpln://secret/{{ include "manticore.secretAgentTokenName" . }}.payload"
+          value: "cpln://secret/{{ include "manticore.agentTokenSecretName" . }}.payload"
         - name: PORT
           value: "3000"
       readinessProbe:
         httpGet:
           path: /
           port: 3000
+          scheme: HTTP
+        initialDelaySeconds: 10
         periodSeconds: 10
         failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 1
   defaultOptions:
     autoscaling:
+      maxConcurrency: 0
       maxScale: {{ .Values.orchestrator.ui.autoscaling.maxScale }}
       minScale: {{ .Values.orchestrator.ui.autoscaling.minScale }}
       metric: {{ .Values.orchestrator.ui.autoscaling.metric }}
+      scaleToZeroDelay: 300
       target: {{ .Values.orchestrator.ui.autoscaling.target }}
     capacityAI: false
     debug: false
@@ -358,10 +391,20 @@ spec:
     timeoutSeconds: 30
   firewallConfig:
     external:
-      inboundAllowCIDR: {{ if .Values.orchestrator.ui.allowExternalAccess }}[ "0.0.0.0/0" ]{{ else }}[ ]{{ end }}
+      # WARNING: the UI has no authentication of its own — enabling publicAccess
+      # publishes full cluster admin to the internet. See README Important Notes.
+      inboundAllowCIDR: {{ if .Values.orchestrator.ui.publicAccess.enabled }}[ "0.0.0.0/0" ]{{ else }}[ ]{{ end }}
+      inboundBlockedCIDR: []
       outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
     internal:
-      inboundAllowType: same-gvc
+      inboundAllowType: {{ .Values.orchestrator.ui.internalAccess.type }}
+      {{- if .Values.orchestrator.ui.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.orchestrator.ui.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- else }}
+      inboundAllowWorkload: []
+      {{- end }}
   identityLink: /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.orchestratorIdentityName" . }}
   supportDynamicTags: false
 
@@ -400,7 +443,7 @@ spec:
         - name: MANTICORE_PORT
           value: "9306"
         - name: AUTH_TOKEN
-          value: "cpln://secret/{{ include "manticore.secretAgentTokenName" . }}.payload"
+          value: "cpln://secret/{{ include "manticore.agentTokenSecretName" . }}.payload"
       image: {{ .Values.orchestrator.backup.image }}:{{ .Values.orchestrator.backup.version }}
       inheritEnv: false
       memory: {{ .Values.orchestrator.backup.resources.memory | quote }}
@@ -413,9 +456,12 @@ spec:
           uri: cpln://volumeset/{{ include "manticore.sharedVolumeName" . }}
   defaultOptions:
     autoscaling:
+      maxConcurrency: 0
       maxScale: 1
       metric: disabled
       minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
     capacityAI: false
     debug: false
     multiZone:
@@ -480,7 +526,9 @@ spec:
           uri: 'cpln://secret/{{ include "manticore.secretK6ScriptName" . }}.payload'
   defaultOptions:
     autoscaling:
+      maxConcurrency: 0
       maxScale: 0
+      metric: cpu
       minScale: 0
       scaleToZeroDelay: 30
       target: 95
@@ -491,10 +539,14 @@ spec:
   firewallConfig:
     external:
       inboundAllowCIDR: []
+      inboundBlockedCIDR: []
       outboundAllowCIDR:
         - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
     internal:
       inboundAllowType: none
+      inboundAllowWorkload: []
   identityLink: /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.loadTestIdentityName" . }}
   supportDynamicTags: false
 ---
@@ -543,18 +595,26 @@ spec:
           echo "Load test complete."
   defaultOptions:
     autoscaling:
+      maxConcurrency: 0
       maxScale: 1
+      metric: concurrency
       minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
     capacityAI: false
     debug: false
     suspend: {{ if .Values.loadTest.controller.schedule }}false{{ else }}true{{ end }}
   firewallConfig:
     external:
       inboundAllowCIDR: []
+      inboundBlockedCIDR: []
       outboundAllowCIDR:
         - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
     internal:
       inboundAllowType: none
+      inboundAllowWorkload: []
   identityLink: /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.loadTestControllerIdentityName" . }}
   job:
     schedule: '{{ .Values.loadTest.controller.schedule | default "0 0 1 1 *" }}'

@@ -19,13 +19,7 @@ targetLinks:
   - //secret/{{ include "manticore.secretConfigName" . }}
   - //secret/{{ include "manticore.secretStartupName" . }}
   - //secret/{{ include "manticore.secretSchemaConfigName" . }}
-  - //secret/{{ include "manticore.secretAgentTokenName" . }}
-targetQuery:
-  kind: secret
-  fetch: items
-  spec:
-    match: all
-    terms: []
+  - //secret/{{ include "manticore.agentTokenSecretName" . }}
 ---
 # Cron execution policy - allows triggering orchestrator jobs
 kind: policy

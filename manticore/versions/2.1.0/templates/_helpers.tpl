@@ -71,10 +71,10 @@ Manticore Secret Schema Config Name
 {{- end }}
 
 {{/*
-Manticore Secret Agent Token Name
+Manticore Agent Token Secret Name (USER-SUPPLIED prerequisite secret, not created by this chart)
 */}}
-{{- define "manticore.secretAgentTokenName" -}}
-{{- printf "%s-manticore-agent-token" .Release.Name }}
+{{- define "manticore.agentTokenSecretName" -}}
+{{- required "orchestrator.agent.tokenSecretName is required — it names an opaque secret that must exist BEFORE install" .Values.orchestrator.agent.tokenSecretName }}
 {{- end }}
 
 {{/*
@@ -190,6 +190,21 @@ Output (multi):   {"addresses":["imports/addresses/data_1.csv","imports/addresse
 {{- $_ := set $config .name .csvPath -}}
 {{- end -}}
 {{- $config | toJson -}}
+{{- end }}
+
+{{/*
+Chart-level validation: removed-key guards plus table validation.
+The guards exist because 2.1.0 is a clean break — a user carrying 2.0.x values
+forward would otherwise silently ship a public admin UI or an ignored token.
+*/}}
+{{- define "manticore.validate" -}}
+{{- if hasKey .Values.orchestrator.agent "token" -}}
+{{- fail "orchestrator.agent.token was REMOVED in manticore 2.1.0. The bearer token is now a prerequisite opaque secret you create before install; set orchestrator.agent.tokenSecretName to its name instead. See the README Prerequisites section." -}}
+{{- end -}}
+{{- if hasKey .Values.orchestrator.ui "allowExternalAccess" -}}
+{{- fail "orchestrator.ui.allowExternalAccess was REMOVED in manticore 2.1.0. Use orchestrator.ui.publicAccess.enabled instead — note it now defaults to false, because the UI has no authentication of its own and publishing it exposes full cluster admin." -}}
+{{- end -}}
+{{- include "manticore.validateTables" . -}}
 {{- end }}
 
 {{/*

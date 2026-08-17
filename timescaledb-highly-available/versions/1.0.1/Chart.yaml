@@ -1,6 +1,6 @@
 apiVersion: v2
 name: timescaledb-highly-available
-description: Multi-replica TimescaleDB (PostgreSQL time-series) with Patroni automatic failover and etcd, plus optional PgBouncer pooling and scheduled backups
+description: Multi-replica TimescaleDB time-series cluster with Patroni automatic failover and etcd consensus
 type: application
 version: 1.0.1
 appVersion: "pg18.4-ts2.28.3"

@@ -109,8 +109,8 @@ listenPort: 8080 # REQUIRED - the port the gateway listens on
 ```yaml
 adminSecretName: my-tyk-admin-secret # REQUIRED - opaque secret (encoding: plain) holding the admin API key
 
-apiSecretName: my-tyk-apis # REQUIRED - dictionary secret holding your API definition JSON files
-policySecretName: my-tyk-policies # REQUIRED - opaque secret holding your policies JSON
+apiSecretName: my-tyk-apis # dictionary secret holding your API definition JSON files; "" = serve the image's demo APIs
+policySecretName: my-tyk-policies # opaque secret holding your policies JSON; "" = no policies
 ```
 
 ### Gateway
@@ -194,6 +194,8 @@ cpln secret reveal my-tyk-admin-secret
 ```
 
 ## Important Notes
+
+- **Leaving `apiSecretName` empty does not serve nothing — it serves Tyk's demo API.** The gateway falls back to the API definitions baked into the upstream image, so `Tyk Test API` answers requests and the install looks healthy while serving none of your APIs. Set the secret, or expect that.
 
 - **Create all three prerequisite secrets before installing** — the workload wedges waiting on a secret that does not exist, and looks broken rather than failing loudly.
 - **`externalAccess: true` puts the Tyk admin API on the internet.** `/tyk/*` is served on the same port as your proxied APIs and cannot be split off, so anyone who guesses or leaks the admin key can mint keys for every API. Prefer leaving it `false` and reaching the gateway from inside the GVC.

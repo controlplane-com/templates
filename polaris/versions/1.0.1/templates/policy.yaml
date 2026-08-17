@@ -1,0 +1,36 @@
+{{/*
+Two principals, least privilege: the bootstrap workload is the only thing that
+ever reads the root client secret, and the server is the only thing that ever
+reads the token signing key and the object-storage credentials.
+*/}}
+kind: policy
+name: {{ include "polaris.policy.name" . }}
+description: Polaris server secret access — metastore credentials, token signing key{{ if .Values.storage.credentialsSecretName }}, object-storage credentials{{ end }}
+tags: {{- include "polaris.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "polaris.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "polaris.postgres.secret.name" . }}
+  - //secret/{{ .Values.tokenSigningKey.secretName }}
+  {{- if .Values.storage.credentialsSecretName }}
+  - //secret/{{ .Values.storage.credentialsSecretName }}
+  {{- end }}
+---
+kind: policy
+name: {{ include "polaris.bootstrap.policy.name" . }}
+description: Polaris bootstrap secret access — metastore credentials, root principal credentials, bootstrap script
+tags: {{- include "polaris.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "polaris.bootstrap.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "polaris.postgres.secret.name" . }}
+  - //secret/{{ .Values.rootCredentials.secretName }}
+  - //secret/{{ include "polaris.secret.bootstrapScript.name" . }}

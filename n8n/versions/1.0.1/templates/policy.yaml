@@ -1,0 +1,15 @@
+kind: policy
+name: {{ include "n8n.policy.name" . }}
+description: n8n secret access
+tags: {{- include "n8n.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "n8n.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "n8n.secretOwner.name" . }}
+  - //secret/{{ include "n8n.secretStart.name" . }}
+  - //secret/{{ include "n8n.postgres.secret.name" . }}
+  - //secret/{{ .Values.encryptionKey.secretName }}

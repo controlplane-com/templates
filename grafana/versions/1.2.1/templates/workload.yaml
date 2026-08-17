@@ -1,0 +1,184 @@
+{{- include "grafana.validate" . }}
+kind: workload
+name: {{ include "grafana.name" . }}
+description: Grafana OSS — dashboards and alerting over your own datasources, HTTP :3000
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "grafana.tags" . | nindent 4 }}
+spec:
+  # Stateless by design: all app state (users, dashboards, datasources, alert
+  # rules) lives in the Postgres app database — no volumeset.
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "grafana.identity.name" . }}
+  containers:
+    - name: grafana
+      image: {{ .Values.image }}
+      # Boot wrapper: cpln env values can't interpolate other env vars, so the
+      # runtime-derived exports happen in bash before exec'ing the image
+      # entrypoint (/run.sh; bash is in the image).
+      command: /bin/bash
+      args:
+        - -c
+        - |-
+          {{- if .Values.publicAccess.enabled }}
+          export GF_SERVER_ROOT_URL="${CPLN_GLOBAL_ENDPOINT}"
+          {{- end }}
+          {{- if .Values.redis.enabled }}
+          export GF_UNIFIED_ALERTING_HA_REDIS_PEER_NAME="$(hostname)"
+          {{- end }}
+          exec /run.sh
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      env:
+        {{- if .Values.postgresHA.enabled }}
+        # ── App database (postgres-highly-available subchart, HAProxy leader endpoint) ──
+        {{- else }}
+        # ── App database (postgres subchart, single instance) ──
+        {{- end }}
+        - name: GF_DATABASE_TYPE
+          value: postgres
+        - name: GF_DATABASE_HOST
+          value: '{{ include "grafana.postgres.host" . }}:5432'
+        - name: GF_DATABASE_NAME
+          {{- if .Values.postgresHA.enabled }}
+          value: 'cpln://secret/{{ include "grafana.postgres.secret.name" . }}.database'
+          {{- else }}
+          # the single-postgres config secret has no `database` key — use the value directly
+          value: {{ .Values.postgres.config.database | quote }}
+          {{- end }}
+        - name: GF_DATABASE_USER
+          value: 'cpln://secret/{{ include "grafana.postgres.secret.name" . }}.username'
+        - name: GF_DATABASE_PASSWORD
+          value: 'cpln://secret/{{ include "grafana.postgres.secret.name" . }}.password'
+        - name: GF_DATABASE_SSL_MODE
+          value: disable
+        # ── Admin bootstrap (first boot only) + datasource-secret encryption key ──
+        # Password and secret key come from prerequisite opaque secrets the user
+        # creates before install — neither value ever transits the Helm release.
+        - name: GF_SECURITY_ADMIN_USER
+          value: {{ .Values.admin.user | quote }}
+        {{- if .Values.admin.applyPassword }}
+        # Only honored when the admin account is first created; dropping the
+        # reference (applyPassword: false) lets the user delete that secret.
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          value: 'cpln://secret/{{ .Values.admin.passwordSecretName }}.payload'
+        {{- end }}
+        - name: GF_SECURITY_SECRET_KEY
+          value: 'cpln://secret/{{ .Values.admin.secretKeySecretName }}.payload'
+        # ── Hardening: no signup, no anonymous access, no telemetry ──
+        - name: GF_USERS_ALLOW_SIGN_UP
+          value: 'false'
+        - name: GF_AUTH_ANONYMOUS_ENABLED
+          value: 'false'
+        - name: GF_ANALYTICS_REPORTING_ENABLED
+          value: 'false'
+        - name: GF_ANALYTICS_CHECK_FOR_UPDATES
+          value: 'false'
+        {{- if .Values.redis.enabled }}
+        # ── Alerting HA coordination (redis subchart, Sentinel mode — no gossip) ──
+        - name: GF_UNIFIED_ALERTING_HA_REDIS_ADDRESS
+          value: {{ include "grafana.redis.sentinelAddr" . }}
+        - name: GF_UNIFIED_ALERTING_HA_REDIS_SENTINEL_MODE_ENABLED
+          value: 'true'
+        - name: GF_UNIFIED_ALERTING_HA_REDIS_SENTINEL_MASTER_NAME
+          value: mymaster
+        - name: GF_UNIFIED_ALERTING_HA_REDIS_PREFIX
+          value: {{ include "grafana.name" . }}
+        {{- end }}
+        {{- if .Values.smtp.enabled }}
+        # ── SMTP for alert notification emails ──
+        - name: GF_SMTP_ENABLED
+          value: 'true'
+        - name: GF_SMTP_HOST
+          value: {{ .Values.smtp.host | quote }}
+        - name: GF_SMTP_FROM_ADDRESS
+          value: {{ .Values.smtp.fromAddress | quote }}
+        - name: GF_SMTP_FROM_NAME
+          value: {{ .Values.smtp.fromName | quote }}
+        {{- if .Values.smtp.user }}
+        - name: GF_SMTP_USER
+          value: {{ .Values.smtp.user | quote }}
+        {{- end }}
+        {{- if .Values.smtp.passwordSecretName }}
+        - name: GF_SMTP_PASSWORD
+          value: 'cpln://secret/{{ .Values.smtp.passwordSecretName }}.payload'
+        {{- end }}
+        {{- end }}
+        {{- range .Values.datasources.credentialSecrets }}
+        # ── Datasource credentials from prerequisite secret '{{ .name }}' ($KEY interpolation) ──
+        {{- $secretName := .name }}
+        {{- range .keys }}
+        - name: {{ . }}
+          value: 'cpln://secret/{{ $secretName }}.{{ . }}'
+        {{- end }}
+        {{- end }}
+      ports:
+        - number: 3000
+          protocol: http
+      {{- if .Values.datasources.definitions }}
+      volumes:
+        - path: /etc/grafana/provisioning/datasources/cpln-datasources.yaml
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "grafana.secretDatasources.name" . }}.payload
+      {{- end }}
+      readinessProbe:
+        httpGet:
+          path: /api/health
+          port: 3000
+          # explicit server defaults — prevents cosmetic drift vs the live workload
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        failureThreshold: 12
+        successThreshold: 1
+        timeoutSeconds: 3
+      # First boot runs app-DB migrations — a liveness kill mid-migration would
+      # crash-loop, hence the long initial delay (metabase precedent).
+      livenessProbe:
+        httpGet:
+          path: /api/health
+          port: 3000
+          # explicit server defaults — prevents cosmetic drift vs the live workload
+          scheme: HTTP
+        initialDelaySeconds: 120
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: {{ .Values.replicas }}
+      maxScale: {{ .Values.replicas }}
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  supportDynamicTags: false

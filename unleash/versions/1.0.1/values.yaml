@@ -1,0 +1,111 @@
+image: unleashorg/unleash-server:8.0.3
+
+resources:
+  cpu: 1000m
+  memory: 1Gi
+  minCpu: 250m
+  minMemory: 512Mi
+
+replicas: 1 # stateless server — set 2+ for high availability (all state lives in PostgreSQL)
+
+# ─── Admin Account ────────────────────────────────────────────────────────────
+# Initial admin login, seeded on first boot only (stored in the database —
+# change it later in the UI, not here).
+admin:
+  username: admin
+  password: change-me-unleash-admin # change before installing
+
+# ─── SDK API Tokens (optional) ────────────────────────────────────────────────
+# Seeded on first startup only. Unleash token format: <project>:<environment>.<secret>
+# (OSS environments: development, production). Leave empty to create tokens in
+# the admin UI instead.
+apiTokens:
+  secretName: "" # name of a pre-created dictionary secret with keys `backend` and `frontend` (e.g. my-unleash-api-tokens); empty = create tokens in the admin UI instead
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: true # admin UI + SDK APIs on the canonical *.cpln.app HTTPS endpoint
+
+internalAccess: # internal firewall scope (in-GVC SDK callers)
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # used with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Database: Highly Available PostgreSQL (default) ──────────────────────────
+# Deploys the postgres-highly-available template: 3 Patroni replicas, 3 etcd
+# replicas, and an HAProxy leader-routing endpoint Unleash connects to.
+postgresHA:
+  enabled: true
+  postgres:
+    username: unleash
+    password: change-me-unleash-db-password # change before installing
+    database: unleash
+  replicas: 3
+  volumeset:
+    capacity: 10 # initial capacity in GiB per replica (minimum is 10)
+
+  backup: # optional database backups — see README storage setup
+    enabled: false
+    mode: logical # logical or wal-g
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    logical:
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      schedule: "0 2 * * *"
+    walg:
+      intervalSeconds: 21600
+    provider: aws # options: aws, gcp, minio
+    aws:
+      bucket: unleash-pg-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: unleash-pg-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: unleash-pg-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: unleash-pg-backup-bucket
+      accessKey: my-minio-username
+      secretKey: my-minio-password
+      prefix: postgres/backups
+
+# ─── Database: Single-instance PostgreSQL (dev/lightweight) ───────────────────
+# Enable this and disable postgresHA for a lighter non-HA deployment.
+postgres:
+  enabled: false
+  config:
+    username: unleash
+    password: change-me-unleash-db-password # change before installing
+    database: unleash
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+  backup: # optional database backups (Postgres 17+) — see README storage setup
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
+    schedule: "0 2 * * *"
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    provider: aws # options: aws, gcp, minio
+    aws:
+      bucket: unleash-pg-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: unleash-pg-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: unleash-pg-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: unleash-pg-backup-bucket
+      accessKey: my-minio-username
+      secretKey: my-minio-password
+      prefix: postgres/backups

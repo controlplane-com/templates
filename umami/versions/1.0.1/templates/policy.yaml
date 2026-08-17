@@ -1,0 +1,13 @@
+kind: policy
+name: {{ include "umami.policy.name" . }}
+description: Umami policy
+tags: {{- include "umami.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "umami.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "umami.secret.config.name" . }}
+  - //secret/{{ include "umami.db.secretName" . }}

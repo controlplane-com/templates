@@ -149,6 +149,12 @@ etcd:
   tuning:
     heartbeatIntervalMs: 250
     electionTimeoutMs: 5000
+    # History compaction. Without it etcd's backend grows with time alone —
+    # Patroni renews its lease every ~10s and every renewal is a revision —
+    # until it hits the quota and etcd goes READ-ONLY.
+    autoCompactionMode: periodic # periodic (retention is a duration) or revision (a revision count)
+    autoCompactionRetention: 1h # periodic needs an explicit unit (1h, 30m, 24h)
+    quotaBackendBytes: 0 # backend size limit in bytes; 0 = etcd's own default of 2 GiB
   volumeset:
     capacity: 10
   internalAccess:

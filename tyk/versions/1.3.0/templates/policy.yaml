@@ -10,9 +10,14 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "tyk.identity.name" . }}
 targetKind: secret
 targetLinks:
+  # The user-created admin-API secret — the gateway reveals it and nothing more.
+  - //secret/{{ .Values.adminSecretName }}
+{{- if .Values.redis.redis.auth.password.enabled }}
   - //secret/{{ include "tyk.redisAuthSecret.name" . }}
+{{- end }}
+{{- if .Values.redis.sentinel.auth.password.enabled }}
   - //secret/{{ include "tyk.sentinelAuthSecret.name" . }}
-  - //secret/{{ include "tyk.gatewaySecret.name" . }}
+{{- end }}
 {{- if .Values.apiSecretName }}
   - //secret/{{ .Values.apiSecretName }}
 {{- end }}

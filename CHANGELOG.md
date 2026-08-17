@@ -39,6 +39,7 @@ High-level, user-facing catalog changes by month: new templates and notable vers
 - **timescaledb-highly-available 1.0.1** — picks up the same etcd fix; earlier versions are affected the same way
 - **etcd 1.4.2** — etcd now trims its own history automatically, so its storage no longer grows without limit and fill up the default 2 GiB after a couple of months, at which point the cluster went read-only and any database using it for coordination could start restart-looping. History retention and the storage quota are now configurable. **If you run `postgres-highly-available` or `timescaledb-highly-available`, upgrade those templates to pick this up**
 - **etcd-multi-location 1.0.2** — history retention and the storage quota are now configurable; behaviour at the defaults is unchanged
+- **grafana-multi-location 1.1.1** — the Redis that coordinates alerting HA is now unauthenticated by default, so turning HA on needs no extra secrets (passwords remain available as an option), and the stretched etcd cluster's compaction settings are configurable
 - **grafana-multi-location 1.1.0** — alerting can now keep running when a region is lost: set `alerting.highAvailability.enabled` and every location evaluates alert rules, with a stretched Redis making sure a notification is still sent only once. Alerting can also be turned off entirely with `alerting.enabled`
 - **grafana-multi-location 1.1.1** — turning on alerting HA no longer requires creating any extra secrets; the coordinating Redis is unauthenticated by default and can be given passwords when you want them
 

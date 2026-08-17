@@ -149,6 +149,16 @@ internalAccess:
 # Grafana has no read/write splitting, so EVERY query goes to the primary —
 # put it where most of your users are.
 postgresML:
+  # The stretched etcd cluster behind Patroni. Compaction is on by default and
+  # should stay on: without it etcd's backend grows with time alone — Patroni
+  # renews its lease every ~10s and every renewal is a revision — until it hits
+  # the quota and etcd goes READ-ONLY, taking the database's failover with it.
+  etcd:
+    tuning:
+      autoCompactionMode: periodic # periodic (retention is a duration) or revision (a revision count)
+      autoCompactionRetention: 1h # periodic needs an explicit unit (1h, 30m, 24h)
+      quotaBackendBytes: 0 # backend size limit in bytes; 0 = etcd's own default of 2 GiB
+
   postgres:
     # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL.
     # A `dictionary` secret holding exactly `username`, `password` and

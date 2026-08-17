@@ -1,6 +1,6 @@
 apiVersion: v2
 name: fusionauth
-description: FusionAuth authentication and authorization app for Control Plane
+description: FusionAuth identity and access management with OAuth2, OIDC and SAML, plus bundled PostgreSQL
 
 type: application
 version: 2.3.2
@@ -16,6 +16,6 @@ dependencies:
 
 annotations:
   created: "2025-08-15"
-  lastModified: "2026-07-07"
+  lastModified: "2026-08-17"
   category: "authentication"
   createsGvc: false

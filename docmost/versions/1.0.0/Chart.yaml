@@ -1,13 +1,13 @@
 apiVersion: v2
 name: docmost
-description: Docmost open-source knowledge base and wiki — real-time collaborative docs with spaces and permissions, backed by Postgres and Redis
+description: Docmost open-source knowledge base and wiki with real-time collaborative editing, spaces and permissions
 type: application
 version: 1.0.0
 appVersion: "0.95.0"
 
 annotations:
   created: "2026-07-31"
-  lastModified: "2026-07-31"
+  lastModified: "2026-08-17"
   category: "knowledge-base"
   createsGvc: false
 

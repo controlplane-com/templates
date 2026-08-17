@@ -1,12 +1,12 @@
 apiVersion: v2
 name: openbao
-description: OpenBao identity-based secrets engine — Vault-compatible API, KV, dynamic secrets, PKI, and transit encryption with raft storage and auto-unseal
+description: OpenBao identity-based secrets engine with a Vault-compatible API, raft storage and auto-unseal
 type: application
 version: 1.0.0
 appVersion: "2.6.1"
 annotations:
   created: "2026-07-31"
-  lastModified: "2026-07-31"
+  lastModified: "2026-08-17"
   category: "secrets-management"
   createsGvc: false
 dependencies:

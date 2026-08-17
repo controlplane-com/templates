@@ -1,6 +1,6 @@
 apiVersion: v2
 name: meilisearch
-description: Meilisearch instant search engine — typo-tolerant REST search API, persistent index storage, master-key authentication, scheduled snapshots and platform volume backups
+description: Meilisearch instant search engine — typo-tolerant REST search API with persistent index storage
 type: application
 version: 1.0.0
 appVersion: "1.52.0"
@@ -12,6 +12,6 @@ dependencies:
 
 annotations:
   created: "2026-08-06"
-  lastModified: "2026-08-07"
+  lastModified: "2026-08-17"
   category: "search"
   createsGvc: false

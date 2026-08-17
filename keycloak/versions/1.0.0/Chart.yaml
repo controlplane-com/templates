@@ -1,6 +1,6 @@
 apiVersion: v2
 name: keycloak
-description: Keycloak open-source identity and access management with clustered SSO, OIDC/SAML, and a highly available PostgreSQL backing store
+description: Keycloak identity and access management with clustered SSO, OIDC/SAML, backed by PostgreSQL
 type: application
 version: 1.0.0
 appVersion: "26.6.3"
@@ -21,6 +21,6 @@ dependencies:
 
 annotations:
   created: "2026-07-09"
-  lastModified: "2026-07-10"
+  lastModified: "2026-08-17"
   category: "authentication"
   createsGvc: false

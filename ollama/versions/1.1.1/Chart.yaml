@@ -1,6 +1,6 @@
 apiVersion: v2
 name: ollama
-description: An Ollama app for Control Plane
+description: Ollama local LLM server with a GPU-backed API and an Open WebUI frontend
 
 type: application
 version: 1.1.1
@@ -13,6 +13,6 @@ dependencies:
 
 annotations:
   created: "2024-12-03"
-  lastModified: "2026-08-04"
+  lastModified: "2026-08-17"
   category: "llm"
   createsGvc: false

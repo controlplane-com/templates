@@ -1,13 +1,13 @@
 apiVersion: v2
 name: tailscale
-description: A Tailscale app for Control Plane
+description: Tailscale subnet router advertising GVC workloads and internal cpln.local DNS to your tailnet
 type: application
 version: 1.2.1
 appVersion: "stable"
 
 annotations:
   created: 2025-05-13
-  lastModified: 2026-02-25
+  lastModified: "2026-08-17"
   category: "mesh-vpn"
   createsGvc: false
 

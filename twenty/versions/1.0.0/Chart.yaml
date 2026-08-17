@@ -1,6 +1,6 @@
 apiVersion: v2
 name: twenty
-description: Twenty open-source CRM — customizable objects, pipelines and views, with a background worker, Redis job queue, and a PostgreSQL backend (single-instance or highly available)
+description: Twenty open-source CRM — customizable objects, pipelines and views, backed by PostgreSQL and Redis
 type: application
 version: 1.0.0
 appVersion: "2.26.1"
@@ -21,6 +21,6 @@ dependencies:
 
 annotations:
   created: "2026-08-05"
-  lastModified: "2026-08-05"
+  lastModified: "2026-08-17"
   category: "crm"
   createsGvc: false

@@ -1,6 +1,6 @@
 apiVersion: v2
 name: glitchtip
-description: GlitchTip Sentry-compatible error tracking with background worker, Redis task queue, and a highly available PostgreSQL backend
+description: GlitchTip Sentry-compatible error tracking with a background worker, backed by PostgreSQL and Redis
 type: application
 version: 1.0.0
 appVersion: "6.2.2"
@@ -25,6 +25,6 @@ dependencies:
 
 annotations:
   created: "2026-07-24"
-  lastModified: "2026-07-24"
+  lastModified: "2026-08-17"
   category: "observability"
   createsGvc: false

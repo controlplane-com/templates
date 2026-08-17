@@ -1,6 +1,6 @@
 apiVersion: v2
 name: duckdb
-description: DuckDB scheduled batch SQL job runner — executes a user-supplied SQL script on a cron schedule over Parquet, CSV and JSON in object storage and over attached PostgreSQL, MySQL and SQLite databases, with no standing infrastructure and no server endpoint
+description: Scheduled DuckDB batch SQL jobs over object storage and attached databases — no server endpoint
 type: application
 version: 1.0.0
 appVersion: "1.5.5"
@@ -12,6 +12,6 @@ dependencies:
 
 annotations:
   created: "2026-08-06"
-  lastModified: "2026-08-07"
+  lastModified: "2026-08-17"
   category: "analytics"
   createsGvc: false

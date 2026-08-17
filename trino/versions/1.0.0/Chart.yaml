@@ -1,6 +1,6 @@
 apiVersion: v2
 name: trino
-description: Trino distributed SQL query engine — a coordinator plus a scalable worker tier that runs federated queries across PostgreSQL, MySQL, ClickHouse, MongoDB and other data sources without moving the data
+description: Trino distributed SQL query engine — coordinator plus scalable workers, federating queries across data sources
 type: application
 version: 1.0.0
 appVersion: "483"
@@ -12,6 +12,6 @@ dependencies:
 
 annotations:
   created: "2026-08-05"
-  lastModified: "2026-08-06"
+  lastModified: "2026-08-17"
   category: "analytics"
   createsGvc: false

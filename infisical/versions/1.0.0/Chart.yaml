@@ -1,13 +1,13 @@
 apiVersion: v2
 name: infisical
-description: Infisical open-source secrets-management platform — store, version, and serve app secrets via UI + API, backed by Postgres and Redis
+description: Infisical open-source secrets-management platform — store, version and serve app secrets via UI and API
 type: application
 version: 1.0.0
 appVersion: "0.162.14"
 
 annotations:
   created: "2026-07-28"
-  lastModified: "2026-07-31"
+  lastModified: "2026-08-17"
   category: "secrets-management"
   createsGvc: false
 

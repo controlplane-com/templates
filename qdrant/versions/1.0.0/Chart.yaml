@@ -1,6 +1,6 @@
 apiVersion: v2
 name: qdrant
-description: Qdrant vector database — REST and gRPC APIs, persistent storage, optional API-key authentication, and scheduled volume snapshots
+description: Qdrant vector database with REST and gRPC APIs, persistent storage and scheduled snapshots
 type: application
 version: 1.0.0
 appVersion: "1.18.3"
@@ -12,6 +12,6 @@ dependencies:
 
 annotations:
   created: "2026-08-05"
-  lastModified: "2026-08-05"
+  lastModified: "2026-08-17"
   category: "database"
   createsGvc: false

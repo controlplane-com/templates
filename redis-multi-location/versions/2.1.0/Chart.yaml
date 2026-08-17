@@ -1,13 +1,13 @@
 apiVersion: v2
 name: redis-multi-location
-description: One Redis master-replica cluster stretched across locations, with Redis Sentinel electing a new master when a location is lost, optional public TCP access and optional backups to object storage
+description: One Redis master-replica cluster stretched across locations, with Sentinel failover on location loss
 type: application
 version: 2.1.0
 appVersion: "7.4"
 
 annotations:
   created: "2025-12-13"
-  lastModified: "2026-08-13"
+  lastModified: "2026-08-17"
   category: "cache"
   createsGvc: true
 

@@ -1,0 +1,109 @@
+replicas: 3   # 1 leader + 2 hot standbys; Patroni forms the cluster and handles failover
+
+# ─── Database Workload Resources ──────────────────────────────────
+resources:
+  minCpu: 500m
+  minMemory: 1Gi        # time-series ingest is memory-sensitive; 2Gi ceiling is the small-prod floor
+  maxCpu: 1
+  maxMemory: 2Gi
+
+# ─── Image ────────────────────────────────────────────────────────
+image: timescale/timescaledb-ha:pg18.4-ts2.28.3  # PostgreSQL 18 + TimescaleDB 2.28.3 Community, Patroni bundled
+
+# ─── Database Config (template-managed superuser) ─────────────────
+postgres:
+  username: username
+  password: password    # change before installing — baked into the data dir at first boot
+  database: test        # TimescaleDB extension is created automatically in this database
+
+multiZone: false        # spread replicas across zones in the location
+
+# ─── Storage (per replica) ────────────────────────────────────────
+volumeset:
+  capacity: 10          # initial capacity in GiB per replica (minimum 10)
+  autoscaling:
+    enabled: false      # set to true to grow each volume automatically
+    maxCapacity: 100    # maximum capacity in GiB when autoscaling is enabled
+    minFreePercentage: 10 # free-space threshold that triggers scaling
+    scalingFactor: 1.2  # how much to scale up by
+
+# ─── Access (internal only — reach the cluster via the proxy) ─────
+internal_access:
+  type: same-gvc        # options: same-gvc, same-org, workload-list
+  workloads:            # only when type is same-gvc or workload-list
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── etcd consensus store (subchart dependency) ───────────────────
+etcd:
+  replicas: 3
+  resources:
+    cpu: 500m
+    memory: 512Mi
+  multiZone: false
+  tuning:
+    # Passed through to the bundled etcd. Without compaction its backend grows
+    # with time alone — Patroni renews its lease every ~10s and every renewal is
+    # a revision — until it hits the quota and etcd goes READ-ONLY.
+    autoCompactionMode: periodic # periodic (retention is a duration) or revision (a revision count)
+    autoCompactionRetention: 1h # periodic needs an explicit unit (1h, 30m, 24h); revision takes a count
+    quotaBackendBytes: 0 # backend size limit in bytes; 0 = etcd's own default of 2 GiB
+  volumeset:
+    capacity: 10
+  internal_access:
+    type: same-gvc
+    workloads:
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── PgBouncer Connection Pooler (optional) ───────────────────────
+pgbouncer:
+  enabled: false
+  image: edoburu/pgbouncer:v1.25.1-p0
+  poolMode: transaction   # options: session, transaction, statement
+  defaultPoolSize: 25      # real Postgres connections PgBouncer maintains per pod
+  maxClientConn: 1000      # maximum client connections PgBouncer accepts per pod
+  maxDbConnections: 100    # hard cap on total Postgres connections across all pods
+  minReplicas: 2
+  maxReplicas: 4
+  resources:
+    cpu: 200m
+    memory: 128Mi
+
+# ─── HAProxy leader endpoint (auto-enabled with pgbouncer) ────────
+proxy:
+  enabled: true
+  image: haproxy:2.9
+  resources:
+    cpu: 100m
+    memory: 128Mi
+  minReplicas: 2
+  maxReplicas: 2
+
+# ─── Scheduled logical backup to object storage (optional) ────────
+backup:
+  enabled: false
+  image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0  # PG18 client, matches server major
+  schedule: "0 2 * * *"   # daily at 2am UTC
+  resources:
+    cpu: 100m
+    memory: 128Mi
+
+  provider: aws           # options: aws, gcp, minio
+
+  aws:
+    bucket: my-backup-bucket
+    region: us-east-1
+    cloudAccountName: my-backup-cloudaccount
+    policyName: my-backup-policy
+    prefix: timescaledb/backups # folder where backups are stored
+
+  gcp:
+    bucket: my-backup-bucket
+    cloudAccountName: my-backup-cloudaccount
+    prefix: timescaledb/backups
+
+  minio:  # self-hosted MinIO or any S3-compatible endpoint
+    endpoint: http://my-minio-workload:9000 # e.g. http://WORKLOAD_NAME:9000 for an internal MinIO deployment
+    bucket: my-backup-bucket
+    accessKey: my-minio-username # matches the MinIO template's admin.username
+    secretKey: my-minio-password # matches the MinIO template's admin.password
+    prefix: timescaledb/backups

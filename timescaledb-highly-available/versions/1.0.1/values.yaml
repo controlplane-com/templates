@@ -40,6 +40,13 @@ etcd:
     cpu: 500m
     memory: 512Mi
   multiZone: false
+  tuning:
+    # Passed through to the bundled etcd. Without compaction its backend grows
+    # with time alone — Patroni renews its lease every ~10s and every renewal is
+    # a revision — until it hits the quota and etcd goes READ-ONLY.
+    autoCompactionMode: periodic # periodic (retention is a duration) or revision (a revision count)
+    autoCompactionRetention: 1h # periodic needs an explicit unit (1h, 30m, 24h); revision takes a count
+    quotaBackendBytes: 0 # backend size limit in bytes; 0 = etcd's own default of 2 GiB
   volumeset:
     capacity: 10
   internal_access:

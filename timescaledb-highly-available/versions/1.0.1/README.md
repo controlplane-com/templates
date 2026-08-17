@@ -68,9 +68,23 @@ etcd:
   resources:
     cpu: 500m
     memory: 512Mi
+  tuning: # history compaction — leave these unless you know you need to change them
+    autoCompactionMode: periodic # periodic (retention is a duration) or revision (a revision count)
+    autoCompactionRetention: 1h # periodic needs an explicit unit (1h, 30m, 24h)
+    quotaBackendBytes: 0 # backend size limit in bytes; 0 = etcd's own default of 2 GiB
   volumeset:
     capacity: 10
 ```
+
+**Leave compaction on.** etcd keeps every historical revision until something compacts it, and Patroni
+renews its leader lease every ~10 seconds — so the backend grows with time alone, whether or not anyone
+touches the database. Unbounded, it reaches the 2 GiB quota in roughly 110 days, at which point etcd
+raises a `NOSPACE` alarm and goes **read-only**: Patroni replicas can no longer renew their leases and
+restart-loop with `exitCode: 0`, which looks healthy. Compaction is what prevents that.
+
+**Already running 1.0.0?** Upgrading turns compaction on, but it cannot shrink a backend that has
+already grown. Check with `cpln workload exec {release}-etcd -- etcdctl endpoint status --cluster` and
+`etcdctl alarm list`; a cluster that is already alarmed needs an operator, not an upgrade.
 
 ### PgBouncer (optional)
 

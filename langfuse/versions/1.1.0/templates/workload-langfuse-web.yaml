@@ -46,12 +46,32 @@ spec:
           value: http://{{ include "langfuse.web.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:3000
         - name: AUTH_TRUST_HOST
           value: "true"
+        # Signing and encryption keys come from the prerequisite secret, so they
+        # never pass through Helm values or land in the release.
         - name: NEXTAUTH_SECRET
-          value: cpln://secret/{{ include "langfuse.secret.name" . }}.nextAuthSecret
+          value: cpln://secret/{{ .Values.langfuse.auth.secretName }}.nextAuthSecret
         - name: ENCRYPTION_KEY
-          value: cpln://secret/{{ include "langfuse.secret.name" . }}.encryptionKey
+          value: cpln://secret/{{ .Values.langfuse.auth.secretName }}.encryptionKey
         - name: SALT
-          value: cpln://secret/{{ include "langfuse.secret.name" . }}.salt
+          value: cpln://secret/{{ .Values.langfuse.auth.secretName }}.salt
+        # Sign-up control. AUTH_DISABLE_SIGNUP blocks BOTH email/password and
+        # first-time SSO user creation, with no first-user exemption — which is
+        # why the owner below is provisioned headlessly instead.
+        - name: AUTH_DISABLE_SIGNUP
+          value: {{ .Values.langfuse.auth.disableSignup | quote }}
+        - name: NEXT_PUBLIC_SIGN_UP_DISABLED
+          value: {{ .Values.langfuse.auth.disableSignup | quote }}
+        # Headless initialization: creates the organization and an OWNER user on
+        # every boot (idempotent — existing rows are left alone) and bypasses the
+        # sign-up block, so a closed instance still has a way in.
+        - name: LANGFUSE_INIT_ORG_ID
+          value: default
+        - name: LANGFUSE_INIT_ORG_NAME
+          value: {{ .Values.langfuse.auth.organizationName | quote }}
+        - name: LANGFUSE_INIT_USER_EMAIL
+          value: cpln://secret/{{ .Values.langfuse.auth.secretName }}.adminEmail
+        - name: LANGFUSE_INIT_USER_PASSWORD
+          value: cpln://secret/{{ .Values.langfuse.auth.secretName }}.adminPassword
         # Object store (AWS)
         {{- if eq .Values.objectStore.provider "aws" }}
         - name: LANGFUSE_S3_EVENT_UPLOAD_BUCKET
@@ -80,9 +100,9 @@ spec:
         - name: LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE
           value: "true"
         - name: LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID
-          value: cpln://secret/{{ include "langfuse.secret.name" . }}.s3AccessKeyId
+          value: cpln://secret/{{ .Values.objectStore.gcp.credentialsSecretName }}.accessKeyId
         - name: LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY
-          value: cpln://secret/{{ include "langfuse.secret.name" . }}.s3SecretAccessKey
+          value: cpln://secret/{{ .Values.objectStore.gcp.credentialsSecretName }}.secretAccessKey
         - name: LANGFUSE_S3_MEDIA_UPLOAD_BUCKET
           value: {{ .Values.objectStore.gcp.bucket | quote }}
         - name: LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT
@@ -94,9 +114,9 @@ spec:
         - name: LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE
           value: "true"
         - name: LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID
-          value: cpln://secret/{{ include "langfuse.secret.name" . }}.s3AccessKeyId
+          value: cpln://secret/{{ .Values.objectStore.gcp.credentialsSecretName }}.accessKeyId
         - name: LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY
-          value: cpln://secret/{{ include "langfuse.secret.name" . }}.s3SecretAccessKey
+          value: cpln://secret/{{ .Values.objectStore.gcp.credentialsSecretName }}.secretAccessKey
         {{- end }}
       ports:
         - number: 3000
@@ -105,6 +125,7 @@ spec:
         httpGet:
           path: /api/public/health
           port: 3000
+          scheme: HTTP
         failureThreshold: 10
         initialDelaySeconds: 30
         periodSeconds: 10
@@ -116,17 +137,50 @@ spec:
       target: 70
       minScale: {{ .Values.langfuse.web.minReplicas }}
       maxScale: {{ .Values.langfuse.web.maxReplicas }}
+      maxConcurrency: 0
       scaleToZeroDelay: 300
     capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  rolloutOptions:
+    {{- /*
+    maxUnavailableReplicas is deliberately NOT set: the API drops it on a
+    stateful workload, so sending it produces permanent drift AND implies a
+    rolling-restart limit that is not in force.
+    terminationGracePeriodSeconds is declared because the API backfills 90.
+    */}}
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
   firewallConfig:
+    {{- /* Every field is declared: the API backfills the empty lists, so
+    omitting them makes a default install drift from the moment it is created. */}}
     external:
-      inboundAllowCIDR: {{- toYaml .Values.langfuse.firewall.inboundAllowCIDR | nindent 8 }}
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
       outboundAllowCIDR:
         - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
     internal:
-      inboundAllowType: same-gvc
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if and .Values.internalAccess.workloads (has .Values.internalAccess.type (list "same-gvc" "workload-list")) }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- else }}
+      inboundAllowWorkload: []
+      {{- end }}
   loadBalancer:
     direct:
       enabled: false
+      ports: []
     replicaDirect: false
   supportDynamicTags: false

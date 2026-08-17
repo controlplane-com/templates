@@ -1,4 +1,4 @@
-{{ include "langfuse.validateObjectStore" . }}
+{{ include "langfuse.validate" . }}
 ---
 kind: identity
 name: {{ include "langfuse.identity.name" . }}

@@ -13,3 +13,8 @@ targetLinks:
   - //secret/{{ include "langfuse.secret.name" . }}
   - //secret/{{ include "langfuse.clickhouse.startup.secret.name" . }}
   - //secret/{{ include "langfuse.clickhouse.storage.secret.name" . }}
+  # Prerequisite secrets the user creates — granted by name, nothing broader.
+  - //secret/{{ .Values.langfuse.auth.secretName }}
+  {{- if eq .Values.objectStore.provider "gcp" }}
+  - //secret/{{ .Values.objectStore.gcp.credentialsSecretName }}
+  {{- end }}

@@ -1,4 +1,3 @@
-{{- include "maria.validateBackupConfig" . }}
 {{- if .Values.backup.enabled }}
 kind: workload
 name: {{ include "maria.backup.name" . }}
@@ -14,32 +13,34 @@ spec:
       env:
       {{- if eq .Values.backup.provider "aws" }}
         - name: AWS_REGION
-          value: cpln://secret/{{ include "maria.secretDatabase.name" . }}.aws-region
+          value: {{ .Values.backup.aws.region | quote }}
         - name: BACKUP_PROVIDER
           value: aws
         - name: BACKUP_BUCKET
-          value: cpln://secret/{{ include "maria.secretDatabase.name" . }}.backup-bucket
+          value: {{ .Values.backup.aws.bucket | quote }}
         - name: BACKUP_PREFIX
-          value: {{ .Values.backup.aws.prefix }}
+          value: {{ .Values.backup.aws.prefix | quote }}
       {{- end }}
       {{- if eq .Values.backup.provider "gcp" }}
         - name: BACKUP_PROVIDER
           value: gcp
         - name: BACKUP_BUCKET
-          value: cpln://secret/{{ include "maria.secretDatabase.name" . }}.backup-bucket
+          value: {{ .Values.backup.gcp.bucket | quote }}
         - name: BACKUP_PREFIX
-          value: {{ .Values.backup.gcp.prefix }}
+          value: {{ .Values.backup.gcp.prefix | quote }}
       {{- end }}
+        - name: MYSQL_DATABASE
+          value: 'cpln://secret/{{ .Values.credentialsSecretName }}.database'
         - name: MYSQL_HOST
           value: {{ include "maria.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local
         - name: MYSQL_ROOT_PASSWORD
-          value: cpln://secret/{{ include "maria.secretDatabase.name" . }}.MYSQL_ROOT_PASSWORD
+          value: 'cpln://secret/{{ .Values.rootPasswordSecretName }}.payload'
         - name: MYSQL_PASSWORD
-          value: cpln://secret/{{ include "maria.secretDatabase.name" . }}.MYSQL_PASSWORD
+          value: 'cpln://secret/{{ .Values.credentialsSecretName }}.password'
         - name: MYSQL_PORT
           value: '3306'
         - name: MYSQL_USER
-          value: cpln://secret/{{ include "maria.secretDatabase.name" . }}.MYSQL_USER
+          value: 'cpln://secret/{{ .Values.credentialsSecretName }}.username'
       image: {{ .Values.backup.image }}
       inheritEnv: false
   defaultOptions:
@@ -71,6 +72,6 @@ spec:
     concurrencyPolicy: Forbid
     historyLimit: 5
     restartPolicy: Never
-    schedule: {{ .Values.backup.schedule }}
+    schedule: {{ .Values.backup.schedule | quote }}
   supportDynamicTags: false
 {{- end }}

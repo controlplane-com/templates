@@ -10,4 +10,6 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "mysql.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "mysql.secretDatabase.name" . }}
+  # Exactly the two user-created credential secrets — nothing else.
+  - //secret/{{ .Values.credentialsSecretName }}
+  - //secret/{{ .Values.rootPasswordSecretName }}

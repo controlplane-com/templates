@@ -1,7 +1,8 @@
-{{- if .Values.enablePhpMyAdmin }}
+{{- if .Values.phpMyAdmin.enabled }}
 kind: workload
 name: {{ include "maria.phpAdmin.name" . }}
 description: phpMyAdmin for MariaDB database management
+gvc: {{ .Values.global.cpln.gvc }}
 tags:
   {{- include "maria.tags" . | nindent 2 }}
 spec:
@@ -9,16 +10,17 @@ spec:
   containers:
     - name: phpmyadmin
       env:
+        # Connection target only. phpMyAdmin presents a login form (auth_type
+        # cookie) and the user supplies credentials there, so this workload is
+        # given no identity and no access to any secret.
         - name: PMA_HOST
           value: '{{ include "maria.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local'
         - name: PMA_PORT
           value: '3306'
-        - name: MYSQL_ROOT_PASSWORD
-          value: 'cpln://secret/{{ include "maria.secretDatabase.name" . }}.MYSQL_ROOT_PASSWORD'
-      image: 'phpmyadmin/phpmyadmin:latest'
+      image: {{ .Values.phpMyAdmin.image }}
       inheritEnv: false
-      cpu: 100m
-      memory: 128Mi
+      cpu: {{ .Values.phpMyAdmin.resources.cpu | quote }}
+      memory: {{ .Values.phpMyAdmin.resources.memory | quote }}
       ports:
         - number: 80
           protocol: http
@@ -29,9 +31,21 @@ spec:
       maxScale: 1
   firewallConfig:
     external:
+      {{- if .Values.phpMyAdmin.publicAccess.enabled }}
       inboundAllowCIDR:
         - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      # Closed egress: the console reaches the database inside the GVC only.
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
     internal:
-      inboundAllowType: same-gvc
-  identityLink: //identity/{{ include "maria.identity.name" . }}
+      inboundAllowType: {{ .Values.phpMyAdmin.internalAccess.type }}
+      {{- if .Values.phpMyAdmin.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.phpMyAdmin.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
 {{- end }}

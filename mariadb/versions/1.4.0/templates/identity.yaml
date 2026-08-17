@@ -1,6 +1,6 @@
-{{- include "maria.validateBackupConfig" . -}}
 kind: identity
 name: {{ include "maria.identity.name" . }}
+description: MariaDB identity
 gvc: {{ .Values.global.cpln.gvc }}
 tags:
   {{- include "maria.tags" . | nindent 4 }}

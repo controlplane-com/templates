@@ -1,3 +1,4 @@
+{{- include "mysql.validate" . -}}
 kind: workload
 name: {{ include "mysql.name" . }}
 description: MySQL database
@@ -10,19 +11,21 @@ spec:
   containers:
     - name: mysql
       env:
+        # Every credential comes from a prerequisite secret the user created, so
+        # none of them ever enters values or the Helm release.
         - name: MYSQL_DATABASE
-          value: 'cpln://secret/{{ include "mysql.secretDatabase.name" . }}.database'
-        - name: MYSQL_PASSWORD
-          value: 'cpln://secret/{{ include "mysql.secretDatabase.name" . }}.password'
-        - name: MYSQL_ROOT_PASSWORD
-          value: 'cpln://secret/{{ include "mysql.secretDatabase.name" . }}.rootPassword'
+          value: 'cpln://secret/{{ .Values.credentialsSecretName }}.database'
         - name: MYSQL_USER
-          value: 'cpln://secret/{{ include "mysql.secretDatabase.name" . }}.user'
+          value: 'cpln://secret/{{ .Values.credentialsSecretName }}.username'
+        - name: MYSQL_PASSWORD
+          value: 'cpln://secret/{{ .Values.credentialsSecretName }}.password'
+        - name: MYSQL_ROOT_PASSWORD
+          value: 'cpln://secret/{{ .Values.rootPasswordSecretName }}.payload'
       image: {{ .Values.image }}
       inheritEnv: false
       minCpu: {{ .Values.resources.minCpu | quote }}
       minMemory: {{ .Values.resources.minMemory | quote }}
-      cpu: {{ .Values.resources.maxCpu }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
       memory: {{ .Values.resources.maxMemory | quote }}
       ports:
         - number: 3306

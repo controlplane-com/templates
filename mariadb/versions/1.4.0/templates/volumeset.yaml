@@ -1,5 +1,6 @@
 kind: volumeset
 name: {{ include "maria.volume.name" . }}
+description: MariaDB volumeset
 gvc: {{ .Values.global.cpln.gvc }}
 tags:
   {{- include "maria.tags" . | nindent 4 }}

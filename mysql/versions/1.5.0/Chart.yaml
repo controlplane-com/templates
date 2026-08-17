@@ -3,7 +3,7 @@ name: mysql
 description: Single-replica MySQL relational database with optional phpMyAdmin and scheduled backups
 
 type: application
-version: 1.4.3
+version: 1.5.0
 appVersion: "9"
 
 annotations:

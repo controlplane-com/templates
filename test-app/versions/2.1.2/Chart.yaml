@@ -1,12 +1,12 @@
 apiVersion: v2
 name: test-app
-description: Test app for Control Plane
+description: Minimal test application used to exercise pipeline and platform behaviour
 type: application
 version: 2.1.2
 appVersion: "11.0.0"
 annotations:
   created: "2025-04-16"
-  lastModified: "2026-06-26"
+  lastModified: "2026-08-17"
   category: "test"
   file-customFile: "Test Configuration File"
   createsGvc: false

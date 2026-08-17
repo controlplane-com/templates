@@ -151,6 +151,29 @@ jobs:
               fi
             done
 
+            # 3b. Chart.yaml description. The marketplace card has a fixed height and
+            # CLIPS a long description mid-sentence (duckdb shipped 39 words and was
+            # visibly cut off in the UI). Em dashes are punctuation, not words.
+            local desc=$(sed -n 's/^description:[[:space:]]*//p' "$version_dir/Chart.yaml" | head -1)
+            if [ -z "$desc" ]; then
+              echo "FAIL [$template @ $version]: Chart.yaml description is empty - it is the marketplace card's one line"
+              failed=1
+            else
+              local words=$(echo "$desc" | tr ' ' '\n' | grep -vE '^$' | grep -vE '^(\xe2\x80\x94|\xe2\x80\x93|-)$' | wc -l | tr -d ' ')
+              if [ "$words" -gt 15 ]; then
+                echo "FAIL [$template @ $version]: description is $words words - the card clips past 15. Say what it IS, not everything it does"
+                failed=1
+              fi
+              if echo "$desc" | grep -qi 'for Control Plane'; then
+                echo "FAIL [$template @ $version]: description says 'for Control Plane' - every template here is"
+                failed=1
+              fi
+              if echo "$desc" | grep -qiE '^(a |an |the )?helm chart'; then
+                echo "FAIL [$template @ $version]: description starts 'a Helm chart for...' - say what the software is instead"
+                failed=1
+              fi
+            fi
+
             # 4. New template: require README.md and icon.png at the template root
             # (only checked when base_sha is available, i.e. PR / workflow_dispatch)
             if [ -n "$base_sha" ]; then

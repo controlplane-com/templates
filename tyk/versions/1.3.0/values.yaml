@@ -1,0 +1,72 @@
+image: tykio/tyk-gateway:v5.10.0
+
+listenPort: 8080 # REQUIRED - the port the gateway listens on
+
+# ─── Prerequisite secrets ─────────────────────────────────────────────────────
+# All three must EXIST BEFORE INSTALL. See README Prerequisites for the exact
+# `cpln secret create-*` commands.
+
+# The admin secret is the Gateway Control API key (X-Tyk-Authorization on /tyk/*),
+# which creates, lists and revokes API keys — so it never transits Helm values.
+adminSecretName: my-tyk-admin-secret # REQUIRED - opaque secret (encoding: plain) holding the admin API key
+
+# These two are OPTIONAL — set either to "" to omit it. But note what happens if
+# you omit the APIs: the gateway falls back to the demo API definitions baked
+# into the upstream image and will happily serve "Tyk Test API" instead of
+# nothing, which looks like a working install until you notice it is not yours.
+apiSecretName: my-tyk-apis # dictionary secret holding your API definition JSON files; "" = serve the image's demo APIs
+policySecretName: my-tyk-policies # opaque secret holding your policies JSON; "" = no policies
+
+# ─── Gateway ──────────────────────────────────────────────────────────────────
+allowMasterKeys: false # true lets a key created with no access_rights reach EVERY API on this gateway
+
+resources:
+  cpu: 50m
+  memory: 128Mi
+
+autoscaling:
+  maxScale: 3
+  metric: cpu
+  minScale: 1
+  scaleToZeroDelay: 300
+  target: 100
+
+multiZone: false # OPTIONAL - Deploys replicas across multiple zones (confirm availability in your location)
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+externalAccess: false # true publishes the gateway — INCLUDING its /tyk admin API — to the internet
+internalAccess: # OPTIONAL - Sets the internal firewall scope
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # used with workload-list, e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Bundled Redis + Sentinel ─────────────────────────────────────────────────
+# Tyk's token, rate-limit and analytics store. It serves this gateway only and is
+# never reachable from outside the GVC, so the passwords are template plumbing —
+# but they are used AS-IS, so change them before installing.
+redis:
+  redis:
+    resources:
+      cpu: 200m
+      memory: 256Mi
+    replicas: 2
+    auth:
+      password:
+        enabled: true
+        value: change-me-tyk-redis
+    firewall:
+      internal_inboundAllowType: same-gvc
+    persistence:
+      enabled: true
+  sentinel:
+    resources:
+      cpu: 200m
+      memory: 256Mi
+    replicas: 3
+    auth:
+      password:
+        enabled: true
+        value: change-me-tyk-sentinel
+    firewall:
+      internal_inboundAllowType: same-gvc
+    persistence:
+      enabled: true

@@ -1,0 +1,244 @@
+# ─── GVC and locations ────────────────────────────────────────────────────────
+# Lives under `global` so the postgres-multi-location subchart — its own etcd
+# subchart, two levels down — and the optional redis-multi-location subchart get
+# the same GVC and locations automatically. Never maintain two location lists.
+
+global:
+  gvc:
+    # This chart CREATES this GVC. It must NOT already exist: Helm adopts a GVC
+    # that does, and `helm uninstall` then DELETES it and everything in it.
+    name: grafana-multi-location-gvc
+    # Minimum 2 locations, and minimum 3 with alerting HA enabled below. The
+    # database tier needs 3 for automatic failover and 5 to survive losing two —
+    # see the survival table in the README.
+    # `replicas` here sets the POSTGRES members in that location, and nothing else.
+    # Every other tier ignores it and has its own count:
+    #   etcd     — always exactly 1 per location, not configurable. Quorum is a
+    #              majority of LOCATIONS, so a second member in one buys nothing.
+    #   Grafana  — the top-level `replicas` below, applied to every location.
+    #   Redis    — redisML.redis.replicasPerLocation (alerting HA only).
+    locations:
+      - name: aws-us-east-1
+        replicas: 1
+      - name: aws-eu-central-1
+        replicas: 1
+      - name: aws-us-west-2
+        replicas: 1
+
+# ─── Grafana UI tier ──────────────────────────────────────────────────────────
+image: grafana/grafana:13.1.3
+
+replicas: 1 # Grafana UI instances PER LOCATION
+
+resources:
+  maxCpu: 1000m
+  maxMemory: 1Gi
+  minCpu: 500m
+  minMemory: 512Mi
+
+database:
+  maxOpenConn: 10 # per instance; see the README budget
+
+# ─── Alerting ─────────────────────────────────────────────────────────────────
+# enabled: false turns rule evaluation off entirely — rules can still be created
+# and viewed, nothing ever evaluates them.
+#
+# highAvailability.enabled: false (default) — a SEPARATE single-replica workload
+# in `location` evaluates every rule, and exactly-once follows from there being
+# only one of it. Restarting it re-notifies whatever is firing at the time, and
+# losing that location stops evaluation with no sign of it in the UI.
+#
+# highAvailability.enabled: true — no separate workload; every UI instance
+# evaluates and a stretched Redis (redisML below) picks exactly one to SEND, so
+# alerting survives losing a location. Needs 3+ locations. The costs: datasource
+# query load multiplies by (locations × replicas) because Redis dedupes the
+# notification and not the query; a large rule set may need resources.maxCpu
+# raised; and if Redis is unhealthy alerting DUPLICATES rather than going silent.
+alerting:
+  enabled: true
+  highAvailability:
+    enabled: false
+  # Dedicated-evaluator mode ONLY — where the one evaluator runs. Must be one of
+  # global.gvc.locations. IGNORED when highAvailability.enabled is true.
+  location: aws-us-east-1
+  # Dedicated-evaluator mode ONLY — in HA mode the UI tier's `resources` apply.
+  resources:
+    maxCpu: 1000m
+    maxMemory: 1Gi
+    minCpu: 500m
+    minMemory: 512Mi
+
+# ─── Admin Bootstrap & Encryption (prerequisite secrets) ──────────────────────
+# BOTH secrets must EXIST BEFORE INSTALL — opaque, encoding: plain (see README).
+# The admin login is on the public internet when publicAccess.enabled is true,
+# so its password never transits values or the Helm release.
+admin:
+  user: admin # initial admin login name (not sensitive)
+  # The password applies only when the admin account is FIRST created; on later
+  # boots Grafana ignores it (change it in the UI instead).
+  applyPassword: true # set false after your first login to stop referencing the password secret
+  passwordSecretName: my-grafana-admin-password # opaque secret holding the first-boot admin password
+  # DIFFERENT LIFECYCLE — permanent. Encrypts datasource passwords AT REST in the
+  # shared database; it protects nothing in transit (that is TLS, via the
+  # datasource URL). Every instance in every location must use the SAME key, or a
+  # datasource saved in one region is undecryptable in another and rules querying
+  # it fail silently. Rotating it invalidates every credential already stored, so
+  # never delete it and never rotate it.
+  secretKeySecretName: my-grafana-secret-key # opaque secret holding the at-rest encryption key
+
+# ─── Datasources as Code (optional) ───────────────────────────────────────────
+# Grafana datasource provisioning entries, passed through verbatim. Every
+# instance of every workload applies the same file on boot.
+datasources:
+  definitions: []
+  # - name: Prometheus
+  #   type: prometheus
+  #   access: proxy
+  #   # Substitute BOTH parts: the workload name AND the GVC. A leftover
+  #   # placeholder resolves to nothing and the panel shows only
+  #   # "upstream connect error ... connection timeout".
+  #   url: http://YOUR_WORKLOAD.YOUR_GVC.cpln.local:9095
+  #   isDefault: true
+  # - name: AppDB
+  #   type: postgres
+  #   url: my-db-host:5432
+  #   user: grafana_reader
+  #   jsonData: { database: appdb, sslmode: disable }
+  #   secureJsonData:
+  #     password: $PG_PASSWORD # interpolated from credentialSecrets below
+
+  # The credentials Grafana authenticates TO each datasource with. `definitions`
+  # renders into a plaintext provisioning file, so put the password in a
+  # pre-created dictionary secret and write $KEY above. Every $KEY needs an entry
+  # here, and the secrets MUST EXIST BEFORE INSTALL.
+  credentialSecrets: []
+  # - name: my-grafana-ds-credentials
+  #   keys: [PG_PASSWORD]
+
+# ─── SMTP for Alert Emails (optional) ─────────────────────────────────────────
+# Whichever instance evaluates is what actually sends: the dedicated evaluator
+# workload by default, or the coordinating UI instance when alerting HA is on.
+smtp:
+  enabled: false
+  host: smtp.example.com:587 # host:port
+  user: "" # empty = unauthenticated SMTP. IF YOU SET THIS, the relay MUST offer
+  # STARTTLS or TLS: Grafana refuses to send credentials over an unencrypted
+  # connection ("failed to send email: unencrypted connection") and every
+  # notification is then lost, with the only signal a log line in the
+  # sending workload. Hosted relays (SES, SendGrid, Mailgun, M365, Gmail)
+  # are fine; a plain in-GVC relay is not — leave this empty for those.
+  passwordSecretName: "" # opaque secret (encoding: plain) with the SMTP password; create BEFORE install
+  fromAddress: grafana@example.com
+  fromName: Grafana
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+# Applies to the UI tier. The dedicated evaluator workload is NEVER public; it
+# honours internalAccess only, so you can reach it in-GVC to manage silences.
+publicAccess:
+  enabled: true # UI on the canonical *.cpln.app HTTPS endpoint
+
+internalAccess:
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # used with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── App Database (subchart: postgres-multi-location) ─────────────────────────
+# One Patroni cluster stretched across the same locations: a single primary,
+# async replicas elsewhere, automatic promotion in a surviving location.
+# Grafana has no read/write splitting, so EVERY query goes to the primary —
+# put it where most of your users are.
+postgresML:
+  # The stretched etcd cluster behind Patroni. Compaction is on by default and
+  # should stay on: without it etcd's backend grows with time alone — Patroni
+  # renews its lease every ~10s and every renewal is a revision — until it hits
+  # the quota and etcd goes READ-ONLY, taking the database's failover with it.
+  etcd:
+    tuning:
+      autoCompactionMode: periodic # periodic (retention is a duration) or revision (a revision count)
+      autoCompactionRetention: 1h # periodic needs an explicit unit (1h, 30m, 24h)
+      quotaBackendBytes: 0 # backend size limit in bytes; 0 = etcd's own default of 2 GiB
+
+  postgres:
+    # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL.
+    # A `dictionary` secret holding exactly `username`, `password` and
+    # `database`. If it does not exist the deployment wedges waiting on it.
+    credentialsSecretName: my-grafana-db-credentials
+
+  # Preferred location for the database primary. Keep it aligned with
+  # alerting.location so the hot path has no cross-region hop. With alerting HA
+  # on, this also decides which Grafana location runs the schema migrations.
+  primaryLocation: aws-us-east-1
+
+  resources:
+    minCpu: 500m
+    minMemory: 1Gi
+    maxCpu: 1
+    maxMemory: 2Gi
+
+  volumeset:
+    capacity: 10 # initial capacity in GiB per member (minimum is 10)
+
+  proxy:
+    minReplicas: 2 # HAProxy leader-routing tier, per location
+    maxReplicas: 2
+
+  backup: # optional database backups — see Storage setup in the README
+    enabled: false
+    mode: logical # logical or wal-g
+    location: aws-us-east-1 # logical mode only: the ONE location the nightly job runs in
+    resources:
+      cpu: 100m
+      # 512Mi, matching postgres-multi-location's own default. At 128Mi the GCP
+      # path OOMs with NO log output: logical jobs merely report `failed` and the
+      # wal-g sidecar loops on OOMKilled while WAL archives with no base backup.
+      # Do not lower this without re-testing the GCS path.
+      memory: 512Mi
+    logical:
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      schedule: "0 2 * * *"
+    walg:
+      intervalSeconds: 21600
+    provider: aws # options: aws, gcp, minio
+    aws:
+      bucket: my-grafana-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: my-grafana-backup-policy
+      prefix: grafana/backups
+    gcp:
+      bucket: my-grafana-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: grafana/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: my-grafana-bucket
+      credentialsSecretName: my-grafana-minio-credentials
+      prefix: grafana/backups
+
+# ─── Alerting-HA coordination (subchart: redis-multi-location) ────────────────
+# Rendered ONLY when alerting.highAvailability.enabled is true. One Redis and one
+# Sentinel per location; failover needs a majority of them, which is why alerting
+# HA requires 3+ locations.
+redisML:
+  redis:
+    # OPTIONAL hardening, off by default. Opaque secret (encoding: plain) whose
+    # payload is the password; it MUST EXIST BEFORE INSTALL, and Grafana reads the
+    # same one, so a misspelt name stops the UI tier too. "" leans on the same-GVC
+    # firewall instead — fine for a GVC this chart owns.
+    passwordSecretName: ""
+    image: redis:7.4
+    replicasPerLocation: 1 # Redis members per location; 1 is plenty for alert coordination
+    resources:
+      cpu: 200m
+      memory: 256Mi
+    volumeset:
+      initialCapacity: 10 # GiB per member (platform minimum); coordination data is tiny
+  sentinel:
+    # Same shape and same failure mode as redis.passwordSecretName, independent of
+    # it — Sentinel is what Grafana asks for the current master.
+    passwordSecretName: ""
+    image: redis:7.4
+    resources:
+      cpu: 200m
+      memory: 256Mi

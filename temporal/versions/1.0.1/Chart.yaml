@@ -2,7 +2,7 @@ apiVersion: v2
 name: temporal
 description: Temporal durable-execution platform — gRPC frontend and Web UI, backed by highly available PostgreSQL
 type: application
-version: 1.0.0
+version: 1.0.1
 appVersion: "1.29.7"
 
 dependencies:
@@ -11,7 +11,7 @@ dependencies:
     repository: "oci://ghcr.io/controlplane-com/templates"
   - name: postgres-highly-available
     alias: postgresHA
-    version: 2.4.1
+    version: 2.4.2
     repository: "oci://ghcr.io/controlplane-com/templates"
     condition: postgresHA.enabled
   - name: postgres

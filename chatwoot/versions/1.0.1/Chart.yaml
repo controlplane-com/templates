@@ -2,7 +2,7 @@ apiVersion: v2
 name: chatwoot
 description: Chatwoot customer engagement platform — live chat and shared inbox, backed by PostgreSQL and Redis
 type: application
-version: 1.0.0
+version: 1.0.1
 appVersion: "4.16.2-ce"
 
 annotations:
@@ -17,7 +17,7 @@ dependencies:
     repository: "oci://ghcr.io/controlplane-com/templates"
   - name: postgres-highly-available
     alias: postgresHA
-    version: 2.4.1
+    version: 2.4.2
     repository: "oci://ghcr.io/controlplane-com/templates"
     condition: postgresHA.enabled
   - name: postgres

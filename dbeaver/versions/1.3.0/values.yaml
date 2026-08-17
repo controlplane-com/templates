@@ -1,0 +1,29 @@
+image: dbeaver/cloudbeaver:25.2.0
+
+# ─── Admin Login (prerequisite secret) ────────────────────────────────────────
+# The admin password guards the CloudBeaver web login, and whoever holds it can
+# reach every database this console is connected to — so it never transits
+# values or the Helm release. Create the opaque secret (encoding: plain) BEFORE
+# install; see README Prerequisites.
+admin:
+  name: cbadmin # admin login name (not sensitive)
+  passwordSecretName: my-dbeaver-admin-password # opaque secret holding the admin password; must EXIST BEFORE INSTALL
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  # false = not reachable from the internet. Setting this true publishes a
+  # database administration console, and its login form, to the whole internet.
+  enabled: false
+
+internalAccess:
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # used with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+resources:
+  cpu: 500m
+  memory: 512Mi
+
+volumeset:
+  capacity: 10 # initial capacity in GiB (minimum is 10)

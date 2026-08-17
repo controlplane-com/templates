@@ -1,13 +1,13 @@
 apiVersion: v2
 name: postgres-multi-location
-description: A single PostgreSQL 17 Patroni cluster stretched across locations, with one primary, asynchronous replicas elsewhere, automatic promotion in a surviving location, optional connection pooling and optional backups to object storage
+description: One PostgreSQL Patroni cluster stretched across locations, with automatic promotion in a surviving location
 type: application
 version: 1.0.2
 appVersion: "17"
 
 annotations:
   created: "2026-08-10"
-  lastModified: "2026-08-12"
+  lastModified: "2026-08-14"
   category: "database"
   createsGvc: true
 

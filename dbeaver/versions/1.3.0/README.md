@@ -79,7 +79,9 @@ Add database connections from the UI after logging in. Point them at in-GVC host
 - **The admin password is only read at first boot.** Rotating the secret afterwards does nothing; change the password in the CloudBeaver UI, or uninstall (which deletes the volume set) and reinstall to re-bootstrap.
 - **`publicAccess.enabled: true` puts a database console on the internet.** Anyone reaching it needs only the admin password to query every connected database. Prefer leaving it off and reaching the UI from inside the GVC.
 - **Egress is closed.** The workload's outbound firewall is empty, so CloudBeaver can only connect to databases inside its own GVC — external or managed databases (RDS, Cloud SQL) are not reachable without editing the workload's firewall.
-- **Access changes take up to a couple of minutes** to propagate after a `publicAccess` or `internalAccess` change.
+- **CloudBeaver logs the submitted password hash, and that hash is enough to log in.** At its default log level the hash appears in `cpln logs`, and the API accepts it in place of the password — so anyone who can read this workload's logs can authenticate as the admin. This is upstream behaviour, not something the chart sets; treat log access to this workload as equivalent to database access.
+- **Access changes take up to a couple of minutes** to propagate after a `publicAccess` or `internalAccess` change (measured: 107-129 s).
+- **The first `helm upgrade` after an install restarts the workload**, taking the UI down for roughly 30-60 seconds even when nothing about it changed. Later upgrades that change nothing do not.
 - **Connections and users live on the volume set** and survive redeploys; `cpln helm uninstall` deletes it, taking every saved connection with it.
 
 ## Links

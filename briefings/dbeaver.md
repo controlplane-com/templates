@@ -34,3 +34,20 @@
 - **Autoscaling is `metric: cpu`, minScale 1 / maxScale 3, on a stateful workload with one volumeset.** Scaling past one replica has never been tested and CloudBeaver has no clustering — treat this template as single-instance regardless of what the autoscaling block says.
 - **A workspace survives redeploys but not uninstall.** `cpln helm uninstall` deletes the volumeset and every saved connection with it; there is no backup feature.
 - **Firewall changes take 30–150 s to propagate.** A user flipping `publicAccess` and testing immediately will see stale behavior.
+
+## Two traps the 1.3.0 test round measured
+
+- **The admin password cannot be rotated.** `CB_ADMIN_PASSWORD` is read only when an empty workspace
+  initialises. Measured: after rotating the secret and restarting, the container held the NEW value
+  (hash proven in-container) while the OLD password still logged in and the new one was rejected. So
+  the prerequisite secret protects the *initial* credential only — the remedy is the CloudBeaver UI,
+  or uninstall (which deletes the volume set) and reinstall.
+- **CloudBeaver logs the submitted password hash at its default level, and the API accepts that hash
+  in place of the password.** It appears in `cpln logs`. Anyone with log access to this workload can
+  authenticate as admin — pass-the-hash. Upstream image behaviour, not chart-set, and NOT closed by
+  moving the password to a prerequisite secret. Worth knowing before recommending this template to
+  anyone with broad org log access.
+- **Egress is closed** (`outboundAllowCIDR: []`, inherited since 1.0.0). Measured: `rc=35` at TLS
+  handshake to public hosts while a control workload in the same GVC reached them fine. RDS, Cloud SQL
+  and Atlas are unreachable, with no values knob. For a database GUI this rules out the most common
+  use case — the obvious candidate for a follow-up version.

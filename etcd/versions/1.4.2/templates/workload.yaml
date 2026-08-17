@@ -1,0 +1,62 @@
+{{- include "etcd.validateReplicas" . -}}
+kind: workload
+name: {{ include "etcd.name" . }}
+description: etcd
+tags: {{- include "etcd.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  containers:
+    - name: etcd
+      command: "/bin/bash"
+      args:
+        - "/etcd/start.sh"
+      cpu: {{ .Values.resources.cpu | quote }}
+      image: {{ .Values.image }}
+      inheritEnv: false
+      memory: {{ .Values.resources.memory | quote }}
+      ports:
+        - number: 2379
+          protocol: tcp
+        - number: 2380
+          protocol: tcp
+      volumes:
+        - path: /var/lib/etcd
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "etcd.volume.name" . }}
+        - path: /etcd/start.sh
+          uri: cpln://secret/{{ include "etcd.secretStartup.name" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "etcd.identity.name" . }}
+  defaultOptions:
+    multiZone:
+      enabled: {{ .Values.multiZone }}
+    autoscaling:
+      keda: {}
+      maxConcurrency: 0
+      maxScale: {{ .Values.replicas }}
+      metric: disabled
+      minScale: {{ .Values.replicas }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internal_access.type }}
+      {{- if .Values.internal_access.workloads }}
+      inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: true
+  supportDynamicTags: false

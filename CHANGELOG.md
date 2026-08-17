@@ -42,6 +42,7 @@ High-level, user-facing catalog changes by month: new templates and notable vers
 - **grafana-multi-location 1.1.1** — the Redis that coordinates alerting HA is now unauthenticated by default, so turning HA on needs no extra secrets (passwords remain available as an option), and the stretched etcd cluster's compaction settings are configurable
 - **grafana-multi-location 1.1.0** — alerting can now keep running when a region is lost: set `alerting.highAvailability.enabled` and every location evaluates alert rules, with a stretched Redis making sure a notification is still sent only once. Alerting can also be turned off entirely with `alerting.enabled`
 - **grafana-multi-location 1.1.1** — turning on alerting HA no longer requires creating any extra secrets; the coordinating Redis is unauthenticated by default and can be given passwords when you want them
+- **dbeaver 1.3.0** — the database console is no longer published to the internet by default, and no longer ships with a known admin password. Earlier versions installed with the password `Password123` on a login form open to the whole internet, with no way to close it. The admin password is now a secret you create before installing (`admin.passwordSecretName`), and public access is an explicit `publicAccess.enabled` choice, off by default. **If you are running any earlier version, treat its admin password as compromised**
 
 ## 2026-07
 

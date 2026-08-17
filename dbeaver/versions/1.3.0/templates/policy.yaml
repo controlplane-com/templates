@@ -10,4 +10,5 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "dbeaver.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "dbeaver.secret.name" . }}
+  # Exactly the user-created admin-password secret — nothing else.
+  - //secret/{{ .Values.admin.passwordSecretName }}

@@ -22,17 +22,28 @@ DBeaver Policy Name
 {{- end }}
 
 {{/*
-DBeaver Secret Admin Config Name
-*/}}
-{{- define "dbeaver.secret.name" -}}
-{{- printf "%s-dbeaver-admin-config" .Release.Name }}
-{{- end }}
-
-{{/*
 DBeaver Volume Set Name
 */}}
 {{- define "dbeaver.volumeset.name" -}}
 {{- printf "%s-dbeaver-vs" .Release.Name }}
+{{- end }}
+
+
+{{/* Validation */}}
+
+{{- define "dbeaver.validate" -}}
+{{- if not .Values.admin.passwordSecretName -}}
+{{- fail "dbeaver: admin.passwordSecretName is required — the name of an opaque secret (encoding: plain) that must EXIST BEFORE INSTALL and hold the CloudBeaver admin password. Create it with: printf '%s' 'YOUR-STRONG-PASSWORD' | cpln secret create-opaque --name my-dbeaver-admin-password --encoding plain -f -" -}}
+{{- end -}}
+{{- if not .Values.admin.name -}}
+{{- fail "dbeaver: admin.name is required — the CloudBeaver admin login name (not sensitive), e.g. 'cbadmin'" -}}
+{{- end -}}
+{{- if not (has .Values.internalAccess.type (list "none" "same-gvc" "same-org" "workload-list")) -}}
+{{- fail (printf "dbeaver: internalAccess.type must be 'none', 'same-gvc', 'same-org', or 'workload-list', got '%s'" .Values.internalAccess.type) -}}
+{{- end -}}
+{{- if and (eq .Values.internalAccess.type "workload-list") (not .Values.internalAccess.workloads) -}}
+{{- fail "dbeaver: internalAccess.workloads must list at least one workload link when internalAccess.type is 'workload-list', e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME" -}}
+{{- end -}}
 {{- end }}
 
 

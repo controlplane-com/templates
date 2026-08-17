@@ -1,3 +1,4 @@
+{{- include "dbeaver.validate" . }}
 kind: workload
 name: {{ include "dbeaver.name" . }}
 description: DBeaver Database GUI
@@ -10,10 +11,15 @@ spec:
       image: {{ .Values.image }}
       inheritEnv: false
       env:
+        # Admin bootstrap. The login name is not sensitive and stays a value;
+        # the password comes from a prerequisite opaque secret the user creates
+        # before install, so it never enters the Helm release. Both are honored
+        # only when the workspace is first initialized on the volumeset — after
+        # that, change the password in the CloudBeaver UI.
         - name: CB_ADMIN_NAME
-          value: cpln://secret/{{ include "dbeaver.secret.name" . }}.admin_name
+          value: {{ .Values.admin.name | quote }}
         - name: CB_ADMIN_PASSWORD
-          value: cpln://secret/{{ include "dbeaver.secret.name" . }}.admin_password
+          value: cpln://secret/{{ .Values.admin.passwordSecretName }}.payload
         - name: CB_SERVER_NAME
           value: {{ include "dbeaver.name" . }}
         - name: CB_SERVER_URL
@@ -40,16 +46,28 @@ spec:
     timeoutSeconds: 5
   firewallConfig:
     external:
+      {{- if .Values.publicAccess.enabled }}
       inboundAllowCIDR:
         - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
       inboundBlockedCIDR: []
+      # Closed egress: the console reaches databases inside the GVC only.
       outboundAllowCIDR: []
       outboundAllowHostname: []
       outboundAllowPort: []
       outboundBlockedCIDR: []
     internal:
-      inboundAllowType: none
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- else }}
       inboundAllowWorkload: []
+      {{- end }}
   identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "dbeaver.identity.name" . }}
   loadBalancer:
     direct:

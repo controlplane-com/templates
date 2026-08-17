@@ -1,12 +1,12 @@
 apiVersion: v2
 name: test-app-2
-description: Test app for Control Plane
+description: Second minimal test application used to exercise multi-chart behaviour
 type: application
 version: 1.0.1
 appVersion: "1.0.0"
 annotations:
   created: "2025-04-16"
-  lastModified: "2026-06-26"
+  lastModified: "2026-08-17"
   category: "test"
   createsGvc: false
 

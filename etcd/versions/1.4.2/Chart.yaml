@@ -1,6 +1,6 @@
 apiVersion: v2
 name: etcd
-description: Distributed, strongly consistent key-value store for coordination, service discovery and configuration
+description: etcd distributed key-value store as an odd-sized quorum cluster in one location
 
 type: application
 version: 1.4.2

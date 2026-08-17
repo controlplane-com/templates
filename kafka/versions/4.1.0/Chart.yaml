@@ -1,6 +1,6 @@
 apiVersion: v2
 name: kafka
-description: Kafka cluster app for Control Plane
+description: Apache Kafka event-streaming cluster in KRaft mode with optional web UI and REST proxy
 type: application
 version: 4.1.0
 appVersion: "3.9"
@@ -12,6 +12,6 @@ dependencies:
 
 annotations:
   created: "2026-07-10"
-  lastModified: "2026-07-25"
+  lastModified: "2026-08-17"
   category: "event-streaming"
   createsGvc: false

@@ -1,6 +1,6 @@
 apiVersion: v2
 name: mysql
-description: MySQL databaseapp for Control Plane
+description: Single-replica MySQL relational database with optional phpMyAdmin and scheduled backups
 
 type: application
 version: 1.4.3
@@ -8,7 +8,7 @@ appVersion: "9"
 
 annotations:
   created: "2024-10-31"
-  lastModified: "2026-07-31"
+  lastModified: "2026-08-17"
   category: "database"
   createsGvc: false
 

@@ -1,6 +1,6 @@
 apiVersion: v2
 name: tyk
-description: Tyk API Gateway for Control Plane
+description: Tyk API gateway securing and rate-limiting API traffic, with a Redis Sentinel store
 
 type: application
 version: 1.2.1
@@ -16,6 +16,6 @@ dependencies:
 
 annotations:
   created: "2025-10-30"
-  lastModified: "2026-06-26"
+  lastModified: "2026-08-17"
   category: "api-gateway"
   createsGvc: false

@@ -1,6 +1,6 @@
 apiVersion: v2
 name: minio
-description: Minio object storage for Control Plane
+description: MinIO S3-compatible object storage in distributed mode with erasure coding across replicas
 
 type: application
 version: 1.2.1
@@ -8,7 +8,7 @@ appVersion: "RELEASE.2025-09-07T16-13-09Z"
 
 annotations:
   created: "2025-11-19"
-  lastModified: "2026-06-26"
+  lastModified: "2026-08-17"
   category: "storage"
   createsGvc: false
 

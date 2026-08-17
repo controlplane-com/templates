@@ -1,6 +1,6 @@
 apiVersion: v2
 name: ess
-description: External Secret Syncer for Control Plane
+description: Syncs secrets from Vault, AWS, GCP, Doppler, 1Password and Infisical into Control Plane secrets
 type: application
 version: 2.0.0
 appVersion: 2.0.0
@@ -12,6 +12,6 @@ dependencies:
 
 annotations:
   created: "2025-03-12"
-  lastModified: "2026-08-04"
+  lastModified: "2026-08-17"
   category: "secrets"
   createsGvc: false

@@ -1,13 +1,13 @@
 apiVersion: v2
 name: cassandra
-description: Cassandra cluster for Control Plane
+description: Multi-node Apache Cassandra 5 wide-column cluster with scheduled repair and optional backups
 type: application
 version: 1.0.1
 appVersion: "5.0"
 
 annotations:
   created: "2026-05-18"
-  lastModified: "2026-08-04"
+  lastModified: "2026-08-17"
   category: "database"
   createsGvc: false
 

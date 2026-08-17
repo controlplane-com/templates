@@ -24,6 +24,11 @@ resources:
 tuning:
   heartbeatIntervalMs: 250 # ~0.5-1.5x the worst round trip between locations
   electionTimeoutMs: 5000 # must be >= 10x heartbeatIntervalMs; maximum 50000
+  # etcd keeps every superseded revision until told otherwise, so compaction is
+  # required rather than optional and cannot be switched off here.
+  autoCompactionMode: periodic # periodic (retention is a duration) or revision (a revision count)
+  autoCompactionRetention: 1h # periodic needs an explicit unit (1h, 30m, 24h); revision takes a count
+  quotaBackendBytes: 0 # backend size limit in bytes; 0 = etcd's own default of 2 GiB
 
 volumeset:
   capacity: 10 # initial capacity in GiB (minimum is 10)

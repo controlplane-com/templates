@@ -1,4 +1,5 @@
 {{- include "etcd.validateReplicas" . -}}
+{{- include "etcd.validateCompaction" . -}}
 kind: workload
 name: {{ include "etcd.name" . }}
 description: etcd

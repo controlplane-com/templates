@@ -1,0 +1,10 @@
+---
+kind: volumeset
+name: {{ include "langfuse.redis.volumeset.name" . }}
+description: Redis volumeset
+tags: {{- include "langfuse.tags" . | nindent 4 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: 10
+  performanceClass: general-purpose-ssd

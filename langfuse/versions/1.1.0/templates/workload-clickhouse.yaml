@@ -1,0 +1,71 @@
+---
+kind: workload
+name: {{ include "langfuse.clickhouse.name" . }}
+description: ClickHouse analytics database
+tags: {{- include "langfuse.tags" . | nindent 2 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  type: stateful
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "langfuse.identity.name" . }}
+  containers:
+    - name: clickhouse
+      image: {{ .Values.clickhouse.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.clickhouse.resources.minCpu | quote }}
+      cpu: {{ .Values.clickhouse.resources.maxCpu | quote }}
+      minMemory: {{ .Values.clickhouse.resources.minMemory | quote }}
+      memory: {{ .Values.clickhouse.resources.maxMemory | quote }}
+      command: "/bin/bash"
+      args:
+        - "/scripts/startup.sh"
+      env:
+        - name: CLICKHOUSE_PASSWORD
+          value: cpln://secret/{{ include "langfuse.secret.name" . }}.clickhousePassword
+        - name: CLICKHOUSE_DATABASE
+          value: {{ .Values.clickhouse.config.database | quote }}
+      ports:
+        - number: 8123
+          protocol: http
+        - number: 9000
+          protocol: tcp
+      readinessProbe:
+        httpGet:
+          path: /ping
+          port: 8123
+        failureThreshold: 10
+        initialDelaySeconds: 20
+        periodSeconds: 5
+        successThreshold: 1
+        timeoutSeconds: 3
+      volumes:
+        - path: /var/lib/clickhouse
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "langfuse.clickhouse.volumeset.name" . }}
+        - path: /var/lib/clickhouse_cache
+          recoveryPolicy: retain
+          uri: scratch://cache-vol
+        - path: /var/lib/clickhouse-tmp
+          recoveryPolicy: retain
+          uri: scratch://tmp-vol
+        - path: /scripts/startup.sh
+          uri: cpln://secret/{{ include "langfuse.clickhouse.startup.secret.name" . }}
+        - path: /etc/clickhouse-server/config.d/storage.xml
+          uri: cpln://secret/{{ include "langfuse.clickhouse.storage.secret.name" . }}
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+    capacityAI: false
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: same-gvc
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  supportDynamicTags: false

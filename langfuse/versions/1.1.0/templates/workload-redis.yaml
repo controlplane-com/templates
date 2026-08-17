@@ -1,0 +1,61 @@
+---
+kind: workload
+name: {{ include "langfuse.redis.name" . }}
+description: Redis queue and cache
+tags: {{- include "langfuse.tags" . | nindent 2 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  type: stateful
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "langfuse.identity.name" . }}
+  containers:
+    - name: redis
+      image: {{ .Values.redis.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.redis.resources.minCpu | quote }}
+      cpu: {{ .Values.redis.resources.maxCpu | quote }}
+      minMemory: {{ .Values.redis.resources.minMemory | quote }}
+      memory: {{ .Values.redis.resources.maxMemory | quote }}
+      command: redis-server
+      args:
+        - --requirepass
+        - $(REDIS_PASSWORD)
+        - --appendonly
+        - "yes"
+      env:
+        - name: REDIS_PASSWORD
+          value: cpln://secret/{{ include "langfuse.secret.name" . }}.redisPassword
+      ports:
+        - number: 6379
+          protocol: tcp
+      readinessProbe:
+        exec:
+          command:
+            - sh
+            - -c
+            - redis-cli -a "$REDIS_PASSWORD" ping | grep -q PONG
+        failureThreshold: 10
+        initialDelaySeconds: 10
+        periodSeconds: 5
+        successThreshold: 1
+        timeoutSeconds: 3
+      volumes:
+        - path: /data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "langfuse.redis.volumeset.name" . }}
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+    capacityAI: false
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      outboundAllowCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  supportDynamicTags: false

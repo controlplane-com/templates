@@ -55,7 +55,7 @@ backup:
 ```yaml
 auth:
   secretKeyName: my-openwebui-secret-key  # opaque secret holding the session/JWT signing key; must EXIST BEFORE INSTALL and never change
-  enableSignup: true          # the FIRST account registered becomes ADMIN — see the first-run steps in Important Notes
+  enableSignup: false         # nobody can self-register; the FIRST account is exempt, so you can still create the admin (see Important Notes)
 ```
 
 ### Model backends
@@ -92,7 +92,7 @@ internalAccess:               # inbound firewall scope for in-GVC callers of the
 |---|---|
 | Web UI (public) | `https://<canonical>.cpln.app` — only when `publicAccess.enabled: true`; read it from `status.canonicalEndpoint` of `{release}-open-webui` |
 | Internal API | `http://{release}-open-webui.{gvc}.cpln.local:8080` — only when `internalAccess.type` allows the caller |
-| From the container itself | `cpln workload exec {release}-open-webui --gvc {gvc} --container open-webui -- curl http://localhost:8080/...` — works regardless of both firewall settings |
+| From your machine, no public access | `cpln port-forward {release}-open-webui 8080:8080 --gvc {gvc}`, then `http://localhost:8080` — works regardless of both firewall settings |
 | Ollama backend | `http://{ollama.workloadName}.{gvc}.cpln.local:11434` (existing ollama workload) |
 | Login | The account you register at first run — the first registration becomes the admin |
 | Session signing key | The payload of your `auth.secretKeyName` secret; never in the Helm release |
@@ -101,7 +101,13 @@ internalAccess:               # inbound firewall scope for in-GVC callers of the
 
 - **First run — claim the admin account before the UI is public:**
   1. Install with `publicAccess.enabled: false` (the default). The canonical endpoint returns 403 from the internet.
-  2. Register the admin account from inside the container — the first account created becomes the administrator:
+  2. Forward the UI to your own machine and register the admin account in the browser — the first account created becomes the administrator, and it is exempt from `auth.enableSignup: false`:
+
+     ```bash
+     cpln port-forward {release}-open-webui 8080:8080 --gvc {gvc}
+     ```
+
+     Then open `http://localhost:8080`, which shows Open WebUI's "create admin account" screen. Port forwarding works even though the workload is closed to both the internet and the GVC. If you would rather not leave the terminal, the same registration over the container's own loopback address works:
 
      ```bash
      cpln workload exec {release}-open-webui --gvc {gvc} --container open-webui -- \
@@ -112,7 +118,7 @@ internalAccess:               # inbound firewall scope for in-GVC callers of the
 
   3. `cpln helm upgrade` the release with `publicAccess.enabled: true`, then sign in with that account at the canonical endpoint. Allow up to a couple of minutes for the firewall change to take effect (measured: 143 s, over 403 → 503 → 200).
 - **Create the session-key secret before installing** — the workload wedges waiting on a secret that does not exist, and `auth.secretKeyName` only names it. Never change it afterwards: it signs every session and JWT, so replacing it logs every user out.
-- **Open WebUI closes sign-ups by itself once the admin exists.** Creating the first account writes `enable_signup: false` into `webui.db`, and that stored value wins over `auth.enableSignup` from then on — so a later `helm upgrade` cannot re-open (or re-close) sign-ups. Invite more users from Admin Settings → Users, or re-enable sign-ups there.
+- **`auth.enableSignup` is only read while no account exists.** Creating the first account writes `enable_signup: false` into `webui.db`, and that stored value wins over the value from then on — so a later `helm upgrade` can neither open nor close sign-ups. Add users, or re-open self-service sign-ups, from Admin Settings → Users.
 - **License / branding clause** — you must keep the "Open WebUI" branding visible in the UI unless your deployment serves 50 or fewer users, or you have enterprise permission. Removing the branding outside those cases violates the license; it is not a template setting.
 - **Single replica, by design.** The default embedded SQLite is single-writer and the volumeset is per-replica, so the workload is pinned to 1 replica. A restart or upgrade is a brief full outage (about a minute). Multi-replica HA requires an external Postgres + Redis + object store (a planned follow-up).
 - **Data lives only on the volumeset.** Uninstall deletes it (a final snapshot is taken); reinstall starts empty, including the admin account.

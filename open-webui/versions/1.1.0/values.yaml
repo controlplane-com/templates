@@ -28,7 +28,10 @@ auth:
   # and must stay the same forever: replacing it logs every user out.
   # Create it with: printf '%s' "$(openssl rand -base64 32)" | cpln secret create-opaque --name my-openwebui-secret-key --encoding plain -f -
   secretKeyName: my-openwebui-secret-key
-  enableSignup: true # the FIRST account registered becomes ADMIN — see the first-run steps in the README
+  # false = nobody can create their own account. The FIRST account is exempt, so
+  # you can still register the admin on a fresh install (see the README first-run
+  # steps); invite everyone else from Admin Settings → Users.
+  enableSignup: false
 
 # ─── Model backends ───────────────────────────────────────────────────────────
 # Point at an existing `ollama` template deployment in this same GVC.

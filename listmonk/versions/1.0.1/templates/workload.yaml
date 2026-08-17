@@ -1,0 +1,116 @@
+{{- include "listmonk.validate" . }}
+kind: workload
+name: {{ include "listmonk.name" . }}
+description: Listmonk newsletter and mailing list manager
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "listmonk.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "listmonk.identity.name" . }}
+  containers:
+    - name: listmonk
+      image: {{ .Values.image }}
+      # Upstream's own container boot chain (env-only config, no config file):
+      # idempotent schema install (retried until postgres is reachable), then
+      # migrate-if-needed, then run. Bypassing docker-entrypoint.sh is safe —
+      # at v6.2.0 it only does unused PUID/*_FILE handling.
+      command: /bin/sh
+      args:
+        - -c
+        - |
+          until ./listmonk --install --idempotent --yes --config ''; do
+            echo "listmonk: waiting for database..."
+            sleep 3
+          done
+          ./listmonk --upgrade --yes --config ''
+          exec ./listmonk --config ''
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
+      env:
+        - name: TZ
+          value: {{ .Values.timezone | quote }}
+        - name: LISTMONK_app__address
+          value: 0.0.0.0:9000
+        - name: LISTMONK_db__host
+          value: '{{ include "listmonk.db.host" . }}'
+        - name: LISTMONK_db__port
+          value: "5432"
+        - name: LISTMONK_db__user
+          value: 'cpln://secret/{{ include "listmonk.db.secretName" . }}.username'
+        - name: LISTMONK_db__password
+          value: 'cpln://secret/{{ include "listmonk.db.secretName" . }}.password'
+        - name: LISTMONK_db__database
+          value: '{{ include "listmonk.db.database" . }}'
+        - name: LISTMONK_db__ssl_mode
+          value: disable
+        # Consumed during --install only: creates the Super Admin on first boot.
+        - name: LISTMONK_ADMIN_USER
+          value: 'cpln://secret/{{ include "listmonk.secret.admin.name" . }}.username'
+        - name: LISTMONK_ADMIN_PASSWORD
+          value: 'cpln://secret/{{ include "listmonk.secret.admin.name" . }}.password'
+      ports:
+        - number: 9000
+          protocol: http
+      volumes:
+        - path: /listmonk/uploads
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "listmonk.volume.name" . }}
+      # /health is the public, unauthenticated health route at v6.2.0
+      # (/api/health requires auth — never use it for probes).
+      # 18 x 10s ≈ 3 min covers first-run schema install.
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 9000
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        failureThreshold: 18
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: 9000
+          scheme: HTTP
+        initialDelaySeconds: 60
+        periodSeconds: 15
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  # No-surge rollout — upstream forbids two live listmonk instances on one DB
+  # (duplicate campaign sends); the old replica must stop before the new starts.
+  rolloutOptions:
+    maxSurgeReplicas: 0%
+    maxUnavailableReplicas: "1"
+    scalingPolicy: OrderedReady

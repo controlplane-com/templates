@@ -1,0 +1,14 @@
+kind: policy
+name: {{ include "keycloak.policy.name" . }}
+description: Keycloak policy
+tags: {{- include "keycloak.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "keycloak.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "keycloak.secretAdmin.name" . }}
+  - //secret/{{ include "keycloak.secretStartup.name" . }}
+  - //secret/{{ include "keycloak.db.secretName" . }}

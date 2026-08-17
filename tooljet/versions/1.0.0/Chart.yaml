@@ -1,13 +1,13 @@
 apiVersion: v2
 name: tooljet
-description: ToolJet open-source low-code platform for building internal tools — visual app builder with the ToolJet Database (PostgREST), backed by Postgres and optional Redis
+description: ToolJet low-code platform for building internal tools, backed by Postgres and optional Redis
 type: application
 version: 1.0.0
 appVersion: "3.20.204-lts"
 
 annotations:
   created: "2026-07-31"
-  lastModified: "2026-07-31"
+  lastModified: "2026-08-17"
   category: "internal-tools"
   createsGvc: false
 

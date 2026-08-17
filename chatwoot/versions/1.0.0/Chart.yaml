@@ -1,13 +1,13 @@
 apiVersion: v2
 name: chatwoot
-description: Chatwoot open-source customer engagement platform — live-chat widget, shared email inbox, and omni-channel agent desk with a Sidekiq worker, backed by a highly available pgvector-capable PostgreSQL and a bundled Redis
+description: Chatwoot customer engagement platform — live chat, shared email inbox and omni-channel agent desk
 type: application
 version: 1.0.0
 appVersion: "4.16.2-ce"
 
 annotations:
   created: "2026-08-05"
-  lastModified: "2026-08-06"
+  lastModified: "2026-08-17"
   category: "customer-support"
   createsGvc: false
 

@@ -1,6 +1,6 @@
 apiVersion: v2
 name: thanos
-description: Thanos Query global PromQL fan-out over Prometheus Thanos sidecars and Store API endpoints with HA deduplication, plus an optional Store Gateway and singleton Compactor for object-storage-backed long-term retention
+description: Thanos Query global PromQL fan-out over Prometheus servers, with optional object-storage long-term retention
 type: application
 version: 1.1.0
 appVersion: "0.42.2"
@@ -12,6 +12,6 @@ dependencies:
 
 annotations:
   created: "2026-07-29"
-  lastModified: "2026-08-06"
+  lastModified: "2026-08-17"
   category: "observability"
   createsGvc: false

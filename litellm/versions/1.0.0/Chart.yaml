@@ -1,13 +1,13 @@
 apiVersion: v2
 name: litellm
-description: LiteLLM OpenAI-compatible LLM gateway with virtual keys, spend tracking, and rate limiting, backed by Postgres and Redis
+description: LiteLLM OpenAI-compatible LLM gateway with virtual keys, spend tracking and rate limiting
 type: application
 version: 1.0.0
 appVersion: "1.93.0"
 
 annotations:
   created: "2026-07-28"
-  lastModified: "2026-07-28"
+  lastModified: "2026-08-17"
   category: "ai"
   createsGvc: false
 

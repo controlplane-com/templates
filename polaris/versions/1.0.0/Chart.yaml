@@ -1,6 +1,6 @@
 apiVersion: v2
 name: polaris
-description: Apache Polaris Iceberg REST catalog — the metadata and access-control service for an Apache Iceberg lakehouse, backed by PostgreSQL and serving Trino, Spark and any Iceberg REST client
+description: Apache Polaris Iceberg REST catalog — the metadata and access-control service for a lakehouse
 type: application
 version: 1.0.0
 appVersion: "1.7.0"
@@ -21,6 +21,6 @@ dependencies:
 
 annotations:
   created: "2026-08-06"
-  lastModified: "2026-08-07"
+  lastModified: "2026-08-17"
   category: "analytics"
   createsGvc: false

@@ -1,13 +1,13 @@
 apiVersion: v2
 name: grafana
-description: Grafana OSS dashboards and alerting over your own datasources — Prometheus-compatible stores, SQL databases, and external systems — backed by PostgreSQL, with optional Redis-coordinated HA
+description: Grafana OSS dashboards and alerting over your own datasources, backed by PostgreSQL
 type: application
 version: 1.2.0
 appVersion: "13.1.1"
 
 annotations:
   created: "2026-07-31"
-  lastModified: "2026-08-10"
+  lastModified: "2026-08-17"
   category: "observability"
   createsGvc: false
 

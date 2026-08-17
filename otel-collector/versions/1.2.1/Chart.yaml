@@ -1,13 +1,13 @@
 apiVersion: v2
 name: otel-collector
-description: OpenTelemetry Collector for traces and metrics — OTLP ingestion with Prometheus remote-write export and optional authenticated public endpoints
+description: OpenTelemetry Collector for traces and metrics — OTLP ingestion with Prometheus remote-write export
 type: application
 version: 1.2.1
 appVersion: "0.157.0"
 
 annotations:
   created: "2026-03-26"
-  lastModified: "2026-08-07"
+  lastModified: "2026-08-17"
   category: "observability"
   createsGvc: false
 

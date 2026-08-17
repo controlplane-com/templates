@@ -9,5 +9,7 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "umami.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "umami.secret.config.name" . }}
+  # Exactly the user-created app-secret and the active backing store's
+  # credential secret — nothing else.
+  - //secret/{{ .Values.app.appSecretName }}
   - //secret/{{ include "umami.db.secretName" . }}

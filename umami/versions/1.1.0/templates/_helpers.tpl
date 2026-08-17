@@ -8,13 +8,6 @@ Umami Workload Name
 {{- end }}
 
 {{/*
-Umami Config Secret Name (template-managed appSecret)
-*/}}
-{{- define "umami.secret.config.name" -}}
-{{- printf "%s-umami-config" .Release.Name }}
-{{- end }}
-
-{{/*
 Umami Identity Name
 */}}
 {{- define "umami.identity.name" -}}
@@ -83,8 +76,11 @@ Names must match the dependency charts' own helpers (pg-ha.secretDatabase.name /
 {{- if and .Values.postgresHA.enabled (not (dig "proxy" "enabled" true .Values.postgresHA)) -}}
 {{- fail "umami: postgresHA.proxy.enabled must remain true — Umami connects through the HAProxy leader endpoint for writes and migrations" -}}
 {{- end -}}
-{{- if not .Values.app.appSecret -}}
-{{- fail "umami: app.appSecret must be set — it signs auth tokens and must be unique per installation" -}}
+{{- if .Values.app.appSecret -}}
+{{- fail "umami: app.appSecret was removed in 1.1.0 — the app secret signs auth tokens and is now a prerequisite opaque secret. Create it, then set app.appSecretName to its name: printf '%s' \"$(openssl rand -base64 32)\" | cpln secret create-opaque --name my-umami-app-secret --encoding plain -f -" -}}
+{{- end -}}
+{{- if not .Values.app.appSecretName -}}
+{{- fail "umami: app.appSecretName is required — the name of an opaque secret (encoding: plain) that must EXIST BEFORE INSTALL and hold the app secret. Create it with: printf '%s' \"$(openssl rand -base64 32)\" | cpln secret create-opaque --name my-umami-app-secret --encoding plain -f -" -}}
 {{- end -}}
 {{- end }}
 

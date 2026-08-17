@@ -1,17 +1,27 @@
 # Umami
 
-This app deploys [Umami](https://umami.is/) — a privacy-first, cookieless web and product analytics platform (a self-hosted Google Analytics alternative, MIT-licensed). It runs the stateless Umami v3 app tier backed by a PostgreSQL store, serving both the analytics dashboard and the public tracking endpoint over HTTPS.
+This app deploys [Umami](https://umami.is/) — a privacy-first, cookieless web and product analytics platform (a self-hosted Google Analytics alternative, MIT-licensed). It runs the stateless Umami v3 app tier backed by a PostgreSQL store, serving the analytics dashboard and the tracking endpoint on one port. The install is private by default; you publish it once the admin password is changed.
 
 ## Architecture
 
 - **Umami**: Stateless `standard` workload on port 3000 — dashboard and tracking/collect endpoint share the same port. `replicas: 1` by default (proven single-instance shape); `≥2` forms an always-on scaled tier for zero-downtime rolling restarts. All state lives in PostgreSQL, so replicas are independent (no clustering).
 - **PostgreSQL (single-instance, default)**: The `postgres` template — the backing store for all users, websites, sessions, and events.
 - **PostgreSQL (HA, optional)**: The `postgres-highly-available` template instead — 3 Patroni replicas with automatic failover and an HAProxy leader endpoint, for a durable production store.
-- **Secret, identity, and policy**: A template-managed `appSecret` (dictionary secret) and a least-privilege policy granting the workload `reveal` on exactly the app config secret and the active database credential secret.
+- **Identity and policy**: A least-privilege policy granting the workload `reveal` on exactly two secrets — the app secret you create and the active database's credential secret. The template creates no secret of its own.
 
 ## Prerequisites
 
-- None for a default install. Optional: a cloud account + bucket if you enable the Postgres backup pass-through.
+**One opaque secret must exist BEFORE you install** — the deployment wedges waiting on it otherwise. Its value never passes through Helm values, so it never lands in the release.
+
+**App secret** (`app.appSecretName`) — signs Umami's auth tokens and sessions; anyone holding it can forge a login. Generate a random one:
+
+```bash
+printf '%s' "$(openssl rand -base64 32)" | cpln secret create-opaque --name my-umami-app-secret --encoding plain -f -
+```
+
+Keep it for the life of the install — changing it logs every user out.
+
+Nothing else is required for a default install. Optional: a cloud account + bucket if you enable the Postgres backup pass-through.
 
 ## Configuration
 
@@ -29,9 +39,10 @@ resources:            # per replica
   minMemory: 256Mi
 
 app:
-  # Signs auth tokens; MUST be unique per install, identical across replicas,
-  # and stable across restarts. Override with: openssl rand -base64 32
-  appSecret: "change-me-KJ8xQ2mZraB7vN1pLwCf5tHgUeYd0sQ4"
+  # Opaque secret (encoding: plain) holding the app secret, which signs auth
+  # tokens and sessions. Must EXIST BEFORE INSTALL, and its value must stay
+  # stable — changing it logs everyone out.
+  appSecretName: my-umami-app-secret
   disableTelemetry: true  # opt out of Umami's anonymous usage telemetry
 ```
 
@@ -96,23 +107,27 @@ Postgres store (`gcp`/`minio` providers are configured the same way). See **Stor
 
 ```yaml
 publicAccess:
-  enabled: true       # HTTPS dashboard + tracking endpoint via the canonical *.cpln.app endpoint
+  enabled: false      # true = HTTPS dashboard + tracking endpoint on the canonical *.cpln.app endpoint
 
 internalAccess:
   type: same-gvc      # options: none, same-gvc, same-org, workload-list
   workloads: []       # only for same-gvc / workload-list
 ```
 
+`publicAccess.enabled: false` is the default because Umami seeds a hardcoded `admin` / `umami` account that no environment variable can override — a public default install would stand on the internet with published credentials. Change that password first, then turn public access on: **tracking only works while it is on**, since browsers on the sites you track must reach `/script.js` and `/api/send`. See the first-run sequence in Important Notes.
+
 ## Connecting
 
 | What | Value |
 |---|---|
-| Public URL | `status.canonicalEndpoint` from `cpln workload get {release}-umami -o yaml` |
+| Local access (public access off) | `cpln port-forward {release}-umami 3000:3000 --gvc {gvc}` then open `http://localhost:3000` |
+| Public URL | `status.canonicalEndpoint` from `cpln workload get {release}-umami -o yaml` — only when `publicAccess.enabled: true` |
 | Dashboard / login | `https://{canonical-endpoint}/login` |
 | Tracking script | `https://{canonical-endpoint}/script.js` (embed on your site) |
 | Collect endpoint | `https://{canonical-endpoint}/api/send` (where the tracker POSTs events) |
-| In-GVC (internal) | `http://{release}-umami.{gvc}.cpln.local:3000` |
-| Default admin | `admin` / `umami` (hardcoded — change it immediately, see below) |
+| In-GVC (internal) | `http://{release}-umami.{gvc}.cpln.local:3000` — subject to `internalAccess.type` |
+| Default admin | `admin` / `umami` (hardcoded — change it before publishing, see below) |
+| App secret | the payload of your `app.appSecretName` secret; never stored in the Helm release |
 
 To start collecting data, add a website in the dashboard, then paste the generated `<script>` tag (which loads `/script.js` and POSTs to `/api/send`) into your site's HTML.
 
@@ -142,9 +157,15 @@ The backing template's README has the full per-provider walkthrough.
 
 ## Important Notes
 
-- **Change the default admin password immediately after first login.** The bootstrap admin is a hardcoded `admin` / `umami`, seeded by the first database migration — there is no environment variable to override it. Change it in **Settings → Profile** right after installing.
-- **Set your own `app.appSecret` before installing.** It signs auth tokens; changing it later logs every user out. Generate one with `openssl rand -base64 32`.
-- **Keep `publicAccess` enabled for tracking to work** — browsers must reach `/script.js` and `/api/send`. Disabling it silently stops all data collection.
+- **First run — secure the admin account, then publish.** The bootstrap admin is a hardcoded `admin` / `umami`, seeded by the first database migration, and there is no environment variable to override it, so the install starts private:
+  1. Install with `publicAccess.enabled: false` (the default).
+  2. Reach the dashboard privately with `cpln port-forward {release}-umami 3000:3000 --gvc {gvc}`, open `http://localhost:3000`, log in as `admin` / `umami`, and change the password in **Settings → Profile**.
+  3. Run `cpln helm upgrade` with `publicAccess.enabled: true` to publish the dashboard and the tracking endpoint.
+
+  Firewall changes take up to a couple of minutes (30–150 s) to propagate, so re-test the public URL rather than trusting the first response.
+- **Tracking does not collect anything until `publicAccess.enabled: true`** — browsers on the sites you track must reach `/script.js` and `/api/send`. Public access is a deliberate second step, not an optional one, if you are collecting analytics.
+- **Create the app-secret before installing.** A missing `app.appSecretName` secret leaves the workload waiting on a secret that does not exist, which looks like a platform fault rather than a missing prerequisite.
+- **The first `helm upgrade` after an install re-applies the bundled Postgres** — including the upgrade that turns public access on. Expect Umami to be briefly unreachable (~2 minutes) while the database restarts; later upgrades do not do this.
 - **Ad blockers block the default `/script.js` and `/api/send`** — set `tracker.scriptName` / `tracker.collectEndpoint` to custom paths to reduce blocking.
 - **`replicas ≥ 2` is recommended for production** — replicas are independent and share the database and `appSecret`; rolling restarts cycle one at a time with no downtime.
 - **Database volumes survive reinstalls under the same release name; uninstalling deletes them** — all analytics data is lost. Use `postgresHA` and/or enable the backup pass-through for durable production data.

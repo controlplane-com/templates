@@ -24,8 +24,11 @@ spec:
           value: 'cpln://secret/{{ include "umami.db.secretName" . }}.password'
         - name: DATABASE_URL
           value: postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@{{ include "umami.db.host" . }}:5432/{{ include "umami.db.database" . }}
+        {{- /* Signs auth tokens and sessions; comes from a prerequisite opaque
+               secret the user creates before install, so it never enters the
+               Helm release. */}}
         - name: APP_SECRET
-          value: 'cpln://secret/{{ include "umami.secret.config.name" . }}.appSecret'
+          value: 'cpln://secret/{{ .Values.app.appSecretName }}.payload'
         {{- if .Values.app.disableTelemetry }}
         - name: DISABLE_TELEMETRY
           value: "1"
@@ -71,6 +74,8 @@ spec:
     suspend: false
     timeoutSeconds: 30
   firewallConfig:
+    {{- /* Fully declared, including the empty lists: the API backfills them and
+           an undeclared field shows as drift on the first no-op upgrade. */}}
     external:
       outboundAllowCIDR:
         - 0.0.0.0/0
@@ -80,13 +85,29 @@ spec:
       {{- else }}
       inboundAllowCIDR: []
       {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
     internal:
       inboundAllowType: {{ .Values.internalAccess.type }}
       {{- if .Values.internalAccess.workloads }}
       inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- else }}
+      inboundAllowWorkload: []
       {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false
   rolloutOptions:
+    {{- /* maxUnavailableReplicas is retained on a standard workload (the API
+           drops it only on stateful ones), so it still serializes the rollout.
+           terminationGracePeriodSeconds is declared because the API backfills 90. */}}
     maxSurgeReplicas: 0%
     maxUnavailableReplicas: "1"
     minReadySeconds: 10
     scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90

@@ -14,10 +14,12 @@ resources: # per replica
 
 # ─── Application ──────────────────────────────────────────────────────────────
 app:
-  # Signs auth tokens and secures sessions. MUST be unique per installation,
-  # identical across replicas, and stable across restarts (changing it logs
-  # everyone out). Override with: openssl rand -base64 32
-  appSecret: "change-me-KJ8xQ2mZraB7vN1pLwCf5tHgUeYd0sQ4"
+  # Name of an opaque secret (encoding: plain) holding the app secret, which signs
+  # auth tokens and sessions — anyone holding it can forge a session. It never
+  # transits values or the Helm release. The secret MUST EXIST BEFORE INSTALL or
+  # the deployment wedges waiting on it; see README Prerequisites. Its value must
+  # be stable for the life of the install (changing it logs everyone out).
+  appSecretName: my-umami-app-secret
   disableTelemetry: true # opt out of Umami's anonymous usage telemetry
 
 # ─── Tracker ──────────────────────────────────────────────────────────────────
@@ -112,7 +114,11 @@ postgresHA:
 
 # ─── Access ────────────────────────────────────────────────────────────────────
 publicAccess:
-  enabled: true # HTTPS dashboard + tracking endpoint via the canonical *.cpln.app endpoint
+  # false = nothing reaches Umami from the internet. Umami seeds a hardcoded
+  # admin/umami account that cannot be overridden, so change that password over
+  # internal access first, then set this true — browsers on the sites you track
+  # must reach /script.js and /api/send for collection to work.
+  enabled: false
 
 internalAccess:
   type: same-gvc # options: none, same-gvc, same-org, workload-list

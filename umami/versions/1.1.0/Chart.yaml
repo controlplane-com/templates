@@ -2,7 +2,7 @@ apiVersion: v2
 name: umami
 description: Umami privacy-first, cookieless web and product analytics with a PostgreSQL backing store
 type: application
-version: 1.0.1
+version: 1.1.0
 appVersion: "3.2.0"
 
 dependencies:

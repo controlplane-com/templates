@@ -24,14 +24,14 @@ Manticore Search is an open-source full-text search engine. This template deploy
    Then set `orchestrator.agent.tokenSecretName` to that name. Rotating the token means updating the secret and redeploying every component.
 
 2. **S3 bucket** holding the CSV files you want to import, plus a Control Plane cloud account with access to it — see [Storage setup](#storage-setup).
-3. **Second S3 bucket and policy** only if you enable `orchestrator.backup`.
+3. **Second S3 bucket and policy** only if you enable `orchestrator.backup` — this one does need write access, see [Backup bucket](#backup-bucket-only-with-orchestratorbackupenabled).
 
 ## Storage setup
 
-Only AWS S3 is supported. The orchestrator mounts the source bucket and also writes indexer scratch files into it, so read-only access is not sufficient.
+Only AWS S3 is supported. The source bucket is mounted **read-only** — imports read the CSVs and write every scratch artifact (TSV, indexer config, built index) to the shared volume, never to the bucket. Backups go to a **separate** bucket, which does need write access.
 
 1. **Create the bucket** in the AWS console (S3 → Create bucket) and upload your CSVs, e.g. to `imports/addresses.csv`.
-2. **Create an IAM policy** (IAM → Policies → Create policy → JSON), replacing `my-manticore-bucket`:
+2. **Create an IAM policy** (IAM → Policies → Create policy → JSON) for the source bucket, replacing `my-manticore-bucket`:
 
    ```json
    {
@@ -44,7 +44,7 @@ Only AWS S3 is supported. The orchestrator mounts the source bucket and also wri
        },
        {
          "Effect": "Allow",
-         "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+         "Action": ["s3:GetObject"],
          "Resource": "arn:aws:s3:::my-manticore-bucket/*"
        }
      ]
@@ -54,7 +54,29 @@ Only AWS S3 is supported. The orchestrator mounts the source bucket and also wri
 3. **Create a Control Plane cloud account** for your AWS account following the [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account) guide, and attach the policy above to the role it uses.
 4. **Reference both** in `buckets.cloudAccountName` and `buckets.awsPolicyRefs`. Custom policies are named without a prefix; only AWS-managed policies take the `aws::` prefix.
 
-For backups, repeat the steps for the backup bucket (the same actions are required) and set `orchestrator.backup.cloudAccountName`, `s3Bucket` and `s3Policy`.
+### Backup bucket (only with `orchestrator.backup.enabled`)
+
+Backups are written by a separate workload under its own identity, so give them their own bucket and their own policy — do not widen the source policy. Replacing `my-manticore-backup-bucket`:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
+      "Resource": "arn:aws:s3:::my-manticore-backup-bucket"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::my-manticore-backup-bucket/*"
+    }
+  ]
+}
+```
+
+Set `orchestrator.backup.cloudAccountName`, `s3Bucket`, `s3Region` and `s3Policy` to match. `GetObject` and `DeleteObject` are there so restores can read an archive back and lifecycle cleanup can remove one; a backup-only install can drop them.
 
 ## Configuration
 
@@ -268,6 +290,14 @@ loadTest:
     errorRate: 0.01               # 1%
 ```
 
+Trigger a run with `cpln workload cron start {release}-load-test-controller --gvc {gvc}`; the controller scales the k6 workload up, waits `duration + testDurationBuffer`, then scales it back to zero. Read the results — including whether each threshold passed — from the runner's own log:
+
+```bash
+cpln logs '{gvc="{gvc}", workload="{release}-load-test", container="k6"}' --since 15m
+```
+
+The last lines are k6's end-of-test summary (`http_req_duration`, `http_req_failed`, a `✓`/`✗` per threshold) followed by `k6 exited with status N` — non-zero means a threshold was breached. The runner idles after the test rather than exiting, so the summary survives; it stops costing anything once the controller scales it to zero.
+
 ## Connecting
 
 | Target | Address | Notes |
@@ -343,20 +373,22 @@ cpln workload cron start {release}-orchestrator-job --gvc {gvc}
 With `orchestrator.backup.enabled: true`, `schedules` drives automated delta and main backups to S3. Run them on demand from the UI, or against the orchestrator API:
 
 ```bash
-# Back up
-curl -X POST "https://{orchestrator-api-url}/api/backup" \
+# Back up ("type": "delta" or "main")
+curl -X POST "http://{release}-orchestrator-api.{gvc}.cpln.local:8080/api/backup" \
   -H "Authorization: Bearer {token}" -H "Content-Type: application/json" \
   -d '{"tableName": "addresses", "type": "delta"}'
 
-# List available backups
-curl "https://{orchestrator-api-url}/api/backups/files?tableName=addresses" \
+# List available backups — "type" defaults to delta, so pass type=main to see full backups
+curl "http://{release}-orchestrator-api.{gvc}.cpln.local:8080/api/backups/files?tableName=addresses&type=main" \
   -H "Authorization: Bearer {token}"
 
 # Restore
-curl -X POST "https://{orchestrator-api-url}/api/restore" \
+curl -X POST "http://{release}-orchestrator-api.{gvc}.cpln.local:8080/api/restore" \
   -H "Authorization: Bearer {token}" -H "Content-Type: application/json" \
   -d '{"tableName": "addresses", "type": "delta", "filename": "addresses_delta-2026-01-28T22-50-49Z.tar.gz"}'
 ```
+
+The backup cron workload only runs **delta** backups on its own schedule; main backups come from `schedules`, the UI, or the API call above. Restore is available only through the UI or the API — there is no `orchestrator.action: restore`. A restore scales the cluster up by one replica while it runs and puts it back afterwards.
 
 After restoring a main table, use the UI's **Rotate Main** control to swap the active slot.
 
@@ -366,8 +398,9 @@ After restoring a main table, use the UI's **Rotate Main** control to swap the a
 - Enabling `orchestrator.ui.publicAccess` puts an unauthenticated admin console on the public internet. Only do it behind your own authenticating proxy.
 - Manticore's 9306/9308 ports have no authentication — keep `manticore.firewall.internalAccess.type` at `same-gvc`, which Galera replication also requires.
 - Tables are empty until you run an `init` followed by an `import`; the install alone does not load data.
-- The orchestrator writes indexer scratch files into `buckets.sourceBucket`, so its IAM policy needs write access, not just read.
+- The source bucket only ever needs read access; scratch files go to the shared volume. Only the optional backup bucket needs write.
 - `manticore.autoscaling.minScale` is the replica count the orchestrator coordinates across; changing it after the cluster is initialized requires a `repair`.
+- Any `helm upgrade` — including one that changes nothing — restarts every Manticore replica one at a time (`scalingPolicy: OrderedReady`); budget ~6-7 minutes at the default 3 replicas. Indexed data survives, and searches keep serving from the replicas that are still up.
 - Uninstalling deletes the volumesets and all indexed data. Take a backup first if you need it.
 
 ## Links

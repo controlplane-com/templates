@@ -1,0 +1,177 @@
+---
+kind: workload
+name: {{ include "mongo-cluster.name" . }}
+description: MongoDB cluster
+tags:
+  cpln/publishNotReadyAddresses: "true"
+  {{- include "mongo-cluster.tags" . | nindent 2 }}
+spec:
+  type: stateful
+  containers:
+    - name: mongodb
+      image: {{ .Values.image }}
+      command: /bin/bash
+      args:
+        - /scripts/start.sh
+      inheritEnv: false
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
+      env:
+        {{- /* From the user-created prerequisite secret — never through values. */}}
+        - name: MONGO_INITDB_ROOT_USERNAME
+          value: 'cpln://secret/{{ .Values.mongodb.credentialsSecretName }}.username'
+        - name: MONGO_INITDB_ROOT_PASSWORD
+          value: 'cpln://secret/{{ .Values.mongodb.credentialsSecretName }}.password'
+      ports:
+        - number: 27017
+          protocol: tcp
+      readinessProbe:
+        exec:
+          command:
+            - /bin/bash
+            - -c
+            - (echo > /dev/tcp/127.0.0.1/27017) 2>/dev/null
+        failureThreshold: 3
+        initialDelaySeconds: 15
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        exec:
+          command:
+            - /bin/bash
+            - -c
+            - (echo > /dev/tcp/127.0.0.1/27017) 2>/dev/null
+        failureThreshold: 3
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+      lifecycle:
+        preStop:
+          exec:
+            command:
+              - /bin/sh
+              - -c
+              - >-
+                mongosh --quiet
+                -u "$MONGO_INITDB_ROOT_USERNAME"
+                -p "$MONGO_INITDB_ROOT_PASSWORD"
+                --authenticationDatabase admin
+                --eval 'try { rs.stepDown(10, 5) } catch(e) { }' || true
+      volumes:
+        - path: /data/db
+          recoveryPolicy: retain
+          uri: 'cpln://volumeset/{{ include "mongo-cluster.volume.name" . }}'
+        - path: /scripts/start.sh
+          recoveryPolicy: retain
+          uri: 'cpln://secret/{{ include "mongo-cluster.secretStartup.name" . }}'
+        - path: /etc/mongo-keyfile/keyfile
+          recoveryPolicy: retain
+          uri: 'cpln://secret/{{ .Values.mongodb.keyfileSecretName }}'
+    # PBM agent sidecar for physical backups
+    {{- if and .Values.backup.enabled (eq .Values.backup.mode "physical") }}
+    - name: pbm-agent
+      image: {{ .Values.backup.physical.image }}
+      command: /bin/sh
+      args:
+        - /pbm/startup.sh
+      inheritEnv: false
+      cpu: {{ .Values.backup.physical.resources.cpu | quote }}
+      memory: {{ .Values.backup.physical.resources.memory | quote }}
+      env:
+        - name: MONGO_INITDB_ROOT_USERNAME
+          value: 'cpln://secret/{{ .Values.mongodb.credentialsSecretName }}.username'
+        - name: MONGO_INITDB_ROOT_PASSWORD
+          value: 'cpln://secret/{{ .Values.mongodb.credentialsSecretName }}.password'
+        {{- /* Bucket and region are not secrets — they come straight from values. */}}
+        - name: PBM_BUCKET
+          value: {{ (eq .Values.backup.provider "aws") | ternary .Values.backup.aws.bucket .Values.backup.gcp.bucket | quote }}
+        - name: PBM_PREFIX
+          value: {{ (eq .Values.backup.provider "aws") | ternary .Values.backup.aws.prefix .Values.backup.gcp.prefix | quote }}
+        {{- if eq .Values.backup.provider "aws" }}
+        - name: AWS_REGION
+          value: {{ .Values.backup.aws.region | quote }}
+        {{- end }}
+      volumes:
+        - path: /data/db
+          recoveryPolicy: retain
+          uri: 'cpln://volumeset/{{ include "mongo-cluster.volume.name" . }}'
+        - path: /pbm/startup.sh
+          recoveryPolicy: retain
+          uri: 'cpln://secret/{{ include "mongo-cluster.secretPbmStartup.name" . }}'
+    {{- end }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      metric: disabled
+      minScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: {{ .Values.multiZone }}
+    suspend: false
+    timeoutSeconds: 10
+  firewallConfig:
+    {{- /*
+    Every field of `external` is declared — the API backfills the empty lists,
+    so omitting them made a default install drift against its own manifest from
+    the moment it was created. MongoDB is reachable on the INTERNAL network
+    only; there is no public endpoint and no knob to create one.
+    */}}
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      {{- if and .Values.backup.enabled (eq .Values.backup.mode "physical") }}
+      {{- /* The pbm-agent sidecar uploads to object storage from this workload. */}}
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      {{- /* mongod needs no egress: replication is internal GVC traffic. */}}
+      outboundAllowCIDR: []
+      {{- end }}
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.firewall.internalAllowType }}
+      {{- if .Values.firewall.workloads }}
+      inboundAllowWorkload: {{ .Values.firewall.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "mongo-cluster.identity.name" . }}
+  securityOptions:
+    filesystemGroupId: 1001
+  loadBalancer:
+    replicaDirect: true
+  localOptions:
+    {{- range $location := .Values.gvc.locations }}
+    - location: //location/{{ $location.name }}
+      autoscaling:
+        maxConcurrency: 0
+        maxScale: {{ $location.replicas | int }}
+        metric: disabled
+        minScale: {{ $location.replicas | int }}
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      multiZone:
+        enabled: {{ $.Values.multiZone }}
+      suspend: false
+      timeoutSeconds: 10
+    {{- end }}
+  rolloutOptions:
+    {{- /*
+    maxUnavailableReplicas is deliberately NOT set: the API DROPS it on a
+    stateful workload, so sending it produced permanent drift AND implied a
+    rolling-restart limit that was never in force.
+    terminationGracePeriodSeconds is declared because the API backfills 90.
+    */}}
+    maxSurgeReplicas: 25%
+    minReadySeconds: 0
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
+  supportDynamicTags: false

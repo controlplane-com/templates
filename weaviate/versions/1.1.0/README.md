@@ -1,163 +1,166 @@
 # Weaviate
 
-This template deploys a Weaviate 1.38 vector database cluster in a single location. Each node runs as a stateful replica with its own persistent volume, forming a Raft-consensus cluster that distributes and replicates vector and object data across nodes. The template includes optional AI module support for generative search and vectorization, and optional scheduled backups to AWS S3 or GCP GCS.
+Weaviate is an AI-native vector database for semantic, hybrid and generative search. This template deploys a Raft-consensus Weaviate cluster in a single location, with each node on its own persistent volume, optional AI provider modules, and optional scheduled backups to S3 or GCS.
 
 ## Architecture
 
-- **Weaviate cluster**: Multi-node stateful cluster using Raft consensus for schema and cluster state management
-- **Per-node volumes**: Each replica has its own persistent volume retaining vector and object data across restarts
-- **Backup** (optional): Scheduled cron job that triggers Weaviate's built-in backup API to write full snapshots to cloud storage
+- **Weaviate cluster** — a `stateful` workload of `replicas` nodes forming a Raft cluster for schema and cluster state
+- **Per-node volume** — one volumeset, one volume per replica, holding that node's objects and vector indexes
+- **API-key secret** (you create it) — an opaque secret holding the key the cluster authenticates against
+- **Provider secrets** (optional, you create them) — one opaque secret per AI provider you enable
+- **Credentials secret** — template-managed, holds the non-sensitive admin username and backup coordinates
+- **Identity + policy** — grants the workloads `reveal` on exactly the secrets above, and nothing else
+- **Backup job** (optional) — a `cron` workload that calls Weaviate's backup API on a schedule
+
+## Prerequisites
+
+- **An API key secret — required, and it must exist BEFORE you install.** Weaviate has no anonymous access in this template, and the deployment wedges waiting on a secret that is not there.
+
+  ```sh
+  printf '%s' "$(openssl rand -hex 32)" | \
+    cpln secret create-opaque --name my-weaviate-api-key --encoding plain -f -
+  ```
+
+  Set `apiKeySecretName` to that name. Keep a copy of the key — it is what every client authenticates with, and the platform is the only place it is stored.
+
+- **An AI provider secret — only if you enable a provider module.** One opaque secret per provider, holding just that provider's key:
+
+  ```sh
+  printf '%s' "sk-..." | \
+    cpln secret create-opaque --name my-weaviate-openai-key --encoding plain -f -
+  ```
+
+- **A cloud account and bucket — only if you enable backups.** See [Backup Storage Setup](#backup-storage-setup).
 
 ## Configuration
 
-### Core Settings
+### Cluster
 
 ```yaml
-replicas: 3               # Number of Weaviate nodes (3 recommended for HA)
-clusterName: my-weaviate  # Internal cluster identifier
+replicas: 3
 
-# Bearer token for authenticating with Weaviate — the shipped default is the same
-# for every install, so replace it with your own value before you deploy
-apiKey: 21203583df918a538cecb1f96c85c4516c4c0e478be23f76466ad8a30adc68cc
-apiUser: admin@example.com  # Username associated with the API key
+image: semitechnologies/weaviate:1.38.0
+```
 
-queryDefaultsLimit: 25    # Default result limit for queries
-defaultVectorizerModule: none  # Default vectorizer applied to new collections
+### Authentication
 
+```yaml
+# REQUIRED PREREQUISITE SECRET — an opaque secret (encoding: plain) whose
+# payload is the API key. Create it before you install (see Prerequisites).
+apiKeySecretName: my-weaviate-api-key
+
+# Username the API key maps to. Not a secret — it is the admin-list identity.
+apiUser: admin@example.com
+```
+
+### Query Behavior
+
+```yaml
+queryDefaultsLimit: 25          # default result limit for queries
+defaultVectorizerModule: none   # none, or a provider e.g. text2vec-openai
+```
+
+Leave `defaultVectorizerModule: none` when you supply your own vectors. Set it to a provider module to have Weaviate call that provider's embedding API on insert and query.
+
+### AI Modules
+
+```yaml
+modules:
+  enabled: []   # e.g. [text2vec-openai, generative-anthropic]
+
+  openai:
+    apiKeySecretName: ""       # e.g. my-weaviate-openai-key
+  anthropic:
+    apiKeySecretName: ""       # e.g. my-weaviate-anthropic-key
+  cohere:
+    apiKeySecretName: ""       # e.g. my-weaviate-cohere-key
+  huggingface:
+    apiKeySecretName: ""       # e.g. my-weaviate-huggingface-key
+```
+
+A provider is off until you name its secret. Every module you intend to use must also be listed in `modules.enabled` — naming a secret alone does not activate one.
+
+| Module | Provider | Secret knob |
+|---|---|---|
+| `text2vec-openai`, `generative-openai`, `qna-openai` | OpenAI | `modules.openai.apiKeySecretName` |
+| `generative-anthropic` | Anthropic | `modules.anthropic.apiKeySecretName` |
+| `text2vec-cohere`, `generative-cohere` | Cohere | `modules.cohere.apiKeySecretName` |
+| `text2vec-huggingface` | Hugging Face | `modules.huggingface.apiKeySecretName` |
+
+### Resources
+
+```yaml
 cpu: 2
 memory: 4Gi
 ```
 
-**Volume** — set the initial storage capacity and optionally enable autoscaling to expand as data grows:
+Vector indexes are RAM-resident; size memory roughly as `vectors × dimensions × 4 bytes × 1.5`.
+
+### Storage
 
 ```yaml
 volumes:
   data:
-    initialCapacity: 20  # GiB
+    initialCapacity: 20   # GiB per replica (platform minimum 10)
     autoscaling:
       maxCapacity: 200
       minFreePercentage: 20
       scalingFactor: 1.5
 ```
 
-Configure which workloads can reach Weaviate:
-
-```yaml
-internal_access:
-  type: same-gvc  # Options: same-gvc, same-org, workload-list
-  workloads:
-    # Uncomment and specify workloads if using workload-list
-    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
-```
-
-- `same-gvc`: Allow access from all workloads in the same GVC
-- `same-org`: Allow access from all workloads in the org
-- `workload-list`: Allow access only from specified workloads
-
-### Multi-Zone
-
-When `multiZone.enabled: true`, Control Plane spreads replicas across availability zones within the location:
+### Placement
 
 ```yaml
 multiZone:
-  enabled: true
+  enabled: false   # true = spread replicas across AZs (location must support it)
 ```
 
-Verify your selected location supports multi-zone before enabling this option.
-
-## AI Modules
-
-Weaviate supports pluggable AI modules for vectorization and generative search. To activate a module, add it to `modules.enabled` and provide the corresponding API key.
+### Access
 
 ```yaml
-modules:
-  enabled:
-    - generative-anthropic
-    # Other options: generative-openai, generative-cohere,
-    #                text2vec-openai, text2vec-cohere, text2vec-huggingface
-
-  openai:
-    apiKey: ""
-  anthropic:
-    apiKey: ""
-  cohere:
-    apiKey: ""
-  huggingface:
-    apiKey: ""
+internalAccess:
+  type: same-gvc   # none | same-gvc | same-org | workload-list
+  workloads: []    # used only with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
 ```
 
-- **`modules.enabled`**: Every module you intend to use must be listed here. Adding an API key alone is not sufficient — the module must also appear in this list.
-- **`defaultVectorizerModule`**: Set to `none` if you are providing your own vectors. Set to a provider (e.g. `text2vec-openai`) to have Weaviate automatically call the provider's embedding API on insert and query.
-- Enabling any module with an API key adds outbound internet access to the Weaviate workload's firewall so it can reach provider APIs.
+Weaviate is reachable only from inside Control Plane — this template opens no public endpoint. A firewall change takes up to a couple of minutes to take effect.
 
-### Supported Providers
-
-| Module | Provider | API Key field |
-|--------|----------|---------------|
-| `generative-anthropic` | Anthropic | `modules.anthropic.apiKey` |
-| `generative-openai` | OpenAI | `modules.openai.apiKey` |
-| `generative-cohere` | Cohere | `modules.cohere.apiKey` |
-| `text2vec-openai` | OpenAI | `modules.openai.apiKey` |
-| `text2vec-cohere` | Cohere | `modules.cohere.apiKey` |
-| `text2vec-huggingface` | Hugging Face | `modules.huggingface.apiKey` |
-
-## Connecting
-
-Each Weaviate replica is reachable individually or through the load-balanced service endpoint:
-
-| Access | Host |
-|--------|------|
-| Any replica (load balanced) | `{release-name}-weaviate.{gvc}.cpln.local` |
-| Specific replica | `{release-name}-weaviate-{n}.{gvc}.cpln.local` |
-
-```
-HTTP REST port: 8080
-gRPC port:      50051
-```
-
-Authenticate using the Bearer token set in `apiKey`:
-
-```sh
-curl -H "Authorization: Bearer YOUR_API_KEY" \
-     http://{release-name}-weaviate.{gvc}.cpln.local:8080/v1/meta
-```
-
-## Backing Up
-
-When enabled, a cron workload runs on schedule and triggers Weaviate's built-in backup API to write a full snapshot to cloud storage. Each backup is stored at `{path}/{backup-id}/` in your bucket and includes all collections and their data.
-
-Set `backup.enabled: true`, choose a provider, and fill in the corresponding block:
+### Backup
 
 ```yaml
 backup:
-  enabled: true
-  provider: aws       # aws or gcp
-  schedule: "0 2 * * *"  # daily at 2am UTC
+  enabled: false
+  provider: aws            # aws | gcp
+  schedule: "0 2 * * *"    # cron in UTC — daily at 02:00
 
   resources:
     cpu: 250m
     memory: 256Mi
 
   aws:
-    bucket: my-backup-bucket
+    bucket: my-weaviate-backup-bucket
     region: us-east-1
-    cloudAccountName: my-s3-cloudaccount
-    policyName: my-backup-policy
+    cloudAccountName: my-s3-cloud-account
+    policyName: my-weaviate-backup-policy
     path: weaviate/backups
 
   gcp:
-    bucket: my-backup-bucket
-    cloudAccountName: my-gcs-cloudaccount
+    bucket: my-weaviate-backup-bucket
+    cloudAccountName: my-gcs-cloud-account
     path: weaviate/backups
 ```
 
+## Backup Storage Setup
+
+Each run writes a full snapshot of every collection to `{path}/{backup-id}/` in your bucket.
+
 ### AWS S3
 
-1. Create your S3 bucket. Set `aws.bucket` and `aws.region` to match.
-
-2. If you do not have a Cloud Account set up, refer to the docs to [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account). Set `aws.cloudAccountName` to match.
-
-3. Create an AWS IAM policy with the following JSON (replace `YOUR_BUCKET_NAME`):
+1. Create the bucket. Set `backup.aws.bucket` and `backup.aws.region` to match.
+2. Create a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) for the AWS account holding it, and set `backup.aws.cloudAccountName`.
+3. Create an AWS IAM policy with the JSON below (replace `YOUR_BUCKET_NAME`), then set `backup.aws.policyName` to its name.
 
 ```json
 {
@@ -182,49 +185,53 @@ backup:
 }
 ```
 
-4. Set `aws.policyName` to the name of the policy created in step 3.
-
 ### GCS
 
-1. Create your GCS bucket. Set `gcp.bucket` to match.
+1. Create the bucket. Set `backup.gcp.bucket` to match.
+2. Create a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) for the GCP project, and set `backup.gcp.cloudAccountName`.
+3. Grant the cloud account's service account `roles/storage.objectAdmin` on that bucket. The template requests exactly that role and no more.
 
-2. If you do not have a Cloud Account set up, refer to the docs to [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account). Set `gcp.cloudAccountName` to match.
+### Restoring
 
-**Important**: Add the `Storage Admin` role to the GCP service account created for the Cloud Account.
-
-## Restoring a Backup
-
-To restore from a backup, exec into any Weaviate replica and POST to the restore endpoint. Replace `s3` with `gcs` for GCP backups, and `BACKUP_ID` with the backup name from your bucket (e.g. `weaviate-backup-20260610-020000`):
+Exec into any replica and POST to the restore endpoint. Use `gcs` instead of `s3` for GCP, and replace `BACKUP_ID` with the backup name from your bucket:
 
 ```sh
-wget -qO- \
-  --header='Authorization: Bearer YOUR_API_KEY' \
-  --header='Content-Type: application/json' \
-  --post-data='{}' \
+wget -qO- --header='Authorization: Bearer YOUR_API_KEY' \
+  --header='Content-Type: application/json' --post-data='{}' \
   'http://localhost:8080/v1/backups/s3/BACKUP_ID/restore'
 ```
 
-Poll for completion:
+Poll the same URL without `--post-data` for progress. A restore fails if a collection from the backup already exists — drop it first, or restore into a fresh deployment.
+
+## Connecting
+
+| What | Where |
+|---|---|
+| Cluster (load balanced) | `{release}-weaviate.{gvc}.cpln.local` |
+| A specific replica | `{release}-weaviate-{n}.{gvc}.cpln.local` |
+| REST / GraphQL port | `8080` |
+| gRPC port | `50051` |
+| Credentials | the API key in the secret named by `apiKeySecretName`; username `apiUser` |
+| Public endpoint | none — internal access only |
 
 ```sh
-wget -qO- \
-  --header='Authorization: Bearer YOUR_API_KEY' \
-  'http://localhost:8080/v1/backups/s3/BACKUP_ID/restore'
+curl -H "Authorization: Bearer YOUR_API_KEY" \
+     http://{release}-weaviate.{gvc}.cpln.local:8080/v1/meta
 ```
-
-**Note**: Restore will fail if a collection from the backup already exists on the cluster. Drop existing collections first or restore to a fresh deployment.
 
 ## Important Notes
 
-- **Minimum replicas**: Use at least 3 replicas for production. The Raft consensus layer requires a quorum (2 of 3 nodes) to elect a leader and process schema changes.
-- **API key security**: Change `apiKey` before deploying to production. The key controls all access to the Weaviate instance including schema management and data.
-- **Modules must be declared**: Adding an API key alone does not activate a module. Every module you intend to use must be listed in `modules.enabled`.
-- **Multi-zone**: Verify your selected location supports multi-zone before enabling.
+- **Create the API-key secret before you install.** Without it the deployment waits on a secret that does not exist and looks broken rather than failing.
+- **Back up the API key yourself.** Rotating it means updating the secret and restarting the cluster; losing it locks you out of every collection.
+- **Use at least 3 replicas in production.** Raft needs a quorum to elect a leader and accept schema changes; a 2-node cluster cannot lose a node.
+- **Enabling a module needs two things** — the provider's secret name *and* the module listed in `modules.enabled`.
+- **Any provider or backup setting opens outbound internet access** on the Weaviate workload. With neither, it has no egress at all.
+- **Restore is not a merge.** It refuses to overwrite a collection that already exists on the cluster.
 
-## Supported External Services
+## Links
 
-- [Weaviate Documentation](https://weaviate.io/developers/weaviate)
-- [Weaviate REST API Reference](https://weaviate.io/developers/weaviate/api/rest)
-- [Weaviate GraphQL API Reference](https://weaviate.io/developers/weaviate/api/graphql)
-- [Weaviate Modules](https://weaviate.io/developers/weaviate/modules)
-- [Cloud Accounts Documentation](https://docs.controlplane.com/guides/create-cloud-account)
+- [Weaviate Documentation](https://docs.weaviate.io/weaviate)
+- [REST API Reference](https://docs.weaviate.io/weaviate/api/rest)
+- [Modules](https://docs.weaviate.io/weaviate/configuration/modules)
+- [Authentication and Authorization](https://docs.weaviate.io/deploy/configuration/authentication)
+- [Backups](https://docs.weaviate.io/deploy/configuration/backups)

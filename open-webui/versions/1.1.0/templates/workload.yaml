@@ -1,0 +1,125 @@
+{{- include "open-webui.validate" . }}
+kind: workload
+name: {{ include "open-webui.name" . }}
+description: Open WebUI — self-hosted chat interface for LLMs
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "open-webui.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "open-webui.identity.name" . }}
+  containers:
+    - name: open-webui
+      image: {{ .Values.image }}
+      # WEBUI_URL must be a process env at server start and the canonical
+      # endpoint is only known at runtime, so boot goes through the mounted
+      # start script instead of the image CMD.
+      command: /bin/sh
+      args:
+        - /cpln/start.sh
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
+      env:
+        # ── Session/JWT signing key (prerequisite opaque secret, created by the
+        #    user before install so it never passes through Helm values) ──
+        - name: WEBUI_SECRET_KEY
+          value: 'cpln://secret/{{ .Values.auth.secretKeyName }}.payload'
+        # ── Authentication ──
+        - name: WEBUI_AUTH
+          value: 'true'
+        - name: ENABLE_SIGNUP
+          value: {{ .Values.auth.enableSignup | quote }}
+        {{- if .Values.customDomain }}
+        # explicit WEBUI_URL wins over the start script's canonical-endpoint fallback
+        - name: WEBUI_URL
+          value: {{ .Values.customDomain | quote }}
+        {{- end }}
+        {{- if .Values.ollama.enabled }}
+        # ── Ollama backend (existing in-GVC ollama workload over internal DNS) ──
+        - name: OLLAMA_BASE_URL
+          value: {{ printf "http://%s.%s.cpln.local:%v" .Values.ollama.workloadName .Values.global.cpln.gvc .Values.ollama.port | quote }}
+        {{- end }}
+        {{- if .Values.openai.apiKeySecretName }}
+        # ── OpenAI-compatible backend (API key = prerequisite opaque secret) ──
+        - name: OPENAI_API_BASE_URL
+          value: {{ .Values.openai.baseUrl | quote }}
+        - name: OPENAI_API_KEY
+          value: 'cpln://secret/{{ .Values.openai.apiKeySecretName }}.payload'
+        {{- end }}
+      ports:
+        - number: 8080
+          protocol: http
+      volumes:
+        - path: /app/backend/data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "open-webui.volume.name" . }}
+        - path: /cpln/start.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "open-webui.secretStart.name" . }}.payload
+      # Unauthenticated upstream health endpoint (the image's own Docker
+      # HEALTHCHECK curls it). failureThreshold covers upgrade-boot migrations.
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 8080
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        failureThreshold: 12
+        successThreshold: 1
+        timeoutSeconds: 3
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: 8080
+        initialDelaySeconds: 30
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+  # Exactly one replica, always: the default embedded SQLite is single-writer
+  # and volumesets are per-replica — active-active would corrupt/split state.
+  # Multi-replica HA needs external Postgres + Redis + object storage (follow-up).
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  # Makes /app/backend/data group-writable by GID 1000. Harmless under the
+  # default root image; keeps a user-supplied non-root image override from
+  # failing on a root-owned volumeset.
+  securityOptions:
+    filesystemGroupId: 1000
+  firewallConfig:
+    external:
+      # Open egress: the model backends may be any external OpenAI-compatible API.
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- else }}
+      inboundAllowWorkload: []
+      {{- end }}

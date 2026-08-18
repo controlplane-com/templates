@@ -35,6 +35,13 @@
 - **Resource block is limit-only, so bare `cpu`/`memory` is correct** per the 2026-08-05 naming ruling — do not "fix" these to `maxCpu`/`maxMemory`.
 - **`aws::ReadOnlyAccess` is on the identity.** A broad managed policy CLAUDE.md forbids, but it is a catalog-wide pattern across 22 templates and is pending a maintainer ruling — deliberately left alone in 1.1.0.
 
-## Status
-- **Not yet deploy-tested at 1.1.0.** The build landed the security changes and a clean bare render; a test round still owes: the wedge-and-recovery path for a missing API-key secret, at least one provider module end to end, backup to both providers, the `internalAccess` variants, and the no-op `helm upgrade` drift gate.
-- **`replicas: 3` is the shipped default but its HA behaviour is unverified by us** — raft cluster formation, replica loss, and rolling-restart continuity are all untested. Treat the number as inherited, not proven.
+## Status — deploy-tested 2026-08-18: 8 PASS, 2 FAIL
+
+The **security change is fully proven**: the key is enforced (401 unauthenticated, 401 wrong key, 200 correct, a real object written and returned by a `nearVector` search), absent from computed values, manifest, stored specs, secret reveals and 288 KB of logs, with no dangling policy targets and no egress opened when providers are unused.
+
+Two **pre-existing** defects were found — neither introduced by 1.1.0, both now confirmed rather than suspected:
+
+- **A ROLLING RESTART PERMANENTLY SPLITS A REPLICA OUT OF THE CLUSTER.** One `force-redeployment` left `test-wv-weaviate-0` a leaderless `Candidate` (`leaderId=''`, `lastContact=never`, `commitIndex=0` against `lastLogIndex=8` — raft log on disk, nothing applied). Replicas 1 and 2 elected a leader without it and it **never rejoined**: still broken 31 minutes later, with a 60-sample probe measuring `200: 42 (70%) / 404: 18 (30%)` — exactly one node in three. **Control Plane reports all three replicas `ready`, so the broken node stays in service-DNS rotation.** Cause: the start script sets `CLUSTER_JOIN` (gossip) but never `RAFT_JOIN`/`RAFT_BOOTSTRAP_EXPECT`, and treats replica-0 as bootstrap on *every* boot. Note the restart of replicas 1 and 2 was seamless (270/270 OK) — the rollout pacing is fine; **rejoin** is what is broken. So the shipped `replicas: 3` default is not safe across an upgrade, and `helm upgrade` is how every user will hit it.
+- **`modules.enabled` does not gate anything.** With `modules.enabled: []`, `text2vec-openai` still loads and a vector-less insert generated a real embedding through a stub. The risk is the inverse of what the values comment claims: supplying a provider key "just to configure it" yields a **live, billable** integration. An `ENABLE_MODULES` allow-list was proposed and then **disproven** — with it genuinely in force, `/v1/meta` still reports all 41 modules.
+
+Also unverified: **backup was NOT tested** (needs an S3 bucket and IAM policy outside the test blast radius) — renders and validation negatives pass, and the cron job's URL derivation was live-checked, but `status.aws.usable` is exactly the surface CLAUDE.md warns can report false success. And with `internalAccess.type: workload-list` the backup cron is not on the allow-list, so its calls would be denied.

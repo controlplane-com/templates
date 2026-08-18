@@ -13,7 +13,9 @@ bindings:
       - /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.identityName" . }}
       - /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.orchestratorIdentityName" . }}
       - /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.orchestratorJobIdentityName" . }}
+      {{- if .Values.orchestrator.backup.enabled }}
       - /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.backupIdentityName" . }}
+      {{- end }}
 targetKind: secret
 targetLinks:
   - //secret/{{ include "manticore.secretConfigName" . }}
@@ -54,7 +56,9 @@ bindings:
       - edit
     principalLinks:
       - /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.orchestratorJobIdentityName" . }}
+      {{- if .Values.orchestrator.backup.enabled }}
       - /org/{{ .Values.global.cpln.org }}/gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "manticore.backupIdentityName" . }}
+      {{- end }}
 targetKind: workload
 targetLinks:
   - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "manticore.name" . }}

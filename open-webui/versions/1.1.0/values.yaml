@@ -49,6 +49,9 @@ openai:
   apiKeySecretName: "" # e.g. my-openwebui-openai-key ; empty = OpenAI backend off
 
 # ─── Access ───────────────────────────────────────────────────────────────────
+# Sets WEBUI_URL only — it does NOT create a cpln domain. Create and verify the
+# domain separately, or the hostname will not resolve. Read at FIRST BOOT ONLY
+# (see Important Notes); set it at install, not in a later upgrade.
 customDomain: "" # full URL, e.g. https://chat.example.com ; empty = canonical *.cpln.app
 
 publicAccess:

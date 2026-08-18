@@ -74,7 +74,10 @@ openai:
 ### Access
 
 ```yaml
-customDomain: ""              # full URL, e.g. https://chat.example.com; empty = canonical *.cpln.app
+# Sets WEBUI_URL only — it does NOT create a cpln domain. Create and verify the
+# domain separately, or the hostname will not resolve. Read at FIRST BOOT ONLY
+# (see Important Notes); set it at install, not in a later upgrade.
+customDomain: ""              # full URL, e.g. https://chat.example.com ; empty = canonical *.cpln.app
 
 publicAccess:
   enabled: false              # true publishes the chat UI, and its sign-in form, to the whole internet
@@ -118,12 +121,13 @@ internalAccess:               # inbound firewall scope for in-GVC callers of the
 
   3. `cpln helm upgrade` the release with `publicAccess.enabled: true`, then sign in with that account at the canonical endpoint. Allow up to a couple of minutes for the firewall change to take effect (measured: 143 s, over 403 → 503 → 200).
 - **Create the session-key secret before installing** — the workload wedges waiting on a secret that does not exist, and `auth.secretKeyName` only names it. Never change it afterwards: it signs every session and JWT, so replacing it logs every user out.
+- **Restoring a snapshot is a manual, deliberate operation.** `backup.enabled` takes crash-consistent volume snapshots; it does not restore them. To roll back, restore the snapshot onto the volume set from the Control Plane console or CLI and let the workload restart onto it. Measured restore: ~2.5 minutes, of which ~40 seconds is downtime, and everything written after the snapshot is gone — including accounts, so a user registered after it will no longer be able to sign in.
 - **`auth.enableSignup` is only read while no account exists.** Creating the first account writes `enable_signup: false` into `webui.db`, and that stored value wins over the value from then on — so a later `helm upgrade` can neither open nor close sign-ups. Add users, or re-open self-service sign-ups, from Admin Settings → Users.
 - **License / branding clause** — you must keep the "Open WebUI" branding visible in the UI unless your deployment serves 50 or fewer users, or you have enterprise permission. Removing the branding outside those cases violates the license; it is not a template setting.
 - **Single replica, by design.** The default embedded SQLite is single-writer and the volumeset is per-replica, so the workload is pinned to 1 replica. A restart or upgrade is a brief full outage (about a minute). Multi-replica HA requires an external Postgres + Redis + object store (a planned follow-up).
 - **Data lives only on the volumeset.** Uninstall deletes it (a final snapshot is taken); reinstall starts empty, including the admin account.
 - **Ollama unreachable is non-fatal.** The UI boots and simply shows no Ollama models — check that `ollama.workloadName` names a `ready` ollama workload in this GVC.
-- **Model-backend settings apply at install, then persist in the app database.** `ollama.workloadName` and `openai.*` are read from the environment only on first boot and then stored in `webui.db`. Changing them via a later `helm upgrade` is ignored — update model connections afterward from the admin UI (Settings → Connections).
+- **`ollama.*`, `openai.*` and `customDomain` apply at install, then persist in the app database.** They are read from the environment only on first boot and then stored in `webui.db`; a later `helm upgrade` is ignored. The trap is that a stale backend keeps *working*, so nothing looks wrong — change model connections from the admin UI (Settings → Connections) instead, and set `customDomain` at first install rather than adding it later.
 - **Backups are scheduled volume snapshots** (default: daily, 7-day retention), managed by the platform — crash-consistent, and SQLite recovers cleanly. These live in the platform storage layer alongside the volume, not off-site.
 
 ## Links

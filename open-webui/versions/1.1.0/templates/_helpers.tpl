@@ -45,6 +45,11 @@ Open WebUI Policy Name
 {{- if lt (int .Values.volumeset.capacity) 10 -}}
 {{- fail (printf "open-webui: volumeset.capacity must be at least 10 (GiB, platform minimum), got '%v'" .Values.volumeset.capacity) -}}
 {{- end -}}
+{{- if .Values.customDomain -}}
+{{- if not (or (hasPrefix "https://" .Values.customDomain) (hasPrefix "http://" .Values.customDomain)) -}}
+{{- fail (printf "open-webui: customDomain must be a full URL including the scheme, e.g. https://chat.example.com — got '%s'. It sets WEBUI_URL and does not create a cpln domain; create that separately." .Values.customDomain) -}}
+{{- end -}}
+{{- end -}}
 {{- if hasKey .Values.auth "webuiSecretKey" -}}
 {{- fail "open-webui: auth.webuiSecretKey was removed in 1.1.0 — the session/JWT signing key is now a prerequisite opaque secret (encoding: plain) you create before install; set auth.secretKeyName to its name instead" -}}
 {{- end -}}

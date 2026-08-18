@@ -52,8 +52,9 @@ spec:
             sleep 30
           done
       env:
+        # User-created prerequisite opaque secret — same key the cluster trusts.
         - name: WEAVIATE_API_KEY
-          value: cpln://secret/{{ include "weaviate.secret.credentials.name" . }}.api-key
+          value: cpln://secret/{{ .Values.apiKeySecretName }}.payload
       cpu: {{ .Values.backup.resources.cpu | quote }}
       memory: {{ .Values.backup.resources.memory | quote }}
       inheritEnv: false
@@ -70,12 +71,19 @@ spec:
     debug: false
     suspend: false
   firewallConfig:
+    {{- /* Every field declared — the API backfills the empty lists, and an
+           omitted field drifts against the manifest from creation. */}}
     external:
       inboundAllowCIDR: []
+      inboundBlockedCIDR: []
       outboundAllowCIDR:
         - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
     internal:
       inboundAllowType: none
+      inboundAllowWorkload: []
   job:
     schedule: {{ .Values.backup.schedule | quote }}
     concurrencyPolicy: Forbid

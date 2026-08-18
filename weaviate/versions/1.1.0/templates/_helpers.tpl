@@ -29,9 +29,52 @@
 {{- end }}
 
 
+{{/* Space-separated names of the prerequisite secrets for every AI provider the
+     user has configured. Empty when no provider is in use — that emptiness is
+     what gates the env vars, the policy targets and the outbound firewall. */}}
+
+{{- define "weaviate.providerSecretNames" -}}
+{{- $names := list }}
+{{- range $p := list "anthropic" "cohere" "huggingface" "openai" }}
+{{- $cfg := index $.Values.modules $p }}
+{{- if $cfg }}
+{{- if $cfg.apiKeySecretName }}
+{{- $names = append $names $cfg.apiKeySecretName }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- join " " $names }}
+{{- end }}
+
+
 {{/* Validation */}}
 
 {{- define "weaviate.validate" -}}
+{{- /* 1.1.0 removed value-borne credentials. Fail loudly on the old keys
+       rather than silently ignoring a key the user believes is in force. */}}
+{{- if .Values.apiKey }}
+{{- fail "weaviate: `apiKey` was removed in 1.1.0 — the API key is now a REQUIRED prerequisite `opaque` secret (encoding: plain). Create it, then set `apiKeySecretName` to its name." }}
+{{- end }}
+{{- if .Values.internal_access }}
+{{- fail "weaviate: `internal_access` was renamed to `internalAccess` in 1.1.0 — same fields (`type`, `workloads`)." }}
+{{- end }}
+{{- if .Values.clusterName }}
+{{- fail "weaviate: `clusterName` was removed in 1.1.0 — it was never rendered into any resource. Remove it; nothing replaces it." }}
+{{- end }}
+{{- range $provider := list "openai" "anthropic" "cohere" "huggingface" }}
+{{- $cfg := index $.Values.modules $provider }}
+{{- if $cfg }}
+{{- if $cfg.apiKey }}
+{{- fail (printf "weaviate: `modules.%s.apiKey` was removed in 1.1.0 — provider keys are now OPTIONAL prerequisite `opaque` secrets. Create one and set `modules.%s.apiKeySecretName` to its name." $provider $provider) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if not .Values.apiKeySecretName }}
+{{- fail "weaviate: `apiKeySecretName` is required — the name of a pre-created `opaque` secret (encoding: plain) whose payload is the Weaviate API key." }}
+{{- end }}
+{{- if not .Values.apiUser }}
+{{- fail "weaviate: `apiUser` is required — the username the API key maps to." }}
+{{- end }}
 {{- if lt (.Values.replicas | int) 1 }}
 {{- fail "replicas must be at least 1" }}
 {{- end }}

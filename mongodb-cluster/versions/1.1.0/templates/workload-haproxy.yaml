@@ -33,7 +33,9 @@ spec:
         successThreshold: 1
         timeoutSeconds: 2
       volumes:
+        {{- /* recoveryPolicy is declared because the API backfills `retain`. */}}
         - path: /proxy/start.sh
+          recoveryPolicy: retain
           uri: cpln://secret/{{ include "mongo-cluster.secretProxyStartup.name" . }}.payload
   identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "mongo-cluster.identity.name" . }}
   defaultOptions:
@@ -55,17 +57,28 @@ spec:
       {{- if .Values.firewall.workloads }}
       inboundAllowWorkload: {{ .Values.firewall.workloads | toYaml | nindent 8 }}
       {{- end }}
+    {{- /* Every field declared — the API backfills the empty lists. */}}
     external:
       inboundAllowCIDR: []
+      inboundBlockedCIDR: []
       outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
   loadBalancer:
     direct:
       enabled: false
       ports: []
     replicaDirect: false
   rolloutOptions:
+    {{- /*
+    A `standard` workload RETAINS maxUnavailableReplicas (unlike the stateful
+    MongoDB tier, where the API drops it). terminationGracePeriodSeconds is
+    declared because the API backfills 90.
+    */}}
     maxSurgeReplicas: "1"
     maxUnavailableReplicas: "0"
     minReadySeconds: 0
     scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
 {{- end }}

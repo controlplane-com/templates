@@ -1,4 +1,4 @@
-{{- include "mongo-cluster.validateLocations" . -}}
+{{- include "mongo-cluster.validate" . -}}
 ---
 kind: gvc
 name: {{ .Values.gvc.name }}
@@ -7,6 +7,13 @@ spec:
   endpointNamingFormat: org
   staticPlacement:
     locationLinks:
-    {{- range .Values.gvc.locations }}
-      - //location/{{ .name }}
+    {{- /*
+    Sorted, because the API STORES locationLinks alphabetically. Rendering them
+    in values order made every install drift against its own manifest from the
+    moment it was created.
+    */}}
+    {{- $names := list }}
+    {{- range .Values.gvc.locations }}{{ $names = append $names .name }}{{ end }}
+    {{- range (sortAlpha $names) }}
+      - //location/{{ . }}
     {{- end }}

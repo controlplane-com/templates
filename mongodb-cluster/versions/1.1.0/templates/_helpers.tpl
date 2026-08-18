@@ -4,14 +4,6 @@
 {{- printf "%s-mongo" .Release.Name }}
 {{- end }}
 
-{{- define "mongo-cluster.secretConfig.name" -}}
-{{- printf "%s-mongo-config" .Release.Name }}
-{{- end }}
-
-{{- define "mongo-cluster.secretKeyfile.name" -}}
-{{- printf "%s-mongo-keyfile" .Release.Name }}
-{{- end }}
-
 {{- define "mongo-cluster.secretStartup.name" -}}
 {{- printf "%s-mongo-startup" .Release.Name }}
 {{- end }}
@@ -58,6 +50,52 @@
 
 
 {{/* Validation */}}
+
+{{- define "mongo-cluster.validate" -}}
+{{- include "mongo-cluster.validateRemovedKeys" . -}}
+{{- include "mongo-cluster.validateCredentials" . -}}
+{{- include "mongo-cluster.validateFirewall" . -}}
+{{- include "mongo-cluster.validateLocations" . -}}
+{{- end -}}
+
+{{/*
+Reject values keys removed in 1.1.0, so an upgrade that still sets them fails
+loudly instead of silently ignoring a credential the user thought they had set.
+*/}}
+{{- define "mongo-cluster.validateRemovedKeys" -}}
+{{- if hasKey .Values.mongodb "password" -}}
+{{- fail "mongodb-cluster: `mongodb.password` was removed in 1.1.0 — the database credentials are no longer values. Create a `dictionary` secret holding `username`, `password` and `database`, and set `mongodb.credentialsSecretName` to its name. See Prerequisites in the README." -}}
+{{- end -}}
+{{- if hasKey .Values.mongodb "username" -}}
+{{- fail "mongodb-cluster: `mongodb.username` was removed in 1.1.0 — it is now the `username` key of the `dictionary` secret named by `mongodb.credentialsSecretName`. See Prerequisites in the README." -}}
+{{- end -}}
+{{- if hasKey .Values.mongodb "database" -}}
+{{- fail "mongodb-cluster: `mongodb.database` was removed in 1.1.0 — it is now the `database` key of the `dictionary` secret named by `mongodb.credentialsSecretName`. See Prerequisites in the README." -}}
+{{- end -}}
+{{- if hasKey .Values.mongodb "replicaSetKey" -}}
+{{- fail "mongodb-cluster: `mongodb.replicaSetKey` was removed in 1.1.0 — the replica set keyfile is now an `opaque` secret you create, named by `mongodb.keyfileSecretName`. Create it with: openssl rand -base64 756 | cpln secret create-opaque --name my-mongodb-keyfile --encoding plain -f -" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Both credential secrets are user-created prerequisites: the chart can only check
+that a NAME was supplied. The keyfile's CONTENT rules (6-1024 characters from the
+base64 alphabet) are invisible here — the startup script checks them at boot.
+*/}}
+{{- define "mongo-cluster.validateCredentials" -}}
+{{- if not .Values.mongodb.credentialsSecretName -}}
+{{- fail "mongodb-cluster: mongodb.credentialsSecretName is required — it names a `dictionary` secret holding the `username`, `password` and `database` keys, which must EXIST BEFORE INSTALL. Create it with: cpln secret create-dictionary --name my-mongodb-credentials --entry username=admin --entry password='YOUR-STRONG-PASSWORD' --entry database=mydatabase" -}}
+{{- end -}}
+{{- if not .Values.mongodb.keyfileSecretName -}}
+{{- fail "mongodb-cluster: mongodb.keyfileSecretName is required — it names an `opaque` secret (encoding: plain) holding the replica set keyfile, which must EXIST BEFORE INSTALL. Create it with: openssl rand -base64 756 | cpln secret create-opaque --name my-mongodb-keyfile --encoding plain -f -" -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "mongo-cluster.validateFirewall" -}}
+{{- if not (or (eq .Values.firewall.internalAllowType "same-gvc") (eq .Values.firewall.internalAllowType "same-org") (eq .Values.firewall.internalAllowType "workload-list")) -}}
+{{- fail (printf "mongodb-cluster: firewall.internalAllowType '%s' is invalid. Use same-gvc, same-org or workload-list." .Values.firewall.internalAllowType) -}}
+{{- end -}}
+{{- end -}}
 
 {{- define "mongo-cluster.validateLocations" -}}
 {{- if lt (len .Values.gvc.locations) 1 -}}

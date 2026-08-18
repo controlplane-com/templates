@@ -17,10 +17,11 @@ spec:
       cpu: {{ .Values.resources.cpu | quote }}
       memory: {{ .Values.resources.memory | quote }}
       env:
+        {{- /* From the user-created prerequisite secret — never through values. */}}
         - name: MONGO_INITDB_ROOT_USERNAME
-          value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.username'
+          value: 'cpln://secret/{{ .Values.mongodb.credentialsSecretName }}.username'
         - name: MONGO_INITDB_ROOT_PASSWORD
-          value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.password'
+          value: 'cpln://secret/{{ .Values.mongodb.credentialsSecretName }}.password'
       ports:
         - number: 27017
           protocol: tcp
@@ -67,7 +68,7 @@ spec:
           uri: 'cpln://secret/{{ include "mongo-cluster.secretStartup.name" . }}'
         - path: /etc/mongo-keyfile/keyfile
           recoveryPolicy: retain
-          uri: 'cpln://secret/{{ include "mongo-cluster.secretKeyfile.name" . }}'
+          uri: 'cpln://secret/{{ .Values.mongodb.keyfileSecretName }}'
     # PBM agent sidecar for physical backups
     {{- if and .Values.backup.enabled (eq .Values.backup.mode "physical") }}
     - name: pbm-agent
@@ -80,16 +81,17 @@ spec:
       memory: {{ .Values.backup.physical.resources.memory | quote }}
       env:
         - name: MONGO_INITDB_ROOT_USERNAME
-          value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.username'
+          value: 'cpln://secret/{{ .Values.mongodb.credentialsSecretName }}.username'
         - name: MONGO_INITDB_ROOT_PASSWORD
-          value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.password'
+          value: 'cpln://secret/{{ .Values.mongodb.credentialsSecretName }}.password'
+        {{- /* Bucket and region are not secrets — they come straight from values. */}}
         - name: PBM_BUCKET
-          value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.backup-bucket'
+          value: {{ (eq .Values.backup.provider "aws") | ternary .Values.backup.aws.bucket .Values.backup.gcp.bucket | quote }}
         - name: PBM_PREFIX
           value: {{ (eq .Values.backup.provider "aws") | ternary .Values.backup.aws.prefix .Values.backup.gcp.prefix | quote }}
         {{- if eq .Values.backup.provider "aws" }}
         - name: AWS_REGION
-          value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.backup-region'
+          value: {{ .Values.backup.aws.region | quote }}
         {{- end }}
       volumes:
         - path: /data/db
@@ -114,9 +116,26 @@ spec:
     suspend: false
     timeoutSeconds: 10
   firewallConfig:
+    {{- /*
+    Every field of `external` is declared — the API backfills the empty lists,
+    so omitting them made a default install drift against its own manifest from
+    the moment it was created. MongoDB is reachable on the INTERNAL network
+    only; there is no public endpoint and no knob to create one.
+    */}}
     external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      {{- if and .Values.backup.enabled (eq .Values.backup.mode "physical") }}
+      {{- /* The pbm-agent sidecar uploads to object storage from this workload. */}}
       outboundAllowCIDR:
         - 0.0.0.0/0
+      {{- else }}
+      {{- /* mongod needs no egress: replication is internal GVC traffic. */}}
+      outboundAllowCIDR: []
+      {{- end }}
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
     internal:
       inboundAllowType: {{ .Values.firewall.internalAllowType }}
       {{- if .Values.firewall.workloads }}
@@ -145,8 +164,14 @@ spec:
       timeoutSeconds: 10
     {{- end }}
   rolloutOptions:
+    {{- /*
+    maxUnavailableReplicas is deliberately NOT set: the API DROPS it on a
+    stateful workload, so sending it produced permanent drift AND implied a
+    rolling-restart limit that was never in force.
+    terminationGracePeriodSeconds is declared because the API backfills 90.
+    */}}
     maxSurgeReplicas: 25%
-    maxUnavailableReplicas: "1"
     minReadySeconds: 0
     scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
   supportDynamicTags: false

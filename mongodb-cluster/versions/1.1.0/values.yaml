@@ -16,12 +16,24 @@ resources:
   cpu: 1
   memory: 2Gi
 
+# ─── Credentials (prerequisite secrets) ───────────────────────────────────────
+# BOTH SECRETS MUST EXIST BEFORE YOU INSTALL — the deployment wedges waiting on a
+# secret that does not exist. Neither value passes through Helm values, so neither
+# lands in the release. See Prerequisites in the README for the exact commands.
 mongodb:
-  username: admin
-  password: mypassword
-  database: mydatabase
-  # REQUIRED: Generate with `openssl rand -base64 32`
-  replicaSetKey: "Ol0GnqpqntkcnjprS+Pu/1Ji8fcSEKb8f4zkF5c+dEQ="
+  # `dictionary` secret holding exactly three keys: `username`, `password`,
+  # `database`. This is the credential you put in your applications' connection
+  # strings, and the root user the cluster is bootstrapped with.
+  credentialsSecretName: my-mongodb-credentials
+
+  # `opaque` secret (encoding: plain) holding the replica set keyfile — the shared
+  # key cluster members authenticate to each other with. Anyone holding it can join
+  # a member to the replica set, so it is kept SEPARATE from the credentials above.
+  # CONTENT RULES (mongod rejects anything else): 6-1024 characters from the base64
+  # alphabet only — A-Z a-z 0-9 + / = — after whitespace is stripped. Generate with
+  # `openssl rand -base64 756`; do NOT invent a passphrase, hyphens alone break it.
+  # It CANNOT be changed after the cluster is initialized.
+  keyfileSecretName: my-mongodb-keyfile
 
 volumeset:
   capacity: 10 # initial capacity in GiB (minimum is 10)

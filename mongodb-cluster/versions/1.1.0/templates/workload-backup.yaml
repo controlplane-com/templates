@@ -21,16 +21,17 @@ spec:
         - name: MONGO_HOST
           value: replica-0.{{ include "mongo-cluster.name" . }}.{{ include "mongo-cluster.backup.location" . }}.{{ .Values.gvc.name }}.cpln.local
         - name: MONGO_USER
-          value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.username'
+          value: 'cpln://secret/{{ .Values.mongodb.credentialsSecretName }}.username'
         - name: MONGO_PASSWORD
-          value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.password'
+          value: 'cpln://secret/{{ .Values.mongodb.credentialsSecretName }}.password'
         - name: MONGO_RS
           value: rs0
+        {{- /* Bucket and region are not secrets — they come straight from values. */}}
         - name: BACKUP_BUCKET
-          value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.backup-bucket'
+          value: {{ (eq .Values.backup.provider "aws") | ternary .Values.backup.aws.bucket .Values.backup.gcp.bucket | quote }}
         {{- if eq .Values.backup.provider "aws" }}
         - name: AWS_REGION
-          value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.backup-region'
+          value: {{ .Values.backup.aws.region | quote }}
         - name: BACKUP_PREFIX
           value: {{ .Values.backup.aws.prefix | quote }}
         {{- end }}
@@ -54,8 +55,11 @@ spec:
     - location: //location/{{ include "mongo-cluster.backup.location" . }}
       suspend: false
   firewallConfig:
+    {{- /* Every field declared — the API backfills the empty lists. */}}
     external:
       inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
       outboundAllowPort:
         - number: 443
           protocol: tcp
@@ -68,6 +72,7 @@ spec:
       outboundAllowHostname:
         - storage.googleapis.com
       {{- end }}
+      outboundBlockedCIDR: []
     internal:
       inboundAllowType: none
   identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "mongo-cluster.identity.name" . }}
@@ -110,9 +115,9 @@ spec:
       memory: {{ .Values.backup.physical.cron.resources.memory | quote }}
       env:
         - name: MONGO_INITDB_ROOT_USERNAME
-          value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.username'
+          value: 'cpln://secret/{{ .Values.mongodb.credentialsSecretName }}.username'
         - name: MONGO_INITDB_ROOT_PASSWORD
-          value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.password'
+          value: 'cpln://secret/{{ .Values.mongodb.credentialsSecretName }}.password'
   defaultOptions:
     autoscaling:
       maxConcurrency: 0
@@ -129,9 +134,14 @@ spec:
     - location: //location/{{ include "mongo-cluster.backup.location" . }}
       suspend: false
   firewallConfig:
+    {{- /* Every field declared — the API backfills the empty lists. */}}
     external:
       inboundAllowCIDR: []
+      inboundBlockedCIDR: []
       outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
     internal:
       inboundAllowType: none
   identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "mongo-cluster.identity.name" . }}

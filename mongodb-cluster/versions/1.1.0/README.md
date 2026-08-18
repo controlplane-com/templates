@@ -8,6 +8,37 @@ This app deploys a highly available MongoDB replica set cluster using Percona Se
 - **HAProxy** (optional): Leader-routing proxy that directs write traffic to the current primary replica
 - **Backup** (optional): Logical backup via mongodump or physical backup via Percona Backup for MongoDB (PBM)
 
+## Prerequisites
+
+**Two secrets must exist BEFORE you install.** A missing one wedges the deployment waiting on a secret that is not there — and the failure is invisible in `cpln logs`; it shows only in `status.versions[].message`. Neither value ever passes through Helm values, so neither lands in the release.
+
+**1. Database credentials** (`mongodb.credentialsSecretName`) — a `dictionary` secret holding exactly three entries:
+
+```bash
+cpln secret create-dictionary --name my-mongodb-credentials \
+  --entry username=admin \
+  --entry password='YOUR-STRONG-PASSWORD' \
+  --entry database=mydatabase
+```
+
+**2. Replica-set keyfile** (`mongodb.keyfileSecretName`) — an `opaque` secret holding the key that authenticates replica-set members to each other:
+
+```bash
+openssl rand -base64 756 | cpln secret create-opaque --name my-mongodb-keyfile --encoding plain -f -
+```
+
+> **The keyfile must be valid base64.** MongoDB accepts 6–1024 characters from the base64 alphabet only (`A-Z a-z 0-9 + / =`). A passphrase containing hyphens or other punctuation **will not start the cluster** — use `openssl rand -base64 756` rather than inventing a string. The container checks this at boot and fails with an explicit message naming your secret, instead of mongod's unhelpful error.
+
+They are deliberately **two** secrets: granting an application `reveal` on the database credentials must not also hand it the key that lets a member join your replica set.
+
+### The GVC this chart creates
+
+This template **creates its own GVC**, named by `gvc.name` (default `mongodb-gvc`).
+
+> **Never set `gvc.name` to a GVC that already exists.** Helm adopts a GVC whose name matches and `helm uninstall` then **deletes it**, taking every unrelated workload in it — including workloads this chart did not create. Adoption also permanently pins the release name. Always use a name unique to this install.
+
+Note the shipped default is three locations × 3 replicas — **nine members across three regions**, and cross-region traffic is billed. Reduce `gvc.locations` for a single-region deployment.
+
 ## Single Location vs. Multi-Location
 
 ### Single Location
@@ -114,7 +145,7 @@ proxy:
 
 When enabled, connect to the proxy workload for all write operations. The proxy performs active health checks on port 27017 across all replicas and updates routing immediately with a primary election.
 
-**Required for**: External write access and logical backups. Physical (PBM) backups connect directly to a replica and do not require the proxy.
+**Required for**: external write access from clients that cannot track the primary themselves. **Backups do not use it** — both the logical and physical jobs connect directly to `replica-0`, so the proxy can be disabled without affecting them.
 
 ## Connecting to MongoDB
 

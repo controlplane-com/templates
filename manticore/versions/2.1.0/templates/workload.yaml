@@ -205,8 +205,6 @@ spec:
           value: "{{ .Values.orchestrator.logLevel }}"
         - name: IMPORT_MEM_LIMIT
           value: "{{ .Values.orchestrator.importMemLimit }}"
-        - name: INDEXER_WORK_DIR
-          value: "/mnt/s3/indexer-temp"
         - name: S3_MOUNT
           value: "/mnt/s3"
         - name: SHARED_VOLUME_MOUNT
@@ -435,7 +433,7 @@ spec:
         - name: BACKUP_PROVIDER
           value: aws
         - name: BACKUP_REGION
-          value: {{ .Values.buckets.awsRegion }}
+          value: {{ .Values.orchestrator.backup.s3Region }}
         - name: DATASET
           value: {{ .Values.orchestrator.backup.dataSet }}
         - name: MANTICORE_HOST
@@ -519,7 +517,10 @@ spec:
           {{- if .Values.loadTest.rps }}
           --rps {{ .Values.loadTest.rps }}
           {{- end }}
-          /scripts/payload
+          --no-usage-report
+          /scripts/payload;
+          echo "k6 exited with status $? (non-zero = a threshold was breached)";
+          sleep 86400
       volumes:
         - path: /scripts
           recoveryPolicy: retain

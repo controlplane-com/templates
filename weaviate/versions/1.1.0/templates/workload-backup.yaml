@@ -1,0 +1,84 @@
+{{- if .Values.backup.enabled }}
+kind: workload
+name: {{ include "weaviate.workload.backup.name" . }}
+description: Scheduled Weaviate backup job
+tags: {{- include "weaviate.tags" . | nindent 2 }}
+spec:
+  type: cron
+  containers:
+    - name: backup
+      image: curlimages/curl:latest
+      command: /bin/sh
+      args:
+        - '-c'
+        - |
+          set -eu
+
+          K8S_NAMESPACE=$(awk '/^search/{print $2}' /etc/resolv.conf | cut -d'.' -f1)
+          WEAVIATE_URL="http://{{ include "weaviate.workload.name" . }}.${K8S_NAMESPACE}.svc.cluster.local:8080"
+          BACKUP_ID="weaviate-backup-$(date +%Y%m%d-%H%M%S)"
+          {{- if eq .Values.backup.provider "aws" }}
+          BACKEND="s3"
+          {{- else if eq .Values.backup.provider "gcp" }}
+          BACKEND="gcs"
+          {{- end }}
+
+          echo "Creating backup ${BACKUP_ID} to backend ${BACKEND}..."
+          curl -sf -X POST "${WEAVIATE_URL}/v1/backups/${BACKEND}" \
+            -H "Authorization: Bearer ${WEAVIATE_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "{\"id\": \"${BACKUP_ID}\"}"
+
+          echo "Polling for completion..."
+          ATTEMPTS=0
+          while true; do
+            ATTEMPTS=$((ATTEMPTS + 1))
+            if [ "${ATTEMPTS}" -ge 60 ]; then
+              echo "ERROR: Backup timed out after 30 minutes."
+              exit 1
+            fi
+            STATUS=$(curl -sf "${WEAVIATE_URL}/v1/backups/${BACKEND}/${BACKUP_ID}" \
+              -H "Authorization: Bearer ${WEAVIATE_API_KEY}" \
+              | grep -o '"status":"[^"]*"' | cut -d'"' -f4)
+            echo "Status: ${STATUS}"
+            if [ "${STATUS}" = "SUCCESS" ]; then
+              echo "Backup completed successfully."
+              exit 0
+            fi
+            if [ "${STATUS}" = "FAILED" ]; then
+              echo "ERROR: Backup failed."
+              exit 1
+            fi
+            sleep 30
+          done
+      env:
+        - name: WEAVIATE_API_KEY
+          value: cpln://secret/{{ include "weaviate.secret.credentials.name" . }}.api-key
+      cpu: {{ .Values.backup.resources.cpu | quote }}
+      memory: {{ .Values.backup.resources.memory | quote }}
+      inheritEnv: false
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "weaviate.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: false
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+    internal:
+      inboundAllowType: none
+  job:
+    schedule: {{ .Values.backup.schedule | quote }}
+    concurrencyPolicy: Forbid
+    restartPolicy: Never
+    historyLimit: 5
+{{- end }}

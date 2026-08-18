@@ -1,0 +1,75 @@
+replicas: 3
+
+image: semitechnologies/weaviate:1.38.0
+
+# Weaviate cluster name
+clusterName: my-weaviate
+
+# IMPORTANT: Change all credentials before deploying to production
+# API key for authenticating with Weaviate
+apiKey: 21203583df918a538cecb1f96c85c4516c4c0e478be23f76466ad8a30adc68cc
+# Username associated with the API key (used for authorization and admin list)
+apiUser: admin@example.com
+
+# Default result limit for queries
+queryDefaultsLimit: 25
+
+# Default vectorizer module applied to new collections
+# Options: none, text2vec-openai, text2vec-cohere, text2vec-huggingface, text2vec-aws
+defaultVectorizerModule: none
+
+# Additional modules to enable alongside the vectorizer
+# Common options: text2vec-openai, text2vec-cohere, text2vec-huggingface,
+#                 generative-openai, generative-cohere, generative-anthropic,
+#                 qna-openai, ref2vec-centroid
+modules:
+  enabled: []
+
+  # External API keys for AI-powered modules (leave empty if not using that provider)
+  openai:
+    apiKey: ""
+  anthropic:
+    apiKey: ""
+  cohere:
+    apiKey: ""
+  huggingface:
+    apiKey: ""
+
+cpu: 2
+memory: 4Gi
+
+volumes:
+  data:
+    initialCapacity: 20
+    autoscaling:
+      maxCapacity: 200
+      minFreePercentage: 20
+      scalingFactor: 1.5
+
+multiZone:
+  enabled: false
+
+internal_access:
+  type: same-gvc
+  workloads:
+
+backup:
+  enabled: false
+  provider: aws   # options: aws or gcp
+  schedule: "0 2 * * *"   # daily at 2am UTC
+
+  resources:
+    cpu: 250m
+    memory: 256Mi
+
+  aws:
+    bucket: my-backup-bucket
+    region: us-east-1
+    cloudAccountName: my-s3-cloudaccount
+    policyName: my-backup-policy
+    path: weaviate/backups
+
+  gcp:
+    bucket: my-backup-bucket
+    cloudAccountName: my-gcs-cloudaccount
+    path: weaviate/backups

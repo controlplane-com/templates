@@ -78,7 +78,7 @@ modules:
     apiKeySecretName: ""       # e.g. my-weaviate-huggingface-key
 ```
 
-A provider is off until you name its secret. Every module you intend to use must also be listed in `modules.enabled` — naming a secret alone does not activate one.
+A provider is off until you name its secret — and naming it is what makes that provider live and **billable**. `modules.enabled` does **not** gate this: testing showed modules load regardless of the list, and a vector-less insert generated a real embedding with it empty. Only supply a key for a provider you intend to use.
 
 | Module | Provider | Secret knob |
 |---|---|---|
@@ -224,7 +224,7 @@ curl -H "Authorization: Bearer YOUR_API_KEY" \
 - **Create the API-key secret before you install.** Without it the deployment waits on a secret that does not exist and looks broken rather than failing.
 - **Back up the API key yourself.** Rotating it means updating the secret and restarting the cluster; losing it locks you out of every collection.
 - **Use at least 3 replicas in production.** Raft needs a quorum to elect a leader and accept schema changes; a 2-node cluster cannot lose a node.
-- **Enabling a module needs two things** — the provider's secret name *and* the module listed in `modules.enabled`.
+- **Supplying a provider key is what activates it, not `modules.enabled`.** Testing showed modules load regardless of that list, so a key added "just to configure it" is a live, billable integration.
 - **Any provider or backup setting opens outbound internet access** on the Weaviate workload. With neither, it has no egress at all.
 - **Restore is not a merge.** It refuses to overwrite a collection that already exists on the cluster.
 

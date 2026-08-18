@@ -1,0 +1,147 @@
+{{- include "mongo-cluster.validateBackupConfig" . }}
+{{- if .Values.backup.enabled }}
+
+{{- if eq .Values.backup.mode "logical" }}
+---
+kind: workload
+name: {{ include "mongo-cluster.backup.name" . }}
+description: MongoDB logical backup
+tags: {{- include "mongo-cluster.tags" . | nindent 2 }}
+spec:
+  type: cron
+  containers:
+    - name: backup-mongodb
+      image: {{ .Values.backup.logical.image }}
+      cpu: {{ .Values.backup.logical.resources.cpu | quote }}
+      memory: {{ .Values.backup.logical.resources.memory | quote }}
+      inheritEnv: false
+      env:
+        - name: BACKUP_PROVIDER
+          value: {{ .Values.backup.provider | quote }}
+        - name: MONGO_HOST
+          value: replica-0.{{ include "mongo-cluster.name" . }}.{{ include "mongo-cluster.backup.location" . }}.{{ .Values.gvc.name }}.cpln.local
+        - name: MONGO_USER
+          value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.username'
+        - name: MONGO_PASSWORD
+          value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.password'
+        - name: MONGO_RS
+          value: rs0
+        - name: BACKUP_BUCKET
+          value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.backup-bucket'
+        {{- if eq .Values.backup.provider "aws" }}
+        - name: AWS_REGION
+          value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.backup-region'
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.aws.prefix | quote }}
+        {{- end }}
+        {{- if eq .Values.backup.provider "gcp" }}
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.gcp.prefix | quote }}
+        {{- end }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: true
+    timeoutSeconds: 3600
+  localOptions:
+    - location: //location/{{ include "mongo-cluster.backup.location" . }}
+      suspend: false
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      outboundAllowPort:
+        - number: 443
+          protocol: tcp
+      {{- if eq .Values.backup.provider "aws" }}
+      outboundAllowHostname:
+        - s3.{{ .Values.backup.aws.region }}.amazonaws.com
+        - s3.amazonaws.com
+      {{- end }}
+      {{- if eq .Values.backup.provider "gcp" }}
+      outboundAllowHostname:
+        - storage.googleapis.com
+      {{- end }}
+    internal:
+      inboundAllowType: none
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "mongo-cluster.identity.name" . }}
+  job:
+    activeDeadlineSeconds: 14400
+    concurrencyPolicy: Forbid
+    historyLimit: 5
+    restartPolicy: Never
+    schedule: {{ .Values.backup.schedule | quote }}
+  supportDynamicTags: false
+{{- end }}
+
+{{- if eq .Values.backup.mode "physical" }}
+---
+kind: workload
+name: {{ include "mongo-cluster.physicalBackup.name" . }}
+description: MongoDB physical backup trigger
+tags: {{- include "mongo-cluster.tags" . | nindent 2 }}
+spec:
+  type: cron
+  containers:
+    - name: pbm-trigger
+      image: {{ .Values.backup.physical.image }}
+      command: /bin/sh
+      args:
+        - -c
+        - |
+          MONGO_URI="mongodb://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@replica-0.{{ include "mongo-cluster.name" . }}.{{ include "mongo-cluster.backup.location" . }}.{{ .Values.gvc.name }}.cpln.local:27017/admin?replicaSet=rs0&authSource=admin&authMechanism=SCRAM-SHA-256"
+          echo "Starting physical backup..."
+          OUTPUT=$(pbm backup --type=physical --wait --mongodb-uri="${MONGO_URI}" 2>&1) || true
+          if echo "${OUTPUT}" | grep -q "saved to remote store"; then
+            echo "Backup completed successfully"
+            exit 0
+          fi
+          echo "Backup failed:"
+          echo "${OUTPUT}"
+          exit 1
+      inheritEnv: false
+      cpu: {{ .Values.backup.physical.cron.resources.cpu | quote }}
+      memory: {{ .Values.backup.physical.cron.resources.memory | quote }}
+      env:
+        - name: MONGO_INITDB_ROOT_USERNAME
+          value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.username'
+        - name: MONGO_INITDB_ROOT_PASSWORD
+          value: 'cpln://secret/{{ include "mongo-cluster.secretConfig.name" . }}.password'
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: true
+    timeoutSeconds: 3600
+  localOptions:
+    - location: //location/{{ include "mongo-cluster.backup.location" . }}
+      suspend: false
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      outboundAllowCIDR: []
+    internal:
+      inboundAllowType: none
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "mongo-cluster.identity.name" . }}
+  job:
+    activeDeadlineSeconds: 14400
+    concurrencyPolicy: Forbid
+    historyLimit: 5
+    restartPolicy: Never
+    schedule: {{ .Values.backup.schedule | quote }}
+  supportDynamicTags: false
+{{- end }}
+
+{{- end }}

@@ -1,0 +1,71 @@
+{{- if .Values.proxy.enabled }}
+---
+kind: workload
+name: {{ include "mongo-cluster.proxy.name" . }}
+description: HAProxy primary-only endpoint for MongoDB
+tags: {{- include "mongo-cluster.tags" . | nindent 2 }}
+spec:
+  type: standard
+  containers:
+    - name: haproxy
+      image: {{ .Values.proxy.image }}
+      inheritEnv: false
+      command: /bin/sh
+      args:
+        - /proxy/start.sh
+      cpu: {{ .Values.proxy.resources.cpu }}
+      memory: {{ .Values.proxy.resources.memory }}
+      ports:
+        - number: 27017
+          protocol: tcp
+        - number: 8404
+          protocol: http
+        - number: 8405
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /healthz
+          port: 8404
+          scheme: HTTP
+        failureThreshold: 3
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        successThreshold: 1
+        timeoutSeconds: 2
+      volumes:
+        - path: /proxy/start.sh
+          uri: cpln://secret/{{ include "mongo-cluster.secretProxyStartup.name" . }}.payload
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "mongo-cluster.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      metric: rps
+      minScale: {{ .Values.proxy.minReplicas }}
+      maxScale: {{ .Values.proxy.maxReplicas }}
+      maxConcurrency: 0
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: {{ .Values.multiZone }}
+    timeoutSeconds: 5
+  firewallConfig:
+    internal:
+      inboundAllowType: {{ .Values.firewall.internalAllowType }}
+      {{- if .Values.firewall.workloads }}
+      inboundAllowWorkload: {{ .Values.firewall.workloads | toYaml | nindent 8 }}
+      {{- end }}
+    external:
+      inboundAllowCIDR: []
+      outboundAllowCIDR: []
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  rolloutOptions:
+    maxSurgeReplicas: "1"
+    maxUnavailableReplicas: "0"
+    minReadySeconds: 0
+    scalingPolicy: OrderedReady
+{{- end }}

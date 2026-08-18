@@ -1,0 +1,21 @@
+---
+kind: policy
+name: {{ include "mongo-cluster.policy.name" . }}
+description: MongoDB policy
+tags: {{- include "mongo-cluster.tags" . | nindent 2 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.gvc.name }}/identity/{{ include "mongo-cluster.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "mongo-cluster.secretConfig.name" . }}
+  - //secret/{{ include "mongo-cluster.secretKeyfile.name" . }}
+  - //secret/{{ include "mongo-cluster.secretStartup.name" . }}
+  {{- if .Values.proxy.enabled }}
+  - //secret/{{ include "mongo-cluster.secretProxyStartup.name" . }}
+  {{- end }}
+  {{- if and .Values.backup.enabled (eq .Values.backup.mode "physical") }}
+  - //secret/{{ include "mongo-cluster.secretPbmStartup.name" . }}
+  {{- end }}

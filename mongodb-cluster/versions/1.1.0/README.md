@@ -62,16 +62,15 @@ resources:
   memory: 2Gi
 
 mongodb:
-  username: admin
-  password: mypassword
-  database: mydatabase
-  # REQUIRED: Generate with `openssl rand -base64 32`
-  replicaSetKey: "Ol0GnqpqntkcnjprS+Pu/1Ji8fcSEKb8f4zkF5c+dEQ="
+  # Dictionary secret holding username, password and database. Must EXIST BEFORE INSTALL.
+  credentialsSecretName: my-mongodb-credentials
+  # Opaque secret holding the replica-set keyfile. Must EXIST BEFORE INSTALL.
+  keyfileSecretName: my-mongodb-keyfile
 ```
 
-> **Important**: Generate a unique `replicaSetKey` before deploying. This key authenticates replica set members to each other and must not be changed after the cluster is initialized.
->
-> Generate with: `openssl rand -base64 32`
+Both secrets are prerequisites — see [Prerequisites](#prerequisites). They are deliberately **separate**: granting an application `reveal` on the database credentials must not also hand it the key that lets a member join your replica set.
+
+> **The keyfile must not be changed after the cluster is initialized.** It authenticates replica-set members to each other; rotating it requires a full cluster restart.
 
 **Volume** — set the initial storage capacity (minimum 10 GiB). Optionally enable autoscaling to expand the volume as data grows:
 
@@ -128,14 +127,16 @@ Connect using the appropriate endpoint:
 
 ```
 Port: 27017
-Database: {mongodb.database}
-Username: {mongodb.username}
-Password: {mongodb.password}
+Database: the `database` entry of your credentials secret
+Username: the `username` entry of your credentials secret
+Password: the `password` entry of your credentials secret
 ```
+
+Read them back with `cpln secret reveal my-mongodb-credentials -o yaml`.
 
 Example connection string (proxy):
 ```
-mongodb://admin:mypassword@{release-name}-mongo-proxy.{gvc}.cpln.local:27017/mydatabase?authSource=admin
+mongodb://USERNAME:PASSWORD@{release-name}-mongo-proxy.{gvc}.cpln.local:27017/DATABASE?authSource=admin
 ```
 
 For driver-level connection pooling, set `maxPoolSize` in your driver config to a value appropriate for your workload. A sensible starting point is 10–50 connections per app replica.
@@ -299,7 +300,9 @@ After removal, apply the template upgrade to reduce the replica count. If stale 
 ## Important Notes
 
 - **Minimum replicas**: Use at least 3 replicas per location for HA. A 2-replica cluster cannot maintain quorum if one replica fails.
-- **Replica set key**: The `replicaSetKey` must be generated before deployment and must not be changed after the cluster is initialized. Changing it requires a full cluster restart.
+- **The keyfile must be valid base64, or mongod will not start.** MongoDB accepts 6-1024 characters from the base64 alphabet only (`A-Z a-z 0-9 + / =`). A passphrase containing hyphens or punctuation **will not work** — generate it with `openssl rand -base64 756`. The container validates this at boot and fails with an explicit message rather than mongod's unhelpful one.
+- **The keyfile must not change after the cluster is initialized.** It authenticates replica-set members to each other; rotating it requires a full cluster restart.
+- **Both prerequisite secrets must exist BEFORE you install.** A missing one wedges the deployment waiting on a secret that is not there, which reads as a platform fault rather than a missing step.
 - **Odd total replica count**: Aim for an odd total number of replicas across all locations (3, 5, 7, 9) to guarantee a clear majority in all split-brain scenarios.
 - **Read from secondaries**: To offload reads from the primary, use `readPreference=secondaryPreferred` in your connection string. Note that secondary reads may be slightly stale.
 - **Connection pooling**: Configure `maxPoolSize` in your MongoDB driver to prevent connection exhaustion. A per-app-replica pool of 10–50 is a reasonable starting point.

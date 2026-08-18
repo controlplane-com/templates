@@ -127,6 +127,7 @@ objectStore:
 
 ```yaml
 langfuse:
+  publicUrl: "" # custom domain, with scheme; empty = derived from the platform endpoint
   web:
     image: langfuse/langfuse:3.225.2
     minReplicas: 2 # Keep at 2+ for zero-downtime rolling deploys
@@ -232,6 +233,7 @@ Or use a [Langfuse SDK](https://langfuse.com/docs/sdk/overview).
 - `encryptionKey` can never be changed: it encrypts every LLM provider key your users add under **Settings → LLM Connections**, and rotating it makes all of them unreadable.
 - Sign-up is closed by default and the owner account is provisioned from your auth secret. Set `langfuse.auth.disableSignup: false` if you want anyone who can reach the UI to register their own account and organization.
 - Back up PostgreSQL: it holds users, projects, API keys, prompts and datasets. Enable snapshots on its volumeset. ClickHouse data already lives in your bucket, and Redis holds only the transient queue.
+- Serving Langfuse on your own domain requires `langfuse.publicUrl` (include the scheme). Auth redirects and the session cookie's Secure flag are derived from it; left empty, the auto-assigned platform endpoint is used.
 - Changing `publicAccess` or `internalAccess` takes up to a couple of minutes to propagate — re-test before concluding the knob did not work.
 - The first `helm upgrade` after an install re-applies the bundled PostgreSQL, which briefly interrupts the app while it restarts.
 

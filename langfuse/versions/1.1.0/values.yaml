@@ -18,6 +18,13 @@ objectStore:
 
 # ─── Langfuse application ─────────────────────────────────────────────────────
 langfuse:
+  # Public base URL — feeds auth redirects and the sign-out/error pages NextAuth
+  # renders server-side, and decides whether the session cookie gets the Secure
+  # flag. Empty = derived from the platform canonical endpoint when publicAccess
+  # is on. Set it only for a custom domain, and include the scheme:
+  #   publicUrl: https://langfuse.example.com
+  publicUrl: ""
+
   web:
     image: langfuse/langfuse:3.225.2
     minReplicas: 2 # Keep at 2+ for zero-downtime rolling deploys

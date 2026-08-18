@@ -91,6 +91,9 @@ compatibility fallbacks — the version bump IS the migration path.
 {{- if not .Values.langfuse.auth.secretName -}}
   {{- fail "langfuse.auth.secretName is required: it names the prerequisite dictionary secret holding nextAuthSecret, encryptionKey, salt, adminEmail and adminPassword. Create the secret BEFORE installing." -}}
 {{- end -}}
+{{- if and .Values.langfuse.publicUrl (not (or (hasPrefix "http://" .Values.langfuse.publicUrl) (hasPrefix "https://" .Values.langfuse.publicUrl))) -}}
+  {{- fail "langfuse.publicUrl must include the scheme, e.g. https://langfuse.example.com" -}}
+{{- end -}}
 {{- if not .Values.langfuse.auth.organizationName -}}
   {{- fail "langfuse.auth.organizationName is required — it names the organization created for the first-run admin." -}}
 {{- end -}}

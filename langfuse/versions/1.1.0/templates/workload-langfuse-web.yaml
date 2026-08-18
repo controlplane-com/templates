@@ -42,8 +42,23 @@ spec:
         - name: REDIS_AUTH
           value: cpln://secret/{{ include "langfuse.secret.name" . }}.redisPassword
         # Auth
+        # NEXTAUTH_URL must be the origin the BROWSER uses: NextAuth builds the
+        # form actions of its own server-rendered pages from it, and only sets
+        # the session cookie's Secure flag when it is https. The canonical
+        # hostname shape is not stable and the org alias is not injected on its
+        # own, so it is derived at runtime from this workload's own
+        # CPLN_GLOBAL_ENDPOINT (already a full URL — never prepend a scheme)
+        # rather than assembled here.
+        {{- if .Values.langfuse.publicUrl }}
+        - name: NEXTAUTH_URL
+          value: {{ .Values.langfuse.publicUrl | quote }}
+        {{- else if .Values.publicAccess.enabled }}
+        - name: NEXTAUTH_URL
+          value: "$(CPLN_GLOBAL_ENDPOINT)"
+        {{- else }}
         - name: NEXTAUTH_URL
           value: http://{{ include "langfuse.web.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:3000
+        {{- end }}
         - name: AUTH_TRUST_HOST
           value: "true"
         # Signing and encryption keys come from the prerequisite secret, so they

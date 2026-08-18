@@ -79,6 +79,12 @@ Names must match the dependency charts' own helpers (pg-ha.secretDatabase.name /
 {{- if .Values.app.appSecret -}}
 {{- fail "umami: app.appSecret was removed in 1.1.0 — the app secret signs auth tokens and is now a prerequisite opaque secret. Create it, then set app.appSecretName to its name: printf '%s' \"$(openssl rand -base64 32)\" | cpln secret create-opaque --name my-umami-app-secret --encoding plain -f -" -}}
 {{- end -}}
+{{- if .Values.resources.cpu -}}
+{{- fail "umami: resources.cpu was renamed to resources.maxCpu in 1.1.0 — the block exposes both a reservation and a limit, so the limit is named maxCpu beside minCpu" -}}
+{{- end -}}
+{{- if .Values.resources.memory -}}
+{{- fail "umami: resources.memory was renamed to resources.maxMemory in 1.1.0 — the block exposes both a reservation and a limit, so the limit is named maxMemory beside minMemory" -}}
+{{- end -}}
 {{- if not .Values.app.appSecretName -}}
 {{- fail "umami: app.appSecretName is required — the name of an opaque secret (encoding: plain) that must EXIST BEFORE INSTALL and hold the app secret. Create it with: printf '%s' \"$(openssl rand -base64 32)\" | cpln secret create-opaque --name my-umami-app-secret --encoding plain -f -" -}}
 {{- end -}}

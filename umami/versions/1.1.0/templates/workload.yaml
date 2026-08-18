@@ -13,8 +13,8 @@ spec:
       inheritEnv: false
       minCpu: {{ .Values.resources.minCpu | quote }}
       minMemory: {{ .Values.resources.minMemory | quote }}
-      cpu: {{ .Values.resources.cpu | quote }}
-      memory: {{ .Values.resources.memory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
       env:
         - name: DATABASE_TYPE
           value: postgresql

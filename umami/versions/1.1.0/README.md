@@ -33,10 +33,10 @@ image: ghcr.io/umami-software/umami:3.2.0
 replicas: 1            # 1 = proven single-instance; 2+ = always-on, zero-downtime restarts
 
 resources:            # per replica
-  cpu: 500m
-  memory: 512Mi
   minCpu: 100m
+  maxCpu: 500m
   minMemory: 256Mi
+  maxMemory: 512Mi
 
 app:
   # Opaque secret (encoding: plain) holding the app secret, which signs auth

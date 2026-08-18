@@ -1,0 +1,26 @@
+apiVersion: v2
+name: umami
+description: Umami privacy-first, cookieless web and product analytics with a PostgreSQL backing store
+type: application
+version: 1.1.0
+appVersion: "3.2.0"
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+  - name: postgres
+    version: 3.3.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+    condition: postgres.enabled
+  - name: postgres-highly-available
+    alias: postgresHA
+    version: 2.4.2
+    repository: "oci://ghcr.io/controlplane-com/templates"
+    condition: postgresHA.enabled
+
+annotations:
+  created: "2026-07-27"
+  lastModified: "2026-08-17"
+  category: "analytics"
+  createsGvc: false

@@ -1,0 +1,15 @@
+kind: policy
+name: {{ include "umami.policy.name" . }}
+description: Umami policy
+tags: {{- include "umami.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "umami.identity.name" . }}
+targetKind: secret
+targetLinks:
+  # Exactly the user-created app-secret and the active backing store's
+  # credential secret — nothing else.
+  - //secret/{{ .Values.app.appSecretName }}
+  - //secret/{{ include "umami.db.secretName" . }}

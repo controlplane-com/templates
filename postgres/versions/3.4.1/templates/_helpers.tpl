@@ -61,13 +61,13 @@ ignoring the credentials it was given.
 */}}
 {{- define "pg.validateCredentials" -}}
 {{- if hasKey .Values.config "username" -}}
-  {{- fail "config.username was REMOVED in postgres 3.4.0. Database credentials are no longer values: create a `dictionary` secret holding the keys `username`, `password` and `database`, and set config.credentialsSecretName to its name. See Prerequisites in the README." -}}
+  {{- fail "config.username was REMOVED in postgres 3.4.0. Database credentials are no longer values: create a `dictionary` secret holding the keys `username`, `password` and `database`, and set config.credentialsSecretName to its name. See Prerequisites in the README. If this chart is BUNDLED inside another template (umami, grafana, keycloak and others), do NOT create a secret yourself — that template creates it for you; set its own database values instead and see ITS README." -}}
 {{- end -}}
 {{- if hasKey .Values.config "password" -}}
-  {{- fail "config.password was REMOVED in postgres 3.4.0. Database credentials are no longer values: create a `dictionary` secret holding the keys `username`, `password` and `database`, and set config.credentialsSecretName to its name. See Prerequisites in the README." -}}
+  {{- fail "config.password was REMOVED in postgres 3.4.0. Database credentials are no longer values: create a `dictionary` secret holding the keys `username`, `password` and `database`, and set config.credentialsSecretName to its name. See Prerequisites in the README. If this chart is BUNDLED inside another template (umami, grafana, keycloak and others), do NOT create a secret yourself — that template creates it for you; set its own database values instead and see ITS README." -}}
 {{- end -}}
 {{- if hasKey .Values.config "database" -}}
-  {{- fail "config.database was REMOVED in postgres 3.4.0. Database credentials are no longer values: create a `dictionary` secret holding the keys `username`, `password` and `database`, and set config.credentialsSecretName to its name. See Prerequisites in the README." -}}
+  {{- fail "config.database was REMOVED in postgres 3.4.0. Database credentials are no longer values: create a `dictionary` secret holding the keys `username`, `password` and `database`, and set config.credentialsSecretName to its name. See Prerequisites in the README. If this chart is BUNDLED inside another template (umami, grafana, keycloak and others), do NOT create a secret yourself — that template creates it for you; set its own database values instead and see ITS README." -}}
 {{- end -}}
 {{- if not .Values.config.credentialsSecretName -}}
   {{- fail "config.credentialsSecretName is required — it names the `dictionary` secret holding the `username`, `password` and `database` keys. Create that secret BEFORE installing; see Prerequisites in the README." -}}

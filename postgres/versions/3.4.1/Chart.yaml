@@ -3,7 +3,7 @@ name: postgres
 description: Single-replica PostgreSQL with persistent storage, optional pooling and backups
 
 type: application
-version: 3.4.0
+version: 3.4.1
 appVersion: "18"
 
 dependencies:

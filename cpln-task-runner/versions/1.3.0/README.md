@@ -49,7 +49,7 @@ api:
     max: 3
   port: 8080
   public:
-    enabled: true            # reachable from the internet; see Important Notes
+    enabled: false           # DEFAULT. /v1/enqueue authenticates nothing — see Important Notes before enabling
     pathPrefix: ""           # path prefix for the public endpoint (empty = root)
   admin:
     # REQUIRED prerequisite secret — an `opaque` secret (encoding: plain) whose

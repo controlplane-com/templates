@@ -1,0 +1,115 @@
+image: n8nio/n8n:2.29.8
+
+resources:
+  cpu: 1000m
+  memory: 1Gi
+  minCpu: 250m
+  minMemory: 512Mi
+
+# ─── Encryption Key (prerequisite) ────────────────────────────────────────────
+# Create BEFORE install: an opaque secret (encoding: plain) holding a random
+# key, e.g. `openssl rand -hex 24`. Back it up — losing it bricks every
+# credential n8n has stored. Do not change it after first boot.
+encryptionKey:
+  secretName: my-n8n-encryption-key # name of your pre-created opaque secret
+
+# ─── Instance Owner ───────────────────────────────────────────────────────────
+# Created automatically on first boot (no public /setup window).
+owner:
+  email: admin@example.com # owner login email
+  firstName: Instance
+  lastName: Owner
+  password: change-me-n8n-owner # change before installing
+
+timezone: UTC # IANA timezone for Schedule triggers and $now (GENERIC_TIMEZONE)
+
+volumeset:
+  capacity: 10 # GiB (minimum 10) — instance config and binary execution data
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: true # editor + webhooks on the canonical *.cpln.app HTTPS endpoint
+
+internalAccess: # internal firewall scope (in-GVC webhook callers)
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # used with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Database: Highly Available PostgreSQL (default) ──────────────────────────
+# Deploys the postgres-highly-available template: 3 Patroni replicas, 3 etcd
+# replicas, and an HAProxy leader-routing endpoint n8n connects to.
+postgresHA:
+  enabled: true
+  postgres:
+    username: n8n
+    password: change-me-n8n-db-password # change before installing
+    database: n8n
+  replicas: 3
+  volumeset:
+    capacity: 10 # initial capacity in GiB per replica (minimum is 10)
+
+  backup: # optional database backups — see README storage setup
+    enabled: false
+    mode: logical # logical or wal-g
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    logical:
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      schedule: "0 2 * * *"
+    walg:
+      intervalSeconds: 21600
+    provider: aws # options: aws, gcp, minio
+    aws:
+      bucket: n8n-pg-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: n8n-pg-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: n8n-pg-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: n8n-pg-backup-bucket
+      accessKey: my-minio-username
+      secretKey: my-minio-password
+      prefix: postgres/backups
+
+# ─── Database: Single-instance PostgreSQL (dev/lightweight) ───────────────────
+# Enable this and disable postgresHA for a lighter non-HA deployment.
+postgres:
+  enabled: false
+  config:
+    username: n8n
+    password: change-me-n8n-db-password # change before installing
+    database: n8n
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+  backup: # optional database backups (Postgres 17+) — see README storage setup
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
+    schedule: "0 2 * * *"
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    provider: aws # options: aws, gcp, minio
+    aws:
+      bucket: n8n-pg-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: n8n-pg-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: n8n-pg-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: n8n-pg-backup-bucket
+      accessKey: my-minio-username
+      secretKey: my-minio-password
+      prefix: postgres/backups

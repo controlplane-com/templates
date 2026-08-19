@@ -79,10 +79,24 @@
   the API on stateful workloads, so nothing limits the rollout; the chart deliberately does not send
   it. Treat every upgrade as a planned write outage. The FIRST upgrade after an install re-applies
   resources even with byte-identical values.
-- **`aws::ReadOnlyAccess` is still on the backup identity** when `provider: aws`. It is broader than
-  the bucket-scoped policy beside it and is a known open item — `redis-multi-location` 2.1.0 dropped
-  the equivalent. Removal was left out of 3.4.0 pending a spike confirming the backup image does not
-  depend on it.
+- **`aws::ReadOnlyAccess` was REMOVED from the backup identity in 3.4.0**, leaving `cpln-connector`
+  plus the user's bucket-scoped policy. The spike that settled it is worth knowing, because the same
+  reasoning applies to the ~21 other templates that still carry it: Control Plane attaches each
+  `policyRef` as a managed policy on a **per-identity derived IAM role**, so permissions are the
+  **union** of refs — and `ReadOnlyAccess` contains **no write actions at all** (its S3 portion is
+  `Get*`/`List*` on `*`). It could never have been carrying the upload; what it carried was read
+  access to every object in every bucket in the account. Proven, not argued: backups succeeded
+  without it, while a negative control (dropping the scoped policy and keeping `ReadOnlyAccess`)
+  failed on the very next run with `AccessDenied` on `PutObject`.
+- **Existing user IAM policies do NOT need updating for this.** A forced 30.9 MB multipart upload
+  succeeded under the old six-action policy, because multipart authorizes under `s3:PutObject`. The
+  four preflight/multipart actions added to the README policy JSON are defensive only — worth having,
+  since orphaned multipart parts bill silently, but nothing breaks without them.
+- **`cpln-connector` on the identity is a separate open question.** The spike found a backup completed
+  with the scoped policy alone, and that attaching `cpln-connector` grants `iam:CreateRole` /
+  `AttachRolePolicy` over cpln-tagged resources — a *larger* privilege than the one 3.4.0 removed. It
+  is genuinely required on the parent cloud-account role; whether it belongs on each workload identity
+  has not been decided.
 - **Firewall changes take 30–150 s to propagate.** Re-poll before concluding `internalAccess` is broken.
 
 ## Status

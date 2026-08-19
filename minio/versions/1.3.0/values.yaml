@@ -2,9 +2,15 @@ image: minio/minio:RELEASE.2025-09-07T16-13-09Z
 
 replicas: 6 # Must be at least 4 and an even number
 
-admin: # MinIO admin credentials
-  username: myuser
-  password: mypassword123
+admin:
+  # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL.
+  # A `dictionary` secret holding exactly two keys: `username` and `password`.
+  # These are the MinIO root credentials, i.e. the S3 access key and secret key
+  # every client and every other template will use. If the secret does not exist
+  # at install time the deployment WEDGES silently — `cpln logs` returns nothing
+  # at all. See Prerequisites in the README for the exact
+  # `cpln secret create-dictionary` command.
+  credentialsSecretName: my-minio-credentials
 
 resources: # Defaults are set for minimal production usage
   minCpu: 1

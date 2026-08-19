@@ -1,3 +1,4 @@
+{{- include "minio.validate" . -}}
 kind: policy
 name: {{ include "minio.policyName" . }}
 description: MinIO policy
@@ -11,4 +12,5 @@ bindings:
 targetKind: secret
 targetLinks:
   - //secret/{{ include "minio.secretStartup.name" . }}
-  - //secret/{{ include "minio.secretAdmin.name" . }}
+  # The user-created root credentials — reveal on exactly that one secret.
+  - //secret/{{ .Values.admin.credentialsSecretName }}

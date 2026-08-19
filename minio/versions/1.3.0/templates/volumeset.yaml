@@ -1,3 +1,4 @@
+{{- include "minio.validate" . -}}
 kind: volumeset
 name: {{ include "minio.volumeName" . }}
 gvc: {{ .Values.global.cpln.gvc }}

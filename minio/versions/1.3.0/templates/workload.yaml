@@ -1,3 +1,4 @@
+{{- include "minio.validate" . -}}
 kind: workload
 name: {{ include "minio.name" . }}
 description: MinIO
@@ -12,10 +13,12 @@ spec:
       env:
         - name: LOCAL_IP
           value: cpln://reference/status.podIP
+        # The root credentials come from the user-created prerequisite secret, so
+        # no MinIO access key or secret key is ever written into the Helm release.
         - name: MINIO_ROOT_PASSWORD
-          value: cpln://secret/{{ include "minio.secretAdmin.name" . }}.password
+          value: cpln://secret/{{ .Values.admin.credentialsSecretName }}.password
         - name: MINIO_ROOT_USER
-          value: cpln://secret/{{ include "minio.secretAdmin.name" . }}.username
+          value: cpln://secret/{{ .Values.admin.credentialsSecretName }}.username
       image: {{ .Values.image }}
       inheritEnv: false
       minCpu: {{ .Values.resources.minCpu | quote }}
@@ -28,12 +31,13 @@ spec:
         - number: 9001
           protocol: http
       volumes:
+        {{- /* recoveryPolicy is declared on both volumes because the API backfills `retain`. */}}
         - path: /data
           recoveryPolicy: retain
           uri: cpln://volumeset/{{ include "minio.volumeName" . }}
         - path: /minio/start.sh
+          recoveryPolicy: retain
           uri: cpln://secret/{{ include "minio.secretStartup.name" . }}.payload
-          
   identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "minio.identity.name" . }}
   defaultOptions:
     autoscaling:
@@ -52,7 +56,20 @@ spec:
     debug: false
     suspend: false
     timeoutSeconds: 5
+  rolloutOptions:
+    {{- /*
+    maxUnavailableReplicas is deliberately NOT set: the API DROPS it on a
+    stateful workload, so sending it produces permanent drift AND implies a
+    rolling-restart limit that is not in force.
+    terminationGracePeriodSeconds is declared because the API backfills 90.
+    */}}
+    maxSurgeReplicas: 25%
+    minReadySeconds: 0
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
   firewallConfig:
+    {{- /* Every field is declared, empty lists included: the API backfills them,
+    so omitting one makes a default install drift from the moment it is created. */}}
     external:
       inboundAllowCIDR: []
       inboundBlockedCIDR: []
@@ -62,8 +79,13 @@ spec:
       outboundBlockedCIDR: []
     internal:
       inboundAllowType: {{ .Values.internalAccess.type }}
-      {{- if .Values.internalAccess.workloads }}
-      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- if and .Values.internalAccess.workloads (has .Values.internalAccess.type (list "same-gvc" "workload-list")) }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- else }}
+      inboundAllowWorkload: []
       {{- end }}
   loadBalancer:
     direct:

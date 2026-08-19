@@ -12,7 +12,11 @@ targetLinks:
 {{- if .Values.createSecret }}
   - //secret/{{ .Values.secretName }}
 {{- else }}
-  - //secret/{{ .Values.redis.admin.fromSecret.name }}
   - //secret/{{ .Values.redis.redis.auth.fromSecret.name }}
+  {{- if ne .Values.redis.sentinel.auth.fromSecret.name .Values.redis.redis.auth.fromSecret.name }}
   - //secret/{{ .Values.redis.sentinel.auth.fromSecret.name }}
+  {{- end }}
+{{- end }}
+{{- if .Values.api.admin.apiKeySecretName }}
+  - //secret/{{ .Values.api.admin.apiKeySecretName }}
 {{- end }}

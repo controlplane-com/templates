@@ -1,86 +1,137 @@
 # Control Plane Task Runner
 
-A self-hosted task queue and scheduler service similar to Google Cloud Tasks, deployed on Control Plane.
-
-## Overview
-
-Task Runner provides HTTP-based task enqueuing with automatic retry, delayed/scheduled execution, per-client rate limiting, and multi-queue support with priority levels.
+A self-hosted HTTP task queue and scheduler, similar to Google Cloud Tasks. Enqueue a task over HTTP and the workers deliver it to your target URL with retries, delayed and scheduled execution, per-client rate limiting, and a circuit breaker. This template deploys the API, the workers, and the Redis Sentinel cluster they persist to.
 
 ## Architecture
 
-This template deploys two workloads:
+- **API workload** — HTTP endpoint for enqueuing tasks and for the admin endpoints; public by default
+- **Worker workload** — background processor that delivers tasks to their target URLs; internal only
+- **Redis + Sentinel** (bundled subchart) — highly available task persistence and coordination
+- **Secret** (optional, on by default) — holds the bundled Redis and Sentinel passwords
+- **Identity + policy** — grants both workloads `reveal` on exactly the secrets they read
 
-- **API**: HTTP endpoint for enqueuing tasks, managing clients, and health checks
-- **Worker**: Background processor that executes tasks from the queue
+## Prerequisites
 
-Both workloads connect to a Redis Sentinel cluster for high-availability task persistence and coordination. The template includes a Redis dependency that deploys a Redis Sentinel setup.
+**Create the admin API key secret BEFORE you install.** The `/admin/*` endpoints create, edit and delete clients and rate-limit tiers, and they are guarded by the `X-Admin-Key` header. The key is an `opaque` secret whose payload *is* the key:
+
+```sh
+printf '%s' "$(openssl rand -hex 32)" | \
+  cpln secret create-opaque --name my-cpln-task-runner-admin-key --encoding plain -f -
+```
+
+Use `printf`, not `echo` — `echo` appends a newline, which becomes part of the key and then has to be sent in every admin request.
+
+Read it back in plaintext with `-o yaml`; without it the payload is redacted:
+
+```sh
+cpln secret reveal my-cpln-task-runner-admin-key -o yaml
+```
+
+If the named secret does not exist, the deployment wedges silently — see Important Notes for how to diagnose that.
+
+Nothing else is required. The bundled Redis and Sentinel passwords are ordinary values (nobody types them), but they are used exactly as written, so change them from their `change-me-…` defaults.
 
 ## Configuration
 
-#### API Configuration
+**Image** — the same image runs both workloads:
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `api.enabled` | `true` | Enable/disable API workload |
-| `api.port` | `8080` | Container port |
-| `api.replicas.min` | `1` | Minimum replicas |
-| `api.replicas.max` | `3` | Maximum replicas |
-| `api.public.enabled` | `true` | Enable public internet access |
-| `api.public.pathPrefix` | `""` | Path prefix for public endpoint (empty for root) |
-| `api.resources.cpu` | `500m` | CPU allocation |
-| `api.resources.memory` | `512Mi` | Memory allocation |
-| `api.env.logLevel` | `info` | Log level (debug/info/warn/error) |
-| `api.env.adminApiKey` | `""` | Admin API key for protected endpoints |
-| `api.env.connectRetries` | `30` | Redis connection retry attempts |
-| `api.env.retryIntervalSec` | `2` | Redis retry interval in seconds |
-| `api.env.otelEndpoint` | `""` | OpenTelemetry collector endpoint |
+```yaml
+image: controlplanecorporation/cpln-task-runner:0.4
+```
 
-#### Worker Configuration
+**API** — the HTTP front end:
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `worker.enabled` | `true` | Enable/disable Worker workload |
-| `worker.port` | `8082` | Container port (for health checks) |
-| `worker.replicas.min` | `1` | Minimum replicas |
-| `worker.replicas.max` | `5` | Maximum replicas |
-| `worker.resources.cpu` | `1000m` | CPU allocation |
-| `worker.resources.memory` | `1Gi` | Memory allocation |
-| `worker.env.logLevel` | `info` | Log level |
-| `worker.env.concurrency` | `10` | Concurrent workers per replica |
-| `worker.env.taskTimeoutSec` | `1800` | Task timeout (30 min default) |
-| `worker.env.maxRetry` | `5` | Maximum retry attempts |
-| `worker.env.allowPrivateUrls` | `false` | Allow targeting private URLs |
-| `worker.env.cbFailureThreshold` | `5` | Circuit breaker failure threshold |
-| `worker.env.cbTimeoutSec` | `30` | Circuit breaker timeout |
-| `worker.env.connectRetries` | `30` | Redis connection retry attempts |
-| `worker.env.retryIntervalSec` | `2` | Redis retry interval in seconds |
-| `worker.env.otelEndpoint` | `""` | OpenTelemetry collector endpoint |
+```yaml
+api:
+  enabled: true
+  replicas:
+    min: 1
+    max: 3
+  port: 8080
+  public:
+    enabled: true            # reachable from the internet; see Important Notes
+    pathPrefix: ""           # path prefix for the public endpoint (empty = root)
+  admin:
+    # REQUIRED prerequisite secret — an `opaque` secret (encoding: plain) whose
+    # payload is the admin API key. "" disables admin auth and is rejected while
+    # public.enabled is true.
+    apiKeySecretName: my-cpln-task-runner-admin-key
+  resources:
+    cpu: 500m
+    memory: 512Mi
+  env:
+    logLevel: info           # debug / info / warn / error
+    otelEndpoint: ""         # empty disables tracing
+    connectRetries: 30       # Redis connection attempts at startup
+    retryIntervalSec: 2      # seconds between those attempts
+```
 
-#### Secret Configuration
+**Worker** — the delivery side:
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `createSecret` | `true` | Create a secret for Redis passwords and admin API key |
-| `secretName` | `task-runner-secrets` | Name of the secret to create (only used if `createSecret` is `true`) |
+```yaml
+worker:
+  enabled: true
+  replicas:
+    min: 1
+    max: 5
+  port: 8082                 # health checks only
+  resources:
+    cpu: 1
+    memory: 1Gi
+  env:
+    logLevel: info
+    concurrency: 10          # concurrent tasks per replica
+    taskTimeoutSec: 1800     # per-task timeout
+    maxRetry: 5              # delivery attempts before a task is archived
+    allowPrivateUrls: false  # allow tasks to target private/internal URLs
+    cbFailureThreshold: 5    # circuit breaker: failures before opening
+    cbTimeoutSec: 30         # circuit breaker: seconds before retrying
+    connectRetries: 30
+    retryIntervalSec: 2
+    otelEndpoint: ""
+```
 
-#### Redis Configuration
+**Bundled Redis credentials** — created for you unless you bring your own secret:
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `redis.redisPassword` | `mypassword` | Redis password (used if `createSecret` is `true`) |
-| `redis.sentinelPassword` | `mypassword` | Redis Sentinel password (used if `createSecret` is `true`) |
-| `redis.redis.auth.fromSecret.name` | `task-runner-secrets` | Secret name for Redis password (used if `createSecret` is `false`) |
-| `redis.redis.auth.fromSecret.passwordKey` | `redis-password` | Secret key for Redis password (used if `createSecret` is `false`) |
-| `redis.sentinel.auth.fromSecret.name` | `task-runner-secrets` | Secret name for Sentinel password (used if `createSecret` is `false`) |
-| `redis.sentinel.auth.fromSecret.passwordKey` | `redis-sentinel-password` | Secret key for Sentinel password (used if `createSecret` is `false`) |
-| `redis.admin.fromSecret.name` | `task-runner-secrets` | Secret name for admin API key (used if `createSecret` is `false`) |
-| `redis.admin.fromSecret.apiKeyKey` | `admin-api-key` | Secret key for admin API key (used if `createSecret` is `false`) |
+```yaml
+createSecret: true                  # false = supply your own secret instead
+secretName: task-runner-secrets     # name of the secret this chart creates
 
-**Note**: When `createSecret` is `true`, the template automatically creates a secret with Redis passwords and admin API key. When `createSecret` is `false`, configure the `redis.*.fromSecret` values to match your existing secret structure.
+redis:
+  redisPassword: change-me-cpln-task-runner-redis
+  sentinelPassword: change-me-cpln-task-runner-sentinel
+  redis:
+    auth:
+      fromSecret:
+        enabled: true
+        name: task-runner-secrets   # with createSecret: false, your secret's name
+        passwordKey: redis-password
+    persistence:
+      enabled: true
+  sentinel:
+    auth:
+      fromSecret:
+        enabled: true
+        name: task-runner-secrets
+        passwordKey: redis-sentinel-password
+    persistence:
+      enabled: true
+```
 
-## Usage
+With `createSecret: false`, create a `dictionary` secret yourself holding the keys named by `passwordKey` above, and point both `fromSecret.name` values at it.
 
-### Enqueue a Task
+## Connecting
+
+| What | Address | Credentials |
+|---|---|---|
+| API (public) | the workload's `*.cpln.app` canonical endpoint | none for `/v1/*`; `X-Admin-Key` for `/admin/*` |
+| API (internal) | `{release}-task-runner-api.{gvc}.cpln.local:8080` | same |
+| Redis Sentinel | `{release}-sentinel.{gvc}.cpln.local:26379` | the Sentinel password above |
+| Admin key | your `opaque` secret | `cpln secret reveal my-cpln-task-runner-admin-key -o yaml` |
+
+Find the public endpoint under `status.canonicalEndpoint` of `cpln workload get {release}-task-runner-api --gvc {gvc} -o yaml`.
+
+### Enqueue a task
 
 ```bash
 curl -X POST https://your-api-endpoint/v1/enqueue \
@@ -97,44 +148,57 @@ curl -X POST https://your-api-endpoint/v1/enqueue \
   }'
 ```
 
-### Admin Endpoints
+### Admin endpoints
 
-When `ADMIN_API_KEY` is configured, admin endpoints require the `X-Admin-Key` header:
+Every `/admin/*` request needs the `X-Admin-Key` header:
 
 ```bash
 # List clients
 curl https://your-api-endpoint/admin/clients \
-  -H "X-Admin-Key: your-admin-key"
+  -H "X-Admin-Key: YOUR-ADMIN-KEY"
 
-# Create/update client
+# Create or update a client
 curl -X POST https://your-api-endpoint/admin/clients/set \
-  -H "X-Admin-Key: your-admin-key" \
+  -H "X-Admin-Key: YOUR-ADMIN-KEY" \
   -H "Content-Type: application/json" \
-  -d '{
-    "client_id": "new-service",
-    "tier": "premium",
-    "enabled": true
-  }'
+  -d '{"client_id": "new-service", "tier": "premium", "enabled": true}'
 ```
 
-## Rate Limiting Tiers
+### Rate-limiting tiers
 
-Rate limiting tiers are configured per-client via the admin API (see Admin Endpoints above). The available tiers and their limits are:
+Tiers are assigned per client through the admin API:
 
-| Tier | Requests/min | Max Concurrent |
+| Tier | Requests/min | Max concurrent |
 |------|-------------|----------------|
 | free | 10 | 1 |
 | basic | 100 | 5 |
 | premium | 1,000 | 20 |
 | enterprise | 5,000 | 50 |
 
-## OpenTelemetry
+### OpenTelemetry
 
-To enable Control Plane’s native tracing through OpenTelemetry, specify an `otelEndpoint` in your values for each workload.
+Set `otelEndpoint` on either workload to export traces, and set the GVC's **Tracing Provider** to Control Plane. The built-in HTTP collector endpoint is `tracing.controlplane:4318`.
 
-In your GVC configuration, ensure the `Tracing Provider` is set to `Control Plane`.
+## Upgrading from 1.2.x
 
-Once enabled, you can point your service to the default HTTP collector endpoint:
-```
-tracing.controlplane:4318
-```
+One behaviour changes, and it will break an existing workflow if you relied on the old default:
+
+- **Admin authentication is now enforced.** 1.2.x shipped `api.env.adminApiKey: ""`, which left `/admin/*` **unauthenticated on a public API** — anyone who found the endpoint could create clients and change rate-limit tiers. That key is now a prerequisite secret named by `api.admin.apiKeySecretName`, and an install that still sets `api.env.adminApiKey` (or `redis.admin.fromSecret`) fails immediately with a message naming the replacement. Create the secret with the *same* key you were using, and admin scripts keep working; create a new one and every caller must be updated. Leaving `apiKeySecretName` empty is still possible for an internal-only deployment, but is rejected while `api.public.enabled` is true.
+- The bundled Redis and Sentinel passwords now default to `change-me-…` instead of `mypassword`. An existing install keeps whatever you set; a fresh install with the defaults untouched runs on a password published in this repo.
+
+## Important Notes
+
+- A missing prerequisite secret wedges the deployment **silently**: `cpln logs` returns zero lines because the container never starts. The only diagnostic is `cpln workload get-deployments {release}-task-runner-api --gvc {gvc} -o yaml` → `status.versions[].message`, which names the missing secret. After creating it, recovery takes 5.5–8.5 minutes, or run `cpln workload force-redeployment {release}-task-runner-api --gvc {gvc}` to cut that to about 90 seconds.
+- **`/v1/enqueue` has no authentication of its own.** It accepts any `client_id` that has been registered through the admin API and rejects unknown ones, so on a public deployment the client ID is the only thing standing between a stranger and your queue — use random client IDs, or set `api.public.enabled: false` and enqueue from inside the GVC.
+- Workers fetch the URLs they are given. `allowPrivateUrls: false` keeps them off internal addresses; turning it on lets any enqueued task reach anything the worker can route to.
+- Change the `change-me-…` Redis and Sentinel passwords before the first install. Once the volumes are initialised, changing them requires uninstalling (which deletes the volume sets) and reinstalling.
+- The first `helm upgrade` after an install re-applies the bundled Redis resources even with identical values, which restarts them; the API returns errors for a minute or two while Redis comes back. Later upgrades are clean.
+- Access changes take roughly 30 seconds to a few minutes to propagate, so a freshly toggled `public.enabled` looks unchanged at first.
+
+## Links
+
+- [Control Plane documentation](https://docs.controlplane.com/)
+- [Secrets reference](https://docs.controlplane.com/reference/secret)
+- [Workload firewall and security](https://docs.controlplane.com/concepts/security)
+- [Redis template](https://github.com/controlplane-com/templates/tree/main/redis)
+- [Task Runner image on Docker Hub](https://hub.docker.com/r/controlplanecorporation/cpln-task-runner)

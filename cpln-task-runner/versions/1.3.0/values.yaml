@@ -11,11 +11,26 @@ api:
     max: 3
   # Container port
   port: 8080
-  # Public access configuration
+  # Public access configuration.
+  # The API is reachable from the public internet when this is true. /v1/enqueue has
+  # no authentication of its own — it accepts any client_id that has been registered
+  # through the admin API — so treat client IDs as secrets on a public deployment.
   public:
     enabled: true
     # Path prefix for public endpoint (empty for root)
     pathPrefix: ""
+  # ─── Admin API authentication (REQUIRED prerequisite secret) ─────────────────
+  # /admin/* creates, edits and deletes clients and rate-limit tiers. It is guarded
+  # by the X-Admin-Key header, and the key comes from an `opaque` secret (encoding:
+  # plain) whose payload IS the key.
+  #
+  # THE SECRET MUST EXIST BEFORE YOU INSTALL — otherwise the deployment wedges
+  # silently and `cpln logs` returns nothing at all. See Prerequisites in the README.
+  #
+  # Setting this to "" leaves the admin endpoints UNAUTHENTICATED, and is rejected
+  # outright while api.public.enabled is true.
+  admin:
+    apiKeySecretName: my-cpln-task-runner-admin-key
   # Resource allocation
   resources:
     cpu: 500m
@@ -24,8 +39,6 @@ api:
   env:
     # Log level (debug, info, warn, error)
     logLevel: info
-    # Admin API key for protected endpoints (leave empty to disable admin auth)
-    adminApiKey: ""
     # OpenTelemetry endpoint (leave empty to disable tracing)
     otelEndpoint: ""
     # Redis connection retries
@@ -70,22 +83,21 @@ worker:
     # OpenTelemetry endpoint (leave empty to disable tracing)
     otelEndpoint: ""
 
-# Creates a secret for redis + sentinel passwords and admin api key
+# Creates a secret holding the bundled Redis + Sentinel passwords.
+# Set to false to bring your own secret; see redis.*.auth.fromSecret below.
 createSecret: true
 # Must match names below. Disregard if providing your own secret
 secretName: task-runner-secrets
 
 # Redis configuration
 redis:
-  # Redis and sentinel passwords
-  redisPassword: mypassword
-  sentinelPassword: mypassword
-  # If createSecret is true, do not change
-  # If providing a secret, adjust secret values below to match the secret name and password key.
-  admin:
-    fromSecret:
-      name: task-runner-secrets
-      apiKeyKey: admin-api-key
+  # Passwords for the BUNDLED Redis and Sentinel, used only by the API and Worker
+  # containers — nobody types them. Used as written when createSecret is true, so
+  # change them: an untouched install runs on a password published in this repo.
+  redisPassword: change-me-cpln-task-runner-redis
+  sentinelPassword: change-me-cpln-task-runner-sentinel
+  # If createSecret is true, do not change.
+  # If providing a secret, adjust the values below to match its name and password keys.
   redis:
     auth:
       fromSecret:

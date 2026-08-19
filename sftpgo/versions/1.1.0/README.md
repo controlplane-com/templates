@@ -157,7 +157,7 @@ Public access uses a dedicated direct load balancer, required for raw-TCP protoc
 | Public SFTP endpoint | `tcp://...cpln.app:2022` — `status.endpoint` of `{release}-sftpgo-proxy` (scale_to_zero) or `{release}-sftpgo` (always_warm) |
 | Connect | `sftp -P 2022 {username}@{endpoint-host}` |
 | In-GVC (internal) | `{release}-sftpgo-proxy:2022` (scale_to_zero) or `{release}-sftpgo:2022` (always_warm) |
-| Web admin (if enabled) | canonical `*.cpln.app` endpoint of `{release}-sftpgo` (always_warm + publicAccess) |
+| Web admin (if enabled) | **`cpln port-forward {release}-sftpgo 8080:8080 --gvc {gvc}`**, then `http://localhost:8080`. Not the canonical endpoint: `loadBalancer.direct` on 2022 makes that a `tcp://…:2022` address, so HTTPS to it does not reach the web admin. |
 | Credentials | SFTP logins from `users[]`; the admin from your `admin.secretName` secret |
 
 ## Cold starts and client configuration (`scale_to_zero` mode)

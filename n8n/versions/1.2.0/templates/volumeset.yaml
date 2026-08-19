@@ -1,0 +1,12 @@
+kind: volumeset
+name: {{ include "n8n.volume.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: n8n data directory (instance config and binary execution data)
+tags: {{- include "n8n.tags" . | nindent 4 }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.capacity }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d

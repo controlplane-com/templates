@@ -21,7 +21,7 @@
 | redis subchart | Redis + Sentinel workloads, volumes, their own identity/policy |
 
 ## Key knobs (shipped 1.3.0 defaults)
-`image` (`controlplanecorporation/cpln-task-runner:0.4`) | `api.public.enabled` (**true**) | `api.admin.apiKeySecretName` (`my-cpln-task-runner-admin-key`, **must exist before install**) | `api.resources.cpu/memory` (500m / 512Mi) | `api.replicas` (1–3) | `worker.replicas` (1–5) | `worker.resources` (1 / 1Gi) | `worker.env.concurrency` (10) | `worker.env.taskTimeoutSec` (1800) | `worker.env.maxRetry` (5) | `worker.env.allowPrivateUrls` (false) | `createSecret` (true) | `secretName` (`task-runner-secrets`) | `redis.redisPassword` / `redis.sentinelPassword` (`change-me-cpln-task-runner-redis` / `-sentinel`)
+`image` (`controlplanecorporation/cpln-task-runner:0.4`) | `api.public.enabled` (**false** as of 1.3.0) | `api.admin.apiKeySecretName` (`my-cpln-task-runner-admin-key`, **must exist before install**) | `api.resources.cpu/memory` (500m / 512Mi) | `api.replicas` (1–3) | `worker.replicas` (1–5) | `worker.resources` (1 / 1Gi) | `worker.env.concurrency` (10) | `worker.env.taskTimeoutSec` (1800) | `worker.env.maxRetry` (5) | `worker.env.allowPrivateUrls` (false) | `createSecret` (true) | `secretName` (`task-runner-secrets`) | `redis.redisPassword` / `redis.sentinelPassword` (`change-me-cpln-task-runner-redis` / `-sentinel`)
 
 ## Troubleshooting / considerations
 - **Security history — 1.2.x is the most exposed default in the 2026-08 audit (row 22).** `api.env.adminApiKey: ""` meant "disable admin auth", and `api.public.enabled` was `true`, so `/admin/*` — create/edit/delete clients and rate-limit tiers — was open to the internet on a default install. `redisPassword`/`sentinelPassword` were both the working value `mypassword`.

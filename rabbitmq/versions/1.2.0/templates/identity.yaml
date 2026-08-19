@@ -1,3 +1,4 @@
+{{- include "rabbitmq.validate" . -}}
 kind: identity
 gvc: {{ .Values.global.cpln.gvc }}
 name: {{ include "rabbitmq.identity.name" . }}

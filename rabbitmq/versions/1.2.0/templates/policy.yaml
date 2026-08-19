@@ -1,3 +1,4 @@
+{{- include "rabbitmq.validate" . -}}
 kind: policy
 name: {{ include "rabbitmq.policy.name" . }}
 description: RabbitMQ Policy
@@ -10,4 +11,7 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "rabbitmq.identity.name" . }}
 targetKind: secret
 targetLinks:
+  # The template-created rabbitmq.conf.
   - //secret/{{ include "rabbitmq.secret.name" . }}
+  # The user-created default-user credentials — reveal on exactly that one secret.
+  - //secret/{{ .Values.credentialsSecretName }}

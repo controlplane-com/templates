@@ -1,23 +1,36 @@
 image:
   repository: rabbitmq:3-management
 
-diskCapacity: 10 # In Gigabytes
+# ─── Credentials ──────────────────────────────────────────────────────────────
+# REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL.
+# A `dictionary` secret holding exactly two keys: `username` and `password`.
+# These are the RabbitMQ default user: the management-UI login AND the AMQP
+# credentials every producer and consumer puts in its connection string.
+# If the secret does not exist at install time the deployment WEDGES silently —
+# `cpln logs` returns nothing at all. See Prerequisites in the README for the
+# exact `cpln secret create-dictionary` command.
+credentialsSecretName: my-rabbitmq-credentials
+
+# ─── Resources ────────────────────────────────────────────────────────────────
 memory: 250Mi
 cpu: 200m
-firewall:
-    internal_inboundAllowType: "same-gvc" # Options: same-org / same-gvc(Recommended)
-    # external_inboundAllowCIDR: 0.0.0.0/0 # Provide a comma-separated list
-    # external_outboundAllowCIDR: "0.0.0.0/0" # "111.222.333.444/16,111.222.444.333/32" # Provide a comma-separated list
-timeoutSeconds: 30
 
+timeoutSeconds: 30 # inbound request timeout in seconds
+
+# ─── Networking ───────────────────────────────────────────────────────────────
+# External inbound is always closed: RabbitMQ is reachable from inside the GVC
+# only. Use `cpln port-forward` to reach the management UI from a browser.
+internalAccess:
+  type: same-gvc # options: none, same-gvc (recommended), same-org
+
+# ─── RabbitMQ configuration ───────────────────────────────────────────────────
 rabbitmq_conf:
-  listeners_tcp_default: 5672
-  default_user: 'user'
-  default_pass: 'changeMe'
-  
+  listeners_tcp_default: 5672 # AMQP listener port
+
 env:
   RABBITMQ_CONFIG_FILE: /etc/rabbitmq/rabbitmq.conf
 
+# ─── Storage ──────────────────────────────────────────────────────────────────
 volumeset:
   volume:
       initialCapacity: 10 # In Gigabytes. For high-throughput-ssd minimum is '1000'

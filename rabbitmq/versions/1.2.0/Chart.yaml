@@ -1,14 +1,14 @@
 apiVersion: v2
 name: rabbitmq
-description: Single-node RabbitMQ message broker with a persistent volume for queues and messages
+description: Single-node RabbitMQ message broker with persistent storage for queues and messages
 
 type: application
-version: 1.1.1
-appVersion: "3"
+version: 1.2.0
+appVersion: "3-management"
 
 annotations:
   created: "2024-01-23"
-  lastModified: "2026-08-17"
+  lastModified: "2026-08-19"
   category: "queue"
   createsGvc: false
 

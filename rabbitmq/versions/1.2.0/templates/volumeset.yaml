@@ -1,3 +1,4 @@
+{{- include "rabbitmq.validate" . -}}
 {{- if .Values.volumeset }}
 kind: volumeset
 name: {{ include "rabbitmq.volume.name" . }}
@@ -6,4 +7,9 @@ spec:
   fileSystemType: {{ .Values.volumeset.volume.fileSystemType }}
   initialCapacity: {{ .Values.volumeset.volume.initialCapacity }}
   performanceClass: {{ .Values.volumeset.volume.performanceClass }}
+  {{- /* Declared because the API backfills both; omitting them makes a default
+  install drift from the moment it is created. */}}
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d
 {{- end }}

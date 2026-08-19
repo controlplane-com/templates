@@ -1,3 +1,15 @@
+{{- include "rabbitmq.validate" . -}}
+{{- /*
+The default user reaches RabbitMQ as ENV VARS, not through rabbitmq.conf. A
+`cpln://secret/...` reference is resolved only in an env var — inside a mounted
+config file it would land as that literal string and RabbitMQ would boot with a
+username of "cpln://secret/...". RabbitMQ 3.9+ reads RABBITMQ_DEFAULT_USER and
+RABBITMQ_DEFAULT_PASS natively (the docker entrypoint no longer touches them).
+*/}}
+{{- $env := merge (dict
+      "RABBITMQ_DEFAULT_USER" (printf "cpln://secret/%s.username" .Values.credentialsSecretName)
+      "RABBITMQ_DEFAULT_PASS" (printf "cpln://secret/%s.password" .Values.credentialsSecretName))
+      (default dict .Values.env) }}
 kind: workload
 name: {{ include "rabbitmq.name" . }}
 tags: {{- include "rabbitmq.tags" . | nindent 2 }}
@@ -12,12 +24,10 @@ spec:
       metrics:
         path: /metrics
         port: 15692
-      {{- if .Values.env }}
       env:
-      {{- range $key, $value := .Values.env }}
+      {{- range $key, $value := $env }}
         - name: {{ $key }}
           value: {{ $value | quote }}
-      {{- end }}
       {{- end }}
       readinessProbe:
         failureThreshold: 10
@@ -35,7 +45,8 @@ spec:
         - number: 15692
           protocol: http
       volumes:
-        - path: {{ .Values.env.RABBITMQ_CONFIG_FILE }}
+        - path: {{ include "rabbitmq.configPath" . }}
+          recoveryPolicy: retain
           uri: 'cpln://secret/{{ include "rabbitmq.secret.name" . }}'
     {{- if .Values.volumeset }}
         - path: /var/lib/rabbitmq
@@ -54,21 +65,30 @@ spec:
     capacityAI: false
     debug: false
     suspend: false
-    timeoutSeconds: 5
-{{- if .Values.firewall }}
+    timeoutSeconds: {{ .Values.timeoutSeconds }}
   firewallConfig:
-    {{- if or (hasKey .Values.firewall "external_inboundAllowCIDR") (hasKey .Values.firewall "external_outboundAllowCIDR") }}
+    {{- /* Every field is declared, empty lists included: the API backfills them,
+    so omitting one makes a default install drift from the moment it is created.
+    External inbound stays closed — RabbitMQ is an internal broker here. */}}
     external:
-      inboundAllowCIDR: {{- if .Values.firewall.external_inboundAllowCIDR }}{{ .Values.firewall.external_inboundAllowCIDR | splitList "," | toYaml | nindent 8 }}{{- else }} []{{- end }}
-      outboundAllowCIDR: {{- if .Values.firewall.external_outboundAllowCIDR }}{{ .Values.firewall.external_outboundAllowCIDR | splitList "," | toYaml | nindent 8 }}{{- else }} []{{- end }}
-    {{- end }}
-    {{- if hasKey .Values.firewall "internal_inboundAllowType" }}
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
     internal:
-      inboundAllowType: {{ default "[]" .Values.firewall.internal_inboundAllowType }}
-    {{- end }}
-{{- end }}
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      inboundAllowWorkload: []
   rolloutOptions:
+    {{- /*
+    maxUnavailableReplicas is deliberately NOT set: the API drops it on a
+    stateful workload, so sending it produces permanent drift AND implies a
+    rolling-restart limit that is not in force.
+    terminationGracePeriodSeconds is declared because the API backfills 90.
+    */}}
     maxSurgeReplicas: 25%
-    maxUnavailableReplicas: '1'
     minReadySeconds: 0
     scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90

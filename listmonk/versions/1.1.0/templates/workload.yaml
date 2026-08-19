@@ -18,6 +18,14 @@ spec:
       args:
         - -c
         - |
+          # Upstream's minimum lengths, checked here because the credentials now
+          # live in a user-created secret and are invisible at render time. A
+          # short value makes --install fail forever inside the wait loop below,
+          # which reads as "the database is down" — so name the real cause.
+          if [ "${#LISTMONK_ADMIN_USER}" -lt 3 ] || [ "${#LISTMONK_ADMIN_PASSWORD}" -lt 8 ]; then
+            echo "listmonk: the {{ .Values.admin.secretName }} secret must hold a username of at least 3 characters and a password of at least 8 (upstream install requirement)" >&2
+            exit 1
+          fi
           until ./listmonk --install --idempotent --yes --config ''; do
             echo "listmonk: waiting for database..."
             sleep 3
@@ -47,10 +55,11 @@ spec:
         - name: LISTMONK_db__ssl_mode
           value: disable
         # Consumed during --install only: creates the Super Admin on first boot.
+        # User-created prerequisite dictionary secret.
         - name: LISTMONK_ADMIN_USER
-          value: 'cpln://secret/{{ include "listmonk.secret.admin.name" . }}.username'
+          value: 'cpln://secret/{{ .Values.admin.secretName }}.username'
         - name: LISTMONK_ADMIN_PASSWORD
-          value: 'cpln://secret/{{ include "listmonk.secret.admin.name" . }}.password'
+          value: 'cpln://secret/{{ .Values.admin.secretName }}.password'
       ports:
         - number: 9000
           protocol: http

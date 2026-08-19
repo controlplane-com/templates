@@ -15,13 +15,6 @@ Listmonk Uploads Volume Set Name (filesystem media store)
 {{- end }}
 
 {{/*
-Listmonk Admin Bootstrap Secret Name (dictionary: username, password)
-*/}}
-{{- define "listmonk.secret.admin.name" -}}
-{{- printf "%s-listmonk-admin" .Release.Name }}
-{{- end }}
-
-{{/*
 Listmonk Identity Name
 */}}
 {{- define "listmonk.identity.name" -}}
@@ -77,12 +70,7 @@ Names must match the dependency charts' own helpers (pg-ha.secretDatabase.name /
 {{/* Validation */}}
 
 {{- define "listmonk.validate" -}}
-{{- if lt (len .Values.admin.username) 3 -}}
-{{- fail "listmonk: admin.username must be at least 3 characters (upstream install requirement)" -}}
-{{- end -}}
-{{- if lt (len .Values.admin.password) 8 -}}
-{{- fail "listmonk: admin.password must be at least 8 characters (upstream install requirement)" -}}
-{{- end -}}
+{{- include "listmonk.validateAdmin" . -}}
 {{- if and .Values.postgresHA.enabled .Values.postgres.enabled -}}
 {{- fail "listmonk: enable exactly one backing store — set either postgres.enabled or postgresHA.enabled to true, not both" -}}
 {{- end -}}
@@ -91,6 +79,30 @@ Names must match the dependency charts' own helpers (pg-ha.secretDatabase.name /
 {{- end -}}
 {{- if and .Values.postgresHA.enabled (not (dig "proxy" "enabled" true .Values.postgresHA)) -}}
 {{- fail "listmonk: postgresHA.proxy.enabled must remain true — listmonk connects through the HAProxy leader endpoint for writes and schema migrations" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+The Super Admin credentials became a user-created prerequisite secret in 1.1.0 —
+they guard a login form on the public endpoint, so they may not transit Helm
+values. The removed keys are named explicitly so an install carrying a 1.0.x
+values file fails at render with its replacement rather than silently falling
+back to a default. There are deliberately NO compatibility shims: the version
+bump IS the migration path.
+
+Upstream's minimum lengths (username 3, password 8) can no longer be checked at
+render — the values live in a secret — so the boot script checks them instead
+and exits with a named error rather than looping forever on a failed --install.
+*/}}
+{{- define "listmonk.validateAdmin" -}}
+{{- if hasKey .Values.admin "username" -}}
+{{- fail "listmonk: admin.username was REMOVED in 1.1.0. Put it in a `dictionary` secret (key: `username`) together with `password`, and set admin.secretName to that secret's name. Create the secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- if hasKey .Values.admin "password" -}}
+{{- fail "listmonk: admin.password was REMOVED in 1.1.0. Put it in a `dictionary` secret (key: `password`) together with `username`, and set admin.secretName to that secret's name. Create the secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- if not .Values.admin.secretName -}}
+{{- fail "listmonk: admin.secretName is required — it names the prerequisite `dictionary` secret holding the `username` and `password` keys. Create that secret BEFORE installing; see Prerequisites in the README." -}}
 {{- end -}}
 {{- end }}
 

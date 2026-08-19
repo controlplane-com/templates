@@ -9,5 +9,6 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "listmonk.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "listmonk.secret.admin.name" . }}
+  # The user-created Super Admin credentials — reveal on exactly that one secret.
+  - //secret/{{ .Values.admin.secretName }}
   - //secret/{{ include "listmonk.db.secretName" . }}

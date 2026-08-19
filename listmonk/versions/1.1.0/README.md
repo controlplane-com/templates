@@ -8,11 +8,31 @@ This app deploys [listmonk](https://listmonk.app/) — a high-performance, self-
 - **Uploads volumeset**: Persistent media store at `/listmonk/uploads` for images uploaded via the admin Media page.
 - **PostgreSQL (single-instance, default)**: The `postgres` template — holds all lists, subscribers, campaigns, and settings.
 - **PostgreSQL (HA, optional)**: The `postgres-highly-available` template instead — 3 Patroni replicas with automatic failover and an HAProxy leader endpoint, for a durable production store.
-- **Secret, identity, and policy**: A template-managed admin bootstrap secret (dictionary) and a least-privilege policy granting the workload `reveal` on exactly that secret and the active database credential secret.
+- **Admin secret** (dictionary) — *not created by this template*; you create it before install and reference it by name. Holds the Super Admin login.
+- **Identity + policy**: a least-privilege policy granting the workload `reveal` on exactly two secrets — your admin secret and the active database credential secret.
 
 ## Prerequisites
 
-- None for a default install. Optional: a cloud account + bucket if you enable the Postgres backup pass-through.
+**One dictionary secret must exist BEFORE you install.** The Super Admin guards a login form on the public endpoint, so it is a prerequisite secret rather than a value — a value would sit in plaintext in the Helm release for the life of the install.
+
+```bash
+cpln secret create-dictionary --name my-listmonk-admin \
+  --entry username=admin \
+  --entry password="$(openssl rand -hex 24)"
+```
+
+Then set `admin.secretName` to that name. Read the password back with `cpln secret reveal my-listmonk-admin -o yaml` (the `-o yaml` is required — the default output does not show the values).
+
+| Key | What it is |
+|---|---|
+| `username` | The Super Admin's login name. **Minimum 3 characters** (upstream requirement). |
+| `password` | Its password. **Minimum 8 characters.** The login form is on the public endpoint. |
+
+A value shorter than the minimum makes listmonk's own `--install` fail on every attempt; the container checks both lengths at boot and exits with a message naming this secret, rather than looping on a misleading "waiting for database".
+
+**If the secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments {release}-listmonk --gvc {gvc} -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own within roughly 5.5–10.5 minutes — poll rather than giving up — or clear it immediately with `cpln workload force-redeployment {release}-listmonk --gvc {gvc}` (~90 s).
+
+Optional: a cloud account + bucket if you enable the Postgres backup pass-through.
 
 ## Configuration
 
@@ -37,11 +57,10 @@ timezone: Etc/UTC     # container TZ — governs campaign scheduling times
 
 ```yaml
 admin:
-  username: admin                    # min 3 chars
-  password: change-me-listmonk-admin # min 8 chars — change BEFORE installing
+  secretName: my-listmonk-admin # PREREQUISITE dictionary secret — must exist BEFORE install
 ```
 
-The Super Admin is created during the first install only; afterwards it lives in the database, and changing these values does not update the account (manage users in **Admin → Settings → Users**).
+The Super Admin is created during the first install only; afterwards it lives in the database, and editing the secret does not update the account (manage users in **Admin → Settings → Users**).
 
 ### Backing Store
 
@@ -102,6 +121,8 @@ internalAccess:
   workloads: []       # only for same-gvc / workload-list
 ```
 
+Public access is **on** by default and is load-bearing: subscription forms, unsubscribe links, and tracking pixels are served to subscribers on the open internet. A firewall change takes 30 s to a few minutes to propagate, so re-test rather than trusting the first response.
+
 ## Connecting
 
 | What | Value |
@@ -110,7 +131,18 @@ internalAccess:
 | Admin UI / login | `https://{canonical-endpoint}/admin` |
 | Public subscription page | `https://{canonical-endpoint}/subscription/form` |
 | In-GVC (internal) | `http://{release}-listmonk.{gvc}.cpln.local:9000` |
-| Admin credentials | `admin.username` / `admin.password` values (bootstrap secret) |
+| Admin credentials | `username` / `password` from your `admin.secretName` secret — `cpln secret reveal my-listmonk-admin -o yaml` |
+
+## Upgrading from 1.0.x
+
+The Super Admin credentials moved out of `values.yaml` into the prerequisite dictionary secret above. Carrying either old key forward fails the render with a message naming its replacement; there are no compatibility fallbacks.
+
+| Removed key | Now a key in the admin secret |
+|---|---|
+| `admin.username` | `username` |
+| `admin.password` | `password` |
+
+**An existing install's Super Admin password does not change on upgrade.** The account was written to the database on the first install and `LISTMONK_ADMIN_*` is never read again, so the secret's contents only matter to a fresh install. Change the password in **Admin → Settings → Users**. If the install is still carrying the published 1.0.x default (`change-me-listmonk-admin`), treat that password as compromised and change it now.
 
 ## Post-install setup
 
@@ -146,7 +178,8 @@ The backing template's README has the full per-provider walkthrough.
 
 ## Important Notes
 
-- **Change `admin.password` (and `postgres.config.password`) before installing.** The admin account is created on the first install only — changing the values later does not update it.
+- **Create the admin secret before installing.** A missing prerequisite secret leaves the workload waiting on something that does not exist, with zero log lines — see Prerequisites for how to diagnose it.
+- **Change `postgres.config.password` before installing** — it is bundled plumbing, used exactly as given.
 - **Single instance by design — do not attempt to scale.** Upstream forbids two listmonk instances on one database (duplicate campaign sends); the template pins one replica and uses a no-surge rollout, so upgrades incur a brief gap instead of overlapping instances.
 - **No mail sends until SMTP is configured** in **Admin → Settings → SMTP** — see Post-install setup.
 - **Keep `publicAccess` enabled for subscriber-facing pages to work** — subscription forms, unsubscribe links, and tracking pixels must be reachable from the internet.

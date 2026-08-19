@@ -12,11 +12,15 @@ volumeset:
   capacity: 10 # initial capacity in GiB (minimum is 10)
 
 # ─── Admin Bootstrap ──────────────────────────────────────────────────────────
-# Super Admin is created on FIRST install only; afterwards it lives in the
-# database — changing these values later does NOT update the account.
+# REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. A `dictionary`
+# secret holding exactly two keys, `username` (min 3 chars) and `password`
+# (min 8 chars); the login form it guards sits on the public endpoint. The
+# Super Admin is created on FIRST install only — editing the secret later does
+# NOT update the account. If the secret does not exist at install time the
+# deployment WEDGES silently — `cpln logs` returns nothing at all. See
+# Prerequisites in the README.
 admin:
-  username: admin                    # min 3 chars
-  password: change-me-listmonk-admin # min 8 chars — change before installing
+  secretName: my-listmonk-admin # name of your pre-created dictionary secret
 
 timezone: Etc/UTC # container TZ — governs campaign scheduling times
 

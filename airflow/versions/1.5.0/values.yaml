@@ -58,8 +58,7 @@ airflow:
     #   adminPassword — the Airflow UI login for `admin.username` below
     # See Prerequisites in the README for the exact command.
     secretName: my-airflow-auth
-    jwtExpirationDelta: 3600 # API token lifetime (seconds)
-    jwtRefreshThreshold: 300 # window before expiry in which a token may be refreshed (seconds)
+    jwtExpirationTime: 86400 # API token lifetime in seconds (Airflow's own default)
 
   admin:
     username: admin # its password is `adminPassword` in the secret above

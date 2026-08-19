@@ -189,6 +189,8 @@ API tokens are issued by `POST /auth/token` with the same credentials and passed
 
 ## Important Notes
 
+- **A wide fan-out can silently lose tasks.** Measured on this image: a 24-task burst finished 7 failed / 9 success, with the failures never starting at all (`hostname: ""`, `start_date: null`). The cause is a concurrent-import race inside the Celery executor's Redis transport — `module 'redis' has no attribute 'client'` from `kombu/transport/redis.py` — not anything this template configures. Until it is fixed upstream, avoid wide simultaneous fan-outs, or stagger task submission. **The tasks fail silently: nothing surfaces in the UI as an error.**
+- **A missing auth secret can take up to about ten minutes to self-heal** (measured 10 min 17 s) once you create it. `cpln workload force-redeployment` clears it in roughly 90 seconds if you do not want to wait.
 - **This template creates its GVC** (KEDA is a GVC-level setting). Point `gvc.name` at a NEW name: Helm adopts a GVC that already exists, and `helm uninstall` then deletes it along with every unrelated workload in it.
 - **Create the auth secret before installing.** Without it the deployment wedges and `cpln logs` returns zero lines. The only diagnostic is `status.versions[].message` from `cpln workload get-deployments {release}-airflow-webserver --gvc {gvc} -o yaml` (`get-deployments`, not plain `get`). It self-heals about 5.5–8.5 minutes after the secret appears, or immediately with `cpln workload force-redeployment`.
 - **Set `postgres.config.password` at first install.** It is bundled plumbing no human types, but the shipped `change-me-airflow-db` is a published value and cannot be changed once the volume is initialized.

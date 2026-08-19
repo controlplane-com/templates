@@ -86,6 +86,12 @@ Common labels - delegated to cpln-common
 Top-level validation - included by every rendered resource
 */}}
 {{- define "airflow.validate" -}}
+{{- if hasKey .Values.airflow.auth "jwtExpirationDelta" -}}
+{{- fail "airflow.auth.jwtExpirationDelta was REMOVED in 1.5.0 — it rendered AIRFLOW__API_AUTH__JWT_EXPIRATION_DELTA, which is not an option in Airflow 3.x and did nothing. Use airflow.auth.jwtExpirationTime instead (seconds)." -}}
+{{- end -}}
+{{- if hasKey .Values.airflow.auth "jwtRefreshThreshold" -}}
+{{- fail "airflow.auth.jwtRefreshThreshold was REMOVED in 1.5.0 — it rendered AIRFLOW__API_AUTH__JWT_REFRESH_THRESHOLD, which is not an option in Airflow 3.x and did nothing. There is no equivalent; remove it." -}}
+{{- end -}}
 {{- include "airflow.validateRemovedKeys" . -}}
 {{- include "airflow.validateAuth" . -}}
 {{- include "airflow.validateGitSync" . -}}

@@ -1,0 +1,52 @@
+kind: workload
+name: {{ include "airflow.postgres.name" . }}
+description: Airflow Postgres
+gvc: {{ .Values.gvc.name }}
+tags:
+  {{- include "airflow.tags" . | nindent 2 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "airflow.identity.name" . }}
+  containers:
+    - name: postgresql
+      env:
+        - name: PGDATA
+          value: "/var/lib/postgresql/data/pg_data"
+        - name: POSTGRES_DB
+          value: {{ .Values.postgres.config.database }}
+        - name: POSTGRES_PASSWORD
+          value: 'cpln://secret/{{ include "airflow.secret.name" . }}.password'
+        - name: POSTGRES_USER
+          value: 'cpln://secret/{{ include "airflow.secret.name" . }}.username'
+      image: {{ .Values.postgres.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.postgres.resources.minCpu | quote }}
+      cpu: {{ .Values.postgres.resources.maxCpu | quote }}
+      minMemory: {{ .Values.postgres.resources.minMemory | quote }}
+      memory: {{ .Values.postgres.resources.maxMemory | quote }}
+      ports:
+        - number: 5432
+          protocol: tcp
+      readinessProbe:
+        exec:
+          command:
+            - sh
+            - '-c'
+            - 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}'
+        failureThreshold: 10
+        initialDelaySeconds: 17
+        periodSeconds: 5
+        successThreshold: 1
+        timeoutSeconds: 3
+      volumes:
+        - path: /var/lib/postgresql/data
+          uri: 'cpln://volumeset/{{ include "airflow.postgresVolume.name" . }}'
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+    capacityAI: false
+  firewallConfig:
+    internal:
+      inboundAllowType: same-gvc

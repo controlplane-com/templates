@@ -1,0 +1,6 @@
+---
+kind: identity
+name: {{ include "airflow.identity.name" . }}
+description: Airflow identity
+tags: {{- include "airflow.tags" . | nindent 4 }}
+gvc: {{ .Values.gvc.name }}

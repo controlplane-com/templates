@@ -9,8 +9,15 @@ tags:
 aws:
   cloudAccountLink: //cloudaccount/{{ .Values.backup.aws.cloudAccountName }}
   policyRefs:
+    # `aws::ReadOnlyAccess` was removed in 3.4.0. Control Plane attaches each ref
+    # to a per-identity derived IAM role, so permissions are the UNION of refs —
+    # and ReadOnlyAccess contains no write actions at all (its S3 portion is
+    # Get*/List* on *). It could never have been carrying the upload; what it did
+    # carry was read access to every object in every bucket in the account.
+    # Proven removable by spike 2026-08-19: backups succeeded without it, and a
+    # negative control (dropping the scoped policy instead) failed immediately,
+    # confirming the result was not stale credentials.
     - cpln-connector
-    - aws::ReadOnlyAccess
     - {{ .Values.backup.aws.policyName | quote }}
 {{- end }}
 {{- if and .Values.backup.enabled (eq .Values.backup.provider "gcp") }}

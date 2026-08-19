@@ -11,12 +11,16 @@ api:
     max: 3
   # Container port
   port: 8080
-  # Public access configuration.
-  # The API is reachable from the public internet when this is true. /v1/enqueue has
-  # no authentication of its own — it accepts any client_id that has been registered
-  # through the admin API — so treat client IDs as secrets on a public deployment.
+  # Public access configuration. DEFAULTS TO FALSE — see the README.
+  # /v1/enqueue has NO authentication whatsoever, and it does not merely accept
+  # registered client IDs: an UNKNOWN client_id is accepted and AUTO-REGISTERED
+  # (measured). So with this true, any stranger can make the worker issue arbitrary
+  # outbound HTTP with a method, headers and body of their choosing. There is no
+  # knob that closes that — the application has no client authentication at all.
+  # Turn this on only if you accept an open queue, or front it with an
+  # authenticating proxy of your own.
   public:
-    enabled: true
+    enabled: false
     # Path prefix for public endpoint (empty for root)
     pathPrefix: ""
   # ─── Admin API authentication (REQUIRED prerequisite secret) ─────────────────

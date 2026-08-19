@@ -51,16 +51,18 @@ spec:
         - name: N8N_ENCRYPTION_KEY
           value: 'cpln://secret/{{ .Values.encryptionKey.secretName }}.payload'
         # ── Instance owner (env-managed — no unauthenticated /setup window) ──
+        # Both values come from the prerequisite dictionary secret. n8n needs a
+        # bcrypt hash here, never a plaintext password.
         - name: N8N_INSTANCE_OWNER_MANAGED_BY_ENV
           value: 'true'
         - name: N8N_INSTANCE_OWNER_EMAIL
-          value: 'cpln://secret/{{ include "n8n.secretOwner.name" . }}.email'
+          value: 'cpln://secret/{{ .Values.owner.secretName }}.email'
         - name: N8N_INSTANCE_OWNER_FIRST_NAME
           value: {{ .Values.owner.firstName | quote }}
         - name: N8N_INSTANCE_OWNER_LAST_NAME
           value: {{ .Values.owner.lastName | quote }}
         - name: N8N_INSTANCE_OWNER_PASSWORD_HASH
-          value: 'cpln://secret/{{ include "n8n.secretOwner.name" . }}.password-hash'
+          value: 'cpln://secret/{{ .Values.owner.secretName }}.passwordHash'
         # ── Public URL construction (host derived at runtime in start.sh) ──
         - name: N8N_PROTOCOL
           value: https

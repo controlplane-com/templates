@@ -13,13 +13,18 @@ resources:
 encryptionKey:
   secretName: my-n8n-encryption-key # name of your pre-created opaque secret
 
-# ─── Instance Owner ───────────────────────────────────────────────────────────
-# Created automatically on first boot (no public /setup window).
+# ─── Instance Owner (prerequisite) ────────────────────────────────────────────
+# REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. If it does not
+# exist the deployment wedges silently and looks like a platform fault.
+# A `dictionary` secret holding exactly two keys:
+#   email         — the owner login email
+#   passwordHash  — a BCRYPT HASH of the owner password (n8n rejects plaintext)
+# n8n re-applies the owner from these values on every start, so changing them
+# changes the login. See README Prerequisites for the exact command.
 owner:
-  email: admin@example.com # owner login email
+  secretName: my-n8n-owner # name of your pre-created dictionary secret
   firstName: Instance
   lastName: Owner
-  password: change-me-n8n-owner # change before installing
 
 timezone: UTC # IANA timezone for Schedule triggers and $now (GENERIC_TIMEZONE)
 

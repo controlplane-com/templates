@@ -15,13 +15,6 @@ n8n Volumeset Name
 {{- end }}
 
 {{/*
-Owner Bootstrap Secret Name
-*/}}
-{{- define "n8n.secretOwner.name" -}}
-{{- printf "%s-n8n-owner" .Release.Name }}
-{{- end }}
-
-{{/*
 Start Script Secret Name
 */}}
 {{- define "n8n.secretStart.name" -}}
@@ -78,14 +71,12 @@ secret also holds {database}.
 {{/* Validation */}}
 
 {{- define "n8n.validate" -}}
+{{- include "n8n.validateRemovedKeys" . -}}
 {{- if not .Values.encryptionKey.secretName -}}
 {{- fail "n8n: encryptionKey.secretName is required — the name of a pre-created opaque secret (encoding: plain) holding the credential-encryption key" -}}
 {{- end -}}
-{{- if not .Values.owner.email -}}
-{{- fail "n8n: owner.email is required — the instance owner's login email" -}}
-{{- end -}}
-{{- if not .Values.owner.password -}}
-{{- fail "n8n: owner.password is required — the instance owner's login password" -}}
+{{- if not .Values.owner.secretName -}}
+{{- fail "n8n: owner.secretName is required — the name of a pre-created dictionary secret holding 'email' and 'passwordHash' (bcrypt). Create the secret BEFORE installing; see the README." -}}
 {{- end -}}
 {{- if not (has .Values.internalAccess.type (list "none" "same-gvc" "same-org" "workload-list")) -}}
 {{- fail (printf "n8n: internalAccess.type must be 'none', 'same-gvc', 'same-org', or 'workload-list', got '%s'" .Values.internalAccess.type) -}}
@@ -98,6 +89,21 @@ secret also holds {database}.
 {{- end -}}
 {{- if and .Values.postgresHA.enabled (not (dig "proxy" "enabled" true .Values.postgresHA)) -}}
 {{- fail "n8n: postgresHA.proxy.enabled must remain true — the HAProxy leader endpoint is n8n's stable database endpoint" -}}
+{{- end -}}
+{{- end }}
+
+
+{{/*
+Keys removed in 1.1.0. An upgrader carrying a 1.0.x values file forward is told
+exactly what to do instead of silently getting a default. There are deliberately
+NO compatibility fallbacks — the version bump IS the migration path.
+*/}}
+{{- define "n8n.validateRemovedKeys" -}}
+{{- if dig "email" "" .Values.owner -}}
+{{- fail "n8n: owner.email was removed in 1.1.0. Put it in the prerequisite dictionary secret named by owner.secretName (key: email) — see the README." -}}
+{{- end -}}
+{{- if dig "password" "" .Values.owner -}}
+{{- fail "n8n: owner.password was removed in 1.1.0. Put a BCRYPT HASH of it in the prerequisite dictionary secret named by owner.secretName (key: passwordHash) — see the README. n8n re-applies the owner from those values on every start, so hash the password you are using today to keep the same login." -}}
 {{- end -}}
 {{- end }}
 

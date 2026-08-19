@@ -1,0 +1,17 @@
+apiVersion: v2
+name: airflow
+description: Apache Airflow with CeleryExecutor, KEDA autoscaling, Redis and Postgres
+type: application
+version: 1.5.0
+appVersion: "3.0.3"
+
+annotations:
+  created: "2025-08-14"
+  lastModified: "2026-08-19"
+  category: "workflow-orchestration"
+  createsGvc: true
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

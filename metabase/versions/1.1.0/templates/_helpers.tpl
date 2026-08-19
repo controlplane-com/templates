@@ -8,13 +8,6 @@ Metabase Workload Name
 {{- end }}
 
 {{/*
-Admin Bootstrap Secret Name
-*/}}
-{{- define "metabase.secretAdmin.name" -}}
-{{- printf "%s-metabase-admin" .Release.Name }}
-{{- end }}
-
-{{/*
 Start Script Secret Name
 */}}
 {{- define "metabase.secretStart.name" -}}
@@ -74,13 +67,8 @@ secret also holds {database}.
 {{- if not .Values.encryptionKey.secretName -}}
 {{- fail "metabase: encryptionKey.secretName is required — the name of a pre-created opaque secret (encoding: plain) holding the encryption key (min 16 chars)" -}}
 {{- end -}}
-{{- if not .Values.admin.email -}}
-{{- fail "metabase: admin.email is required — the admin account's login email" -}}
-{{- end -}}
-{{- if not .Values.admin.password -}}
-{{- fail "metabase: admin.password is required — the admin account's login password (letters + digits, 8+ chars)" -}}
-{{- end -}}
-{{- range $field, $value := dict "admin.email" .Values.admin.email "admin.firstName" .Values.admin.firstName "admin.lastName" .Values.admin.lastName "admin.password" .Values.admin.password "siteName" .Values.siteName -}}
+{{- include "metabase.validateAdmin" . -}}
+{{- range $field, $value := dict "admin.firstName" .Values.admin.firstName "admin.lastName" .Values.admin.lastName "siteName" .Values.siteName -}}
 {{- if or (contains "\"" ($value | toString)) (contains "\\" ($value | toString)) -}}
 {{- fail (printf "metabase: %s must not contain double quotes or backslashes — it is embedded in the first-boot setup API JSON body" $field) -}}
 {{- end -}}
@@ -96,6 +84,29 @@ secret also holds {database}.
 {{- end -}}
 {{- if and .Values.postgresHA.enabled (not (dig "proxy" "enabled" true .Values.postgresHA)) -}}
 {{- fail "metabase: postgresHA.proxy.enabled must remain true — the HAProxy leader endpoint is Metabase's stable database endpoint" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+The admin login became a user-created prerequisite secret in 1.1.0 — it guards a
+form on the public endpoint, so it may not transit Helm values. The removed keys
+are named explicitly so an install carrying a 1.0.x values file fails at render
+with its replacement rather than silently falling back to a default. There are
+deliberately NO compatibility shims: the version bump IS the migration path.
+
+The no-quote/no-backslash constraint still applies to the email and password,
+but their VALUES are no longer visible at render time — the start script
+re-checks them at boot instead and refuses to POST a malformed setup body.
+*/}}
+{{- define "metabase.validateAdmin" -}}
+{{- if hasKey .Values.admin "email" -}}
+{{- fail "metabase: admin.email was REMOVED in 1.1.0. Put it in a `dictionary` secret (key: `email`) together with `password`, and set admin.secretName to that secret's name. Create the secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- if hasKey .Values.admin "password" -}}
+{{- fail "metabase: admin.password was REMOVED in 1.1.0. Put it in a `dictionary` secret (key: `password`) together with `email`, and set admin.secretName to that secret's name. Create the secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- if not .Values.admin.secretName -}}
+{{- fail "metabase: admin.secretName is required — it names the prerequisite `dictionary` secret holding the `email` and `password` keys. Create that secret BEFORE installing; see Prerequisites in the README." -}}
 {{- end -}}
 {{- end }}
 

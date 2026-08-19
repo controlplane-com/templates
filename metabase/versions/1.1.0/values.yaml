@@ -15,13 +15,18 @@ encryptionKey:
   secretName: my-metabase-encryption-key # name of your pre-created opaque secret
 
 # ─── Admin Account ────────────────────────────────────────────────────────────
-# Created automatically on first boot (no public /setup window). Values must
-# not contain double quotes or backslashes (embedded in the setup API call).
+# Created automatically on first boot (no public /setup window).
+# REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. A `dictionary`
+# secret holding exactly two keys, `email` and `password`; the login form it
+# guards sits on the public endpoint. The password must satisfy Metabase's own
+# check (letters + digits, 8+ chars), and neither value may contain a double
+# quote or a backslash — both are embedded in the first-boot setup API call.
+# If the secret does not exist at install time the deployment WEDGES silently —
+# `cpln logs` returns nothing at all. See Prerequisites in the README.
 admin:
-  email: admin@example.com # admin login email
+  secretName: my-metabase-admin # name of your pre-created dictionary secret
   firstName: Metabase
   lastName: Admin
-  password: change-me-metabase-1 # change before installing; letters + digits, 8+ chars
 
 siteName: Metabase # instance name shown in the UI and emails
 

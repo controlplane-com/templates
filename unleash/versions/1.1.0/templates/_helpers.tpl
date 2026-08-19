@@ -8,13 +8,6 @@ Unleash Workload Name
 {{- end }}
 
 {{/*
-Admin Bootstrap Secret Name
-*/}}
-{{- define "unleash.secretAdmin.name" -}}
-{{- printf "%s-unleash-admin" .Release.Name }}
-{{- end }}
-
-{{/*
 Start Script Secret Name
 */}}
 {{- define "unleash.secretStart.name" -}}
@@ -71,12 +64,7 @@ secret also holds {database}.
 {{/* Validation */}}
 
 {{- define "unleash.validate" -}}
-{{- if not .Values.admin.username -}}
-{{- fail "unleash: admin.username is required — the initial admin login username (seeded on first boot)" -}}
-{{- end -}}
-{{- if not .Values.admin.password -}}
-{{- fail "unleash: admin.password is required — the initial admin login password (seeded on first boot)" -}}
-{{- end -}}
+{{- include "unleash.validateAdmin" . -}}
 {{- if lt (int .Values.replicas) 1 -}}
 {{- fail (printf "unleash: replicas must be at least 1, got '%v'" .Values.replicas) -}}
 {{- end -}}
@@ -91,6 +79,27 @@ secret also holds {database}.
 {{- end -}}
 {{- if and .Values.postgresHA.enabled (not (dig "proxy" "enabled" true .Values.postgresHA)) -}}
 {{- fail "unleash: postgresHA.proxy.enabled must remain true — the HAProxy leader endpoint is Unleash's stable database endpoint" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+The initial admin credentials became a user-created prerequisite secret in
+1.1.0 — they guard a login form on the public endpoint, so they may not transit
+Helm values. The removed keys are named explicitly so an install carrying a
+1.0.x values file fails at render with its replacement rather than silently
+falling back to a default. There are deliberately NO compatibility shims: the
+version bump IS the migration path. (`apiTokens.secretName` was already a
+prerequisite secret and is unchanged.)
+*/}}
+{{- define "unleash.validateAdmin" -}}
+{{- if hasKey .Values.admin "username" -}}
+{{- fail "unleash: admin.username was REMOVED in 1.1.0. Put it in a `dictionary` secret (key: `username`) together with `password`, and set admin.secretName to that secret's name. Create the secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- if hasKey .Values.admin "password" -}}
+{{- fail "unleash: admin.password was REMOVED in 1.1.0. Put it in a `dictionary` secret (key: `password`) together with `username`, and set admin.secretName to that secret's name. Create the secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- if not .Values.admin.secretName -}}
+{{- fail "unleash: admin.secretName is required — it names the prerequisite `dictionary` secret holding the `username` and `password` keys. Create that secret BEFORE installing; see Prerequisites in the README." -}}
 {{- end -}}
 {{- end }}
 

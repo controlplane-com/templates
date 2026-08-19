@@ -9,11 +9,14 @@ resources:
 replicas: 1 # stateless server — set 2+ for high availability (all state lives in PostgreSQL)
 
 # ─── Admin Account ────────────────────────────────────────────────────────────
-# Initial admin login, seeded on first boot only (stored in the database —
-# change it later in the UI, not here).
+# REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. A `dictionary`
+# secret holding exactly two keys, `username` and `password`; the login form it
+# guards sits on the public endpoint. Seeded on first boot only (the account
+# then lives in the database — change it later in the UI, not here). If the
+# secret does not exist at install time the deployment WEDGES silently —
+# `cpln logs` returns nothing at all. See Prerequisites in the README.
 admin:
-  username: admin
-  password: change-me-unleash-admin # change before installing
+  secretName: my-unleash-admin # name of your pre-created dictionary secret
 
 # ─── SDK API Tokens (optional) ────────────────────────────────────────────────
 # Seeded on first startup only. Unleash token format: <project>:<environment>.<secret>

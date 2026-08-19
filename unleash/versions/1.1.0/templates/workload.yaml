@@ -44,11 +44,12 @@ spec:
           value: 'cpln://secret/{{ include "unleash.postgres.secret.name" . }}.password'
         - name: DATABASE_SSL
           value: 'false'
-        # ── Default admin (seeded on first boot only) ──
+        # ── Default admin (user-created prerequisite dictionary secret;
+        #    seeded on first boot only) ──
         - name: UNLEASH_DEFAULT_ADMIN_USERNAME
-          value: 'cpln://secret/{{ include "unleash.secretAdmin.name" . }}.username'
+          value: 'cpln://secret/{{ .Values.admin.secretName }}.username'
         - name: UNLEASH_DEFAULT_ADMIN_PASSWORD
-          value: 'cpln://secret/{{ include "unleash.secretAdmin.name" . }}.password'
+          value: 'cpln://secret/{{ .Values.admin.secretName }}.password'
         {{- if .Values.apiTokens.secretName }}
         # ── First-boot SDK API tokens (prerequisite dictionary secret) ──
         - name: INIT_BACKEND_API_TOKENS

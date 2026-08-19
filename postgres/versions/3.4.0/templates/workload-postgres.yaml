@@ -1,3 +1,4 @@
+{{- include "pg.validate" . -}}
 kind: workload
 name: {{ include "postgres.name" . }}
 gvc: {{ .Values.global.cpln.gvc }}
@@ -11,12 +12,14 @@ spec:
       env:
         - name: PGDATA
           value: "/var/lib/postgresql/data/pg_data"
+        # All three come from the user-created prerequisite secret, so no
+        # database credential is ever written into the Helm release.
         - name: POSTGRES_DB
-          value: {{ .Values.config.database | quote }}
+          value: 'cpln://secret/{{ .Values.config.credentialsSecretName }}.database'
         - name: POSTGRES_PASSWORD
-          value: 'cpln://secret/{{ include "postgres.secretDatabase.name" . }}.password'
+          value: 'cpln://secret/{{ .Values.config.credentialsSecretName }}.password'
         - name: POSTGRES_USER
-          value: 'cpln://secret/{{ include "postgres.secretDatabase.name" . }}.username'
+          value: 'cpln://secret/{{ .Values.config.credentialsSecretName }}.username'
       image: {{ .Values.image }}
       inheritEnv: false
       minCpu: {{ .Values.resources.minCpu | quote }}
@@ -46,12 +49,33 @@ spec:
       minScale: 1
       maxScale: 1
     capacityAI: false
+  rolloutOptions:
+    {{- /*
+    maxUnavailableReplicas is deliberately NOT set: the API drops it on a
+    stateful workload, so sending it produces permanent drift AND implies a
+    rolling-restart limit that is not in force.
+    terminationGracePeriodSeconds is declared because the API backfills 90.
+    */}}
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
   firewallConfig:
+    {{- /* Every field is declared, empty lists included: the API backfills them,
+    so omitting one makes a default install drift from the moment it is created. */}}
     external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
       outboundAllowCIDR:
         - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
     internal:
       inboundAllowType: {{ .Values.internalAccess.type }}
-      {{- if .Values.internalAccess.workloads }}
-      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- if and .Values.internalAccess.workloads (has .Values.internalAccess.type (list "same-gvc" "workload-list")) }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- else }}
+      inboundAllowWorkload: []
       {{- end }}

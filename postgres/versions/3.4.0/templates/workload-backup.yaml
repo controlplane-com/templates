@@ -1,3 +1,4 @@
+{{- include "pg.validate" . -}}
 {{- if .Values.backup.enabled }}
 kind: workload
 name: {{ include "postgres.backup.name" . }}
@@ -12,11 +13,11 @@ spec:
       env:
       {{- if eq .Values.backup.provider "aws" }}
         - name: AWS_REGION
-          value: cpln://secret/{{ include "postgres.secretDatabase.name" . }}.aws-region
+          value: {{ .Values.backup.aws.region | quote }}
         - name: BACKUP_PROVIDER
           value: aws
         - name: BACKUP_BUCKET
-          value: cpln://secret/{{ include "postgres.secretDatabase.name" . }}.backup-bucket
+          value: {{ .Values.backup.aws.bucket | quote }}
         - name: BACKUP_PREFIX
           value: {{ .Values.backup.aws.prefix | quote }}
       {{- end }}
@@ -24,7 +25,7 @@ spec:
         - name: BACKUP_PROVIDER
           value: gcp
         - name: BACKUP_BUCKET
-          value: cpln://secret/{{ include "postgres.secretDatabase.name" . }}.backup-bucket
+          value: {{ .Values.backup.gcp.bucket | quote }}
         - name: BACKUP_PREFIX
           value: {{ .Values.backup.gcp.prefix | quote }}
       {{- end }}
@@ -32,24 +33,24 @@ spec:
         - name: BACKUP_PROVIDER
           value: minio
         - name: BACKUP_BUCKET
-          value: cpln://secret/{{ include "postgres.secretDatabase.name" . }}.backup-bucket
+          value: {{ .Values.backup.minio.bucket | quote }}
         - name: BACKUP_PREFIX
           value: {{ .Values.backup.minio.prefix | quote }}
         - name: MINIO_ENDPOINT
-          value: cpln://secret/{{ include "postgres.secretDatabase.name" . }}.minio-endpoint
+          value: {{ .Values.backup.minio.endpoint | quote }}
         - name: MINIO_ACCESS_KEY
-          value: cpln://secret/{{ include "postgres.secretDatabase.name" . }}.minio-access-key
+          value: 'cpln://secret/{{ .Values.backup.minio.credentialsSecretName }}.accessKey'
         - name: MINIO_SECRET_KEY
-          value: cpln://secret/{{ include "postgres.secretDatabase.name" . }}.minio-secret-key
+          value: 'cpln://secret/{{ .Values.backup.minio.credentialsSecretName }}.secretKey'
       {{- end }}
         - name: PG_HOST
           value: {{ include "postgres.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local
         - name: PG_PASSWORD
-          value: cpln://secret/{{ include "postgres.secretDatabase.name" . }}.password
+          value: 'cpln://secret/{{ .Values.config.credentialsSecretName }}.password'
         - name: PG_PORT
           value: '5432'
         - name: PG_USER
-          value: cpln://secret/{{ include "postgres.secretDatabase.name" . }}.username
+          value: 'cpln://secret/{{ .Values.config.credentialsSecretName }}.username'
       image: {{ .Values.backup.image }}
       inheritEnv: false
   defaultOptions:

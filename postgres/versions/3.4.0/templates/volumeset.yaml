@@ -1,3 +1,4 @@
+{{- include "pg.validate" . -}}
 kind: volumeset
 name: {{ include "postgres.volume.name" . }}
 gvc: {{ .Values.global.cpln.gvc }}

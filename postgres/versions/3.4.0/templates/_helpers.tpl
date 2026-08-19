@@ -15,13 +15,6 @@ Postgres Backup Workload Name
 {{- end }}
 
 {{/*
-Postgres Secret Database Config Name
-*/}}
-{{- define "postgres.secretDatabase.name" -}}
-{{- printf "%s-pg-config" .Release.Name }}
-{{- end }}
-
-{{/*
 Postgres Identity Name
 */}}
 {{- define "postgres.identity.name" -}}
@@ -51,6 +44,35 @@ PgBouncer Workload Name
 
 
 {{/* Validation */}}
+
+{{/*
+Top-level validation - included by every rendered resource
+*/}}
+{{- define "pg.validate" -}}
+{{- include "pg.validateCredentials" . -}}
+{{- include "pg.validateBackupConfig" . -}}
+{{- end }}
+
+{{/*
+Validate database credentials - they are a user-created prerequisite secret as of
+3.4.0, never values. The three removed keys are named explicitly so an install
+carrying the old values fails at render with the replacement rather than quietly
+ignoring the credentials it was given.
+*/}}
+{{- define "pg.validateCredentials" -}}
+{{- if hasKey .Values.config "username" -}}
+  {{- fail "config.username was REMOVED in postgres 3.4.0. Database credentials are no longer values: create a `dictionary` secret holding the keys `username`, `password` and `database`, and set config.credentialsSecretName to its name. See Prerequisites in the README." -}}
+{{- end -}}
+{{- if hasKey .Values.config "password" -}}
+  {{- fail "config.password was REMOVED in postgres 3.4.0. Database credentials are no longer values: create a `dictionary` secret holding the keys `username`, `password` and `database`, and set config.credentialsSecretName to its name. See Prerequisites in the README." -}}
+{{- end -}}
+{{- if hasKey .Values.config "database" -}}
+  {{- fail "config.database was REMOVED in postgres 3.4.0. Database credentials are no longer values: create a `dictionary` secret holding the keys `username`, `password` and `database`, and set config.credentialsSecretName to its name. See Prerequisites in the README." -}}
+{{- end -}}
+{{- if not .Values.config.credentialsSecretName -}}
+  {{- fail "config.credentialsSecretName is required — it names the `dictionary` secret holding the `username`, `password` and `database` keys. Create that secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- end }}
 
 {{/*
 Validate backup configuration - when backup is enabled, backup.provider must be set to 'aws', 'gcp', or 'minio'
@@ -90,11 +112,11 @@ Validate backup configuration - when backup is enabled, backup.provider must be 
     {{- if not .Values.backup.minio.bucket -}}
       {{- fail "All fields are required for MinIO backup. Missing: backup.minio.bucket" -}}
     {{- end -}}
-    {{- if not .Values.backup.minio.accessKey -}}
-      {{- fail "All fields are required for MinIO backup. Missing: backup.minio.accessKey" -}}
+    {{- if or (hasKey .Values.backup.minio "accessKey") (hasKey .Values.backup.minio "secretKey") -}}
+      {{- fail "backup.minio.accessKey and backup.minio.secretKey were REMOVED in postgres 3.4.0. Create a `dictionary` secret holding the keys `accessKey` and `secretKey`, and set backup.minio.credentialsSecretName to its name. See Storage setup in the README." -}}
     {{- end -}}
-    {{- if not .Values.backup.minio.secretKey -}}
-      {{- fail "All fields are required for MinIO backup. Missing: backup.minio.secretKey" -}}
+    {{- if not .Values.backup.minio.credentialsSecretName -}}
+      {{- fail "backup.minio.credentialsSecretName is required when backup.provider is 'minio' — it names the `dictionary` secret holding the `accessKey` and `secretKey` keys. Create that secret BEFORE installing; see Storage setup in the README." -}}
     {{- end -}}
   {{- end -}}
 {{- end -}}

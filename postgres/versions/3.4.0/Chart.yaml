@@ -1,9 +1,9 @@
 apiVersion: v2
 name: postgres
-description: Single replica PostgreSQL database app
+description: Single-replica PostgreSQL with persistent storage, optional pooling and backups
 
 type: application
-version: 3.3.0
+version: 3.4.0
 appVersion: "18"
 
 dependencies:
@@ -13,7 +13,7 @@ dependencies:
 
 annotations:
   created: "2025-12-23"
-  lastModified: "2026-06-30"
+  lastModified: "2026-08-19"
   category: "database"
   postgresVersion: "18"
   createsGvc: false

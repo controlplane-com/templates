@@ -1,4 +1,4 @@
-{{- include "pg.validateBackupConfig" . -}}
+{{- include "pg.validate" . -}}
 kind: identity
 name: {{ include "postgres.identity.name" . }}
 description: Postgres identity

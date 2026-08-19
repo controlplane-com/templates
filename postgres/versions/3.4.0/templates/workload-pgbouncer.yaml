@@ -1,3 +1,4 @@
+{{- include "pg.validate" . -}}
 {{- if .Values.pgbouncer.enabled }}
 kind: workload
 name: {{ include "postgres.pgbouncer.name" . }}
@@ -18,12 +19,13 @@ spec:
           value: {{ include "postgres.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local
         - name: DB_PORT
           value: '5432'
+        # Same user-created prerequisite secret the Postgres workload reads.
         - name: DB_USER
-          value: 'cpln://secret/{{ include "postgres.secretDatabase.name" . }}.username'
+          value: 'cpln://secret/{{ .Values.config.credentialsSecretName }}.username'
         - name: DB_PASSWORD
-          value: 'cpln://secret/{{ include "postgres.secretDatabase.name" . }}.password'
+          value: 'cpln://secret/{{ .Values.config.credentialsSecretName }}.password'
         - name: DB_NAME
-          value: {{ .Values.config.database | quote }}
+          value: 'cpln://secret/{{ .Values.config.credentialsSecretName }}.database'
         - name: POOL_MODE
           value: {{ .Values.pgbouncer.poolMode | quote }}
         - name: DEFAULT_POOL_SIZE
@@ -42,11 +44,23 @@ spec:
       maxScale: {{ .Values.pgbouncer.replicas }}
     capacityAI: false
   firewallConfig:
+    {{- /* Every field is declared, empty lists included: the API backfills them,
+    so omitting one makes a default install drift from the moment it is created. */}}
     external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
       outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
     internal:
       inboundAllowType: {{ .Values.internalAccess.type }}
-      {{- if .Values.internalAccess.workloads }}
-      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- if and .Values.internalAccess.workloads (has .Values.internalAccess.type (list "same-gvc" "workload-list")) }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- else }}
+      inboundAllowWorkload: []
       {{- end }}
 {{- end }}

@@ -14,8 +14,13 @@ storage:
     fileShare: trivy-reports                 # Azure file share name
     scope: "" # /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Storage/storageAccounts/<name>
 
-# Bearer token shared between the daemon and web-server. Change before deploying to production.
-postToken: changeme
+# Bearer token the daemon presents when posting reports to the web-server.
+# REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. The web-server's
+# POST endpoint is reachable from the public internet (that is how the daemon
+# reaches it), and this token is the only thing guarding it. Name of a
+# pre-existing CPLN opaque secret whose payload is the token (see README).
+postToken:
+  secretName: my-cpln-trivy-post-token
 
 # Authentication for Trivy to pull images from the Control Plane image registry.
 # Name of a pre-existing CPLN opaque secret whose payload is the service account key (see README).

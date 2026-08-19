@@ -15,7 +15,7 @@ targetKind: image
 ---
 kind: policy
 name: {{ include "cpln-trivy.policy.secret.name" . }}
-description: Allows the Trivy identity to reveal the registry credentials secret
+description: Allows the Trivy identity to reveal the post token and registry credentials
 tags:
   {{- include "cpln-trivy.tags" . | nindent 2 }}
 bindings:
@@ -25,7 +25,8 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "cpln-trivy.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "cpln-trivy.secret.name" . }}
+  # Prerequisite secrets the user creates — granted by name, nothing broader.
+  - //secret/{{ .Values.postToken.secretName }}
   - //secret/{{ .Values.trivyAuth.secretName }}
 
 ---

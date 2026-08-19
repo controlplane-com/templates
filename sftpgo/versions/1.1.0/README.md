@@ -131,8 +131,8 @@ Declared users are re-applied on every start; each is isolated to the bucket fol
 
 ```yaml
 users:
-  - username: partner-a
-    password: a-strong-password        # and/or publicKeys
+  - username: sftpuser
+    password: change-me-sftp-user      # used as-is — change it, or omit and use publicKeys
     publicKeys: []                     # e.g. ["ssh-ed25519 AAAA... user@host"]
     # keyPrefix: custom/folder/        # per-user bucket folder override
 ```

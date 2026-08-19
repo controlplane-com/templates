@@ -1,5 +1,6 @@
 {{- include "cpln-trivy.validateStorage" . }}
 {{- include "cpln-trivy.validateAuth" . }}
+{{- include "cpln-trivy.validatePostToken" . }}
 kind: workload
 name: {{ include "cpln-trivy.webserver.name" . }}
 description: Stores and serves Trivy HTML vulnerability reports
@@ -18,7 +19,7 @@ spec:
           protocol: http
       env:
         - name: POST_TOKEN
-          value: cpln://secret/{{ include "cpln-trivy.secret.name" . }}.POST_TOKEN
+          value: cpln://secret/{{ .Values.postToken.secretName }}.payload
         {{- if eq .Values.storage.type "s3" }}
         - name: FILE_SYSTEM_ENABLED
           value: "false"

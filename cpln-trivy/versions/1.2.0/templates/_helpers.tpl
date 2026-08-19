@@ -12,10 +12,6 @@
 {{- printf "%s-identity" .Release.Name }}
 {{- end }}
 
-{{- define "cpln-trivy.secret.name" -}}
-{{- printf "%s-secret" .Release.Name }}
-{{- end }}
-
 {{- define "cpln-trivy.policy.images.name" -}}
 {{- printf "%s-manage-images" .Release.Name }}
 {{- end }}
@@ -37,6 +33,20 @@
 
 
 {{/* Validation */}}
+
+{{/*
+Keys removed in 1.2.0. An upgrader carrying a 1.1.0 values file forward is told
+exactly what to do instead of silently getting a default. There are deliberately
+NO compatibility fallbacks — the version bump IS the migration path.
+*/}}
+{{- define "cpln-trivy.validatePostToken" -}}
+{{- if kindIs "string" .Values.postToken -}}
+  {{- fail "cpln-trivy: postToken is no longer a plain value in 1.2.0. Put the token in an opaque secret (encoding: plain) and set postToken.secretName to its name — see the README. Reuse the SAME token your install already has, or the daemon's uploads start returning 401." -}}
+{{- end -}}
+{{- if not .Values.postToken.secretName -}}
+  {{- fail "cpln-trivy: postToken.secretName is required — the name of a pre-created opaque secret holding the bearer token the daemon posts with. Create the secret BEFORE installing." -}}
+{{- end -}}
+{{- end }}
 
 {{- define "cpln-trivy.validateAuth" -}}
 {{- if not .Values.trivyAuth.secretName -}}

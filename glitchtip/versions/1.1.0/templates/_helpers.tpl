@@ -15,20 +15,6 @@ GlitchTip Worker Workload Name
 {{- end }}
 
 {{/*
-Django Secret Name (SECRET_KEY)
-*/}}
-{{- define "glitchtip.secretDjango.name" -}}
-{{- printf "%s-glitchtip-django" .Release.Name }}
-{{- end }}
-
-{{/*
-Admin Bootstrap Secret Name
-*/}}
-{{- define "glitchtip.secretAdmin.name" -}}
-{{- printf "%s-glitchtip-admin" .Release.Name }}
-{{- end }}
-
-{{/*
 Web Start Script Secret Name
 */}}
 {{- define "glitchtip.secretWebStart.name" -}}
@@ -140,9 +126,9 @@ CPLN_GLOBAL_ENDPOINT at runtime.
   value: 'cpln://secret/{{ include "glitchtip.postgres.secret.name" . }}.username'
 - name: DATABASE_PASSWORD
   value: 'cpln://secret/{{ include "glitchtip.postgres.secret.name" . }}.password'
-# ── Django ──
+# ── Django (prerequisite auth secret) ──
 - name: SECRET_KEY
-  value: 'cpln://secret/{{ include "glitchtip.secretDjango.name" . }}.SECRET_KEY'
+  value: 'cpln://secret/{{ .Values.auth.secretName }}.secretKey'
 # ── Registration posture (secure-by-default: closed signup, open org creation) ──
 - name: ENABLE_USER_REGISTRATION
   value: {{ ternary "'True'" "'False'" .Values.registration.enabled }}
@@ -172,15 +158,39 @@ CPLN_GLOBAL_ENDPOINT at runtime.
 
 {{/* Validation */}}
 
+{{/*
+Keys removed in 1.1.0. An upgrader carrying a 1.0.x values file forward is told
+exactly what to do instead of silently getting a default. There are deliberately
+NO compatibility fallbacks — the version bump IS the migration path.
+*/}}
+{{- define "glitchtip.validateRemovedKeys" -}}
+{{- if dig "secretKey" "" (.Values.django | default dict) -}}
+{{- fail "glitchtip: django.secretKey was removed in 1.1.0. Put it in the prerequisite dictionary secret named by auth.secretName (key: secretKey) — see the README. Reuse the SAME value your install already has: a new one logs every user out." -}}
+{{- end -}}
+{{- if dig "email" "" (.Values.admin | default dict) -}}
+{{- fail "glitchtip: admin.email was removed in 1.1.0. Put it in the prerequisite dictionary secret named by auth.secretName (key: adminEmail) — see the README." -}}
+{{- end -}}
+{{- if dig "password" "" (.Values.admin | default dict) -}}
+{{- fail "glitchtip: admin.password was removed in 1.1.0. Put it in the prerequisite dictionary secret named by auth.secretName (key: adminPassword) — see the README." -}}
+{{- end -}}
+{{- if dig "cpu" "" .Values.resources -}}
+{{- fail "glitchtip: resources.cpu was renamed to resources.maxCpu in 1.1.0 (the block exposes both a reservation and a limit) — see the README." -}}
+{{- end -}}
+{{- if dig "memory" "" .Values.resources -}}
+{{- fail "glitchtip: resources.memory was renamed to resources.maxMemory in 1.1.0 (the block exposes both a reservation and a limit) — see the README." -}}
+{{- end -}}
+{{- if dig "cpu" "" .Values.worker.resources -}}
+{{- fail "glitchtip: worker.resources.cpu was renamed to worker.resources.maxCpu in 1.1.0 — see the README." -}}
+{{- end -}}
+{{- if dig "memory" "" .Values.worker.resources -}}
+{{- fail "glitchtip: worker.resources.memory was renamed to worker.resources.maxMemory in 1.1.0 — see the README." -}}
+{{- end -}}
+{{- end }}
+
 {{- define "glitchtip.validate" -}}
-{{- if not .Values.django.secretKey -}}
-{{- fail "glitchtip: django.secretKey is required — Django session/token signing key (change from the placeholder before installing)" -}}
-{{- end -}}
-{{- if not .Values.admin.email -}}
-{{- fail "glitchtip: admin.email is required — the initial superuser login email (seeded on first boot)" -}}
-{{- end -}}
-{{- if not .Values.admin.password -}}
-{{- fail "glitchtip: admin.password is required — the initial superuser login password (seeded on first boot)" -}}
+{{- include "glitchtip.validateRemovedKeys" . -}}
+{{- if not .Values.auth.secretName -}}
+{{- fail "glitchtip: auth.secretName is required — it names the prerequisite dictionary secret holding secretKey, adminEmail and adminPassword. Create the secret BEFORE installing." -}}
 {{- end -}}
 {{- if lt (int .Values.replicas) 1 -}}
 {{- fail (printf "glitchtip: replicas must be at least 1, got '%v'" .Values.replicas) -}}

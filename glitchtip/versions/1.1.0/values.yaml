@@ -3,31 +3,34 @@ image: glitchtip/glitchtip:6.2.2
 replicas: 1 # web tier — stateless; set 2+ for high availability (state lives in PostgreSQL/Redis)
 
 resources: # web workload
-  cpu: 1000m
-  memory: 1Gi
   minCpu: 250m
   minMemory: 512Mi
+  maxCpu: 1000m
+  maxMemory: 1Gi
 
 # ─── Background Worker ────────────────────────────────────────────────────────
 # Processes events, alerts, emails, and scheduled jobs; also runs database
 # migrations and admin bootstrap at boot. Single replica (scheduler singleton).
 worker:
   resources:
-    cpu: 1000m
-    memory: 1Gi
     minCpu: 250m
     minMemory: 512Mi
+    maxCpu: 1000m
+    maxMemory: 1Gi
   concurrency: 20 # async tasks processed in parallel (VTASKS_CONCURRENCY)
 
-# ─── Django ───────────────────────────────────────────────────────────────────
-django:
-  secretKey: change-me-glitchtip-secret-key # session/token signing key — change before installing; rotating later logs out all users
-
-# ─── Initial Admin ────────────────────────────────────────────────────────────
-# Superuser seeded on first boot only — log in with these, then manage in the UI.
-admin:
-  email: admin@example.com
-  password: change-me-glitchtip-admin # change before installing
+# ─── Authentication ───────────────────────────────────────────────────────────
+auth:
+  # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. If it does not
+  # exist the deployment WEDGES silently and looks like a platform fault.
+  # A `dictionary` secret holding exactly three keys:
+  #   secretKey      — Django session/token signing key; rotating it logs every
+  #                    user out, so keep it for the life of the install
+  #   adminEmail     — the initial superuser login, seeded on first boot; this
+  #                    login form sits on the public endpoint
+  #   adminPassword  — its password
+  # See README Prerequisites for the exact command.
+  secretName: my-glitchtip-auth
 
 registration:
   enabled: false # open self-signup on the endpoint; admin-created users and invites work regardless
@@ -78,7 +81,7 @@ postgresHA:
   enabled: true
   postgres:
     username: glitchtip
-    password: change-me-glitchtip-db-password # change before installing
+    password: change-me-glitchtip-db # change before installing
     database: glitchtip
   replicas: 3
   volumeset:
@@ -97,18 +100,18 @@ postgresHA:
       intervalSeconds: 21600
     provider: aws # options: aws, gcp, minio
     aws:
-      bucket: glitchtip-pg-backup-bucket
+      bucket: my-glitchtip-backup-bucket
       region: us-east-1
       cloudAccountName: my-s3-cloud-account
-      policyName: glitchtip-pg-backup-policy
+      policyName: my-glitchtip-backup-policy
       prefix: postgres/backups
     gcp:
-      bucket: glitchtip-pg-backup-bucket
+      bucket: my-glitchtip-backup-bucket
       cloudAccountName: my-gcs-cloud-account
       prefix: postgres/backups
     minio:
       endpoint: http://my-minio-workload:9000
-      bucket: glitchtip-pg-backup-bucket
+      bucket: my-glitchtip-backup-bucket
       accessKey: my-minio-username
       secretKey: my-minio-password
       prefix: postgres/backups
@@ -119,7 +122,7 @@ postgres:
   enabled: false
   config:
     username: glitchtip
-    password: change-me-glitchtip-db-password # change before installing
+    password: change-me-glitchtip-db # change before installing
     database: glitchtip
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)
@@ -133,18 +136,18 @@ postgres:
       memory: 128Mi
     provider: aws # options: aws, gcp, minio
     aws:
-      bucket: glitchtip-pg-backup-bucket
+      bucket: my-glitchtip-backup-bucket
       region: us-east-1
       cloudAccountName: my-s3-cloud-account
-      policyName: glitchtip-pg-backup-policy
+      policyName: my-glitchtip-backup-policy
       prefix: postgres/backups
     gcp:
-      bucket: glitchtip-pg-backup-bucket
+      bucket: my-glitchtip-backup-bucket
       cloudAccountName: my-gcs-cloud-account
       prefix: postgres/backups
     minio:
       endpoint: http://my-minio-workload:9000
-      bucket: glitchtip-pg-backup-bucket
+      bucket: my-glitchtip-backup-bucket
       accessKey: my-minio-username
       secretKey: my-minio-password
       prefix: postgres/backups

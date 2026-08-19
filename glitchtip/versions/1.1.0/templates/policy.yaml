@@ -9,8 +9,6 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "glitchtip.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "glitchtip.secretDjango.name" . }}
-  - //secret/{{ include "glitchtip.secretAdmin.name" . }}
   - //secret/{{ include "glitchtip.secretWebStart.name" . }}
   - //secret/{{ include "glitchtip.secretWorkerStart.name" . }}
   - //secret/{{ include "glitchtip.postgres.secret.name" . }}
@@ -20,3 +18,5 @@ targetLinks:
   {{- if .Values.email.secretName }}
   - //secret/{{ .Values.email.secretName }}
   {{- end }}
+  # Prerequisite secret the user creates — granted by name, nothing broader.
+  - //secret/{{ .Values.auth.secretName }}

@@ -15,8 +15,8 @@ spec:
       inheritEnv: false
       minCpu: {{ .Values.worker.resources.minCpu | quote }}
       minMemory: {{ .Values.worker.resources.minMemory | quote }}
-      cpu: {{ .Values.worker.resources.cpu | quote }}
-      memory: {{ .Values.worker.resources.memory | quote }}
+      cpu: {{ .Values.worker.resources.maxCpu | quote }}
+      memory: {{ .Values.worker.resources.maxMemory | quote }}
       env:
         {{- include "glitchtip.env.common" . | trim | nindent 8 }}
         # ── Worker ──
@@ -26,9 +26,9 @@ spec:
           value: {{ .Values.worker.concurrency | quote }}
         # ── Superuser bootstrap (read by `createsuperuser --noinput`) ──
         - name: DJANGO_SUPERUSER_EMAIL
-          value: 'cpln://secret/{{ include "glitchtip.secretAdmin.name" . }}.email'
+          value: 'cpln://secret/{{ .Values.auth.secretName }}.adminEmail'
         - name: DJANGO_SUPERUSER_PASSWORD
-          value: 'cpln://secret/{{ include "glitchtip.secretAdmin.name" . }}.password'
+          value: 'cpln://secret/{{ .Values.auth.secretName }}.adminPassword'
       volumes:
         - path: /cpln/start.sh
           recoveryPolicy: retain

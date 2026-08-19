@@ -254,7 +254,7 @@ Two behaviours change, both deliberately:
 - **The broker Admin API (port 9644) is unauthenticated for reads *and writes*, and is reachable from the whole GVC under the default `same-gvc` firewall.** Verified: a neighbouring workload with no credentials created and then deleted a SASL user through it. Any workload in the GVC can therefore administer the cluster. Narrow it with `redpanda.firewall.inboundAllowWorkload`, and treat GVC membership as equivalent to cluster admin until you do.
 - SASL users are created on first boot of broker 0 and then live in the cluster's metadata. Editing a credentials secret afterwards does not rotate the user — update the user with `rpk security user update` and change the secret to match.
 - `replicas` must be 1, 3, or 5; an even count cannot form a Raft quorum and is rejected at install. Changing it changes broker membership, so treat it as a deliberate cluster operation.
-- The topic-data volume set has no snapshot schedule. Data survives reschedules and reinstalls of the same release, but there is no point-in-time backup — use tiered storage or a mirroring job if you need one.
+- The topic-data volume set is snapshotted daily by default (`volume.snapshots.schedule: 0 0 * * *`), kept 7 days, with a final snapshot on delete. Set `schedule: ""` to keep only the final-on-delete snapshot.
 - A rolling upgrade is not serialized by the platform for a stateful workload, so brokers may restart together. Configure producers and consumers to retry.
 
 ## Links

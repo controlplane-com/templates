@@ -1,0 +1,17 @@
+{{- include "pg.validate" . -}}
+kind: policy
+name: {{ include "postgres.policy.name" . }}
+description: Postgres policy
+tags: {{- include "pg.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "postgres.identity.name" . }}
+targetKind: secret
+targetLinks:
+  # The user-created database credentials — reveal on exactly that one secret.
+  - //secret/{{ .Values.config.credentialsSecretName }}
+  {{- if and .Values.backup.enabled (eq .Values.backup.provider "minio") }}
+  - //secret/{{ .Values.backup.minio.credentialsSecretName }}
+  {{- end }}

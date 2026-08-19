@@ -204,7 +204,7 @@ Complete the steps for your chosen backend before installing.
 
 1. Create your bucket on the server. Set `storage.minio.bucket`.
 2. Set `storage.minio.endpoint` to the S3 API address including port. For the `minio` marketplace template deployed in the same GVC, this is `http://WORKLOAD_NAME:9000`.
-3. Set `storage.minio.accessKey` and `storage.minio.accessSecret` to credentials with access to the bucket. For the MinIO template, these are its `admin.username` and `admin.password`.
+3. Set `storage.minio.accessKey` and `storage.minio.accessSecret` to credentials with access to the bucket. For the MinIO marketplace template, these are the `username` and `password` in the dictionary secret named by its `admin.credentialsSecretName`.
 
 ## Important Notes
 

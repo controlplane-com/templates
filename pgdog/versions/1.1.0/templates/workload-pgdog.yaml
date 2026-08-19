@@ -10,28 +10,53 @@ spec:
   containers:
     - name: pgdog
       image: {{ .Values.image }}
-      cpu: {{ .Values.resources.cpu | quote }}
-      memory: {{ .Values.resources.memory | quote }}
+      {{- /* The image CMD is the PgDog binary; the startup script assembles the
+             config files from the prerequisite secrets and then execs it. */}}
+      command: /bin/bash
+      args:
+        - /scripts/start.sh
       minCpu: {{ .Values.resources.minCpu | quote }}
       minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
       inheritEnv: false
       env:
         - name: RUST_LOG
           value: {{ .Values.logging.level | quote }}
+        {{- /* Non-sensitive, but injected as env rather than templated into the
+               script so that every TOML value goes through the same escaping. */}}
+        - name: PGDOG_ADMIN_DATABASE
+          value: {{ .Values.admin.database | quote }}
+        - name: PGDOG_ADMIN_USER
+          value: {{ .Values.admin.user | quote }}
+        {{- /* From the user-created prerequisite secrets — never through values. */}}
+        - name: PGDOG_ADMIN_PASSWORD
+          value: 'cpln://secret/{{ .Values.admin.passwordSecretName }}.payload'
+        {{- range $i, $u := .Values.users }}
+        - name: PGDOG_USER_{{ $i }}_USERNAME
+          value: 'cpln://secret/{{ $u.credentialsSecretName }}.username'
+        - name: PGDOG_USER_{{ $i }}_PASSWORD
+          value: 'cpln://secret/{{ $u.credentialsSecretName }}.password'
+        - name: PGDOG_USER_{{ $i }}_DATABASE
+          value: {{ $u.database | quote }}
+        {{- end }}
       ports:
         - number: 6432
           protocol: tcp
       volumes:
-        - path: /pgdog/pgdog.toml
-          uri: cpln://secret/{{ include "pgdog.secret.config.name" . }}.payload
-        - path: /pgdog/users.toml
-          uri: cpln://secret/{{ include "pgdog.secret.users.name" . }}.payload
+        - path: /scripts/start.sh
+          recoveryPolicy: retain
+          uri: 'cpln://secret/{{ include "pgdog.secret.startup.name" . }}.payload'
+        - path: /etc/pgdog/pgdog.base.toml
+          recoveryPolicy: retain
+          uri: 'cpln://secret/{{ include "pgdog.secret.config.name" . }}.payload'
       readinessProbe:
         tcpSocket:
           port: 6432
         initialDelaySeconds: 5
         periodSeconds: 5
         failureThreshold: 6
+        successThreshold: 1
         timeoutSeconds: 3
       livenessProbe:
         tcpSocket:
@@ -39,14 +64,23 @@ spec:
         initialDelaySeconds: 10
         periodSeconds: 10
         failureThreshold: 3
+        successThreshold: 1
         timeoutSeconds: 5
   defaultOptions:
     autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.replicas }}
       metric: disabled
       minScale: {{ .Values.replicas }}
-      maxScale: {{ .Values.replicas }}
+      scaleToZeroDelay: 300
+      target: 100
     capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
   firewallConfig:
+    {{- /* Fully declared, including the empty lists: the API backfills them and
+           an undeclared field shows as drift on the first no-op upgrade. */}}
     external:
       outboundAllowCIDR:
         - 0.0.0.0/0
@@ -56,13 +90,19 @@ spec:
       {{- else }}
       inboundAllowCIDR: []
       {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
     internal:
       inboundAllowType: {{ .Values.internalAccess.type }}
       {{- if .Values.internalAccess.workloads }}
       inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- else }}
+      inboundAllowWorkload: []
       {{- end }}
-  {{- if .Values.publicAccess.enabled }}
   loadBalancer:
+    {{- if .Values.publicAccess.enabled }}
     direct:
       enabled: true
       ports:
@@ -70,8 +110,23 @@ spec:
           externalPort: 6432
           protocol: TCP
           scheme: tcp
-  {{- if .Values.publicAccess.address }}
+    {{- if .Values.publicAccess.address }}
     domains:
       - domainLink: //domain/{{ .Values.publicAccess.address }}
-  {{- end }}
-  {{- end }}
+    {{- end }}
+    {{- else }}
+    direct:
+      enabled: false
+      ports: []
+    {{- end }}
+    replicaDirect: false
+  supportDynamicTags: false
+  rolloutOptions:
+    {{- /* maxUnavailableReplicas is retained on a standard workload (the API drops
+           it only on stateful ones). terminationGracePeriodSeconds is declared
+           because the API backfills 90 and an undeclared field reads as drift. */}}
+    maxSurgeReplicas: 0%
+    maxUnavailableReplicas: "1"
+    minReadySeconds: 10
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90

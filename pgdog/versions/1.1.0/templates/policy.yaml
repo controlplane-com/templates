@@ -1,3 +1,11 @@
+{{- include "pgdog.validate" . }}
+{{- $targets := list
+      (printf "//secret/%s" (include "pgdog.secret.config.name" .))
+      (printf "//secret/%s" (include "pgdog.secret.startup.name" .))
+      (printf "//secret/%s" .Values.admin.passwordSecretName) }}
+{{- range .Values.users }}
+{{- $targets = append $targets (printf "//secret/%s" .credentialsSecretName) }}
+{{- end }}
 kind: policy
 name: {{ include "pgdog.policy.name" . }}
 description: PgDog policy
@@ -8,6 +16,12 @@ bindings:
     principalLinks:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pgdog.identity.name" . }}
 targetKind: secret
+{{- /*
+  One target per user-created secret, deduplicated (two pooled users may point at
+  the same credentials secret) and sorted so the rendered list is stable no matter
+  what order the values list is written in.
+*/}}
 targetLinks:
-  - //secret/{{ include "pgdog.secret.config.name" . }}
-  - //secret/{{ include "pgdog.secret.users.name" . }}
+{{- range ($targets | uniq | sortAlpha) }}
+  - {{ . }}
+{{- end }}

@@ -1,3 +1,4 @@
+{{- include "pgdog.validate" . }}
 kind: identity
 name: {{ include "pgdog.identity.name" . }}
 description: PgDog identity

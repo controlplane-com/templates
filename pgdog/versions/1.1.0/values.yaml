@@ -1,10 +1,10 @@
 image: ghcr.io/pgdogdev/pgdog:v0.1.45
 
 resources:
-  cpu: 500m
-  memory: 256Mi
   minCpu: 100m
   minMemory: 128Mi
+  maxCpu: 500m
+  maxMemory: 256Mi
 
 replicas: 1
 
@@ -36,23 +36,36 @@ loadBalancing:
 # list them all here — PgDog routes writes to primary and reads to replicas.
 
 databases:
-  - name: mydb               # logical name clients use when connecting
-    host: postgres.example.com
+  - name: my-pgdog-database  # logical name clients connect to; must be a real database on the backend
+    host: my-postgres-workload  # e.g. WORKLOAD_NAME for an in-GVC Postgres, or an external hostname
     port: 5432
     role: primary            # options: primary, replica, auto
-  # - name: mydb
-  #   host: replica.example.com
+  # - name: my-pgdog-database
+  #   host: my-postgres-replica
   #   port: 5432
   #   role: replica
 
-# ─── Users ────────────────────────────────────────────────────────────────────
-# Each entry maps to a [[users]] block in users.toml.
-# 'database' must match a name from the databases list above.
+# ─── Pooled Users (prerequisite secrets) ──────────────────────────────────────
+# Each entry maps to a [[users]] block in users.toml and needs ITS OWN secret.
+#
+# EVERY SECRET LISTED HERE MUST EXIST BEFORE YOU INSTALL — the deployment wedges
+# silently waiting on a secret that does not exist, and `cpln logs` returns
+# nothing at all. See Prerequisites in the README for the exact commands and for
+# how to diagnose a wedged deployment.
+#
+# `credentialsSecretName` names a `dictionary` secret holding the keys `username`
+# and `password`. That pair is what applications put in their connection strings,
+# and PgDog also uses it to open backend connections — so it must match a real
+# Postgres role. Pointing it at the SAME secret your Postgres template already
+# uses is the intended shape.
+#
+# To pool a SECOND user, create a second dictionary secret and add a second entry:
+#   - credentialsSecretName: my-pgdog-reporting-credentials
+#     database: my-pgdog-database
 
 users:
-  - name: myuser
-    password: mypassword
-    database: mydb
+  - credentialsSecretName: my-pgdog-user-credentials
+    database: my-pgdog-database   # must match a `name` from the databases list above
 
 # ─── Admin Database ───────────────────────────────────────────────────────────
 # PgDog exposes an internal admin database for stats and introspection.
@@ -61,7 +74,11 @@ users:
 admin:
   database: admin
   user: admin
-  password: changeme         # change this — a random password is generated if omitted from config
+  # REQUIRED PREREQUISITE SECRET — an `opaque` secret (encoding: plain) whose
+  # payload is the admin password. Kept SEPARATE from the pooled-user credentials
+  # above: revealing an application's password must not also hand it the admin
+  # database. See Prerequisites in the README.
+  passwordSecretName: my-pgdog-admin-password
 
 # ─── Authentication ───────────────────────────────────────────────────────────
 
@@ -78,7 +95,7 @@ logging:
 
 publicAccess:
   enabled: false
-  # address: pgdog.example.com  # custom domain when publicAccess is enabled
+  # address: my-pgdog-domain.example.com  # name of an existing cpln domain resource
 
 internalAccess:
   type: same-gvc             # options: none, same-gvc, same-org, workload-list

@@ -1,3 +1,4 @@
+{{- include "airflow.validate" . -}}
 kind: volumeset
 name: {{ include "airflow.volume.name" . }}
 description: Airflow volume set

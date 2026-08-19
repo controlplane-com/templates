@@ -1,4 +1,4 @@
----
+{{- include "airflow.validate" . -}}
 kind: identity
 name: {{ include "airflow.identity.name" . }}
 description: Airflow identity

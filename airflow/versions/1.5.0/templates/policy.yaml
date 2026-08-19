@@ -1,5 +1,4 @@
-# Helm template for Airflow policies
----
+{{- include "airflow.validate" . -}}
 kind: policy
 name: {{ include "airflow.policy.name" . }}
 description: Airflow policy
@@ -13,3 +12,7 @@ bindings:
 targetKind: secret
 targetLinks:
   - //secret/{{ include "airflow.secret.name" . }}
+  - //secret/{{ .Values.airflow.auth.secretName }}
+  {{- if and .Values.gitSync.enabled .Values.gitSync.auth.secretName }}
+  - //secret/{{ .Values.gitSync.auth.secretName }}
+  {{- end }}

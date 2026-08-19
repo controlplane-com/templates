@@ -1,3 +1,4 @@
+{{- include "airflow.validate" . -}}
 kind: workload
 name: {{ include "airflow.redis.name" . }}
 description: Airflow Redis

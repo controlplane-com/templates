@@ -1,3 +1,4 @@
+{{- include "airflow.validate" . -}}
 kind: workload
 name: {{ include "airflow.webserver.name" . }}
 description: Airflow webserver
@@ -43,9 +44,9 @@ spec:
         - name: POSTGRES_PASSWORD
           value: cpln://secret/{{ include "airflow.secret.name" . }}.password
         - name: AIRFLOW__API_AUTH__JWT_SECRET
-          value: cpln://secret/{{ include "airflow.secret.name" . }}.jwtSecret
+          value: cpln://secret/{{ .Values.airflow.auth.secretName }}.jwtSecret
         - name: AIRFLOW__CORE__FERNET_KEY
-          value: cpln://secret/{{ include "airflow.secret.name" . }}.fernetKey
+          value: cpln://secret/{{ .Values.airflow.auth.secretName }}.fernetKey
         - name: AIRFLOW__API__BASE_URL
           value: http://{{ include "airflow.webserver.name" . }}:{{ .Values.airflow.webPort }}
         - name: AIRFLOW__CELERY__BROKER_URL
@@ -72,7 +73,7 @@ spec:
         - name: AIRFLOW_ADMIN_USERNAME
           value: {{ .Values.airflow.admin.username | quote }}
         - name: AIRFLOW_ADMIN_PASSWORD
-          value: cpln://secret/{{ include "airflow.secret.name" . }}.adminPassword
+          value: cpln://secret/{{ .Values.airflow.auth.secretName }}.adminPassword
         - name: AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS
           value: {{ printf "%s:ADMIN" .Values.airflow.admin.username | quote }}
         - name: AIRFLOW__API__HOST
@@ -86,6 +87,7 @@ spec:
         httpGet:
           path: /api/v2/monitor/health
           port: {{ .Values.airflow.webPort }}
+          scheme: HTTP
         failureThreshold: 5
         initialDelaySeconds: 30
         periodSeconds: 10
@@ -112,11 +114,11 @@ spec:
           value: current
         - name: GITSYNC_PERIOD
           value: {{ .Values.gitSync.period | quote }}
-        {{- if .Values.gitSync.auth.token }}
+        {{- if .Values.gitSync.auth.secretName }}
         - name: GITSYNC_USERNAME
           value: git
         - name: GITSYNC_PASSWORD
-          value: cpln://secret/{{ include "airflow.secret.name" . }}.gitSyncToken
+          value: cpln://secret/{{ .Values.gitSync.auth.secretName }}
         {{- end }}
       volumes:
         - path: /opt/airflow
@@ -125,8 +127,12 @@ spec:
     {{- end }}
   firewallConfig:
     external:
+      {{- if .Values.firewallConfig.inboundAllowCIDR }}
       inboundAllowCIDR:
         {{- toYaml .Values.firewallConfig.inboundAllowCIDR | nindent 8 }}
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
       inboundBlockedCIDR: []
       outboundAllowCIDR:
         - 0.0.0.0/0

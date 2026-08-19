@@ -1,3 +1,4 @@
+{{- include "airflow.validate" . -}}
 kind: workload
 name: {{ include "airflow.postgres.name" . }}
 description: Airflow Postgres

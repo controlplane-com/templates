@@ -1,13 +1,13 @@
 apiVersion: v2
 name: airflow
-description: Airflow with Celery using Keda, Redis and Postgres
+description: Apache Airflow with CeleryExecutor, KEDA autoscaling, Redis and Postgres
 type: application
-version: 1.4.0
+version: 1.5.0
 appVersion: "3.0.3"
 
 annotations:
   created: "2025-08-14"
-  lastModified: "2026-08-04"
+  lastModified: "2026-08-19"
   category: "workflow-orchestration"
   createsGvc: true
 

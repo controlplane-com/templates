@@ -1,3 +1,4 @@
+{{- include "airflow.validate" . -}}
 kind: workload
 name: {{ include "airflow.celery.name" . }}
 description: Airflow Celery worker
@@ -22,9 +23,9 @@ spec:
         - name: POSTGRES_PASSWORD
           value: cpln://secret/{{ include "airflow.secret.name" . }}.password
         - name: AIRFLOW__API_AUTH__JWT_SECRET
-          value: cpln://secret/{{ include "airflow.secret.name" . }}.jwtSecret
+          value: cpln://secret/{{ .Values.airflow.auth.secretName }}.jwtSecret
         - name: AIRFLOW__CORE__FERNET_KEY
-          value: cpln://secret/{{ include "airflow.secret.name" . }}.fernetKey
+          value: cpln://secret/{{ .Values.airflow.auth.secretName }}.fernetKey
         - name: AIRFLOW__API__BASE_URL
           value: http://{{ include "airflow.webserver.name" . }}:{{ .Values.airflow.webPort }}
         - name: AIRFLOW__CELERY__BROKER_URL
@@ -81,8 +82,7 @@ spec:
   {{- end }}        
   firewallConfig:
     external:
-      inboundAllowCIDR:
-        - 0.0.0.0/0
+      inboundAllowCIDR: []
       inboundBlockedCIDR: []
       outboundAllowCIDR:
         - 0.0.0.0/0

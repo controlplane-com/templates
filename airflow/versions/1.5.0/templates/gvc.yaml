@@ -1,3 +1,4 @@
+{{- include "airflow.validate" . -}}
 kind: gvc
 name: {{ .Values.gvc.name }}
 description: Airflow GVC

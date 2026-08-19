@@ -1,0 +1,17 @@
+kind: policy
+name: {{ include "unleash.policy.name" . }}
+description: Unleash secret access
+tags: {{- include "unleash.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "unleash.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "unleash.secretAdmin.name" . }}
+  - //secret/{{ include "unleash.secretStart.name" . }}
+  - //secret/{{ include "unleash.postgres.secret.name" . }}
+  {{- if .Values.apiTokens.secretName }}
+  - //secret/{{ .Values.apiTokens.secretName }}
+  {{- end }}

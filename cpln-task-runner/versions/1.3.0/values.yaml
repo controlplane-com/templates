@@ -1,0 +1,120 @@
+# Same image for both API and Worker workloads
+image: controlplanecorporation/cpln-task-runner:0.4
+
+# API configuration
+api:
+  # Enable/disable the API workload
+  enabled: true
+  # Number of replicas
+  replicas:
+    min: 1
+    max: 3
+  # Container port
+  port: 8080
+  # Public access configuration. DEFAULTS TO FALSE — see the README.
+  # /v1/enqueue has NO authentication whatsoever, and it does not merely accept
+  # registered client IDs: an UNKNOWN client_id is accepted and AUTO-REGISTERED
+  # (measured). So with this true, any stranger can make the worker issue arbitrary
+  # outbound HTTP with a method, headers and body of their choosing. There is no
+  # knob that closes that — the application has no client authentication at all.
+  # Turn this on only if you accept an open queue, or front it with an
+  # authenticating proxy of your own.
+  public:
+    enabled: false
+    # Path prefix for public endpoint (empty for root)
+    pathPrefix: ""
+  # ─── Admin API authentication (REQUIRED prerequisite secret) ─────────────────
+  # /admin/* creates, edits and deletes clients and rate-limit tiers. It is guarded
+  # by the X-Admin-Key header, and the key comes from an `opaque` secret (encoding:
+  # plain) whose payload IS the key.
+  #
+  # THE SECRET MUST EXIST BEFORE YOU INSTALL — otherwise the deployment wedges
+  # silently and `cpln logs` returns nothing at all. See Prerequisites in the README.
+  #
+  # Setting this to "" leaves the admin endpoints UNAUTHENTICATED, and is rejected
+  # outright while api.public.enabled is true.
+  admin:
+    apiKeySecretName: my-cpln-task-runner-admin-key
+  # Resource allocation
+  resources:
+    cpu: 500m
+    memory: 512Mi
+  # Environment variables
+  env:
+    # Log level (debug, info, warn, error)
+    logLevel: info
+    # OpenTelemetry endpoint (leave empty to disable tracing)
+    otelEndpoint: ""
+    # Redis connection retries
+    connectRetries: 30
+    # Redis retry interval in seconds
+    retryIntervalSec: 2
+
+# Worker configuration
+worker:
+  # Enable/disable the Worker workload
+  enabled: true
+  # Number of replicas
+  replicas:
+    min: 1
+    max: 5
+  # Container port (for health checks)
+  port: 8082
+  # Resource allocation
+  resources:
+    cpu: 1
+    memory: 1Gi
+  # Environment variables
+  env:
+    # Log level (debug, info, warn, error)
+    logLevel: info
+    # Number of concurrent workers per replica
+    concurrency: 10
+    # Task timeout in seconds (default: 30 minutes)
+    taskTimeoutSec: 1800
+    # Maximum retry attempts
+    maxRetry: 5
+    # Allow tasks to target private/internal URLs
+    allowPrivateUrls: false
+    # Circuit breaker failure threshold
+    cbFailureThreshold: 5
+    # Circuit breaker timeout in seconds
+    cbTimeoutSec: 30
+    # Redis connection retries
+    connectRetries: 30
+    # Redis retry interval in seconds
+    retryIntervalSec: 2
+    # OpenTelemetry endpoint (leave empty to disable tracing)
+    otelEndpoint: ""
+
+# Creates a secret holding the bundled Redis + Sentinel passwords.
+# Set to false to bring your own secret; see redis.*.auth.fromSecret below.
+createSecret: true
+# Must match names below. Disregard if providing your own secret
+secretName: task-runner-secrets
+
+# Redis configuration
+redis:
+  # Passwords for the BUNDLED Redis and Sentinel, used only by the API and Worker
+  # containers — nobody types them. Used as written when createSecret is true, so
+  # change them: an untouched install runs on a password published in this repo.
+  redisPassword: change-me-cpln-task-runner-redis
+  sentinelPassword: change-me-cpln-task-runner-sentinel
+  # If createSecret is true, do not change.
+  # If providing a secret, adjust the values below to match its name and password keys.
+  redis:
+    auth:
+      fromSecret:
+        enabled: true
+        name: task-runner-secrets
+        passwordKey: redis-password
+    persistence:
+      enabled: true
+  sentinel:
+    auth:
+      fromSecret:
+        enabled: true
+        name: task-runner-secrets
+        passwordKey: redis-sentinel-password
+    persistence:
+      enabled: true

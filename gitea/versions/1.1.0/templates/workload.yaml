@@ -1,0 +1,140 @@
+{{- include "gitea.validate" . -}}
+kind: workload
+name: {{ include "gitea.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: Gitea self-hosted Git service
+tags: {{- include "gitea.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "gitea.identity.name" . }}
+  containers:
+    - name: gitea
+      image: {{ .Values.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      env:
+        # ─── Database (postgres subchart) ───
+        - name: GITEA__database__DB_TYPE
+          value: postgres
+        - name: GITEA__database__HOST
+          value: {{ include "gitea.postgres.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:5432
+        - name: GITEA__database__NAME
+          value: {{ .Values.postgres.config.database | quote }}
+        - name: GITEA__database__USER
+          value: cpln://secret/{{ include "gitea.secretPostgres.name" . }}.username
+        - name: GITEA__database__PASSWD
+          value: cpln://secret/{{ include "gitea.secretPostgres.name" . }}.password
+        # ─── Security (stable app secrets) ───
+        - name: GITEA__security__INSTALL_LOCK
+          value: "true"
+        - name: GITEA__security__SECRET_KEY
+          value: cpln://secret/{{ .Values.gitea.auth.secretName }}.secretKey
+        - name: GITEA__security__INTERNAL_TOKEN
+          value: cpln://secret/{{ .Values.gitea.auth.secretName }}.internalToken
+        - name: GITEA__oauth2__JWT_SECRET
+          value: cpln://secret/{{ .Values.gitea.auth.secretName }}.jwtSecret
+        # ─── Server ───
+        - name: GITEA__server__HTTP_PORT
+          value: "3000"
+        - name: GITEA__server__LFS_START_SERVER
+          value: "true"
+        {{- if .Values.ssh.enabled }}
+        - name: GITEA__server__START_SSH_SERVER
+          value: "true"
+        - name: GITEA__server__SSH_LISTEN_PORT
+          value: "2222"
+        - name: GITEA__server__SSH_PORT
+          value: {{ .Values.ssh.externalPort | quote }}
+        {{- else }}
+        - name: GITEA__server__START_SSH_SERVER
+          value: "false"
+        - name: GITEA__server__DISABLE_SSH
+          value: "true"
+        {{- end }}
+        # ─── Service ───
+        - name: GITEA__service__DISABLE_REGISTRATION
+          value: {{ .Values.gitea.disableRegistration | quote }}
+        # ─── Admin bootstrap (consumed by the wrapper script) ───
+        - name: GITEA_ADMIN_USERNAME
+          value: cpln://secret/{{ .Values.gitea.auth.secretName }}.adminUsername
+        - name: GITEA_ADMIN_PASSWORD
+          value: cpln://secret/{{ .Values.gitea.auth.secretName }}.adminPassword
+        - name: GITEA_ADMIN_EMAIL
+          value: cpln://secret/{{ .Values.gitea.auth.secretName }}.adminEmail
+      # Entrypoint (dumb-init → docker-entrypoint.sh → docker-setup.sh) is left intact so
+      # app.ini is generated and environment-to-ini runs first; these args are then exec'd.
+      args:
+        - /bin/sh
+        - /scripts/bootstrap.sh
+      ports:
+        - number: 3000
+          protocol: http
+        {{- if .Values.ssh.enabled }}
+        - number: 2222
+          protocol: tcp
+        {{- end }}
+      volumes:
+        - path: /var/lib/gitea
+          uri: cpln://volumeset/{{ include "gitea.volume.name" . }}
+        - path: /scripts/bootstrap.sh
+          # The API backfills `recoveryPolicy: retain` on a secret volume;
+          # declaring it keeps the stored spec identical to what we render.
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "gitea.secret.bootstrap.name" . }}
+      readinessProbe:
+        httpGet:
+          path: /api/healthz
+          port: 3000
+        failureThreshold: 10
+        initialDelaySeconds: 20
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        tcpSocket:
+          port: 3000
+        failureThreshold: 6
+        initialDelaySeconds: 60
+        periodSeconds: 15
+        successThreshold: 1
+        timeoutSeconds: 5
+  securityOptions:
+    # Rootless gitea runs as UID/GID 1000; make the fresh volumeset group-writable
+    # by GID 1000 so the image's docker-setup.sh can create /var/lib/gitea/git on
+    # first boot (a root-owned mount otherwise masks the image's chowned dir).
+    # Same proven pattern as timescaledb-highly-available's non-root data volume.
+    filesystemGroupId: 1000
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+    capacityAI: false
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  {{- if .Values.ssh.enabled }}
+  loadBalancer:
+    direct:
+      enabled: true
+      ports:
+        - containerPort: 2222
+          externalPort: {{ .Values.ssh.externalPort }}
+          protocol: TCP
+          scheme: tcp
+  {{- end }}

@@ -38,10 +38,19 @@ internalAccess:
 postgres:
   enabled: true
   image: postgres:18 # listmonk requires Postgres 12+
-  config:
+  # Credentials for the bundled database — internal plumbing no human types elsewhere.
+  # Listmonk CREATES the dictionary secret named by config.credentialsSecretName below
+  # out of these three values, so there is nothing for you to create before installing.
+  credentials:
     username: listmonk
     password: change-me-listmonk-db # change before installing
     database: listmonk
+  config:
+    # Name of the dictionary secret this chart creates and the bundled postgres reads.
+    # Secret names are org-wide: give each listmonk release its own name. A second
+    # release left on this name is REFUSED at install (it is owned by the first
+    # release) — nothing is shared, overwritten or deleted.
+    credentialsSecretName: my-listmonk-db-credentials
   resources:
     minCpu: 200m
     maxCpu: 500m
@@ -72,8 +81,9 @@ postgres:
     minio: # any S3-compatible endpoint (e.g. an internal MinIO template)
       endpoint: http://my-minio-workload:9000
       bucket: my-backup-bucket
-      accessKey: my-minio-username
-      secretKey: my-minio-password
+      # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
+      # only when backup is enabled with provider: minio. See README "Storage setup".
+      credentialsSecretName: my-listmonk-minio-credentials
       prefix: listmonk/backups
 
 # ─── Backing Store: Highly Available PostgreSQL (durable HA path) ─────────────

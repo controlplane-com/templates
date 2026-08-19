@@ -9,6 +9,7 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "keycloak.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "keycloak.secretAdmin.name" . }}
+  # The user-created admin credentials — reveal on exactly that one secret.
+  - //secret/{{ .Values.admin.secretName }}
   - //secret/{{ include "keycloak.secretStartup.name" . }}
   - //secret/{{ include "keycloak.db.secretName" . }}

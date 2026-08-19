@@ -8,13 +8,6 @@ Keycloak Workload Name
 {{- end }}
 
 {{/*
-Keycloak Admin Secret Name
-*/}}
-{{- define "keycloak.secretAdmin.name" -}}
-{{- printf "%s-keycloak-admin" .Release.Name }}
-{{- end }}
-
-{{/*
 Keycloak Startup Script Secret Name
 */}}
 {{- define "keycloak.secretStartup.name" -}}
@@ -77,6 +70,7 @@ Names must match the dependency charts' own helpers (pg-ha.secretDatabase.name /
 {{/* Validation */}}
 
 {{- define "keycloak.validate" -}}
+{{- include "keycloak.validateAdmin" . -}}
 {{- $replicas := int .Values.replicas -}}
 {{- if lt $replicas 1 -}}
 {{- fail "keycloak: replicas must be at least 1" -}}
@@ -92,6 +86,26 @@ Names must match the dependency charts' own helpers (pg-ha.secretDatabase.name /
 {{- end -}}
 {{- if and .Values.postgresHA.enabled (not (dig "proxy" "enabled" true .Values.postgresHA)) -}}
 {{- fail "keycloak: postgresHA.proxy.enabled must remain true — Keycloak connects through the HAProxy leader endpoint for writes" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+The bootstrap admin credentials became a user-created prerequisite secret in
+1.1.0 — they guard a login form on the public endpoint, so they may not transit
+Helm values. The removed keys are named explicitly so an install carrying a
+1.0.x values file fails at render with the replacement rather than silently
+falling back to a default. There are deliberately NO compatibility shims: the
+version bump IS the migration path.
+*/}}
+{{- define "keycloak.validateAdmin" -}}
+{{- if hasKey .Values.admin "username" -}}
+{{- fail "keycloak: admin.username was REMOVED in 1.1.0. Put it in a `dictionary` secret (key: `username`) together with `password`, and set admin.secretName to that secret's name. Create the secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- if hasKey .Values.admin "password" -}}
+{{- fail "keycloak: admin.password was REMOVED in 1.1.0. Put it in a `dictionary` secret (key: `password`) together with `username`, and set admin.secretName to that secret's name. Create the secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- if not .Values.admin.secretName -}}
+{{- fail "keycloak: admin.secretName is required — it names the prerequisite `dictionary` secret holding the `username` and `password` keys. Create that secret BEFORE installing; see Prerequisites in the README." -}}
 {{- end -}}
 {{- end }}
 

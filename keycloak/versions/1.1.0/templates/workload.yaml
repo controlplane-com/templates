@@ -24,10 +24,11 @@ spec:
           value: 'cpln://secret/{{ include "keycloak.db.secretName" . }}.username'
         - name: KC_DB_PASSWORD
           value: 'cpln://secret/{{ include "keycloak.db.secretName" . }}.password'
+        # ── Bootstrap admin (user-created prerequisite dictionary secret) ──
         - name: KC_BOOTSTRAP_ADMIN_USERNAME
-          value: 'cpln://secret/{{ include "keycloak.secretAdmin.name" . }}.username'
+          value: 'cpln://secret/{{ .Values.admin.secretName }}.username'
         - name: KC_BOOTSTRAP_ADMIN_PASSWORD
-          value: 'cpln://secret/{{ include "keycloak.secretAdmin.name" . }}.password'
+          value: 'cpln://secret/{{ .Values.admin.secretName }}.password'
         - name: KC_HEALTH_ENABLED
           value: 'true'
         - name: KC_HTTP_ENABLED

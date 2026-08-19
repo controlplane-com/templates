@@ -10,6 +10,7 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "gitea.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "gitea.secret.env.name" . }}
   - //secret/{{ include "gitea.secret.bootstrap.name" . }}
   - //secret/{{ include "gitea.secretPostgres.name" . }}
+  # Prerequisite secret the user creates — granted by name, nothing broader.
+  - //secret/{{ .Values.gitea.auth.secretName }}

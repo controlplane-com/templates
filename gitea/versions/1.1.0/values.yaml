@@ -17,18 +17,21 @@ volumeset:
     minFreePercentage: 10 # minimum free percentage that triggers scaling
     scalingFactor: 1.2 # how much to grow the volume when scaling is triggered
 
-# ─── Gitea admin + app secrets (template-scoped — CHANGE THESE) ────
+# ─── Gitea ────────────────────────────────────────────────────────
 gitea:
-  admin:
-    username: gitea_admin
-    password: change-me-admin-pass   # CHANGE THIS before install — the first admin login
-    email: admin@example.com
-  security:
-    # Stable per install. CHANGE THESE. Generate each: `gitea generate secret SECRET_KEY|INTERNAL_TOKEN|JWT_SECRET`
-    # Do NOT rotate after install — changing SECRET_KEY makes existing encrypted data (2FA, tokens) unreadable.
-    secretKey: REPLACE_WITH_gitea_generate_secret_SECRET_KEY
-    internalToken: REPLACE_WITH_gitea_generate_secret_INTERNAL_TOKEN
-    jwtSecret: REPLACE_WITH_gitea_generate_secret_JWT_SECRET
+  auth:
+    # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. If it does
+    # not exist the deployment WEDGES silently and looks like a platform fault.
+    # A `dictionary` secret holding exactly six keys:
+    #   adminUsername   — first site-admin login
+    #   adminPassword   — its password; this login sits on the public endpoint
+    #   adminEmail      — its email address
+    #   secretKey       — encrypts 2FA secrets, tokens and mirror credentials;
+    #                     CANNOT be rotated without making all of them unreadable
+    #   internalToken   — Gitea's internal API shared token
+    #   jwtSecret       — signs OAuth2 tokens; must be base64url of exactly 32 bytes
+    # See README Prerequisites for the exact command.
+    secretName: my-gitea-auth
   disableRegistration: true  # true = admin-invite only; false = allow open self-registration
 
 # ─── Access ───────────────────────────────────────────────────────
@@ -52,11 +55,13 @@ internalAccess: # internal firewall scope
     #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
 # ─── Backing database (postgres subchart) ─────────────────────────
+# Bundled plumbing: it serves Gitea only and is unreachable from outside the
+# GVC — but the password is used AS-IS, so change it before installing.
 postgres:
   image: postgres:18
   config:
     username: gitea
-    password: change-me-db-pass
+    password: change-me-gitea-db
     database: gitea
   resources:
     minCpu: 200m

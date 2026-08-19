@@ -31,11 +31,11 @@ spec:
         - name: GITEA__security__INSTALL_LOCK
           value: "true"
         - name: GITEA__security__SECRET_KEY
-          value: cpln://secret/{{ include "gitea.secret.env.name" . }}.secretKey
+          value: cpln://secret/{{ .Values.gitea.auth.secretName }}.secretKey
         - name: GITEA__security__INTERNAL_TOKEN
-          value: cpln://secret/{{ include "gitea.secret.env.name" . }}.internalToken
+          value: cpln://secret/{{ .Values.gitea.auth.secretName }}.internalToken
         - name: GITEA__oauth2__JWT_SECRET
-          value: cpln://secret/{{ include "gitea.secret.env.name" . }}.jwtSecret
+          value: cpln://secret/{{ .Values.gitea.auth.secretName }}.jwtSecret
         # ─── Server ───
         - name: GITEA__server__HTTP_PORT
           value: "3000"
@@ -59,11 +59,11 @@ spec:
           value: {{ .Values.gitea.disableRegistration | quote }}
         # ─── Admin bootstrap (consumed by the wrapper script) ───
         - name: GITEA_ADMIN_USERNAME
-          value: cpln://secret/{{ include "gitea.secret.env.name" . }}.adminUsername
+          value: cpln://secret/{{ .Values.gitea.auth.secretName }}.adminUsername
         - name: GITEA_ADMIN_PASSWORD
-          value: cpln://secret/{{ include "gitea.secret.env.name" . }}.adminPassword
+          value: cpln://secret/{{ .Values.gitea.auth.secretName }}.adminPassword
         - name: GITEA_ADMIN_EMAIL
-          value: cpln://secret/{{ include "gitea.secret.env.name" . }}.adminEmail
+          value: cpln://secret/{{ .Values.gitea.auth.secretName }}.adminEmail
       # Entrypoint (dumb-init → docker-entrypoint.sh → docker-setup.sh) is left intact so
       # app.ini is generated and environment-to-ini runs first; these args are then exec'd.
       args:
@@ -80,6 +80,9 @@ spec:
         - path: /var/lib/gitea
           uri: cpln://volumeset/{{ include "gitea.volume.name" . }}
         - path: /scripts/bootstrap.sh
+          # The API backfills `recoveryPolicy: retain` on a secret volume;
+          # declaring it keeps the stored spec identical to what we render.
+          recoveryPolicy: retain
           uri: cpln://secret/{{ include "gitea.secret.bootstrap.name" . }}
       readinessProbe:
         httpGet:

@@ -2,11 +2,11 @@ apiVersion: v2
 name: gitea
 description: Gitea lightweight self-hosted Git service — repositories, pull requests, issues and a package registry
 type: application
-version: 1.0.0
-appVersion: "1.27.1"
+version: 1.1.0
+appVersion: "1.27.1-rootless"
 annotations:
   created: "2026-07-27"
-  lastModified: "2026-08-17"
+  lastModified: "2026-08-19"
   category: "developer-tools"
   createsGvc: false
 dependencies:

@@ -7,7 +7,8 @@ This app deploys [Umami](https://umami.is/) — a privacy-first, cookieless web 
 - **Umami**: Stateless `standard` workload on port 3000 — dashboard and tracking/collect endpoint share the same port. `replicas: 1` by default (proven single-instance shape); `≥2` forms an always-on scaled tier for zero-downtime rolling restarts. All state lives in PostgreSQL, so replicas are independent (no clustering).
 - **PostgreSQL (single-instance, default)**: The `postgres` template — the backing store for all users, websites, sessions, and events.
 - **PostgreSQL (HA, optional)**: The `postgres-highly-available` template instead — 3 Patroni replicas with automatic failover and an HAProxy leader endpoint, for a durable production store.
-- **Identity and policy**: A least-privilege policy granting the workload `reveal` on exactly two secrets — the app secret you create and the active database's credential secret. The template creates no secret of its own.
+- **Database credentials secret**: A `dictionary` secret holding the bundled database's `username`, `password` and `database`, built by this template from `postgres.credentials.*` and handed to the Postgres store by name. Nothing for you to create. (Not rendered on the HA path — `postgres-highly-available` still makes its own.)
+- **Identity and policy**: A least-privilege policy granting the workload `reveal` on exactly two secrets — the app secret you create and the active database's credential secret.
 
 ## Prerequisites
 
@@ -21,7 +22,11 @@ printf '%s' "$(openssl rand -base64 32)" | cpln secret create-opaque --name my-u
 
 Keep it for the life of the install — changing it logs every user out.
 
-Nothing else is required for a default install. Optional: a cloud account + bucket if you enable the Postgres backup pass-through.
+Nothing else is required for a default install. **The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*`.
+
+Optional, only if you turn on backups: a cloud account + bucket (AWS/GCP), or — for `provider: minio` — a `dictionary` secret holding the S3-compatible endpoint's keys (see **Storage setup**).
+
+**Upgrading from 1.1.0:** the database credentials moved from `postgres.config.username/password/database` to `postgres.credentials.username/password/database`. If you carry the old keys, the install fails with `config.username was REMOVED in postgres 3.4.0` — move the three keys and you are done. Ignore that message's advice to create a secret yourself; this template creates it.
 
 ## Configuration
 
@@ -61,10 +66,14 @@ Exactly one of the two stores must be enabled (the chart enforces this at render
 ```yaml
 postgres:             # default: single-instance PostgreSQL
   enabled: true
-  config:
+  credentials:        # this template builds the DB credential secret from these
     username: umami
-    password: change-me-umami-db
+    password: change-me-umami-db   # change before installing
     database: umami
+  config:
+    # name of the dictionary secret this template CREATES and Postgres reads;
+    # secret names are org-wide, so give each umami release its own
+    credentialsSecretName: my-umami-db-credentials
   volumeset:
     capacity: 10      # GiB
   backup:
@@ -128,6 +137,7 @@ internalAccess:
 | In-GVC (internal) | `http://{release}-umami.{gvc}.cpln.local:3000` — subject to `internalAccess.type` |
 | Default admin | `admin` / `umami` (hardcoded — change it before publishing, see below) |
 | App secret | the payload of your `app.appSecretName` secret; never stored in the Helm release |
+| Database credentials | the `username` / `password` / `database` keys of the secret named by `postgres.config.credentialsSecretName` |
 
 To start collecting data, add a website in the dashboard, then paste the generated `<script>` tag (which loads `/script.js` and POSTs to `/api/send`) into your site's HTML.
 
@@ -151,7 +161,15 @@ Then set `provider: aws` and `aws.{bucket,region,cloudAccountName,policyName}`.
 
 **GCP Cloud Storage** — create the bucket and a cloud account, grant its service account **Storage Object Admin** (`roles/storage.objectAdmin`) on the bucket, then set `provider: gcp` and `gcp.{bucket,cloudAccountName}`.
 
-**MinIO / S3-compatible** — set `provider: minio` and `minio.{endpoint,bucket,accessKey,secretKey}` (no cloud account needed; keys authenticate directly).
+**MinIO / S3-compatible** — no cloud account needed, but the keys are a prerequisite secret. Create a `dictionary` secret with the endpoint's credentials, then set `provider: minio`, `minio.{endpoint,bucket}` and `minio.credentialsSecretName` to its name:
+
+```bash
+cpln secret create-dictionary --name my-umami-minio-credentials \
+  --entry accessKey=MINIO_ACCESS_KEY \
+  --entry secretKey=MINIO_SECRET_KEY
+```
+
+(On the `postgresHA` path the MinIO keys are still plain values — `minio.{accessKey,secretKey}` — because that store has not adopted the prerequisite-secret convention yet.)
 
 The backing template's README has the full per-provider walkthrough.
 
@@ -164,6 +182,7 @@ The backing template's README has the full per-provider walkthrough.
 
   Firewall changes take up to a couple of minutes (30–150 s) to propagate, so re-test the public URL rather than trusting the first response.
 - **Tracking does not collect anything until `publicAccess.enabled: true`** — browsers on the sites you track must reach `/script.js` and `/api/send`. Public access is a deliberate second step, not an optional one, if you are collecting analytics.
+- **Give each umami release its own `postgres.config.credentialsSecretName`.** Secret names are org-wide, so two releases left on the default share one secret — and uninstalling either deletes it out from under the other.
 - **Create the app-secret before installing.** A missing `app.appSecretName` secret leaves the workload waiting on a secret that does not exist, which looks like a platform fault rather than a missing prerequisite.
 - **The first `helm upgrade` after an install re-applies the bundled Postgres** — including the upgrade that turns public access on. Expect Umami to be briefly unreachable (~2 minutes) while the database restarts; later upgrades do not do this.
 - **Ad blockers block the default `/script.js` and `/api/send`** — set `tracker.scriptName` / `tracker.collectEndpoint` to custom paths to reduce blocking.

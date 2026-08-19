@@ -31,10 +31,18 @@ tracker:
 postgres:
   enabled: true
   image: postgres:18
-  config:
+  # Credentials for the bundled database — internal plumbing no human types elsewhere.
+  # Umami CREATES the dictionary secret named by config.credentialsSecretName below out
+  # of these three values, so there is nothing for you to create before installing.
+  credentials:
     username: umami
     password: change-me-umami-db # change before installing
     database: umami
+  config:
+    # Name of the dictionary secret this chart creates and the bundled postgres reads.
+    # Secret names are org-wide: give each umami release its own name if you run more
+    # than one in the same org.
+    credentialsSecretName: my-umami-db-credentials
   resources:
     minCpu: 250m
     maxCpu: 1
@@ -65,8 +73,9 @@ postgres:
     minio:                 # any S3-compatible endpoint (e.g. an internal MinIO template)
       endpoint: http://my-minio-workload:9000
       bucket: my-backup-bucket
-      accessKey: my-minio-username
-      secretKey: my-minio-password
+      # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
+      # only when backup is enabled with provider: minio. See README "Storage setup".
+      credentialsSecretName: my-umami-minio-credentials
       prefix: umami/backups
 
 # ─── Backing Store: Highly Available PostgreSQL (durable HA path) ──────────────

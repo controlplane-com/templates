@@ -31,7 +31,7 @@ No secret is created by this chart: the database credentials are a secret you cr
 
    **If the secret does not exist at install time the deployment wedges silently.** `cpln logs`
    returns zero lines — the container never starts, so there is nothing to log. The only diagnostic
-   is `status.versions[].message` in `cpln workload get {release}-postgres -o yaml`. Create the
+   is `status.versions[].message` in `cpln workload get-deployments {release}-postgres -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the
    secret and it recovers on its own in about 6 minutes, or clear it immediately with
    `cpln workload force-redeployment {release}-postgres` (~90 s).
 

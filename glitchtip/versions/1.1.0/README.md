@@ -203,6 +203,7 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
 
 ## Important Notes
 
+- **The default HA stack takes about six and a half minutes to converge**, and the worker crash-loops with `Connection reset by peer` for the first several minutes while Patroni elects a database leader. This is expected and self-correcting — do not treat it as a failed install.
 - **Create the auth secret before installing.** A missing prerequisite secret leaves both workloads waiting on something that does not exist, with zero log lines — see Prerequisites for how to diagnose it.
 - **Never rotate `secretKey` on a live install unless you intend to** — it logs every user out and invalidates password-reset links in flight. Nothing is corrupted, but everyone has to sign in again.
 - **Change the database password and the redis password before installing** — both are bundled plumbing used as-is.

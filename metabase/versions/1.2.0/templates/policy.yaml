@@ -1,0 +1,16 @@
+kind: policy
+name: {{ include "metabase.policy.name" . }}
+description: Metabase secret access
+tags: {{- include "metabase.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "metabase.identity.name" . }}
+targetKind: secret
+targetLinks:
+  # The user-created admin credentials — reveal on exactly that one secret.
+  - //secret/{{ .Values.admin.secretName }}
+  - //secret/{{ include "metabase.secretStart.name" . }}
+  - //secret/{{ include "metabase.postgres.secret.name" . }}
+  - //secret/{{ .Values.encryptionKey.secretName }}

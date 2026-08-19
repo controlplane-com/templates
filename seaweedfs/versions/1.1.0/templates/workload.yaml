@@ -1,0 +1,127 @@
+{{- include "seaweedfs.validate" . -}}
+kind: workload
+name: {{ include "seaweedfs.name" . }}
+description: SeaweedFS all-in-one node — S3-compatible API :8333{{ if .Values.adminUI.enabled }}, admin UI :23646{{ end }}
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "seaweedfs.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "seaweedfs.identity.name" . }}
+  containers:
+    - name: seaweedfs
+      image: {{ .Values.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      # Entrypoint intact (entrypoint.sh): chowns /data, drops to uid 1000, then
+      # execs `weed mini` — master + volume + filer + S3 gateway + admin UI in one
+      # process. Every port is pinned explicitly because mini's port layout may
+      # change between releases.
+      args:
+        - mini
+        - -dir=/data
+        # Advertised identity is pinned so master raft/sequencer state survives a
+        # reschedule onto a new pod IP; -ip.bind keeps listeners on all interfaces.
+        - -ip=localhost
+        - -ip.bind=0.0.0.0
+        - -master.port=9333
+        - -volume.port=9340
+        - -filer.port=8888
+        - -s3.port=8333
+        - -s3.port.iceberg=0
+        - -webdav=false
+        {{- if .Values.adminUI.enabled }}
+        - -admin.ui=true
+        - -admin.port=23646
+        {{- else }}
+        - -admin.ui=false
+        {{- end }}
+        {{- if .Values.s3.buckets }}
+        - -bucket={{ join "," .Values.s3.buckets }}
+        {{- end }}
+      env:
+        # S3 credentials from the user's prerequisite dictionary secret. Without
+        # them SeaweedFS serves S3 completely unauthenticated.
+        - name: AWS_ACCESS_KEY_ID
+          value: cpln://secret/{{ .Values.s3.credentialsSecretName }}.AWS_ACCESS_KEY_ID
+        - name: AWS_SECRET_ACCESS_KEY
+          value: cpln://secret/{{ .Values.s3.credentialsSecretName }}.AWS_SECRET_ACCESS_KEY
+        {{- if .Values.adminUI.enabled }}
+        # Admin UI credentials — read via viper's WEED_ prefix env fallback
+        # (admin.user / admin.password); the flags are deliberately NOT passed,
+        # since an explicit flag would suppress the env fallback.
+        - name: WEED_ADMIN_USER
+          value: cpln://secret/{{ include "seaweedfs.secret.admin.name" . }}.WEED_ADMIN_USER
+        - name: WEED_ADMIN_PASSWORD
+          value: cpln://secret/{{ include "seaweedfs.secret.admin.name" . }}.WEED_ADMIN_PASSWORD
+        {{- end }}
+      # 8333 is declared FIRST so the canonical endpoint routes to the S3 API.
+      ports:
+        - number: 8333
+          protocol: http
+        {{- if .Values.adminUI.enabled }}
+        - number: 23646
+          protocol: http
+        {{- end }}
+      volumes:
+        - path: /data
+          uri: cpln://volumeset/{{ include "seaweedfs.volume.name" . }}
+      # /healthz on the S3 port is unauthenticated by design upstream
+      readinessProbe:
+        httpGet:
+          path: /healthz
+          port: 8333
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        failureThreshold: 12
+        successThreshold: 1
+        timeoutSeconds: 5
+      # tcpSocket only — restarts a dead process, never a busy one
+      livenessProbe:
+        tcpSocket:
+          port: 8333
+        initialDelaySeconds: 30
+        periodSeconds: 15
+        failureThreshold: 6
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+    capacityAI: false
+    debug: false
+    suspend: false
+    # Object uploads and downloads run far longer than the 5s default
+    timeoutSeconds: 300
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  supportDynamicTags: false

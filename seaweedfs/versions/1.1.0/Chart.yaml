@@ -1,0 +1,15 @@
+apiVersion: v2
+name: seaweedfs
+description: SeaweedFS distributed object storage with an S3-compatible API, as a single all-in-one node
+type: application
+version: 1.0.0
+appVersion: "4.40"
+annotations:
+  created: "2026-08-05"
+  lastModified: "2026-08-17"
+  category: "storage"
+  createsGvc: false
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

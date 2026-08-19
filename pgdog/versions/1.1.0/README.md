@@ -145,7 +145,7 @@ From a workload inside the GVC:
 
 ```sh
 PGPASSWORD="$(cpln secret reveal my-pgdog-admin-password -o yaml | awk '/^  payload:/ {print $2}')" \
-  psql -h {release-name}-pgdog -p 6432 -U admin -d admin
+  psql -h {release-name}-pgdog.{gvc}.cpln.local -p 6432 -U admin -d admin
 ```
 
 ### Authentication and logging
@@ -179,7 +179,7 @@ Applications connect exactly as they would to PostgreSQL — PgDog speaks the fu
 
 | Setting | Value |
 |---|---|
-| Host (in-GVC) | `{release-name}-pgdog` (or `{release-name}-pgdog.{gvc}.cpln.local`) |
+| Host (in-GVC) | `{release-name}-pgdog.{gvc}.cpln.local` — the fully-qualified form is required; the short name does **not** resolve for this workload |
 | Host (public) | the workload's `status.canonicalEndpoint`, when `publicAccess.enabled` is true |
 | Port | `6432` |
 | Database | a `name` from your `databases` list |

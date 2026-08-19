@@ -1,0 +1,18 @@
+apiVersion: v2
+name: rabbitmq
+description: Single-node RabbitMQ message broker with persistent storage for queues and messages
+
+type: application
+version: 1.2.0
+appVersion: "3-management"
+
+annotations:
+  created: "2024-01-23"
+  lastModified: "2026-08-19"
+  category: "queue"
+  createsGvc: false
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

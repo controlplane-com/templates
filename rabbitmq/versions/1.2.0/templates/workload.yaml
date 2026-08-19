@@ -1,0 +1,94 @@
+{{- include "rabbitmq.validate" . -}}
+{{- /*
+The default user reaches RabbitMQ as ENV VARS, not through rabbitmq.conf. A
+`cpln://secret/...` reference is resolved only in an env var — inside a mounted
+config file it would land as that literal string and RabbitMQ would boot with a
+username of "cpln://secret/...". RabbitMQ 3.9+ reads RABBITMQ_DEFAULT_USER and
+RABBITMQ_DEFAULT_PASS natively (the docker entrypoint no longer touches them).
+*/}}
+{{- $env := merge (dict
+      "RABBITMQ_DEFAULT_USER" (printf "cpln://secret/%s.username" .Values.credentialsSecretName)
+      "RABBITMQ_DEFAULT_PASS" (printf "cpln://secret/%s.password" .Values.credentialsSecretName))
+      (default dict .Values.env) }}
+kind: workload
+name: {{ include "rabbitmq.name" . }}
+tags: {{- include "rabbitmq.tags" . | nindent 2 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  type: stateful
+  containers:
+    - name: rabbitmq
+      cpu: {{ .Values.cpu | quote }}
+      memory: {{ .Values.memory | quote }}
+      image: {{ .Values.image.repository }}
+      metrics:
+        path: /metrics
+        port: 15692
+      env:
+      {{- range $key, $value := $env }}
+        - name: {{ $key }}
+          value: {{ $value | quote }}
+      {{- end }}
+      readinessProbe:
+        failureThreshold: 10
+        initialDelaySeconds: 15
+        periodSeconds: 10
+        successThreshold: 1
+        tcpSocket:
+          port: {{ .Values.rabbitmq_conf.listeners_tcp_default }}
+        timeoutSeconds: 3
+      ports:
+        - number: 15672
+          protocol: http
+        - number: {{ .Values.rabbitmq_conf.listeners_tcp_default }}
+          protocol: tcp
+        - number: 15692
+          protocol: http
+      volumes:
+        - path: {{ include "rabbitmq.configPath" . }}
+          recoveryPolicy: retain
+          uri: 'cpln://secret/{{ include "rabbitmq.secret.name" . }}'
+    {{- if .Values.volumeset }}
+        - path: /var/lib/rabbitmq
+          recoveryPolicy: retain
+          uri: 'cpln://volumeset/{{ include "rabbitmq.volume.name" . }}'
+    {{- end }}
+  identityLink: //identity/{{ include "rabbitmq.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: {{ .Values.timeoutSeconds }}
+  firewallConfig:
+    {{- /* Every field is declared, empty lists included: the API backfills them,
+    so omitting one makes a default install drift from the moment it is created.
+    External inbound stays closed — RabbitMQ is an internal broker here. */}}
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      inboundAllowWorkload: []
+  rolloutOptions:
+    {{- /*
+    maxUnavailableReplicas is deliberately NOT set: the API drops it on a
+    stateful workload, so sending it produces permanent drift AND implies a
+    rolling-restart limit that is not in force.
+    terminationGracePeriodSeconds is declared because the API backfills 90.
+    */}}
+    maxSurgeReplicas: 25%
+    minReadySeconds: 0
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90

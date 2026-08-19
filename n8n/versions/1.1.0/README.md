@@ -56,10 +56,10 @@ Set `owner.secretName` to that name. Read it back later with `cpln secret reveal
 image: n8nio/n8n:2.29.8
 
 resources:
-  cpu: 1000m
-  memory: 1Gi
   minCpu: 250m
   minMemory: 512Mi
+  maxCpu: 1000m
+  maxMemory: 1Gi
 
 encryptionKey:
   secretName: my-n8n-encryption-key # your pre-created opaque secret (see Prerequisites)

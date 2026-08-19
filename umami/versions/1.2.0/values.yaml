@@ -40,8 +40,9 @@ postgres:
     database: umami
   config:
     # Name of the dictionary secret this chart creates and the bundled postgres reads.
-    # Secret names are org-wide: give each umami release its own name if you run more
-    # than one in the same org.
+    # Secret names are org-wide: give each umami release its own name. A second
+    # release left on this name is REFUSED at install (it is owned by the first
+    # release) — nothing is shared, overwritten or deleted.
     credentialsSecretName: my-umami-db-credentials
   resources:
     minCpu: 250m

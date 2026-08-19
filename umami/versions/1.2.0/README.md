@@ -72,7 +72,7 @@ postgres:             # default: single-instance PostgreSQL
     database: umami
   config:
     # name of the dictionary secret this template CREATES and Postgres reads;
-    # secret names are org-wide, so give each umami release its own
+    # secret names are org-wide; a second release on this name is refused at install
     credentialsSecretName: my-umami-db-credentials
   volumeset:
     capacity: 10      # GiB
@@ -182,7 +182,7 @@ The backing template's README has the full per-provider walkthrough.
 
   Firewall changes take up to a couple of minutes (30–150 s) to propagate, so re-test the public URL rather than trusting the first response.
 - **Tracking does not collect anything until `publicAccess.enabled: true`** — browsers on the sites you track must reach `/script.js` and `/api/send`. Public access is a deliberate second step, not an optional one, if you are collecting analytics.
-- **Give each umami release its own `postgres.config.credentialsSecretName`.** Secret names are org-wide, so two releases left on the default share one secret — and uninstalling either deletes it out from under the other.
+- **Give each umami release its own `postgres.config.credentialsSecretName`.** Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
 - **Create the app-secret before installing.** A missing `app.appSecretName` secret leaves the workload waiting on a secret that does not exist, which looks like a platform fault rather than a missing prerequisite.
 - **The first `helm upgrade` after an install re-applies the bundled Postgres** — including the upgrade that turns public access on. Expect Umami to be briefly unreachable (~2 minutes) while the database restarts; later upgrades do not do this.
 - **Ad blockers block the default `/script.js` and `/api/send`** — set `tracker.scriptName` / `tracker.collectEndpoint` to custom paths to reduce blocking.

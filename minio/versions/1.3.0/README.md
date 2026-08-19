@@ -44,8 +44,9 @@ password are a secret you create yourself.
    6–8.5 minutes, or clear it immediately with
    `cpln workload force-redeployment {release}-minio --gvc {gvc}` (~90 s).
 
-2. **Replica quota** — the default per-workload replica quota is below the recommended 6. Request a
-   quota increase before installing with `replicas: 6` or more.
+2. **Replica quota** — the built-in `replicas-per-workload` quota is **6**, so the default
+   `replicas: 6` installs with no action needed. Request an increase only if you raise `replicas`
+   above 6.
 
 ## Configuration
 
@@ -132,9 +133,16 @@ and secret key.
 
 - **The credentials secret must exist before you install.** Without it the workload wedges with no
   log output at all; see Prerequisites for the one diagnostic that shows it.
-- **Rotating the secret needs a restart, and it is a fleet-wide change.** MinIO reads the root
-  credentials on every start, so restarting after updating the secret is what applies them — update
-  every client and every other template configured with these keys at the same time.
+- **Rotating the root credentials takes about 11 minutes of split state — plan it as a maintenance
+  window.** MinIO reads the root credentials on every start and they are per-node environment, so an
+  `OrderedReady` rollout restarts one replica at a time. Measured mid-rollout over service DNS: the
+  new credential succeeded 15 times and failed auth 5 times, while the old one failed all 20 — so
+  clients see intermittent failures with **both** keys until every replica has cycled. It does
+  converge cleanly, and no re-encryption of internal IAM data is needed.
+- **`cpln secret update` cannot rotate it** — that command only edits a secret's description and
+  tags. Update the value with `cpln apply -f <secret.yaml>`, then `cpln workload force-redeployment
+  <release>-minio --gvc <gvc>` to apply it. Update every client and every other template configured
+  with these keys in the same window.
 - **Treat `replicas` as fixed at install time.** MinIO grows by adding server pools, which this
   template does not model; changing the value rewrites every node's peer list for the existing pool.
 - **Do not set `internalAccess.type: none`.** Replicas discover and reach each other over internal

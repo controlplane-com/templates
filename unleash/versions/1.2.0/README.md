@@ -41,7 +41,9 @@ cpln secret create-dictionary --name my-unleash-api-tokens \
 
 Set its name in `apiTokens.secretName`. Leave it empty to create tokens in the admin UI after install instead.
 
-For optional database backups: a bucket and access setup for one of the supported providers (see [Backup storage setup](#backup-storage-setup)).
+**The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgresHA.postgres.*` (HA mode) or `postgres.credentials.*` (single-instance mode).
+
+For optional database backups: a bucket and access setup for one of the supported providers (see [Backup storage setup](#backup-storage-setup)). With `provider: minio` on the single-instance store, the endpoint's keys are a prerequisite `dictionary` secret — see that section.
 
 ## Configuration
 
@@ -101,10 +103,14 @@ postgresHA:
   enabled: false
 postgres:                     # dev/lightweight: single-instance PostgreSQL
   enabled: true
-  config:
+  credentials:                # this template builds the DB credential secret from these
     username: unleash
     password: change-me-unleash-db-password # change before installing
     database: unleash
+  config:
+    # name of the dictionary secret this template CREATES and Postgres reads;
+    # secret names are org-wide; a second release on this name is refused at install
+    credentialsSecretName: my-unleash-db-credentials
   volumeset:
     capacity: 10              # GiB
   backup:
@@ -121,7 +127,15 @@ postgres:                     # dev/lightweight: single-instance PostgreSQL
 | Internal (same GVC) | `http://{release}-unleash.{gvc}.cpln.local:4242` |
 | Login | `username` / `password` from your `admin.secretName` secret — `cpln secret reveal my-unleash-admin -o yaml` |
 | Postgres (internal, HA mode) | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432`, credentials in the `{release}-postgres-config` secret |
-| Postgres (internal, single mode) | `{release}-postgres.{gvc}.cpln.local:5432`, credentials in the `{release}-pg-config` secret |
+| Postgres (internal, single mode) | `{release}-postgres.{gvc}.cpln.local:5432`, credentials in the secret named by `postgres.config.credentialsSecretName` |
+
+## Upgrading from 1.1.0
+
+The single-instance database credentials moved from `postgres.config.username/password/database` to `postgres.credentials.username/password/database`, and `postgres.config.credentialsSecretName` names the secret this template now creates from them. If you carry the old keys the install fails with `config.username was REMOVED in postgres 3.4.0` — move the three keys and you are done. **Ignore that message's advice to create a secret yourself; this template creates it**, and the database password stays a value exactly as before.
+
+With `postgres.backup.provider: minio`, `postgres.backup.minio.accessKey`/`secretKey` were likewise removed — put them in a `dictionary` secret and set `postgres.backup.minio.credentialsSecretName` to its name (see [Backup storage setup](#backup-storage-setup)).
+
+The HA path (`postgresHA.*`) is unchanged in every respect.
 
 ## Upgrading from 1.0.x
 
@@ -166,12 +180,19 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
 
 1. Create your bucket on the server. Set `backup.minio.bucket`.
 2. Set `backup.minio.endpoint` to the S3 API address including port. For the `minio` marketplace template in the same GVC, this is `http://WORKLOAD_NAME:9000`.
-3. Set `backup.minio.accessKey` and `backup.minio.secretKey` to credentials with access to the bucket.
+3. For `postgresHA.backup`, set `backup.minio.accessKey` and `backup.minio.secretKey` to credentials with access to the bucket. For `postgres.backup` (single-instance), create a `dictionary` secret with those credentials and set `postgres.backup.minio.credentialsSecretName` to its name:
+
+```bash
+cpln secret create-dictionary --name my-unleash-minio-credentials \
+  --entry accessKey=YOUR_ACCESS_KEY \
+  --entry secretKey=YOUR_SECRET_KEY
+```
 
 ## Important Notes
 
 - **Create the admin secret before installing.** A missing prerequisite secret leaves the workload waiting on something that does not exist, with zero log lines — see Prerequisites for how to diagnose it.
-- **Change the database password (`postgresHA.postgres.password` / `postgres.config.password`) before installing** — it is bundled plumbing, used exactly as given.
+- **Change the database password (`postgresHA.postgres.password` / `postgres.credentials.password`) before installing** — it is bundled plumbing, used exactly as given.
+- **Give each unleash release its own `postgres.config.credentialsSecretName`** (single-instance mode only). Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
 - **Admin credentials and API tokens are seeded on first boot only** — they live in the database afterwards; change the password or manage tokens in the admin UI, not by editing the secrets.
 - **Backend tokens must stay secret** (server-side SDKs, `/api/client`); frontend tokens are safe to embed in browsers (`/api/frontend`). A 401 usually means the wrong token type or environment.
 - **The free edition ships exactly two environments** (`development`, `production`); SSO, role-based access control, multiple projects, change requests, and audit logs require an Unleash Enterprise license and are not available in this template.

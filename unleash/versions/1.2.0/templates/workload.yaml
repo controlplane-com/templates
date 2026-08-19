@@ -31,13 +31,11 @@ spec:
           value: {{ include "unleash.postgres.host" . }}
         - name: DATABASE_PORT
           value: '5432'
+        # Both stores' credential secrets now carry a `database` key, so this is
+        # read the same way in either mode (the single-instance secret is created
+        # by this chart, the HA one by postgres-highly-available).
         - name: DATABASE_NAME
-          {{- if .Values.postgresHA.enabled }}
           value: 'cpln://secret/{{ include "unleash.postgres.secret.name" . }}.database'
-          {{- else }}
-          # the single-postgres config secret has no `database` key — use the value directly
-          value: {{ .Values.postgres.config.database | quote }}
-          {{- end }}
         - name: DATABASE_USERNAME
           value: 'cpln://secret/{{ include "unleash.postgres.secret.name" . }}.username'
         - name: DATABASE_PASSWORD

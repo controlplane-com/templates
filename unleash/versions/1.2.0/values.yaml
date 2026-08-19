@@ -81,10 +81,20 @@ postgresHA:
 # Enable this and disable postgresHA for a lighter non-HA deployment.
 postgres:
   enabled: false
-  config:
+  # Credentials for the bundled database — internal plumbing no human types
+  # elsewhere. Unleash CREATES the dictionary secret named by
+  # config.credentialsSecretName below out of these three values, so there is
+  # nothing for you to create before installing.
+  credentials:
     username: unleash
     password: change-me-unleash-db-password # change before installing
     database: unleash
+  config:
+    # Name of the dictionary secret this chart creates and the bundled postgres
+    # reads. Secret names are org-wide: give each unleash release its own name.
+    # A second release left on this name is REFUSED at install (it is owned by
+    # the first release) — nothing is shared, overwritten or deleted.
+    credentialsSecretName: my-unleash-db-credentials
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)
 
@@ -109,6 +119,7 @@ postgres:
     minio:
       endpoint: http://my-minio-workload:9000
       bucket: unleash-pg-backup-bucket
-      accessKey: my-minio-username
-      secretKey: my-minio-password
+      # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
+      # only when this backup is enabled with provider: minio. See README storage setup.
+      credentialsSecretName: my-unleash-minio-credentials
       prefix: postgres/backups

@@ -52,13 +52,21 @@ redpanda:
       enabled: false
       port: 8082
 
+  # ─── SASL authentication ───────────────────────────────────────────────────
   auth:
     saslMechanism: SCRAM-SHA-256 # SCRAM-SHA-256 / SCRAM-SHA-512
+    # Each entry names a `dictionary` secret holding the keys `username` and `password`.
+    #
+    # EVERY SECRET LISTED HERE MUST EXIST BEFORE YOU INSTALL — a missing secret wedges
+    # the deployment silently and `cpln logs` returns nothing at all. See Prerequisites
+    # in the README for the exact commands and for how to diagnose a wedged deployment.
+    #
+    # The FIRST entry is the cluster superuser: the console, the Schema Registry client
+    # and (when enabled) the HTTP Proxy all authenticate to the brokers as it.
     users:
-      - username: admin
-        password: "your-admin-password"
-      # - username: your-app-user
-      #   password: "your-app-password"
+      - credentialsSecretName: my-redpanda-admin-credentials
+      # - credentialsSecretName: my-redpanda-app-credentials
+    # Extra usernames to grant superuser rights, for users created outside this chart.
     superusers: []
 
   acl:
@@ -85,8 +93,13 @@ redpanda_console:
   replicas: 1
   timeoutSeconds: 30
   # domain: console.example.com
-  # To disable all traffic, comment out the corresponding rule. Docs: https://docs.controlplane.com/concepts/security#firewall
+  # The console has NO LOGIN of its own — authentication and RBAC are Redpanda
+  # Enterprise features, so in this build every visitor shares the console's own
+  # SASL superuser session. External inbound is therefore CLOSED by default; reach
+  # the UI with `cpln port-forward <console-workload> 8080:8080 --gvc <gvc>`.
+  # Uncommenting external_inboundAllowCIDR publishes an unauthenticated Kafka admin
+  # UI to the whole internet. Docs: https://docs.controlplane.com/concepts/security#firewall
   firewall:
     # internal_inboundAllowType: "same-gvc"
-    external_inboundAllowCIDR: "0.0.0.0/0"
+    # external_inboundAllowCIDR: "0.0.0.0/0"
     external_outboundAllowCIDR: "0.0.0.0/0"

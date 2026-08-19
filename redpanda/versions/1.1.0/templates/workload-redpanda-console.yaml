@@ -11,6 +11,12 @@ spec:
   containers:
     - name: redpanda-console
       image: {{ .Values.redpanda_console.image }}
+      # The config file carries SASL credentials, which now come from a prerequisite
+      # secret — so it is written at container start by this script rather than
+      # mounted as a rendered secret. See secret-console-init.yaml.
+      command: /bin/sh
+      args:
+        - /scripts/console-init.sh
       inheritEnv: false
       cpu: {{ .Values.redpanda_console.cpu }}
       {{- if .Values.redpanda_console.minCpu }}
@@ -22,16 +28,18 @@ spec:
       {{- end }}
       env:
         - name: CONFIG_FILEPATH
-          value: /etc/redpanda-console/config.yaml
+          value: /tmp/redpanda-console/config.yaml
+        - name: REDPANDA_CONSOLE_USERNAME
+          value: 'cpln://secret/{{ $adminUser.credentialsSecretName }}.username'
         - name: REDPANDA_CONSOLE_PASSWORD
-          value: 'cpln://secret/{{ include "redpanda.name" . }}-secrets.{{ $adminUser.username }}-password'
+          value: 'cpln://secret/{{ $adminUser.credentialsSecretName }}.password'
       ports:
         - number: 8080
           protocol: http
       volumes:
-        - path: /etc/redpanda-console/config.yaml
+        - path: /scripts/console-init.sh
           recoveryPolicy: retain
-          uri: 'cpln://secret/{{ include "redpanda.name" . }}-console-config'
+          uri: 'cpln://secret/{{ include "redpanda.secret.consoleInit.name" . }}'
   defaultOptions:
     autoscaling:
       maxConcurrency: 0

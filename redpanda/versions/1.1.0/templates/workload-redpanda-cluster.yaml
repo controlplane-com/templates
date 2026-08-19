@@ -1,4 +1,3 @@
-{{- include "redpanda.validateReplicas" . }}
 kind: workload
 name: {{ include "redpanda.clusterName" . }}
 description: Redpanda broker cluster
@@ -33,8 +32,8 @@ spec:
                 done
                 until curl -sf "http://${ADMIN}/v1/cluster/health_overview" 2>/dev/null | grep -qE '"is_healthy"\s*:\s*true'; do sleep 2; done
                 [ "$ORDINAL" != "0" ] && exit 0
-                {{- range .Values.redpanda.auth.users }}
-                rpk security user create {{ .username }} --password "$REDPANDA_{{ .username | upper | replace "-" "_" }}_PASSWORD" --mechanism {{ $.Values.redpanda.auth.saslMechanism }} -X admin.hosts="${ADMIN_HOSTS}" || true
+                {{- range $i, $u := .Values.redpanda.auth.users }}
+                rpk security user create "$REDPANDA_USER_{{ $i }}_USERNAME" --password "$REDPANDA_USER_{{ $i }}_PASSWORD" --mechanism {{ $.Values.redpanda.auth.saslMechanism }} -X admin.hosts="${ADMIN_HOSTS}" || true
                 {{- end }}
         # Transfer all partition leadership off this broker before Kubernetes sends
         # SIGTERM. By the time SIGTERM arrives the broker holds no leadership, so
@@ -59,9 +58,11 @@ spec:
         {{- if .Values.redpanda.env }}
 {{ toYaml .Values.redpanda.env | indent 8 }}
         {{- end }}
-        {{- range .Values.redpanda.auth.users }}
-        - name: REDPANDA_{{ .username | upper | replace "-" "_" }}_PASSWORD
-          value: 'cpln://secret/{{ include "redpanda.name" $ }}-secrets.{{ .username }}-password'
+        {{- range $i, $u := .Values.redpanda.auth.users }}
+        - name: REDPANDA_USER_{{ $i }}_USERNAME
+          value: 'cpln://secret/{{ $u.credentialsSecretName }}.username'
+        - name: REDPANDA_USER_{{ $i }}_PASSWORD
+          value: 'cpln://secret/{{ $u.credentialsSecretName }}.password'
         {{- end }}
       ports:
         - number: {{ .Values.redpanda.listeners.kafka.internal.port }}
@@ -144,9 +145,11 @@ spec:
       ports: []
     replicaDirect: true
   identityLink: //identity/{{ include "redpanda.name" . }}
+  # maxUnavailableReplicas is deliberately absent: the API silently DROPS it on a
+  # stateful workload, so sending it produced permanent rendered-vs-stored drift and
+  # implied a serialized rolling restart that was never in force.
   rolloutOptions:
     maxSurgeReplicas: 25%
-    maxUnavailableReplicas: '1'
     minReadySeconds: 0
     scalingPolicy: Parallel
   securityOptions:

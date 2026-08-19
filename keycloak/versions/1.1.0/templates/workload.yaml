@@ -111,6 +111,6 @@ spec:
   {{- end }}
   rolloutOptions:
     maxSurgeReplicas: 0%
-    maxUnavailableReplicas: "1"
     minReadySeconds: 10
     scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90

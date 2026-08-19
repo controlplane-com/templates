@@ -121,5 +121,6 @@ spec:
   # (duplicate campaign sends); the old replica must stop before the new starts.
   rolloutOptions:
     maxSurgeReplicas: 0%
-    maxUnavailableReplicas: "1"
+    minReadySeconds: 0
     scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90

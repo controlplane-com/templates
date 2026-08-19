@@ -9,7 +9,8 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "sftpgo.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "sftpgo.secretAdmin.name" . }}
+  # Prerequisite secret the user creates — granted by name, nothing broader.
+  - //secret/{{ .Values.admin.secretName }}
   - //secret/{{ include "sftpgo.secretUsers.name" . }}
 {{- if eq .Values.mode "scale_to_zero" }}
 ---

@@ -12,21 +12,26 @@ scaleToZero: # only used when mode is scale_to_zero
   proxy:
     image: ghcr.io/controlplane-com/scale-to-zero-proxy:0.1.0
     resources: # all SFTP traffic flows through the proxy
-      cpu: 500m
-      memory: 256Mi
       minCpu: 100m
       minMemory: 128Mi
+      maxCpu: 500m
+      maxMemory: 256Mi
 
 resources: # SFTPGo container; CPU governs transfer throughput and wake speed
-  cpu: 1000m
-  memory: 512Mi
   minCpu: 250m
   minMemory: 256Mi
+  maxCpu: 1000m
+  maxMemory: 512Mi
 
-# ─── Admin Bootstrap ──────────────────────────────────────────────────────────
-admin: # SFTPGo administrator (REST API / optional web admin), created on first boot
-  username: admin
-  password: change-me-sftpgo-admin # change before installing
+# ─── Admin (prerequisite) ─────────────────────────────────────────────────────
+# REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. If it does not
+# exist the deployment wedges silently and looks like a platform fault.
+# A `dictionary` secret holding exactly two keys:
+#   username — the SFTPGo administrator login
+#   password — its password; this login guards the REST API and web admin
+# The admin is created on first boot only. See README Prerequisites.
+admin:
+  secretName: my-sftpgo-admin # name of your pre-created dictionary secret
 
 # ─── Storage Backend ──────────────────────────────────────────────────────────
 storage:

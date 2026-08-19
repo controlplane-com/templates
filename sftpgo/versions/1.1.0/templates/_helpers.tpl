@@ -22,13 +22,6 @@ SFTPGo Volumeset Name
 {{- end }}
 
 {{/*
-Admin Bootstrap Secret Name
-*/}}
-{{- define "sftpgo.secretAdmin.name" -}}
-{{- printf "%s-sftpgo-admin" .Release.Name }}
-{{- end }}
-
-{{/*
 Users LOADDATA Secret Name
 */}}
 {{- define "sftpgo.secretUsers.name" -}}
@@ -151,6 +144,10 @@ credentials from the workload identity.
 {{/* Validation */}}
 
 {{- define "sftpgo.validate" -}}
+{{- include "sftpgo.validateRemovedKeys" . -}}
+{{- if not .Values.admin.secretName -}}
+{{- fail "sftpgo: admin.secretName is required — the name of a pre-created dictionary secret holding 'username' and 'password'. Create the secret BEFORE installing; see the README." -}}
+{{- end -}}
 {{- if not (or (eq .Values.mode "scale_to_zero") (eq .Values.mode "always_warm")) -}}
 {{- fail (printf "sftpgo: mode must be 'scale_to_zero' or 'always_warm', got '%s'" .Values.mode) -}}
 {{- end -}}
@@ -195,6 +192,21 @@ credentials from the workload identity.
 {{- if and (not .password) (not .publicKeys) -}}
 {{- fail (printf "sftpgo: user '%s' needs a password or at least one entry in publicKeys" .username) -}}
 {{- end -}}
+{{- end -}}
+{{- end }}
+
+
+{{/*
+Keys removed in 1.1.0. An upgrader carrying a 1.0.0 values file forward is told
+exactly what to do instead of silently getting a default. There are deliberately
+NO compatibility fallbacks — the version bump IS the migration path.
+*/}}
+{{- define "sftpgo.validateRemovedKeys" -}}
+{{- if dig "username" "" .Values.admin -}}
+{{- fail "sftpgo: admin.username was removed in 1.1.0. Put it in the prerequisite dictionary secret named by admin.secretName (key: username) — see the README." -}}
+{{- end -}}
+{{- if dig "password" "" .Values.admin -}}
+{{- fail "sftpgo: admin.password was removed in 1.1.0. Put it in the prerequisite dictionary secret named by admin.secretName (key: password) — see the README. An install that already booted keeps the admin it created; the secret only seeds a fresh data provider." -}}
 {{- end -}}
 {{- end }}
 

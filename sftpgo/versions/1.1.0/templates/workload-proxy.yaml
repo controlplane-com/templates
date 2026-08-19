@@ -13,8 +13,8 @@ spec:
       inheritEnv: false
       minCpu: {{ .Values.scaleToZero.proxy.resources.minCpu | quote }}
       minMemory: {{ .Values.scaleToZero.proxy.resources.minMemory | quote }}
-      cpu: {{ .Values.scaleToZero.proxy.resources.cpu | quote }}
-      memory: {{ .Values.scaleToZero.proxy.resources.memory | quote }}
+      cpu: {{ .Values.scaleToZero.proxy.resources.maxCpu | quote }}
+      memory: {{ .Values.scaleToZero.proxy.resources.maxMemory | quote }}
       env:
         - name: TARGET_WORKLOAD
           value: {{ include "sftpgo.name" . }}

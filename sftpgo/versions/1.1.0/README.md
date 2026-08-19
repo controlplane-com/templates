@@ -7,7 +7,7 @@ This app deploys [SFTPGo](https://github.com/drakkan/sftpgo) — an SFTP server 
 - **SFTPGo**: Stateful workload (single replica) serving SFTP on port 2022; embedded bolt database and SSH host keys persist on a volumeset.
 - **Scale-to-zero proxy** (`scale_to_zero` mode only): Always-on activator workload that accepts client connections while SFTPGo sleeps, wakes it via the platform API, splices traffic, and suspends it again after an idle window.
 - **Volumeset**: 10 GiB persistent storage for the embedded database and SSH host keys (host-key stability across restarts/wakes).
-- **Secrets, identities, and policies**: Admin bootstrap credentials (dictionary secret), the declared-users file (opaque secret), and least-privilege policies — the proxy's identity may suspend/wake exactly the SFTPGo workload, nothing else.
+- **Secrets, identities, and policies**: The declared-users file (opaque secret), plus least-privilege policies granting the SFTPGo identity `reveal` on exactly the secrets it uses — including the admin secret you create — and letting the proxy's identity suspend/wake exactly the SFTPGo workload, nothing else.
 
 ## Choosing a mode
 
@@ -19,6 +19,27 @@ This app deploys [SFTPGo](https://github.com/drakkan/sftpgo) — an SFTP server 
 | Best for | Cost-sensitive, periodic transfers, cooperative clients | Strict SLAs, arbitrary third-party clients |
 
 ## Prerequisites
+
+### Admin credentials — a **dictionary** secret
+
+**This secret must exist BEFORE you install.** It is the SFTPGo administrator login for the REST API and web admin, so it is a prerequisite secret rather than a value — a value would sit in plaintext in the Helm release for the life of the install.
+
+```bash
+cpln secret create-dictionary --name my-sftpgo-admin \
+  --entry username=admin \
+  --entry password="$(openssl rand -hex 24)"
+```
+
+Set `admin.secretName` to that name. Read it back later with `cpln secret reveal my-sftpgo-admin -o yaml` (the `-o yaml` is required — the default output does not show the values).
+
+| Key | What it is |
+|---|---|
+| `username` | The administrator login. |
+| `password` | Its password. Used only when the embedded database has no admin yet, i.e. on first boot. |
+
+**If the secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments <release>-sftpgo --gvc <gvc> -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own in roughly 6–10 minutes — poll rather than time-boxing — or clear it immediately with `cpln workload force-redeployment <release>-sftpgo --gvc <gvc>` (~90 s).
+
+### Object storage
 
 An existing bucket in one of the supported backends, and the access setup for it (step-by-step under [Storage setup](#storage-setup)):
 
@@ -38,10 +59,10 @@ scaleToZero:          # used only in scale_to_zero mode
   proxy:
     image: ghcr.io/controlplane-com/scale-to-zero-proxy:0.1.0
     resources:
-      cpu: 500m       # all SFTP traffic flows through the proxy
-      memory: 256Mi
       minCpu: 100m
       minMemory: 128Mi
+      maxCpu: 500m    # all SFTP traffic flows through the proxy
+      maxMemory: 256Mi
 ```
 
 ### SFTPGo
@@ -50,14 +71,13 @@ scaleToZero:          # used only in scale_to_zero mode
 image: drakkan/sftpgo:v2.7.4-distroless-slim
 
 resources:            # CPU governs transfer throughput and wake speed
-  cpu: 1000m
-  memory: 512Mi
   minCpu: 250m
   minMemory: 256Mi
+  maxCpu: 1000m
+  maxMemory: 512Mi
 
 admin:
-  username: admin     # SFTPGo administrator (REST API / optional web admin)
-  password: change-me-sftpgo-admin
+  secretName: my-sftpgo-admin # your pre-created dictionary secret (see Prerequisites)
 
 volumeset:
   capacity: 10        # GiB — embedded database + SSH host keys
@@ -138,7 +158,7 @@ Public access uses a dedicated direct load balancer, required for raw-TCP protoc
 | Connect | `sftp -P 2022 {username}@{endpoint-host}` |
 | In-GVC (internal) | `{release}-sftpgo-proxy:2022` (scale_to_zero) or `{release}-sftpgo:2022` (always_warm) |
 | Web admin (if enabled) | canonical `*.cpln.app` endpoint of `{release}-sftpgo` (always_warm + publicAccess) |
-| Credentials | `users[]` entries; admin per `admin.*` |
+| Credentials | SFTP logins from `users[]`; the admin from your `admin.secretName` secret |
 
 ## Cold starts and client configuration (`scale_to_zero` mode)
 
@@ -188,7 +208,10 @@ Complete the steps for your chosen backend before installing.
 
 ## Important Notes
 
-- **Change the default admin and user passwords before installing.** The admin bootstrap only applies on first boot; changing `admin.*` later requires the REST API.
+- **Change the default `users[]` passwords before installing** — they are used as-is. Prefer `publicKeys`, which needs no secret at all; SFTPGo's declared-users file is a literal document with no secret indirection, so anything you put in `users[].password` (and `storage.minio.accessKey` / `accessSecret`) stays a value.
+- **The admin secret seeds the first boot only.** SFTPGo applies it when the embedded database has no admin yet, so on an existing install changing the secret does not change the admin password — rotate that through the REST API or web admin.
+- **Upgrading from 1.0.0**: `admin.username` and `admin.password` were removed, and the render fails naming the replacement if either is still set. Create the dictionary secret with the values you already use and set `admin.secretName`; your existing admin login is unaffected.
+- **Access changes take up to a few minutes to propagate** — after toggling `publicAccess` or `internalAccess`, re-test over 30 s to 5 minutes before concluding the knob is broken.
 - **Declared users are authoritative** — edits made to them via the admin API/UI are overwritten on the next restart or wake. Users *created* via the API are untouched.
 - **Upgrading while suspended wakes the server**; it re-suspends after the next connection comes and goes.
 - **First install: the public endpoint's DNS takes a few minutes** to propagate after the load balancer is created.

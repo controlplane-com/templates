@@ -1,0 +1,6 @@
+{{- include "pgdog.validate" . }}
+kind: identity
+name: {{ include "pgdog.identity.name" . }}
+description: PgDog identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "pgdog.tags" . | nindent 4 }}

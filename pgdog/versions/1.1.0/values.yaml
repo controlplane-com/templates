@@ -1,0 +1,104 @@
+image: ghcr.io/pgdogdev/pgdog:v0.1.45
+
+resources:
+  minCpu: 100m
+  minMemory: 128Mi
+  maxCpu: 500m
+  maxMemory: 256Mi
+
+replicas: 1
+
+# ─── Connection Pooling ────────────────────────────────────────────────────────
+
+pooling:
+  mode: transaction          # options: transaction, session
+  defaultPoolSize: 10        # max server connections per pool
+  minPoolSize: 1             # minimum idle connections kept open
+  workers: 2                 # tokio async threads; recommend 2× vCPU count
+
+# ─── Timeouts (milliseconds) ──────────────────────────────────────────────────
+
+timeouts:
+  connect: 5000              # time to establish a backend connection
+  checkout: 5000             # max time a client waits for a free connection
+  idle: 60000                # idle server connections closed after this
+  query: 0                   # per-query timeout; 0 = disabled
+
+# ─── Load Balancing ───────────────────────────────────────────────────────────
+
+loadBalancing:
+  strategy: least_active_connections  # options: random, round_robin, least_active_connections
+  readWriteSplit: include_primary
+
+# ─── Backend Databases ────────────────────────────────────────────────────────
+# Each entry maps to a [[databases]] block in pgdog.toml.
+# Add one entry per Postgres instance. For a primary + replicas setup,
+# list them all here — PgDog routes writes to primary and reads to replicas.
+
+databases:
+  - name: my-pgdog-database  # logical name clients connect to; must be a real database on the backend
+    host: my-postgres-workload  # e.g. WORKLOAD_NAME for an in-GVC Postgres, or an external hostname
+    port: 5432
+    role: primary            # options: primary, replica, auto
+  # - name: my-pgdog-database
+  #   host: my-postgres-replica
+  #   port: 5432
+  #   role: replica
+
+# ─── Pooled Users (prerequisite secrets) ──────────────────────────────────────
+# Each entry maps to a [[users]] block in users.toml and needs ITS OWN secret.
+#
+# EVERY SECRET LISTED HERE MUST EXIST BEFORE YOU INSTALL — the deployment wedges
+# silently waiting on a secret that does not exist, and `cpln logs` returns
+# nothing at all. See Prerequisites in the README for the exact commands and for
+# how to diagnose a wedged deployment.
+#
+# `credentialsSecretName` names a `dictionary` secret holding the keys `username`
+# and `password`. That pair is what applications put in their connection strings,
+# and PgDog also uses it to open backend connections — so it must match a real
+# Postgres role. Pointing it at the SAME secret your Postgres template already
+# uses is the intended shape.
+#
+# To pool a SECOND user, create a second dictionary secret and add a second entry:
+#   - credentialsSecretName: my-pgdog-reporting-credentials
+#     database: my-pgdog-database
+
+users:
+  - credentialsSecretName: my-pgdog-user-credentials
+    database: my-pgdog-database   # must match a `name` from the databases list above
+
+# ─── Admin Database ───────────────────────────────────────────────────────────
+# PgDog exposes an internal admin database for stats and introspection.
+# Connect with: psql -h <pgdog-host> -p 6432 -U <admin.user> <admin.database>
+
+admin:
+  database: admin
+  user: admin
+  # REQUIRED PREREQUISITE SECRET — an `opaque` secret (encoding: plain) whose
+  # payload is the admin password. Kept SEPARATE from the pooled-user credentials
+  # above: revealing an application's password must not also hand it the admin
+  # database. See Prerequisites in the README.
+  passwordSecretName: my-pgdog-admin-password
+
+# ─── Authentication ───────────────────────────────────────────────────────────
+
+auth:
+  type: scram
+
+# ─── Logging ──────────────────────────────────────────────────────────────────
+
+logging:
+  format: text               # options: text, json, json_flattened
+  level: info                # RUST_LOG syntax; e.g. info, debug, pgdog=debug
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+
+publicAccess:
+  enabled: false
+  # address: my-pgdog-domain.example.com  # name of an existing cpln domain resource
+
+internalAccess:
+  type: same-gvc             # options: none, same-gvc, same-org, workload-list
+  workloads: []
+  # workloads:
+  #   - //gvc/my-gvc/workload/my-app

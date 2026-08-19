@@ -14,7 +14,7 @@
 | Resource | Purpose |
 |---|---|
 | `{release}-unleash` workload (standard, :4242 http) | Server: admin UI + Admin/Client/Frontend APIs on one port |
-| `{release}-unleash-admin` secret | First-boot admin username/password |
+| user's `admin.secretName` secret (dictionary, **prerequisite**) | First-boot admin `username`/`password` — user-created since 1.1.0, never by the chart |
 | user's `apiTokens.secretName` secret (optional, prerequisite) | First-boot SDK tokens — user-created dictionary secret with keys `backend` + `frontend`; template only references it by name |
 | `{release}-unleash-start` secret | Boot script — sets the public URL at runtime |
 | identity + policy | Reveal (read) access on exactly the secrets above + the DB credential secret |
@@ -24,11 +24,12 @@
 - Dual database mode like n8n/metabase/temporal: HA Postgres default, single Postgres for dev; exactly one must be enabled.
 
 ## Key knobs
-`image` · `replicas` (1 default, 2+ = HA) · `admin.username/password` (first boot only) · `apiTokens.secretName` (first boot only; prerequisite dictionary secret with keys `backend`/`frontend`, token format `project:environment.secret`) · `publicAccess.enabled` (default true) · `internalAccess.type` · `postgresHA.*` / `postgres.*` (incl. backups)
+`image` · `replicas` (1 default, 2+ = HA) · `admin.secretName` (prerequisite dictionary secret: `username` + `password`; first boot only) · `apiTokens.secretName` (first boot only; prerequisite dictionary secret with keys `backend`/`frontend`, token format `project:environment.secret`) · `publicAccess.enabled` (default true) · `internalAccess.type` · `postgresHA.*` / `postgres.*` (incl. backups)
 
 ## Troubleshooting / considerations
-- **First-boot-only seeds:** admin password and `apiTokens` are written to the database once. Changing these values and upgrading does nothing — change the password in the UI; create new tokens in the UI. A full reset requires uninstall (deletes the DB volume) + reinstall.
-- **Token values never pass through helm:** `apiTokens.secretName` only names a secret the user pre-creates (maintainer ruling — client credentials follow the prerequisite-secret convention). Default empty = no seeding; create tokens in the UI instead.
+- **Workload wedged with ZERO log lines** → the prerequisite admin secret (or, if named, the API-token secret) does not exist. The container never starts, so `cpln logs` is empty; the diagnostic is `status.versions[].message` from `cpln workload get-deployments … -o yaml` (**not** plain `get`). Self-heals in ~5.5–10.5 min once created, or force a redeployment (~90 s).
+- **First-boot-only seeds:** the admin password and `apiTokens` are written to the database once. Editing the secrets and upgrading does nothing — change the password in the UI; create new tokens in the UI. A full reset requires uninstall (deletes the DB volume) + reinstall.
+- **No credential passes through helm:** `apiTokens.secretName` (default empty = no seeding) and, since 1.1.0, `admin.secretName` only NAME secrets the user pre-creates. The admin move follows the 2026-08-07 ruling — it guards a public human-facing login; `fail` guards name the replacement for the removed `admin.username`/`admin.password`, with no shims.
 - **Backend vs frontend token confusion** is the #1 SDK support call: backend tokens (server-side SDKs, `/api/client`) must stay secret; frontend tokens (`/api/frontend`) are safe to embed in browsers. A 401 usually means the wrong token type or wrong environment in the token string.
 - **Only 2 environments in the free edition** (`development`, `production`). SSO, role-based access control (per-user permission tiers), multiple projects, change requests, and audit logs are all paid-Enterprise — never tell a user these are one config flag away.
 - **Public URL links:** password-reset/invite links use `UNLEASH_URL`, derived at boot from the canonical endpoint. If links look wrong after toggling `publicAccess`, restart the workload so the boot script re-derives it.

@@ -19,6 +19,12 @@ redpanda:
     initialCapacity: 10 # In GB
     performanceClass: general-purpose-ssd # For production workloads, switch to high-throughput-ssd (min 200GB) for higher IOPS
     fileSystemType: xfs # xfs / ext4
+    # Platform-managed snapshots of the topic data. Topic data is the only durable
+    # state this template holds, and nothing else backs it up.
+    snapshots:
+      createFinalSnapshot: true # take a snapshot when the volume set is deleted
+      retentionDuration: 7d # how long each snapshot is kept
+      schedule: 0 0 * * * # cron in UTC; "" disables scheduled snapshots
     # customEncryption:
     #   enabled: true
     #   region: aws-us-east-2

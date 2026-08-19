@@ -7,6 +7,12 @@ spec:
   initialCapacity: {{ .Values.redpanda.volume.initialCapacity }}
   performanceClass: {{ .Values.redpanda.volume.performanceClass }}
   fileSystemType: {{ .Values.redpanda.volume.fileSystemType }}
+  snapshots:
+    createFinalSnapshot: {{ .Values.redpanda.volume.snapshots.createFinalSnapshot }}
+    retentionDuration: {{ .Values.redpanda.volume.snapshots.retentionDuration }}
+    {{- if .Values.redpanda.volume.snapshots.schedule }}
+    schedule: {{ .Values.redpanda.volume.snapshots.schedule }}
+    {{- end }}
   {{- if and .Values.redpanda.volume.customEncryption .Values.redpanda.volume.customEncryption.enabled }}
   customEncryption:
     regions:

@@ -89,7 +89,7 @@ cpln port-forward RELEASE_NAME-rabbitmq 15672:15672 --gvc GVC_NAME
 
 ## Important Notes
 
-- The credentials secret must exist **before** you install. If it does not, the deployment wedges **silently** — `cpln logs` returns zero lines. The only diagnostic is `cpln workload get-deployments RELEASE_NAME-rabbitmq --gvc GVC_NAME -o yaml`, under `status.versions[].message`. Once you create the secret the deployment recovers on its own in about 6–8 minutes, or in about 90 seconds if you force a redeployment of the workload.
+- The credentials secret must exist **before** you install. If it does not, the deployment wedges **silently** — `cpln logs` returns zero lines. The only diagnostic is `cpln workload get-deployments RELEASE_NAME-rabbitmq --gvc GVC_NAME -o yaml`, under `status.versions[].message`. Once you create the secret the deployment recovers on its own in roughly 5.5–8.5 minutes (measured 8 min 16 s here), or in about 90 seconds if you force a redeployment of the workload.
 - The default user is written into the RabbitMQ database on **first boot only**. Changing the secret afterwards does not change the broker's credentials — rotate with `rabbitmqctl change_password`, or uninstall (which deletes the volume set and all messages) and reinstall.
 - This broker is reachable inside the GVC only; there is no public-access knob. Use `cpln port-forward` for the management UI.
 - A change to `internalAccess.type` takes up to a couple of minutes to propagate — re-test before concluding it did not apply.

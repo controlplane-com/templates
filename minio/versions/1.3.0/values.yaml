@@ -1,0 +1,27 @@
+image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+
+replicas: 6 # Must be at least 4 and an even number
+
+admin: # MinIO admin credentials
+  username: myuser
+  password: mypassword123
+
+resources: # Defaults are set for minimal production usage
+  minCpu: 1
+  minMemory: 2Gi
+  maxCpu: 2
+  maxMemory: 4Gi
+
+volumeset:
+  capacity: 10 # initial capacity in GiB (minimum is 10)
+  autoscaling:
+    enabled: false # Set to true to enable autoscaling
+    maxCapacity: 100 # Maximum capacity in GiB when autoscaling is enabled
+    minFreePercentage: 10 # Minimum free percentage to trigger scaling when autoscaling is enabled
+    scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
+
+internalAccess: # Sets the internal firewall scope - if set to none, replicas will not be able to reach each other
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads:  # Note: can only be used if type is same-gvc or workload-list
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME

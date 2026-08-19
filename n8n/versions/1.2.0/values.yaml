@@ -87,10 +87,20 @@ postgresHA:
 # Enable this and disable postgresHA for a lighter non-HA deployment.
 postgres:
   enabled: false
-  config:
+  # Credentials for the bundled database — internal plumbing no human types
+  # elsewhere. n8n CREATES the dictionary secret named by
+  # config.credentialsSecretName below out of these three values, so there is
+  # nothing for you to create before installing.
+  credentials:
     username: n8n
     password: change-me-n8n-db-password # change before installing
     database: n8n
+  config:
+    # Name of the dictionary secret this chart creates and the bundled postgres
+    # reads. Secret names are org-wide: give each n8n release its own name.
+    # A second release left on this name is REFUSED at install (it is owned by
+    # the first release) — nothing is shared, overwritten or deleted.
+    credentialsSecretName: my-n8n-db-credentials
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)
 
@@ -115,6 +125,7 @@ postgres:
     minio:
       endpoint: http://my-minio-workload:9000
       bucket: n8n-pg-backup-bucket
-      accessKey: my-minio-username
-      secretKey: my-minio-password
+      # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
+      # only when this backup is enabled with provider: minio. See README storage setup.
+      credentialsSecretName: my-n8n-minio-credentials
       prefix: postgres/backups

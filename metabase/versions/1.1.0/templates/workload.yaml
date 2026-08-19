@@ -1,0 +1,133 @@
+{{- include "metabase.validate" . }}
+kind: workload
+name: {{ include "metabase.name" . }}
+description: Metabase open-source BI — dashboards, SQL editor, and scheduled reports
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "metabase.tags" . | nindent 4 }}
+spec:
+  # Stateless by design: all app state (questions, dashboards, users,
+  # connection configs) lives in the Postgres app database — no volumeset.
+  type: standard
+  identityLink: //identity/{{ include "metabase.identity.name" . }}
+  containers:
+    - name: metabase
+      image: {{ .Values.image }}
+      # Boot goes through the mounted start script: it derives MB_SITE_URL from
+      # the runtime canonical endpoint (public mode only) and runs the
+      # first-boot admin bootstrap against the localhost setup API, then execs
+      # the image entrypoint.
+      command: /bin/bash
+      args:
+        - /cpln/start.sh
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
+      env:
+        {{- if .Values.postgresHA.enabled }}
+        # ── App database (postgres-highly-available subchart, HAProxy leader endpoint) ──
+        {{- else }}
+        # ── App database (postgres subchart, single instance) ──
+        {{- end }}
+        - name: MB_DB_TYPE
+          value: postgres
+        - name: MB_DB_HOST
+          value: {{ include "metabase.postgres.host" . }}
+        - name: MB_DB_PORT
+          value: '5432'
+        - name: MB_DB_DBNAME
+          {{- if .Values.postgresHA.enabled }}
+          value: 'cpln://secret/{{ include "metabase.postgres.secret.name" . }}.database'
+          {{- else }}
+          # the single-postgres config secret has no `database` key — use the value directly
+          value: {{ .Values.postgres.config.database | quote }}
+          {{- end }}
+        - name: MB_DB_USER
+          value: 'cpln://secret/{{ include "metabase.postgres.secret.name" . }}.username'
+        - name: MB_DB_PASS
+          value: 'cpln://secret/{{ include "metabase.postgres.secret.name" . }}.password'
+        # ── Encryption of saved database-connection details (prerequisite opaque secret) ──
+        - name: MB_ENCRYPTION_SECRET_KEY
+          value: 'cpln://secret/{{ .Values.encryptionKey.secretName }}.payload'
+        # ── Admin bootstrap (consumed by the start script's localhost setup call) ──
+        - name: MB_CPLN_ADMIN_EMAIL
+          value: 'cpln://secret/{{ include "metabase.secretAdmin.name" . }}.email'
+        - name: MB_CPLN_ADMIN_PASSWORD
+          value: 'cpln://secret/{{ include "metabase.secretAdmin.name" . }}.password'
+        - name: MB_CPLN_ADMIN_FIRST_NAME
+          value: {{ .Values.admin.firstName | quote }}
+        - name: MB_CPLN_ADMIN_LAST_NAME
+          value: {{ .Values.admin.lastName | quote }}
+        - name: MB_CPLN_SITE_NAME
+          value: {{ .Values.siteName | quote }}
+        # ── JVM: default heap is 25% of the container limit — starved at 2 Gi.
+        #    run_metabase.sh appends to (honors) JAVA_OPTS.
+        - name: JAVA_OPTS
+          value: '-XX:MaxRAMPercentage=75.0'
+        # ── Misc ──
+        - name: MB_ANON_TRACKING_ENABLED
+          value: 'false'
+      ports:
+        - number: 3000
+          protocol: http
+      volumes:
+        - path: /cpln/start.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "metabase.secretStart.name" . }}.payload
+      # Ready = healthy AND first-boot setup complete: requiring
+      # "has-user-setup":true means external traffic never reaches an instance
+      # with an open setup window — if bootstrap fails, the workload simply
+      # never becomes ready (fail-closed). failureThreshold 20 is the platform
+      # max; readiness exhaustion is non-fatal (marks unready, keeps polling).
+      readinessProbe:
+        exec:
+          command:
+            - /bin/bash
+            - -c
+            - curl -fsS -m 3 http://localhost:3000/api/health >/dev/null && curl -fsS -m 3 http://localhost:3000/api/session/properties | grep -q '"has-user-setup":true'
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      # First boot runs app-DB migrations — a liveness kill mid-migration would
+      # crash-loop, hence the long initial delay.
+      livenessProbe:
+        httpGet:
+          path: /api/health
+          port: 3000
+        initialDelaySeconds: 240
+        periodSeconds: 30
+        failureThreshold: 5
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}

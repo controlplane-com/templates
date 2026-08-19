@@ -1,0 +1,115 @@
+{{- include "sftpgo.validate" . }}
+kind: workload
+name: {{ include "sftpgo.name" . }}
+description: SFTPGo
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "sftpgo.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "sftpgo.identity.name" . }}
+  containers:
+    - name: sftpgo
+      image: {{ .Values.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
+      env:
+        - name: SFTPGO_DATA_PROVIDER__DRIVER
+          value: bolt
+        - name: SFTPGO_DATA_PROVIDER__NAME
+          value: /var/lib/sftpgo/sftpgo.db
+        - name: SFTPGO_DATA_PROVIDER__CREATE_DEFAULT_ADMIN
+          value: '1'
+        - name: SFTPGO_DEFAULT_ADMIN_USERNAME
+          value: 'cpln://secret/{{ include "sftpgo.secretAdmin.name" . }}.username'
+        - name: SFTPGO_DEFAULT_ADMIN_PASSWORD
+          value: 'cpln://secret/{{ include "sftpgo.secretAdmin.name" . }}.password'
+        - name: SFTPGO_LOADDATA_FROM
+          value: /etc/sftpgo/users.json
+        - name: SFTPGO_LOADDATA_MODE
+          value: '0'
+        - name: SFTPGO_SFTPD__BINDINGS__0__PORT
+          value: '2022'
+        - name: SFTPGO_HTTPD__BINDINGS__0__PORT
+          value: '8080'
+      ports:
+        - number: 2022
+          protocol: tcp
+        {{- if .Values.webAdmin.enabled }}
+        - number: 8080
+          protocol: http
+        {{- end }}
+      volumes:
+        - path: /var/lib/sftpgo
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "sftpgo.volume.name" . }}
+        - path: /etc/sftpgo/users.json
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "sftpgo.secretUsers.name" . }}.payload
+      readinessProbe:
+        tcpSocket:
+          port: 2022
+        initialDelaySeconds: 1
+        periodSeconds: 2
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 2
+      livenessProbe:
+        httpGet:
+          path: /healthz
+          port: 8080
+        initialDelaySeconds: 10
+        periodSeconds: 30
+        failureThreshold: 5
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  # The distroless image runs as UID/GID 1000 with no root entrypoint to chown
+  # the freshly-provisioned (root-owned) volumeset mount. filesystemGroupId makes
+  # /var/lib/sftpgo group-owned and group-writable by GID 1000 so SFTPGo can
+  # create its bolt database and SSH host keys on first boot.
+  securityOptions:
+    filesystemGroupId: 1000
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if and (eq .Values.mode "always_warm") .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+        {{- if eq .Values.mode "scale_to_zero" }}
+        - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "sftpgo.proxy.name" . }}
+        {{- end }}
+      {{- end }}
+  {{- if and (eq .Values.mode "always_warm") .Values.publicAccess.enabled }}
+  loadBalancer:
+    direct:
+      enabled: true
+      ports:
+        - containerPort: 2022
+          externalPort: 2022
+          protocol: TCP
+          scheme: tcp
+  {{- end }}

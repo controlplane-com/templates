@@ -1,0 +1,79 @@
+{{- if eq .Values.mode "scale_to_zero" }}
+kind: workload
+name: {{ include "sftpgo.proxy.name" . }}
+description: Scale-to-zero TCP activator proxy for SFTPGo
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "sftpgo.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //identity/{{ include "sftpgo.proxy.identity.name" . }}
+  containers:
+    - name: proxy
+      image: {{ .Values.scaleToZero.proxy.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.scaleToZero.proxy.resources.minCpu | quote }}
+      minMemory: {{ .Values.scaleToZero.proxy.resources.minMemory | quote }}
+      cpu: {{ .Values.scaleToZero.proxy.resources.cpu | quote }}
+      memory: {{ .Values.scaleToZero.proxy.resources.memory | quote }}
+      env:
+        - name: TARGET_WORKLOAD
+          value: {{ include "sftpgo.name" . }}
+        - name: PORT_MAPPINGS
+          value: "2022:2022"
+        - name: IDLE_HOLD
+          value: {{ .Values.scaleToZero.idleHold | quote }}
+      ports:
+        - number: 2022
+          protocol: tcp
+      readinessProbe:
+        httpGet:
+          path: /healthz
+          port: 8081
+        initialDelaySeconds: 2
+        periodSeconds: 5
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 3
+      livenessProbe:
+        httpGet:
+          path: /healthz
+          port: 8081
+        initialDelaySeconds: 5
+        periodSeconds: 15
+        failureThreshold: 5
+        timeoutSeconds: 3
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: same-gvc
+  {{- if .Values.publicAccess.enabled }}
+  loadBalancer:
+    direct:
+      enabled: true
+      ports:
+        - containerPort: 2022
+          externalPort: 2022
+          protocol: TCP
+          scheme: tcp
+  {{- end }}
+{{- end }}

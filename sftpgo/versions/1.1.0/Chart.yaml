@@ -1,0 +1,17 @@
+apiVersion: v2
+name: sftpgo
+description: SFTPGo SFTP server backed by S3-compatible object storage, with an optional scale-to-zero mode
+type: application
+version: 1.0.0
+appVersion: "2.7.4-distroless-slim"
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+
+annotations:
+  created: "2026-07-13"
+  lastModified: "2026-08-17"
+  category: "storage"
+  createsGvc: false

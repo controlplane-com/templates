@@ -40,8 +40,8 @@ spec:
           {{- if .Values.postgresHA.enabled }}
           value: 'cpln://secret/{{ include "metabase.postgres.secret.name" . }}.database'
           {{- else }}
-          # the single-postgres config secret has no `database` key — use the value directly
-          value: {{ .Values.postgres.config.database | quote }}
+          # the bundled single-instance DB name is a value of this chart — use it directly
+          value: {{ .Values.postgres.credentials.database | quote }}
           {{- end }}
         - name: MB_DB_USER
           value: 'cpln://secret/{{ include "metabase.postgres.secret.name" . }}.username'

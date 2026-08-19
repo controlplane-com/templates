@@ -1,0 +1,87 @@
+image: ghcr.io/pgdogdev/pgdog:v0.1.45
+
+resources:
+  cpu: 500m
+  memory: 256Mi
+  minCpu: 100m
+  minMemory: 128Mi
+
+replicas: 1
+
+# ─── Connection Pooling ────────────────────────────────────────────────────────
+
+pooling:
+  mode: transaction          # options: transaction, session
+  defaultPoolSize: 10        # max server connections per pool
+  minPoolSize: 1             # minimum idle connections kept open
+  workers: 2                 # tokio async threads; recommend 2× vCPU count
+
+# ─── Timeouts (milliseconds) ──────────────────────────────────────────────────
+
+timeouts:
+  connect: 5000              # time to establish a backend connection
+  checkout: 5000             # max time a client waits for a free connection
+  idle: 60000                # idle server connections closed after this
+  query: 0                   # per-query timeout; 0 = disabled
+
+# ─── Load Balancing ───────────────────────────────────────────────────────────
+
+loadBalancing:
+  strategy: least_active_connections  # options: random, round_robin, least_active_connections
+  readWriteSplit: include_primary
+
+# ─── Backend Databases ────────────────────────────────────────────────────────
+# Each entry maps to a [[databases]] block in pgdog.toml.
+# Add one entry per Postgres instance. For a primary + replicas setup,
+# list them all here — PgDog routes writes to primary and reads to replicas.
+
+databases:
+  - name: mydb               # logical name clients use when connecting
+    host: postgres.example.com
+    port: 5432
+    role: primary            # options: primary, replica, auto
+  # - name: mydb
+  #   host: replica.example.com
+  #   port: 5432
+  #   role: replica
+
+# ─── Users ────────────────────────────────────────────────────────────────────
+# Each entry maps to a [[users]] block in users.toml.
+# 'database' must match a name from the databases list above.
+
+users:
+  - name: myuser
+    password: mypassword
+    database: mydb
+
+# ─── Admin Database ───────────────────────────────────────────────────────────
+# PgDog exposes an internal admin database for stats and introspection.
+# Connect with: psql -h <pgdog-host> -p 6432 -U <admin.user> <admin.database>
+
+admin:
+  database: admin
+  user: admin
+  password: changeme         # change this — a random password is generated if omitted from config
+
+# ─── Authentication ───────────────────────────────────────────────────────────
+
+auth:
+  type: scram
+
+# ─── Logging ──────────────────────────────────────────────────────────────────
+
+logging:
+  format: text               # options: text, json, json_flattened
+  level: info                # RUST_LOG syntax; e.g. info, debug, pgdog=debug
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+
+publicAccess:
+  enabled: false
+  # address: pgdog.example.com  # custom domain when publicAccess is enabled
+
+internalAccess:
+  type: same-gvc             # options: none, same-gvc, same-org, workload-list
+  workloads: []
+  # workloads:
+  #   - //gvc/my-gvc/workload/my-app

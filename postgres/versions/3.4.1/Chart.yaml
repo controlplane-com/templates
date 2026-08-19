@@ -1,0 +1,19 @@
+apiVersion: v2
+name: postgres
+description: Single-replica PostgreSQL with persistent storage, optional pooling and backups
+
+type: application
+version: 3.4.1
+appVersion: "18"
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+
+annotations:
+  created: "2025-12-23"
+  lastModified: "2026-08-19"
+  category: "database"
+  postgresVersion: "18"
+  createsGvc: false

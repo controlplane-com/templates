@@ -1,0 +1,65 @@
+{{- include "cpln-trivy.validateStorage" . }}
+{{- include "cpln-trivy.validateAuth" . }}
+kind: workload
+name: {{ include "cpln-trivy.webserver.name" . }}
+description: Stores and serves Trivy HTML vulnerability reports
+tags:
+  {{- include "cpln-trivy.tags" . | nindent 2 }}
+spec:
+  type: serverless
+  containers:
+    - name: web-server
+      image: {{ .Values.webServer.image }}
+      cpu: {{ .Values.webServer.resources.cpu | quote }}
+      memory: {{ .Values.webServer.resources.memory | quote }}
+      inheritEnv: false
+      ports:
+        - number: 8080
+          protocol: http
+      env:
+        - name: POST_TOKEN
+          value: cpln://secret/{{ include "cpln-trivy.secret.name" . }}.POST_TOKEN
+        {{- if eq .Values.storage.type "s3" }}
+        - name: FILE_SYSTEM_ENABLED
+          value: "false"
+        - name: S3_BUCKET
+          value: {{ .Values.storage.s3.bucket | quote }}
+        - name: S3_REGION
+          value: {{ .Values.storage.s3.region | quote }}
+        {{- else if eq .Values.storage.type "azureFileshare" }}
+        - name: FILE_SYSTEM_ENABLED
+          value: "true"
+        - name: LOCAL_DIR
+          value: /app/data
+        {{- end }}
+      {{- if eq .Values.storage.type "azureFileshare" }}
+      volumes:
+        - path: /app/data
+          recoveryPolicy: retain
+          uri: azurefs://{{ .Values.storage.azureFileshare.accountName }}/{{ .Values.storage.azureFileshare.fileShare }}
+      {{- end }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 1000
+      maxScale: {{ .Values.webServer.autoscaling.maxScale }}
+      metric: concurrency
+      minScale: {{ .Values.webServer.autoscaling.minScale }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR: {{- toYaml .Values.webServer.firewall.inboundAllowCIDR | nindent 8 }}
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: {{- toYaml .Values.webServer.firewall.outboundAllowCIDR | nindent 8 }}
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: none
+      inboundAllowWorkload: []
+  identityLink: //identity/{{ include "cpln-trivy.identity.name" . }}
+  supportDynamicTags: false

@@ -1,0 +1,5 @@
+kind: identity
+name: {{ include "redpanda.name" . }}
+description: Redpanda identity
+tags: {{- include "redpanda.tags" . | nindent 2 }}
+gvc: {{ .Values.global.cpln.gvc }}

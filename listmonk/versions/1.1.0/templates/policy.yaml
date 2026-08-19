@@ -1,0 +1,13 @@
+kind: policy
+name: {{ include "listmonk.policy.name" . }}
+description: Listmonk policy
+tags: {{- include "listmonk.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "listmonk.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "listmonk.secret.admin.name" . }}
+  - //secret/{{ include "listmonk.db.secretName" . }}

@@ -35,8 +35,12 @@ s3:
 # ─── Admin UI (port 23646, reachable inside the GVC only) ─────────
 adminUI:
   enabled: true # cluster status, bucket browser, user and maintenance management
-  username: admin
-  password: change-me-seaweedfs-admin # CHANGE THIS before install
+  # REQUIRED PREREQUISITE SECRET when adminUI.enabled is true — CREATE IT BEFORE
+  # YOU INSTALL. A `dictionary` secret holding exactly two keys, `username` and
+  # `password`, guarding the admin login form. If it does not exist at install
+  # time the deployment WEDGES silently — `cpln logs` returns nothing at all.
+  # See Prerequisites in the README for the exact command.
+  credentialsSecretName: my-seaweedfs-admin-credentials
 
 # ─── Access ───────────────────────────────────────────────────────
 publicAccess:

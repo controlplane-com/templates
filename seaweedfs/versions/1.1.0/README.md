@@ -6,21 +6,36 @@ SeaweedFS is a distributed object store with an S3-compatible API. This template
 
 - **SeaweedFS workload** — stateful, single replica; runs `weed mini`, serving the S3 API on port 8333 and the admin UI on 23646.
 - **Volumeset** (`/data`, 20 GiB) — object data, filer metadata (leveldb) and master metadata on one disk.
-- **Admin secret** (dictionary, optional) — admin UI username and password; created only when `adminUI.enabled` is true.
 - **S3 credentials secret** (dictionary) — *not created by this template*; you create it before install and reference it by name.
+- **Admin credentials secret** (dictionary) — *not created by this template* either; required only when `adminUI.enabled` is true.
 - **Identity + policy** — grant the workload `reveal` on exactly the secrets it mounts, nothing else.
 
 ## Prerequisites
 
-**A dictionary secret holding the S3 credentials must exist before you install.** SeaweedFS serves S3 with *no authentication at all* when credentials are absent, so this template treats them as a hard prerequisite rather than a value. Create it first:
+Both secrets below are credentials, so they are **prerequisite secrets rather than values** — a value would sit in plaintext in the Helm release for the life of the install. Create them BEFORE you install.
 
-```bash
-cpln secret create-dictionary --name my-seaweedfs-s3-credentials \
-  --entry AWS_ACCESS_KEY_ID=<your-access-key> \
-  --entry AWS_SECRET_ACCESS_KEY=<your-secret-key>
-```
+1. **S3 credentials** — a `dictionary` secret with exactly the keys `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. SeaweedFS serves S3 with *no authentication at all* when they are absent, so this is a hard requirement.
 
-The secret must contain exactly these two keys. Installing before the secret exists leaves the deployment waiting on a missing secret — it never starts.
+   ```bash
+   cpln secret create-dictionary --name my-seaweedfs-s3-credentials \
+     --entry AWS_ACCESS_KEY_ID="$(openssl rand -hex 10)" \
+     --entry AWS_SECRET_ACCESS_KEY="$(openssl rand -hex 24)"
+   ```
+
+   Then set `s3.credentialsSecretName` to that name.
+
+2. **Admin UI credentials** — a `dictionary` secret with exactly the keys `username` and `password`, guarding the admin login form. Required whenever `adminUI.enabled` is true (the default).
+
+   ```bash
+   cpln secret create-dictionary --name my-seaweedfs-admin-credentials \
+     --entry username=admin \
+     --entry password="$(openssl rand -hex 24)"
+   ```
+
+   Then set `adminUI.credentialsSecretName` to that name. Read either secret back later with
+   `cpln secret reveal my-seaweedfs-admin-credentials -o yaml`.
+
+**If a secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments <release>-seaweedfs --gvc <gvc> -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own in about 6 minutes, or clear it immediately with a `cpln workload force-redeployment` on the workload (~90 s).
 
 ## Configuration
 
@@ -51,7 +66,7 @@ volumeset:
 
 ```yaml
 s3:
-  credentialsSecretName: my-seaweedfs-s3-credentials # PREREQUISITE secret (see above) — must exist BEFORE install
+  credentialsSecretName: my-seaweedfs-s3-credentials # PREREQUISITE dictionary secret — must exist BEFORE install
   buckets: [] # buckets created at startup if missing, e.g. [backups, uploads]
 ```
 
@@ -60,8 +75,7 @@ s3:
 ```yaml
 adminUI:
   enabled: true # cluster status, bucket browser, user and maintenance management
-  username: admin
-  password: change-me-seaweedfs-admin # CHANGE THIS before install
+  credentialsSecretName: my-seaweedfs-admin-credentials # PREREQUISITE dictionary secret (username, password) — must exist BEFORE install
 ```
 
 ### Access
@@ -84,8 +98,9 @@ internalAccess:
 | S3 API, in-GVC (FQDN) | `http://<release>-seaweedfs.<gvc>.cpln.local:8333` | Same host, fully qualified. |
 | S3 API, host:port form | `<release>-seaweedfs.<gvc>.cpln.local:8333` | For clients that take a bare host:port (Thanos, Mimir); pair with `insecure: true`. |
 | S3 API, public | `https://<canonical>.cpln.app` | Only when `publicAccess.enabled`; port 443, no port suffix. Find it under `status.canonicalEndpoint` (`cpln workload get <release>-seaweedfs -o yaml`). |
-| Admin UI | `http://<release>-seaweedfs.<gvc>.cpln.local:23646` | In-GVC only; log in with `adminUI.username` / `adminUI.password`. With `adminUI.enabled: false` the port, credentials and secret are all removed so nothing is reachable — the upstream binary still starts the component in-process, it simply has no route and no declared port. |
-| S3 credentials | your prerequisite secret | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`. |
+| Admin UI | `http://<release>-seaweedfs.<gvc>.cpln.local:23646` | In-GVC only, never public. From a laptop, tunnel to it with `cpln port-forward <release>-seaweedfs 23646:23646 --gvc <gvc>`. With `adminUI.enabled: false` the port and credentials are removed so nothing is reachable — the upstream binary still starts the component in-process, it simply has no route and no declared port. |
+| S3 credentials | your `s3.credentialsSecretName` secret | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`. |
+| Admin UI credentials | your `adminUI.credentialsSecretName` secret | `username` / `password`. |
 
 ## Using SeaweedFS as the S3 backend for other templates
 
@@ -117,13 +132,13 @@ aws --endpoint-url http://<release>-seaweedfs:8333 s3 cp ./file s3://<bucket>/fi
 
 ## Important Notes
 
-- **Create the S3 credentials secret before installing** — the deployment waits indefinitely on a missing secret, and SeaweedFS would serve S3 unauthenticated if the credentials were simply omitted.
-- **Change `adminUI.password` before installing** — the shipped default is an illustrative placeholder.
+- **Create both prerequisite secrets before installing** — a missing one wedges the deployment with no log output at all; Prerequisites gives the one command that diagnoses it.
+- **Upgrading from 1.0.0 needs the new admin secret** — `adminUI.username` and `adminUI.password` are gone, and passing either now fails the render with a message naming `adminUI.credentialsSecretName`. Put the same username and password in the secret to keep existing logins working.
 - **Rotating the S3 credentials secret and redeploying actually rotates the keys** — the S3 identity is rebuilt from the environment on every boot, not stored on disk.
 - **Single replica by design** — `weed mini` runs one master, one filer and one volume server in a single process, so raising the replica count would create separate, divergent object stores. A redeploy or upgrade is therefore a full S3 outage: measured at **337 failed requests over an 80.8 s gap** (≈5 req/s polling), with the store reachable again about 128 s after the trigger. Schedule upgrades accordingly, and expect the same window when the platform reschedules the replica. Multi-node clustering is a planned follow-up.
 - **Data lives on the volumeset** and survives redeploys and upgrades under the same release name. `helm uninstall` deletes the volumeset and every stored object.
 - **Volume file size is derived from disk capacity at startup**, so growing the volumeset takes effect on the next restart. This is harmless — SeaweedFS simply creates more volume files.
-- **Only the S3 API is publicly routable.** The admin UI is the workload's second port, so `publicAccess` exposes port 8333 only; reach the admin UI from inside the GVC.
+- **Only the S3 API is publicly routable.** The admin UI is the workload's second port, so `publicAccess` exposes port 8333 only; reach the admin UI from inside the GVC or through `cpln port-forward`.
 
 ## Links
 

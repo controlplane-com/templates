@@ -50,13 +50,14 @@ spec:
         - name: AWS_SECRET_ACCESS_KEY
           value: cpln://secret/{{ .Values.s3.credentialsSecretName }}.AWS_SECRET_ACCESS_KEY
         {{- if .Values.adminUI.enabled }}
-        # Admin UI credentials — read via viper's WEED_ prefix env fallback
-        # (admin.user / admin.password); the flags are deliberately NOT passed,
-        # since an explicit flag would suppress the env fallback.
+        # Admin UI credentials from the user's prerequisite dictionary secret —
+        # read via viper's WEED_ prefix env fallback (admin.user / admin.password);
+        # the flags are deliberately NOT passed, since an explicit flag would
+        # suppress the env fallback.
         - name: WEED_ADMIN_USER
-          value: cpln://secret/{{ include "seaweedfs.secret.admin.name" . }}.WEED_ADMIN_USER
+          value: cpln://secret/{{ .Values.adminUI.credentialsSecretName }}.username
         - name: WEED_ADMIN_PASSWORD
-          value: cpln://secret/{{ include "seaweedfs.secret.admin.name" . }}.WEED_ADMIN_PASSWORD
+          value: cpln://secret/{{ .Values.adminUI.credentialsSecretName }}.password
         {{- end }}
       # 8333 is declared FIRST so the canonical endpoint routes to the S3 API.
       ports:

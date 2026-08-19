@@ -15,13 +15,6 @@ SeaweedFS Volume Set Name (objects + filer metadata + master metadata)
 {{- end }}
 
 {{/*
-SeaweedFS Admin UI Secret Name (dictionary: WEED_ADMIN_USER / WEED_ADMIN_PASSWORD)
-*/}}
-{{- define "seaweedfs.secret.admin.name" -}}
-{{- printf "%s-seaweedfs-admin" .Release.Name }}
-{{- end }}
-
-{{/*
 SeaweedFS Identity Name
 */}}
 {{- define "seaweedfs.identity.name" -}}
@@ -39,19 +32,19 @@ SeaweedFS Policy Name
 {{/* Validation */}}
 
 {{/*
-Validate configuration — required prerequisite secret, admin credentials,
-volumeset capacity, bucket-name syntax and the internal access enum.
+Validate configuration — required prerequisite secrets, volumeset capacity,
+bucket-name syntax and the internal access enum.
 */}}
 {{- define "seaweedfs.validate" -}}
 {{- if not .Values.s3.credentialsSecretName -}}
   {{- fail "s3.credentialsSecretName is required (name of the prerequisite dictionary secret holding AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY — it must exist before install)" -}}
 {{- end -}}
+{{- if or (hasKey .Values.adminUI "username") (hasKey .Values.adminUI "password") -}}
+  {{- fail "adminUI.username and adminUI.password were removed in seaweedfs 1.1.0 — the admin UI login form is now guarded by a REQUIRED prerequisite dictionary secret. Create one holding the keys `username` and `password`, then set adminUI.credentialsSecretName to its name." -}}
+{{- end -}}
 {{- if .Values.adminUI.enabled -}}
-  {{- if not .Values.adminUI.username -}}
-    {{- fail "adminUI.username is required when adminUI.enabled is true" -}}
-  {{- end -}}
-  {{- if not .Values.adminUI.password -}}
-    {{- fail "adminUI.password is required when adminUI.enabled is true (an empty password disables admin UI authentication)" -}}
+  {{- if not .Values.adminUI.credentialsSecretName -}}
+    {{- fail "adminUI.credentialsSecretName is required when adminUI.enabled is true (name of the prerequisite dictionary secret holding `username` and `password` — it must exist before install)" -}}
   {{- end -}}
 {{- end -}}
 {{- if lt (int .Values.volumeset.capacity) 10 -}}

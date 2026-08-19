@@ -10,7 +10,9 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "seaweedfs.identity.name" . }}
 targetKind: secret
 targetLinks:
+  # The user-created S3 credentials — reveal on exactly that one secret.
   - //secret/{{ .Values.s3.credentialsSecretName }}
   {{- if .Values.adminUI.enabled }}
-  - //secret/{{ include "seaweedfs.secret.admin.name" . }}
+  # The user-created admin UI credentials, only while the UI is enabled.
+  - //secret/{{ .Values.adminUI.credentialsSecretName }}
   {{- end }}

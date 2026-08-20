@@ -2,7 +2,7 @@ apiVersion: v2
 name: unleash
 description: Unleash open-source feature-flag server with admin UI, SDK APIs, and PostgreSQL
 type: application
-version: 1.2.0
+version: 1.2.1
 appVersion: "8.0.3"
 
 dependencies:

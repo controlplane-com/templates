@@ -1,0 +1,105 @@
+---
+kind: workload
+name: {{ include "chatwoot.name" . }}
+description: Chatwoot web server — dashboard UI, API, chat widget and ActionCable WebSockets on HTTP :3000
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "chatwoot.tags" . | nindent 4 }}
+spec:
+  # stateful in every storage mode: the workload type is immutable on the
+  # platform, so a conditional type would break `helm upgrade` from local
+  # storage to object storage.
+  type: stateful
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "chatwoot.identity.name" . }}
+  containers:
+    - name: chatwoot
+      image: {{ .Values.chatwoot.image }}
+      command: /bin/sh
+      args:
+        - /cpln/start.sh
+      inheritEnv: false
+      minCpu: {{ .Values.chatwoot.resources.minCpu | quote }}
+      cpu: {{ .Values.chatwoot.resources.maxCpu | quote }}
+      minMemory: {{ .Values.chatwoot.resources.minMemory | quote }}
+      memory: {{ .Values.chatwoot.resources.maxMemory | quote }}
+      env:
+        {{- include "chatwoot.env.common" . | trim | nindent 8 }}
+        {{- if eq (include "chatwoot.frontendUrl.derived" .) "true" }}
+        # This tier IS the public one, so its own canonical endpoint is correct.
+        # Already a full URL (https://…) — never prepend a scheme.
+        - name: FRONTEND_URL
+          value: "$(CPLN_GLOBAL_ENDPOINT)"
+        {{- end }}
+      ports:
+        - number: 3000
+          protocol: http
+      readinessProbe:
+        # /api reports Postgres and Redis status, so a broken dependency
+        # de-registers the replica. Budget 10 + 20×25 = 510s: the HA database
+        # (the default) needs ~145s to converge before the worker can even
+        # start migrations, so a 310s budget was sized for the single-instance
+        # path and could expire on a first HA install.
+        httpGet:
+          path: /api
+          port: 3000
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 25
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        # /health touches neither the database nor Redis, so a dependency blip
+        # never restarts a healthy container.
+        httpGet:
+          path: /health
+          port: 3000
+          scheme: HTTP
+        initialDelaySeconds: 240
+        periodSeconds: 30
+        failureThreshold: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+      volumes:
+        - path: /cpln/start.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "chatwoot.secret.webStart.name" . }}.payload
+        {{- if eq .Values.storage.type "local" }}
+        - path: /app/storage
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "chatwoot.storage.volumeset.name" . }}
+        {{- end }}
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: {{ .Values.chatwoot.replicas }}
+      maxScale: {{ .Values.chatwoot.replicas }}
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 300   # headroom for attachment uploads and imports; WebSockets unaffected
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  supportDynamicTags: false

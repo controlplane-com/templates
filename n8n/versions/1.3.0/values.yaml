@@ -1,0 +1,131 @@
+image: n8nio/n8n:2.29.8
+
+resources:
+  minCpu: 250m
+  minMemory: 512Mi
+  maxCpu: 1000m
+  maxMemory: 1Gi
+
+# ─── Encryption Key (prerequisite) ────────────────────────────────────────────
+# Create BEFORE install: an opaque secret (encoding: plain) holding a random
+# key, e.g. `openssl rand -hex 24`. Back it up — losing it bricks every
+# credential n8n has stored. Do not change it after first boot.
+encryptionKey:
+  secretName: my-n8n-encryption-key # name of your pre-created opaque secret
+
+# ─── Instance Owner (prerequisite) ────────────────────────────────────────────
+# REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. If it does not
+# exist the deployment wedges silently and looks like a platform fault.
+# A `dictionary` secret holding exactly two keys:
+#   email         — the owner login email
+#   passwordHash  — a BCRYPT HASH of the owner password (n8n rejects plaintext)
+# n8n re-applies the owner from these values on every start, so changing them
+# changes the login. See README Prerequisites for the exact command.
+owner:
+  secretName: my-n8n-owner # name of your pre-created dictionary secret
+  firstName: Instance
+  lastName: Owner
+
+timezone: UTC # IANA timezone for Schedule triggers and $now (GENERIC_TIMEZONE)
+
+volumeset:
+  capacity: 10 # GiB (minimum 10) — instance config and binary execution data
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: true # editor + webhooks on the canonical *.cpln.app HTTPS endpoint
+
+internalAccess: # internal firewall scope (in-GVC webhook callers)
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # used with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Database: Highly Available PostgreSQL (default) ──────────────────────────
+# Deploys the postgres-highly-available template: 3 Patroni replicas, 3 etcd
+# replicas, and an HAProxy leader-routing endpoint n8n connects to.
+postgresHA:
+  enabled: true
+  postgres:
+    username: n8n
+    password: change-me-n8n-db-password # change before installing
+    database: n8n
+  replicas: 3
+  volumeset:
+    capacity: 10 # initial capacity in GiB per replica (minimum is 10)
+
+  backup: # optional database backups — see README storage setup
+    enabled: false
+    mode: logical # logical or wal-g
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    logical:
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      schedule: "0 2 * * *"
+    walg:
+      intervalSeconds: 21600
+    provider: aws # options: aws, gcp, minio
+    aws:
+      bucket: n8n-pg-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: n8n-pg-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: n8n-pg-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: n8n-pg-backup-bucket
+      accessKey: my-minio-username
+      secretKey: my-minio-password
+      prefix: postgres/backups
+
+# ─── Database: Single-instance PostgreSQL (dev/lightweight) ───────────────────
+# Enable this and disable postgresHA for a lighter non-HA deployment.
+postgres:
+  enabled: false
+  # Credentials for the bundled database — internal plumbing no human types
+  # elsewhere. n8n CREATES the dictionary secret named by
+  # config.credentialsSecretName below out of these three values, so there is
+  # nothing for you to create before installing.
+  credentials:
+    username: n8n
+    password: change-me-n8n-db-password # change before installing
+    database: n8n
+  config:
+    # Name of the dictionary secret this chart creates and the bundled postgres
+    # reads. Secret names are org-wide: give each n8n release its own name.
+    # A second release left on this name is REFUSED at install (it is owned by
+    # the first release) — nothing is shared, overwritten or deleted.
+    credentialsSecretName: my-n8n-db-credentials
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+  backup: # optional database backups (Postgres 17+) — see README storage setup
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
+    schedule: "0 2 * * *"
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    provider: aws # options: aws, gcp, minio
+    aws:
+      bucket: n8n-pg-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: n8n-pg-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: n8n-pg-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: n8n-pg-backup-bucket
+      # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
+      # only when this backup is enabled with provider: minio. See README storage setup.
+      credentialsSecretName: my-n8n-minio-credentials
+      prefix: postgres/backups

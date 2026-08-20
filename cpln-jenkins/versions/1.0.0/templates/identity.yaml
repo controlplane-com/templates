@@ -1,0 +1,5 @@
+{{- include "cpln-jenkins.validate" . -}}
+kind: identity
+name: {{ include "cpln-jenkins.identity.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "cpln-jenkins.tags" . | nindent 4 }}

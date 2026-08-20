@@ -1,0 +1,15 @@
+apiVersion: v2
+name: cpln-jenkins
+description: Jenkins CI server that runs build agents as on-demand Control Plane workloads
+type: application
+version: 1.0.0
+appVersion: "2.0.1"
+annotations:
+  created: "2026-08-20"
+  lastModified: "2026-08-20"
+  category: "developer-tools"
+  createsGvc: false
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

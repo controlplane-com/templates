@@ -1,0 +1,59 @@
+# ─── Image ────────────────────────────────────────────────────────────────────
+# Jenkins LTS with the Control Plane cloud plugin baked in and Configuration as
+# Code enabled. Built from github.com/controlplane-com/cpln-jenkins-plugin.
+image: ghcr.io/controlplane-com/cpln-jenkins:2.0.1
+
+# ─── Admin login ──────────────────────────────────────────────────────────────
+admin:
+  username: admin
+  # REQUIRED prerequisite `opaque` secret holding the password, created BEFORE
+  # install. The deployment wedges silently until it exists.
+  passwordSecretName: my-jenkins-admin-password
+
+# ─── Control Plane cloud ──────────────────────────────────────────────────────
+# These values PRE-CONFIGURE the "Control Plane" cloud inside Jenkins — the same
+# settings you would otherwise fill in by hand under Manage Jenkins → Clouds.
+# The chart renders them into a Configuration as Code file the controller reads
+# at boot, so a fresh install already knows how to provision agents.
+#
+# Because that file is applied on EVERY boot, editing these settings in the
+# Jenkins UI does not survive a restart. Change them here and upgrade instead.
+#
+# Jenkins provisions each build agent as its own Control Plane workload and
+# deletes it once idle.
+cloud:
+  enabled: true                # false = no cloud is configured; builds have nowhere to run
+  # REQUIRED prerequisite `opaque` secret holding a Control Plane API key, with
+  # create/delete/view on workloads in the target GVC. See the README.
+  apiKeySecretName: my-jenkins-cpln-api-key
+  # GVC the agents run in. Empty = the GVC Jenkins itself runs in. It MUST have
+  # exactly ONE location — the plugin rejects multi-location GVCs.
+  gvc: ""
+  agentWorkload: jenkins-agent   # name prefix for provisioned agent workloads
+  agentImage: jenkins/inbound-agent:latest
+  labels: cpln                   # space-separated; jobs target these
+  allowJobsWithoutLabels: true   # false = only jobs requesting a label above
+  useUniqueAgents: true          # one dedicated agent per queued job
+  executors: 1                   # concurrent builds per agent
+  cpu: 300                       # millicores per agent (minimum 50)
+  memory: 512                    # MiB per agent (minimum 128)
+  retentionMins: 5               # delete an idle agent after this long
+  provisioningCooldownSecs: 60   # gap between provisions; prevents over-scaling
+
+# ─── Controller resources and storage ─────────────────────────────────────────
+resources:
+  minCpu: 500m
+  maxCpu: 1000m
+  minMemory: 1Gi
+  maxMemory: 2Gi
+
+volumeset:
+  capacity: 10                   # GiB (minimum 10); holds JENKINS_HOME
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: false                 # true publishes the Jenkins login to the internet
+
+internalAccess:
+  type: same-gvc                 # none | same-gvc | same-org | workload-list
+  workloads: []                  # used with workload-list

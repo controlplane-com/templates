@@ -17,8 +17,9 @@
 | volumeset `/var/lib/gitea` (20 GiB) | Repos, LFS, attachments, built-in SSH host keys |
 | auth secret (dictionary, **user-created**) | `adminUsername/Password/Email`, `secretKey`, `internalToken`, `jwtSecret` — named by `gitea.auth.secretName`, NOT created by the chart |
 | `{release}-gitea-bootstrap` (opaque secret) | Admin-bootstrap wrapper script |
-| identity + policy | `reveal` scoped to the bootstrap script, the postgres `{release}-pg-config` secret, and the user's auth secret by name |
-| `{release}-postgres` (postgres subchart) | Backing database — reused template, not bundled |
+| identity + policy | `reveal` scoped to the bootstrap script, the DB credential secret, and the user's auth secret by name |
+| `my-gitea-db-credentials` (dictionary, **chart-created**, 1.2.0+) | `username`/`password`/`database` for the bundled DB; built from `postgres.credentials.*` and handed to the postgres subchart by name |
+| `{release}-postgres` (postgres subchart, **3.4.1** since 1.2.0) | Backing database — reused template, not bundled |
 
 - Shape: single stateful Gitea replica + one Postgres (via the `postgres` dependency). `createsGvc: false`.
 - Uses the **rootless** image (`gitea/gitea:1.27.1-rootless`): runs as UID 1000, built-in SSH server on 2222 — deliberately avoids the default image's root + OpenSSH-on-port-22.
@@ -31,7 +32,9 @@
 | `gitea.disableRegistration` | `true` = admin-invite only; `false` = open sign-ups |
 | `publicAccess.enabled` | Public HTTPS web UI + Git-over-HTTPS on the canonical endpoint |
 | `ssh.enabled` (default **false**) / `ssh.externalPort` / `ssh.domain` | Opt-in public Git-over-SSH (raw-TCP LB) + advertised port/domain — takes over the endpoint (see below) |
-| `postgres.*` | Pass-through to the backing `postgres` template (db name/creds/resources/storage) |
+| `postgres.credentials.{username,password,database}` | **1.2.0** — was `postgres.config.*`; bundled plumbing, still plain values |
+| `postgres.config.credentialsSecretName` (default `my-gitea-db-credentials`) | **1.2.0** — name of the dictionary secret the CHART creates and the subchart reads; org-wide, so unique per release |
+| `postgres.*` (resources, volumeset, image) | Pass-through to the backing `postgres` template |
 
 ## Troubleshooting / considerations
 - **Since 1.1.0 the admin login and all three signing keys live in a PREREQUISITE dictionary secret** named by `gitea.auth.secretName` — the chart creates no credential secret at all. `gitea.admin.*` and `gitea.security.*` were removed with `fail` guards naming each replacement; there are no compatibility shims.
@@ -47,4 +50,7 @@
 - **Registry/packages and LFS work out of the box** (LFS stored on the local volume). External object storage for LFS is a follow-up.
 - **Public access is ON by default and that is deliberate** (reviewed 2026-08-19): Git-over-HTTPS clone/push from laptops and CI is the service's purpose, self-registration is closed by default, and after 1.1.0 there is no published default credential to protect against. `publicAccess.enabled: false` works — reach the UI with `cpln port-forward {release}-gitea 3000:3000 --gvc {gvc}`.
 - **`appVersion` is `1.27.1-rootless`** (corrected in 1.1.0) — it must match the actual image tag, and the rootless variant is what ships.
-- **Bundled Postgres is still a plain value** (`postgres.config.password`, placeholder `change-me-gitea-db`): it serves Gitea only, is unreachable outside the GVC, and no human ever types it — the bundled-plumbing exception. The subchart stays pinned at postgres 3.2.1; do not bump it to 3.4.0 without doing the credentials-secret migration.
+- **Bundled Postgres credentials are still plain values** (`postgres.credentials.*`, placeholder `change-me-gitea-db`): the database serves Gitea only, is unreachable outside the GVC, and no human ever types the password — the bundled-plumbing exception.
+- **1.2.0 adopted postgres 3.4.1 and absorbed the break rather than passing it on.** 3.4.0 deleted its `{release}-pg-config` secret and now takes only a secret NAME. Because a parent cannot template a subchart value, the name is a plain value (`postgres.config.credentialsSecretName`) that BOTH sides read: gitea's `secret-db.yaml` renders it, the subchart's env refs and policy consume it, and `gitea.secretPostgres.name` points the app at it. Net user-visible change is one rename (`postgres.config.*` → `postgres.credentials.*`); **no new prerequisite**. The auth secret (1.1.0) is untouched.
+- **The DB secret name is org-wide, not release-scoped** (forced by the Helm limitation above). Two gitea releases in one org left at the default both render `my-gitea-db-credentials`, and the second install is **REFUSED** (`cannot be updated because it is being managed by a different release`) and creates nothing — nothing is shared, overwritten or deleted, and the first release is unaffected.
+- **A stale 1.1.x values file fails with the SUBCHART's message, not gitea's.** Helm renders `charts/…` before `templates/…`, so the postgres chart's "create a dictionary secret" advice always wins — wrong here, since this template creates it. The README's "Upgrading from 1.1.0" table carries the correction; a parent-side guard would be dead code.

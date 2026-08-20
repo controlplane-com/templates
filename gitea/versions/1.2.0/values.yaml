@@ -59,10 +59,18 @@ internalAccess: # internal firewall scope
 # GVC — but the password is used AS-IS, so change it before installing.
 postgres:
   image: postgres:18
-  config:
+  # Gitea CREATES the dictionary secret named by config.credentialsSecretName below
+  # out of these three values, so there is nothing for you to create before installing.
+  credentials:
     username: gitea
     password: change-me-gitea-db
     database: gitea
+  config:
+    # Name of the dictionary secret this chart creates and the bundled postgres reads.
+    # Secret names are org-wide: give each gitea release its own name. A second
+    # release left on this name is REFUSED at install (it is owned by the first
+    # release) — nothing is shared, overwritten or deleted.
+    credentialsSecretName: my-gitea-db-credentials
   resources:
     minCpu: 200m
     minMemory: 256Mi

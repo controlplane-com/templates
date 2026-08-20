@@ -15,10 +15,14 @@ Backing Postgres Workload Name (created by the postgres subchart)
 {{- end }}
 
 {{/*
-Postgres Config Secret Name (created by the postgres subchart)
+Name of the bundled database's credential secret.
+This chart CREATES that secret (secret-db.yaml) and the postgres subchart only
+receives its NAME — since postgres 3.4.0 the subchart creates no secret of its own.
+A subchart value cannot be templated by its parent, so the name is a plain value
+that both sides read, which is why it is not derived from the release name.
 */}}
 {{- define "gitea.secretPostgres.name" -}}
-{{- printf "%s-pg-config" .Release.Name }}
+{{- .Values.postgres.config.credentialsSecretName }}
 {{- end }}
 
 {{/*

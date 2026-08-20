@@ -22,7 +22,7 @@ spec:
         - name: GITEA__database__HOST
           value: {{ include "gitea.postgres.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:5432
         - name: GITEA__database__NAME
-          value: {{ .Values.postgres.config.database | quote }}
+          value: {{ .Values.postgres.credentials.database | quote }}
         - name: GITEA__database__USER
           value: cpln://secret/{{ include "gitea.secretPostgres.name" . }}.username
         - name: GITEA__database__PASSWD

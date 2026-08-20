@@ -61,16 +61,28 @@ derived name (unleash/n8n pattern).
 {{- end }}
 
 {{/*
-Credentials secret of the active database (created by the dependency chart).
-Names must match the dependency charts' own helpers (pg-ha.secretDatabase.name
-/ postgres.secretDatabase.name). Both hold {username, password}; only the HA
-secret also holds {database}.
+Name of the bundled database's credential secret in the SINGLE-INSTANCE path.
+This chart CREATES that secret (secret-db.yaml) and the postgres subchart only
+receives its NAME — since postgres 3.4.0 the subchart creates no secret of its
+own. A subchart value cannot be templated by its parent, so the name is a plain
+value that both sides read, which is why it is not derived from the release name.
+*/}}
+{{- define "glitchtip.secret.db.name" -}}
+{{- .Values.postgres.config.credentialsSecretName }}
+{{- end }}
+
+{{/*
+Credentials secret of the ACTIVE database.
+HA path: still created by postgres-highly-available 2.4.2 (pg-ha.secretDatabase.name)
+— unchanged, that chart has not adopted the prerequisite-secret convention.
+Single-instance path: created by this chart, named by postgres.config.credentialsSecretName.
+Both hold the same three keys — username, password, database.
 */}}
 {{- define "glitchtip.postgres.secret.name" -}}
 {{- if .Values.postgresHA.enabled -}}
 {{- printf "%s-postgres-config" .Release.Name }}
 {{- else -}}
-{{- printf "%s-pg-config" .Release.Name }}
+{{- include "glitchtip.secret.db.name" . }}
 {{- end }}
 {{- end }}
 
@@ -115,13 +127,11 @@ CPLN_GLOBAL_ENDPOINT at runtime.
   value: {{ include "glitchtip.postgres.host" . }}
 - name: DATABASE_PORT
   value: '5432'
+{{- /* Both stores' credential secrets carry a `database` key, so this is read the
+  same way in either mode (the single-instance secret is created by this chart,
+  the HA one by postgres-highly-available). */}}
 - name: DATABASE_NAME
-  {{- if .Values.postgresHA.enabled }}
   value: 'cpln://secret/{{ include "glitchtip.postgres.secret.name" . }}.database'
-  {{- else }}
-  # the single-postgres config secret has no `database` key — use the value directly
-  value: {{ .Values.postgres.config.database | quote }}
-  {{- end }}
 - name: DATABASE_USER
   value: 'cpln://secret/{{ include "glitchtip.postgres.secret.name" . }}.username'
 - name: DATABASE_PASSWORD

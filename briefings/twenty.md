@@ -19,8 +19,9 @@
 | `{release}-twenty-storage` volumeset | **`fileSystemType: shared` (read-write-many)** — mounted by the server AND worker at `/app/packages/twenty-server/.local-storage`; rendered only in `storage.type: local` |
 | `{release}-twenty-redis-vs` volumeset | Redis AOF at `/data` (ext4) |
 | `{release}-twenty-creds` (dictionary) + `-worker-start` (opaque) | Redis password; the worker's start script (SERVER_URL derivation, then `exec /app/entrypoint.sh yarn worker:prod`) |
+| `my-twenty-db-credentials` (dictionary, **chart-created**, 1.1.0+) | `username`/`password`/`database` for the single-instance DB; built from `postgres.credentials.*` and handed to the postgres subchart by name. Single-instance path only |
 | identity + policy | one identity shared by all three workloads; `reveal` on exactly the mounted secrets; carries the AWS cloud-account link in keyless S3 mode |
-| `postgres` 3.3.0 (default) **or** `postgres-highly-available` 2.4.1 aliased `postgresHA` (opt-in) | application database — reused, never reimplemented |
+| `postgres` **3.4.1** (default, since 1.1.0) **or** `postgres-highly-available` 2.4.2 aliased `postgresHA` (opt-in) | application database — reused, never reimplemented |
 
 - All HTTP: no `loadBalancer.direct` ports anywhere; public access uses the automatic `*.cpln.app` endpoint.
 
@@ -41,6 +42,9 @@
 | `redis.{image,auth.password,volumeset.capacity}` | `redis:8.10.0` / `change-me-twenty-redis` / `10` | password is embedded in `REDIS_URL` — letters/digits/`-`/`_` only |
 | `postgres.enabled` / `postgresHA.enabled` | `true` / `false` | **single instance is the default** (`postgres:18`, live 18.4); HA is opt-in (Patroni, PG 17.5). Exactly one must be on |
 | `postgres.backup.*` / `postgresHA.backup.*` | `enabled: false` | `aws` \| `gcp` \| `minio`; dependency-covered (render-verified, not re-tested live) |
+| `postgres.credentials.{username,password,database}` | `twenty` / `change-me-twenty-db` / `twenty` | **1.1.0** — was `postgres.config.*`; bundled plumbing, still plain values |
+| `postgres.config.credentialsSecretName` | `my-twenty-db-credentials` | **1.1.0** — name of the dictionary secret the CHART creates and the subchart reads; org-wide, so unique per release |
+| `postgres.backup.minio.credentialsSecretName` | `my-twenty-minio-credentials` | **1.1.0** — genuine prerequisite, single-instance backup with `provider: minio` only; `postgresHA.backup.minio` still takes plain keys |
 
 Prerequisite secret (create BEFORE install; the shipped README's exact form):
 `printf '%s' "$(openssl rand -base64 32)" | cpln secret create-opaque --name my-twenty-app-secret --encoding plain --file -`
@@ -67,3 +71,8 @@ Prerequisite secret (create BEFORE install; the shipped README's exact form):
 - **Twenty serves TWO GraphQL schemas** — auth/core on `/metadata`, workspace records on `/graphql`; introspection is disabled in this build. Worth knowing before debugging an API call.
 - **Volumeset budget:** a default install consumes 3 volumesets (pg, redis, shared storage), the HA variant 4, against a 10-per-GVC cap — relevant when stacking several installs in one GVC.
 - **Upstream releases a minor every few days.** 2.26.1 is pinned deliberately; v2.27+ moved sessions to httpOnly cookies, which needs proxy/cookie verification before a bump.
+- **1.1.0 adopted postgres 3.4.1 and absorbed the break rather than passing it on.** 3.4.0 deleted its `{release}-pg-config` secret and now takes only a secret NAME. Because a parent cannot template a subchart value, the name is a plain value (`postgres.config.credentialsSecretName`) that BOTH sides read: twenty's `secret-db.yaml` renders it, the subchart's env refs and policy consume it, and `twenty.postgres.secret.name` points the app at it on the single-instance branch. Net user-visible change is one rename; **no new prerequisite** for the database.
+- **Twenty had THREE single-instance consumers of the old credential values, not one** — worth knowing before a similar bump. Beyond `twenty.postgres.secret.name`, the password and database name are also read directly out of values: `twenty.postgres.database` feeds `PG_DATABASE_URL`, and `twenty.postgres.password` exists solely so the URL-safety regex can validate it. All three are `postgresHA.enabled` branches; only the else-branch moved to `postgres.credentials.*`.
+- **The HA branch was deliberately left untouched.** `postgres-highly-available` 2.4.2 has not adopted the convention: it still takes `postgresHA.postgres.username/password/database` as values, creates `{release}-postgres-config` itself, and still takes MinIO backup keys as plain values. Verified byte-identical HA render between 1.0.1 and 1.1.0. When pg-ha eventually adopts it, the three `twenty.postgres.*` HA branches and the `postgresHA` values block are the places to change.
+- **A stale 1.0.x values file fails with the SUBCHART's message, not twenty's.** Helm renders `charts/…` before `templates/…`, so the postgres chart's "create a dictionary secret" advice always wins — wrong for the three credentials keys, since this template creates that secret. The README's "Upgrading from 1.0.x" table carries the correction; a parent-side guard would be dead code.
+- **The DB secret name is org-wide, not release-scoped** (forced by the Helm limitation above). Two twenty releases in one org left at the default both render `my-twenty-db-credentials`, and the second install is **REFUSED** (`cannot be updated because it is being managed by a different release`) and creates nothing — nothing is shared, overwritten or deleted, and the first release is unaffected.

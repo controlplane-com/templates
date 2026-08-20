@@ -2,7 +2,7 @@
 
 ## What it is
 - Jenkins LTS controller with our own [Control Plane cloud plugin](https://github.com/controlplane-com/cpln-jenkins-plugin) baked in. Jenkins provisions each build agent as a Control Plane workload on demand and deletes it once idle.
-- Ships `ghcr.io/controlplane-com/cpln-jenkins:2.0.0` (appVersion `2.0.0`), built and published by that repo's `publish-image.yml` on merge to main. **We own the image**, unlike most templates — a plugin fix means a new image tag, then an `image:` bump here.
+- Ships `ghcr.io/controlplane-com/cpln-jenkins:2.0.1` (appVersion `2.0.1`), built and published by that repo's `publish-image.yml` on merge to main. **We own the image**, unlike most templates — a plugin fix means a new image tag, then an `image:` bump here.
 - Configured entirely through Configuration as Code. No setup wizard: it boots to a login screen.
 
 ## Common use cases

@@ -43,7 +43,7 @@ Secret names are organization-wide, so give each Jenkins release its own names.
 ### Image
 
 ```yaml
-image: ghcr.io/controlplane-com/cpln-jenkins:2.0.0
+image: ghcr.io/controlplane-com/cpln-jenkins:2.0.1
 ```
 
 ### Admin login

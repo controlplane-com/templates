@@ -3,7 +3,7 @@ name: cpln-jenkins
 description: Jenkins CI server that runs build agents as on-demand Control Plane workloads
 type: application
 version: 1.0.0
-appVersion: "2.0.0"
+appVersion: "2.0.1"
 annotations:
   created: "2026-08-20"
   lastModified: "2026-08-20"

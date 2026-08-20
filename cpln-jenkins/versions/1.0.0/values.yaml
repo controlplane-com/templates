@@ -1,7 +1,7 @@
 # ─── Image ────────────────────────────────────────────────────────────────────
 # Jenkins LTS with the Control Plane cloud plugin baked in and Configuration as
 # Code enabled. Built from github.com/controlplane-com/cpln-jenkins-plugin.
-image: ghcr.io/controlplane-com/cpln-jenkins:2.0.0
+image: ghcr.io/controlplane-com/cpln-jenkins:2.0.1
 
 # ─── Admin login ──────────────────────────────────────────────────────────────
 admin:

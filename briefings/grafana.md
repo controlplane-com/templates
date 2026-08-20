@@ -18,7 +18,8 @@
 | user-created opaque secrets (×2, **prerequisite**) | admin password (droppable via `admin.applyPassword: false` after first login) + datasource-encryption key (permanent); consumed as `.payload`, never created by the chart (1.2.0) |
 | `{release}-grafana-datasources` secret | rendered datasource provisioning YAML, file-mounted at `/etc/grafana/provisioning/datasources/` — only when `datasources.definitions` is set |
 | identity + policy | `reveal` on exactly the mounted secrets (admin, datasources, user credential secrets, SMTP password) |
-| `postgresHA` subchart (default) / `postgres` subchart (alt) | app DB — ALL state lives here; exactly one must be enabled (XOR validated at render) |
+| `postgresHA` subchart 2.4.2 (default) / `postgres` subchart 3.4.1 (alt) | app DB — ALL state lives here; exactly one must be enabled (XOR validated at render) |
+| `postgres.config.credentialsSecretName` secret (dictionary, **chart-created**) | Bundled single-instance DB `username`/`password`/`database`. Created by THIS chart since 1.3.0 (postgres 3.4.x stopped creating it); HA mode still uses pg-ha's own `{release}-postgres-config` |
 | `redis` subchart (only when `redis.enabled`) | alerting-HA coordination via Sentinel; dedupes notifications across replicas |
 
 - Image is `grafana/grafana:13.1.1` — NOT `grafana-oss:`; that repo never published 13.1.x (stops at 13.0.2). Identical OSS build.
@@ -37,6 +38,8 @@
 | `smtp.enabled` (+ `host/user/passwordSecretName/fromAddress/fromName`) | `false` | alert email; password via a prerequisite opaque secret |
 | `publicAccess.enabled` / `internalAccess.type` | `true` / `same-gvc` | `none` and `workload-list` both enforced live |
 | `postgresHA.enabled` / `postgres.enabled` | `true` / `false` | HA (3 Patroni + 3 etcd + HAProxy) vs single-instance; `postgresHA.proxy.enabled` must stay true |
+| `postgres.credentials.{username,password,database}` | `grafana` / `change-me-grafana-db-password` / `grafana` | bundled single-instance DB credentials — still plain VALUES; the chart builds the secret from them (1.3.0; was `postgres.config.*`) |
+| `postgres.config.credentialsSecretName` | `my-grafana-db-credentials` | name of that chart-created secret; **org-wide**, so give each release its own |
 | `redis.enabled` | `false` | Sentinel tier for alerting HA; auth knobs are validation-blocked in this version |
 | `postgresHA.backup.*` / `postgres.backup.*` | `enabled: false` | subchart DB backups (logical or WAL-G) to S3/GCS/MinIO |
 
@@ -59,4 +62,8 @@
 - **Multi-replica: Grafana Live push updates degrade** (per-instance websockets land on one replica). Dashboards, queries, and alerting are unaffected.
 - **Expected transient log noise:** a Postgres `connection reset` while pg-HA is still forming; ~6 s of `sentinel: GetMasterAddrByName … EOF` when redis+grafana cold-start in the same rollout; `Creating shutdown snapshot failed err=EOF` on draining old replicas. All self-recover; steady state is zero ERROR/WARN.
 - **Convergence:** default pg-HA stack ready in ~6 min (etcd 11 s, pg-HA + proxy 85 s, then Grafana); redis+sentinel ~25 s; rolling restart ~2.5 min. Firewall changes take ~30 s to propagate.
+- **The bundled DB credential secret is chart-created, not a prerequisite (1.3.0, postgres 3.4.1).** The single-instance path moved `postgres.config.{username,password,database}` → `postgres.credentials.{...}`; this chart renders `templates/secret-db.yaml` from those values and passes only the NAME down as `postgres.config.credentialsSecretName`. Users gained **no** new prerequisite — the DB password is still a value, unlike the admin password and encryption key (those guard a public login / are long-lived, so they stay prerequisites). **The HA branch of `grafana.postgres.secret.name` was deliberately left alone**: pg-ha 2.4.2 has not adopted the convention and still creates `{release}-postgres-config`. **Redis is untouched** — the redis subchart owns its own `{release}-redis-config` / `{release}-sentinel-config` secrets and shares no helper with the postgres path.
+- **Secret names are org-wide and cannot be templated.** Helm resolves subchart values before rendering and postgres does not `tpl` the name, so it cannot contain `.Release.Name`. A second grafana release left on the default `my-grafana-db-credentials` is **refused at install** ("cannot be updated because it is being managed by a different release") and creates nothing — not silent data loss.
+- **An upgrader carrying the 1.2.x keys gets postgres's own error**, not a grafana one: Helm renders `charts/` before `templates/`, so the subchart's `config.username was REMOVED in postgres 3.4.0` always wins. 3.4.1 appends a clause telling bundled users not to create a secret. A parent-side guard would be dead code — do not add one.
+- **`postgres.backup.minio.accessKey`/`secretKey` were removed too** (postgres 3.4.0) — that path now needs a prerequisite dictionary secret named by `postgres.backup.minio.credentialsSecretName`. `postgresHA.backup.minio` still takes the keys inline.
 - **Dashboards-as-code is a staged follow-up** (platform secret payload size limit undocumented; dashboard JSON can be 100s of KB). v1: import via UI/API — persisted in Postgres, survives restarts.

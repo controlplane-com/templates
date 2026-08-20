@@ -19,12 +19,13 @@
 | `{release}-unleash-start` secret | Boot script — sets the public URL at runtime |
 | identity + policy | Reveal (read) access on exactly the secrets above + the DB credential secret |
 | postgresHA (default) or postgres subchart | The database — holds every flag, user, and token |
+| `postgres.config.credentialsSecretName` secret (dictionary, **chart-created**) | Bundled single-instance DB `username`/`password`/`database`. Created by THIS chart since 1.2.0 (postgres 3.4.x stopped creating it); HA mode still uses pg-ha's own `{release}-postgres-config` |
 
 - Fully stateless server: no volumeset; `replicas: 2+` scales it behind the load balancer (default 1).
 - Dual database mode like n8n/metabase/temporal: HA Postgres default, single Postgres for dev; exactly one must be enabled.
 
 ## Key knobs
-`image` · `replicas` (1 default, 2+ = HA) · `admin.secretName` (prerequisite dictionary secret: `username` + `password`; first boot only) · `apiTokens.secretName` (first boot only; prerequisite dictionary secret with keys `backend`/`frontend`, token format `project:environment.secret`) · `publicAccess.enabled` (default true) · `internalAccess.type` · `postgresHA.*` / `postgres.*` (incl. backups)
+`image` · `replicas` (1 default, 2+ = HA) · `admin.secretName` (prerequisite dictionary secret: `username` + `password`; first boot only) · `apiTokens.secretName` (first boot only; prerequisite dictionary secret with keys `backend`/`frontend`, token format `project:environment.secret`) · `publicAccess.enabled` (default true) · `internalAccess.type` · `postgresHA.postgres.{username,password,database}` (HA mode) / `postgres.credentials.{username,password,database}` + `postgres.config.credentialsSecretName` (single-instance, default `my-unleash-db-credentials`) · backups on either store
 
 ## Troubleshooting / considerations
 - **Workload wedged with ZERO log lines** → the prerequisite admin secret (or, if named, the API-token secret) does not exist. The container never starts, so `cpln logs` is empty; the diagnostic is `status.versions[].message` from `cpln workload get-deployments … -o yaml` (**not** plain `get`). Self-heals in ~5.5–10.5 min once created, or force a redeployment (~90 s).
@@ -36,4 +37,8 @@
 - **DB connections:** each replica opens at most 4 Postgres connections (upstream default), so replica count is never a connection-limit concern at sane scale.
 - **v8 needs PostgreSQL 15+** — both our dependency charts qualify (pg-ha = PG 17, postgres = PG 18); relevant if external-DB support is added later.
 - **HA-mode first boot takes ~5–7 min at any replica count** (test-proven): transient `Failed to migrate db` errors while the database cluster starts are expected and self-heal; there is NO replicas-specific first-boot race (fresh install at 2 converged unaided, zero migration conflicts — never advise install-at-1-then-scale).
+- **The bundled DB credential secret is chart-created, not a prerequisite (1.2.0, postgres 3.4.1).** The single-instance path moved `postgres.config.{username,password,database}` → `postgres.credentials.{...}`; this chart renders `templates/secret-db.yaml` from those values and passes only the NAME down as `postgres.config.credentialsSecretName`. No new prerequisite for users — the DB password is still a value. **The HA branch was deliberately not touched**: `postgres-highly-available` 2.4.2 has not adopted the convention and still creates `{release}-postgres-config` itself.
+- **Secret names are org-wide and cannot be templated.** Helm resolves subchart values before rendering and postgres does not `tpl` the name, so it cannot contain `.Release.Name`. A second unleash release left on the default `my-unleash-db-credentials` is **refused at install** ("cannot be updated because it is being managed by a different release") and creates nothing — not silent data loss.
+- **An upgrader carrying the 1.1.0 keys gets postgres's own error**, not an unleash one: Helm renders `charts/` before `templates/`, so the subchart's `config.username was REMOVED in postgres 3.4.0` message always wins. postgres 3.4.1 appends a clause telling bundled users not to create a secret themselves. A parent-side guard would be dead code — do not add one.
+- **`postgres.backup.minio.accessKey`/`secretKey` were removed too** (postgres 3.4.0) — that path now needs a prerequisite dictionary secret named by `postgres.backup.minio.credentialsSecretName`. `postgresHA.backup.minio` still takes the keys inline.
 - **Availability numbers (test-proven):** rolling redeploy @2 replicas = 55/55 polls served; replica kill @2 = 30/30; even a single-replica upgrade served 63/63 (the platform surges the replacement before stopping the old one).

@@ -29,7 +29,7 @@ postgres-highly-available:
 
   postgres:
     username: cdc_user
-    password: "changeme-postgres-password"
+    password: "change-me-cdc-pipeline-postgres"
     database: cdcdb
     walLevel: logical  # Required for CDC -- do not change
 
@@ -114,16 +114,16 @@ kafka:
         sasl:
           admin:
             username: admin
-            password: "changeme-kafka-admin-password"
+            password: "change-me-cdc-pipeline-kafka-admin"
           users: "debezium"
-          passwords: "changeme-kafka-debezium-password"
+          passwords: "change-me-cdc-pipeline-kafka-debezium"
     acl:
       superUsers: "User:admin"
       allowEveryoneIfNoAclFound: false
     secrets:
-      kraft_cluster_id: "changeme-kraft-cluster-id"
-      inter_broker_password: "changeme-inter-broker-password"
-      controller_password: "changeme-controller-password"
+      kraft_cluster_id: "change-me-cdc-pipeline-kraft-cluster-id"
+      inter_broker_password: "change-me-cdc-pipeline-inter-broker"
+      controller_password: "change-me-cdc-pipeline-controller"
     extra_configurations:
       default.replication.factor: 3
       auto.create.topics.enable: true
@@ -252,7 +252,7 @@ debezium-server:
       port: 5432
       name: cdcdb                           # Must match postgres-highly-available.postgres.database
       user: cdc_user                        # Must match postgres-highly-available.postgres.username
-      password: "changeme-postgres-password" # Must match postgres-highly-available.postgres.password
+      password: "change-me-cdc-pipeline-postgres" # Must match postgres-highly-available.postgres.password
 
     serverName: "dbserver1"
     tableIncludeList: ""
@@ -311,7 +311,7 @@ debezium-server:
       securityProtocol: "SASL_PLAINTEXT"
       saslMechanism: "PLAIN"
       saslUsername: "debezium"                       # Must match kafka.kafka.listeners.client.sasl.users
-      saslPassword: "changeme-kafka-debezium-password" # Must match kafka.kafka.listeners.client.sasl.passwords
+      saslPassword: "change-me-cdc-pipeline-kafka-debezium" # Must match kafka.kafka.listeners.client.sasl.passwords
 
     redis:
       address: ""

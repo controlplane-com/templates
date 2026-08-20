@@ -20,7 +20,7 @@ This meta-template handles all of that automatically. Shared values are defined 
 ## Quick Start
 
 1. Install the template and customize `values.yaml`:
-   - Set real passwords (replace all `changeme-*` values)
+   - Set real passwords (replace every `change-me-cdc-pipeline-*` value)
    - Configure `source.tableIncludeList` to specify which tables to capture
    - Adjust resource sizes and replica counts as needed
 

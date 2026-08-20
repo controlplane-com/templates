@@ -113,10 +113,20 @@ redis:
 postgres:
   enabled: true
   image: postgres:18          # NocoDB supports PostgreSQL 12+ (the HA path below runs 17)
-  config:
+  # Credentials for the bundled database — internal plumbing no human types
+  # elsewhere. NocoDB CREATES the dictionary secret named by
+  # config.credentialsSecretName below out of these three values, so there is
+  # nothing for you to create before installing.
+  credentials:
     username: nocodb
     password: change-me-nocodb-db     # change before install; letters/digits/-/_ only (embedded in NC_DB)
     database: nocodb
+  config:
+    # Name of the dictionary secret this chart creates and the bundled postgres
+    # reads. Secret names are org-wide: give each nocodb release its own name.
+    # A second release left on this name is REFUSED at install (it is owned by
+    # the first release) — nothing is shared, overwritten or deleted.
+    credentialsSecretName: my-nocodb-db-credentials
   resources:
     minCpu: 250m
     maxCpu: 1000m
@@ -146,8 +156,9 @@ postgres:
     minio:
       endpoint: http://my-minio-workload:9000
       bucket: my-nocodb-pg-backup-bucket
-      accessKey: my-minio-username
-      secretKey: my-minio-password
+      # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
+      # only when this backup is enabled with provider: minio. See README storage setup.
+      credentialsSecretName: my-nocodb-minio-credentials
       prefix: postgres/backups
 
 # ─── Database: Highly Available PostgreSQL 17 (opt-in) ────────────

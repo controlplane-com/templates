@@ -47,27 +47,41 @@ derived name (glitchtip/unleash/twenty pattern).
 {{- end }}
 
 {{/*
-Credentials secret of the active database (created by the dependency chart).
-Names must match the dependency charts' own helpers (postgres.secretDatabase.name
-/ pg-ha.secretDatabase.name). Both hold {username, password}.
+Name of the bundled database's credential secret in the SINGLE-INSTANCE path.
+This chart CREATES that secret (secret-db.yaml) and the postgres subchart only
+receives its NAME — since postgres 3.4.0 the subchart creates no secret of its
+own. A subchart value cannot be templated by its parent, so the name is a plain
+value that both sides read, which is why it is not derived from the release name.
+*/}}
+{{- define "nocodb.secret.db.name" -}}
+{{- .Values.postgres.config.credentialsSecretName }}
+{{- end }}
+
+{{/*
+Credentials secret of the ACTIVE database.
+HA path: still created by postgres-highly-available 2.4.2 (pg-ha.secretDatabase.name)
+— unchanged, that chart has not adopted the prerequisite-secret convention.
+Single-instance path: created by this chart, named by postgres.config.credentialsSecretName.
+Both hold the same three keys — username, password, database.
 */}}
 {{- define "nocodb.postgres.secret.name" -}}
 {{- if .Values.postgresHA.enabled -}}
 {{- printf "%s-postgres-config" .Release.Name }}
 {{- else -}}
-{{- printf "%s-pg-config" .Release.Name }}
+{{- include "nocodb.secret.db.name" . }}
 {{- end }}
 {{- end }}
 
 {{/*
-Database name of the active database — taken from values (not the secret) so a
-single code path serves both database modes.
+Database name of the active database — taken from values (not the secret) because
+it is interpolated into the NC_DB connection URL at render time, where a
+cpln://secret reference cannot be resolved.
 */}}
 {{- define "nocodb.postgres.database" -}}
 {{- if .Values.postgresHA.enabled -}}
 {{- .Values.postgresHA.postgres.database }}
 {{- else -}}
-{{- .Values.postgres.config.database }}
+{{- .Values.postgres.credentials.database }}
 {{- end }}
 {{- end }}
 
@@ -79,7 +93,7 @@ the NC_DB query string, so its charset matters).
 {{- if .Values.postgresHA.enabled -}}
 {{- .Values.postgresHA.postgres.password }}
 {{- else -}}
-{{- .Values.postgres.config.password }}
+{{- .Values.postgres.credentials.password }}
 {{- end }}
 {{- end }}
 

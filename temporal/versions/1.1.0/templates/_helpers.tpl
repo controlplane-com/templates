@@ -76,6 +76,9 @@ first two (its two store names are set on the workload, not taken from the secre
 {{/* Validation */}}
 
 {{- define "temporal.validate" -}}
+{{- if and .Values.postgres.enabled (ne (default "temporal" .Values.postgres.credentials.database) "temporal") -}}
+{{- fail (printf "temporal: postgres.credentials.database must be \"temporal\", got %q. Temporal's server reads DBNAME as the literal \"temporal\" and auto-setup does not create it — any other value wedges the install on 'Unable to setup SQL schema: no usable database connection found'." .Values.postgres.credentials.database) -}}
+{{- end -}}
 {{- if not (has .Values.internalAccess.type (list "none" "same-gvc" "same-org" "workload-list")) -}}
 {{- fail (printf "temporal: internalAccess.type must be 'none', 'same-gvc', 'same-org', or 'workload-list', got '%s'" .Values.internalAccess.type) -}}
 {{- end -}}

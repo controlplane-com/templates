@@ -79,8 +79,11 @@ postgres:
   # Credentials for the bundled database — internal plumbing no human types elsewhere.
   # Temporal CREATES the dictionary secret named by config.credentialsSecretName below
   # out of these three values, so there is nothing for you to create before installing.
-  # `database` is the database the subchart initializes; Temporal itself owns its two
-  # store names (`temporal` and `temporal_visibility`) and creates them at boot.
+  # `database` MUST stay `temporal`. Temporal's server reads DBNAME as the literal
+  # `temporal` and auto-setup does NOT create it — it only creates the visibility
+  # store. Measured 2026-08-19: setting anything else wedges the install permanently
+  # on `Unable to setup SQL schema: no usable database connection found`. A render
+  # guard enforces this.
   credentials:
     username: temporal
     password: change-me-temporal-db-password # change before installing

@@ -15,7 +15,8 @@
 |---|---|
 | `{release}-nocodb` (stateful, :8080) | UI + REST/GraphQL API + live updates in one image; replica count from `nocodb.replicas`; runs meta-database migrations on boot |
 | `{release}-nocodb-redis` + `-redis-vs` volumeset | bundled single-node Redis (AOF, `noeviction`): job/event pub-sub, metadata cache, rate limiter — **required**, all three needed above one replica |
-| `postgres` 3.3.0 **or** `postgres-highly-available` 2.4.1 (aliased `postgresHA`) | the metadata store — every base, table, view, user and automation |
+| `postgres` 3.4.1 **or** `postgres-highly-available` 2.4.2 (aliased `postgresHA`) | the metadata store — every base, table, view, user and automation |
+| `postgres.config.credentialsSecretName` secret (dictionary, **chart-created**) | Bundled single-instance DB `username`/`password`/`database`. Created by THIS chart since 1.1.0 (postgres 3.4.x stopped creating it); HA mode still uses pg-ha's own `{release}-postgres-config` |
 | `{release}-nocodb-storage` volumeset | local attachments at `/usr/app/data`; **rendered only when `storage.type: local`** |
 | `{release}-nocodb-creds` (dictionary) | template-managed Redis password only — the DB credentials come from the subchart's own secret |
 | identity + policy | `reveal` on exactly the mounted secrets; carries the AWS cloud-account link in keyless S3 mode |
@@ -40,7 +41,8 @@
 | `publicAccess.enabled` / `internalAccess.type` | `true` / `same-gvc` | standard access pattern |
 | `redis.*` | `redis:8.10.0`, `change-me-nocodb-redis`, 100m/400m · 256Mi/512Mi, 10 GiB | bundled, always deployed |
 | `postgres.enabled` / `postgresHA.enabled` | `true` / `false` | exactly one; HA = 3 Patroni + 3 etcd + HAProxy leader endpoint |
-| `postgres.config.password` / `postgresHA.postgres.password` | `change-me-nocodb-db` | letters/digits/`-`/`_` only — embedded in the `NC_DB` query string |
+| `postgres.credentials.{username,password,database}` / `postgresHA.postgres.*` | `nocodb` / `change-me-nocodb-db` / `nocodb` | password is letters/digits/`-`/`_` only — embedded in the `NC_DB` query string. Still plain VALUES; the chart builds the secret from them (1.1.0; was `postgres.config.*`) |
+| `postgres.config.credentialsSecretName` | `my-nocodb-db-credentials` | name of that chart-created secret; **org-wide**, so give each release its own |
 | `postgres.backup.*` / `postgresHA.backup.*` | `enabled: false` | passed straight through to the subchart (aws \| gcp \| minio) |
 
 Prerequisite secret (create BEFORE install; verbatim-verified):
@@ -68,4 +70,9 @@ Prerequisite secret (create BEFORE install; verbatim-verified):
 - **`internalAccess.type` changes are not instantaneous** — ~30 s from the spec going live to in-GVC traffic actually being rejected. Re-poll before concluding a knob is broken.
 - **Data survives reinstall** — bases live in the database volumeset and local attachments in the storage volumeset; wiping an instance means deleting those too.
 - **SSO/SAML/OIDC, audit logs and row-level security are Enterprise-gated** in the same image and need a purchased license key this template never sets. Expect "why is SSO greyed out" — the answer is edition, not configuration.
+- **The bundled DB credential secret is chart-created, not a prerequisite (1.1.0, postgres 3.4.1).** The single-instance path moved `postgres.config.{username,password,database}` → `postgres.credentials.{...}`; this chart renders `templates/secret-db.yaml` from those values and passes only the NAME down as `postgres.config.credentialsSecretName`. Users gained **no** new prerequisite — the DB password is still a value, unlike `secrets.name` and `admin.secretName`, which stay prerequisites and were untouched. **The HA branch of `nocodb.postgres.secret.name` was deliberately left alone**: pg-ha 2.4.2 has not adopted the convention and still creates `{release}-postgres-config`. **Redis is untouched** — it is a template-owned workload with its own `{release}-nocodb-creds` secret and shares no helper with the postgres path.
+- **`NC_DB` still interpolates the database NAME from values, deliberately.** `nocodb.postgres.database` reads `postgres.credentials.database` (was `postgres.config.database`) because the name is baked into the `pg://…?d=` connection URL at render time, where a `cpln://secret` reference cannot resolve. Username and password DO come from the secret, via `$(NC_PG_USER)`/`$(NC_PG_PASSWORD)` expansion. `nocodb.postgres.password` — used only by the charset validation — was renamed the same way.
+- **Secret names are org-wide and cannot be templated.** Helm resolves subchart values before rendering and postgres does not `tpl` the name, so it cannot contain `.Release.Name`. A second nocodb release left on the default `my-nocodb-db-credentials` is **refused at install** ("cannot be updated because it is being managed by a different release") and creates nothing — not silent data loss.
+- **An upgrader carrying the 1.0.x keys gets postgres's own error**, not a nocodb one: Helm renders `charts/` before `templates/`, so the subchart's `config.username was REMOVED in postgres 3.4.0` always wins. 3.4.1 appends a clause telling bundled users not to create a secret. A parent-side guard would be dead code — do not add one.
+- **`postgres.backup.minio.accessKey`/`secretKey` were removed too** (postgres 3.4.0) — that path now needs a prerequisite dictionary secret named by `postgres.backup.minio.credentialsSecretName`. `postgresHA.backup.minio` still takes the keys inline.
 - **Not exercised in testing** (call out if a report touches them): all `smtp.*` rows, S3-compatible storage via `endpoint` + `forcePathStyle` + static keys, an explicit `nocodb.siteUrl`, `postgresHA` leader-kill failover, `internalAccess.type` `same-org`/`workload-list`, and the backup blocks (render-only, covered by the dependency templates).

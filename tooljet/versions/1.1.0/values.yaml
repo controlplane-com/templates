@@ -50,10 +50,20 @@ internalAccess:
 # ─── PostgreSQL (subchart: postgres) — app DB + ToolJet Database ──
 postgres:
   image: postgres:16          # upstream-proven with the bundled PostgREST 12.2.0
-  config:
+  # Credentials for the bundled database — internal plumbing no human types
+  # elsewhere. ToolJet CREATES the dictionary secret named by
+  # config.credentialsSecretName below out of these three values, so there is
+  # nothing for you to create before installing.
+  credentials:
     username: tooljet
     password: change-me-tooljet-pg   # template-managed cred for the bundled DB — change before install
     database: tooljet         # app DB; ToolJet Database (tooljet_db) is auto-created alongside it
+  config:
+    # Name of the dictionary secret this chart creates and the bundled postgres
+    # reads. Secret names are org-wide: give each tooljet release its own name.
+    # A second release left on this name is REFUSED at install (it is owned by
+    # the first release) — nothing is shared, overwritten or deleted.
+    credentialsSecretName: my-tooljet-db-credentials
   resources:
     minCpu: 250m
     maxCpu: 1000m

@@ -15,7 +15,8 @@
 |---|---|
 | `{release}-tooljet` (standard, :3000) | ToolJet server; PostgREST and a fallback single-instance Redis run *inside* the container |
 | `{release}-postgres` (subchart + volumeset) | ONE instance, THREE databases auto-created at boot: `tooljet` (app), `tooljet_db` (ToolJet Database), and `sample_db` (upstream sample data, created even with `SAMPLE_PG_DB_*` unset) |
-| `{release}-tooljet-db` secret + identity + policy | template-managed DB creds; `reveal` scoped to exactly the mounted secrets (DB secret + the prerequisite secret, plus redis-auth/SMTP secrets when enabled) |
+| `{release}-tooljet-db` secret + identity + policy | template-managed DB creds (`postgresUsername`/`postgresPassword`) for the app's `PG_*`, `TOOLJET_DB_*` and `PGRST_DB_URI`; `reveal` scoped to exactly the mounted secrets (DB secret + the prerequisite secret, plus redis-auth/SMTP secrets when enabled) |
+| secret named by `postgres.config.credentialsSecretName` | The SAME creds in the shape the postgres subchart reads (`username`/`password`/`database`); created by this chart since postgres 3.4.0 stopped creating its own |
 | `{release}-redis` / `{release}-sentinel` (optional subchart) | only when `redis.enabled` — required for `replicas >= 2` |
 
 - App tier is stateless; all state lives in the Postgres databases.
@@ -30,7 +31,8 @@
 | `secrets.name` | `my-tooljet-secrets` | REQUIRED prerequisite dictionary secret |
 | `smtp.enabled` (+ `host`, `port`, `fromEmail`, `auth.secretName`) | `false` | **install-time only** — see below |
 | `publicAccess.enabled` / `internalAccess.type` | `true` / `same-gvc` | `none`, `workload-list`, and public-off all verified live |
-| `postgres.image` / `postgres.config.*` / `postgres.volumeset.capacity` | `postgres:16` / `tooljet` + `change-me-tooljet-pg` / `10` | PG 16 is deliberate (see below) |
+| `postgres.image` / `postgres.credentials.*` / `postgres.volumeset.capacity` | `postgres:16` / `tooljet` + `change-me-tooljet-pg` + `tooljet` / `10` | PG 16 is deliberate (see below) |
+| `postgres.config.credentialsSecretName` | `my-tooljet-db-credentials` | Name of the secret this chart CREATES for the subchart; org-wide, so one per release |
 | `redis.enabled` / `redis.redis.auth.password.{enabled,value}` | `false` / `false` | auth toggle wires `REDIS_PASSWORD`; data + sentinel replicas pinned to 1 |
 
 Prerequisite secret (create BEFORE install; commands are verbatim-verified):
@@ -50,6 +52,8 @@ Prerequisite secret (create BEFORE install; commands are verbatim-verified):
 - **Three databases on one Postgres.** `tooljet`, `tooljet_db`, and `sample_db` are all created by the image's boot scripts using the template-managed superuser. **The ToolJet Database cannot be disabled in 3.x** — it is part of the product, not an optional component. If a user reports `tooljet_db` missing, check the Postgres subchart user is still the superuser the template created.
 - **`replicas >= 2` without `redis.enabled: true` is blocked at render** — the in-image Redis is single-instance-only (job queues + multiplayer editing would split-brain).
 - **Redis subchart is pinned to 1 data node + 1 sentinel** — ToolJet is not Sentinel-aware, so the service DNS name must always resolve to a writable master; extra data nodes would send writes to read-only replicas. `redis.redis.replicas` and `redis.sentinel.replicas` are validation-locked at 1.
+- **Two secrets carry the same DB credentials, by design (1.1.0, postgres 3.4.1).** `{release}-tooljet-db` keeps `postgresUsername`/`postgresPassword` for the app; the new `postgres.config.credentialsSecretName` secret carries `username`/`password`/`database` because those key names are fixed by the subchart. Renaming the app's keys would break `PG_USER`/`PG_PASS`/`TOOLJET_DB_*`/`PGRST_DB_URI`; the app secret also has no `database` key. Do not try to collapse them.
+- **`postgres.config.credentialsSecretName` is org-wide.** Two tooljet releases left on the default name: the second is REFUSED at install (`cannot be updated because it is being managed by a different release`) and creates nothing. Not data loss — the first release is untouched.
 - **Postgres default is 16, not 18** — the bundled PostgREST 12.2.0 predates PG 17/18; consequence: the postgres subchart's backup feature (needs PG 17+) is not surfaced in v1. A PG 17 spike is a named follow-up.
 - Benign log noise: repeated `Invalid License Key:Parse error` (free-tier license checks) and `npm warn using --force` from the upstream entrypoint.
 - **Untested gap carried into v1:** an actual authored ToolJet *workflow* execution on the external Redis (queue coordination itself is proven).

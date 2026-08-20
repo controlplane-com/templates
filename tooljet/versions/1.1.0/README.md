@@ -81,13 +81,19 @@ internalAccess:
 ```yaml
 postgres:
   image: postgres:16          # upstream-proven with the bundled PostgREST 12.2.0
-  config:
+  credentials:                # this template builds the DB credential secret from these
     username: tooljet
     password: change-me-tooljet-pg   # change before installing
     database: tooljet         # tooljet_db is auto-created alongside it
+  config:
+    # name of the dictionary secret this template CREATES and Postgres reads;
+    # secret names are org-wide, so give each tooljet release its own name
+    credentialsSecretName: my-tooljet-db-credentials
   volumeset:
     capacity: 10              # GiB (minimum 10)
 ```
+
+`postgres.credentials.password` seeds the database on first boot and cannot be changed afterwards — set it before you install. It is **not** a prerequisite secret: it is bundled plumbing, so this template creates that secret for you.
 
 ### Redis (optional — required for replicas >= 2)
 
@@ -114,6 +120,10 @@ redis:
 
 The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`cpln workload get {release}-tooljet -o yaml`).
 
+## Upgrading from 1.0.0
+
+The bundled database credentials moved from `postgres.config.username/password/database` to `postgres.credentials.username/password/database`, and `postgres.config.credentialsSecretName` names the secret this template now creates from them. If you carry the old keys the install fails with `config.username was REMOVED in postgres 3.4.0` — move the three keys and you are done. **Ignore that message's advice to create a secret yourself; this template creates it**, and the database password stays a value exactly as before.
+
 ## Important Notes
 
 - **The prerequisite secret must exist before install** — `secrets.name` is a dictionary secret with `SECRET_KEY_BASE`, `LOCKBOX_MASTER_KEY`, and `PGRST_JWT_SECRET`. A missing secret wedges the deployment.
@@ -122,6 +132,7 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`c
 - **Scaling to `replicas >= 2` requires `redis.enabled: true`** — replicas coordinate the job queue and multiplayer editing through the shared Redis; the install fails validation otherwise.
 - **Keep `redis.redis.replicas` at 1** — ToolJet's Redis client is not Sentinel-aware; more data nodes would route writes to read-only replicas.
 - **First boot takes several minutes** — the entrypoint waits for Postgres, creates both databases, and runs all migrations before serving. Subsequent boots are much faster.
+- **Give each tooljet release its own `postgres.config.credentialsSecretName`.** Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
 - **All ToolJet state lives in Postgres and survives an app restart/reinstall** — to wipe all data you must also reinstall the Postgres dependency (its volumeset).
 
 ## Links

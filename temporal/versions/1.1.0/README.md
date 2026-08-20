@@ -8,6 +8,7 @@ This app deploys [Temporal](https://temporal.io/) — an open-source (MIT) durab
 - **Temporal Web UI** (optional, default on): workload serving the UI on port 8080, internal-only (the UI has no built-in authentication).
 - **PostgreSQL (HA, default)** (subchart): the `postgres-highly-available` template — 3× Patroni Postgres, 3× etcd, and an HAProxy leader endpoint Temporal connects through.
 - **PostgreSQL (dev/lightweight, optional)** (subchart): the single-instance `postgres` template instead, for lighter deployments.
+- **Database credentials secret** (dictionary): on the single-instance path, built by *this* template from `postgres.credentials.*` and handed to the Postgres store by name. Nothing for you to create. (Not rendered on the HA path — `postgres-highly-available` still makes its own.)
 - **Identity and policy**: a least-privilege policy granting the server identity `reveal` on exactly the database credentials secret.
 - **Optional database backups** (subchart): logical dumps or WAL-G archiving to S3, GCS, or an S3-compatible endpoint.
 
@@ -15,6 +16,7 @@ This app deploys [Temporal](https://temporal.io/) — an open-source (MIT) durab
 
 - None for a default install.
 - For optional database backups: a bucket and access setup for one of the supported providers (see [Backup storage setup](#backup-storage-setup)).
+- The database password is **not** a prerequisite — it is bundled plumbing no human types elsewhere, so this template creates that secret for you from `postgres.credentials.*` (single-instance path) or hands it to `postgres-highly-available` (HA path).
 
 ## Configuration
 
@@ -79,10 +81,15 @@ postgresHA:
   enabled: false
 postgres:                 # dev/lightweight: single-instance PostgreSQL
   enabled: true
-  config:
+  credentials:            # this template builds the DB credential secret from these
     username: temporal
     password: change-me-temporal-db-password # change before installing
-    database: temporal
+    database: temporal    # the database the store initializes; Temporal creates its own
+                          # `temporal` and `temporal_visibility` stores at boot
+  config:
+    # name of the dictionary secret this template CREATES and Postgres reads;
+    # secret names are org-wide, so a second release on this name is refused at install
+    credentialsSecretName: my-temporal-db-credentials
   volumeset:
     capacity: 10          # GiB
   backup:
@@ -97,7 +104,7 @@ postgres:                 # dev/lightweight: single-instance PostgreSQL
 | Namespace | `default` |
 | Web UI (internal) | `http://{release}-temporal-ui.{gvc}.cpln.local:8080` |
 | Postgres (internal, HA mode) | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432`, credentials in the `{release}-postgres-config` secret |
-| Postgres (internal, single mode) | `{release}-postgres.{gvc}.cpln.local:5432`, credentials in the `{release}-pg-config` secret |
+| Postgres (internal, single mode) | `{release}-postgres.{gvc}.cpln.local:5432`, credentials in the secret named by `postgres.config.credentialsSecretName` |
 
 - **Always use the full `.cpln.local` FQDN** in worker/client connection config — short workload names do not resolve.
 - **Python workers must guard their entrypoint with `if __name__ == "__main__":`** — the Temporal Python SDK's workflow sandbox re-imports the worker module, and an unguarded module-level `main()` crashes the worker.
@@ -133,11 +140,39 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
 
 1. Create your bucket on the server. Set `backup.minio.bucket`.
 2. Set `backup.minio.endpoint` to the S3 API address including port. For the `minio` marketplace template in the same GVC, this is `http://WORKLOAD_NAME:9000`.
-3. Set `backup.minio.accessKey` and `backup.minio.secretKey` to credentials with access to the bucket.
+3. Supply credentials with access to the bucket. The two database paths differ here:
+   - **Single-instance** (`postgres.backup`): create a dictionary secret and name it in `postgres.backup.minio.credentialsSecretName`.
+
+     ```bash
+     cpln secret create-dictionary --name my-temporal-minio-credentials \
+       --entry accessKey=ACCESS_KEY \
+       --entry secretKey=SECRET_KEY
+     ```
+   - **HA** (`postgresHA.backup`): set `postgresHA.backup.minio.accessKey` and `.secretKey` directly — the `postgres-highly-available` template still takes them as values.
+
+## Upgrading from 1.0.x
+
+The single-instance Postgres moved to the `postgres` 3.4.1 template, which no longer takes
+database credentials or MinIO backup keys as values. Temporal absorbed the credentials
+change rather than passing it on, so **there is no new prerequisite for the database** —
+only renames on the single-instance path:
+
+| Removed key | Replacement |
+|---|---|
+| `postgres.config.username` | `postgres.credentials.username` |
+| `postgres.config.password` | `postgres.credentials.password` |
+| `postgres.config.database` | `postgres.credentials.database` |
+| `postgres.backup.minio.accessKey` / `.secretKey` | `postgres.backup.minio.credentialsSecretName` (a dictionary secret you create; MinIO backups only) |
+
+Carrying an old credentials key forward fails the render with the **Postgres template's**
+message, which tells you to create a dictionary secret yourself. Ignore that advice for the
+three credentials keys — this template creates that secret. The `postgresHA` path is
+completely unchanged, including its MinIO backup keys.
 
 ## Important Notes
 
-- **Change the database password (`postgresHA.postgres.password` / `postgres.config.password`) before installing.**
+- **Change the database password (`postgresHA.postgres.password` / `postgres.credentials.password`) before installing.**
+- **Give each temporal release its own `postgres.config.credentialsSecretName`** (single-instance path). Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected.
 - **`historyShards` is permanent** — the shard count is fixed at the cluster's first boot and can never be changed; the server refuses a different value later. Size it before installing (512 suits most deployments).
 - **Never expose the Web UI publicly** — it has no built-in authentication. To offer browser access from outside the internal scope, put your own authenticating proxy in front of it.
 - **Temporal connects and runs schema setup as the database superuser** provisioned by the Postgres subchart — it needs `CREATE DATABASE` and DDL rights at every version upgrade.

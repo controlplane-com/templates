@@ -76,10 +76,21 @@ postgresHA:
 # Enable this and disable postgresHA for a lighter non-HA deployment.
 postgres:
   enabled: false
-  config:
+  # Credentials for the bundled database — internal plumbing no human types elsewhere.
+  # Temporal CREATES the dictionary secret named by config.credentialsSecretName below
+  # out of these three values, so there is nothing for you to create before installing.
+  # `database` is the database the subchart initializes; Temporal itself owns its two
+  # store names (`temporal` and `temporal_visibility`) and creates them at boot.
+  credentials:
     username: temporal
     password: change-me-temporal-db-password # change before installing
     database: temporal
+  config:
+    # Name of the dictionary secret this chart creates and the bundled postgres reads.
+    # Secret names are org-wide: give each temporal release its own name. A second
+    # release left on this name is REFUSED at install (it is owned by the first
+    # release) — nothing is shared, overwritten or deleted.
+    credentialsSecretName: my-temporal-db-credentials
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)
 
@@ -104,6 +115,7 @@ postgres:
     minio:
       endpoint: http://my-minio-workload:9000
       bucket: temporal-pg-backup-bucket
-      accessKey: my-minio-username
-      secretKey: my-minio-password
+      # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
+      # only when this backup is enabled with provider: minio. See README backup setup.
+      credentialsSecretName: my-temporal-minio-credentials
       prefix: postgres/backups

@@ -47,16 +47,28 @@ derived name (tyk pattern).
 {{- end }}
 
 {{/*
-Credentials secret of the active database (created by the dependency chart).
-Names must match the dependency charts' own helpers (pg-ha.secretDatabase.name
-/ postgres.secretDatabase.name). Both hold {username, password}; only the HA
-secret also holds {database}.
+Name of the bundled database's credential secret in the SINGLE-INSTANCE path.
+This chart CREATES that secret (secret-db.yaml) and the postgres subchart only
+receives its NAME — since postgres 3.4.0 the subchart creates no secret of its own.
+A subchart value cannot be templated by its parent, so the name is a plain value
+that both sides read, which is why it is not derived from the release name.
+*/}}
+{{- define "temporal.secret.db.name" -}}
+{{- .Values.postgres.config.credentialsSecretName }}
+{{- end }}
+
+{{/*
+Credentials secret of the ACTIVE database.
+HA path: still created by postgres-highly-available 2.4.2 (pg-ha.secretDatabase.name).
+Single-instance path: created by this chart, named by postgres.config.credentialsSecretName.
+Both hold the same three keys — username, password, database; Temporal reads only the
+first two (its two store names are set on the workload, not taken from the secret).
 */}}
 {{- define "temporal.postgres.secret.name" -}}
 {{- if .Values.postgresHA.enabled -}}
 {{- printf "%s-postgres-config" .Release.Name }}
 {{- else -}}
-{{- printf "%s-pg-config" .Release.Name }}
+{{- include "temporal.secret.db.name" . }}
 {{- end }}
 {{- end }}
 

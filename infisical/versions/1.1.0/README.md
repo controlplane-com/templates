@@ -81,13 +81,19 @@ internalAccess:
 ```yaml
 postgres:
   image: postgres:18
-  config:
+  credentials:                 # this template builds the DB credential secret from these
     username: infisical
     password: change-me-infisical-pg   # change before installing
     database: infisical
+  config:
+    # name of the dictionary secret this template CREATES and Postgres reads;
+    # secret names are org-wide, so give each infisical release its own name
+    credentialsSecretName: my-infisical-db-credentials
   volumeset:
     capacity: 10               # GiB (minimum 10)
 ```
+
+The database password is **not** a prerequisite — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*`.
 
 ### Redis
 
@@ -113,12 +119,17 @@ redis:
 
 The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`cpln workload get {release}-infisical -o yaml`).
 
+## Upgrading from 1.0.0
+
+The bundled database credentials moved from `postgres.config.username/password/database` to `postgres.credentials.username/password/database`, and `postgres.config.credentialsSecretName` names the secret this template now creates from them. If you carry the old keys the install fails with `config.username was REMOVED in postgres 3.4.0` — move the three keys and you are done. **Ignore that message's advice to create a secret yourself; this template creates it**, and the database password stays a value exactly as before.
+
 ## Important Notes
 
 - **The prerequisite secret must exist before install** — `secrets.name` is a dictionary secret with `ENCRYPTION_KEY` and `AUTH_SECRET`. A missing secret wedges the deployment.
 - **`ENCRYPTION_KEY` and `AUTH_SECRET` are write-once — never rotate them.** `ENCRYPTION_KEY` encrypts every stored secret; `AUTH_SECRET` signs all sessions.
 - **The first account to sign up becomes super-admin.** There are no admin env vars — create your admin account immediately after install, then disable open sign-ups in the admin panel.
 - **Redis is required, not optional** — Infisical will not boot without it; the template hard-wires the Sentinel dependency (authless behind the same-GVC firewall by default).
+- **Give each infisical release its own `postgres.config.credentialsSecretName`.** Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
 - **Stored secrets live in Postgres and survive an app restart/reinstall** — to wipe all data you must also reinstall the Postgres dependency (its volumeset).
 - **Set `smtp.requireTls: false` for a plaintext mail catcher** (e.g. Mailpit); real providers on port 587 need it left `true`.
 - **First boot takes ~2–5 minutes** — the app waits for Postgres to finish initializing and runs its migrations, logging transient `ECONNRESET` / "Boot up migration failed" retries in the meantime. This is normal; it becomes `ready` once migrations complete.

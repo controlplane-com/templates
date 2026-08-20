@@ -31,7 +31,7 @@ spec:
         - name: POSTGRES_PASSWORD
           value: cpln://secret/{{ include "infisical.db.secret.name" . }}.postgresPassword
         - name: DB_CONNECTION_URI
-          value: postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@{{ include "infisical.postgres.host" . }}:5432/{{ .Values.postgres.config.database }}
+          value: postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@{{ include "infisical.postgres.host" . }}:5432/{{ .Values.postgres.credentials.database }}
         # ── Redis (redis subchart, Sentinel-aware) — cache + BullMQ job queues ──
         - name: REDIS_SENTINEL_HOSTS
           value: {{ include "infisical.redis.sentinelHosts" . | quote }}

@@ -22,7 +22,7 @@ spec:
         - name: POSTGRES_PASSWORD
           value: cpln://secret/{{ include "langfuse.secret.name" . }}.postgresPassword
         - name: DATABASE_URL
-          value: postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@{{ printf "%s-postgres" .Release.Name }}.{{ .Values.global.cpln.gvc }}.cpln.local:5432/{{ .Values.postgres.config.database }}
+          value: postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@{{ printf "%s-postgres" .Release.Name }}.{{ .Values.global.cpln.gvc }}.cpln.local:5432/{{ .Values.postgres.credentials.database }}
         # ClickHouse
         - name: CLICKHOUSE_PASSWORD
           value: cpln://secret/{{ include "langfuse.secret.name" . }}.clickhousePassword

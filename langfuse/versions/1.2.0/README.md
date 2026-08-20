@@ -10,6 +10,7 @@ Langfuse is an open-source LLM observability and evaluation platform — traces,
 - **Redis** (`stateful`) — BullMQ ingestion queue and API key/prompt cache, on a persistent volumeset.
 - **ClickHouse** (`stateful`) — all traces, observations and scores; powers the dashboards. Its data parts live in the object store; the volumeset holds local metadata only.
 - **Object storage** — AWS S3 or GCS, one bucket shared by ClickHouse (`clickhouse/`) and Langfuse (`events/`, `media/`).
+- **Database credentials secret** — a *separate* template-created dictionary secret (`username` / `password` / `database`), built from `postgres.credentials.*` and handed to the bundled PostgreSQL by name. Kept apart from the datastore-credentials secret above so the PostgreSQL identity is never granted the Redis or ClickHouse password. Nothing for you to create.
 - **Identity + policy** — grants the workloads `reveal` on exactly the secrets they mount: the bundled datastore credentials, the ClickHouse config, your auth secret, and (on GCS) your credentials secret.
 
 ## Prerequisites
@@ -36,6 +37,10 @@ cpln secret create-dictionary --name my-langfuse-auth \
 | `adminPassword` | Its password — 8 characters minimum. Record it; it is not shown anywhere. |
 
 Set `langfuse.auth.secretName` to the name you used.
+
+The datastore passwords are **not** prerequisites — they are bundled plumbing no human types
+elsewhere, so this template creates those secrets for you from `postgres.credentials.*`,
+`redis.auth.password` and `clickhouse.config.password`.
 
 ### 2. Object storage
 
@@ -173,10 +178,14 @@ postgres:
     maxCpu: 1
     minMemory: 512Mi
     maxMemory: 1Gi
-  config:
+  credentials:        # this template builds the DB credential secret from these
     username: langfuse
     password: change-me-langfuse-db
     database: langfuse
+  config:
+    # name of the dictionary secret this template CREATES and PostgreSQL reads;
+    # secret names are org-wide, so a second release on this name is refused at install
+    credentialsSecretName: my-langfuse-db-credentials
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)
 
@@ -214,7 +223,7 @@ clickhouse:
 | Internal HTTP | `RELEASE_NAME-langfuse-web.GVC_NAME.cpln.local:3000` |
 | First login | `adminEmail` / `adminPassword` from your auth secret |
 | Langfuse API keys | Created in the UI under **Settings → API Keys** per project |
-| ClickHouse / Redis / Postgres | Internal only; credentials come from `clickhouse.config`, `redis.auth` and `postgres.config` |
+| ClickHouse / Redis / Postgres | Internal only; credentials come from `clickhouse.config`, `redis.auth` and `postgres.credentials`. PostgreSQL itself reads the `username` / `password` / `database` keys of the secret named by `postgres.config.credentialsSecretName` |
 
 Send traces with the public API once you have a project key pair:
 
@@ -227,6 +236,22 @@ curl -X POST https://YOUR_LANGFUSE_ENDPOINT/api/public/traces \
 
 Or use a [Langfuse SDK](https://langfuse.com/docs/sdk/overview).
 
+## Upgrading from 1.1.0
+
+The bundled PostgreSQL moved to the `postgres` 3.4.1 template, which no longer takes database
+credentials as values. Langfuse absorbed that change rather than passing it on, so **there is
+no new prerequisite** — only a rename:
+
+| Removed key | Replacement |
+|---|---|
+| `postgres.config.username` | `postgres.credentials.username` |
+| `postgres.config.password` | `postgres.credentials.password` |
+| `postgres.config.database` | `postgres.credentials.database` |
+
+Carrying an old key fails the render with the **Postgres template's** message, which tells you
+to create a dictionary secret yourself. Ignore that advice here — this template creates it.
+Move the three keys and you are done. The auth, Redis and ClickHouse paths are unchanged.
+
 ## Important Notes
 
 - Create the auth secret **before** installing — a missing one leaves the web and worker workloads waiting on a secret that does not exist.
@@ -235,6 +260,7 @@ Or use a [Langfuse SDK](https://langfuse.com/docs/sdk/overview).
 - Back up PostgreSQL: it holds users, projects, API keys, prompts and datasets. Enable snapshots on its volumeset. ClickHouse data already lives in your bucket, and Redis holds only the transient queue.
 - Serving Langfuse on your own domain requires `langfuse.publicUrl` (include the scheme). Auth redirects and the session cookie's Secure flag are derived from it; left empty, the auto-assigned platform endpoint is used.
 - Changing `publicAccess` or `internalAccess` takes up to a couple of minutes to propagate — re-test before concluding the knob did not work.
+- Give each Langfuse release its own `postgres.config.credentialsSecretName`. Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared, overwritten or deleted, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
 - The first `helm upgrade` after an install re-applies the bundled PostgreSQL, which briefly interrupts the app while it restarts.
 
 ## Links

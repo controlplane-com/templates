@@ -86,10 +86,18 @@ postgres:
     maxCpu: 1
     minMemory: 512Mi
     maxMemory: 1Gi
-  config:
+  # Langfuse CREATES the dictionary secret named by config.credentialsSecretName
+  # below out of these three values, so there is nothing to create before install.
+  credentials:
     username: langfuse
     password: change-me-langfuse-db
     database: langfuse
+  config:
+    # Name of the dictionary secret this chart creates and the bundled postgres reads.
+    # Secret names are org-wide: give each langfuse release its own name. A second
+    # release left on this name is REFUSED at install (it is owned by the first
+    # release) — nothing is shared, overwritten or deleted.
+    credentialsSecretName: my-langfuse-db-credentials
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)
 

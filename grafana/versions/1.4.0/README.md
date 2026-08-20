@@ -33,7 +33,7 @@ Other prerequisites, only if you use the matching feature:
 - For authenticated SMTP: an **opaque** secret (encoding `plain`) holding the SMTP password, created **before install**.
 - For optional database backups: a bucket and access setup on AWS S3, Google Cloud Storage, or a MinIO/S3-compatible server (see [Backup storage setup](#backup-storage-setup)). With `provider: minio` on the single-instance store, the endpoint's keys are a prerequisite `dictionary` secret — see that section.
 
-**The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgresHA.postgres.*` (HA mode) or `postgres.credentials.*` (single-instance mode).
+**The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*`, and feeds it to whichever store is enabled.
 
 ## Configuration
 

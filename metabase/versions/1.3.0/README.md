@@ -203,7 +203,7 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
 
 - **Create both prerequisite secrets before installing.** A missing one leaves the workload waiting on something that does not exist, with zero log lines — see Prerequisites for how to diagnose it.
 - **Back up the encryption-key secret** — losing or changing it means re-entering every saved database connection; rotation is only possible offline via Metabase's `rotate-encryption-key` command.
-- **Change the database password (`postgresHA.postgres.password` / `postgres.credentials.password`) before installing** — it is bundled plumbing, used exactly as given.
+- **Change the database password (`postgres.credentials.password`) before installing** — it is bundled plumbing, used exactly as given, and it feeds whichever store is enabled.
 - **Give each metabase release its own `postgres.config.credentialsSecretName`.** Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
 - **A too-weak admin password keeps the workload unready by design** — Metabase's server-side check requires letters and digits, 8+ characters, and a failed bootstrap is fail-closed rather than exposing an open setup page.
 - **Metabase is single-replica in this template** — the default HA Postgres backend removes the database as a failure point; upgrades restart the replica (brief UI downtime, no data loss).

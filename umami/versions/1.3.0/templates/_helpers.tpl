@@ -40,11 +40,7 @@ Names must match the dependency charts' own helpers (pg-ha.proxy.name / postgres
 Database name for the active backing store
 */}}
 {{- define "umami.db.database" -}}
-{{- if .Values.postgresHA.enabled -}}
-{{- .Values.postgresHA.postgres.database }}
-{{- else -}}
 {{- .Values.postgres.credentials.database }}
-{{- end }}
 {{- end }}
 
 {{/*
@@ -60,13 +56,15 @@ is why it is not derived from the release name.
 
 {{/*
 Credentials secret of the ACTIVE backing store.
-HA path: still created by postgres-highly-available 2.4.2 (pg-ha.secretDatabase.name).
-Default path: created by this chart, named by postgres.config.credentialsSecretName.
-Both hold the same three keys — username, password, database.
+THIS CHART creates it in both paths. postgres 3.4.0 and
+postgres-highly-available 2.5.0 both stopped creating a credentials secret and
+now take only its NAME, so the two stores are fed the same secret, built from
+postgres.credentials.* — which stay values because a bundled database serving
+only Umami is internal plumbing no human types elsewhere.
 */}}
 {{- define "umami.db.secretName" -}}
 {{- if .Values.postgresHA.enabled -}}
-{{- printf "%s-postgres-config" .Release.Name }}
+{{- .Values.postgresHA.config.credentialsSecretName }}
 {{- else -}}
 {{- include "umami.secret.db.name" . }}
 {{- end }}

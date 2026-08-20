@@ -148,7 +148,7 @@ The bootstrap admin credentials moved out of `values.yaml` into the prerequisite
 ## Important Notes
 
 - **Create the admin secret before installing.** A missing prerequisite secret leaves the workload waiting on something that does not exist, with zero log lines — see Prerequisites for how to diagnose it.
-- **Change the database password (`postgresHA.postgres.password` / `postgres.credentials.password`) before installing** — it is bundled plumbing, used exactly as given.
+- **Change the database password (`postgres.credentials.password`) before installing** — it is bundled plumbing, used exactly as given, and it feeds whichever store is enabled.
 - **Give each keycloak release its own `postgres.config.credentialsSecretName`.** Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
 - **The bootstrap admin is temporary by design** — log in, create a permanent admin, then remove the bootstrap one (Keycloak warns until you do).
 - **Keep `publicAccess` enabled for browser SSO** — end-user browsers must reach Keycloak's login endpoints; disable it only for pure service-to-service deployments.

@@ -47,11 +47,7 @@ Names must match the dependency charts' own helpers (pg-ha.proxy.name / postgres
 Database name for the active backing store
 */}}
 {{- define "listmonk.db.database" -}}
-{{- if .Values.postgresHA.enabled -}}
-{{- .Values.postgresHA.postgres.database }}
-{{- else -}}
 {{- .Values.postgres.credentials.database }}
-{{- end }}
 {{- end }}
 
 {{/*
@@ -73,7 +69,7 @@ Both hold the same three keys — username, password, database.
 */}}
 {{- define "listmonk.db.secretName" -}}
 {{- if .Values.postgresHA.enabled -}}
-{{- printf "%s-postgres-config" .Release.Name }}
+{{- .Values.postgresHA.config.credentialsSecretName }}
 {{- else -}}
 {{- include "listmonk.secret.db.name" . }}
 {{- end }}

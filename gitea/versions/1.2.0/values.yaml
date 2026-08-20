@@ -1,0 +1,79 @@
+# ─── Image ────────────────────────────────────────────────────────
+image: gitea/gitea:1.27.1-rootless  # rootless variant: runs as UID 1000, built-in SSH server on 2222
+
+# ─── Resources ────────────────────────────────────────────────────
+resources:
+  minCpu: 250m
+  minMemory: 512Mi
+  maxCpu: 1000m
+  maxMemory: 1024Mi
+
+# ─── Storage (repos, LFS, attachments, SSH host keys) ─────────────
+volumeset:
+  capacity: 20 # initial capacity in GiB (minimum is 10)
+  autoscaling:
+    enabled: false # set to true to enable volume autoscaling
+    maxCapacity: 200 # maximum capacity in GiB when autoscaling is enabled
+    minFreePercentage: 10 # minimum free percentage that triggers scaling
+    scalingFactor: 1.2 # how much to grow the volume when scaling is triggered
+
+# ─── Gitea ────────────────────────────────────────────────────────
+gitea:
+  auth:
+    # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. If it does
+    # not exist the deployment WEDGES silently and looks like a platform fault.
+    # A `dictionary` secret holding exactly six keys:
+    #   adminUsername   — first site-admin login
+    #   adminPassword   — its password; this login sits on the public endpoint
+    #   adminEmail      — its email address
+    #   secretKey       — encrypts 2FA secrets, tokens and mirror credentials;
+    #                     CANNOT be rotated without making all of them unreadable
+    #   internalToken   — Gitea's internal API shared token
+    #   jwtSecret       — signs OAuth2 tokens; must be base64url of exactly 32 bytes
+    # See README Prerequisites for the exact command.
+    secretName: my-gitea-auth
+  disableRegistration: true  # true = admin-invite only; false = allow open self-registration
+
+# ─── Access ───────────────────────────────────────────────────────
+publicAccess:
+  enabled: true  # HTTPS web UI + Git-over-HTTPS on the auto *.cpln.app endpoint
+
+# ─── Git-over-SSH (optional, OFF by default) ──────────────────────
+# NOTE: enabling public SSH repoints the single *.cpln.app endpoint to a raw-TCP
+# load balancer on port 22, which takes over the public HTTPS web UI (they cannot
+# share one canonical endpoint). Leave this off to keep the public web UI +
+# Git-over-HTTPS; enable it only if you serve the web UI via a custom domain, or
+# you only need Git-over-SSH. Git-over-HTTPS works fully regardless.
+ssh:
+  enabled: false     # false = Git-over-HTTPS only (public web UI stays up); true = public SSH takes the endpoint
+  externalPort: 22   # public port clients connect to (also advertised in SSH clone URLs)
+  domain: ""         # advertised SSH host in clone URLs; empty = use the web domain
+
+internalAccess: # internal firewall scope
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads:  # only used when type is same-gvc or workload-list
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Backing database (postgres subchart) ─────────────────────────
+# Bundled plumbing: it serves Gitea only and is unreachable from outside the
+# GVC — but the password is used AS-IS, so change it before installing.
+postgres:
+  image: postgres:18
+  config:
+    username: gitea
+    password: change-me-gitea-db
+    database: gitea
+  resources:
+    minCpu: 200m
+    minMemory: 256Mi
+    maxCpu: 500m
+    maxMemory: 512Mi
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+    autoscaling:
+      enabled: false
+      maxCapacity: 100
+      minFreePercentage: 10
+      scalingFactor: 1.2
+  internalAccess:
+    type: same-gvc

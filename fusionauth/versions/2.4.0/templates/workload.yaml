@@ -16,7 +16,7 @@ spec:
         - name: DATABASE_PASSWORD
           value: 'cpln://secret/{{ include "fusionauth.secretPostgres.name" . }}.password'
         - name: DATABASE_URL
-          value: jdbc:postgresql://{{ include "fusionauth.postgres.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:5432/{{ .Values.postgres.config.database }}
+          value: jdbc:postgresql://{{ include "fusionauth.postgres.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:5432/{{ .Values.postgres.credentials.database }}
         - name: DATABASE_USERNAME
           value: 'cpln://secret/{{ include "fusionauth.secretPostgres.name" . }}.username'
         - name: fusionauth-app.runtime-mode

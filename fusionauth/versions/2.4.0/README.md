@@ -6,6 +6,10 @@ FusionAuth is a modern, self-hosted identity and access management platform that
 ### Getting Started
 1. **Automatic Database Setup**: A PostgreSQL database is automatically created and connected to FusionAuth. No manual database configuration required.
 
+    - Set the credentials under `postgres.credentials` (`username`, `password`, `database`). They are used **exactly as given**, so change the password before installing.
+    - This template builds a `dictionary` secret from those three values and hands the bundled Postgres its **name** — you create nothing yourself. The name comes from `postgres.config.credentialsSecretName` (default `my-fusionauth-db-credentials`).
+    - Secret names are org-wide, so **give each fusionauth release its own name**. A second release left on the default name is *refused at install* (`cannot be updated because it is being managed by a different release`) and creates nothing — nothing is shared, overwritten or deleted, and the first release is unaffected.
+
 2. **Firewall Configuration**: By default, inbound traffic is open to all (`0.0.0.0/0`). If FusionAuth needs to communicate with external Identity Providers (e.g. Google OAuth), set `firewall.external.outboundAllowCIDR` to `0.0.0.0/0` or the specific CIDRs required by your IdP.
 
     - Use the FusionAuth admin panel to configure your IdP after deployment.
@@ -13,6 +17,22 @@ FusionAuth is a modern, self-hosted identity and access management platform that
 3. **Setup and Integration**: Follow the setup wizard in the FusionAuth admin panel to create your app.
     - Configure your application with the corresponding `origin`, `redirect`, and `logout` URLs to your code
     - Be sure to configure your app's tenant to use the proper issuer for issuing tokens (e.g. `my-fusionauth-app.io`)
+
+## Upgrading from 2.3.x
+
+The bundled Postgres moved to the `postgres` 3.4.1 template, which no longer takes
+database credentials as values. FusionAuth absorbed that change rather than passing it
+on, so **there is no new prerequisite** — only a rename:
+
+| Removed key | Replacement |
+|---|---|
+| `postgres.config.username` | `postgres.credentials.username` |
+| `postgres.config.password` | `postgres.credentials.password` |
+| `postgres.config.database` | `postgres.credentials.database` |
+
+Carrying an old key forward fails the render with the **Postgres template's** message,
+which tells you to create a dictionary secret yourself. Ignore that advice here — this
+template creates it. Move the three keys and you are done.
 
 ## Backing Up Postgres
 

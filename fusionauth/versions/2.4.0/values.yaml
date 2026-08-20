@@ -18,10 +18,20 @@ firewall:
 # Database configuration
 postgres:
   image: postgres:18
-  config:
+  # Credentials for the bundled database — internal plumbing no human types elsewhere.
+  # FusionAuth CREATES the dictionary secret named by config.credentialsSecretName
+  # below out of these three values, so there is nothing for you to create before
+  # installing.
+  credentials:
     username: username
     password: password
     database: test
+  config:
+    # Name of the dictionary secret this chart creates and the bundled postgres reads.
+    # Secret names are org-wide: give each fusionauth release its own name. A second
+    # release left on this name is REFUSED at install (it is owned by the first
+    # release) — nothing is shared, overwritten or deleted.
+    credentialsSecretName: my-fusionauth-db-credentials
   resources:
     minCpu: 200m
     minMemory: 128Mi

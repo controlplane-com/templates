@@ -144,10 +144,20 @@ postgresHA:
 postgres:
   enabled: false
   image: pgvector/pgvector:pg18
-  config:
+  # Credentials for the bundled database — internal plumbing no human types
+  # elsewhere. Chatwoot CREATES the dictionary secret named by
+  # config.credentialsSecretName below out of these three values, so there is
+  # nothing for you to create before installing.
+  credentials:
     username: chatwoot
-    password: change-me-chatwoot-pg   # template-managed cred for the bundled DB — change before install
+    password: change-me-chatwoot-pg   # change before install
     database: chatwoot
+  config:
+    # Name of the dictionary secret this chart creates and the bundled postgres
+    # reads. Secret names are org-wide: give each chatwoot release its own name.
+    # A second release left on this name is REFUSED at install (it is owned by
+    # the first release) — nothing is shared, overwritten or deleted.
+    credentialsSecretName: my-chatwoot-db-credentials
   resources:
     minCpu: 250m
     maxCpu: 1000m
@@ -173,8 +183,9 @@ postgres:
     minio:
       endpoint: http://my-minio-workload:9000
       bucket: my-chatwoot-pg-backup-bucket
-      accessKey: my-minio-username
-      secretKey: my-minio-password
+      # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
+      # only when this backup is enabled with provider: minio. See README storage setup.
+      credentialsSecretName: my-chatwoot-minio-credentials
       prefix: postgres/backups
 
 # ─── Redis (bundled, single node) ─────────────────────────────────

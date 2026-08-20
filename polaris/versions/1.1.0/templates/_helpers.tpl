@@ -71,15 +71,28 @@ parent duplicates the derived name (temporal pattern).
 {{- end }}
 
 {{/*
-Credentials secret of the active metastore, created by the dependency chart
-(postgres.secretConfig.name / pg-ha.secretDatabase.name). Both hold
-{username, password}.
+Name of the bundled metastore's credential secret in the SINGLE-INSTANCE path.
+This chart CREATES that secret (secret-db.yaml) and the postgres subchart only
+receives its NAME — since postgres 3.4.0 the subchart creates no secret of its
+own. A subchart value cannot be templated by its parent, so the name is a plain
+value that both sides read, which is why it is not derived from the release name.
+*/}}
+{{- define "polaris.secret.db.name" -}}
+{{- .Values.postgres.config.credentialsSecretName }}
+{{- end }}
+
+{{/*
+Credentials secret of the ACTIVE metastore.
+HA path: still created by postgres-highly-available 2.4.2 (pg-ha.secretDatabase.name)
+— unchanged, that chart has not adopted the prerequisite-secret convention.
+Single-instance path: created by this chart, named by postgres.config.credentialsSecretName.
+Both hold the same three keys — username, password, database.
 */}}
 {{- define "polaris.postgres.secret.name" -}}
 {{- if .Values.postgresHA.enabled -}}
 {{- printf "%s-postgres-config" .Release.Name }}
 {{- else -}}
-{{- printf "%s-pg-config" .Release.Name }}
+{{- include "polaris.secret.db.name" . }}
 {{- end }}
 {{- end }}
 
@@ -88,7 +101,7 @@ Credentials secret of the active metastore, created by the dependency chart
 {{- if .Values.postgresHA.enabled -}}
 {{- .Values.postgresHA.postgres.database }}
 {{- else -}}
-{{- .Values.postgres.config.database }}
+{{- .Values.postgres.credentials.database }}
 {{- end }}
 {{- end }}
 

@@ -10,6 +10,7 @@ This app deploys [Apache Polaris](https://polaris.apache.org/) — an Apache Ice
 - **Two identities and two policies**: Least privilege — only the bootstrap principal can reveal the root credentials; only the server principal can reveal the token signing key and the object-storage credentials.
 - **PostgreSQL (single-instance, default)**: The `postgres` template — every catalog, namespace, table pointer, principal and grant lives here.
 - **PostgreSQL (HA, optional)**: The `postgres-highly-available` template instead — 3 Patroni replicas, 3 etcd replicas, and an HAProxy leader endpoint.
+- **Metastore credentials secret**: A `dictionary` secret holding the bundled single-instance metastore's `username`, `password` and `database`, built by this template from `postgres.credentials.*` and handed to the Postgres subchart by name. Nothing for you to create. (Not rendered on the HA path — `postgres-highly-available` still makes its own.)
 - **No volumeset**: The Polaris server writes nothing to local disk that must survive a restart.
 
 ## Prerequisites
@@ -30,7 +31,9 @@ printf '%s' "$(openssl rand -hex 32)" | \
 Optional:
 
 - **Object storage credentials** for the bucket that holds your Iceberg data — see **Iceberg bucket setup** below.
-- **Cloud account + bucket** only if you enable the Postgres backup pass-through (see **Storage setup**).
+- **Cloud account + bucket** only if you enable the Postgres backup pass-through (see **Storage setup**). With `postgres.backup.provider: minio` (single-instance mode) the endpoint's keys are a prerequisite dictionary secret instead — see that section.
+
+**The metastore password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*` (single-instance mode) or `postgresHA.postgres.*` (HA mode).
 
 ## Iceberg bucket setup
 
@@ -142,10 +145,14 @@ Exactly one of the two stores must be enabled (the chart enforces this at render
 ```yaml
 postgres: # default: single-instance PostgreSQL
   enabled: true
-  config:
+  credentials: # this template builds the metastore credential secret from these
     username: polaris
     password: change-me-polaris-db # change before installing
     database: polaris
+  config:
+    # name of the dictionary secret this template CREATES and Postgres reads;
+    # secret names are org-wide; a second release on this name is refused at install
+    credentialsSecretName: my-polaris-db-credentials
   resources:
     minCpu: 200m
     maxCpu: 500m
@@ -296,7 +303,13 @@ Then set `provider: aws` and `aws.{bucket,region,cloudAccountName,policyName}`.
 
 **GCP Cloud Storage** — create the bucket and a cloud account, grant its service account **Storage Object Admin** (`roles/storage.objectAdmin`) on the bucket, then set `provider: gcp` and `gcp.{bucket,cloudAccountName}`.
 
-**MinIO / S3-compatible** — set `provider: minio` and `minio.{endpoint,bucket,accessKey,secretKey}` (no cloud account needed; the keys authenticate directly).
+**MinIO / S3-compatible** — set `provider: minio` and `minio.{endpoint,bucket}` (no cloud account needed; the keys authenticate directly). For `postgresHA.backup` the keys are inline values (`minio.accessKey` / `minio.secretKey`); for `postgres.backup` (single-instance) they are a prerequisite dictionary secret named by `postgres.backup.minio.credentialsSecretName`:
+
+```bash
+cpln secret create-dictionary --name my-polaris-minio-credentials \
+  --entry accessKey=YOUR_ACCESS_KEY \
+  --entry secretKey=YOUR_SECRET_KEY
+```
 
 ## Important Notes
 
@@ -306,7 +319,9 @@ Then set `provider: aws` and `aws.{bucket,region,cloudAccountName,policyName}`.
 - **Root credentials are write-once.** They are applied when the realm is first bootstrapped; changing them afterwards has no effect. Rotate by creating a new principal through the management API.
 - **Rotating `tokenSigningKey` invalidates every outstanding token** — clients must obtain a new one.
 - **`realm` is permanent.** Renaming it bootstraps a new, empty realm and hides the existing catalogs; changing it back makes them visible again.
-- **Change `postgres.config.password` (or `postgresHA.postgres.password`) before installing** — the default is a placeholder.
+- **Change `postgres.credentials.password` (or `postgresHA.postgres.password`) before installing** — the default is a placeholder.
+- **Upgrading from 1.0.x**: the single-instance metastore credentials moved from `postgres.config.username/password/database` to `postgres.credentials.username/password/database`, named by the new `postgres.config.credentialsSecretName`. Carrying the old keys fails the render with `config.username was REMOVED in postgres 3.4.0` — move the three keys and you are done. **Ignore that message's advice to create a secret yourself; this template creates it**, and the metastore password stays a value. `postgres.backup.minio.accessKey`/`secretKey` were removed the same way (see Storage setup). The HA path (`postgresHA.*`) and the `rootCredentials` / `tokenSigningKey` prerequisite secrets are all unchanged.
+- **Give each polaris release its own `postgres.config.credentialsSecretName`** (single-instance mode only). Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
 - **Database volumes survive restarts, redeploys and upgrades; uninstalling deletes them** — every catalog definition is lost with them. Use `postgresHA` and/or the backup pass-through for production.
 - **No credential vending in this version.** Polaris and each engine hold their own static object-storage credentials; keep `iceberg.rest-catalog.vended-credentials-enabled=false` in Trino.
 - **Polaris does not migrate its own database schema** — treat a future Polaris version bump as an explicit schema step, not something boot handles.

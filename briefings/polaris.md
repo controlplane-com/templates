@@ -18,7 +18,8 @@
 | `{release}-polaris-bootstrap` (standard, always 1) | Runs `apache/polaris-admin-tool:1.7.0` until it succeeds, then `sleep infinity`. Creates the realm schema + root principal |
 | secret `{release}-polaris-bootstrap-script` (opaque, plain) | The bootstrap shell script; interpolates the root credentials at runtime so they never enter a workload spec |
 | 2 × identity + 2 × policy | Split principals: **only** bootstrap can reveal the root credentials; **only** the server can reveal the signing key and object-storage credentials |
-| `postgres` 3.3.0 subchart (default) **or** `postgres-highly-available` 2.4.1 (`alias: postgresHA`) | The metastore — every catalog, namespace, table pointer, principal and grant |
+| `postgres` 3.4.1 subchart (default) **or** `postgres-highly-available` 2.4.2 (`alias: postgresHA`) | The metastore — every catalog, namespace, table pointer, principal and grant |
+| `postgres.config.credentialsSecretName` secret (dictionary, **chart-created**) | Bundled single-instance metastore `username`/`password`/`database`. Created by THIS chart since 1.1.0 (postgres 3.4.x stopped creating it); HA mode still uses pg-ha's own `{release}-postgres-config` |
 
 - A default render is **13 resources**, with exactly one database subchart. No GVC, no volumeset of its own.
 - Internal endpoint: `http://{release}-polaris.{gvc}.cpln.local:8181`. Probes hit `/q/health/ready` and `/q/health/live` on 8182; `capacityAI: false` (the JVM sizes heap from the cgroup limit at start); `timeoutSeconds: 60` because table commits and large namespace listings run past the 5 s default.
@@ -43,7 +44,8 @@ Both are render-validated as required, and the placeholder defaults keep the bar
 | `publicAccess.enabled` | `false` | publishes the REST + management API on the automatic `*.cpln.app` endpoint |
 | `internalAccess.type` / `.workloads` | `same-gvc` / `[]` | `none` \| `same-gvc` \| `same-org` \| `workload-list` |
 | `postgres.enabled` / `postgresHA.enabled` | **`true` / `false`** | exactly one, enforced at render; HA is one flag away |
-| `postgres.config.password` / `postgresHA.postgres.password` | `change-me-polaris-db` | placeholder — change before installing |
+| `postgres.credentials.{username,password,database}` / `postgresHA.postgres.*` | `polaris` / `change-me-polaris-db` / `polaris` | placeholder password — change before installing. Still plain VALUES; the chart builds the secret from them (1.1.0; was `postgres.config.*`) |
+| `postgres.config.credentialsSecretName` | `my-polaris-db-credentials` | name of that chart-created secret; **org-wide**, so give each release its own |
 | `postgres.volumeset.capacity`, `.backup.*`, `postgresHA.replicas`, `.backup.*` | 10 GiB, backups off | straight pass-through to the database subchart |
 
 ## Availability posture
@@ -65,3 +67,11 @@ Both are render-validated as required, and the placeholder defaults keep the bar
 - **Polaris does not migrate its own database schema** — treat a future Polaris version bump as an explicit schema step, not something boot handles.
 - **Uninstall deletes the metastore volume and every catalog definition with it** (Iceberg data files in the bucket survive, but nothing knows about them). The chart's own uninstall removes all subchart resources cleanly — the janitor found nothing to do.
 - Credential hygiene verified against the **live** workload JSON: zero occurrences of the client secret, signing key or database password in any spec — only `cpln://secret/...` references, and the two reveal policies target exactly the secrets each principal needs.
+
+## postgres 3.4.1 adoption (1.1.0)
+- **The bundled metastore credential secret is chart-created, not a prerequisite.** The single-instance path moved `postgres.config.{username,password,database}` → `postgres.credentials.{...}`; this chart renders `templates/secret-db.yaml` from those values and passes only the NAME down as `postgres.config.credentialsSecretName`. Users gained **no** new prerequisite — the metastore password is still a value, unlike `rootCredentials.secretName` and `tokenSigningKey.secretName`, which stay prerequisites and were untouched.
+- **`polaris.postgres.database` is a SECOND consumer beyond the secret-name helper.** The JDBC URL (`QUARKUS_DATASOURCE_JDBC_URL`, used identically by the server and the bootstrap admin tool) interpolates the database NAME at render time, where a `cpln://secret` reference cannot resolve — so that helper reads `postgres.credentials.database` (was `postgres.config.database`). Username and password still come from the secret. Anyone renaming these knobs again must move this read too.
+- **The HA branch of `polaris.postgres.secret.name` was deliberately left alone**: pg-ha 2.4.2 has not adopted the convention and still creates `{release}-postgres-config`. Both policies (server and bootstrap) target the helper, so they picked up the new name with no edit.
+- **Secret names are org-wide and cannot be templated.** Helm resolves subchart values before rendering and postgres does not `tpl` the name, so it cannot contain `.Release.Name`. A second polaris release left on the default `my-polaris-db-credentials` is **refused at install** ("cannot be updated because it is being managed by a different release") and creates nothing — not silent data loss.
+- **An upgrader carrying the 1.0.x keys gets postgres's own error**, not a polaris one: Helm renders `charts/` before `templates/`, so the subchart's `config.username was REMOVED in postgres 3.4.0` always wins. 3.4.1 appends a clause telling bundled users not to create a secret. A parent-side guard would be dead code — do not add one.
+- **`postgres.backup.minio.accessKey`/`secretKey` were removed too** (postgres 3.4.0) — that path now needs a prerequisite dictionary secret named by `postgres.backup.minio.credentialsSecretName`. `postgresHA.backup.minio` still takes the keys inline.

@@ -83,10 +83,20 @@ internalAccess: # who may reach Polaris from inside Control Plane
 # table pointer and grant lives here.
 postgres:
   enabled: true
-  config:
+  # Credentials for the bundled metastore — internal plumbing no human types
+  # elsewhere. Polaris CREATES the dictionary secret named by
+  # config.credentialsSecretName below out of these three values, so there is
+  # nothing for you to create before installing.
+  credentials:
     username: polaris
     password: change-me-polaris-db # change before installing
     database: polaris
+  config:
+    # Name of the dictionary secret this chart creates and the bundled postgres
+    # reads. Secret names are org-wide: give each polaris release its own name.
+    # A second release left on this name is REFUSED at install (it is owned by
+    # the first release) — nothing is shared, overwritten or deleted.
+    credentialsSecretName: my-polaris-db-credentials
   resources:
     minCpu: 200m
     maxCpu: 500m
@@ -116,8 +126,9 @@ postgres:
     minio:
       endpoint: http://my-minio-workload:9000
       bucket: my-polaris-backup-bucket
-      accessKey: my-minio-username
-      secretKey: my-minio-password
+      # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
+      # only when this backup is enabled with provider: minio. See README storage setup.
+      credentialsSecretName: my-polaris-minio-credentials
       prefix: postgres/backups
 
 # ─── Metastore: Highly Available PostgreSQL ───────────────────────

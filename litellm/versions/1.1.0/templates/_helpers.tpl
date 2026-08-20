@@ -12,6 +12,19 @@
 {{- printf "%s-litellm-db" .Release.Name }}
 {{- end }}
 
+{{/*
+Name of the bundled database's credential secret that the postgres SUBCHART
+reads. This chart CREATES that secret (secret-db-credentials.yaml) and the
+subchart only receives its NAME — since postgres 3.4.0 the subchart creates no
+secret of its own. A subchart value cannot be templated by its parent, so the
+name is a plain value that both sides read, which is why it is not derived from
+the release name. Distinct from litellm.db.secret.name, which is the app's own
+secret.
+*/}}
+{{- define "litellm.pgCredentials.secret.name" -}}
+{{- .Values.postgres.config.credentialsSecretName }}
+{{- end }}
+
 {{- define "litellm.identity.name" -}}
 {{- printf "%s-litellm-identity" .Release.Name }}
 {{- end }}

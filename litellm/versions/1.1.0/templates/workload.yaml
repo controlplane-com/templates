@@ -34,7 +34,7 @@ spec:
         - name: POSTGRES_PASSWORD
           value: cpln://secret/{{ include "litellm.db.secret.name" . }}.postgresPassword
         - name: DATABASE_URL
-          value: postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@{{ include "litellm.postgres.host" . }}:5432/{{ .Values.postgres.config.database }}
+          value: postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@{{ include "litellm.postgres.host" . }}:5432/{{ .Values.postgres.credentials.database }}
         - name: STORE_MODEL_IN_DB
           value: {{ ternary "\"True\"" "\"False\"" .Values.litellm.storeModelInDb }}
         {{- if eq (include "litellm.redisAuthEnabled" .) "true" }}

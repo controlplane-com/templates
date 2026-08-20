@@ -72,13 +72,19 @@ internalAccess:
 ```yaml
 postgres:
   image: postgres:18
-  config:
+  credentials:                # this template builds the DB credential secret from these
     username: litellm
     password: change-me-litellm-pg   # change before installing
     database: litellm
+  config:
+    # name of the dictionary secret this template CREATES and Postgres reads;
+    # secret names are org-wide, so give each litellm release its own name
+    credentialsSecretName: my-litellm-db-credentials
   volumeset:
     capacity: 10              # GiB (minimum 10)
 ```
+
+The database password is **not** a prerequisite — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*`.
 
 ### Redis
 
@@ -105,6 +111,10 @@ redis:
 
 The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`cpln workload get {release}-litellm -o yaml`).
 
+## Upgrading from 1.0.0
+
+The bundled database credentials moved from `postgres.config.username/password/database` to `postgres.credentials.username/password/database`, and `postgres.config.credentialsSecretName` names the secret this template now creates from them. If you carry the old keys the install fails with `config.username was REMOVED in postgres 3.4.0` — move the three keys and you are done. **Ignore that message's advice to create a secret yourself; this template creates it**, and the database password stays a value exactly as before.
+
 ## Important Notes
 
 - **The prerequisite secret must exist before install** — `secrets.name` is a dictionary secret with `LITELLM_MASTER_KEY`, `LITELLM_SALT_KEY`, and every `providerEnv` key. A missing secret wedges the deployment.
@@ -112,6 +122,7 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`c
 - **The endpoint is key-gated, not open.** Public access still requires a valid master or virtual key — hand out virtual keys (with budgets/limits) rather than the master key.
 - **Keep Redis on for `replicas >= 2`.** Without it, each replica rate-limits in-memory, so the effective limit is N× the configured value.
 - **Redis ships authless by default** (same-GVC firewall is the boundary). Set `redis.redis.auth.password.enabled: true` to require AUTH; the master password is then wired into the proxy's cache config.
+- **Give each litellm release its own `postgres.config.credentialsSecretName`.** Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
 - **Postgres data survives reinstall of the proxy** — to reset virtual keys/spend you must also reinstall the database (its volumeset).
 - **First install self-heals a brief DB-timing gap.** On a cold install the proxy can start before Postgres accepts connections and log a `P1001` error with one restart; it recovers automatically once the database is ready (about 1.5–2 minutes to healthy). No action needed.
 

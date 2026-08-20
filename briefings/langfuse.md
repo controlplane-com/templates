@@ -15,16 +15,17 @@ Self-hosted **Langfuse** — LLM observability and evaluation. Traces, prompt ma
 |---|---|---|
 | `{rel}-langfuse-web` | workload (`stateful`) | Next.js UI + public API on :3000, autoscales 2–5 on CPU. The only tier with public inbound. |
 | `{rel}-langfuse-worker` | workload (`stateful`) | Ingestion/eval processor. No inbound. |
-| `{rel}-postgres` | postgres 3.2.1 subchart | Users, projects, API keys, prompts, datasets, eval configs. **The one thing that must be backed up.** |
+| `{rel}-postgres` | postgres **3.4.1** subchart since 1.2.0 (creates no secret of its own) | Users, projects, API keys, prompts, datasets, eval configs. **The one thing that must be backed up.** |
 | `{rel}-langfuse-redis` | workload (`stateful`) + volumeset | BullMQ queue + API-key/prompt cache. Transient. |
 | `{rel}-langfuse-clickhouse` | workload (`stateful`) + volumeset | Traces/observations/scores. Data parts go to the object store; the volumeset holds metadata only. |
-| `{rel}-langfuse-config` | secret (dictionary) | Bundled datastore credentials only — no key material since 1.1.0. |
+| `{rel}-langfuse-config` | secret (dictionary) | Bundled datastore credentials the APP reads (`postgresUsername`/`postgresPassword`/`redisPassword`/`clickhousePassword`) — no key material since 1.1.0. |
+| `my-langfuse-db-credentials` | secret (dictionary), **chart-created**, 1.2.0+ | `username`/`password`/`database` for the bundled DB; built from `postgres.credentials.*` and handed to the postgres subchart by name. **Deliberately separate** from `-langfuse-config`. |
 | `{rel}-langfuse-clickhouse-startup` / `-storage` | secrets (opaque) | Startup script and the S3/GCS disk XML. |
 | identity + policy | | `reveal` on exactly those secrets plus the user's prerequisite secrets. |
 
 Three datastores is not optional — Langfuse requires all of Postgres, Redis and ClickHouse.
 
-## Key knobs (defaults as shipped in 1.1.0)
+## Key knobs (defaults as shipped in 1.2.0)
 
 | Knob | Default | Notes |
 |---|---|---|
@@ -35,7 +36,9 @@ Three datastores is not optional — Langfuse requires all of Postgres, Redis an
 | `internalAccess.type` | `same-gvc` | Web tier only; the datastores are pinned to `same-gvc`. |
 | `objectStore.provider` | `aws` | `aws` = keyless cloud account; `gcp` = HMAC pair in a second prerequisite secret. |
 | `langfuse.web.image` | `langfuse/langfuse:3.225.2` | Pinned concrete; 1.0.x floated on `:3`. |
-| `postgres/redis/clickhouse.*.password` | `change-me-langfuse-{db,redis,clickhouse}` | Bundled plumbing, used as-is. |
+| `postgres.credentials.{username,password,database}` | `langfuse` / `change-me-langfuse-db` / `langfuse` | **1.2.0** — was `postgres.config.*`; bundled plumbing, still plain values. |
+| `postgres.config.credentialsSecretName` | `my-langfuse-db-credentials` | **1.2.0** — name of the dictionary secret the CHART creates and the subchart reads; org-wide, so unique per release. |
+| `redis.auth.password` / `clickhouse.config.password` | `change-me-langfuse-{redis,clickhouse}` | Bundled plumbing, used as-is. Unchanged in 1.2.0. |
 
 ## Troubleshooting traps
 
@@ -46,4 +49,8 @@ Three datastores is not optional — Langfuse requires all of Postgres, Redis an
 - **ClickHouse holds no durable local data.** Its volumeset is metadata; the parts are in the object store. A restore is a redeploy pointed at the same bucket. Conversely, deleting the bucket loses all trace history regardless of snapshots.
 - **On GCS, credentials reach ClickHouse via `from_env`.** `storage.xml` carries `<access_key_id from_env="GCS_ACCESS_KEY_ID"/>` rather than the literal key, with the pair injected from the prerequisite secret. If ClickHouse starts but S3 disk operations fail with an auth error, check those two env vars exist on the container before suspecting the HMAC key.
 - **The first `helm upgrade` after install re-applies the bundled postgres subchart** and the app is briefly unreachable while it restarts — catalog-wide behavior, not a Langfuse defect.
+- **1.2.0 adopted postgres 3.4.1, and langfuse absorbed the break rather than passing it on.** 3.4.0 deleted its `{release}-pg-config` secret and now takes only a secret NAME. Because a parent cannot template a subchart value, the name is a plain value (`postgres.config.credentialsSecretName`) that both sides read: langfuse's `secret-db.yaml` renders it, the subchart's env refs and policy consume it. Net user-visible change is one rename (`postgres.config.{username,password,database}` → `postgres.credentials.*`); **no new prerequisite**, because no human ever types this password. The auth/ClickHouse/Redis paths are untouched.
+- **The DB secret is a SECOND secret on purpose — do not merge it into `{rel}-langfuse-config`.** The postgres subchart's policy grants its identity `reveal` on the *entire* secret it is handed. `-langfuse-config` also carries `redisPassword` and `clickhousePassword`, so pointing the subchart at it would give the Postgres identity both. The two DB values are therefore rendered into both secrets and read by different identities; that duplication is intended.
+- **The secret name is org-wide, not release-scoped** (forced by the Helm limitation above). Two langfuse releases left on the default name: the second is **refused at install** — `cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared, overwritten or deleted. No render-time guard for it.
+- **A stale 1.1.0 values file fails with the SUBCHART's message, not langfuse's.** Helm renders `charts/…` before `templates/…`, so a parent-side guard would be dead code and was deliberately not added (unlike `langfuse.validateRemovedKeys`, which covers 1.1.0's own removals). The README's "Upgrading from 1.1.0" table carries the rename.
 - **Web and worker are `stateful` with no volumes.** That is deliberate (the cpu:minCpu ≤ 4:1 cap applies to them, and all four workloads sit at or under it), but it means `rolloutOptions.maxUnavailableReplicas` is dropped by the API, so the template does not send it.

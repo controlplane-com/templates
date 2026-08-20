@@ -15,9 +15,11 @@
 |---|---|
 | `{release}-docmost` (stateful, :3000) | UI + API + realtime collab in one image; `docmost.replicas` knob; `filesystemGroupId: 1000` |
 | `{release}-docmost-redis` | bundled single-node Redis (AOF, `noeviction`) — job queues + cross-replica realtime coordination |
-| `{release}-postgres` (postgres subchart 3.3.0 + volumeset) | all documents, users, spaces |
+| `{release}-postgres` (postgres subchart **3.4.1** since 1.1.0 — creates no secret of its own, + volumeset) | all documents, users, spaces |
 | Volumesets ×2 | local attachments (`/app/data/storage`, only mounted when `storage.type: local`) + Redis AOF (`/data`) |
-| creds secret + identity + policy | template-managed pg/redis creds; `reveal` on exactly the mounted secrets (incl. the user's APP_SECRET); AWS cloud-account link in keyless S3 mode |
+| `{release}-docmost-creds` secret (dictionary, chart-created) | `postgresUsername` / `postgresPassword` / `redisPassword` — the APP's own reads, used to assemble `DATABASE_URL` and `REDIS_URL` |
+| `my-docmost-db-credentials` secret (dictionary, **chart-created**, 1.1.0+) | `username`/`password`/`database` for the bundled DB; built from `postgres.credentials.*` and handed to the postgres subchart by name. **Deliberately separate** from the creds secret above |
+| identity + policy | `reveal` on exactly the mounted secrets (creds + the user's APP_SECRET, + S3/SMTP secrets when set); AWS cloud-account link in keyless S3 mode. The postgres subchart's own identity/policy cover the DB secret |
 
 - The attachment volumeset resource is rendered in both storage modes (mode-switch-safe) but only mounted in `local`.
 
@@ -35,7 +37,9 @@
 | `storage.fileUploadSizeLimit` | `50mb` | see truncation note below |
 | `smtp.enabled` (+ `host/port/secure/fromAddress/fromName/auth.secretName`) | `false` | off = invites cannot be delivered |
 | `publicAccess.enabled` / `internalAccess.type` | `true` / `same-gvc` | `none`, `workload-list`, public-off all verified live |
-| `postgres.*` / `redis.*` | `postgres:18` / `redis:8` + `change-me-*` creds | bundled dependency creds + sizing |
+| `postgres.credentials.{username,password,database}` | `docmost` / `change-me-docmost-pg` / `docmost` | **1.1.0** — was `postgres.config.*`; bundled plumbing, still plain values |
+| `postgres.config.credentialsSecretName` | `my-docmost-db-credentials` | **1.1.0** — name of the dictionary secret the CHART creates and the subchart reads; org-wide, so unique per release |
+| `postgres.image` / `redis.*` | `postgres:18` / `redis:8` + `change-me-docmost-redis` | bundled dependency creds + sizing |
 
 Prerequisite secret (create BEFORE install; verbatim-verified):
 `printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name my-docmost-app-secret --encoding plain -f -`
@@ -58,4 +62,8 @@ Prerequisite secret (create BEFORE install; verbatim-verified):
 - **Redis is required, not a cache nicety** — readiness (`/api/health`) pings Postgres AND Redis, so a Redis restart makes the app briefly unready (drops from the LB) and then recovers; liveness is process-only, so the app container does **not** restart (measured: 0 app restarts during a Redis redeploy). Docmost has no Sentinel support, hence the bundled single-node Redis rather than the HA redis template.
 - **First boot runs DB migrations** (kysely) but is fast in practice — full stack ready in ~60–85 s (pg ~40 s, redis ~40 s, docmost ~60–83 s). One benign `read ECONNRESET` + retry while Postgres is still booting is expected.
 - **First user to open the UI creates the admin account + workspace** (`POST /api/auth/setup`) — tell users to do this right after install; the endpoint is public by default.
+- **1.1.0 adopted postgres 3.4.1, and docmost absorbed the break rather than passing it on.** 3.4.0 deleted its `{release}-pg-config` secret and now takes only a secret NAME. Because a parent cannot template a subchart value, the name is a plain value (`postgres.config.credentialsSecretName`) that both sides read: docmost's `secret-db.yaml` renders it, the subchart's env refs and policy consume it. Net user-visible change is one rename (`postgres.config.{username,password,database}` → `postgres.credentials.*`); **no new prerequisite**, because no human ever types this password.
+- **The DB secret is a SECOND secret on purpose — do not merge it into `{release}-docmost-creds`.** The postgres subchart's policy grants its identity `reveal` on the *entire* secret it is handed. `{release}-docmost-creds` also carries `redisPassword`, so pointing the subchart at it would give the Postgres identity the Redis credential. The two DB values are therefore rendered into both secrets and read by different identities; that duplication is intended.
+- **The secret name is org-wide, not release-scoped** (forced by the Helm limitation above). Two docmost releases left on the default name: the second is **refused at install** — `cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared, overwritten or deleted. No render-time guard for it.
+- **A stale 1.0.0 values file fails with the SUBCHART's message, not docmost's.** Helm renders `charts/…` before `templates/…`, so a parent-side guard would be dead code and was deliberately not added. 3.4.1's message appends a clause telling bundled users not to create a secret themselves; the README's "Upgrading from 1.0.0" table carries the rename.
 - Transient 503s on the public endpoint are expected when flipping `publicAccess` (LB config change), not during normal rolling upgrades.

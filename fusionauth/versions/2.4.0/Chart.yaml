@@ -1,0 +1,21 @@
+apiVersion: v2
+name: fusionauth
+description: FusionAuth identity and access management with OAuth2, OIDC and SAML, plus bundled PostgreSQL
+
+type: application
+version: 2.3.2
+appVersion: "1.60.2"
+
+dependencies:
+  - name: postgres
+    version: 3.2.1
+    repository: "oci://ghcr.io/controlplane-com/templates"
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+
+annotations:
+  created: "2025-08-15"
+  lastModified: "2026-08-17"
+  category: "authentication"
+  createsGvc: false

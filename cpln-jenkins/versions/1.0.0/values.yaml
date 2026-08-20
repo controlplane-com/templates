@@ -11,10 +11,18 @@ admin:
   passwordSecretName: my-jenkins-admin-password
 
 # ─── Control Plane cloud ──────────────────────────────────────────────────────
+# These values PRE-CONFIGURE the "Control Plane" cloud inside Jenkins — the same
+# settings you would otherwise fill in by hand under Manage Jenkins → Clouds.
+# The chart renders them into a Configuration as Code file the controller reads
+# at boot, so a fresh install already knows how to provision agents.
+#
+# Because that file is applied on EVERY boot, editing these settings in the
+# Jenkins UI does not survive a restart. Change them here and upgrade instead.
+#
 # Jenkins provisions each build agent as its own Control Plane workload and
 # deletes it once idle.
 cloud:
-  enabled: true
+  enabled: true                # false = no cloud is configured; builds have nowhere to run
   # REQUIRED prerequisite `opaque` secret holding a Control Plane API key, with
   # create/delete/view on workloads in the target GVC. See the README.
   apiKeySecretName: my-jenkins-cpln-api-key

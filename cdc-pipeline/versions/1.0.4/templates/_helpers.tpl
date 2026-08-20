@@ -8,9 +8,9 @@ CDC Pipeline - Cross-Component Validation
 Validate that PostgreSQL WAL level is set to "logical" (required for CDC)
 */}}
 {{- define "cdc.validateWalLevel" -}}
-{{- $walLevel := index .Values "postgres-highly-available" "postgres" "walLevel" -}}
+{{- $walLevel := .Values.database.walLevel -}}
 {{- if ne $walLevel "logical" -}}
-{{- fail (printf "postgres-highly-available.postgres.walLevel must be 'logical' for CDC, got '%s'" $walLevel) -}}
+{{- fail (printf "database.walLevel must be 'logical' for CDC, got '%s'" $walLevel) -}}
 {{- end -}}
 {{- end -}}
 
@@ -18,9 +18,9 @@ Validate that PostgreSQL WAL level is set to "logical" (required for CDC)
 Validate that database credentials match between PostgreSQL and Debezium
 */}}
 {{- define "cdc.validateCredentials" -}}
-{{- $pgUser := index .Values "postgres-highly-available" "postgres" "username" -}}
-{{- $pgPass := index .Values "postgres-highly-available" "postgres" "password" -}}
-{{- $pgDb := index .Values "postgres-highly-available" "postgres" "database" -}}
+{{- $pgUser := .Values.database.username -}}
+{{- $pgPass := .Values.database.password -}}
+{{- $pgDb := .Values.database.name -}}
 {{- $dbzUser := index .Values "debezium-server" "source" "database" "user" -}}
 {{- $dbzPass := index .Values "debezium-server" "source" "database" "password" -}}
 {{- $dbzDb := index .Values "debezium-server" "source" "database" "name" -}}

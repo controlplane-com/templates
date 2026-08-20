@@ -150,10 +150,12 @@ postgres:
 # set postgres.enabled: false.
 postgresHA:
   enabled: false
-  postgres:
-    username: twenty
-    password: change-me-twenty-db     # change before install; letters/digits/-/_ only (it is embedded in a URL)
-    database: twenty
+  config:
+    # Name of the dictionary secret this chart creates and the bundled
+    # postgres-highly-available reads. Since pgHA 2.5.0 the subchart creates no
+    # credentials secret of its own, so both stores are fed the same one, built
+    # from postgres.credentials.* above.
+    credentialsSecretName: my-twenty-db-credentials
   replicas: 3
   resources:
     minCpu: 500m

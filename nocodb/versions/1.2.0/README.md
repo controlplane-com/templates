@@ -38,7 +38,7 @@ NocoDB is a no-code database and spreadsheet-style app builder — the self-host
     --entry NC_SMTP_USERNAME=apikey --entry NC_SMTP_PASSWORD=changeme
   ```
 
-**The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*` (single-instance mode) or `postgresHA.postgres.*` (HA mode).
+**The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*` (single-instance mode) or `postgres.credentials.*` (HA mode).
 
 ## Configuration
 

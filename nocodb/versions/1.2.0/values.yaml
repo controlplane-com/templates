@@ -167,10 +167,12 @@ postgres:
 # production. Enable this and set postgres.enabled: false.
 postgresHA:
   enabled: false
-  postgres:
-    username: nocodb
-    password: change-me-nocodb-db     # change before install; letters/digits/-/_ only (embedded in NC_DB)
-    database: nocodb
+  config:
+    # Name of the dictionary secret this chart creates and the bundled
+    # postgres-highly-available reads. Since pgHA 2.5.0 the subchart creates no
+    # credentials secret of its own, so both stores are fed the same one, built
+    # from postgres.credentials.* above.
+    credentialsSecretName: my-nocodb-db-credentials
   replicas: 3
   resources:                  # per Patroni replica; the default install runs 3 of these
     minCpu: 500m

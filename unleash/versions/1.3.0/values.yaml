@@ -40,10 +40,12 @@ internalAccess: # internal firewall scope (in-GVC SDK callers)
 # replicas, and an HAProxy leader-routing endpoint Unleash connects to.
 postgresHA:
   enabled: true
-  postgres:
-    username: unleash
-    password: change-me-unleash-db-password # change before installing
-    database: unleash
+  config:
+    # Name of the dictionary secret this chart creates and the bundled
+    # postgres-highly-available reads. Since pgHA 2.5.0 the subchart creates no
+    # credentials secret of its own, so both stores are fed the same one, built
+    # from postgres.credentials.* above.
+    credentialsSecretName: my-unleash-db-credentials
   replicas: 3
   volumeset:
     capacity: 10 # initial capacity in GiB per replica (minimum is 10)

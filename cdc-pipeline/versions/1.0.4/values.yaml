@@ -16,6 +16,24 @@
 # =============================================================================
 # PostgreSQL HA
 # =============================================================================
+# ─── CDC database credentials ─────────────────────────────────────────────────
+# Internal plumbing: the bundled database exists only to serve this pipeline, so
+# these stay values and the chart creates the secret from them. They must match
+# the debezium-server.source.database.* values below, which the chart enforces
+# at render.
+database:
+  username: cdc_user
+  password: "change-me-cdc-pipeline-postgres"
+  name: cdcdb
+  # Debezium uses the `pgoutput` logical-decoding plugin, which requires
+  # PostgreSQL to run with wal_level = logical.
+  #
+  # KNOWN ISSUE: postgres-highly-available hardcodes `wal_level: replica` and
+  # does not read this value. It is validated here as a guard against someone
+  # setting it to something else, but the backing store does NOT currently
+  # honour it — see the README.
+  walLevel: logical
+
 postgres-highly-available:
   replicas: 3
 
@@ -27,11 +45,11 @@ postgres-highly-available:
 
   image: controlplanecorporation/patroni-postgres:0.7
 
-  postgres:
-    username: cdc_user
-    password: "change-me-cdc-pipeline-postgres"
-    database: cdcdb
-    walLevel: logical  # Required for CDC -- do not change
+  config:
+    # Name of the dictionary secret THIS chart creates and the bundled
+    # postgres-highly-available reads. Since pgHA 2.5.0 the subchart creates no
+    # credentials secret of its own; the values live in `database:` below.
+    credentialsSecretName: my-cdc-pipeline-db-credentials
 
   multiZone: false
 

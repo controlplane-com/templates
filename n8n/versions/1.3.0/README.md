@@ -46,7 +46,7 @@ Set `owner.secretName` to that name. Read it back later with `cpln secret reveal
 
 **If either secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments <release>-n8n --gvc <gvc> -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own in roughly 6–10 minutes — poll rather than time-boxing — or clear it immediately with `cpln workload force-redeployment <release>-n8n --gvc <gvc>` (~90 s).
 
-**The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgresHA.postgres.*` (HA mode) or `postgres.credentials.*` (single-instance mode).
+**The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*` (HA mode) or `postgres.credentials.*` (single-instance mode).
 
 - For optional database backups: a bucket and access setup for one of the supported providers (see [Backup storage setup](#backup-storage-setup)). With `provider: minio` on the single-instance store, the endpoint's keys are a prerequisite `dictionary` secret — see that section.
 
@@ -179,7 +179,7 @@ cpln secret create-dictionary --name my-n8n-minio-credentials \
 ## Important Notes
 
 - **Back up the encryption-key secret** — losing it permanently bricks every credential n8n has stored; never change it after first boot (n8n fails to start on a key mismatch).
-- **Change the bundled database password (`postgresHA.postgres.password` / `postgres.credentials.password`) before installing** — it is used as-is. The owner login is no longer a value; it comes from the prerequisite secret.
+- **Change the bundled database password (`postgres.credentials.password`) before installing** — it is used as-is. The owner login is no longer a value; it comes from the prerequisite secret.
 - **Give each n8n release its own `postgres.config.credentialsSecretName`** (single-instance mode only). Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
 - **The n8n main instance is single-replica by upstream design** — the default HA Postgres backend removes the database as a failure point.
 - **Upgrades restart the single replica** — expect roughly a minute of editor/webhook downtime per `helm upgrade`; the first upgrade after an install also re-applies the bundled database, which can add a couple of minutes.

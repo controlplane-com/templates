@@ -171,7 +171,7 @@ completely unchanged, including its MinIO backup keys.
 
 ## Important Notes
 
-- **Change the database password (`postgresHA.postgres.password` / `postgres.credentials.password`) before installing.**
+- **Change the database password (`postgres.credentials.password`) before installing.**
 - **Give each temporal release its own `postgres.config.credentialsSecretName`** (single-instance path). Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected.
 - **`historyShards` is permanent** — the shard count is fixed at the cluster's first boot and can never be changed; the server refuses a different value later. Size it before installing (512 suits most deployments).
 - **Never expose the Web UI publicly** — it has no built-in authentication. To offer browser access from outside the internal scope, put your own authenticating proxy in front of it.

@@ -80,7 +80,7 @@ Both hold the same three keys — username, password, database.
 */}}
 {{- define "glitchtip.postgres.secret.name" -}}
 {{- if .Values.postgresHA.enabled -}}
-{{- printf "%s-postgres-config" .Release.Name }}
+{{- .Values.postgresHA.config.credentialsSecretName }}
 {{- else -}}
 {{- include "glitchtip.secret.db.name" . }}
 {{- end }}

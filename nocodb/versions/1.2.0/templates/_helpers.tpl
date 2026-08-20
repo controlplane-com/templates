@@ -66,7 +66,7 @@ Both hold the same three keys — username, password, database.
 */}}
 {{- define "nocodb.postgres.secret.name" -}}
 {{- if .Values.postgresHA.enabled -}}
-{{- printf "%s-postgres-config" .Release.Name }}
+{{- .Values.postgresHA.config.credentialsSecretName }}
 {{- else -}}
 {{- include "nocodb.secret.db.name" . }}
 {{- end }}
@@ -78,11 +78,7 @@ it is interpolated into the NC_DB connection URL at render time, where a
 cpln://secret reference cannot be resolved.
 */}}
 {{- define "nocodb.postgres.database" -}}
-{{- if .Values.postgresHA.enabled -}}
-{{- .Values.postgresHA.postgres.database }}
-{{- else -}}
 {{- .Values.postgres.credentials.database }}
-{{- end }}
 {{- end }}
 
 {{/*
@@ -90,11 +86,7 @@ Password of the active database — used only by validation (it is embedded in
 the NC_DB query string, so its charset matters).
 */}}
 {{- define "nocodb.postgres.password" -}}
-{{- if .Values.postgresHA.enabled -}}
-{{- .Values.postgresHA.postgres.password }}
-{{- else -}}
 {{- .Values.postgres.credentials.password }}
-{{- end }}
 {{- end }}
 
 {{/*

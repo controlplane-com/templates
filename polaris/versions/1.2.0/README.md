@@ -33,7 +33,7 @@ Optional:
 - **Object storage credentials** for the bucket that holds your Iceberg data — see **Iceberg bucket setup** below.
 - **Cloud account + bucket** only if you enable the Postgres backup pass-through (see **Storage setup**). With `postgres.backup.provider: minio` (single-instance mode) the endpoint's keys are a prerequisite dictionary secret instead — see that section.
 
-**The metastore password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*` (single-instance mode) or `postgresHA.postgres.*` (HA mode).
+**The metastore password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*` (single-instance mode) or `postgres.credentials.*` (HA mode).
 
 ## Iceberg bucket setup
 
@@ -319,7 +319,7 @@ cpln secret create-dictionary --name my-polaris-minio-credentials \
 - **Root credentials are write-once.** They are applied when the realm is first bootstrapped; changing them afterwards has no effect. Rotate by creating a new principal through the management API.
 - **Rotating `tokenSigningKey` invalidates every outstanding token** — clients must obtain a new one.
 - **`realm` is permanent.** Renaming it bootstraps a new, empty realm and hides the existing catalogs; changing it back makes them visible again.
-- **Change `postgres.credentials.password` (or `postgresHA.postgres.password`) before installing** — the default is a placeholder.
+- **Change `postgres.credentials.password` before installing** — the default is a placeholder.
 - **Upgrading from 1.0.x**: the single-instance metastore credentials moved from `postgres.config.username/password/database` to `postgres.credentials.username/password/database`, named by the new `postgres.config.credentialsSecretName`. Carrying the old keys fails the render with `config.username was REMOVED in postgres 3.4.0` — move the three keys and you are done. **Ignore that message's advice to create a secret yourself; this template creates it**, and the metastore password stays a value. `postgres.backup.minio.accessKey`/`secretKey` were removed the same way (see Storage setup). The HA path (`postgresHA.*`) and the `rootCredentials` / `tokenSigningKey` prerequisite secrets are all unchanged.
 - **Give each polaris release its own `postgres.config.credentialsSecretName`** (single-instance mode only). Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
 - **Database volumes survive restarts, redeploys and upgrades; uninstalling deletes them** — every catalog definition is lost with them. Use `postgresHA` and/or the backup pass-through for production.

@@ -73,7 +73,7 @@ Both hold {username, password}.
 */}}
 {{- define "twenty.postgres.secret.name" -}}
 {{- if .Values.postgresHA.enabled -}}
-{{- printf "%s-postgres-config" .Release.Name }}
+{{- .Values.postgresHA.config.credentialsSecretName }}
 {{- else -}}
 {{- include "twenty.secret.db.name" . }}
 {{- end }}
@@ -84,11 +84,7 @@ Database name of the active database — taken from values (not the secret) so a
 single code path serves both database modes.
 */}}
 {{- define "twenty.postgres.database" -}}
-{{- if .Values.postgresHA.enabled -}}
-{{- .Values.postgresHA.postgres.database }}
-{{- else -}}
 {{- .Values.postgres.credentials.database }}
-{{- end }}
 {{- end }}
 
 {{/*
@@ -96,11 +92,7 @@ Password of the active database — used only by validation (it is embedded in
 PG_DATABASE_URL, so its charset matters).
 */}}
 {{- define "twenty.postgres.password" -}}
-{{- if .Values.postgresHA.enabled -}}
-{{- .Values.postgresHA.postgres.password }}
-{{- else -}}
 {{- .Values.postgres.credentials.password }}
-{{- end }}
 {{- end }}
 
 {{/*

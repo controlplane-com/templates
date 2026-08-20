@@ -41,7 +41,7 @@ cpln secret create-dictionary --name my-unleash-api-tokens \
 
 Set its name in `apiTokens.secretName`. Leave it empty to create tokens in the admin UI after install instead.
 
-**The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgresHA.postgres.*` (HA mode) or `postgres.credentials.*` (single-instance mode).
+**The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*` (HA mode) or `postgres.credentials.*` (single-instance mode).
 
 For optional database backups: a bucket and access setup for one of the supported providers (see [Backup storage setup](#backup-storage-setup)). With `provider: minio` on the single-instance store, the endpoint's keys are a prerequisite `dictionary` secret — see that section.
 
@@ -191,7 +191,7 @@ cpln secret create-dictionary --name my-unleash-minio-credentials \
 ## Important Notes
 
 - **Create the admin secret before installing.** A missing prerequisite secret leaves the workload waiting on something that does not exist, with zero log lines — see Prerequisites for how to diagnose it.
-- **Change the database password (`postgresHA.postgres.password` / `postgres.credentials.password`) before installing** — it is bundled plumbing, used exactly as given.
+- **Change the database password (`postgres.credentials.password`) before installing** — it is bundled plumbing, used exactly as given.
 - **Give each unleash release its own `postgres.config.credentialsSecretName`** (single-instance mode only). Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
 - **Admin credentials and API tokens are seeded on first boot only** — they live in the database afterwards; change the password or manage tokens in the admin UI, not by editing the secrets.
 - **Backend tokens must stay secret** (server-side SDKs, `/api/client`); frontend tokens are safe to embed in browsers (`/api/frontend`). A 401 usually means the wrong token type or environment.

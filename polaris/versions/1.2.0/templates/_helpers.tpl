@@ -90,7 +90,7 @@ Both hold the same three keys — username, password, database.
 */}}
 {{- define "polaris.postgres.secret.name" -}}
 {{- if .Values.postgresHA.enabled -}}
-{{- printf "%s-postgres-config" .Release.Name }}
+{{- .Values.postgresHA.config.credentialsSecretName }}
 {{- else -}}
 {{- include "polaris.secret.db.name" . }}
 {{- end }}
@@ -98,11 +98,7 @@ Both hold the same three keys — username, password, database.
 
 {{/* Database name of the active metastore (the JDBC URL cannot read a secret). */}}
 {{- define "polaris.postgres.database" -}}
-{{- if .Values.postgresHA.enabled -}}
-{{- .Values.postgresHA.postgres.database }}
-{{- else -}}
 {{- .Values.postgres.credentials.database }}
-{{- end }}
 {{- end }}
 
 {{/*

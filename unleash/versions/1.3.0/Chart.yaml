@@ -2,7 +2,7 @@ apiVersion: v2
 name: unleash
 description: Unleash open-source feature-flag server with admin UI, SDK APIs, and PostgreSQL
 type: application
-version: 1.2.1
+version: 1.3.0
 appVersion: "8.0.3"
 
 dependencies:
@@ -11,7 +11,7 @@ dependencies:
     repository: "oci://ghcr.io/controlplane-com/templates"
   - name: postgres-highly-available
     alias: postgresHA
-    version: 2.4.2
+    version: 2.5.0
     repository: "oci://ghcr.io/controlplane-com/templates"
     condition: postgresHA.enabled
   - name: postgres
@@ -21,6 +21,6 @@ dependencies:
 
 annotations:
   created: "2026-07-23"
-  lastModified: "2026-08-19"
+  lastModified: "2026-08-20"
   category: "feature-flags"
   createsGvc: false

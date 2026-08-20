@@ -37,7 +37,7 @@ Chatwoot is an open-source customer engagement platform — a live-chat widget, 
     --entry SMTP_USERNAME=apikey --entry SMTP_PASSWORD=...
   ```
 
-**The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgresHA.postgres.*` (HA mode) or `postgres.credentials.*` (single-instance mode).
+**The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*` (HA mode) or `postgres.credentials.*` (single-instance mode).
 
 ## Configuration
 

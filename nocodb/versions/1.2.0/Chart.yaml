@@ -2,7 +2,7 @@ apiVersion: v2
 name: nocodb
 description: NocoDB no-code database and spreadsheet-style app builder, backed by Postgres and Redis
 type: application
-version: 1.1.0
+version: 1.2.0
 appVersion: "2026.07.0"
 
 dependencies:
@@ -15,12 +15,12 @@ dependencies:
     condition: postgres.enabled
   - name: postgres-highly-available
     alias: postgresHA
-    version: 2.4.2
+    version: 2.5.0
     repository: "oci://ghcr.io/controlplane-com/templates"
     condition: postgresHA.enabled
 
 annotations:
   created: "2026-08-06"
-  lastModified: "2026-08-19"
+  lastModified: "2026-08-20"
   category: "no-code-database"
   createsGvc: false

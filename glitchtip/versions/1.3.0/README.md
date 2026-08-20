@@ -40,7 +40,7 @@ Also:
 - **Optional — outbound email (invites, alerts, password resets)**: an **opaque** secret in your org whose payload is a full email URL, e.g. `smtp://user:password@smtp.example.com:587`. Set its name in `email.secretName`. Create it BEFORE installing; leave empty to run without email.
 - For optional database backups: a bucket and access setup for one of the supported providers (see [Backup storage setup](#backup-storage-setup)). With `provider: minio` on the single-instance store, the endpoint's keys are a prerequisite `dictionary` secret — see that section.
 
-**The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgresHA.postgres.*` (HA mode) or `postgres.credentials.*` (single-instance mode).
+**The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*` (HA mode) or `postgres.credentials.*` (single-instance mode).
 
 ## Configuration
 

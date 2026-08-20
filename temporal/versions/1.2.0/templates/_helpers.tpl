@@ -66,7 +66,7 @@ first two (its two store names are set on the workload, not taken from the secre
 */}}
 {{- define "temporal.postgres.secret.name" -}}
 {{- if .Values.postgresHA.enabled -}}
-{{- printf "%s-postgres-config" .Release.Name }}
+{{- .Values.postgresHA.config.credentialsSecretName }}
 {{- else -}}
 {{- include "temporal.secret.db.name" . }}
 {{- end }}

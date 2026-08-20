@@ -1,0 +1,103 @@
+# ─── ToolJet server ───────────────────────────────────────────────
+tooljet:
+  # Official LTS image (EE build — runs the free tier, no license key needed).
+  # PostgREST and a single-instance fallback Redis are bundled in-image.
+  image: tooljet/tooljet:v3.20.204-lts
+  replicas: 1                 # >=2 requires redis.enabled=true (shared job queue + multiplayer coordination)
+  # Public base URL ToolJet advertises (links, redirects) — set WITH https://.
+  # Empty = derive from the platform canonical endpoint (CPLN_GLOBAL_ENDPOINT).
+  host: ""
+  resources:
+    minCpu: 500m
+    maxCpu: 2000m
+    minMemory: 1Gi
+    maxMemory: 4Gi   # first-boot migrations OOM below this (image bakes a 4096MB Node heap)
+
+# ─── Prerequisite secret (USER-CREATED — MUST EXIST BEFORE INSTALL) ─
+# Dictionary secret holding ToolJet's root-of-trust keys. Create it FIRST — the
+# deployment WEDGES on a missing secret and looks broken. SECRET_KEY_BASE and
+# LOCKBOX_MASTER_KEY are WRITE-ONCE: rotating LOCKBOX_MASTER_KEY corrupts every
+# stored datasource credential. Required keys:
+#   SECRET_KEY_BASE    — openssl rand -hex 64
+#   LOCKBOX_MASTER_KEY — openssl rand -hex 32
+#   PGRST_JWT_SECRET   — openssl rand -hex 32
+secrets:
+  name: my-tooljet-secrets
+
+# ─── SMTP / email (optional) ──────────────────────────────────────
+# Off by default → zero-config install works; the first visitor to the UI
+# becomes the Super Admin without email. Enable for invites / password reset.
+smtp:
+  enabled: false               # NOTE: only takes effect at INITIAL install — a first-boot migration seeds it; enabling via a later upgrade does nothing
+  host: smtp.example.com       # SMTP server host (SMTP_DOMAIN)
+  port: 587                    # SMTP server port
+  fromEmail: no-reply@example.com   # DEFAULT_FROM_EMAIL
+  auth:
+    # OPTIONAL prerequisite dictionary secret with SMTP_USERNAME + SMTP_PASSWORD.
+    # Empty = unauthenticated relay (e.g. a mail catcher). When set, the workload
+    # is granted reveal on exactly that secret.
+    secretName: ""
+
+# ─── Access ───────────────────────────────────────────────────────
+publicAccess:
+  enabled: true               # HTTPS UI + API on the auto *.cpln.app endpoint; false = internal-only
+internalAccess:
+  type: same-gvc              # none | same-gvc | same-org | workload-list
+  workloads: []               # used only with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── PostgreSQL (subchart: postgres) — app DB + ToolJet Database ──
+postgres:
+  image: postgres:16          # upstream-proven with the bundled PostgREST 12.2.0
+  # Credentials for the bundled database — internal plumbing no human types
+  # elsewhere. ToolJet CREATES the dictionary secret named by
+  # config.credentialsSecretName below out of these three values, so there is
+  # nothing for you to create before installing.
+  credentials:
+    username: tooljet
+    password: change-me-tooljet-pg   # template-managed cred for the bundled DB — change before install
+    database: tooljet         # app DB; ToolJet Database (tooljet_db) is auto-created alongside it
+  config:
+    # Name of the dictionary secret this chart creates and the bundled postgres
+    # reads. Secret names are org-wide: give each tooljet release its own name.
+    # A second release left on this name is REFUSED at install (it is owned by
+    # the first release) — nothing is shared, overwritten or deleted.
+    credentialsSecretName: my-tooljet-db-credentials
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 1Gi
+  volumeset:
+    capacity: 10              # GiB (minimum 10)
+
+# ─── Redis (subchart: redis, optional) — required for replicas >= 2 ─
+# Default off: single-replica ToolJet uses the Redis bundled inside the image.
+# Enable for multi-replica (shared BullMQ job queue + multiplayer coordination).
+# Pinned to ONE data node — ToolJet is not Sentinel-aware, so the service DNS
+# name must always resolve to the master.
+redis:
+  enabled: false
+  redis:
+    image: redis:7.4
+    replicas: 1               # keep at 1 — plain-client access; see comment above
+    # Auth toggle. Default off = the redis template's proven authless default
+    # (same-GVC firewall is the boundary). enabled=true wires REDIS_PASSWORD.
+    auth:
+      password:
+        enabled: false
+        value: change-me-tooljet-redis
+    resources:
+      cpu: 200m
+      memory: 256Mi
+      minCpu: 80m
+      minMemory: 128Mi
+  sentinel:
+    image: redis:7.4
+    replicas: 1               # monitor only — no failover target exists with one data node
+    resources:
+      cpu: 200m
+      memory: 256Mi
+      minCpu: 80m
+      minMemory: 128Mi

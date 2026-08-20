@@ -1,0 +1,155 @@
+---
+kind: workload
+name: {{ include "tooljet.name" . }}
+description: ToolJet server — low-code app builder UI + API, HTTP :3000
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "tooljet.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "tooljet.identity.name" . }}
+  containers:
+    - name: tooljet
+      image: {{ .Values.tooljet.image }}
+      # Image entrypoint starts the in-container PostgREST (:3001, localhost-only),
+      # waits for Postgres, auto-creates both databases and runs migrations, then
+      # execs the args — verbatim what upstream's compose and k8s manifest pass.
+      args:
+        - "npm"
+        - "run"
+        - "start:prod"
+      inheritEnv: false
+      minCpu: {{ .Values.tooljet.resources.minCpu | quote }}
+      cpu: {{ .Values.tooljet.resources.maxCpu | quote }}
+      minMemory: {{ .Values.tooljet.resources.minMemory | quote }}
+      memory: {{ .Values.tooljet.resources.maxMemory | quote }}
+      env:
+        # ── Public base URL — empty host derives from the platform canonical endpoint ──
+        - name: TOOLJET_HOST
+          value: {{ if .Values.tooljet.host }}{{ .Values.tooljet.host | quote }}{{ else }}"$(CPLN_GLOBAL_ENDPOINT)"{{ end }}
+        # ── Root-of-trust keys (user prerequisite dictionary secret) ──
+        - name: SECRET_KEY_BASE
+          value: cpln://secret/{{ .Values.secrets.name }}.SECRET_KEY_BASE
+        - name: LOCKBOX_MASTER_KEY
+          value: cpln://secret/{{ .Values.secrets.name }}.LOCKBOX_MASTER_KEY
+        - name: PGRST_JWT_SECRET
+          value: cpln://secret/{{ .Values.secrets.name }}.PGRST_JWT_SECRET
+        # ── App database (postgres subchart) ──
+        - name: PG_HOST
+          value: {{ include "tooljet.postgres.host" . | quote }}
+        - name: PG_PORT
+          value: "5432"
+        - name: PG_DB
+          value: {{ .Values.postgres.credentials.database | quote }}
+        - name: PG_USER
+          value: cpln://secret/{{ include "tooljet.db.secret.name" . }}.postgresUsername
+        - name: PG_PASS
+          value: cpln://secret/{{ include "tooljet.db.secret.name" . }}.postgresPassword
+        # ── ToolJet Database (tooljet_db, same Postgres instance — auto-created at boot) ──
+        - name: TOOLJET_DB
+          value: "tooljet_db"
+        - name: TOOLJET_DB_HOST
+          value: {{ include "tooljet.postgres.host" . | quote }}
+        - name: TOOLJET_DB_PORT
+          value: "5432"
+        - name: TOOLJET_DB_USER
+          value: cpln://secret/{{ include "tooljet.db.secret.name" . }}.postgresUsername
+        - name: TOOLJET_DB_PASS
+          value: cpln://secret/{{ include "tooljet.db.secret.name" . }}.postgresPassword
+        # ── In-container PostgREST (localhost: triggers the bundled binary) ──
+        - name: PGRST_HOST
+          value: "localhost:3001"
+        - name: PGRST_SERVER_PORT
+          value: "3001"
+        - name: PGRST_DB_URI
+          value: postgres://$(PG_USER):$(PG_PASS)@{{ include "tooljet.postgres.host" . }}:5432/tooljet_db
+        - name: PGRST_DB_PRE_CONFIG
+          value: "postgrest.pre_config"
+        - name: PGRST_LOG_LEVEL
+          value: "info"
+        # ── Workflow scheduling in-container (matches upstream's k8s manifest) ──
+        - name: WORKER
+          value: "true"
+        {{- if .Values.redis.enabled }}
+        # ── External Redis (redis subchart) — shared job queue + multiplayer coordination ──
+        - name: REDIS_HOST
+          value: {{ include "tooljet.redis.host" . | quote }}
+        - name: REDIS_PORT
+          value: "6379"
+        {{- if eq (include "tooljet.redisAuthEnabled" .) "true" }}
+        - name: REDIS_PASSWORD
+          value: cpln://secret/{{ include "tooljet.redis.secretPassword.name" . }}.password
+        {{- end }}
+        {{- end }}
+        {{- if .Values.smtp.enabled }}
+        # ── SMTP / email ──
+        - name: SMTP_DOMAIN
+          value: {{ .Values.smtp.host | quote }}
+        - name: SMTP_PORT
+          value: {{ .Values.smtp.port | quote }}
+        - name: DEFAULT_FROM_EMAIL
+          value: {{ .Values.smtp.fromEmail | quote }}
+        {{- if .Values.smtp.auth.secretName }}
+        - name: SMTP_USERNAME
+          value: cpln://secret/{{ .Values.smtp.auth.secretName }}.SMTP_USERNAME
+        - name: SMTP_PASSWORD
+          value: cpln://secret/{{ .Values.smtp.auth.secretName }}.SMTP_PASSWORD
+        {{- end }}
+        {{- end }}
+      ports:
+        - number: 3000
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /api/health
+          port: 3000
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 15
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /api/health
+          port: 3000
+          scheme: HTTP
+        initialDelaySeconds: 180
+        periodSeconds: 30
+        failureThreshold: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: {{ .Values.tooljet.replicas }}
+      maxScale: {{ .Values.tooljet.replicas }}
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  supportDynamicTags: false

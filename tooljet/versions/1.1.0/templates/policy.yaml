@@ -1,0 +1,20 @@
+---
+kind: policy
+name: {{ include "tooljet.policy.name" . }}
+description: ToolJet secret access
+tags: {{- include "tooljet.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "tooljet.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "tooljet.db.secret.name" . }}
+  - //secret/{{ .Values.secrets.name }}
+  {{- if and .Values.smtp.enabled .Values.smtp.auth.secretName }}
+  - //secret/{{ .Values.smtp.auth.secretName }}
+  {{- end }}
+  {{- if eq (include "tooljet.redisAuthEnabled" .) "true" }}
+  - //secret/{{ include "tooljet.redis.secretPassword.name" . }}
+  {{- end }}

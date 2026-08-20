@@ -1,0 +1,93 @@
+# ─── LiteLLM proxy ────────────────────────────────────────────────
+litellm:
+  # DB-bundled image variant — always deployed with Postgres, so the image must
+  # run Prisma `migrate deploy` on boot. Pin concrete tags; never main-stable/latest.
+  image: ghcr.io/berriai/litellm-database:v1.93.0
+  replicas: 1                 # proven single-replica shape; set >=2 for the scaled/HA tier (keep redis on for shared rate limits)
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 1Gi
+    maxMemory: 2Gi
+  storeModelInDb: true        # also manage models via the Admin UI (persisted in Postgres)
+  # Model/provider list seeded into config.yaml. api_key values reference env vars
+  # supplied via the prerequisite secret below (never inline real keys here).
+  modelList:
+    - model_name: gpt-4o-mini
+      litellm_params:
+        model: openai/gpt-4o-mini
+        api_key: os.environ/OPENAI_API_KEY
+  # Env-var NAMES (non-sensitive) exposed to the proxy from the prerequisite secret.
+  # Every name here must exist as a key in the `secrets.name` dictionary secret.
+  providerEnv:
+    - OPENAI_API_KEY
+
+# ─── Prerequisite secret (USER-CREATED — MUST EXIST BEFORE INSTALL) ─
+# Dictionary secret containing (required) LITELLM_MASTER_KEY, LITELLM_SALT_KEY
+# and every provider key named in litellm.providerEnv. Create it FIRST — the
+# deployment WEDGES on a missing secret and looks broken (see README Prerequisites).
+# LITELLM_SALT_KEY is write-once: never rotate it or stored provider keys corrupt.
+secrets:
+  name: my-litellm-secrets
+
+# ─── Access ───────────────────────────────────────────────────────
+publicAccess:
+  enabled: true               # key-gated *.cpln.app endpoint (UI + API). false = internal-only
+internalAccess:
+  type: same-gvc              # options: none, same-gvc, same-org, workload-list
+  workloads: []               # used only with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── PostgreSQL (subchart: postgres) — keys / spend / budgets ──────
+postgres:
+  image: postgres:18
+  # Credentials for the bundled database — internal plumbing no human types
+  # elsewhere. LiteLLM CREATES the dictionary secret named by
+  # config.credentialsSecretName below out of these three values, so there is
+  # nothing for you to create before installing.
+  credentials:
+    username: litellm
+    password: change-me-litellm-pg     # template-managed cred for the bundled DB
+    database: litellm
+  config:
+    # Name of the dictionary secret this chart creates and the bundled postgres
+    # reads. Secret names are org-wide: give each litellm release its own name.
+    # A second release left on this name is REFUSED at install (it is owned by
+    # the first release) — nothing is shared, overwritten or deleted.
+    credentialsSecretName: my-litellm-db-credentials
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 1Gi
+  volumeset:
+    capacity: 10              # GiB (minimum is 10)
+
+# ─── Redis (subchart: redis, Sentinel HA) — rate limits / cache ────
+redis:
+  enabled: true               # gates the dependency; false = in-memory per-replica rate limiting
+  redis:
+    image: redis:7.4
+    replicas: 3
+    # Auth toggle. Default off = the redis template's proven authless default
+    # (same-GVC firewall is the boundary). Set enabled=true to require AUTH — the
+    # master password is then wired into LiteLLM's cache config (master-only, not
+    # sentinel — see upstream #20734).
+    auth:
+      password:
+        enabled: false
+        value: change-me-litellm-redis
+    resources:
+      cpu: 200m
+      memory: 256Mi
+      minCpu: 80m
+      minMemory: 128Mi
+  sentinel:
+    image: redis:7.4
+    replicas: 3
+    resources:
+      cpu: 200m
+      memory: 256Mi
+      minCpu: 80m
+      minMemory: 128Mi

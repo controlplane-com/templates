@@ -133,12 +133,8 @@ Validate backup configuration - when backup is enabled, backup.provider must be 
     {{- if not .Values.backup.minio.bucket -}}
       {{- fail "Invalid backup configuration: backup.minio.bucket is required when provider is 'minio'." -}}
     {{- end -}}
-    {{- if not .Values.backup.minio.accessKey -}}
-      {{- fail "Invalid backup configuration: backup.minio.accessKey is required when provider is 'minio'." -}}
-    {{- end -}}
-    {{- if not .Values.backup.minio.secretKey -}}
-      {{- fail "Invalid backup configuration: backup.minio.secretKey is required when provider is 'minio'." -}}
-    {{- end -}}
+    {{- /* accessKey/secretKey moved to a prerequisite secret in 2.5.0; the
+           replacement is validated in pg-ha.validate. */}}
   {{- end -}}
 {{- end -}}
 {{- end }}
@@ -152,3 +148,23 @@ Common labels - delegated to cpln-common
 {{- define "pg-ha.tags" -}}
 {{- include "cpln-common.tags" . }}
 {{- end }}
+{{/*
+Validation. Runs from every resource template, so a bad value fails at render
+before anything is applied.
+*/}}
+{{- define "pg-ha.validate" -}}
+{{- if .Values.postgres -}}
+{{- fail "postgres-highly-available: the `postgres` block was REMOVED in 2.5.0. `postgres.username`, `postgres.password` and `postgres.database` are now a `dictionary` secret you create, named by `config.credentialsSecretName`, holding the keys `username`, `password` and `database`. Delete the `postgres:` block from your values. See Prerequisites in the README." -}}
+{{- end -}}
+{{- if not .Values.config.credentialsSecretName -}}
+{{- fail "postgres-highly-available: config.credentialsSecretName is required — it names the `dictionary` secret holding `username`, `password` and `database`. Create that secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- if and .Values.backup.enabled (eq .Values.backup.provider "minio") -}}
+{{- if or (hasKey .Values.backup.minio "accessKey") (hasKey .Values.backup.minio "secretKey") -}}
+{{- fail "postgres-highly-available: backup.minio.accessKey and backup.minio.secretKey were REMOVED in 2.5.0. Create a `dictionary` secret holding the keys `accessKey` and `secretKey`, and set backup.minio.credentialsSecretName to its name. See Backup setup in the README." -}}
+{{- end -}}
+{{- if not .Values.backup.minio.credentialsSecretName -}}
+{{- fail "postgres-highly-available: backup.minio.credentialsSecretName is required when backup.provider is 'minio' — it names the `dictionary` secret holding `accessKey` and `secretKey`. Create it BEFORE installing; see Backup setup in the README." -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

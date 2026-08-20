@@ -1,3 +1,4 @@
+{{- include "pg-ha.validate" . -}}
 kind: workload
 name: {{ include "pg-ha.name" . }}
 description: Postgres Highly Available
@@ -17,6 +18,19 @@ spec:
       env:
         - name: PGDATA
           value: /var/lib/postgresql/data/pgdata
+        {{- /*
+          The startup script runs in THIS container and expands these when it
+          writes Patroni's config, so they must be here, not only on the wal-g
+          sidecar. APP_DATABASE is separate from PGDATABASE because psql and
+          wal-g connect to the `postgres` maintenance database, while the
+          application database is the one named in the credentials secret.
+        */}}
+        - name: PGUSER
+          value: cpln://secret/{{ .Values.config.credentialsSecretName }}.username
+        - name: PGPASSWORD
+          value: cpln://secret/{{ .Values.config.credentialsSecretName }}.password
+        - name: APP_DATABASE
+          value: cpln://secret/{{ .Values.config.credentialsSecretName }}.database
       {{- if and .Values.backup.enabled (eq .Values.backup.mode "wal-g") }}
         - name: WALG_COMPRESSION_METHOD
           value: zstd
@@ -42,9 +56,9 @@ spec:
         - name: AWS_REGION
           value: us-east-1
         - name: AWS_ACCESS_KEY_ID
-          value: cpln://secret/{{ include "pg-ha.secretDatabase.name" . }}.minio-access-key
+          value: cpln://secret/{{ .Values.backup.minio.credentialsSecretName }}.accessKey
         - name: AWS_SECRET_ACCESS_KEY
-          value: cpln://secret/{{ include "pg-ha.secretDatabase.name" . }}.minio-secret-key
+          value: cpln://secret/{{ .Values.backup.minio.credentialsSecretName }}.secretKey
         {{- end }}
       {{- end }}
       image: {{ .Values.image }}
@@ -115,9 +129,9 @@ spec:
         - name: PGPORT
           value: "5432"
         - name: PGUSER
-          value: cpln://secret/{{ include "pg-ha.secretDatabase.name" . }}.username
+          value: cpln://secret/{{ .Values.config.credentialsSecretName }}.username
         - name: PGPASSWORD
-          value: cpln://secret/{{ include "pg-ha.secretDatabase.name" . }}.password
+          value: cpln://secret/{{ .Values.config.credentialsSecretName }}.password
         - name: PGDATABASE
           value: postgres
         {{- if eq .Values.backup.provider "aws" }}
@@ -142,9 +156,9 @@ spec:
         - name: AWS_REGION
           value: us-east-1
         - name: AWS_ACCESS_KEY_ID
-          value: cpln://secret/{{ include "pg-ha.secretDatabase.name" . }}.minio-access-key
+          value: cpln://secret/{{ .Values.backup.minio.credentialsSecretName }}.accessKey
         - name: AWS_SECRET_ACCESS_KEY
-          value: cpln://secret/{{ include "pg-ha.secretDatabase.name" . }}.minio-secret-key
+          value: cpln://secret/{{ .Values.backup.minio.credentialsSecretName }}.secretKey
         {{- end }}
       volumes:
         - path: /var/lib/postgresql/data

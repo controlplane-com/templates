@@ -1,3 +1,4 @@
+{{- include "pg-ha.validate" . -}}
 kind: volumeset
 name: {{ include "pg-ha.volume.name" . }}
 description: Postgres Highly Available volumeset

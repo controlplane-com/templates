@@ -1,3 +1,4 @@
+{{- include "pg-ha.validate" . -}}
 kind: policy
 name: {{ include "pg-ha.policy.name" . }}
 description: Postgres Highly Available policy
@@ -11,7 +12,14 @@ bindings:
 targetKind: secret
 targetLinks:
   - //secret/{{ include "pg-ha.secretStartup.name" . }}
+  {{- /* The user's prerequisite credentials secret. */}}
+  - //secret/{{ .Values.config.credentialsSecretName }}
+  {{- if .Values.backup.enabled }}
   - //secret/{{ include "pg-ha.secretDatabase.name" . }}
+  {{- end }}
+  {{- if and .Values.backup.enabled (eq .Values.backup.provider "minio") }}
+  - //secret/{{ .Values.backup.minio.credentialsSecretName }}
+  {{- end }}
   {{- if .Values.proxy.enabled }}
   - //secret/{{ include "pg-ha.secretProxyStartup.name" . }}
   {{- end }}

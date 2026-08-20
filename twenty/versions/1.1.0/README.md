@@ -10,7 +10,7 @@
 - **PostgreSQL** — the `postgres` template (single instance, PostgreSQL 18) by default, or the `postgres-highly-available` template (3 Patroni replicas, 3 etcd replicas, HAProxy leader endpoint, PostgreSQL 17) as an opt-in.
 - **Volume sets** — Redis AOF at `/data`; local attachment storage at `/app/packages/twenty-server/.local-storage` (*only* in `storage.type: local`).
 - **Identity + policy** — one identity shared by the three workloads, granted `reveal` on exactly the secrets they mount.
-- **Secrets** — a template-created dictionary secret for the bundled Redis password; the app key and any S3 static keys come from user-created secrets.
+- **Secrets** — template-created dictionary secrets for the bundled Redis password and (single-instance path) the database credentials; the app key and any S3 static keys come from user-created secrets.
 
 ## Prerequisites
 
@@ -24,6 +24,7 @@
 - **(Only for S3 attachment storage)** a bucket on AWS S3 (keyless via a cloud account + IAM policy — static keys are not accepted for AWS) or a MinIO/S3-compatible server with a static-key dictionary secret — see Storage setup.
 - **(Only during a key rotation)** a second opaque secret holding the *previous* app key, referenced via `secrets.fallbackName`.
 - **(Only for database backups)** a bucket on AWS S3, Google Cloud Storage or a MinIO/S3-compatible server, plus a Control Plane cloud account — see Storage setup.
+- The database password is **not** a prerequisite — it is bundled plumbing no human types elsewhere, so this template creates that secret for you from `postgres.credentials.*` (single-instance path) or hands it to `postgres-highly-available` (HA path).
 
 ## Configuration
 
@@ -124,10 +125,14 @@ redis:
 postgres:
   enabled: true
   image: postgres:18          # PostgreSQL 18 (the HA path below runs 17 — the majors differ)
-  config:
+  credentials:                # this template builds the DB credential secret from these
     username: twenty
     password: change-me-twenty-db     # change before install; letters/digits/-/_ only (it is embedded in a URL)
     database: twenty
+  config:
+    # name of the dictionary secret this template CREATES and Postgres reads;
+    # secret names are org-wide, so a second release on this name is refused at install
+    credentialsSecretName: my-twenty-db-credentials
   resources:
     minCpu: 250m
     maxCpu: 1000m
@@ -212,7 +217,16 @@ Scheduled database backups are configured on whichever database path you enabled
 
 **AWS S3** — create the bucket, a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account), and an IAM policy scoped to that bucket, then set `…backup.enabled: true`, `…backup.provider: aws`, and `…backup.aws.{bucket,region,cloudAccountName,policyName}`. The policy JSON is the same bucket-scoped document shown above for attachment storage.
 
-**MinIO / S3-compatible** — set `…backup.provider: minio` and `…backup.minio.{endpoint,bucket,accessKey,secretKey}`; no cloud account is involved because the keys authenticate directly.
+**MinIO / S3-compatible** — set `…backup.provider: minio` and `…backup.minio.{endpoint,bucket}`; no cloud account is involved because keys authenticate directly. The two database paths take those keys differently:
+
+- **Single instance** — create a dictionary secret and name it in `postgres.backup.minio.credentialsSecretName`:
+
+  ```bash
+  cpln secret create-dictionary --name my-twenty-minio-credentials \
+    --entry accessKey=ACCESS_KEY \
+    --entry secretKey=SECRET_KEY
+  ```
+- **Highly available** — set `postgresHA.backup.minio.accessKey` and `.secretKey` directly; the `postgres-highly-available` template still takes them as values.
 
 The backing database template's own README carries the full per-provider walkthrough.
 
@@ -231,7 +245,27 @@ The backing database template's own README carries the full per-provider walkthr
 | From another workload in the GVC | `http://{release}-twenty.{gvc}.cpln.local:3000` |
 | Redis (internal only) | `{release}-twenty-redis.{gvc}.cpln.local:6379`, password from `redis.auth.password` |
 | Database (internal only) | `{release}-postgres.{gvc}.cpln.local:5432`, or `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432` in HA mode |
+| Database credentials | `username` / `password` / `database` keys of the secret named by `postgres.config.credentialsSecretName` (HA mode: `{release}-postgres-config`) |
 | First login | there is no seeded account — **the first person to sign up becomes the workspace admin** |
+
+## Upgrading from 1.0.x
+
+The single-instance Postgres moved to the `postgres` 3.4.1 template, which no longer takes
+database credentials or MinIO backup keys as values. Twenty absorbed the credentials change
+rather than passing it on, so **there is no new prerequisite for the database** — only
+renames on the single-instance path:
+
+| Removed key | Replacement |
+|---|---|
+| `postgres.config.username` | `postgres.credentials.username` |
+| `postgres.config.password` | `postgres.credentials.password` |
+| `postgres.config.database` | `postgres.credentials.database` |
+| `postgres.backup.minio.accessKey` / `.secretKey` | `postgres.backup.minio.credentialsSecretName` (a dictionary secret you create; MinIO backups only) |
+
+Carrying an old credentials key forward fails the render with the **Postgres template's**
+message, which tells you to create a dictionary secret yourself. Ignore that advice for the
+three credentials keys — this template creates that secret. The `postgresHA` path is
+completely unchanged, including its MinIO backup keys.
 
 ## Important Notes
 
@@ -240,6 +274,7 @@ The backing database template's own README carries the full per-provider walkthr
 - **`local` storage uses a shared (read-write-many) volume mounted by both the server and the worker**, so attachments are visible to background jobs. Shared volumes support expansion only — **no snapshots** — and exist in a single location, so `storage.type: s3` remains the durable choice for production and is required for `twenty.replicas > 1`.
 
 - **Create the app-key secret before installing.** Without it the deployment sits waiting on a missing secret and looks broken.
+- **Give each twenty release its own `postgres.config.credentialsSecretName`** (single-instance path). Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected.
 - **On a public endpoint, whoever reaches the URL first owns the CRM.** Sign up immediately after install, or set `publicAccess.enabled: false` until you are ready.
 - **Treat the app key as write-once.** Changing `secrets.name` without pointing `secrets.fallbackName` at the old key makes stored OAuth tokens, TOTP secrets and app variables undecryptable and logs everyone out.
 - **`twenty.replicas > 1` requires `storage.type: s3`**, and moves boot migrations to the worker — on a *fresh* multi-replica install the servers may serve errors for a minute or two until the worker finishes migrating.

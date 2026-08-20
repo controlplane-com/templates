@@ -2,7 +2,7 @@ apiVersion: v2
 name: twenty
 description: Twenty open-source CRM — customizable objects, pipelines and views, backed by PostgreSQL and Redis
 type: application
-version: 1.0.1
+version: 1.1.0
 appVersion: "2.26.1"
 
 dependencies:
@@ -10,7 +10,7 @@ dependencies:
     version: 1.0.0
     repository: "oci://ghcr.io/controlplane-com/templates"
   - name: postgres
-    version: 3.3.0
+    version: 3.4.1
     repository: "oci://ghcr.io/controlplane-com/templates"
     condition: postgres.enabled
   - name: postgres-highly-available
@@ -21,6 +21,6 @@ dependencies:
 
 annotations:
   created: "2026-08-05"
-  lastModified: "2026-08-17"
+  lastModified: "2026-08-19"
   category: "crm"
   createsGvc: false

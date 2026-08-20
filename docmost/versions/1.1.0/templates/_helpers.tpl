@@ -20,6 +20,16 @@
 {{- printf "%s-docmost-creds" .Release.Name }}
 {{- end }}
 
+{{/*
+Name of the DB-credentials secret this chart creates for the bundled postgres
+subchart. postgres 3.4.0 stopped creating its own secret and now takes only a
+NAME, and a parent cannot template a subchart value — so the name is a plain
+value that both sides read.
+*/}}
+{{- define "docmost.secret.db.name" -}}
+{{- .Values.postgres.config.credentialsSecretName }}
+{{- end }}
+
 {{- define "docmost.identity.name" -}}
 {{- printf "%s-docmost-identity" .Release.Name }}
 {{- end }}

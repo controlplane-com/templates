@@ -75,10 +75,19 @@ internalAccess:
 # ─── PostgreSQL (subchart: postgres) — documents, users, spaces ───
 postgres:
   image: postgres:18
-  config:
+  # Credentials for the bundled database — internal plumbing no human types elsewhere.
+  # Docmost CREATES the dictionary secret named by config.credentialsSecretName below
+  # out of these three values, so there is nothing for you to create before installing.
+  credentials:
     username: docmost
     password: change-me-docmost-pg   # template-managed cred for the bundled DB — change before install
     database: docmost
+  config:
+    # Name of the dictionary secret this chart creates and the bundled postgres reads.
+    # Secret names are org-wide: give each docmost release its own name. A second
+    # release left on this name is REFUSED at install (it is owned by the first
+    # release) — nothing is shared, overwritten or deleted.
+    credentialsSecretName: my-docmost-db-credentials
   resources:
     minCpu: 250m
     maxCpu: 1000m

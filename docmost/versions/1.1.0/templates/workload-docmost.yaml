@@ -29,7 +29,7 @@ spec:
         - name: POSTGRES_PASSWORD
           value: cpln://secret/{{ include "docmost.secret.creds.name" . }}.postgresPassword
         - name: DATABASE_URL
-          value: postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@{{ include "docmost.postgres.host" . }}:5432/{{ .Values.postgres.config.database }}?schema=public
+          value: postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@{{ include "docmost.postgres.host" . }}:5432/{{ .Values.postgres.credentials.database }}?schema=public
         # ── Redis (bundled) — BullMQ queues + socket.io adapter + collab sync ──
         - name: REDIS_PASSWORD
           value: cpln://secret/{{ include "docmost.secret.creds.name" . }}.redisPassword

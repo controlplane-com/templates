@@ -9,6 +9,7 @@ Docmost is an open-source (AGPL) knowledge base and wiki — a Confluence/Notion
 - **Redis** — bundled single-node workload with AOF persistence; BullMQ queues, socket.io adapter, and cross-replica collab sync. Required — Docmost will not report healthy without it.
 - **Attachment volumeset** — local attachment storage at `/app/data/storage`; mounted only when `storage.type: local`.
 - **Creds secret** — template-created dictionary secret used to assemble `DATABASE_URL` and `REDIS_URL`.
+- **Database credentials secret** — a *separate* template-created dictionary secret (`username` / `password` / `database`), built from `postgres.credentials.*` and handed to the Postgres store by name. Kept apart from the creds secret above so the Postgres identity is never granted the Redis password. Nothing for you to create.
 - **Identity + policy** — grants the workloads `reveal` on exactly the secrets they mount; carries the AWS cloud-account link in keyless S3 mode.
 
 ## Prerequisites
@@ -20,6 +21,7 @@ Docmost is an open-source (AGPL) knowledge base and wiki — a Confluence/Notion
     cpln secret create-opaque --name my-docmost-app-secret --encoding plain -f -
   ```
 
+- **The database password is not a prerequisite** — it is bundled plumbing no human types elsewhere, so this template creates that secret for you from `postgres.credentials.*`.
 - **(Only for S3 attachment storage)** a bucket on AWS S3 (keyless via a cloud account + IAM policy — static keys are not accepted for AWS) or a MinIO/S3-compatible server with a static-key dictionary secret — see Storage setup.
 - **(Optional, only for authenticated SMTP)** a dictionary secret with `SMTP_USERNAME` + `SMTP_PASSWORD`, referenced via `smtp.auth.secretName`.
 
@@ -100,10 +102,14 @@ internalAccess:
 ```yaml
 postgres:
   image: postgres:18
-  config:
+  credentials:                # this template builds the DB credential secret from these
     username: docmost
     password: change-me-docmost-pg      # change before installing
     database: docmost
+  config:
+    # name of the dictionary secret this template CREATES and Postgres reads;
+    # secret names are org-wide, so a second release on this name is refused at install
+    credentialsSecretName: my-docmost-db-credentials
   volumeset:
     capacity: 10              # GiB (minimum 10)
 
@@ -166,8 +172,25 @@ cpln secret create-dictionary --name my-docmost-s3-keys \
 | Public UI | `https://<canonical>.cpln.app` | first visit creates the admin account + workspace |
 | Internal (same GVC) | `http://{release}-docmost.{gvc}.cpln.local:3000` | account login |
 | Health | `GET /api/health` (readiness), `GET /api/health/live` | none |
+| PostgreSQL (same GVC) | `{release}-postgres.{gvc}.cpln.local:5432` | the `username` / `password` / `database` keys of the secret named by `postgres.config.credentialsSecretName` |
 
 The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`cpln workload get {release}-docmost -o yaml`).
+
+## Upgrading from 1.0.0
+
+The bundled Postgres moved to the `postgres` 3.4.1 template, which no longer takes database
+credentials as values. Docmost absorbed that change rather than passing it on, so **there is
+no new prerequisite** — only a rename:
+
+| Removed key | Replacement |
+|---|---|
+| `postgres.config.username` | `postgres.credentials.username` |
+| `postgres.config.password` | `postgres.credentials.password` |
+| `postgres.config.database` | `postgres.credentials.database` |
+
+Carrying an old key fails the render with the **Postgres template's** message, which tells you
+to create a dictionary secret yourself. Ignore that advice here — this template creates it.
+Move the three keys and you are done.
 
 ## Important Notes
 
@@ -176,6 +199,7 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`c
 - **Secure your workspace on first visit** — the first browser session to reach the UI creates the admin account and workspace; install and set it up promptly.
 - **`replicas > 1` requires `storage.type: s3`** — local attachments live on per-replica volumes and would 404 across replicas; the chart refuses to render otherwise.
 - **With SMTP off, member invites cannot be delivered** — the production image sends no mail and logs no invite links. Configure `smtp.*` before inviting members; the solo/first-admin experience works fine without it.
+- **Give each Docmost release its own `postgres.config.credentialsSecretName`.** Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared, overwritten or deleted, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
 - **Pages and attachments survive reinstall** — documents live in the Postgres volumeset, local attachments in the storage volumeset; to wipe all data, delete those volumesets too.
 
 ## Links

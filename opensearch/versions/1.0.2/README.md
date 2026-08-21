@@ -207,6 +207,8 @@ Monitor with `curl "$OS/_cat/recovery?v&active_only=true"` and `curl "$OS/_clust
 
 - **The security plugin is disabled — there is no authentication.** Any workload permitted by `internal_access` has full read/write admin access to every index. Keep `internal_access.type` as narrow as your deployment allows, and use `workload-list` rather than `same-org` for anything sensitive.
 - **`replicas` must be odd.** An even count cannot form a quorum and is rejected at render.
+- **Enabling backups on a running cluster fails for a few minutes before it succeeds.** The repository plugin is installed at node startup, so the nodes must roll before the repository can be registered — meanwhile the setup job reports `repository type [s3] does not exist` and restarts. It retries until every node carries the plugin (about 4-5 minutes for 3 nodes) and then succeeds. Enabling backups at install time avoids this entirely.
+- **Switching `backup.provider` on an existing release leaves the old cloud binding attached.** The API merges identity updates and never removes a provider block once set, so an AWS-then-GCP switch leaves the identity holding both. Measured: a direct re-apply omitting the old block does not clear it either. Uninstall and reinstall if you need the old binding gone.
 - **Always use the fully-qualified internal hostname** (`RELEASE_NAME-opensearch.GVC_NAME.cpln.local`). The bare workload name is not reliably resolvable.
 - **Set the snapshot IAM policy to both bucket ARNs.** With only `bucket/*`, repository registration succeeds and snapshot listing then fails.
 - **Data survives a Helm upgrade but not an uninstall** — `cpln helm uninstall` deletes the volume sets. Enable snapshots if the data matters.

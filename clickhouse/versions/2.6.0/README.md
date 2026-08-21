@@ -203,5 +203,5 @@ clickhouse-client --host $WORKLOAD_NAME --password $PASSWORD
 - [Cloud Accounts Documentation](https://docs.controlplane.com/guides/create-cloud-account#overview)
 - [ClickHouse with S3](https://clickhouse.com/docs/integrations/s3)
 - [ClickHouse with GCS](https://clickhouse.com/docs/integrations/gcs)
-- [ClickHouse with Azure Blob Storage](https://clickhouse.com/docs/integrations/azure-data-lake-storage)
+- [ClickHouse with Azure Blob Storage](https://clickhouse.com/docs/engines/table-engines/integrations/azureBlobStorage)
 - [ClickHouse with S3-compatible storage](https://clickhouse.com/docs/integrations/s3#s3-compatible-storage)

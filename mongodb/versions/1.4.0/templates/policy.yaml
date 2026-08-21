@@ -10,4 +10,8 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "mongo.identity.name" . }}
 targetKind: secret
 targetLinks:
+  {{- /* the user's prerequisite credentials secret */}}
+  - //secret/{{ .Values.config.credentialsSecretName }}
+  {{- if .Values.backup.enabled }}
   - //secret/{{ include "mongo.secretDatabase.name" . }}
+  {{- end }}

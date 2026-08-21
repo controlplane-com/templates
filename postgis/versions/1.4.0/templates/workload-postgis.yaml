@@ -11,11 +11,11 @@ spec:
         - name: PGDATA
           value: "/var/lib/postgresql/data/pg_data"
         - name: POSTGRES_DB
-          value: {{ .Values.config.database | quote }}
+          value: 'cpln://secret/{{ .Values.config.credentialsSecretName }}.database'
         - name: POSTGRES_PASSWORD
-          value: 'cpln://secret/{{ include "postgis.secretDatabase.name" . }}.password'
+          value: 'cpln://secret/{{ .Values.config.credentialsSecretName }}.password'
         - name: POSTGRES_USER
-          value: 'cpln://secret/{{ include "postgis.secretDatabase.name" . }}.username'
+          value: 'cpln://secret/{{ .Values.config.credentialsSecretName }}.username'
       image: {{ .Values.image }}
       inheritEnv: false
       minCpu: {{ .Values.resources.minCpu | quote }}

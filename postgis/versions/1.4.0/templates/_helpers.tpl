@@ -101,3 +101,13 @@ Common labels
 app.cpln.io/name: {{ .Release.Name }}
 app.cpln.io/instance: {{ .Release.Name }}
 {{- end }}
+
+{{/* Validation — runs from every resource template, so a bad value fails before anything is applied. */}}
+{{- define "postgis.validate" -}}
+{{- if or (hasKey .Values.config "username") (hasKey .Values.config "password") -}}
+{{- fail "postgis: config.username and config.password were REMOVED — they are now a `dictionary` secret you create, named by config.credentialsSecretName, holding the keys `username`, `password` and `database`. Delete them from your values. See Prerequisites in the README." -}}
+{{- end -}}
+{{- if not .Values.config.credentialsSecretName -}}
+{{- fail "postgis: config.credentialsSecretName is required — it names the `dictionary` secret holding `username`, `password` and `database`. Create that secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- end -}}

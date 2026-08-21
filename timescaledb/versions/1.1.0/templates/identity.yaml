@@ -1,3 +1,4 @@
+{{- include "timescaledb.validate" . -}}
 {{- include "timescaledb.validateBackupConfig" . -}}
 kind: identity
 name: {{ include "timescaledb.identity.name" . }}

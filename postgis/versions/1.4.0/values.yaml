@@ -7,9 +7,12 @@ resources:
   maxMemory: 1024Mi
 
 config:
-  username: username
-  password: password
-  database: test
+  # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL.
+  # A `dictionary` secret holding exactly three keys: `username`, `password`
+  # and `database`. If it does not exist at install time the deployment
+  # WEDGES silently — `cpln logs` returns nothing at all. See Prerequisites
+  # in the README for the exact `cpln secret create-dictionary` command.
+  credentialsSecretName: my-postgis-credentials
 
 volumeset:
   capacity: 10 # initial capacity in GiB (minimum is 10)

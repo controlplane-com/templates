@@ -1,3 +1,4 @@
+{{- include "postgis.validate" . -}}
 {{- include "postgis.validateBackupConfig" . -}}
 kind: identity
 name: {{ include "postgis.identity.name" . }}

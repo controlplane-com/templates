@@ -109,3 +109,13 @@ Common labels - delegated to cpln-common
 {{- define "timescaledb.tags" -}}
 {{- include "cpln-common.tags" . }}
 {{- end }}
+
+{{/* Validation — runs from every resource template, so a bad value fails before anything is applied. */}}
+{{- define "timescaledb.validate" -}}
+{{- if or (hasKey .Values.config "username") (hasKey .Values.config "password") -}}
+{{- fail "timescaledb: config.username and config.password were REMOVED — they are now a `dictionary` secret you create, named by config.credentialsSecretName, holding the keys `username`, `password` and `database`. Delete them from your values. See Prerequisites in the README." -}}
+{{- end -}}
+{{- if not .Values.config.credentialsSecretName -}}
+{{- fail "timescaledb: config.credentialsSecretName is required — it names the `dictionary` secret holding `username`, `password` and `database`. Create that secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- end -}}

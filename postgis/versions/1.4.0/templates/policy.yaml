@@ -9,4 +9,8 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "postgis.identity.name" . }}
 targetKind: secret
 targetLinks:
+  {{- /* the user's prerequisite credentials secret */}}
+  - //secret/{{ .Values.config.credentialsSecretName }}
+  {{- if .Values.backup.enabled }}
   - //secret/{{ include "postgis.secretDatabase.name" . }}
+  {{- end }}

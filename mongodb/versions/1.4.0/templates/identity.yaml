@@ -1,3 +1,4 @@
+{{- include "mongo.validate" . -}}
 {{- include "mongo.validateBackupConfig" . -}}
 kind: identity
 name: {{ include "mongo.identity.name" . }}

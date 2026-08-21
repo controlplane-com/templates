@@ -11,11 +11,11 @@ spec:
     - name: mongo
       env:
         - name: MONGO_INITDB_DATABASE
-          value: {{ .Values.config.database | quote }}
+          value: 'cpln://secret/{{ .Values.config.credentialsSecretName }}.database'
         - name: MONGO_INITDB_ROOT_PASSWORD
-          value: 'cpln://secret/{{ include "mongo.secretDatabase.name" . }}.password'
+          value: 'cpln://secret/{{ .Values.config.credentialsSecretName }}.password'
         - name: MONGO_INITDB_ROOT_USERNAME
-          value: 'cpln://secret/{{ include "mongo.secretDatabase.name" . }}.username'
+          value: 'cpln://secret/{{ .Values.config.credentialsSecretName }}.username'
       image: {{ .Values.image }}
       inheritEnv: false
       minCpu: {{ .Values.resources.minCpu | quote }}

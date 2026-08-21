@@ -6,10 +6,13 @@ resources:
   maxCpu: 500m
   maxMemory: 512Mi
 
-config: # initdb credentials and database name
-  username: username
-  password: password
-  database: test
+config:
+  # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL.
+  # A `dictionary` secret holding exactly three keys: `username`, `password`
+  # and `database`. If it does not exist at install time the deployment
+  # WEDGES silently — `cpln logs` returns nothing at all. See Prerequisites
+  # in the README for the exact `cpln secret create-dictionary` command.
+  credentialsSecretName: my-mongodb-credentials
 
 volumeset:
   capacity: 10 # initial capacity in GiB (minimum is 10)

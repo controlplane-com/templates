@@ -19,11 +19,11 @@ spec:
         - name: DB_PORT
           value: '5432'
         - name: DB_USER
-          value: 'cpln://secret/{{ include "timescaledb.secretDatabase.name" . }}.username'
+          value: 'cpln://secret/{{ .Values.config.credentialsSecretName }}.username'
         - name: DB_PASSWORD
-          value: 'cpln://secret/{{ include "timescaledb.secretDatabase.name" . }}.password'
+          value: 'cpln://secret/{{ .Values.config.credentialsSecretName }}.password'
         - name: DB_NAME
-          value: {{ .Values.config.database | quote }}
+          value: 'cpln://secret/{{ .Values.config.credentialsSecretName }}.database'
         - name: POOL_MODE
           value: {{ .Values.pgbouncer.poolMode | quote }}
         - name: DEFAULT_POOL_SIZE

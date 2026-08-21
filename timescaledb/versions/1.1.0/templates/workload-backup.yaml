@@ -45,11 +45,11 @@ spec:
         - name: PG_HOST
           value: {{ include "timescaledb.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local
         - name: PG_PASSWORD
-          value: cpln://secret/{{ include "timescaledb.secretDatabase.name" . }}.password
+          value: cpln://secret/{{ .Values.config.credentialsSecretName }}.password
         - name: PG_PORT
           value: '5432'
         - name: PG_USER
-          value: cpln://secret/{{ include "timescaledb.secretDatabase.name" . }}.username
+          value: cpln://secret/{{ .Values.config.credentialsSecretName }}.username
       image: {{ .Values.backup.image }}
       inheritEnv: false
   defaultOptions:

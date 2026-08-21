@@ -1,0 +1,63 @@
+{{- if .Values.repair.enabled }}
+kind: workload
+name: {{ include "cassandra.workload.repair.name" . }}
+description: Scheduled Cassandra cluster repair job
+tags: {{- include "cassandra.tags" . | nindent 2 }}
+spec:
+  type: cron
+  containers:
+    - name: repair
+      image: {{ .Values.image }}
+      cpu: 250m
+      memory: 256Mi
+      inheritEnv: false
+      command: /bin/bash
+      args:
+        - '-c'
+        - |
+          set -euo pipefail
+
+          CASSANDRA_WORKLOAD="{{ include "cassandra.workload.name" . }}"
+
+          # The svc.cluster.local hostnames resolve directly to pod IPs, bypassing
+          # the CP service mesh proxy that blocks JMX (port 7199) connections.
+          # The namespace hash is extracted from the pod's DNS search domain.
+          K8S_NAMESPACE=$(awk '/^search/{print $2}' /etc/resolv.conf | cut -d'.' -f1)
+
+          echo "Starting full repair on all {{ .Values.replicas | int }} replicas..."
+          FAILED=0
+          for i in $(seq 0 $(( {{ .Values.replicas | int }} - 1 ))); do
+            HOST="${CASSANDRA_WORKLOAD}-${i}.${CASSANDRA_WORKLOAD}.${K8S_NAMESPACE}.svc.cluster.local"
+            echo "--- Repairing replica ${i} (${HOST}) ---"
+            nodetool -u cassandra -pw "{{ .Values.superuserPassword }}" -h "${HOST}" -p 7199 repair \
+              && echo "Replica ${i} repair complete." \
+              || { echo "WARN: Replica ${i} repair failed."; FAILED=$(( FAILED + 1 )); }
+          done
+
+          if [ "${FAILED}" -gt 0 ]; then
+            echo "ERROR: ${FAILED} replica(s) failed repair."
+            exit 1
+          else
+            echo "All replicas repaired successfully."
+          fi
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "cassandra.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: false
+  firewallConfig:
+    internal:
+      inboundAllowType: {{ .Values.internal_access.type }}
+  job:
+    schedule: {{ .Values.repair.schedule | quote }}
+    concurrencyPolicy: Forbid
+    restartPolicy: Never
+    historyLimit: 5
+{{- end }}

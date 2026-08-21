@@ -1,0 +1,87 @@
+---
+kind: workload
+name: {{ include "pgedge.name" . }}
+description: pgEdge distributed multi-master PostgreSQL
+tags: {{- include "pgedge.tags" . | nindent 2 }}
+spec:
+  type: stateful
+  containers:
+    - name: pgedge
+      image: {{ .Values.image }}
+      command: "/bin/bash"
+      args:
+        - "/pgedge/start.sh"
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      inheritEnv: false
+      env:
+        - name: PGDATA
+          value: /pgvol/pgdata
+        - name: PG_USERNAME
+          value: cpln://secret/{{ include "pgedge.secretConfig.name" . }}.username
+        - name: PG_PASSWORD
+          value: cpln://secret/{{ include "pgedge.secretConfig.name" . }}.password
+        - name: PG_DATABASE
+          value: cpln://secret/{{ include "pgedge.secretConfig.name" . }}.database
+      ports:
+        - number: 5432
+          protocol: tcp
+      volumes:
+        - path: /pgvol
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "pgedge.volume.name" . }}
+        - path: /pgedge/start.sh
+          uri: cpln://secret/{{ include "pgedge.secretStartup.name" . }}.payload
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "pgedge.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      metric: disabled
+      minScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: {{ .Values.multiZone }}
+    suspend: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0  # Required for inter-node Spock replication across locations
+    internal:
+      inboundAllowType: {{ .Values.internal_access.type }}
+      {{- if .Values.internal_access.workloads }}
+      inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: true  # Each replica gets its own addressable DNS endpoint
+  localOptions:
+    {{- range $location := .Values.gvc.locations }}
+    - location: //location/{{ $location.name }}
+      autoscaling:
+        maxConcurrency: 0
+        maxScale: {{ $location.replicas | int }}
+        metric: disabled
+        minScale: {{ $location.replicas | int }}
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      multiZone:
+        enabled: {{ $.Values.multiZone }}
+      suspend: false
+      timeoutSeconds: 5
+    {{- end }}
+  securityOptions:
+    filesystemGroupId: 1000
+    runAsUser: 26
+  supportDynamicTags: false

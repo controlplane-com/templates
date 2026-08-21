@@ -27,7 +27,7 @@ spec:
       volumes:
         - path: /usr/src/app/sync.yaml
           recoveryPolicy: retain
-          uri: cpln://secret/{{ include "ess.secret.name" . }}
+          uri: cpln://secret/{{ .Values.configSecretName }}
   defaultOptions:
     autoscaling:
       maxConcurrency: 0

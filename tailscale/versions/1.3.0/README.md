@@ -4,6 +4,32 @@ This app creates a workload in your Control Plane GVC that connects to your tail
 
 Any workload that allows access from this tailscale workload will be able to be reached when connected to the tailscale network.
 
+### Prerequisites
+
+**One `opaque` secret must exist BEFORE you install.** It holds your Tailscale auth key, which authorizes a
+device onto your tailnet — so it is not a value: a value would leave the key in the Helm release.
+
+Generate a key in the Tailscale admin console under **Settings → Keys → Generate auth key**, then:
+
+```bash
+printf '%s' 'tskey-auth-YOUR-KEY-HERE' | cpln secret create-opaque --name my-tailscale-authkey --encoding plain -f -
+```
+
+Set `authKeySecretName` to the name you used. Secret names are organization-wide, so give each release its own.
+
+**If the secret does not exist at install time, the deployment wedges silently.** `cpln logs` returns
+**zero lines** — the container never starts, so it has nothing to log. Read `status.versions[].message`:
+
+```bash
+cpln workload get-deployments RELEASE_NAME-tailscale --gvc GVC_NAME -o yaml
+```
+
+Note this is `get-deployments` — plain `cpln workload get` has no `versions` field.
+
+<b>Upgrading from 1.2.x:</b> delete `AuthKey` from your values and create the secret instead. An upgrade that
+still carries `AuthKey` is refused at render. Reuse the same key, or generate a new one — unlike a database
+password, a Tailscale auth key only authorizes the device at join time, so replacing it is safe.
+
 ### Configure Tailscale
 
 1. Create an Auth key using the Tailscale [admin website](https://login.tailscale.com/admin/settings/keys) and save the value for use later in this guide ($TS_AUTHKEY). Be sure to enable the `Reusable` and `Ephemeral` options for the key.

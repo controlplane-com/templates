@@ -1,3 +1,4 @@
+{{- include "ess.validate" . }}
 kind: identity
 gvc: {{ .Values.global.cpln.gvc }}
 name: {{ include "ess.identity.name" . }}

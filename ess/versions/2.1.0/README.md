@@ -20,6 +20,54 @@ This version adds automatic base64 handling to `discoverAllSecrets`: a discovere
 
 > **Upgrade note:** On the first sync after upgrading, any already-discovered opaque secret whose value looks like base64 is re-written with `encoding: base64`, and workloads consuming it start receiving the **decoded** value. If a consumer decodes such a secret itself today, label the GCP secret `cpln-encoding: disable` **before** upgrading to keep the current behavior.
 
+### Prerequisites
+
+**One `opaque` secret must exist BEFORE you install**, holding your entire `sync.yaml`.
+
+The sync configuration carries provider credentials — a Vault token, AWS access keys, a 1Password service
+account token — so it is not a value. A value would put every one of them in the Helm release. It is also a
+configuration *file* rather than a set of environment variables, and a `cpln://secret` reference inside a file
+is never resolved, so individual keys cannot be swapped out either. The whole file is therefore yours.
+
+Write your configuration to a file:
+
+```yaml
+# sync.yaml
+providers:
+  - name: my-vault
+    vault:
+      address: https://my-vault.com:8200
+      token: YOUR-VAULT-TOKEN
+    syncInterval: 1m
+secrets:
+  - name: my-app-secret
+    provider: my-vault
+    type: opaque
+    path: secret/data/my-app
+    key: password
+```
+
+Then create the secret from it and set `configSecretName` to the name you used:
+
+```bash
+cpln secret create-opaque --name my-ess-config --encoding plain -f sync.yaml
+```
+
+The schema for `providers` and `secrets` is documented below — it is unchanged, it simply lives in this file
+now instead of under `essConfig` in your values.
+
+**If the secret does not exist at install time, the deployment wedges silently.** `cpln logs` returns
+**zero lines**. Read `status.versions[].message`:
+
+```bash
+cpln workload get-deployments RELEASE_NAME-ess --gvc GVC_NAME -o yaml
+```
+
+<b>Upgrading from 2.0.x:</b> move your existing `essConfig` block into `sync.yaml` verbatim — the keys are
+identical, only the top-level `essConfig:` wrapper goes away — create the secret, and delete `essConfig` from
+your values. An upgrade that still carries `essConfig` is refused at render. Rotate any credential that was in
+your values file, since it was stored in the Helm release.
+
 ### Configuring `values.yaml`
 
 #### Top-level fields
@@ -30,11 +78,11 @@ This version adds automatic base64 handling to `discoverAllSecrets`: a discovere
 | `resources.cpu` / `resources.memory` | Resource limits for the workload container. |
 | `port` | Port for the ESS HTTP admin API (default: `3004`). Used for health checks and manual sync triggers. |
 | `allowedIp` | List of CIDRs allowed to reach the ESS admin API externally. Replace the placeholder with your IP, or use `0.0.0.0/0` to allow all. |
-| `essConfig` | The full sync configuration — providers and secrets (see below). |
+| `configSecretName` | Name of the `opaque` secret holding your `sync.yaml` — the full sync configuration. See [Prerequisites](#prerequisites). |
 
 ---
 
-#### `essConfig.providers`
+#### `providers`
 
 Each provider entry requires a unique `name` and exactly one provider block. An optional `syncInterval` sets the default interval for all secrets using that provider.
 
@@ -110,7 +158,7 @@ Each provider entry requires a unique `name` and exactly one provider block. An 
 
 ---
 
-#### `essConfig.secrets`
+#### `secrets`
 
 Each secret entry syncs one value (or a set of values) from a provider into a Control Plane secret.
 

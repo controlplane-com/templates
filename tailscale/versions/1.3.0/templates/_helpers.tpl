@@ -57,3 +57,18 @@ Common tags
 app.cpln.io/name: {{ .Release.Name }}
 app.cpln.io/instance: {{ .Release.Name }}
 {{- end }}
+
+
+{{/*
+The auth key moved out of values in 1.3.0. Reject the old key explicitly so an
+upgrade that still carries it fails at render instead of leaving a Tailscale
+auth key sitting in the Helm release.
+*/}}
+{{- define "ts.validate" -}}
+{{- if hasKey .Values "AuthKey" -}}
+{{- fail "tailscale: AuthKey was REMOVED — it is now an `opaque` secret you create, named by authKeySecretName, whose entire value is the auth key. Delete AuthKey from your values. See Prerequisites in the README." -}}
+{{- end -}}
+{{- if not .Values.authKeySecretName -}}
+{{- fail "tailscale: authKeySecretName is required — it names the `opaque` secret holding your Tailscale auth key. Create that secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- end -}}

@@ -3,7 +3,7 @@ location: aws-us-east-1
 
 image:
   repository: tailscale/tailscale
-  tag: stable
+  tag: v1.102.3 # pinned: `stable` floats, so installs are not reproducible
 
 resources:
   cpu: 500m
@@ -11,7 +11,7 @@ resources:
 
 extraEnv:
   - name: TS_HOSTNAME
-    value: cpln-test-new
+    value: cpln-tailscale # the name this device advertises on your tailnet
   # - name: TS_EXTRA_ARGS
   #   value: --advertise-exit-node
 
@@ -32,4 +32,9 @@ locationDNS:
 
 deployHttpbinExample: true
 
-AuthKey: replaceWithYourTailscaleAuthKey
+# REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL.
+# An `opaque` secret whose entire value is your Tailscale auth key. If it does
+# not exist at install time the deployment WEDGES silently — `cpln logs`
+# returns nothing at all. See Prerequisites in the README for the exact
+# `cpln secret create-opaque` command.
+authKeySecretName: my-tailscale-authkey

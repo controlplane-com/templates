@@ -2,7 +2,6 @@ kind: workload
 name: {{ include "ts.name" . }}
 description: Tailscale
 tags: {{- include "ts.tags" . | nindent 2 }}
-  cpln/checksum: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
 gvc: {{ .Values.global.cpln.gvc }}
 spec:
   type: standard
@@ -40,7 +39,7 @@ spec:
         - name: TS_ACCEPT_DNS
           value: 'false'
         - name: TS_AUTHKEY
-          value: cpln://secret/{{ include "ts.secret.name" . }}.authkey
+          value: cpln://secret/{{ .Values.authKeySecretName }}
         - name: TS_KUBE_SECRET
           value: ''
         - name: TS_ROUTES

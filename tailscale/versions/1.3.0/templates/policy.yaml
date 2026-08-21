@@ -9,4 +9,5 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "ts.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "ts.secret.name" . }}
+  {{- /* the user's prerequisite auth-key secret */}}
+  - //secret/{{ .Values.authKeySecretName }}

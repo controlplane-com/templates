@@ -1,3 +1,4 @@
+{{- include "ts.validate" . }}
 kind: identity
 name: {{ include "ts.identity.name" . }}
 description: Identity for the tailscale workload used to grant access to the tailscale secret

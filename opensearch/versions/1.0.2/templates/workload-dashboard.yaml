@@ -45,7 +45,7 @@ spec:
     internal:
       inboundAllowType: same-gvc
       inboundAllowWorkload: []
-  identityLink: //gvc/test-gvc/identity/{{ include "opensearch.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "opensearch.identity.name" . }}
   loadBalancer:
     replicaDirect: false
   localOptions: []

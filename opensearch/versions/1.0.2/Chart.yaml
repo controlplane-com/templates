@@ -3,12 +3,12 @@ name: opensearch
 description: OpenSearch search and analytics cluster with Dashboards and optional S3 or GCS snapshots
 
 type: application
-version: 1.0.1
+version: 1.0.2
 appVersion: "3.4.0"
 
 annotations:
   created: "2026-02-19"
-  lastModified: "2026-08-17"
+  lastModified: "2026-08-21"
   category: "search"
   createsGvc: false
 

@@ -112,3 +112,37 @@ Common labels
 app.cpln.io/name: {{ .Release.Name }}
 app.cpln.io/instance: {{ .Release.Name }}
 {{- end }}
+
+
+{{/* Validation */}}
+
+{{/*
+Validate backup configuration. An unsupported provider used to render cleanly
+and then produce no snapshot repository at all, so the failure only surfaced
+when a backup silently never happened.
+*/}}
+{{- define "opensearch.validate" -}}
+{{- if .Values.backup.enabled -}}
+  {{- $provider := .Values.backup.provider -}}
+  {{- if not (or (eq $provider "aws") (eq $provider "gcp")) -}}
+    {{- fail (printf "opensearch: backup.provider must be 'aws' or 'gcp', got '%s'." $provider) -}}
+  {{- end -}}
+  {{- if eq $provider "aws" -}}
+    {{- range $f := list "bucket" "region" "cloudAccountName" "policyName" -}}
+      {{- if not (index $.Values.backup.aws $f) -}}
+        {{- fail (printf "opensearch: backup.aws.%s is required when backup.provider is 'aws'." $f) -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if eq $provider "gcp" -}}
+    {{- range $f := list "bucket" "cloudAccountName" -}}
+      {{- if not (index $.Values.backup.gcp $f) -}}
+        {{- fail (printf "opensearch: backup.gcp.%s is required when backup.provider is 'gcp'." $f) -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- if not (mod .Values.replicas 2) -}}
+{{- fail (printf "opensearch: replicas must be odd so the cluster can form a quorum, got %v." .Values.replicas) -}}
+{{- end -}}
+{{- end -}}

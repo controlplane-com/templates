@@ -1,116 +1,129 @@
 # OpenSearch
 
-Deploy a production-ready OpenSearch cluster with automated configuration, optional visualization dashboard, demo log ingestion, and automated backups to S3 or GCS.
+OpenSearch is an open-source search and analytics engine for logs, metrics, and full-text search. This template deploys a multi-node OpenSearch cluster with persistent storage, an optional Dashboards UI, an optional demo log pipeline, and optional automated snapshots to AWS S3 or GCS.
 
-## What This Template Provides
+## Architecture
 
-- **Highly available OpenSearch cluster** with configurable replica count
-- **Automated plugin installation** (S3/GCS repository plugins for backups)
-- **OpenSearch Dashboards** for log visualization (optional - recommended)
-- **Demo log pipeline** showing Fluent Bit integration (optional)
-- **Automated snapshot backups** to AWS S3 or GCP GCS (optional)
-- **One-time setup jobs** that configure repositories and policies via API
+- **Stateful OpenSearch Workload** — (`RELEASE_NAME-opensearch`): a cluster of `replicas` nodes serving HTTP on `9200` and transport on `9300`, using `replicaDirect` so nodes can discover each other.
+- **Volume Set** — (`RELEASE_NAME-opensearch-vs`): persistent storage per node, with optional autoscaling.
+- **Startup Secret** — the node startup script, which installs the snapshot repository plugin when backups are enabled.
+- **Identity & Policy** — an identity bound to the workloads, and a policy granting `reveal` on exactly this release's secrets. When backups are enabled, the identity also carries the Cloud Account binding used to reach your bucket.
+- **Dashboards Workload** *(optional)* — (`RELEASE_NAME-opensearch-dashboard`): the web UI on port `5601`, created when `dashboard.enabled: true`.
+- **Backup Setup Workload** *(optional)* — a one-time job that registers the snapshot repository and creates the snapshot policy, created when `backup.enabled: true`.
+- **Demo Log Pipeline** *(optional)* — a log generator, a Fluent Bit sidecar, its own identity, policy and volume set, and a one-time setup job, created when `demoLogs.enabled: true`.
+
+This template does not create a GVC. Deploy it into an existing one.
+
+## Prerequisites
+
+None for a default install.
+
+Backups need a bucket and a Control Plane Cloud Account before they can be enabled — see [Storage setup](#storage-setup).
 
 ## Configuration
 
-### Core Settings
+**Cluster** — node count and identity. `replicas` must be odd so the cluster can form a quorum; an even value is rejected at render:
 
-| Value | Description | Default |
-|---|---|---|
-| `replicas` | Number of OpenSearch nodes (must be odd: 3, 5, 7) | 3 |
-| `clusterName` | OpenSearch cluster name | `my-opensearch-cluster` |
-| `resources.cpu` | CPU allocation per node | `1` |
-| `resources.memory` | Memory allocation per node | `4Gi` |
-| `volumeset.capacity` | Storage per node in GiB | `50` |
+```yaml
+image: opensearchproject/opensearch:3.4.0
+replicas: 3 # Must be odd
+clusterName: my-opensearch-cluster
+```
 
-**Production recommendations:**
-- Minimum 3 replicas for high availability
-- 1 CPU / 4Gi RAM handles 10-50GB/day logs
-- Scale to 2 CPU / 8Gi for 50-100GB/day
+**Resources** — per node. OpenSearch is memory-sensitive; raise `maxMemory` before raising CPU:
 
-**Firewall configuration:**
-- External access is blocked by default
-- Dashboard access via `cpln port-forward` only
-- OpenSearch replicas communicate internally
+```yaml
+resources:
+  minCpu: 500m
+  minMemory: 2Gi
+  maxCpu: 1
+  maxMemory: 4Gi
+```
 
----
+**Volume** — per node. Optionally autoscale as indices grow:
 
-## OpenSearch Dashboards
+```yaml
+volumeset:
+  capacity: 10 # initial capacity in GiB (minimum is 10)
+  autoscaling:
+    enabled: false # Set to true to enable autoscaling
+    maxCapacity: 100 # Maximum capacity in GiB when autoscaling is enabled
+    minFreePercentage: 10 # Minimum free percentage to trigger scaling when autoscaling is enabled
+    scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
+```
 
-Enable the web UI for log visualization:
+**Internal access** — which workloads may reach OpenSearch on `9200`. External inbound is closed and not configurable:
+
+```yaml
+internal_access:
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads:  # Note: can only be used if type is same-gvc or workload-list
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+```
+
+**Dashboards** — the web UI, reachable through `cpln port-forward`:
+
 ```yaml
 dashboard:
   enabled: true
+  image: opensearchproject/opensearch-dashboards:3.4.0
+  resources:
+    cpu: 100m
+    memory: 512Mi
 ```
 
-### Accessing the Dashboard
+**Demo logs** — a sample app plus Fluent Bit that ships logs into a `demo-logs*` index, for seeing the pipeline end to end:
 
-Dashboard is not exposed externally for security. Access via port-forward:
-```bash
-cpln port-forward WORKLOAD_NAME --location LOCATION --org ORG_NAME 5601:5601
-```
-
-Then open: http://localhost:5601
-
----
-
-## Demo Log Pipeline
-
-Deploys a sample application that generates logs and ships them to OpenSearch via Fluent Bit. This demonstrates:
-- How to configure Fluent Bit as a sidecar
-- Log parsing and enrichment
-- Automatic index creation
-- Dashboard visualization setup
-
-Enable demo:
 ```yaml
 demoLogs:
-  enabled: true
+  enabled: false
+  remove_setup_workload: false # Set to true after demo logs startup is no longer needed to reduce resource usage
 ```
 
-**What gets deployed:**
-- Log generator (Python app writing JSON logs)
-- Fluent Bit sidecar (tails logs, ships to OpenSearch)
-- Setup job (creates index template and Dashboard index pattern)
+**Backups** — scheduled snapshots. See [Storage setup](#storage-setup) before enabling:
 
-### After demo setup completes (~1-2 minutes)
-- Logs appear in Dashboard under `Discover` by the `demo-logs*` index pattern name.
-- To remove the setup workload:
 ```yaml
-demoLogs:
-  enabled: true
-  remove_setup_workload: true  # Removes the one-time setup job
+backup:
+  enabled: false      # Set to true to enable automated snapshots
+  remove_setup_workload: false # Set to true after backup setup is no longer needed to reduce resource usage
+  provider: aws       # Cloud provider: aws or gcp
+  schedule: 0 2 * * * # Daily at 2am UTC
+  retention:
+    maxAge: 30d       # Delete snapshots older than 30 days
+    maxCount: 30      # Keep maximum 30 snapshots
+  aws:
+    bucket: my-s3-bucket                 # S3 bucket name (required if provider=aws)
+    region: us-east-1                    # S3 bucket region (required if provider=aws)
+    prefix: opensearch-snapshots         # Path prefix in bucket
+    cloudAccountName: my-cloud-account   # Control Plane Cloud Account name (required)
+    policyName: my-backup-policy         # AWS IAM custom policy name (required)
+  gcp:
+    bucket: my-gcs-bucket                # GCS bucket name (required if provider=gcp)
+    prefix: opensearch-snapshots         # Path prefix in bucket
+    cloudAccountName: my-cloud-account   # Control Plane Cloud Account name (required)
 ```
-- To remove the demo logs configuration entirely
-```yaml
-demoLogs:
-  enabled: false # Removes all demo logs resources
-```
 
-**Run `cpln helm upgrade` to apply**
+## Connecting
 
----
+| What | Value |
+|---|---|
+| OpenSearch API (same GVC) | `RELEASE_NAME-opensearch.GVC_NAME.cpln.local:9200` |
+| Dashboards UI | `cpln port-forward RELEASE_NAME-opensearch-dashboard 5601:5601 --gvc GVC_NAME`, then `http://localhost:5601` |
+| Credentials | None — the security plugin is disabled, see [Important Notes](#important-notes) |
 
-## Automated Backups
+Neither workload is exposed to the internet, and external inbound is not configurable in this template.
 
-OpenSearch uses **snapshots** for backups - incremental, efficient backups stored in S3 or GCS.
+## Storage setup
 
-**This template automatically:**
-1. Installs the S3 or GCS repository plugin at container startup
-2. Configures the snapshot repository via OpenSearch API
-3. Creates a snapshot policy with your schedule and retention settings
+Required only when `backup.enabled: true`.
 
-### S3
+### AWS S3
 
-For the workload to have access to a S3 bucket, ensure the following prerequisites are completed in your AWS account before installing:
+1. Create your bucket. Set `backup.aws.bucket` to its name and `backup.aws.region` to its region.
+2. If you do not have one, [create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account). Set `backup.aws.cloudAccountName` to its name.
+3. Create an IAM policy with the following JSON, replacing `YOUR_BUCKET_NAME`, and set `backup.aws.policyName` to its name:
 
-1. Create your bucket. Update the value `bucket` to include its name and `region` to include its region.
-
-2. If you do not have a Cloud Account set up, refer to the docs to [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account). Update the value `cloudAccountName`.
-
-3. Create a new AWS IAM policy with the following JSON (replace `YOUR_BUCKET_NAME`)
-
-```JSON
+```json
 {
     "Version": "2012-10-17",
     "Statement": [
@@ -121,147 +134,86 @@ For the workload to have access to a S3 bucket, ensure the following prerequisit
                 "s3:PutObject",
                 "s3:DeleteObject",
                 "s3:ListBucket",
-                "s3:GetObjectVersion",
-                "s3:DeleteObjectVersion"
+                "s3:GetBucketLocation",
+                "s3:ListBucketMultipartUploads",
+                "s3:AbortMultipartUpload",
+                "s3:ListMultipartUploadParts"
             ],
             "Resource": [
+                "arn:aws:s3:::YOUR_BUCKET_NAME",
                 "arn:aws:s3:::YOUR_BUCKET_NAME/*"
             ]
         }
     ]
 }
 ```
- Set `policyName` to match the policy name.
+
+Both ARNs are required: `s3:ListBucket` and `s3:GetBucketLocation` authorize against the bucket itself, while the object actions authorize against `bucket/*`. A policy carrying only the `/*` ARN fails when OpenSearch enumerates the repository.
 
 ### GCS
 
-For the workload to have access to a GCS bucket, ensure the following prerequisites are completed in your GCP account before installing:
+1. Create your bucket. Set `backup.gcp.bucket` to its name.
+2. If you do not have one, [create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account). Set `backup.gcp.cloudAccountName` to its name.
+3. Grant the Cloud Account's service account the **Storage Admin** role. Access is keyless — no credentials are stored.
 
-1. Create your bucket. Update the value `bucket` to include its name.
+## Snapshots
 
-2. If you do not have a Cloud Account set up, refer to the docs to [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account). Update the value `cloudAccountName`.
+The backup setup job registers a `backup-repo` snapshot repository and a policy matching your schedule and retention. Once it has run successfully you can set `backup.remove_setup_workload: true` and upgrade to reclaim its resources; scheduled snapshots continue.
 
-**Important**: You must add the `Storage Admin` role to the created GCP service account.
+Take or inspect snapshots from any workload in the same GVC:
 
-#### Disabling the Backup Setup Workload
-
-The backup configuration is performed by a one-time setup job that:
-- Waits for OpenSearch to be healthy
-- Registers the snapshot repository via API
-- Creates the automated snapshot policy
-
-Once successful, you can remove it to save resources:
-```yaml
-backup:
-  enabled: true
-  remove_setup_workload: true
-```
-
-Run `cpln helm upgrade` to apply. The automated snapshots will continue on schedule.
-
-### Manual Snapshots
-
-Test backups or take ad-hoc snapshots from any workload in the same GVC:
 ```bash
 # Take a manual snapshot
-curl -X PUT "http://WORKLOAD_NAME:9200/_snapshot/backup-repo/manual-$(date +%Y%m%d-%H%M%S)"
+curl -X PUT "http://RELEASE_NAME-opensearch.GVC_NAME.cpln.local:9200/_snapshot/backup-repo/manual-$(date +%Y%m%d-%H%M%S)"
 
 # List all snapshots
-curl "http://WORKLOAD_NAME:9200/_snapshot/backup-repo/_all?pretty"
-
-# Check snapshot status
-curl "http://WORKLOAD_NAME:9200/_snapshot/backup-repo/_current?pretty"
+curl "http://RELEASE_NAME-opensearch.GVC_NAME.cpln.local:9200/_snapshot/backup-repo/_all?pretty"
 ```
 
----
+### Restoring
 
-## Restoring Snapshots
+OpenSearch snapshots are raw index segment files, not dumps. Restore through the API. Set `OS=http://RELEASE_NAME-opensearch.GVC_NAME.cpln.local:9200` first.
 
-OpenSearch stores snapshots as raw index segment files, not SQL dumps. Restore via the OpenSearch API from any workload that can reach the cluster.
+**Into an empty cluster** — nothing to conflict with:
 
-### List Available Snapshots
 ```bash
-curl "http://WORKLOAD_NAME:9200/_snapshot/backup-repo/_all?pretty"
-```
-
-### Restore Scenarios
-
-#### Scenario 1: Disaster Recovery (Empty Cluster)
-
-When restoring to a fresh/empty cluster:
-```bash
-curl -X POST "http://WORKLOAD_NAME:9200/_snapshot/backup-repo/SNAPSHOT_NAME/_restore" \
+curl -X POST "$OS/_snapshot/backup-repo/SNAPSHOT_NAME/_restore" \
   -H 'Content-Type: application/json' \
-  -d '{
-    "indices": "*",
-    "ignore_unavailable": true,
-    "include_global_state": false
-  }'
+  -d '{"indices": "*", "ignore_unavailable": true, "include_global_state": false}'
 ```
 
-**All indices will be restored** since the cluster is empty.
+**Over existing indices** — an open index cannot be restored into, so close them first:
 
-#### Scenario 2: Restore to Same Cluster (Close Indices First)
-
-When indices already exist, close them before restoring:
 ```bash
-# Close all indices
-curl -X POST "http://WORKLOAD_NAME:9200/_all/_close"
-
-# Restore snapshot
-curl -X POST "http://WORKLOAD_NAME:9200/_snapshot/backup-repo/SNAPSHOT_NAME/_restore" \
+curl -X POST "$OS/_all/_close"
+curl -X POST "$OS/_snapshot/backup-repo/SNAPSHOT_NAME/_restore" \
   -H 'Content-Type: application/json' \
-  -d '{
-    "indices": "*",
-    "ignore_unavailable": true,
-    "include_global_state": false
-  }'
-
-# Reopen indices after restore
-curl -X POST "http://WORKLOAD_NAME:9200/_all/_open"
+  -d '{"indices": "*", "ignore_unavailable": true, "include_global_state": false}'
+curl -X POST "$OS/_all/_open"
 ```
 
-#### Scenario 3: Restore with Rename (Non-Destructive)
+**Alongside existing indices** — restore under new names, leaving live data untouched:
 
-Restore alongside existing indices with different names:
 ```bash
-curl -X POST "http://WORKLOAD_NAME:9200/_snapshot/backup-repo/SNAPSHOT_NAME/_restore" \
+curl -X POST "$OS/_snapshot/backup-repo/SNAPSHOT_NAME/_restore" \
   -H 'Content-Type: application/json' \
-  -d '{
-    "indices": "*",
-    "rename_pattern": "(.+)",
-    "rename_replacement": "restored-$1",
-    "ignore_unavailable": true,
-    "include_global_state": false
-  }'
+  -d '{"indices": "*", "rename_pattern": "(.+)", "rename_replacement": "restored-$1",
+       "ignore_unavailable": true, "include_global_state": false}'
 ```
 
-**Result:** Creates `restored-demo-logs`, `restored-app-logs`, etc.
+Monitor with `curl "$OS/_cat/recovery?v&active_only=true"` and `curl "$OS/_cluster/health?pretty"`.
 
-### Restore Specific Indices
-```bash
-curl -X POST "http://WORKLOAD_NAME:9200/_snapshot/backup-repo/SNAPSHOT_NAME/_restore" \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "indices": "demo-logs,app-logs-2026.02*",
-    "ignore_unavailable": true,
-    "include_global_state": false
-  }'
-```
+## Important Notes
 
-### Monitor Restore Progress
-```bash
-# View recovery status
-curl "http://WORKLOAD_NAME:9200/_cat/recovery?v&active_only=true"
+- **The security plugin is disabled — there is no authentication.** Any workload permitted by `internal_access` has full read/write admin access to every index. Keep `internal_access.type` as narrow as your deployment allows, and use `workload-list` rather than `same-org` for anything sensitive.
+- **`replicas` must be odd.** An even count cannot form a quorum and is rejected at render.
+- **Always use the fully-qualified internal hostname** (`RELEASE_NAME-opensearch.GVC_NAME.cpln.local`). The bare workload name is not reliably resolvable.
+- **Set the snapshot IAM policy to both bucket ARNs.** With only `bucket/*`, repository registration succeeds and snapshot listing then fails.
+- **Data survives a Helm upgrade but not an uninstall** — `cpln helm uninstall` deletes the volume sets. Enable snapshots if the data matters.
 
-# Check cluster health
-curl "http://WORKLOAD_NAME:9200/_cluster/health?pretty"
-```
+## Links
 
----
-
-## Supported External Services
-
-- [OpenSearch Documentation](https://opensearch.org/docs/latest/)
-- [OpenSearch Dashboards Documentation](https://opensearch.org/docs/latest/dashboards/)
-- [Snapshot Management](https://opensearch.org/docs/latest/tuning-your-cluster/availability-and-recovery/snapshots/snapshot-management/)
+- [OpenSearch documentation](https://opensearch.org/docs/latest/)
+- [OpenSearch Dashboards](https://opensearch.org/docs/latest/dashboards/)
+- [Snapshot and restore](https://docs.opensearch.org/latest/tuning-your-cluster/availability-and-recovery/snapshots/snapshot-restore/)
+- [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account)

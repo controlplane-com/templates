@@ -56,7 +56,7 @@ spec:
       {{- if .Values.internal_access.workloads }}
       inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
       {{- end }}
-  identityLink: //gvc/test-gvc/identity/{{ include "opensearch.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "opensearch.identity.name" . }}
   loadBalancer:
     replicaDirect: true
   localOptions: []

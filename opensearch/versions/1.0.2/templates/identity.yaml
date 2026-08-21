@@ -1,17 +1,17 @@
+{{- include "opensearch.validate" . }}
 ---
 kind: identity
 name: {{ include "opensearch.identity.name" . }}
 description: OpenSearch identity
 tags: {{ include "opensearch.tags" . | nindent 4 }}
-{{- if and .Values.backup.enabled .Values.backup.provider "aws" }}
+{{- if and .Values.backup.enabled (eq .Values.backup.provider "aws") }}
 aws:
   cloudAccountLink: //cloudaccount/{{ .Values.backup.aws.cloudAccountName }}
   policyRefs:
     - cpln-connector
-    - aws::ReadOnlyAccess
-    - {{ .Values.backup.aws.policyName  | quote }}
+    - {{ .Values.backup.aws.policyName | quote }}
 {{- end }}
-{{- if and .Values.backup.enabled .Values.backup.provider "gcp" }}
+{{- if and .Values.backup.enabled (eq .Values.backup.provider "gcp") }}
 gcp:
   bindings:
     - resource: //storage.googleapis.com/projects/_/buckets/{{ .Values.backup.gcp.bucket }}

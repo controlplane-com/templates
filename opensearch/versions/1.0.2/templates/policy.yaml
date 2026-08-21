@@ -6,7 +6,7 @@ bindings:
   - permissions:
       - reveal
     principalLinks:
-      - //gvc/test-gvc/identity/{{ include "opensearch.identity.name" . }}
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "opensearch.identity.name" . }}
 targetKind: secret
 targetLinks:
   - //secret/{{ include "opensearch.secretStartup.name" . }}
@@ -21,14 +21,8 @@ bindings:
   - permissions:
       - reveal
     principalLinks:
-      - //gvc/test-gvc/identity/{{ include "opensearch.demoLogsIdentity.name" . }}
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "opensearch.demoLogsIdentity.name" . }}
 targetKind: secret
 targetLinks:
   - //secret/{{ include "opensearch.secretFluentBitDemo.name" . }}
-targetQuery:
-  kind: secret
-  fetch: items
-  spec:
-    match: all
-    terms: []
 {{- end }}

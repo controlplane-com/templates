@@ -6,7 +6,7 @@ FusionAuth is a modern, self-hosted identity and access management platform that
 ### Getting Started
 1. **Automatic Database Setup**: A PostgreSQL database is automatically created and connected to FusionAuth. No manual database configuration required.
 
-    - Set the credentials under `postgres.credentials` (`username`, `password`, `database`). They are used **exactly as given**, so change the password before installing.
+    - Set the credentials under `postgres.credentials` (`username`, `password`, `database`). They are used **exactly as given**, so change `change-me-fusionauth-db` before installing. They are internal plumbing — nothing outside this release connects to that database — which is why they stay values rather than becoming a prerequisite secret.
     - This template builds a `dictionary` secret from those three values and hands the bundled Postgres its **name** — you create nothing yourself. The name comes from `postgres.config.credentialsSecretName` (default `my-fusionauth-db-credentials`).
     - Secret names are org-wide, so **give each fusionauth release its own name**. A second release left on the default name is *refused at install* (`cannot be updated because it is being managed by a different release`) and creates nothing — nothing is shared, overwritten or deleted, and the first release is unaffected.
 
@@ -15,8 +15,30 @@ FusionAuth is a modern, self-hosted identity and access management platform that
     - Use the FusionAuth admin panel to configure your IdP after deployment.
 
 3. **Setup and Integration**: Follow the setup wizard in the FusionAuth admin panel to create your app.
+
+    - **Complete the setup wizard immediately after installing.** Inbound traffic is open to `0.0.0.0/0` by default and FusionAuth has no administrator until the wizard is finished, so whoever reaches it first creates that account. If you cannot complete it right away, install with `firewall.external.inboundAllowCIDR` restricted to your own address and widen it afterwards — allow a couple of minutes for a firewall change to propagate.
     - Configure your application with the corresponding `origin`, `redirect`, and `logout` URLs to your code
     - Be sure to configure your app's tenant to use the proper issuer for issuing tokens (e.g. `my-fusionauth-app.io`)
+
+## Upgrading from 2.4.0
+
+**Only one thing changed: the default `postgres.credentials.password` is now `change-me-fusionauth-db` instead of `password`.**
+
+That matters because the bundled database initialized its data directory with whatever password was in force at **first boot**, and changing the value afterwards does not change the database. So:
+
+- **If you already set your own password**, nothing changes — upgrade normally.
+- **If you never overrode it**, your database's password is literally `password`. Do **one** of these before upgrading, or FusionAuth will fail to authenticate:
+
+  1. **Keep it working as-is** — set `postgres.credentials.password: password` explicitly in your values. The upgrade is then a no-op.
+  2. **Rotate it properly** (recommended — `password` was a published default, so treat it as compromised). Change it inside Postgres first, then set the value to match:
+
+     ```sql
+     ALTER ROLE username WITH PASSWORD 'YOUR-STRONG-PASSWORD';
+     ```
+
+`postgres.credentials.username` and `postgres.credentials.database` are deliberately unchanged, for the same reason — they are baked into the initialized data directory, and `database` also forms the JDBC URL.
+
+These credentials stay plain values rather than becoming a prerequisite secret because they are genuinely internal plumbing: the chart creates the secret from them, the bundled Postgres is the only consumer, and no human ever types this password anywhere else.
 
 ## Upgrading from 2.3.x
 

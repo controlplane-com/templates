@@ -3,7 +3,7 @@ name: fusionauth
 description: FusionAuth identity and access management with OAuth2, OIDC and SAML, plus bundled PostgreSQL
 
 type: application
-version: 2.4.0
+version: 2.4.1
 appVersion: "1.60.2"
 
 dependencies:
@@ -16,6 +16,6 @@ dependencies:
 
 annotations:
   created: "2025-08-15"
-  lastModified: "2026-08-19"
+  lastModified: "2026-08-21"
   category: "authentication"
   createsGvc: false

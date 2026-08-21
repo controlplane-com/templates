@@ -23,8 +23,11 @@ postgres:
   # below out of these three values, so there is nothing for you to create before
   # installing.
   credentials:
+    # username and database are UNCHANGED from 2.4.0 on purpose: an existing
+    # install's data directory was initialized with them, so a new default would
+    # break the upgrade. Only the password placeholder changed — see the README.
     username: username
-    password: password
+    password: change-me-fusionauth-db # used EXACTLY as given — change it before installing
     database: test
   config:
     # Name of the dictionary secret this chart creates and the bundled postgres reads.

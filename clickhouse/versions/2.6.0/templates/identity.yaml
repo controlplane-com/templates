@@ -1,3 +1,4 @@
+{{- include "clickhouse.validate" . -}}
 {{ include "clickhouse.validateStorage" . }}
 ---
 kind: identity

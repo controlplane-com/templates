@@ -3,12 +3,12 @@ name: postgis
 description: PostGIS database app running on Control Plane
 
 type: application
-version: 1.3.2
+version: 1.4.0
 appVersion: "18-3.6"
 
 annotations:
   created: "2024-11-19"
-  lastModified: "2026-08-04"
+  lastModified: "2026-08-21"
   category: "database"
   createsGvc: false
 

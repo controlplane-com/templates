@@ -39,8 +39,12 @@ hetzner: # If enabled, all fields below are required - See README for guidance
 clusterName: my_cluster # Used in cluster mode only
 
 database: # Automatically create a database on initialization using the default user
-  name: mydatabase
-  password: mypassword
+  # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL.
+  # A `dictionary` secret holding exactly two keys: `password` and `database`.
+  # ClickHouse has no separate username here — it uses the built-in `default`
+  # user, so there is no `username` key. If the secret does not exist at install
+  # time the deployment WEDGES silently; see Prerequisites in the README.
+  credentialsSecretName: my-clickhouse-credentials
 
 volumeset:
   server:

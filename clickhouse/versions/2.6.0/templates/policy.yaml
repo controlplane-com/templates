@@ -11,7 +11,7 @@ bindings:
       - //gvc/{{ .Values.gvc.name }}/identity/{{ include "clickhouse.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "clickhouse.secretDatabase.name" . }}
+  - //secret/{{ .Values.database.credentialsSecretName }}
   - //secret/{{ include "clickhouse.secretKeeper.name" . }}
   - //secret/{{ include "clickhouse.secretServer.name" . }}
   {{- if eq .Values.provider "aws" }}

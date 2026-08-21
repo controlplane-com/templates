@@ -21,13 +21,13 @@ spec:
         - name: TIDB_PORT
           value: "4000"
         - name: ROOT_PW
-          value: cpln://secret/{{ include "tidb.userSecret.name" . }}.rootPassword
+          value: cpln://secret/{{ .Values.autoCreateDatabase.credentialsSecretName }}.rootPassword
         - name: APP_DB
-          value: cpln://secret/{{ include "tidb.userSecret.name" . }}.db
+          value: cpln://secret/{{ .Values.autoCreateDatabase.credentialsSecretName }}.db
         - name: APP_USER
-          value: cpln://secret/{{ include "tidb.userSecret.name" . }}.user
+          value: cpln://secret/{{ .Values.autoCreateDatabase.credentialsSecretName }}.user
         - name: APP_PW
-          value: cpln://secret/{{ include "tidb.userSecret.name" . }}.password
+          value: cpln://secret/{{ .Values.autoCreateDatabase.credentialsSecretName }}.password
   identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "tidb.identity.name" . }}
   defaultOptions:
     autoscaling:

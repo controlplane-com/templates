@@ -200,3 +200,15 @@ under-replicated and tidb-server never becomes ready.
 {{- else -}}{{ $total }}
 {{- end -}}
 {{- end -}}
+
+{{/* Validation */}}
+{{- define "tidb.validate" -}}
+{{- if .Values.autoCreateDatabase.enabled -}}
+{{- if hasKey .Values.autoCreateDatabase "database" -}}
+{{- fail "tidb: autoCreateDatabase.database was REMOVED — rootPassword, user, password and db are now a `dictionary` secret you create, named by autoCreateDatabase.credentialsSecretName. Delete the block from your values. See Prerequisites in the README." -}}
+{{- end -}}
+{{- if not .Values.autoCreateDatabase.credentialsSecretName -}}
+{{- fail "tidb: autoCreateDatabase.credentialsSecretName is required when autoCreateDatabase.enabled — it names the `dictionary` secret holding rootPassword, user, password and db. Create it BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

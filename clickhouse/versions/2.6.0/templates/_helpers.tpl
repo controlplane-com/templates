@@ -178,3 +178,12 @@ Common labels - delegated to cpln-common
 {{- define "clickhouse.tags" -}}
 {{- include "cpln-common.tags" . }}
 {{- end }}
+{{/* Validation */}}
+{{- define "clickhouse.validate" -}}
+{{- if or (hasKey .Values.database "password") (hasKey .Values.database "name") -}}
+{{- fail "clickhouse: database.password and database.name were REMOVED — they are now a `dictionary` secret you create, named by database.credentialsSecretName, holding the keys `password` and `database`. Delete them from your values. See Prerequisites in the README." -}}
+{{- end -}}
+{{- if not .Values.database.credentialsSecretName -}}
+{{- fail "clickhouse: database.credentialsSecretName is required — it names the `dictionary` secret holding `password` and `database`. Create it BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- end -}}

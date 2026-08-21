@@ -14,7 +14,7 @@ targetLinks:
   - //secret/{{ include "tidb.serverSecret.name" . }}
   - //secret/{{ include "tidb.tikvSecret.name" . }}
 {{- if .Values.autoCreateDatabase.enabled }}
-  - //secret/{{ include "tidb.userSecret.name" . }}
+  - //secret/{{ .Values.autoCreateDatabase.credentialsSecretName }}
 {{- end }}
 {{- if and .Values.autoCreateDatabase.enabled .Values.autoCreateDatabase.deployInitWorkload }}
   - //secret/{{ include "tidb.dbInit.name" . }}

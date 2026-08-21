@@ -31,11 +31,12 @@ resources:
 autoCreateDatabase: # Enable to automatically create the database on initialization
   enabled: true
   deployInitWorkload: true # Set to false after the DB has been initialized to remove the init workload and save resources
-  database: # Set database values
-    rootPassword: myrootpw
-    user: myuser
-    password: mypw
-    db: mydb
+  # REQUIRED PREREQUISITE SECRET when autoCreateDatabase.enabled — CREATE IT
+  # BEFORE YOU INSTALL. A `dictionary` secret holding exactly four keys:
+  # `rootPassword`, `user`, `password` and `db`. If it does not exist at install
+  # time the deployment WEDGES silently — `cpln logs` returns nothing at all.
+  # See Prerequisites in the README for the create-dictionary command.
+  credentialsSecretName: my-tidb-credentials
 
 volumeset:
   tikv:

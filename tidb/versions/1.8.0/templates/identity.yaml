@@ -1,3 +1,4 @@
+{{- include "tidb.validate" . -}}
 ---
 kind: identity
 gvc: {{ .Values.gvc.name }}

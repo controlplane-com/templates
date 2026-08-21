@@ -23,6 +23,30 @@ Specify **3 or more locations**. Deploys a shard per location with configurable 
 
 **Important**: To minimize network egress costs, deploy all locations in the same cloud provider and keep object storage in the same region(s). Using 1 replica per location for ClickHouse server is sufficient for most cluster deployments.
 
+## Prerequisites
+
+**One `dictionary` secret must exist BEFORE you install.** This is the password you put in every client connection, so it is not a value — putting it in values would leave it in the Helm release.
+
+```bash
+cpln secret create-dictionary --name my-clickhouse-credentials \
+  --entry password='YOUR-STRONG-PASSWORD' \
+  --entry database=mydatabase
+```
+
+Set `database.credentialsSecretName` to the name you used. Secret names are organization-wide, so give each release its own.
+
+There is no `username` key: ClickHouse authenticates as its built-in `default` user here, so the secret holds only `password` and `database`.
+
+**If the secret does not exist at install time, the deployment wedges silently.** `cpln logs` returns **zero lines** — the container never starts, so it has nothing to log. Read `status.versions[].message` instead:
+
+```bash
+cpln workload get-deployments RELEASE_NAME-clickhouse-server --gvc GVC_NAME -o yaml
+```
+
+Note this is `get-deployments` — plain `cpln workload get` has no `versions` field.
+
+<b>Upgrading from 2.5.x:</b> delete `database.password` and `database.name` from your values and create the secret instead, using the password the database <b>already has</b> — it was applied on first initialisation and a new value in the secret will not change it. An upgrade that still carries either key is refused at render.
+
 ## Configuration
 
 Before installing, update `values.yaml` with the parameters relevant to your environment:

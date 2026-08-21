@@ -2,6 +2,30 @@
 
 TiDB is a distributed SQL database that provides horizontal scalability, strong consistency, and MySQL compatibility. It features a distributed architecture with separate components for storage (TiKV), computation (TiDB Server), and metadata management (PD), making it ideal for applications requiring massive scale, high availability, and seamless migration from MySQL.
 
+### Prerequisites
+
+**One `dictionary` secret must exist BEFORE you install.** These are the credentials you put in every application's connection string, so they are not values — putting them in values would leave them in the Helm release.
+
+```bash
+cpln secret create-dictionary --name my-tidb-credentials \
+  --entry rootPassword='YOUR-ROOT-PASSWORD' \
+  --entry user=myuser \
+  --entry password='YOUR-STRONG-PASSWORD' \
+  --entry db=mydb
+```
+
+Set `autoCreateDatabase.credentialsSecretName` to the name you used. Secret names are organization-wide, so give each release its own.
+
+**If the secret does not exist at install time, the deployment wedges silently.** `cpln logs` returns **zero lines** — the container never starts, so it has nothing to log. Read `status.versions[].message` instead:
+
+```bash
+cpln workload get-deployments RELEASE_NAME-tidb --gvc GVC_NAME -o yaml
+```
+
+Note this is `get-deployments` — plain `cpln workload get` has no `versions` field. Creating the secret repairs the deployment on its own in roughly 5.5 to 10.5 minutes, or force a redeployment to skip the wait.
+
+<b>Upgrading from 1.7.x:</b> delete the `autoCreateDatabase.database` block from your values and create the secret instead, using the credentials the database <b>already has</b> — they were applied when the data directory was first initialised, and a new value in the secret will not change them. An upgrade that still carries the old keys is refused at render.
+
 ## Configuration
 
 To configure your TiDB cluster across multiple locations, update the `gvc.locations` section in the `values.yaml` file:
@@ -92,11 +116,7 @@ Enable `autoCreateDatabase` in `values.yaml` to automatically create a database 
 autoCreateDatabase:
   enabled: true
   deployInitWorkload: true
-  database:
-    rootPassword: myrootpw   # change before deploying
-    user: myuser
-    password: mypw           # change before deploying
-    db: mydb
+  credentialsSecretName: my-tidb-credentials
 ```
 
 **Phase 2 — after initialization is complete**, upgrade with `deployInitWorkload: false` to remove the init workload and its secret while keeping the credentials available to the server:

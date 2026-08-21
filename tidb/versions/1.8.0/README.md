@@ -1,0 +1,238 @@
+# TiDB
+
+TiDB is a distributed SQL database that provides horizontal scalability, strong consistency, and MySQL compatibility. It features a distributed architecture with separate components for storage (TiKV), computation (TiDB Server), and metadata management (PD), making it ideal for applications requiring massive scale, high availability, and seamless migration from MySQL.
+
+### Prerequisites
+
+**One `dictionary` secret must exist BEFORE you install.** These are the credentials you put in every application's connection string, so they are not values — putting them in values would leave them in the Helm release.
+
+```bash
+cpln secret create-dictionary --name my-tidb-credentials \
+  --entry rootPassword='YOUR-ROOT-PASSWORD' \
+  --entry user=myuser \
+  --entry password='YOUR-STRONG-PASSWORD' \
+  --entry db=mydb
+```
+
+Set `autoCreateDatabase.credentialsSecretName` to the name you used. Secret names are organization-wide, so give each release its own.
+
+**If the secret does not exist at install time, the deployment wedges silently.** `cpln logs` returns **zero lines** — the container never starts, so it has nothing to log. Read `status.versions[].message` instead:
+
+```bash
+cpln workload get-deployments RELEASE_NAME-tidb --gvc GVC_NAME -o yaml
+```
+
+Note this is `get-deployments` — plain `cpln workload get` has no `versions` field. Creating the secret repairs the deployment on its own in roughly 5.5 to 10.5 minutes, or force a redeployment to skip the wait.
+
+<b>Upgrading from 1.7.x:</b> delete the `autoCreateDatabase.database` block from your values and create the secret instead, using the credentials the database <b>already has</b> — they were applied when the data directory was first initialised, and a new value in the secret will not change them. An upgrade that still carries the old keys is refused at render.
+
+## Configuration
+
+To configure your TiDB cluster across multiple locations, update the `gvc.locations` section in the `values.yaml` file:
+
+```yaml
+gvc:
+  name: tidb-gvc
+  locations:
+    - name: aws-us-east-1
+      replicas: 1
+    - name: aws-us-west-2
+      replicas: 1
+    - name: aws-eu-central-1
+      replicas: 1
+  pdReplicas: 3 # options: 3, 5, 7
+```
+
+The `replicas` value per location controls how many TiDB Server and TiKV replicas run in that location. The `pdReplicas` value controls how many Placement Driver replicas are distributed across all locations (must be 3, 5, or 7).
+
+**Important:** TiDB's PD and TiKV components rely on Raft quorum for high availability. Deploy across a minimum of 3 locations to maintain quorum if one location becomes unavailable.
+
+## Development Mode
+
+For development and testing purposes, you can enable `devMode` to bypass the 3-location requirement and deploy with fewer locations:
+
+```yaml
+devMode: true # WARNING: For development/testing only. Do NOT enable in production.
+```
+
+When `devMode` is enabled, 1 or 2 locations are permitted. However, PD still requires 3 replicas (`pdReplicas: 3`) and TiKV still needs at least 3 total instances across all locations to satisfy its internal replication requirements. Configure `replicas` per location accordingly:
+
+**1 location:**
+```yaml
+devMode: true
+gvc:
+  locations:
+    - name: aws-us-east-2
+      replicas: 3  # 3 TiKV instances in a single location
+  pdReplicas: 3
+```
+
+**2 locations:**
+```yaml
+devMode: true
+gvc:
+  locations:
+    - name: aws-us-east-2
+      replicas: 2  # total across both locations must be >= 3
+    - name: aws-us-east-1
+      replicas: 1
+  pdReplicas: 3
+```
+
+> **Warning:** A single-location or two-location deployment provides no fault tolerance. If the location(s) become unavailable, the cluster will halt. This mode is intended for local testing and development only.
+
+### Resource Configuration
+
+The default resource configuration in `values.yaml` is designed for **testing and development environments**. For production deployments, resources should be increased based on the following:
+
+**Production Recommendations:**
+- **PD (Placement Driver)**: 4-8 CPU cores, 8-16GB RAM
+- **TiDB Server**: 8-16 CPU cores, 16-32GB RAM (scales with concurrent connections)
+- **TiKV (Storage)**: 8-16 CPU cores, 32-64GB RAM (memory-intensive for caching)
+
+### Volume Storage
+
+Configure initial storage capacity and optional autoscaling for TiKV (the data store). PD only holds cluster state and does not require autoscaling.
+
+```yaml
+volumeset:
+  tikv:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+    autoscaling:
+      enabled: false
+      maxCapacity: 100       # maximum capacity in GiB
+      minFreePercentage: 10  # scale when free space drops below this percentage
+      scalingFactor: 1.2     # multiply current capacity by this factor when scaling
+  pd:
+    capacity: 10 # initial capacity in GiB
+```
+
+### Database Initialization
+
+Enable `autoCreateDatabase` in `values.yaml` to automatically create a database and user on first install. An init workload is deployed to run the setup script, and can be removed once complete to save resources.
+
+**Phase 1 — initial deploy:**
+```yaml
+autoCreateDatabase:
+  enabled: true
+  deployInitWorkload: true
+  credentialsSecretName: my-tidb-credentials
+```
+
+**Phase 2 — after initialization is complete**, upgrade with `deployInitWorkload: false` to remove the init workload and its secret while keeping the credentials available to the server:
+```yaml
+autoCreateDatabase:
+  enabled: true
+  deployInitWorkload: false
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `enabled` | Set to `true` to enable automatic database creation |
+| `deployInitWorkload` | Set to `false` after the DB is initialized to remove the init workload and save resources |
+| `database.rootPassword` | Root password for the TiDB cluster |
+| `database.user` | Username for the new database user |
+| `database.password` | Password for the new database user |
+| `database.db` | Name of the database to create |
+
+### Internal Access Configuration
+
+To specify which workloads can access this TiDB cluster internally, configure the `internal_access` section in your `values.yaml` file:
+
+**Access Types:**
+- `same-gvc`: Allow access from all workloads in the same GVC
+- `same-org`: Allow access from all workloads in the same organization
+- `workload-list`: Allow access only from specific workloads listed in `workloads` and can be used in conjunction with `same-gvc`
+
+Once deployed, TiDB will be available on Port 4000 (default)
+
+### Connecting to TiDB
+
+To connect to your TiDB cluster using a MySQL client, use the following command:
+
+```bash
+mysql -h <TIDB_SERVER_WORKLOAD_INTERNAL_NAME> -P 4000 -u <USER> -p
+```
+
+**Note:** Depending on the number of replicas and locations configured, TiDB can take up to 5 minutes to become ready for connections.
+
+The cluster automatically handles data distribution and replication across your configured locations.
+
+**Note on GVC Naming**
+
+This template creates a GVC with a default name defined in the `values.yaml`. If you plan to deploy multiple instances of this template, you **must assign a unique GVC name** for each deployment.
+
+## Backing Up
+
+Set your desired backup schedule in the values file and configure your AWS S3 or GCS bucket. You can also set a prefix where your backups will be stored in the bucket.
+
+Set `backup.location` to the region closest to your storage bucket to minimize cross-region transfer latency and costs. When `backup.enabled` is `true`, the template automatically grants TiKV outbound internet access so nodes can upload directly to cloud storage.
+
+### AWS S3
+
+For the backup job to have access to an S3 bucket, ensure the following prerequisites are completed in your AWS account before installing:
+
+1. Create your bucket. Update `aws.bucket` to include its name and `aws.region` to include its region.
+
+2. If you do not have a Cloud Account set up, refer to the docs to [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account). Update `aws.cloudAccountName`.
+
+3. Create a new AWS IAM policy with the following JSON (replace `YOUR_BUCKET_NAME`):
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:ListBucket",
+                "s3:GetObjectVersion",
+                "s3:DeleteObjectVersion"
+            ],
+            "Resource": [
+                "arn:aws:s3:::YOUR_BUCKET_NAME",
+                "arn:aws:s3:::YOUR_BUCKET_NAME/*"
+            ]
+        }
+    ]
+}
+```
+
+4. Set `aws.policyName` to match the policy created in step 3.
+
+### GCS
+
+For the backup job to have access to a GCS bucket, ensure the following prerequisites are completed in your GCP account before installing:
+
+1. Create your bucket. Update `gcp.bucket` to include its name.
+
+2. If you do not have a Cloud Account set up, refer to the docs to [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account). Update `gcp.cloudAccountName`.
+
+**Important**: You must add the `Storage Admin` role to the created GCP service account.
+
+### Restoring a Backup
+
+Backups are stored at `BUCKET/PREFIX/tidb-TIMESTAMP/`. To restore, run `br restore full` from a machine with access to the bucket and network access to the PD endpoint.
+
+**AWS S3**
+```sh
+br restore full \
+  --pd="PD_WORKLOAD_INTERNAL_NAME:2379" \
+  --storage="s3://BUCKET_NAME/PREFIX/tidb-TIMESTAMP" \
+  --s3.region="BUCKET_REGION"
+```
+
+**GCS**
+```sh
+br restore full \
+  --pd="PD_WORKLOAD_INTERNAL_NAME:2379" \
+  --storage="gcs://BUCKET_NAME/PREFIX/tidb-TIMESTAMP"
+```
+
+**Note:** `br` must be the same version as your TiDB cluster. Download it from the [TiDB Community Toolkit](https://docs.pingcap.com/tidb/stable/download-ecosystem-tools).
+
+### Supported External Services
+- [TiDB Documentation](https://docs.pingcap.com/tidb/stable/)

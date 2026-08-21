@@ -22,7 +22,7 @@ Set `config.credentialsSecretName` to the name you used. Secret names are organi
 **If the secret does not exist at install time, the deployment wedges silently.** `cpln logs` returns **zero lines** — the container never starts, so it has nothing to log. The one place the reason appears is `status.versions[].message`:
 
 ```bash
-cpln workload get-deployments RELEASE_NAME-mongodb --gvc GVC_NAME -o yaml
+cpln workload get-deployments RELEASE_NAME-mongo --gvc GVC_NAME -o yaml
 ```
 
 Note this is `get-deployments` — plain `cpln workload get` has no `versions` field. Creating the secret repairs the deployment on its own in roughly 5.5 to 10.5 minutes, or force a redeployment to skip the wait.

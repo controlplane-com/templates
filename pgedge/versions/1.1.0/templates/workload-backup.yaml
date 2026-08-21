@@ -32,13 +32,13 @@ spec:
         - name: PG_HOST
           value: replica-0.{{ include "pgedge.name" . }}.{{ (index .Values.gvc.locations 0).name }}.{{ .Values.gvc.name }}.cpln.local
         - name: PG_PASSWORD
-          value: cpln://secret/{{ include "pgedge.secretConfig.name" . }}.password
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
         - name: PG_PORT
           value: '5432'
         - name: PG_USER
-          value: cpln://secret/{{ include "pgedge.secretConfig.name" . }}.username
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.username
         - name: PG_DATABASE
-          value: cpln://secret/{{ include "pgedge.secretConfig.name" . }}.database
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.database
       image: {{ .Values.backup.image }}
       inheritEnv: false
   defaultOptions:

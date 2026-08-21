@@ -11,6 +11,9 @@ spec:
       cpu: 250m
       memory: 256Mi
       inheritEnv: false
+      env:
+        - name: CASS_SUPERUSER_PASSWORD
+          value: cpln://secret/{{ .Values.credentialsSecretName }}.superuserPassword
       command: /bin/bash
       args:
         - '-c'
@@ -29,7 +32,7 @@ spec:
           for i in $(seq 0 $(( {{ .Values.replicas | int }} - 1 ))); do
             HOST="${CASSANDRA_WORKLOAD}-${i}.${CASSANDRA_WORKLOAD}.${K8S_NAMESPACE}.svc.cluster.local"
             echo "--- Repairing replica ${i} (${HOST}) ---"
-            nodetool -u cassandra -pw "{{ .Values.superuserPassword }}" -h "${HOST}" -p 7199 repair \
+            nodetool -u cassandra -pw "${CASS_SUPERUSER_PASSWORD}" -h "${HOST}" -p 7199 repair \
               && echo "Replica ${i} repair complete." \
               || { echo "WARN: Replica ${i} repair failed."; FAILED=$(( FAILED + 1 )); }
           done

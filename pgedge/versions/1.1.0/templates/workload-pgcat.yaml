@@ -8,9 +8,18 @@ spec:
   containers:
     - name: pgcat
       image: {{ .Values.pgcat.image }}
-      command: "/usr/bin/pgcat"
+      command: "/bin/sh"
       args:
-        - "/etc/pgcat/pgcat.toml"
+        - "/etc/pgcat/start.sh"
+      env:
+        - name: PG_USERNAME
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.username
+        - name: PG_PASSWORD
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
+        - name: PG_DATABASE
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.database
+        - name: PGCAT_ADMIN_PASSWORD
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
       cpu: {{ .Values.pgcat.resources.cpu | quote }}
       memory: {{ .Values.pgcat.resources.memory | quote }}
       inheritEnv: false
@@ -18,7 +27,7 @@ spec:
         - number: 5432
           protocol: tcp
       volumes:
-        - path: /etc/pgcat/pgcat.toml
+        - path: /etc/pgcat/start.sh
           uri: cpln://secret/{{ include "pgedge.secretPgcatConfig.name" . }}.payload
   identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "pgedge.identity.name" . }}
   defaultOptions:

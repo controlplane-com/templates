@@ -2,11 +2,13 @@ replicas: 3
 # replicationFactor must not exceed replicas
 replicationFactor: 1
 
-# IMPORTANT: Change all credentials before deploying to production
-superuserPassword: supersecretpassword
-username: username
-password: password
-keyspaceName: mydatabase
+# REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL.
+# A `dictionary` secret holding exactly four keys: `superuserPassword`
+# (the built-in `cassandra` role), `username`, `password` and `keyspace`.
+# If it does not exist at install time the deployment WEDGES silently —
+# `cpln logs` returns nothing at all. See Prerequisites in the README for
+# the exact `cpln secret create-dictionary` command.
+credentialsSecretName: my-cassandra-credentials
 
 image: cassandra:5.0
 cpu: 1

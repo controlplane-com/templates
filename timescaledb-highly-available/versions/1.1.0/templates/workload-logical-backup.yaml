@@ -18,9 +18,9 @@ spec:
         - name: PG_PORT
           value: '5432'
         - name: PG_USER
-          value: cpln://secret/{{ include "tsdb-ha.secretDatabase.name" . }}.username
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.username
         - name: PG_PASSWORD
-          value: cpln://secret/{{ include "tsdb-ha.secretDatabase.name" . }}.password
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
         - name: BACKUP_BUCKET
           value: cpln://secret/{{ include "tsdb-ha.secretDatabase.name" . }}.backup-bucket
       {{- if eq .Values.backup.provider "aws" }}
@@ -45,9 +45,9 @@ spec:
         - name: MINIO_ENDPOINT
           value: cpln://secret/{{ include "tsdb-ha.secretDatabase.name" . }}.minio-endpoint
         - name: MINIO_ACCESS_KEY
-          value: cpln://secret/{{ include "tsdb-ha.secretDatabase.name" . }}.minio-access-key
+          value: cpln://secret/{{ .Values.backup.minio.credentialsSecretName }}.accessKey
         - name: MINIO_SECRET_KEY
-          value: cpln://secret/{{ include "tsdb-ha.secretDatabase.name" . }}.minio-secret-key
+          value: cpln://secret/{{ .Values.backup.minio.credentialsSecretName }}.secretKey
       {{- end }}
   identityLink: //identity/{{ include "tsdb-ha.identity.name" . }}
   defaultOptions:

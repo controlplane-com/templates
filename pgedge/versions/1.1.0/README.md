@@ -8,6 +8,38 @@ This template deploys a pgEdge active-active distributed PostgreSQL cluster usin
 - **pgcat**: Connection pooler providing a single virtual endpoint for applications. Routes writes to the designated primary and distributes reads across all nodes.
 - **Spock**: Multi-master logical replication extension included in the pgEdge image. Handles cross-node replication with last-update-wins conflict resolution.
 
+## Prerequisites
+
+**One `dictionary` secret must exist BEFORE you install.** These are the credentials you type into every
+client and connection string, so they are not values — a value would leave them in the Helm release.
+
+```bash
+cpln secret create-dictionary --name my-pgedge-credentials \
+  --entry username=myuser \
+  --entry password='YOUR-STRONG-PASSWORD' \
+  --entry database=mydb
+```
+
+Set ``postgres.credentialsSecretName`` to the name you used. Secret names are organization-wide, so give each release its own.
+
+<b>Upgrading from 1.0.x:</b> delete `postgres.username`, `postgres.password` and `postgres.database` from your
+values and create the secret instead, using the credentials the cluster <b>already has</b> — they were applied
+when the data directory was first initialised and a new value in the secret will not change them. An upgrade
+that still carries any of the old keys is refused at render.
+
+**If the secret does not exist at install time, the deployment wedges silently.** `cpln logs` returns
+**zero lines** — the container never starts, so it has nothing to log. The one place the reason appears is
+`status.versions[].message`:
+
+```bash
+cpln workload get-deployments RELEASE_NAME-pgedge --gvc GVC_NAME -o yaml
+```
+
+Note this is `get-deployments` — plain `cpln workload get` has no `versions` field. Creating the secret
+repairs the deployment on its own in roughly 5.5 to 10.5 minutes, or force a redeployment to skip the wait.
+
+The secret holds three keys: `username`, `password` and `database`. pgcat uses the same password for its admin console, which replaces the fixed `pgcat_admin` password earlier versions shipped.
+
 ## Configuration
 
 ### pgEdge Settings
@@ -32,9 +64,7 @@ resources:
   maxMemory: 4Gi
 
 postgres:
-  username: postgres  # PostgreSQL superuser username
-  password: password  # PostgreSQL superuser password
-  database: mydb      # Auto-created database name
+  credentialsSecretName: my-pgedge-credentials  # see Prerequisites — must exist before install
 
 multiZone: false  # Set to true to spread replicas across availability zones
 ```
@@ -101,8 +131,8 @@ Connect through pgcat for all application traffic:
 Host: {release-name}-pgcat.{gvc}.cpln.local
 Port: 5432
 Database: {postgres.database}
-Username: {postgres.username}
-Password: {postgres.password}
+Username: the `username` entry of your credentials secret
+Password: the `password` entry of your credentials secret
 ```
 
 ## Schema Changes (DDL)

@@ -1,5 +1,6 @@
 ---
 {{- include "pgedge.validateBackupConfig" . -}}
+{{- include "pgedge.validateCredentials" . }}
 kind: identity
 gvc: {{ .Values.gvc.name }}
 name: {{ include "pgedge.identity.name" . }}

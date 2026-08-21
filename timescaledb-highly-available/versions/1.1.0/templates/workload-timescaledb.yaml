@@ -17,6 +17,12 @@ spec:
       env:
         - name: PGDATA
           value: /home/postgres/pgdata/data
+        - name: PGUSER
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.username
+        - name: PGPASSWORD
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
+        - name: APP_DATABASE
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.database
       image: {{ .Values.image }}
       inheritEnv: false
       ports:

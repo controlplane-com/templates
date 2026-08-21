@@ -18,11 +18,11 @@ spec:
         - name: DB_PORT
           value: '5432'
         - name: DB_USER
-          value: cpln://secret/{{ include "tsdb-ha.secretDatabase.name" . }}.username
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.username
         - name: DB_PASSWORD
-          value: cpln://secret/{{ include "tsdb-ha.secretDatabase.name" . }}.password
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
         - name: DB_NAME
-          value: {{ .Values.postgres.database | quote }}
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.database
         - name: POOL_MODE
           value: {{ .Values.pgbouncer.poolMode | quote }}
         - name: DEFAULT_POOL_SIZE

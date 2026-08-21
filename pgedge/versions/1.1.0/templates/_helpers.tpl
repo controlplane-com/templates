@@ -142,3 +142,18 @@ Common tags
 app.cpln.io/name: {{ .Release.Name }}
 app.cpln.io/instance: {{ .Release.Name }}
 {{- end }}
+
+
+{{/*
+Credentials moved out of values in 1.1.0. Reject the old keys explicitly so an
+upgrade that still carries them fails at render rather than silently running
+against a different password.
+*/}}
+{{- define "pgedge.validateCredentials" -}}
+{{- if or (hasKey .Values.postgres "username") (hasKey .Values.postgres "password") (hasKey .Values.postgres "database") -}}
+{{- fail "pgedge: postgres.username, postgres.password and postgres.database were REMOVED — they are now a `dictionary` secret you create, named by postgres.credentialsSecretName, holding the keys `username`, `password` and `database`. Delete them from your values. See Prerequisites in the README." -}}
+{{- end -}}
+{{- if not .Values.postgres.credentialsSecretName -}}
+{{- fail "pgedge: postgres.credentialsSecretName is required — it names the `dictionary` secret holding `username`, `password` and `database`. Create that secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- end -}}

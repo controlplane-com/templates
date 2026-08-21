@@ -1,3 +1,4 @@
+{{- include "cassandra.validateCredentials" . }}
 kind: identity
 name: {{ include "cassandra.identity.name" . }}
 description: {{ include "cassandra.workload.name" . }} identity

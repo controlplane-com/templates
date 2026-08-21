@@ -11,7 +11,14 @@ bindings:
 targetKind: secret
 targetLinks:
   - //secret/{{ include "tsdb-ha.secretStartup.name" . }}
+  {{- if .Values.backup.enabled }}
   - //secret/{{ include "tsdb-ha.secretDatabase.name" . }}
+  {{- end }}
+  {{- /* the user's prerequisite credentials secret */}}
+  - //secret/{{ .Values.postgres.credentialsSecretName }}
+  {{- if and .Values.backup.enabled (eq .Values.backup.provider "minio") }}
+  - //secret/{{ .Values.backup.minio.credentialsSecretName }}
+  {{- end }}
   {{- if or .Values.proxy.enabled .Values.pgbouncer.enabled }}
   - //secret/{{ include "tsdb-ha.secretProxyStartup.name" . }}
   {{- end }}

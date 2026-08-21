@@ -12,9 +12,13 @@ image: timescale/timescaledb-ha:pg18.4-ts2.28.3  # PostgreSQL 18 + TimescaleDB 2
 
 # ─── Database Config (template-managed superuser) ─────────────────
 postgres:
-  username: username
-  password: password    # change before installing — baked into the data dir at first boot
-  database: test        # TimescaleDB extension is created automatically in this database
+  # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL.
+  # A `dictionary` secret holding exactly three keys: `username`, `password`
+  # and `database`. The TimescaleDB extension is created automatically in the
+  # database that secret names. If it does not exist at install time the
+  # deployment WEDGES silently — `cpln logs` returns nothing at all. See
+  # Prerequisites in the README for the create-dictionary command.
+  credentialsSecretName: my-timescaledb-ha-credentials
 
 multiZone: false        # spread replicas across zones in the location
 
@@ -104,6 +108,8 @@ backup:
   minio:  # self-hosted MinIO or any S3-compatible endpoint
     endpoint: http://my-minio-workload:9000 # e.g. http://WORKLOAD_NAME:9000 for an internal MinIO deployment
     bucket: my-backup-bucket
-    accessKey: my-minio-username # matches the MinIO template's admin.username
-    secretKey: my-minio-password # matches the MinIO template's admin.password
+    # REQUIRED PREREQUISITE SECRET when provider is `minio` — a `dictionary`
+    # secret holding exactly two keys: `accessKey` and `secretKey`. For the
+    # minio template these are its admin.username and admin.password.
+    credentialsSecretName: my-timescaledb-ha-minio-credentials
     prefix: timescaledb/backups

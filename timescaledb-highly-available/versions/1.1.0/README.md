@@ -13,6 +13,34 @@ Multi-replica [TimescaleDB](https://www.timescale.com/) (the time-series databas
 
 ## Prerequisites
 
+**One `dictionary` secret must exist BEFORE you install.** These are the credentials you type into every
+client and connection string, so they are not values — a value would leave them in the Helm release.
+
+```bash
+cpln secret create-dictionary --name my-timescaledb-ha-credentials \
+  --entry username=myuser \
+  --entry password='YOUR-STRONG-PASSWORD' \
+  --entry database=mydb
+```
+
+Set `postgres.credentialsSecretName` to the name you used. The TimescaleDB extension is created automatically
+in the database that secret names. Secret names are organization-wide, so give each release its own.
+
+Backing up to MinIO needs a second `dictionary` secret holding `accessKey` and `secretKey` — see
+[Backups](#backups-optional).
+
+**If the secret does not exist at install time, the deployment wedges silently.** `cpln logs` returns
+**zero lines**. Read `status.versions[].message` instead:
+
+```bash
+cpln workload get-deployments RELEASE_NAME-timescaledb-ha --gvc GVC_NAME -o yaml
+```
+
+<b>Upgrading from 1.0.x:</b> delete `postgres.username`, `postgres.password` and `postgres.database`, plus
+`backup.minio.accessKey` and `backup.minio.secretKey`, and create the secrets instead — using the credentials
+the cluster <b>already has</b>. An upgrade that still carries any of the old keys is refused at render.
+
+
 - None for a default install.
 - For optional backups: a bucket and access setup for one of the supported providers — AWS S3, GCS, or MinIO/S3-compatible (see [Backup storage setup](#backup-storage-setup)).
 
@@ -35,9 +63,7 @@ multiZone: false # spread replicas across zones in the location
 
 ```yaml
 postgres:
-  username: username
-  password: password # change before installing
-  database: test # TimescaleDB extension is created automatically in this database
+  credentialsSecretName: my-timescaledb-ha-credentials # see Prerequisites — must exist before install
 ```
 
 ### Storage (per replica)
@@ -132,7 +158,7 @@ Always connect through the proxy (or PgBouncer) — never a raw replica address,
 |---|---|
 | Via HAProxy (default) | `{release}-timescaledb-ha-proxy.{gvc}.cpln.local:5432` |
 | Via PgBouncer (when enabled) | `{release}-pgbouncer.{gvc}.cpln.local:5432` — use this as the app endpoint |
-| Credentials | `postgres.username` / `postgres.password`, stored in the `{release}-tsdb-ha-config` secret |
+| Credentials | The `username` and `password` entries of the secret named by `postgres.credentialsSecretName` |
 | Database | `postgres.database` (TimescaleDB extension created here) |
 
 Turn a table into a hypertable and query with time buckets:
@@ -177,11 +203,11 @@ Only needed when `backup.enabled` is true. Complete the steps for your provider 
 
 1. Create your bucket on the server. Set `backup.minio.bucket`.
 2. Set `backup.minio.endpoint` to the S3 API address including port. For the `minio` marketplace template in the same GVC, this is `http://WORKLOAD_NAME:9000`.
-3. Set `backup.minio.accessKey` and `backup.minio.secretKey` to credentials with access to the bucket.
+3. Create a second `dictionary` secret holding exactly `accessKey` and `secretKey`, and set `backup.minio.credentialsSecretName` to its name. For the `minio` template these are its `admin.username` and `admin.password`.
 
 ## Important Notes
 
-- **Change `postgres.password` before installing** — credentials are baked into the data directory at first boot; changing the value later does not change the database password. To reset, uninstall (which deletes the volumes) and reinstall.
+- **Create the credentials secret before installing** — the deployment wedges silently without it, and `cpln logs` returns zero lines. Credentials are baked into the data directory at first boot, so changing the secret later does not change the database password; to reset, uninstall (which deletes the volumes) and reinstall.
 - **Always connect via the proxy, never a replica** — the leader moves on failover; a pinned replica address will break. PgBouncer and backups already route through the proxy.
 - **`proxy.enabled` must stay true for backups** — the logical backup dumps the leader through the proxy endpoint.
 - **`replicas: 1` has no HA** — it renders a single-member Patroni cluster with no failover; use ≥ 3 for production, and an odd `etcd.replicas` (3, 5, 7) for quorum.

@@ -11,4 +11,8 @@ targetKind: secret
 targetLinks:
   - //secret/{{ include "cassandra.secret.init.name" . }}
   - //secret/{{ include "cassandra.secret.config.name" . }}
+  {{- /* the user's prerequisite credentials secret */}}
+  - //secret/{{ .Values.credentialsSecretName }}
+  {{- if .Values.backup.enabled }}
   - //secret/{{ include "cassandra.secret.credentials.name" . }}
+  {{- end }}

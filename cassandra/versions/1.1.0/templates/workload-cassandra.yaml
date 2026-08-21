@@ -19,6 +19,14 @@ spec:
           value: {{ .Values.jvmHeapSize | quote }}
         - name: LOCAL_JMX
           value: "no"
+        - name: CASS_SUPERUSER_PASSWORD
+          value: cpln://secret/{{ .Values.credentialsSecretName }}.superuserPassword
+        - name: CASS_APP_USER
+          value: cpln://secret/{{ .Values.credentialsSecretName }}.username
+        - name: CASS_APP_PASSWORD
+          value: cpln://secret/{{ .Values.credentialsSecretName }}.password
+        - name: CASS_KEYSPACE
+          value: cpln://secret/{{ .Values.credentialsSecretName }}.keyspace
       lifecycle:
         preStop:
           exec:
@@ -89,7 +97,7 @@ spec:
           value: {{ .Values.backup.gcp.prefix | quote }}
         {{- end }}
         - name: CASSANDRA_JMX_PASSWORD
-          value: cpln://secret/{{ include "cassandra.secret.credentials.name" . }}.superuser-password
+          value: cpln://secret/{{ .Values.credentialsSecretName }}.superuserPassword
       volumes:
         - path: /var/lib/cassandra
           recoveryPolicy: retain

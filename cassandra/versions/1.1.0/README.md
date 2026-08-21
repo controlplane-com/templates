@@ -9,6 +9,39 @@ This app deploys a Cassandra 5.0 cluster in a single location. Each node runs as
 - **Repair** (optional): Scheduled cron job that runs `nodetool repair` across all nodes to keep data consistent
 - **Backup** (optional): Logical (`cqlsh COPY TO`) or physical (`nodetool snapshot`) backup to S3 or GCS
 
+## Prerequisites
+
+**One `dictionary` secret must exist BEFORE you install.** These are the credentials you type into every
+client and connection string, so they are not values — a value would leave them in the Helm release.
+
+```bash
+cpln secret create-dictionary --name my-cassandra-credentials \
+  --entry superuserPassword='YOUR-SUPERUSER-PASSWORD' \
+  --entry username=myuser \
+  --entry password='YOUR-STRONG-PASSWORD' \
+  --entry keyspace=mykeyspace
+```
+
+Set ``credentialsSecretName`` to the name you used. Secret names are organization-wide, so give each release its own.
+
+<b>Upgrading from 1.0.x:</b> delete `superuserPassword`, `username`, `password` and `keyspaceName` from your
+values and create the secret instead, using the credentials the cluster <b>already has</b> — they were applied
+during first-boot bootstrap and a new value in the secret will not change them. An upgrade that still carries
+any of the old keys is refused at render.
+
+**If the secret does not exist at install time, the deployment wedges silently.** `cpln logs` returns
+**zero lines** — the container never starts, so it has nothing to log. The one place the reason appears is
+`status.versions[].message`:
+
+```bash
+cpln workload get-deployments RELEASE_NAME-cassandra --gvc GVC_NAME -o yaml
+```
+
+Note this is `get-deployments` — plain `cpln workload get` has no `versions` field. Creating the secret
+repairs the deployment on its own in roughly 5.5 to 10.5 minutes, or force a redeployment to skip the wait.
+
+The secret holds four keys. `superuserPassword` is the built-in `cassandra` role, used for JMX and by the repair cron; `username`, `password` and `keyspace` are the application role and its keyspace, created on first boot.
+
 ## Configuration
 
 ### Core Settings
@@ -18,10 +51,7 @@ replicas: 3           # Number of Cassandra nodes
 replicationFactor: 1  # Copies of each partition stored across the cluster
                       # Must not exceed replicas; raise to 3 for fault tolerance
 
-superuserPassword: supersecretpassword  # Built-in cassandra superuser password
-username: username    # Application user
-password: password    # Application user password
-keyspaceName: mydatabase  # Keyspace created on startup
+credentialsSecretName: my-cassandra-credentials  # see Prerequisites — must exist before install
 
 image: cassandra:5.0
 cpu: 1
@@ -63,9 +93,9 @@ Each Cassandra replica is reachable via its own DNS name:
 ```
 Host:     {release-name}-cassandra-{n}.{gvc}.cpln.local
 Port:     9042  (CQL, native transport)
-Username: {username}
-Password: {password}
-Keyspace: {keyspaceName}
+Username: the `username` entry of your credentials secret
+Password: the `password` entry of your credentials secret
+Keyspace: the `keyspace` entry of your credentials secret
 ```
 
 Provide multiple node hostnames as contact points in your application so it can discover the full cluster topology.

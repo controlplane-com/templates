@@ -78,3 +78,18 @@
 {{- define "cassandra.tags" -}}
 {{- include "cpln-common.tags" . }}
 {{- end }}
+
+
+{{/*
+Credentials moved out of values in 1.1.0. Reject the old keys explicitly so an
+upgrade that still carries them fails at render rather than silently running
+against a different password.
+*/}}
+{{- define "cassandra.validateCredentials" -}}
+{{- if or (hasKey .Values "superuserPassword") (hasKey .Values "username") (hasKey .Values "password") (hasKey .Values "keyspaceName") -}}
+{{- fail "cassandra: superuserPassword, username, password and keyspaceName were REMOVED — they are now a `dictionary` secret you create, named by credentialsSecretName, holding the keys `superuserPassword`, `username`, `password` and `keyspace`. Delete them from your values. See Prerequisites in the README." -}}
+{{- end -}}
+{{- if not .Values.credentialsSecretName -}}
+{{- fail "cassandra: credentialsSecretName is required — it names the `dictionary` secret holding `superuserPassword`, `username`, `password` and `keyspace`. Create that secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- end -}}

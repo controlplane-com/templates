@@ -115,11 +115,8 @@ Validate backup configuration - when backup is enabled, backup.provider must be 
     {{- if not .Values.backup.minio.bucket -}}
       {{- fail "Invalid backup configuration: backup.minio.bucket is required when provider is 'minio'." -}}
     {{- end -}}
-    {{- if not .Values.backup.minio.accessKey -}}
-      {{- fail "Invalid backup configuration: backup.minio.accessKey is required when provider is 'minio'." -}}
-    {{- end -}}
-    {{- if not .Values.backup.minio.secretKey -}}
-      {{- fail "Invalid backup configuration: backup.minio.secretKey is required when provider is 'minio'." -}}
+    {{- if not .Values.backup.minio.credentialsSecretName -}}
+      {{- fail "Invalid backup configuration: backup.minio.credentialsSecretName is required when provider is 'minio' — it names the `dictionary` secret holding `accessKey` and `secretKey`." -}}
     {{- end -}}
   {{- end -}}
 {{- end -}}
@@ -134,3 +131,21 @@ Common labels - delegated to cpln-common
 {{- define "tsdb-ha.tags" -}}
 {{- include "cpln-common.tags" . }}
 {{- end }}
+
+
+{{/*
+Credentials moved out of values in 1.1.0. Reject the old keys explicitly rather
+than ignoring them, so an upgrade that still carries them fails at render
+instead of silently restarting against a different password.
+*/}}
+{{- define "tsdb-ha.validateCredentials" -}}
+{{- if or (hasKey .Values.postgres "username") (hasKey .Values.postgres "password") (hasKey .Values.postgres "database") -}}
+{{- fail "timescaledb-highly-available: postgres.username, postgres.password and postgres.database were REMOVED — they are now a `dictionary` secret you create, named by postgres.credentialsSecretName, holding the keys `username`, `password` and `database`. Delete them from your values. See Prerequisites in the README." -}}
+{{- end -}}
+{{- if not .Values.postgres.credentialsSecretName -}}
+{{- fail "timescaledb-highly-available: postgres.credentialsSecretName is required — it names the `dictionary` secret holding `username`, `password` and `database`. Create that secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- if or (hasKey .Values.backup.minio "accessKey") (hasKey .Values.backup.minio "secretKey") -}}
+{{- fail "timescaledb-highly-available: backup.minio.accessKey and backup.minio.secretKey were REMOVED — they are now a `dictionary` secret you create, named by backup.minio.credentialsSecretName, holding the keys `accessKey` and `secretKey`. Delete them from your values. See Storage setup in the README." -}}
+{{- end -}}
+{{- end -}}

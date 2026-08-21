@@ -35,9 +35,9 @@ spec:
         - name: CASSANDRA_USER
           value: cassandra
         - name: CASSANDRA_PASSWORD
-          value: cpln://secret/{{ include "cassandra.secret.credentials.name" . }}.superuser-password
+          value: cpln://secret/{{ .Values.credentialsSecretName }}.superuserPassword
         - name: CASSANDRA_KEYSPACE
-          value: cpln://secret/{{ include "cassandra.secret.credentials.name" . }}.keyspace
+          value: cpln://secret/{{ .Values.credentialsSecretName }}.keyspace
   identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "cassandra.identity.name" . }}
   defaultOptions:
     autoscaling:

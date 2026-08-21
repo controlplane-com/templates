@@ -1,0 +1,10 @@
+---
+kind: volumeset
+name: {{ include "nocodb.redis.volumeset.name" . }}
+description: NocoDB Redis AOF persistence
+tags: {{- include "nocodb.tags" . | nindent 4 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.redis.volumeset.capacity }}
+  performanceClass: general-purpose-ssd

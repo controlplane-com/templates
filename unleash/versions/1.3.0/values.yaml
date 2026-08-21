@@ -1,0 +1,127 @@
+image: unleashorg/unleash-server:8.0.3
+
+resources:
+  cpu: 1000m
+  memory: 1Gi
+  minCpu: 250m
+  minMemory: 512Mi
+
+replicas: 1 # stateless server — set 2+ for high availability (all state lives in PostgreSQL)
+
+# ─── Admin Account ────────────────────────────────────────────────────────────
+# REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. A `dictionary`
+# secret holding exactly two keys, `username` and `password`; the login form it
+# guards sits on the public endpoint. Seeded on first boot only (the account
+# then lives in the database — change it later in the UI, not here). If the
+# secret does not exist at install time the deployment WEDGES silently —
+# `cpln logs` returns nothing at all. See Prerequisites in the README.
+admin:
+  secretName: my-unleash-admin # name of your pre-created dictionary secret
+
+# ─── SDK API Tokens (optional) ────────────────────────────────────────────────
+# Seeded on first startup only. Unleash token format: <project>:<environment>.<secret>
+# (OSS environments: development, production). Leave empty to create tokens in
+# the admin UI instead.
+apiTokens:
+  secretName: "" # name of a pre-created dictionary secret with keys `backend` and `frontend` (e.g. my-unleash-api-tokens); empty = create tokens in the admin UI instead
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: true # admin UI + SDK APIs on the canonical *.cpln.app HTTPS endpoint
+
+internalAccess: # internal firewall scope (in-GVC SDK callers)
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # used with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Database: Highly Available PostgreSQL (default) ──────────────────────────
+# Deploys the postgres-highly-available template: 3 Patroni replicas, 3 etcd
+# replicas, and an HAProxy leader-routing endpoint Unleash connects to.
+postgresHA:
+  enabled: true
+  config:
+    # Name of the dictionary secret this chart creates and the bundled
+    # postgres-highly-available reads. Since pgHA 2.5.0 the subchart creates no
+    # credentials secret of its own, so both stores are fed the same one, built
+    # from postgres.credentials.* above.
+    credentialsSecretName: my-unleash-db-credentials
+  replicas: 3
+  volumeset:
+    capacity: 10 # initial capacity in GiB per replica (minimum is 10)
+
+  backup: # optional database backups — see README storage setup
+    enabled: false
+    mode: logical # logical or wal-g
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    logical:
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      schedule: "0 2 * * *"
+    walg:
+      intervalSeconds: 21600
+    provider: aws # options: aws, gcp, minio
+    aws:
+      bucket: unleash-pg-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: unleash-pg-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: unleash-pg-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: unleash-pg-backup-bucket
+      accessKey: my-minio-username
+      secretKey: my-minio-password
+      prefix: postgres/backups
+
+# ─── Database: Single-instance PostgreSQL (dev/lightweight) ───────────────────
+# Enable this and disable postgresHA for a lighter non-HA deployment.
+postgres:
+  enabled: false
+  # Credentials for the bundled database — internal plumbing no human types
+  # elsewhere. Unleash CREATES the dictionary secret named by
+  # config.credentialsSecretName below out of these three values, so there is
+  # nothing for you to create before installing.
+  credentials:
+    username: unleash
+    password: change-me-unleash-db-password # change before installing
+    database: unleash
+  config:
+    # Name of the dictionary secret this chart creates and the bundled postgres
+    # reads. Secret names are org-wide: give each unleash release its own name.
+    # A second release left on this name is REFUSED at install (it is owned by
+    # the first release) — nothing is shared, overwritten or deleted.
+    credentialsSecretName: my-unleash-db-credentials
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+  backup: # optional database backups (Postgres 17+) — see README storage setup
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
+    schedule: "0 2 * * *"
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    provider: aws # options: aws, gcp, minio
+    aws:
+      bucket: unleash-pg-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: unleash-pg-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: unleash-pg-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: unleash-pg-backup-bucket
+      # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
+      # only when this backup is enabled with provider: minio. See README storage setup.
+      credentialsSecretName: my-unleash-minio-credentials
+      prefix: postgres/backups

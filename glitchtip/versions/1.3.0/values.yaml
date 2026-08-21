@@ -1,0 +1,166 @@
+image: glitchtip/glitchtip:6.2.2
+
+replicas: 1 # web tier — stateless; set 2+ for high availability (state lives in PostgreSQL/Redis)
+
+resources: # web workload
+  minCpu: 250m
+  minMemory: 512Mi
+  maxCpu: 1000m
+  maxMemory: 1Gi
+
+# ─── Background Worker ────────────────────────────────────────────────────────
+# Processes events, alerts, emails, and scheduled jobs; also runs database
+# migrations and admin bootstrap at boot. Single replica (scheduler singleton).
+worker:
+  resources:
+    minCpu: 250m
+    minMemory: 512Mi
+    maxCpu: 1000m
+    maxMemory: 1Gi
+  concurrency: 20 # async tasks processed in parallel (VTASKS_CONCURRENCY)
+
+# ─── Authentication ───────────────────────────────────────────────────────────
+auth:
+  # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. If it does not
+  # exist the deployment WEDGES silently and looks like a platform fault.
+  # A `dictionary` secret holding exactly three keys:
+  #   secretKey      — Django session/token signing key; rotating it logs every
+  #                    user out, so keep it for the life of the install
+  #   adminEmail     — the initial superuser login, seeded on first boot; this
+  #                    login form sits on the public endpoint
+  #   adminPassword  — its password
+  # See README Prerequisites for the exact command.
+  secretName: my-glitchtip-auth
+
+registration:
+  enabled: false # open self-signup on the endpoint; admin-created users and invites work regardless
+
+# ─── Email (optional) ─────────────────────────────────────────────────────────
+email:
+  secretName: "" # name of a pre-created opaque secret whose payload is an EMAIL_URL, e.g. smtp://user:pass@smtp.example.com:587 (create BEFORE install; empty = outbound email off)
+  fromAddress: glitchtip@example.com # DEFAULT_FROM_EMAIL — used only when secretName is set
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+domain: "" # full URL used in DSNs and email links (e.g. https://errors.example.com); empty = canonical *.cpln.app endpoint
+publicAccess:
+  enabled: true # UI + SDK event ingest (DSN) on the canonical *.cpln.app HTTPS endpoint
+
+internalAccess: # internal firewall scope (in-GVC SDK callers)
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # used with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Task Queue / Cache: Redis (default) ──────────────────────────────────────
+# Deploys the redis template (master-replica + Sentinel); GlitchTip connects
+# through Sentinel. Disable to run tasks/cache/sessions on PostgreSQL instead
+# (lighter dev shape, lower throughput).
+redis:
+  enabled: true
+  redis:
+    replicas: 2
+    auth:
+      password:
+        enabled: true
+        value: change-me-glitchtip-redis # change before installing (any characters OK — the boot script percent-encodes it)
+    firewall:
+      internal_inboundAllowType: same-gvc
+    persistence:
+      enabled: true
+  sentinel:
+    replicas: 3
+    firewall:
+      internal_inboundAllowType: same-gvc
+    persistence:
+      enabled: true
+
+# ─── Database: Highly Available PostgreSQL (default) ──────────────────────────
+# Deploys the postgres-highly-available template: 3 Patroni replicas, 3 etcd
+# replicas, and an HAProxy leader-routing endpoint GlitchTip connects to.
+postgresHA:
+  enabled: true
+  config:
+    # Name of the dictionary secret this chart creates and the bundled
+    # postgres-highly-available reads. Since pgHA 2.5.0 the subchart creates no
+    # credentials secret of its own, so both stores are fed the same one, built
+    # from postgres.credentials.* above.
+    credentialsSecretName: my-glitchtip-db-credentials
+  replicas: 3
+  volumeset:
+    capacity: 10 # initial capacity in GiB per replica (minimum is 10)
+
+  backup: # optional database backups — see README storage setup
+    enabled: false
+    mode: logical # logical or wal-g
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    logical:
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      schedule: "0 2 * * *"
+    walg:
+      intervalSeconds: 21600
+    provider: aws # options: aws, gcp, minio
+    aws:
+      bucket: my-glitchtip-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: my-glitchtip-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: my-glitchtip-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: my-glitchtip-backup-bucket
+      accessKey: my-minio-username
+      secretKey: my-minio-password
+      prefix: postgres/backups
+
+# ─── Database: Single-instance PostgreSQL (dev/lightweight) ───────────────────
+# Enable this and disable postgresHA for a lighter non-HA deployment.
+postgres:
+  enabled: false
+  # Credentials for the bundled database — internal plumbing no human types
+  # elsewhere. GlitchTip CREATES the dictionary secret named by
+  # config.credentialsSecretName below out of these three values, so there is
+  # nothing for you to create before installing.
+  credentials:
+    username: glitchtip
+    password: change-me-glitchtip-db # change before installing
+    database: glitchtip
+  config:
+    # Name of the dictionary secret this chart creates and the bundled postgres
+    # reads. Secret names are org-wide: give each glitchtip release its own name.
+    # A second release left on this name is REFUSED at install (it is owned by
+    # the first release) — nothing is shared, overwritten or deleted.
+    credentialsSecretName: my-glitchtip-db-credentials
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+  backup: # optional database backups (Postgres 17+) — see README storage setup
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
+    schedule: "0 2 * * *"
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    provider: aws # options: aws, gcp, minio
+    aws:
+      bucket: my-glitchtip-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: my-glitchtip-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: my-glitchtip-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: my-glitchtip-backup-bucket
+      # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
+      # only when this backup is enabled with provider: minio. See README storage setup.
+      credentialsSecretName: my-glitchtip-minio-credentials
+      prefix: postgres/backups

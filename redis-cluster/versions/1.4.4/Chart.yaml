@@ -1,0 +1,18 @@
+apiVersion: v2
+name: redis-cluster
+description: Redis cluster
+type: application
+
+version: 1.4.3
+appVersion: "7.2"
+
+annotations:
+  created: "2024-09-26"
+  lastModified: "2026-07-06"
+  category: "database"
+  createsGvc: false
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

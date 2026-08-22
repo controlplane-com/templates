@@ -1,0 +1,27 @@
+{{- include "mongo-cluster.validate" . -}}
+---
+kind: policy
+name: {{ include "mongo-cluster.policy.name" . }}
+description: MongoDB policy
+tags: {{- include "mongo-cluster.tags" . | nindent 2 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.gvc.name }}/identity/{{ include "mongo-cluster.identity.name" . }}
+targetKind: secret
+targetLinks:
+  {{- /*
+  The two user-created prerequisite secrets. They are separate resources on
+  purpose: an application granted `reveal` on the credentials must not also get
+  the keyfile, which is what lets a member join the replica set.
+  */}}
+  - //secret/{{ .Values.mongodb.credentialsSecretName }}
+  - //secret/{{ .Values.mongodb.keyfileSecretName }}
+  - //secret/{{ include "mongo-cluster.secretStartup.name" . }}
+  {{- if .Values.proxy.enabled }}
+  - //secret/{{ include "mongo-cluster.secretProxyStartup.name" . }}
+  {{- end }}
+  {{- if and .Values.backup.enabled (eq .Values.backup.mode "physical") }}
+  - //secret/{{ include "mongo-cluster.secretPbmStartup.name" . }}
+  {{- end }}

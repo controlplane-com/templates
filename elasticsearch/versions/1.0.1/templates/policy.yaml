@@ -1,0 +1,13 @@
+kind: policy
+name: {{ include "elasticsearch.policy.name" . }}
+origin: default
+description: Grant Elasticsearch identity access to its secrets
+tags: {{- include "elasticsearch.tags" . | nindent 2 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "elasticsearch.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "elasticsearch.secret.startup.name" . }}

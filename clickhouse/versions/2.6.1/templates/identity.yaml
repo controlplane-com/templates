@@ -1,0 +1,16 @@
+{{- include "clickhouse.validate" . -}}
+{{ include "clickhouse.validateStorage" . }}
+---
+kind: identity
+gvc: {{ .Values.gvc.name }}
+name: {{ include "clickhouse.identity.name" . }}
+description: Clickhouse identity
+tags: {{- include "clickhouse.tags" . | nindent 4 }}
+{{- if eq .Values.provider "aws" }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.aws.cloudAccountName }}
+  policyRefs:
+    - cpln-connector
+    - aws::ReadOnlyAccess
+    - "{{ .Values.aws.policyName }}"
+{{- end }}

@@ -1,0 +1,96 @@
+gvc:
+  name: mongodb-gvc
+  locations:
+    - name: aws-us-east-1
+      replicas: 3
+    - name: aws-us-west-2
+      replicas: 3
+    - name: aws-eu-central-1
+      replicas: 3
+
+image: percona/percona-server-mongodb:8.0
+
+multiZone: false
+
+resources:
+  cpu: 1
+  memory: 2Gi
+
+# ─── Credentials (prerequisite secrets) ───────────────────────────────────────
+# BOTH SECRETS MUST EXIST BEFORE YOU INSTALL — the deployment wedges waiting on a
+# secret that does not exist. Neither value passes through Helm values, so neither
+# lands in the release. See Prerequisites in the README for the exact commands.
+mongodb:
+  # `dictionary` secret holding exactly three keys: `username`, `password`,
+  # `database`. This is the credential you put in your applications' connection
+  # strings, and the root user the cluster is bootstrapped with.
+  credentialsSecretName: my-mongodb-credentials
+
+  # `opaque` secret (encoding: plain) holding the replica set keyfile — the shared
+  # key cluster members authenticate to each other with. Anyone holding it can join
+  # a member to the replica set, so it is kept SEPARATE from the credentials above.
+  # CONTENT RULES (mongod rejects anything else): 6-1024 characters from the base64
+  # alphabet only — A-Z a-z 0-9 + / = — after whitespace is stripped. Generate with
+  # `openssl rand -base64 756`; do NOT invent a passphrase, hyphens alone break it.
+  # It CANNOT be changed after the cluster is initialized.
+  keyfileSecretName: my-mongodb-keyfile
+
+volumeset:
+  capacity: 10 # initial capacity in GiB (minimum is 10)
+  autoscaling:
+    enabled: false
+    maxCapacity: 100
+    minFreePercentage: 10
+    scalingFactor: 1.2
+
+firewall:
+  internalAllowType: same-gvc # options: same-gvc, same-org, workload-list
+  workloads: []
+  # - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+proxy:
+  enabled: true
+  image: haproxy:2.9
+  resources:
+    cpu: 100m
+    memory: 128Mi
+  minReplicas: 2
+  maxReplicas: 2
+
+backup:
+  enabled: false
+  mode: logical # options: logical, physical
+
+  schedule: "0 2 * * *" # daily at 2am UTC
+  
+  provider: aws # options: aws or gcp
+
+  # Logical backup (mongodump)
+  logical:
+    image: ghcr.io/controlplane-com/backup-images/mongo-backup:8.0
+    resources:
+      cpu: 100m
+      memory: 128Mi
+
+  # Physical backup (Percona Backup for MongoDB)
+  physical:
+    image: percona/percona-backup-mongodb:2.14.0
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    cron:
+      resources:
+        cpu: 50m
+        memory: 64Mi
+
+  aws:
+    bucket: my-backup-bucket
+    region: us-east-1
+    cloudAccountName: my-backup-cloudaccount
+    policyName: my-backup-policy
+    prefix: mongodb-cluster/backups
+
+  gcp:
+    bucket: my-backup-bucket
+    cloudAccountName: my-backup-cloudaccount
+    prefix: mongodb-cluster/backups

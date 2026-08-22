@@ -158,6 +158,14 @@ Each run writes a full snapshot of every collection to `{path}/{backup-id}/` in 
 
 ### AWS S3
 
+
+<b>Upgrading from 1.1.0:</b> this version removes <code>aws::ReadOnlyAccess</code> from the backup identity.
+That managed policy granted read access to every bucket in your AWS account and contained no write actions,
+so it was never carrying the backup itself — but it <i>was</i> silently supplying any read action your
+bucket-scoped policy happened to omit. <b>Update your IAM policy to the full action list in this section before
+upgrading</b>; if it already matches, no action is needed. Nothing else changes.
+
+
 1. Create the bucket. Set `backup.aws.bucket` and `backup.aws.region` to match.
 2. Create a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) for the AWS account holding it, and set `backup.aws.cloudAccountName`.
 3. Create an AWS IAM policy with the JSON below (replace `YOUR_BUCKET_NAME`), then set `backup.aws.policyName` to its name.
@@ -174,7 +182,11 @@ Each run writes a full snapshot of every collection to `{path}/{backup-id}/` in 
                 "s3:DeleteObject",
                 "s3:ListBucket",
                 "s3:GetObjectVersion",
-                "s3:DeleteObjectVersion"
+                "s3:DeleteObjectVersion",
+                "s3:GetBucketLocation",
+                "s3:AbortMultipartUpload",
+                "s3:ListBucketMultipartUploads",
+                "s3:ListMultipartUploadParts"
             ],
             "Resource": [
                 "arn:aws:s3:::YOUR_BUCKET_NAME",

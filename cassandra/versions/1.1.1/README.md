@@ -175,6 +175,14 @@ backup:
 
 ### AWS S3
 
+<b>Upgrading from 1.1.0:</b> this version removes <code>aws::ReadOnlyAccess</code> from the backup identity.
+That managed policy granted read access to every bucket in your AWS account and contained no write actions,
+so it was never carrying the backup itself — but it <i>was</i> silently supplying any read action your
+bucket-scoped policy happened to omit. <b>Update your IAM policy to the full action list in this section before
+upgrading</b>; if it already matches, no action is needed. Nothing else changes.
+
+
+
 1. Create your S3 bucket. Set `aws.bucket` and `aws.region` to match.
 
 2. If you do not have a Cloud Account set up, refer to the docs to [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account). Set `aws.cloudAccountName` to match.
@@ -193,7 +201,11 @@ backup:
                 "s3:DeleteObject",
                 "s3:ListBucket",
                 "s3:GetObjectVersion",
-                "s3:DeleteObjectVersion"
+                "s3:DeleteObjectVersion",
+                "s3:GetBucketLocation",
+                "s3:AbortMultipartUpload",
+                "s3:ListBucketMultipartUploads",
+                "s3:ListMultipartUploadParts"
             ],
             "Resource": [
                 "arn:aws:s3:::YOUR_BUCKET_NAME",

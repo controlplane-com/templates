@@ -3,12 +3,12 @@ name: mongodb
 description: Single-replica MongoDB document database on a persistent volume with optional scheduled backups
 
 type: application
-version: 1.4.0
-appVersion: "6"
+version: 1.4.1
+appVersion: "8.2.3"
 
 annotations:
   created: "2024-11-11"
-  lastModified: "2026-08-21"
+  lastModified: "2026-08-22"
   category: "database"
   createsGvc: false
 

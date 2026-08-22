@@ -62,3 +62,4 @@ env values on the backup job — they are not credentials; bucket access comes f
 - **1.5.0** (2026-08-17) — credentials became two prerequisite secrets; phpMyAdmin defaults off, gains
   its own `publicAccess`/`internalAccess` knobs and a pinned image; template-created secret removed.
 - **1.4.3** — backup job passes `MYSQL_DATABASE`; schedule quoted.
+- **`aws::ReadOnlyAccess` was removed from the backup identity in 1.5.1.** It granted read access to every bucket in the AWS account and contains no write actions, so it was never carrying the backup — what it did carry was account-wide read. The identity is now `cpln-connector` plus the user's bucket-scoped policy only. The documented IAM policy was widened to ten actions at the same time, because `ReadOnlyAccess` had been silently supplying any read action a user's policy omitted; **an upgrading user must update their IAM policy first**.

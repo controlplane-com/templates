@@ -84,6 +84,14 @@ Set your desired backup schedule in the values file and configure your AWS S3 or
 
 ### AWS S3
 
+
+<b>Upgrading from 1.4.3:</b> this version removes <code>aws::ReadOnlyAccess</code> from the backup identity.
+That managed policy granted read access to every bucket in your AWS account and contained no write actions,
+so it was never carrying the backup itself — but it <i>was</i> silently supplying any read action your
+bucket-scoped policy happened to omit. <b>Update your IAM policy to the full action list in this section before
+upgrading</b>; if it already matches, no action is needed. Nothing else changes.
+
+
 For the cron job to have access to an S3 bucket, ensure the following prerequisites are completed in your AWS account before installing:
 
 1. Create your bucket. Update the value `bucket` to include its name and `region` to include its region.
@@ -104,7 +112,11 @@ For the cron job to have access to an S3 bucket, ensure the following prerequisi
                 "s3:DeleteObject",
                 "s3:ListBucket",
                 "s3:GetObjectVersion",
-                "s3:DeleteObjectVersion"
+                "s3:DeleteObjectVersion",
+                "s3:GetBucketLocation",
+                "s3:AbortMultipartUpload",
+                "s3:ListBucketMultipartUploads",
+                "s3:ListMultipartUploadParts"
             ],
             "Resource": [
                 "arn:aws:s3:::YOUR_BUCKET_NAME",

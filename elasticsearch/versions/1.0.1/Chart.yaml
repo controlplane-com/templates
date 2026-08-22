@@ -3,7 +3,7 @@ name: elasticsearch
 description: Elasticsearch distributed search and analytics engine
 
 type: application
-version: 1.0.0
+version: 1.0.1
 appVersion: "8.17.0"
 
 dependencies:
@@ -13,6 +13,6 @@ dependencies:
 
 annotations:
   created: "2026-05-19"
-  lastModified: "2026-05-22"
+  lastModified: "2026-08-22"
   category: "search"
   createsGvc: false

@@ -335,6 +335,13 @@ Storage buckets and backup buckets are independent — each needs its own bucket
 
 ### AWS S3 (storage backend and backups)
 
+<b>Upgrading from 1.1.0:</b> this version removes <code>aws::ReadOnlyAccess</code> from the backup identity.
+That managed policy granted read access to every bucket in your AWS account and contained no write actions,
+so it was never carrying the backup itself — but it <i>was</i> silently supplying any read action your
+bucket-scoped policy happened to omit. <b>Update your IAM policy to the full action list in this section before
+upgrading</b>; if it already matches, no action is needed. Nothing else changes.
+
+
 1. Create your bucket, and set the matching `bucket` and `region` values.
 2. If you do not already have one, [create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account) and set the matching `cloudAccountName`.
 3. Create an AWS IAM policy with the JSON below (replace `YOUR_BUCKET_NAME`) and set the matching `policyName`:
@@ -351,7 +358,11 @@ Storage buckets and backup buckets are independent — each needs its own bucket
                 "s3:DeleteObject",
                 "s3:ListBucket",
                 "s3:GetObjectVersion",
-                "s3:DeleteObjectVersion"
+                "s3:DeleteObjectVersion",
+                "s3:GetBucketLocation",
+                "s3:AbortMultipartUpload",
+                "s3:ListBucketMultipartUploads",
+                "s3:ListMultipartUploadParts"
             ],
             "Resource": [
                 "arn:aws:s3:::YOUR_BUCKET_NAME",

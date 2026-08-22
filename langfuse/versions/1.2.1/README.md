@@ -50,6 +50,14 @@ Both ClickHouse and Langfuse use one bucket with separate key prefixes (`clickho
 
 ### AWS S3
 
+
+<b>Upgrading from 1.2.0:</b> this version removes <code>aws::ReadOnlyAccess</code> from the backup identity.
+That managed policy granted read access to every bucket in your AWS account and contained no write actions,
+so it was never carrying the backup itself — but it <i>was</i> silently supplying any read action your
+bucket-scoped policy happened to omit. <b>Update your IAM policy to the full action list in this section before
+upgrading</b>; if it already matches, no action is needed. Nothing else changes.
+
+
 1. Create your bucket. Set `objectStore.aws.bucket` to its name and `objectStore.aws.region` to its region.
 
 2. If you do not have one, [create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account) for your AWS account. Set `objectStore.aws.cloudAccountName` to its name.
@@ -68,7 +76,11 @@ Both ClickHouse and Langfuse use one bucket with separate key prefixes (`clickho
                 "s3:DeleteObject",
                 "s3:ListBucket",
                 "s3:GetObjectVersion",
-                "s3:DeleteObjectVersion"
+                "s3:DeleteObjectVersion",
+                "s3:GetBucketLocation",
+                "s3:AbortMultipartUpload",
+                "s3:ListBucketMultipartUploads",
+                "s3:ListMultipartUploadParts"
             ],
             "Resource": [
                 "arn:aws:s3:::YOUR_BUCKET_NAME",

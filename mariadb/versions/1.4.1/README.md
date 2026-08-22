@@ -130,6 +130,14 @@ Only needed when `backup.enabled: true`.
 
 ### AWS S3
 
+
+<b>Upgrading from 1.4.0:</b> this version removes <code>aws::ReadOnlyAccess</code> from the backup identity.
+That managed policy granted read access to every bucket in your AWS account and contained no write actions,
+so it was never carrying the backup itself — but it <i>was</i> silently supplying any read action your
+bucket-scoped policy happened to omit. <b>Update your IAM policy to the full action list in this section before
+upgrading</b>; if it already matches, no action is needed. Nothing else changes.
+
+
 1. Create your bucket. Set `backup.aws.bucket` to its name and `backup.aws.region` to its region.
 2. Create a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) for the AWS account holding the bucket, and set `backup.aws.cloudAccountName` to its name.
 3. Create an IAM policy with the JSON below (replace `YOUR_BUCKET_NAME`) and set `backup.aws.policyName` to its name. The template attaches it to the workload's identity:
@@ -146,7 +154,11 @@ Only needed when `backup.enabled: true`.
                 "s3:DeleteObject",
                 "s3:ListBucket",
                 "s3:GetObjectVersion",
-                "s3:DeleteObjectVersion"
+                "s3:DeleteObjectVersion",
+                "s3:GetBucketLocation",
+                "s3:AbortMultipartUpload",
+                "s3:ListBucketMultipartUploads",
+                "s3:ListMultipartUploadParts"
             ],
             "Resource": [
                 "arn:aws:s3:::YOUR_BUCKET_NAME",

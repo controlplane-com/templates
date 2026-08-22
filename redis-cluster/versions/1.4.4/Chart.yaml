@@ -3,12 +3,12 @@ name: redis-cluster
 description: Redis cluster
 type: application
 
-version: 1.4.3
+version: 1.4.4
 appVersion: "7.2"
 
 annotations:
   created: "2024-09-26"
-  lastModified: "2026-07-06"
+  lastModified: "2026-08-22"
   category: "database"
   createsGvc: false
 

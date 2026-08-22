@@ -1,0 +1,6 @@
+{{- include "ts.validate" . }}
+kind: identity
+name: {{ include "ts.identity.name" . }}
+description: Identity for the tailscale workload used to grant access to the tailscale secret
+tags: {{- include "ts.tags" . | nindent 2 }}
+gvc: {{ .Values.global.cpln.gvc }}

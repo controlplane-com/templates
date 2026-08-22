@@ -1,0 +1,19 @@
+image: ghcr.io/controlplane-com/cpln-build/external-secret-syncer:v2.0.0
+
+resources:
+  cpu: 200m
+  memory: 256Mi
+
+port: 3004
+
+allowedIp:
+  - 1.2.3.4 # Replace with your IP
+
+# REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL.
+# An `opaque` secret (encoding: plain) whose entire value is your sync.yaml.
+# It holds provider credentials — a Vault token, AWS keys, a 1Password service
+# account token — which is why it is not a value: a value would leave every one
+# of them in the Helm release. If the secret does not exist at install time the
+# deployment WEDGES silently. See Prerequisites in the README for the exact
+# `cpln secret create-opaque` command and a sync.yaml starting point.
+configSecretName: my-ess-config

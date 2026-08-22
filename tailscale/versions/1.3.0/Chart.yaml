@@ -1,0 +1,17 @@
+apiVersion: v2
+name: tailscale
+description: Tailscale subnet router advertising GVC workloads and internal cpln.local DNS to your tailnet
+type: application
+version: 1.3.0
+appVersion: "1.102.3"
+
+annotations:
+  created: 2025-05-13
+  lastModified: "2026-08-21"
+  category: "mesh-vpn"
+  createsGvc: false
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

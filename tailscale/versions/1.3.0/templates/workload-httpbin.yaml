@@ -1,0 +1,30 @@
+{{- if .Values.deployHttpbinExample }}
+kind: workload
+name: {{ include "ts.httpbin.name" . }}
+description: Httpbin example workload
+tags: {{- include "ts.tags" . | nindent 2 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  type: serverless
+  containers:
+    - name: httpbin
+      cpu: 100m
+      image: kennethreitz/httpbin
+      memory: 128Mi
+      ports:
+        - number: 80
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /
+          port: 80
+          scheme: HTTP
+  defaultOptions:
+    capacityAI: false
+  firewallConfig:
+    internal:
+      inboundAllowType: workload-list
+      # allow access from tailscale internally
+      inboundAllowWorkload:
+        - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "ts.name" . }}
+{{- end }}

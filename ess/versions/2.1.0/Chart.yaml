@@ -1,0 +1,17 @@
+apiVersion: v2
+name: ess
+description: Syncs secrets from Vault, AWS, GCP, Doppler, 1Password and Infisical into Control Plane secrets
+type: application
+version: 2.1.0
+appVersion: 2.0.0
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+
+annotations:
+  created: "2025-03-12"
+  lastModified: "2026-08-21"
+  category: "secrets"
+  createsGvc: false

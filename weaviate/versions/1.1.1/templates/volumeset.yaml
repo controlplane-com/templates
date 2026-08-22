@@ -1,0 +1,12 @@
+kind: volumeset
+name: {{ include "weaviate.volumeset.name" . }}
+description: {{ include "weaviate.workload.name" . }} data
+tags: {{- include "weaviate.tags" . | nindent 2 }}
+spec:
+  initialCapacity: {{ .Values.volumes.data.initialCapacity }}
+  performanceClass: general-purpose-ssd
+  fileSystemType: ext4
+  autoscaling:
+    maxCapacity: {{ .Values.volumes.data.autoscaling.maxCapacity }}
+    minFreePercentage: {{ .Values.volumes.data.autoscaling.minFreePercentage }}
+    scalingFactor: {{ .Values.volumes.data.autoscaling.scalingFactor }}

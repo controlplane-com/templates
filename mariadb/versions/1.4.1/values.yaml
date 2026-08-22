@@ -1,0 +1,72 @@
+image: mariadb:11
+
+# ─── Credentials (prerequisite secrets) ───────────────────────────────────────
+# BOTH SECRETS MUST EXIST BEFORE YOU INSTALL — the deployment wedges waiting on a
+# secret that does not exist. Neither value passes through Helm values, so neither
+# lands in the release. See Prerequisites in the README for the exact commands.
+
+# `dictionary` secret holding exactly three keys: `username`, `password`, `database`.
+# This is the credential you put in your applications' connection strings.
+credentialsSecretName: my-mariadb-credentials
+
+# `opaque` secret (encoding: plain) holding the MariaDB root password. Deliberately
+# separate, so sharing the application credentials above does not hand out root.
+rootPasswordSecretName: my-mariadb-root-password
+
+resources:
+  minCpu: 100m
+  minMemory: 128Mi
+  maxCpu: 250m
+  maxMemory: 264Mi
+
+timeoutSeconds: 15
+
+volumeset:
+  capacity: 10 # initial capacity in GiB (minimum is 10)
+  autoscaling:
+    enabled: false # Set to true to enable autoscaling
+    maxCapacity: 100 # Maximum capacity in GiB when autoscaling is enabled
+    minFreePercentage: 10 # Minimum free percentage to trigger scaling when autoscaling is enabled
+    scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
+
+internalAccess: # Which workloads may reach MariaDB on port 3306
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # only used when type is workload-list
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── phpMyAdmin (optional admin console) ──────────────────────────────────────
+phpMyAdmin:
+  enabled: false # true deploys a phpMyAdmin console alongside the database
+  image: phpmyadmin:5.2.3-apache
+  publicAccess:
+    enabled: false # true publishes the console, and its login form, to the whole internet
+  internalAccess:
+    type: same-gvc # options: none, same-gvc, same-org, workload-list
+    workloads: [] # only used when type is workload-list
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+  resources:
+    cpu: 100m
+    memory: 128Mi
+
+backup:
+  enabled: false
+  image: ghcr.io/controlplane-com/backup-images/mysql-backup:1.0.0 # compatible with all MariaDB versions
+  schedule: "0 2 * * *"   # daily at 2am UTC
+
+  resources:
+    cpu: 100m
+    memory: 128Mi
+
+  provider: aws # Options: aws or gcp
+
+  aws:
+    bucket: my-backup-bucket
+    region: us-east-1
+    cloudAccountName: my-backup-cloudaccount
+    policyName: my-backup-policy
+    prefix: mariadb/backups # folder name where your backups will be stored
+
+  gcp:
+    bucket: my-backup-bucket
+    cloudAccountName: my-backup-cloudaccount
+    prefix: mariadb/backups # folder name where your backups will be stored

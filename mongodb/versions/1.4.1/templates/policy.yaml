@@ -1,0 +1,17 @@
+kind: policy
+name: {{ include "mongo.policy.name" . }}
+description: Policy granting MongoDB identity access to its database credentials
+tags:
+  {{- include "mongo.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "mongo.identity.name" . }}
+targetKind: secret
+targetLinks:
+  {{- /* the user's prerequisite credentials secret */}}
+  - //secret/{{ .Values.config.credentialsSecretName }}
+  {{- if .Values.backup.enabled }}
+  - //secret/{{ include "mongo.secretDatabase.name" . }}
+  {{- end }}

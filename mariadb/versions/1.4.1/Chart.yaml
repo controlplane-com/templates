@@ -1,0 +1,18 @@
+apiVersion: v2
+name: mariadb
+description: Single-replica MariaDB relational database with optional phpMyAdmin and scheduled backups
+
+type: application
+version: 1.4.1
+appVersion: "11"
+
+annotations:
+  created: "2024-11-01"
+  lastModified: "2026-08-22"
+  category: "database"
+  createsGvc: false
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

@@ -1,0 +1,1 @@
+{{- /* pg_meta runs as a sidecar container in workload-studio.yaml */ -}}

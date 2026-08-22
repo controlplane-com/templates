@@ -1,0 +1,134 @@
+# ─── Object store ─────────────────────────────────────────────────────────────
+# One bucket serves BOTH ClickHouse (data parts, prefix `clickhouse/`) and
+# Langfuse (raw event buffer `events/`, media uploads `media/`).
+objectStore:
+  provider: aws # Options: aws, gcp
+  aws:
+    bucket: my-langfuse-bucket
+    region: us-east-1
+    cloudAccountName: my-langfuse-cloudaccount # Control Plane Cloud Account — keyless S3 access
+    policyName: my-langfuse-policy # pre-created AWS IAM policy scoped to the bucket above
+  gcp:
+    bucket: my-langfuse-bucket
+    # REQUIRED PREREQUISITE SECRET when provider is `gcp` — CREATE IT BEFORE YOU
+    # INSTALL, or the deployment wedges waiting on a secret that does not exist.
+    # A `dictionary` secret with exactly two keys: `accessKeyId`, `secretAccessKey`
+    # (a GCS HMAC pair). See README Prerequisites for the exact command.
+    credentialsSecretName: my-langfuse-gcs-credentials
+
+# ─── Langfuse application ─────────────────────────────────────────────────────
+langfuse:
+  # Public base URL — feeds auth redirects and the sign-out/error pages NextAuth
+  # renders server-side, and decides whether the session cookie gets the Secure
+  # flag. Empty = derived from the platform canonical endpoint when publicAccess
+  # is on. Set it only for a custom domain, and include the scheme:
+  #   publicUrl: https://langfuse.example.com
+  publicUrl: ""
+
+  web:
+    image: langfuse/langfuse:3.225.2
+    minReplicas: 2 # Keep at 2+ for zero-downtime rolling deploys
+    maxReplicas: 5
+    resources:
+      minCpu: 500m
+      maxCpu: 1000m
+      minMemory: 1Gi
+      maxMemory: 2Gi
+
+  worker:
+    image: langfuse/langfuse-worker:3.225.2
+    replicas: 1
+    resources:
+      minCpu: 250m
+      maxCpu: 500m
+      minMemory: 512Mi
+      maxMemory: 1Gi
+
+  auth:
+    # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. If it does not
+    # exist the deployment WEDGES waiting on it and looks like a platform fault.
+    # A `dictionary` secret holding exactly five keys:
+    #   nextAuthSecret  — signs session tokens (openssl rand -base64 32)
+    #   encryptionKey   — encrypts the LLM provider API keys your users store in
+    #                     Langfuse; CANNOT be rotated without losing every one of
+    #                     them (openssl rand -hex 32, exactly 64 hex characters)
+    #   salt            — hashes Langfuse's own API keys (openssl rand -base64 32)
+    #   adminEmail      — first-run owner account, provisioned at boot
+    #   adminPassword   — its password (8 characters minimum)
+    # Use three DIFFERENT random values for the three key material entries.
+    # See README Prerequisites for the exact command.
+    secretName: my-langfuse-auth
+
+    # Langfuse ships with email/password registration OPEN, so a public instance
+    # would let any stranger create an account AND their own organization. Closed
+    # here: the admin above is provisioned headlessly at boot, which bypasses the
+    # block. Set to false only if you want self-service registration.
+    disableSignup: true
+    organizationName: Langfuse # organization created for the first-run admin
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+# Applies to the Langfuse web UI and public API. A firewall change takes up to
+# a couple of minutes to propagate.
+publicAccess:
+  enabled: true # false keeps the UI reachable only from inside the GVC
+internalAccess:
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # used with workload-list, e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── PostgreSQL ───────────────────────────────────────────────────────────────
+# Stores users, projects, API keys, prompts, datasets and eval configs.
+# Bundled plumbing: it serves Langfuse only and is unreachable from outside the
+# GVC — but the password is used AS-IS, so change it before installing.
+postgres:
+  image: postgres:18
+  resources:
+    minCpu: 250m
+    maxCpu: 1
+    minMemory: 512Mi
+    maxMemory: 1Gi
+  # Langfuse CREATES the dictionary secret named by config.credentialsSecretName
+  # below out of these three values, so there is nothing to create before install.
+  credentials:
+    username: langfuse
+    password: change-me-langfuse-db
+    database: langfuse
+  config:
+    # Name of the dictionary secret this chart creates and the bundled postgres reads.
+    # Secret names are org-wide: give each langfuse release its own name. A second
+    # release left on this name is REFUSED at install (it is owned by the first
+    # release) — nothing is shared, overwritten or deleted.
+    credentialsSecretName: my-langfuse-db-credentials
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+# ─── Redis ────────────────────────────────────────────────────────────────────
+# BullMQ ingestion queue and API key/prompt cache. Bundled plumbing — change the
+# password before installing.
+redis:
+  image: redis:7.4
+  resources:
+    minCpu: 100m
+    maxCpu: 400m
+    minMemory: 256Mi
+    maxMemory: 512Mi
+  auth:
+    password: change-me-langfuse-redis
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+# ─── ClickHouse ───────────────────────────────────────────────────────────────
+# Stores all traces, observations and scores; powers the dashboards. Data parts
+# live in the object store above; the volumeset holds local metadata only.
+# Bundled plumbing — change the password before installing.
+clickhouse:
+  image: clickhouse/clickhouse-server:25.10
+  resources:
+    minCpu: 1
+    maxCpu: 2
+    minMemory: 2Gi
+    maxMemory: 4Gi
+  config:
+    password: change-me-langfuse-clickhouse
+    database: langfuse
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)

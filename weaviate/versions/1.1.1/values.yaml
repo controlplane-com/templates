@@ -1,0 +1,99 @@
+# ─── Cluster ──────────────────────────────────────────────────────────────────
+replicas: 3
+
+image: semitechnologies/weaviate:1.38.0
+
+# ─── Authentication ───────────────────────────────────────────────────────────
+# REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL.
+# An `opaque` secret (encoding: plain) whose entire payload is the API key:
+#   printf '%s' "$(openssl rand -hex 32)" | \
+#     cpln secret create-opaque --name my-weaviate-api-key --encoding plain -f -
+# If it does not exist at install time the deployment WEDGES waiting on it and
+# looks broken. See Prerequisites in the README.
+apiKeySecretName: my-weaviate-api-key
+
+# Username the API key maps to. Not a secret — it is the admin-list identity.
+apiUser: admin@example.com
+
+# ─── Query Behavior ───────────────────────────────────────────────────────────
+# Default result limit for queries
+queryDefaultsLimit: 25
+
+# Default vectorizer module applied to new collections
+# Options: none, text2vec-openai, text2vec-cohere, text2vec-huggingface, text2vec-aws
+defaultVectorizerModule: none
+
+# ─── AI Modules ───────────────────────────────────────────────────────────────
+modules:
+  # NOTE: this list does NOT gate anything — testing showed modules load
+  # regardless of it, and a vector-less insert generated a real embedding with
+  # this list empty. Supplying a provider key below is what makes that
+  # provider live and BILLABLE, so only supply keys you intend to use.
+  # Common options: text2vec-openai, text2vec-cohere, text2vec-huggingface,
+  #                 generative-openai, generative-cohere, generative-anthropic,
+  #                 qna-openai, ref2vec-centroid
+  enabled: []
+
+  # OPTIONAL PREREQUISITE SECRETS — one `opaque` secret (encoding: plain) per
+  # provider, holding only that provider's key. Empty = provider off: no env
+  # var, no reveal grant, no outbound egress opened.
+  #   printf '%s' "sk-..." | \
+  #     cpln secret create-opaque --name my-weaviate-openai-key --encoding plain -f -
+  openai:
+    apiKeySecretName: "" # e.g. my-weaviate-openai-key
+  anthropic:
+    apiKeySecretName: "" # e.g. my-weaviate-anthropic-key
+  cohere:
+    apiKeySecretName: "" # e.g. my-weaviate-cohere-key
+  huggingface:
+    apiKeySecretName: "" # e.g. my-weaviate-huggingface-key
+
+# ─── Resources ────────────────────────────────────────────────────────────────
+# HNSW vector indexes are RAM-resident. Rough sizing:
+#   memory ≈ vectors × dimensions × 4 bytes × 1.5
+cpu: 2
+memory: 4Gi
+
+# ─── Storage ──────────────────────────────────────────────────────────────────
+volumes:
+  data:
+    initialCapacity: 20 # GiB per replica (platform minimum 10)
+    autoscaling:
+      maxCapacity: 200
+      minFreePercentage: 20
+      scalingFactor: 1.5
+
+# ─── Placement ────────────────────────────────────────────────────────────────
+multiZone:
+  enabled: false # true = spread replicas across AZs (location must support it)
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+# Weaviate is reachable only from inside Control Plane — there is no public
+# endpoint, by design. See Important Notes in the README.
+internalAccess:
+  type: same-gvc # none | same-gvc | same-org | workload-list
+  workloads: [] # used only with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Backup ───────────────────────────────────────────────────────────────────
+backup:
+  enabled: false
+  provider: aws # aws | gcp
+  schedule: "0 2 * * *" # cron in UTC — daily at 02:00
+
+  resources:
+    cpu: 250m
+    memory: 256Mi
+
+  aws:
+    bucket: my-weaviate-backup-bucket
+    region: us-east-1
+    cloudAccountName: my-s3-cloud-account
+    policyName: my-weaviate-backup-policy
+    path: weaviate/backups
+
+  gcp:
+    bucket: my-weaviate-backup-bucket
+    cloudAccountName: my-gcs-cloud-account
+    path: weaviate/backups

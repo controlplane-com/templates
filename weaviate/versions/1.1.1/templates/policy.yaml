@@ -1,0 +1,20 @@
+kind: policy
+name: {{ include "weaviate.policy.name" . }}
+description: Weaviate secret access
+tags: {{- include "weaviate.tags" . | nindent 2 }}
+origin: default
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "weaviate.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "weaviate.secret.credentials.name" . }}
+  - //secret/{{ include "weaviate.secret.start-script.name" . }}
+  - //secret/{{ .Values.apiKeySecretName }}
+{{- range $name := splitList " " (include "weaviate.providerSecretNames" .) }}
+{{- if $name }}
+  - //secret/{{ $name }}
+{{- end }}
+{{- end }}

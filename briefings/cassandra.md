@@ -55,3 +55,4 @@ The repair cron and the backup job reach nodes on `*.svc.cluster.local`, which r
   it owned — raise it for anything real.
 - **The repair cron authenticates over JMX**, so a wrong `superuserPassword` shows up as repair failures
   rather than as a CQL error.
+- **`aws::ReadOnlyAccess` was removed from the backup identity in 1.1.1.** It granted read access to every bucket in the AWS account and contains no write actions, so it was never carrying the backup — what it did carry was account-wide read. The identity is now `cpln-connector` plus the user's bucket-scoped policy only. The documented IAM policy was widened to ten actions at the same time, because `ReadOnlyAccess` had been silently supplying any read action a user's policy omitted; **an upgrading user must update their IAM policy first**.

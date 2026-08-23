@@ -2,6 +2,18 @@
 
 Creates a Coraza Web Application Firewall (WAF) with OWASP Core Rule Set (CRS) integration that proxies traffic to a target workload, providing comprehensive security filtering and protection.
 
+### Architecture
+
+- **WAF workload** — Coraza with the OWASP Core Rule Set, listening on `WAFPort` and proxying to `targetWorkload`.
+- **Secrets** — the startup script and a custom-rules secret for your own rules.
+- **Identity and policy** — `reveal` on those secrets.
+
+This template does not create a GVC. It sits in front of a workload you already run.
+
+### Prerequisites
+
+**The workload you intend to protect must already exist**, and `targetWorkload` must be its fully-qualified internal address (`WORKLOAD.GVC.cpln.local`) with `targetPort` set to the port it serves.
+
 ### Configuration
 
 The following values can be configured in your values file:
@@ -51,3 +63,20 @@ SecRule REQUEST_URI "@rx attack" "id:1001,phase:1,deny,msg:'Blocked attack attem
 - [OWASP Coraza Docs](https://coraza.io/docs/tutorials/introduction/)
 - [OWASP CRS Docs](https://coreruleset.org/docs/)
 - [Coraza Caddy README](https://github.com/coreruleset/coraza-crs-docker#)
+
+### Important Notes
+
+- **This only protects traffic that goes through it.** The WAF is a proxy, so the workload behind it must not remain publicly reachable on its own endpoint, or requests will simply bypass inspection.
+- **The image is pinned by digest**, so it does not drift. Bumping it is a deliberate values change.
+- **`diskBodyInspection` trades memory for coverage.** With it off, request bodies above the in-memory limit are not inspected at all rather than being buffered.
+- **Custom rules are applied on top of the Core Rule Set**, so a rule ID collision silently overrides a CRS rule.
+
+### Connecting
+
+| What | Value |
+|---|---|
+| Public | the WAF workload's endpoint on `WAFPort` — this is the address clients should use |
+| Internal (same GVC) | `RELEASE_NAME-coraza.GVC_NAME.cpln.local:WAFPort` |
+| Upstream | whatever you set as `targetWorkload` and `targetPort` |
+
+Send traffic to the WAF, not to the workload behind it.

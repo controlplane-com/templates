@@ -6,6 +6,27 @@ A meta-template that deploys a complete Change Data Capture (CDC) pipeline on Co
 - **Apache Kafka** (KRaft mode + Kafbat UI) as the event streaming platform
 - **Debezium Server** as the CDC connector (PostgreSQL -> Kafka)
 
+## Architecture
+
+An umbrella chart. It deploys and wires together three existing templates as dependencies rather than
+reimplementing any of them:
+
+| Component | From | Role |
+|---|---|---|
+| `postgres-highly-available` | template dependency | the CDC **source** — a Patroni-managed cluster with automatic failover |
+| `kafka` | template dependency | the **transport** the change events are published to |
+| `debezium-server` | template dependency | the **connector** reading Postgres' replication stream and writing to Kafka |
+
+This chart itself contributes only the glue: a shared credentials secret, and cross-component validation that
+catches mismatched values before anything is deployed.
+
+Because each component is the same template you would install on its own, its own README is the reference for
+that component's knobs, storage and backups.
+
+## Prerequisites
+
+None — all three components are deployed for you.
+
 ## Why Use This Template?
 
 When deploying these three components individually, you must manually coordinate:
@@ -84,3 +105,21 @@ INSERT INTO debezium_heartbeat VALUES (1, now());
 | PostgreSQL HA | 2.2.0 (Patroni, PostgreSQL 17) |
 | Kafka | 4.0.0 (Apache Kafka 3.9.1, KRaft) |
 | Debezium Server | 1.1.0 (Debezium 3.0) |
+
+## Important Notes
+
+- **The source database must run with `wal_level = logical`.** Debezium's `pgoutput` decoding requires it, and a
+  Postgres cluster left on the default `replica` produces a connector that starts and then never emits a change.
+- **Dependency versions are pinned in `Chart.yaml`** and do not follow the components' latest releases. Upgrading
+  a component means bumping the pin here, which is a deliberate change rather than something that happens on
+  reinstall.
+- **A replication slot is left behind on the source** when the connector is removed. Postgres retains WAL for an
+  inactive slot indefinitely, so an abandoned slot will eventually fill the source's disk — drop it explicitly.
+- **Cross-component validation runs at render.** A mismatch between, say, the Debezium SASL user and the Kafka
+  user list fails the install rather than producing a pipeline that deploys and silently carries nothing.
+
+## Links
+
+- [Debezium documentation](https://debezium.io/documentation/reference/stable/)
+- [Postgres logical decoding](https://www.postgresql.org/docs/current/logicaldecoding.html)
+- [Apache Kafka documentation](https://kafka.apache.org/documentation/)

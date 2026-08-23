@@ -4,6 +4,14 @@ This app creates a workload in your Control Plane GVC that connects to your tail
 
 Any workload that allows access from this tailscale workload will be able to be reached when connected to the tailscale network.
 
+### Architecture
+
+- **Tailscale workload** — a subnet router that joins your tailnet and advertises the GVC's internal routes, pinned to a single `location`.
+- **Identity and policy** — `reveal` on the auth-key secret you create.
+- **Example httpbin workload** *(optional)* — a demo target, created when `deployHttpbinExample: true`.
+
+This template creates no secret of its own and does not create a GVC.
+
 ### Prerequisites
 
 **One `opaque` secret must exist BEFORE you install.** It holds your Tailscale auth key, which authorizes a
@@ -130,3 +138,41 @@ Wait for the workloads to be started and then try hitting the httpbin internal e
 {{- if not (eq (index .Values.locationDNS .Values.global.cpln.location) `172.20.0.10`) }}
 You must update the tailscale DNS configuration for cpln.local to {{index .Values.locationDNS .Values.global.cpln.location}} instead of 172.20.0.10.
 {{- end }}
+
+### Configuration
+
+```yaml
+location: aws-us-east-1 # a SINGLE location in your GVC
+image:
+  repository: tailscale/tailscale
+  tag: v1.102.3 # pinned: `stable` floats, so installs are not reproducible
+resources:
+  cpu: 500m
+  memory: 128Mi
+extraEnv:
+  - name: TS_HOSTNAME
+    value: cpln-tailscale # the name this device advertises on your tailnet
+deployHttpbinExample: true
+authKeySecretName: my-tailscale-authkey # see Prerequisites — must exist before install
+```
+
+`locationDNS` maps each Control Plane location to its internal resolver, used for split DNS. Leave it unless you know you need to change it.
+
+### Connecting
+
+| What | Value |
+|---|---|
+| From a tailnet device | the GVC's internal `*.cpln.local` endpoints, once the routes are approved |
+| Route approval | [Tailscale admin → Machines](https://login.tailscale.com/admin/machines) — advertised routes must be approved before they carry traffic |
+
+### Important Notes
+
+- **Approve the advertised routes in the Tailscale admin console.** Until you do, the gateway joins the tailnet but no traffic reaches the GVC — the most common reason this appears not to work.
+- **Run the gateway in a single location.** A subnet router advertising the same routes from several locations gives Tailscale competing paths.
+- **Auth keys expire.** Tailscale's default is 90 days, and reusable/ephemeral is chosen at generation time. A node that silently drops off months later is usually an expired key, not a template fault.
+- **Rotating the key is safe.** Unlike a database password, an auth key only authorizes the device at join time, so replacing it does not disturb a node that has already joined.
+
+### Links
+
+- [Tailscale documentation](https://tailscale.com/kb/)
+- [Subnet routers](https://tailscale.com/kb/1019/subnets)

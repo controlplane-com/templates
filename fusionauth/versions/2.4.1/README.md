@@ -3,6 +3,19 @@
 ## Overview
 FusionAuth is a modern, self-hosted identity and access management platform that provides user authentication, authorization, and secure single sign-on. It supports protocols such as OAuth2, OpenID Connect, and SAML.
 
+### Architecture
+
+- **FusionAuth workload** — the identity provider, publicly reachable by default so applications can redirect users to it.
+- **Bundled PostgreSQL** — deployed from the `postgres` template as a dependency, holding all FusionAuth state.
+- **Secrets** — the database credentials secret this chart creates from your values, and the startup script.
+- **Identity and policy** — `reveal` on exactly those secrets.
+
+There is no volume set on the application tier — all state lives in PostgreSQL.
+
+### Prerequisites
+
+None. The database is deployed and wired up for you; there is no secret to create beforehand.
+
 ### Getting Started
 1. **Automatic Database Setup**: A PostgreSQL database is automatically created and connected to FusionAuth. No manual database configuration required.
 
@@ -142,3 +155,36 @@ unset PGPASSWORD
 
 ## Supported External Services
 - [FusionAuth Documentation](https://fusionauth.io/docs/)
+
+## Configuration
+
+```yaml
+image: controlplanecorporation/fusionauth:0.2
+resources:
+  cpu: 512m
+  memory: 1024Mi
+firewall:
+  external:
+    inboundAllowCIDR:
+        - 0.0.0.0/0
+    outboundAllowCIDR: [] # Set to 0.0.0.0/0 if communicating with an external IdP
+  internal:
+    type: same-gvc # options: same-gvc, same-org, workload-list
+```
+
+The `postgres` block configures the bundled database — its credentials, the name of the secret this chart creates from them, resources, and volume size. See [Getting Started](#getting-started) for how those credentials are used.
+
+## Connecting
+
+| What | Value |
+|---|---|
+| Admin UI and API | the workload's public endpoint, since inbound defaults to `0.0.0.0/0` |
+| Internal (same GVC) | `RELEASE_NAME-fusionauth.GVC_NAME.cpln.local:9011` |
+| Credentials | created by you in the setup wizard on first visit |
+
+## Important Notes
+
+- **Complete the setup wizard immediately after installing.** Inbound is open to `0.0.0.0/0` by default and FusionAuth has no administrator until the wizard is finished, so whoever reaches it first creates that account.
+- **The database credentials are used exactly as given.** Change `change-me-fusionauth-db` before installing; they are applied when the data directory is first initialized and cannot be changed by editing values afterwards.
+- **Give each release its own `postgres.config.credentialsSecretName`.** Secret names are organization-wide, so a second release left on the default is refused at install.
+- **First boot waits on PostgreSQL by design.** The startup script polls for up to five minutes; a FusionAuth container that looks stuck early in an install is usually just waiting for the database.

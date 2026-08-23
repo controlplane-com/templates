@@ -2,6 +2,15 @@
 
 Debezium Server is a standalone Change Data Capture (CDC) application that streams database changes to various messaging systems. Unlike Debezium connectors that run on Kafka Connect, Debezium Server runs as a standalone application and can send events directly to Kafka, Redis, NATS, HTTP endpoints, cloud services, and more.
 
+## Architecture
+
+- **Debezium Server workload** — reads the source database's change stream and writes each change to the configured sink.
+- **Volume set** — offset and history storage, so the connector resumes where it left off rather than re-snapshotting.
+- **Secrets** — the generated `application.properties`, the source credentials, and the entrypoint script.
+- **Identity and policy** — `reveal` on those secrets, plus cloud access when the sink is a cloud service.
+
+This template does not create a GVC, and it does not deploy the source database or the sink — both must already exist.
+
 ## Overview
 
 This template deploys Debezium Server on Control Plane with:
@@ -345,3 +354,15 @@ cpln helm install debezium ./debezium-server/versions/1.0.0 \
 - [Debezium Documentation](https://debezium.io/documentation/)
 - [Debezium Server Documentation](https://debezium.io/documentation/reference/stable/operations/debezium-server.html)
 - [Control Plane Documentation](https://docs.controlplane.com/)
+
+## Important Notes
+
+- **The source database must be configured for CDC before this will work.** PostgreSQL needs `wal_level = logical`; MySQL needs binary logging with row format. A source left on the default settings produces a connector that starts and then never emits a change.
+- **Offsets live on the volume set.** Deleting it makes the connector re-snapshot the source from scratch on next start.
+- **A replication slot is left behind on the source** when you uninstall. PostgreSQL retains WAL for an inactive slot indefinitely, so an abandoned slot will eventually fill the source's disk — drop it explicitly.
+- **One connector per deployment.** Capturing from several sources means several releases.
+
+## Links
+
+- [Debezium Server documentation](https://debezium.io/documentation/reference/stable/operations/debezium-server.html)
+- [Debezium connectors](https://debezium.io/documentation/reference/stable/connectors/)

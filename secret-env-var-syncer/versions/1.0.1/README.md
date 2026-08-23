@@ -1,5 +1,17 @@
 ## Secret Env Var Syncer (SEVS)
 
+### Architecture
+
+- **Cron workload** — runs on `schedule`, reads each entry in `sevsConfig`, and writes the resolved values into the target workloads' environment variables.
+- **Secret** — the generated syncer configuration.
+- **Identity and policy** — permission to read the secrets it syncs from and to edit the workloads it syncs into.
+
+This template does not create a GVC.
+
+### Prerequisites
+
+**The secrets you reference and the workloads you target must already exist.** The syncer resolves them at each run; it does not create either.
+
 ### Overview
 
 Creates a cron workload that syncs keys from Control Plane dictionary secrets into environment variables on GVCs or individual workload containers. Runs on a configurable schedule, then exits.
@@ -86,3 +98,16 @@ These are automatically created by the template via three policy resources.
 ### Resources
 
 - [Image Source Code](https://github.com/controlplane-com/secret-env-var-syncer)
+
+### Connecting
+
+There is no endpoint to connect to — this template is a scheduled job. Confirm it is working by checking the target workload's environment after a run, or by reading the cron workload's logs:
+
+```bash
+cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-secret-env-var-syncer"}' --limit 50 --since 30m
+```
+
+### Links
+
+- [Control Plane secrets](https://docs.controlplane.com/reference/secret)
+- [Control Plane workloads](https://docs.controlplane.com/reference/workload/general)

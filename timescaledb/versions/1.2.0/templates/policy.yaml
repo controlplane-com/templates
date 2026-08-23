@@ -13,4 +13,7 @@ targetLinks:
   - //secret/{{ .Values.config.credentialsSecretName }}
   {{- if .Values.backup.enabled }}
   - //secret/{{ include "timescaledb.secretDatabase.name" . }}
+  {{- if and .Values.backup.enabled (eq .Values.backup.provider "minio") }}
+  - //secret/{{ .Values.backup.minio.credentialsSecretName }}
+  {{- end }}
   {{- end }}

@@ -38,9 +38,9 @@ spec:
         - name: MINIO_ENDPOINT
           value: cpln://secret/{{ include "timescaledb.secretDatabase.name" . }}.minio-endpoint
         - name: MINIO_ACCESS_KEY
-          value: cpln://secret/{{ include "timescaledb.secretDatabase.name" . }}.minio-access-key
+          value: cpln://secret/{{ .Values.backup.minio.credentialsSecretName }}.accessKey
         - name: MINIO_SECRET_KEY
-          value: cpln://secret/{{ include "timescaledb.secretDatabase.name" . }}.minio-secret-key
+          value: cpln://secret/{{ .Values.backup.minio.credentialsSecretName }}.secretKey
       {{- end }}
         - name: PG_HOST
           value: {{ include "timescaledb.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local

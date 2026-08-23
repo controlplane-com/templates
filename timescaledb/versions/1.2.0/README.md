@@ -186,7 +186,15 @@ upgrading</b>; if it already matches, no action is needed. Nothing else changes.
 
 1. Create your bucket on the server. Set `backup.minio.bucket`.
 2. Set `backup.minio.endpoint` to the S3 API address including port. For the `minio` marketplace template in the same GVC, this is `http://WORKLOAD_NAME:9000`.
-3. Set `backup.minio.accessKey` and `backup.minio.secretKey` to credentials with access to the bucket.
+3. Create a [dictionary secret](https://docs.controlplane.com/reference/secret) holding exactly `accessKey` and `secretKey`, and set `backup.minio.credentialsSecretName` to its name. For the `minio` template these are its `admin.username` and `admin.password`:
+
+```bash
+cpln secret create-dictionary --name my-timescaledb-minio-credentials \
+  --entry accessKey=MINIO_ACCESS_KEY \
+  --entry secretKey=MINIO_SECRET_KEY
+```
+
+<b>Upgrading from 1.1.x:</b> delete `backup.minio.accessKey` and `backup.minio.secretKey` and create the secret instead. An upgrade that still carries either key is refused at render.
 
 ## Restoring a backup
 

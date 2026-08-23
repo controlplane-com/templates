@@ -90,11 +90,11 @@ Validate backup configuration - when backup is enabled, backup.provider must be 
     {{- if not .Values.backup.minio.bucket -}}
       {{- fail "All fields are required for MinIO backup. Missing: backup.minio.bucket" -}}
     {{- end -}}
-    {{- if not .Values.backup.minio.accessKey -}}
-      {{- fail "All fields are required for MinIO backup. Missing: backup.minio.accessKey" -}}
+    {{- if or (hasKey .Values.backup.minio "accessKey") (hasKey .Values.backup.minio "secretKey") -}}
+      {{- fail "timescaledb: backup.minio.accessKey and backup.minio.secretKey were REMOVED — they are now a `dictionary` secret you create, named by backup.minio.credentialsSecretName, holding the keys `accessKey` and `secretKey`. Delete them from your values. See Backup setup in the README." -}}
     {{- end -}}
-    {{- if not .Values.backup.minio.secretKey -}}
-      {{- fail "All fields are required for MinIO backup. Missing: backup.minio.secretKey" -}}
+    {{- if not .Values.backup.minio.credentialsSecretName -}}
+      {{- fail "timescaledb: backup.minio.credentialsSecretName is required when provider is 'minio' — it names the `dictionary` secret holding `accessKey` and `secretKey`. Create it BEFORE installing; see Backup setup in the README." -}}
     {{- end -}}
   {{- end -}}
 {{- end -}}

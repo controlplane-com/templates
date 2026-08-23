@@ -75,6 +75,8 @@ backup:
   minio: # Backup to a self-hosted MinIO workload (or any S3-compatible endpoint)
     endpoint: http://my-minio-workload:9000 # e.g. http://WORKLOAD_NAME:9000 for an internal MinIO template deployment
     bucket: my-backup-bucket
-    accessKey: my-minio-username # matches the MinIO template's admin.username
-    secretKey: my-minio-password # matches the MinIO template's admin.password
+    # REQUIRED PREREQUISITE SECRET when provider is `minio` — a `dictionary`
+    # secret holding exactly two keys: `accessKey` and `secretKey`. For the
+    # minio template these are its admin.username and admin.password.
+    credentialsSecretName: my-timescaledb-minio-credentials
     prefix: timescaledb/backups # folder name where your backups will be stored

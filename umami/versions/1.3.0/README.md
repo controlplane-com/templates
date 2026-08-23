@@ -91,10 +91,8 @@ postgres:
   enabled: false
 postgresHA:           # durable HA: 3-replica Patroni store with an HAProxy leader endpoint
   enabled: true
-  postgres:
-    username: umami
-    password: change-me-umami-db
-    database: umami
+  config:
+    credentialsSecretName: my-umami-db-credentials # see Prerequisites — must exist before install
   replicas: 3
   volumeset:
     capacity: 10      # GiB per replica

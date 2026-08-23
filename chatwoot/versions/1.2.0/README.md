@@ -128,10 +128,8 @@ Enable exactly one of `postgresHA` (default) and `postgres`.
 ```yaml
 postgresHA:
   enabled: true
-  postgres:
-    username: chatwoot
-    password: change-me-chatwoot-pg   # change before installing
-    database: chatwoot
+  config:
+    credentialsSecretName: my-chatwoot-db-credentials # see Prerequisites — must exist before install
   replicas: 3
   volumeset:
     capacity: 10              # GiB per replica (minimum 10)

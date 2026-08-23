@@ -95,10 +95,8 @@ Exactly one of the two databases must be enabled (the chart enforces this at ren
 ```yaml
 postgresHA:                   # default: highly available PostgreSQL
   enabled: true
-  postgres:
-    username: n8n
-    password: change-me-n8n-db-password # change before installing
-    database: n8n
+  config:
+    credentialsSecretName: my-n8n-db-credentials # see Prerequisites — must exist before install
   replicas: 3
   volumeset:
     capacity: 10              # GiB per replica

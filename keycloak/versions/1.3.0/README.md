@@ -63,10 +63,8 @@ Exactly one of the two stores must be enabled (the chart enforces this at render
 ```yaml
 postgresHA:          # default: highly available PostgreSQL
   enabled: true
-  postgres:
-    username: keycloak
-    password: change-me-keycloak-db
-    database: keycloak
+  config:
+    credentialsSecretName: my-keycloak-db-credentials # see Prerequisites — must exist before install
   replicas: 3
   volumeset:
     capacity: 10     # GiB per replica

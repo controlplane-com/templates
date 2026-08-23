@@ -65,10 +65,8 @@ Exactly one of the two databases must be enabled (the chart enforces this at ren
 ```yaml
 postgresHA:               # default: highly available PostgreSQL
   enabled: true
-  postgres:
-    username: temporal
-    password: change-me-temporal-db-password # change before installing
-    database: temporal
+  config:
+    credentialsSecretName: my-temporal-db-credentials # see Prerequisites — must exist before install
   replicas: 3
   volumeset:
     capacity: 10          # GiB per replica

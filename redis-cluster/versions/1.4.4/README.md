@@ -2,6 +2,22 @@
 
 This app creates a Redis Cluster with at least 6 nodes on Control Plane Platform.
 
+### Architecture
+
+- **Stateful Redis workload** — `replicas` nodes forming a Redis Cluster, sharded across masters with one replica each.
+- **Volume set** — per-node persistence.
+- **Secrets** — the cluster configuration and the startup/bootstrap script, plus an auth secret created only when `redis.password` is set.
+- **Identity and policy** — `reveal` on this template's secrets, and cloud storage access when backups are on.
+- **Backup cron workload** *(optional)* — a scheduled backup to S3 or GCS.
+
+This template does not create a GVC.
+
+### Prerequisites
+
+None for a default install.
+
+Backups need a bucket and a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) before they can be enabled — see [Backing Up](#backing-up).
+
 ### Configuration
 
 **Replicas and resources** — minimum of 6 replicas required for a valid cluster (3 primaries + 3 replicas):
@@ -158,3 +174,16 @@ gsutil cp gs://BUCKET_NAME/PREFIX/BACKUP_FILE.rdb.gz - \
 ### Supported External Services
 - [Redis Documentation](https://redis.io/docs/)
 - [Redis Cluster Documentation](https://redis.io/docs/latest/operate/oss_and_stack/management/scaling/)
+
+### Important Notes
+
+- **`replicas` has a hard floor of 6.** Redis Cluster needs three masters for quorum, and this template pairs each with a replica. Fewer will not form a cluster.
+- **Authentication is off by default.** `redis: {}` means no `requirepass`, so anything `internalAccess` admits has full access. Set `redis.password` to enable it.
+- **Your client must speak the Redis Cluster protocol.** A plain client pointed at one node receives `MOVED` redirects it will not follow — the most common cause of "it does not work" here.
+- **This is not interchangeable with the `redis` template.** That one is primary/replica with Sentinel and a single write endpoint; this one shards the keyspace. Moving between them is a data migration.
+- **The default `250Mi` per node is a floor, not a recommendation.** A cache left at the default will begin evicting almost immediately under real load.
+
+### Links
+
+- [Redis Cluster specification](https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/)
+- [Redis documentation](https://redis.io/docs/latest/)

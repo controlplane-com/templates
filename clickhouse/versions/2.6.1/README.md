@@ -8,6 +8,15 @@ ClickHouse is a high-performance column-oriented analytical database designed fo
 - **Scratch volume** — fast local read cache for performance
 - **Volumeset** — persistent metadata, state, and system files
 
+## Architecture
+
+- **GVC** — created by this template, named by `gvc.name`. Give every install its own.
+- **Stateful ClickHouse Server workload** — the database, with configurable replicas per location.
+- **Stateful ClickHouse Keeper workload** *(cluster mode only)* — coordination, one replica per location across the first three.
+- **Volume sets** — server metadata and state, plus Keeper state in cluster mode. Primary data lives in object storage; the volume is a read cache.
+- **Secrets** — startup scripts for Server and Keeper, and one storage-configuration secret for the selected provider.
+- **Identity and policy** — `reveal` on this template's secrets plus the credentials secret you create, and cloud access to the bucket.
+
 ## Deployment Modes
 
 ### Single-Node
@@ -217,3 +226,12 @@ clickhouse-client --host $WORKLOAD_NAME --password $PASSWORD
 - [ClickHouse with GCS](https://clickhouse.com/docs/integrations/gcs)
 - [ClickHouse with Azure Blob Storage](https://clickhouse.com/docs/engines/table-engines/integrations/azureBlobStorage)
 - [ClickHouse with S3-compatible storage](https://clickhouse.com/docs/integrations/s3#s3-compatible-storage)
+
+## Important Notes
+
+- **This template creates its own GVC.** Never point `gvc.name` at an existing shared GVC — the chart adopts a GVC that already exists, and uninstalling then deletes it along with everything else in it. Give each install a unique name.
+- **Object storage is required in every mode**, including single-node. There is no local-only shape.
+- **2 locations is not supported.** Use 1 (single-node or single-shard) or 3 or more.
+- **The credentials secret has no `username` key.** ClickHouse authenticates as its built-in `default` user, so the secret holds only `password` and `database`.
+- **Credentials apply on first initialization only.** Changing the secret afterwards does not change the cluster — rotate inside ClickHouse first, then update the secret.
+- **Keep locations and buckets in the same provider and region family.** Cross-region traffic to object storage is billed on every query that misses the local cache.

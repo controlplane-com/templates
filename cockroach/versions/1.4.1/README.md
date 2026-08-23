@@ -2,6 +2,22 @@
 
 CockroachDB is a distributed SQL database built on a transactional and strongly-consistent key-value store. It provides automatic replication, distribution, and survivability across multiple locations with minimal latency and maximum throughput. CockroachDB offers ACID transactions, horizontal scalability, and built-in fault tolerance, making it ideal for applications requiring global data distribution and high availability.
 
+## Architecture
+
+- **GVC** — created by this template, named by `gvc.name`. Give every install its own.
+- **Stateful CockroachDB workload** — nodes per location, draining gracefully on shutdown.
+- **PgBouncer workload** — a connection pooler in front of the cluster.
+- **Volume set** — per-node storage.
+- **Secrets** — the PgBouncer startup script and cluster configuration.
+- **Identity and policy** — `reveal` on this template's secrets, and cloud storage access when backups are on.
+- **Backup cron workload** *(optional)* — a scheduled backup to S3 or GCS.
+
+## Prerequisites
+
+None for a default install.
+
+Backups need a bucket and a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) before they can be enabled.
+
 ## Configuration
 
 To configure your CockroachDB cluster across multiple locations, update the `gvc.locations` section in the `values.yaml` file.
@@ -174,3 +190,15 @@ cockroach sql --insecure \
 
 ### Supported External Services
 - [CockroachDB Documentation](https://www.cockroachlabs.com/docs/stable/)
+
+## Important Notes
+
+- **This template creates its own GVC.** Never point `gvc.name` at an existing shared GVC — the chart adopts a GVC that already exists, and uninstalling then deletes it along with everything else in it.
+- **The cluster runs in insecure mode.** There are no SQL credentials in values, so access is governed by `internal_access` and the GVC boundary and nothing else.
+- **`backup.location` is separate from the cluster's locations** and defaults to `aws-us-east-1`. Leaving it mismatched with your bucket's region means every backup pays cross-region egress.
+- **Surviving a region loss needs at least three locations.** Fewer cannot, regardless of how CockroachDB is configured.
+
+## Links
+
+- [CockroachDB documentation](https://www.cockroachlabs.com/docs/stable/)
+- [Multi-region survivability](https://www.cockroachlabs.com/docs/stable/multiregion-survival-goals)

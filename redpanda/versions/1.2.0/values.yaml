@@ -1,0 +1,111 @@
+redpanda:
+  name: cluster
+  image: redpandadata/redpanda:v26.1.9
+  replicas: 3
+  multiZone: false
+  env: []
+
+  cpu: 1500m
+  memory: 4Gi
+  minCpu: 500m
+  minMemory: 2Gi
+  # smp: number of Seastar reactor threads — must match the container's vCPU count (floor of cpu limit).
+  # Without this, Seastar uses all node CPUs and divides memory across them, starving each shard.
+  smp: 1
+  # reserveMemory: memory set aside for the OS; Redpanda uses (memory - reserveMemory).
+  reserveMemory: 1G
+
+  volume:
+    initialCapacity: 10 # In GB
+    performanceClass: general-purpose-ssd # For production workloads, switch to high-throughput-ssd (min 200GB) for higher IOPS
+    fileSystemType: xfs # xfs / ext4
+    # Platform-managed snapshots of the topic data. Topic data is the only durable
+    # state this template holds, and nothing else backs it up.
+    snapshots:
+      createFinalSnapshot: true # take a snapshot when the volume set is deleted
+      retentionDuration: 7d # how long each snapshot is kept
+      schedule: 0 0 * * * # cron in UTC; "" disables scheduled snapshots
+    # customEncryption:
+    #   enabled: true
+    #   region: aws-us-east-2
+    #   keyId: arn:aws:kms:us-east-2:1234567890:key/your-key-id
+
+  # To disable all traffic, comment out the corresponding rule. Docs: https://docs.controlplane.com/concepts/security#firewall
+  firewall:
+    internal_inboundAllowType: "same-gvc" # Options: same-org / same-gvc
+    # external_inboundAllowCIDR: 0.0.0.0/0
+    # inboundAllowWorkload:
+    #   - //gvc/my-gvc/workload/my-app
+    # external_outboundAllowCIDR: "0.0.0.0/0"
+
+  listeners:
+    kafka:
+      internal:
+        port: 9092
+      # external:
+      #   directReplicaRouting:
+      #     containerPort: 9094
+      #     publicAddress: redpanda.example.com
+      # Uncomment to enable external Kafka access over TLS via a public domain.
+
+    adminApi:
+      port: 9644
+
+    schemaRegistry:
+      port: 8081
+
+    pandaproxy:
+      enabled: false
+      port: 8082
+
+  # ─── SASL authentication ───────────────────────────────────────────────────
+  auth:
+    saslMechanism: SCRAM-SHA-256 # SCRAM-SHA-256 / SCRAM-SHA-512
+    # Each entry names a `dictionary` secret holding the keys `username` and `password`.
+    #
+    # EVERY SECRET LISTED HERE MUST EXIST BEFORE YOU INSTALL — a missing secret wedges
+    # the deployment silently and `cpln logs` returns nothing at all. See Prerequisites
+    # in the README for the exact commands and for how to diagnose a wedged deployment.
+    #
+    # The FIRST entry is the cluster superuser: the console, the Schema Registry client
+    # and (when enabled) the HTTP Proxy all authenticate to the brokers as it.
+    users:
+      - credentialsSecretName: my-redpanda-admin-credentials
+      # - credentialsSecretName: my-redpanda-app-credentials
+    # Extra usernames to grant superuser rights, for users created outside this chart.
+    superusers: []
+
+  acl:
+    allowEveryoneIfNoAclFound: false
+
+  secrets:
+    # Leave empty to auto-generate on first boot. Set explicitly to preserve identity across reinstalls.
+    cluster_id: ""
+
+  extra_configurations: {}
+    # auto_create_topics_enabled: false
+    # log_retention_ms: 604800000
+    # log_segment_size: 134217728
+    # log_retention_bytes: -1
+
+redpanda_console:
+  enabled: true
+  name: console
+  image: redpandadata/console:v3.7.4
+  cpu: 200m
+  memory: 256Mi
+  minCpu: 50m
+  minMemory: 64Mi
+  replicas: 1
+  timeoutSeconds: 30
+  # domain: console.example.com
+  # The console has NO LOGIN of its own — authentication and RBAC are Redpanda
+  # Enterprise features, so in this build every visitor shares the console's own
+  # SASL superuser session. External inbound is therefore CLOSED by default; reach
+  # the UI with `cpln port-forward <console-workload> 8080:8080 --gvc <gvc>`.
+  # Uncommenting external_inboundAllowCIDR publishes an unauthenticated Kafka admin
+  # UI to the whole internet. Docs: https://docs.controlplane.com/concepts/security#firewall
+  firewall:
+    # internal_inboundAllowType: "same-gvc"
+    # external_inboundAllowCIDR: "0.0.0.0/0"
+    external_outboundAllowCIDR: "0.0.0.0/0"

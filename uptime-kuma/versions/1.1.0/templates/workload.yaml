@@ -1,0 +1,90 @@
+{{- include "uptime-kuma.validate" . }}
+kind: workload
+name: {{ include "uptime-kuma.name" . }}
+description: Uptime Kuma — uptime monitoring, dashboard, and public status pages
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "uptime-kuma.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "uptime-kuma.identity.name" . }}
+  containers:
+    - name: uptime-kuma
+      image: {{ .Values.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
+      env:
+        # sqlite is upstream's default; setting it explicitly makes the first-visit
+        # setup wizard skip its database-selection page (admin account only)
+        - name: UPTIME_KUMA_DB_TYPE
+          value: sqlite
+        - name: DATA_DIR
+          value: /app/data
+      ports:
+        - number: 3001
+          protocol: http
+      volumes:
+        - path: /app/data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "uptime-kuma.volume.name" . }}
+      # Upstream's own healthcheck binary: healthy == exactly HTTP 302 on
+      # 127.0.0.1:3001/ (a 200 is a failure signal). Exec it rather than
+      # re-encoding that rule in an httpGet probe.
+      readinessProbe:
+        exec:
+          command:
+            - /app/extra/healthcheck
+        initialDelaySeconds: 10
+        periodSeconds: 5
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      # Generous initialDelay: upgrade boots run DB migrations (upstream's own
+      # HEALTHCHECK start-period is 180s).
+      livenessProbe:
+        exec:
+          command:
+            - /app/extra/healthcheck
+        initialDelaySeconds: 120
+        periodSeconds: 30
+        failureThreshold: 5
+        timeoutSeconds: 5
+  # Exactly one replica, always: upstream supports no clustering — SQLite on
+  # local disk, in-process scheduler, and websocket session state all break >1.
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  # Makes /app/data group-writable by GID 1000 (n8n/sftpgo pattern). Harmless
+  # under the default root image; keeps a user-supplied -rootless image override
+  # (user node, uid/gid 1000) from failing on a root-owned volumeset.
+  securityOptions:
+    filesystemGroupId: 1000
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}

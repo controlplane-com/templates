@@ -1,0 +1,17 @@
+apiVersion: v2
+name: open-webui
+description: Open WebUI self-hosted chat interface for LLMs — talks to Ollama and OpenAI-compatible APIs
+type: application
+version: 1.1.0
+appVersion: "0.11.0"
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+
+annotations:
+  created: "2026-07-28"
+  lastModified: "2026-08-17"
+  category: "llm"
+  createsGvc: false

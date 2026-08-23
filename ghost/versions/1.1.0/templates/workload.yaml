@@ -1,0 +1,107 @@
+{{- include "ghost.validate" . }}
+kind: workload
+name: {{ include "ghost.name" . }}
+description: Ghost publishing platform — editor, site, and Content/Admin APIs
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "ghost.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "ghost.identity.name" . }}
+  containers:
+    - name: ghost
+      image: {{ .Values.image }}
+      # `url` must be process env at Ghost start and the canonical endpoint is
+      # only known at runtime, so boot goes through the mounted start script,
+      # which then execs the image's own entrypoint (chown + gosu + theme-seed).
+      command: /bin/sh
+      args:
+        - /cpln/start.sh
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
+      env:
+        - name: NODE_ENV
+          value: production
+        # ── Database (mysql subchart, MySQL 8) ──
+        - name: database__client
+          value: mysql
+        - name: database__connection__host
+          value: {{ include "ghost.mysql.host" . }}
+        - name: database__connection__port
+          value: "3306"
+        - name: database__connection__user
+          value: 'cpln://secret/{{ include "ghost.mysql.secretName" . }}.user'
+        - name: database__connection__password
+          value: 'cpln://secret/{{ include "ghost.mysql.secretName" . }}.password'
+        - name: database__connection__database
+          value: 'cpln://secret/{{ include "ghost.mysql.secretName" . }}.database'
+        {{- if .Values.mail.secretName }}
+        # ── Mail (optional prerequisite dictionary secret: user, password) ──
+        - name: mail__transport
+          value: SMTP
+        - name: mail__options__host
+          value: {{ .Values.mail.host | quote }}
+        - name: mail__options__port
+          value: {{ .Values.mail.port | quote }}
+        - name: mail__options__secure
+          value: {{ .Values.mail.secure | quote }}
+        - name: mail__options__auth__user
+          value: 'cpln://secret/{{ .Values.mail.secretName }}.user'
+        - name: mail__options__auth__pass
+          value: 'cpln://secret/{{ .Values.mail.secretName }}.password'
+        - name: mail__from
+          value: {{ .Values.mail.from | quote }}
+        {{- end }}
+      ports:
+        - number: 2368
+          protocol: http
+      volumes:
+        - path: /var/lib/ghost/content
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "ghost.volume.name" . }}
+        - path: /cpln/start.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "ghost.secretStart.name" . }}.payload
+      # Ghost has no dedicated health endpoint; GET / returns 200 (or a 3xx to
+      # `url`) once boot migrations finish. failureThreshold 12 gives ~2 min of
+      # headroom for first-boot knex migrations against a freshly-created DB.
+      readinessProbe:
+        httpGet:
+          path: /
+          port: 2368
+          # Ghost 301-redirects http->https unless it sees this header; without it
+          # the probe gets a 301, never goes ready, and the edge returns 503.
+          httpHeaders:
+            - name: X-Forwarded-Proto
+              value: https
+        initialDelaySeconds: 20
+        periodSeconds: 10
+        failureThreshold: 12
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}

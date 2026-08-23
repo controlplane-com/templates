@@ -1,0 +1,17 @@
+apiVersion: v2
+name: uptime-kuma
+description: Uptime Kuma self-hosted uptime monitoring — HTTP/TCP/DNS checks, 90+ notification providers, and public status pages
+type: application
+version: 1.0.0
+appVersion: "2.4.0"
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+
+annotations:
+  created: "2026-07-23"
+  lastModified: "2026-07-23"
+  category: "observability"
+  createsGvc: false

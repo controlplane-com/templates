@@ -1,0 +1,25 @@
+kind: policy
+name: {{ include "redpanda.name" . }}
+description: Redpanda secrets access policy
+tags: {{- include "redpanda.tags" . | nindent 2 }}
+origin: default
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "redpanda.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "redpanda.name" . }}-init
+  {{- if .Values.redpanda_console.enabled }}
+  - //secret/{{ include "redpanda.secret.consoleInit.name" . }}
+  {{- end }}
+  {{- /* The SASL credentials are user-created prerequisite secrets; grant reveal on
+         exactly the ones named, de-duplicated in case two users share a secret. */}}
+  {{- $names := list }}
+  {{- range .Values.redpanda.auth.users }}
+  {{- $names = append $names .credentialsSecretName }}
+  {{- end }}
+  {{- range $names | uniq }}
+  - //secret/{{ . }}
+  {{- end }}

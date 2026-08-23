@@ -1,0 +1,123 @@
+image: quay.io/keycloak/keycloak:26.6.3
+
+# Replica count. 2+ (default) forms an Infinispan cluster over JGroups JDBC_PING
+# for zero-downtime restarts. 1 = dev mode: clustering fully disabled (local cache).
+replicas: 2
+
+resources: # per replica
+  maxCpu: 1000m
+  maxMemory: 2Gi # JVM heap is sized to 70% of this limit; do not set below 1.5Gi
+  minCpu: 500m
+  minMemory: 1Gi
+
+# ─── Admin Bootstrap ──────────────────────────────────────────────────────────
+# REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. A `dictionary`
+# secret holding exactly two keys, `username` and `password`; it is the
+# temporary admin Keycloak creates on first boot, and its login form sits on the
+# public endpoint. If the secret does not exist at install time the deployment
+# WEDGES silently — `cpln logs` returns nothing at all. See Prerequisites in the
+# README for the exact `cpln secret create-dictionary` command.
+admin:
+  secretName: my-keycloak-admin
+
+# ─── Backing Store: Highly Available PostgreSQL (default) ────────────────────
+# Deploys the postgres-highly-available template: 3 Patroni replicas, 3 etcd
+# replicas, and an HAProxy leader-routing endpoint Keycloak connects to.
+postgresHA:
+  enabled: true
+  config:
+    # Name of the dictionary secret this chart creates and the bundled
+    # postgres-highly-available reads. Since pgHA 2.5.0 the subchart creates no
+    # credentials secret of its own, so both stores are fed the same one, built
+    # from postgres.credentials.* above.
+    credentialsSecretName: my-keycloak-db-credentials
+  replicas: 3
+  volumeset:
+    capacity: 10 # initial capacity in GiB per replica (minimum is 10)
+
+  backup: # pass-through to the postgres-highly-available template's backup feature
+    enabled: false
+    mode: logical # logical or wal-g
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    logical:
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      schedule: "0 2 * * *" # daily at 2am UTC
+    walg:
+      intervalSeconds: 21600 # every 6 hours
+    provider: aws # Options: aws, gcp, or minio
+    aws:
+      bucket: my-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-backup-cloudaccount
+      policyName: my-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: my-backup-bucket
+      cloudAccountName: my-backup-cloudaccount
+      prefix: postgres/backups
+    minio: # any S3-compatible endpoint, e.g. an internal MinIO template deployment
+      endpoint: http://my-minio-workload:9000
+      bucket: my-backup-bucket
+      # REQUIRED PREREQUISITE SECRET when provider is `minio` — a `dictionary`
+      # secret holding exactly `accessKey` and `secretKey`. See Backup setup
+      # in the README.
+      credentialsSecretName: my-keycloak-minio-credentials
+      prefix: postgres/backups
+
+# ─── Backing Store: Single-instance PostgreSQL (dev/test) ────────────────────
+# Enable this and disable postgresHA for a lighter non-HA deployment.
+postgres:
+  enabled: false
+  # Credentials for the bundled database — internal plumbing no human types elsewhere.
+  # Keycloak CREATES the dictionary secret named by config.credentialsSecretName below
+  # out of these three values, so there is nothing for you to create before installing.
+  credentials:
+    username: keycloak
+    password: change-me-keycloak-db # change before installing
+    database: keycloak
+  config:
+    # Name of the dictionary secret this chart creates and the bundled postgres reads.
+    # Secret names are org-wide: give each keycloak release its own name. A second
+    # release left on this name is REFUSED at install (it is owned by the first
+    # release) — nothing is shared, overwritten or deleted.
+    credentialsSecretName: my-keycloak-db-credentials
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+  backup: # pass-through to the postgres template's backup feature (Postgres 17+)
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
+    schedule: "0 2 * * *" # daily at 2am UTC
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    provider: aws # Options: aws, gcp, or minio
+    aws:
+      bucket: my-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-backup-cloudaccount
+      policyName: my-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: my-backup-bucket
+      cloudAccountName: my-backup-cloudaccount
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: my-backup-bucket
+      # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
+      # only when backup is enabled with provider: minio. See README "Storage setup".
+      credentialsSecretName: my-keycloak-minio-credentials
+      prefix: postgres/backups
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: true # HTTPS via the canonical *.cpln.app endpoint
+
+internalAccess:
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # note: replicas > 1 requires type != none
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME

@@ -1,0 +1,26 @@
+apiVersion: v2
+name: listmonk
+description: Listmonk newsletter and mailing list manager with campaigns and subscriber lists, backed by PostgreSQL
+type: application
+version: 1.4.0
+appVersion: "6.2.0"
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+  - name: postgres
+    version: 3.4.1
+    repository: "oci://ghcr.io/controlplane-com/templates"
+    condition: postgres.enabled
+  - name: postgres-highly-available
+    alias: postgresHA
+    version: 2.5.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+    condition: postgresHA.enabled
+
+annotations:
+  created: "2026-07-31"
+  lastModified: "2026-08-23"
+  category: "email"
+  createsGvc: false

@@ -1,0 +1,15 @@
+# =============================================================================
+# Manticore Volumeset
+# =============================================================================
+# Persistent storage per replica (data, binlog, cluster state)
+kind: volumeset
+name: {{ include "manticore.volumeName" . }}
+description: Persistent storage for Manticore data and cluster state
+tags: {{- include "manticore.tags" . | nindent 4 }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.manticore.volumeset.capacity }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d

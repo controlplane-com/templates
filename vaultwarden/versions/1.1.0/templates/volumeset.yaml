@@ -1,0 +1,15 @@
+kind: volumeset
+name: {{ include "vaultwarden.volume.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: Vaultwarden data directory (SQLite database, attachments, sends, and RSA keys)
+tags: {{- include "vaultwarden.tags" . | nindent 4 }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.capacity }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: {{ .Values.backup.retention | quote }}
+    {{- if .Values.backup.enabled }}
+    schedule: {{ .Values.backup.schedule | quote }}
+    {{- end }}

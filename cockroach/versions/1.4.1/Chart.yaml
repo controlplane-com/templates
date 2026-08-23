@@ -8,7 +8,7 @@ appVersion: "25.4.0"
 
 annotations:
   created: "2025-08-25"
-  lastModified: "2026-08-22"
+  lastModified: "2026-08-23"
   category: "database"
   createsGvc: true
 

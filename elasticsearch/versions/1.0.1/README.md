@@ -10,6 +10,12 @@ Deploy a production-ready Elasticsearch 8.17.0 cluster with automated configurat
 - **One-time setup job** that configures the snapshot repository and SLM policy via API
 - **Multi-zone scheduling** for higher availability across availability zones (optional)
 
+## Prerequisites
+
+None for a default install.
+
+Backups need a bucket and a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) before they can be enabled — see [Automated Backups](#automated-backups).
+
 ## Configuration
 
 ### Core Settings
@@ -241,3 +247,26 @@ curl 'http://localhost:9200/_cluster/health?pretty'
 - [Kibana Documentation](https://www.elastic.co/docs/solutions/search)
 - [Snapshot and Restore](https://www.elastic.co/guide/en/elasticsearch/reference/current/snapshot-restore.html)
 - [Snapshot Lifecycle Management](https://www.elastic.co/guide/en/elasticsearch/reference/current/snapshots-take-snapshot.html)
+
+## Connecting
+
+| What | Value |
+|---|---|
+| Elasticsearch API (same GVC) | `RELEASE_NAME-elasticsearch.GVC_NAME.cpln.local:9200` |
+| Kibana *(when enabled)* | `cpln port-forward RELEASE_NAME-kibana 5601:5601 --gvc GVC_NAME`, then `http://localhost:5601` |
+| Credentials | None — security is disabled, see Important Notes |
+
+Always use the fully-qualified internal hostname. The bare workload name is not reliably resolvable.
+
+## Important Notes
+
+- **X-Pack security is disabled, so there is no authentication.** Anything `internal_access` admits has full admin access to every index, and there are no credentials anywhere in this template. Keep `internal_access` as narrow as your deployment allows.
+- **`replicas` must be odd**, or the cluster cannot elect a master.
+- **`jvmHeap` is not derived from `resources`.** Raising the container memory limit does not raise the heap, and setting the heap above about half the limit will get the process OOM-killed.
+- **Enabling backups on a running cluster fails for several minutes first.** The snapshot repository plugin installs at node startup, so every node must roll before the repository can be registered; the setup job retries until they have.
+- **The snapshot IAM policy needs both bucket ARNs** — `arn:aws:s3:::BUCKET` and `arn:aws:s3:::BUCKET/*`. `s3:ListBucket` and `s3:GetBucketLocation` authorize against the bucket itself.
+
+## Links
+
+- [Elasticsearch documentation](https://www.elastic.co/docs)
+- [Snapshot and restore](https://www.elastic.co/docs/deploy-manage/tools/snapshot-and-restore)

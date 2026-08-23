@@ -2,6 +2,18 @@
 
 TiDB is a distributed SQL database that provides horizontal scalability, strong consistency, and MySQL compatibility. It features a distributed architecture with separate components for storage (TiKV), computation (TiDB Server), and metadata management (PD), making it ideal for applications requiring massive scale, high availability, and seamless migration from MySQL.
 
+## Architecture
+
+- **GVC** — created by this template, named by `gvc.name`. Give every install its own.
+- **Stateful PD workload** (`RELEASE_NAME-pd`) — the placement driver, distributed across locations per `pdReplicas`, using `replicaDirect` so each node is individually addressable.
+- **Stateful TiKV workload** (`RELEASE_NAME-tikv`) — distributed key-value storage; replicas per location follow `gvc.locations[].replicas`.
+- **TiDB Server workload** (`RELEASE_NAME-server`) — the MySQL-compatible SQL layer on `4000`.
+- **DB init workload** *(optional)* — a one-time job that sets the root password and creates the application database and user. Disable it after first deployment.
+- **Volume sets** — PD and TiKV storage, each with 7-day snapshot retention.
+- **Secrets** — startup scripts for PD, TiKV and TiDB Server, plus the init job's script.
+- **Identity and policy** — `reveal` on this template's secrets plus the credentials secret you create, and cloud storage access when backups are on.
+- **Backup cron workload** *(optional)* — TiDB's `br` tool writing a full cluster snapshot to S3 or GCS.
+
 ### Prerequisites
 
 **One `dictionary` secret must exist BEFORE you install.** These are the credentials you put in every application's connection string, so they are not values — putting them in values would leave them in the Helm release.
@@ -248,3 +260,11 @@ br restore full \
 
 ### Supported External Services
 - [TiDB Documentation](https://docs.pingcap.com/tidb/stable/)
+
+## Important Notes
+
+- **This template creates its own GVC.** Never point `gvc.name` at an existing shared GVC — the chart adopts a GVC that already exists, and uninstalling then deletes it along with everything else in it.
+- **Three locations are required unless `devMode` is on.** `devMode: true` bypasses the HA requirement and is for testing only.
+- **Set `autoCreateDatabase.deployInitWorkload: false` after first deployment** and upgrade, to remove the one-time job and free its resources. The job is idempotent — it exits immediately if the database already exists.
+- **Credentials apply on first initialization only.** Changing the secret afterwards does not change the cluster; rotate with `ALTER USER` inside TiDB first, then update the secret.
+- **The workload that wedges on a missing credentials secret is `RELEASE_NAME-server`**, not a workload named after the release alone.

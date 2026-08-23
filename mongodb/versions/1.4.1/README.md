@@ -2,6 +2,16 @@
 
 Creates a single replica MongoDB database with a dedicated persistent volume with an optional backup configuration.
 
+### Architecture
+
+- **Stateful MongoDB workload** (`RELEASE_NAME-mongo`) — one replica serving `27017`, pinned to a single instance.
+- **Volume set** (`RELEASE_NAME-mongo-vs`) — the data directory, with optional autoscaling.
+- **Identity and policy** — grants `reveal` on exactly the credentials secret you create, plus the backup config secret and Cloud Account binding when backups are on.
+- **Backup config secret** *(optional)* — the bucket and region only; created when `backup.enabled`. It holds no credentials.
+- **Backup cron workload** *(optional)* — a scheduled `mongodump` writing compressed archives to S3 or GCS.
+
+This template creates no credential secret of its own, and does not create a GVC.
+
 ### Warning
 
 This application works only with a single replica, do not scale up the replicas.

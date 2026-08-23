@@ -97,10 +97,8 @@ postgres:
   enabled: false
 postgresHA:           # durable HA: 3-replica Patroni store with an HAProxy leader endpoint
   enabled: true
-  postgres:
-    username: listmonk
-    password: change-me-listmonk-db
-    database: listmonk
+  config:
+    credentialsSecretName: my-listmonk-db-credentials # see Prerequisites — must exist before install
   replicas: 3
   volumeset:
     capacity: 10      # GiB per replica

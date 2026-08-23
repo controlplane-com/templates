@@ -151,10 +151,8 @@ Set `postgres.enabled: false` and `postgresHA.enabled: true`. Exactly one databa
 ```yaml
 postgresHA:
   enabled: false
-  postgres:
-    username: twenty
-    password: change-me-twenty-db     # change before install; letters/digits/-/_ only (it is embedded in a URL)
-    database: twenty
+  config:
+    credentialsSecretName: my-twenty-db-credentials # see Prerequisites — must exist before install
   replicas: 3
   resources:
     minCpu: 500m

@@ -155,10 +155,8 @@ postgres:
 
 postgresHA:
   enabled: false              # 3 Patroni replicas + 3 etcd + an HAProxy leader endpoint
-  postgres:
-    username: nocodb
-    password: change-me-nocodb-db
-    database: nocodb
+  config:
+    credentialsSecretName: my-nocodb-db-credentials # see Prerequisites — must exist before install
   replicas: 3
   volumeset:
     capacity: 10              # GiB per replica (minimum 10)

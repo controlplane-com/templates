@@ -87,10 +87,8 @@ Exactly one of the two databases must be enabled (the chart enforces this at ren
 ```yaml
 postgresHA:                   # default: highly available PostgreSQL
   enabled: true
-  postgres:
-    username: unleash
-    password: change-me-unleash-db-password # change before installing
-    database: unleash
+  config:
+    credentialsSecretName: my-unleash-db-credentials # see Prerequisites — must exist before install
   replicas: 3
   volumeset:
     capacity: 10              # GiB per replica

@@ -175,10 +175,8 @@ postgres:
   enabled: false
 postgresHA: # set postgresHA.enabled: true for near-zero-downtime upgrades and failover
   enabled: true
-  postgres:
-    username: polaris
-    password: change-me-polaris-db # change before installing
-    database: polaris
+  config:
+    credentialsSecretName: my-polaris-db-credentials # see Prerequisites — must exist before install
   replicas: 3
   volumeset:
     capacity: 10 # initial capacity in GiB per replica (minimum is 10)

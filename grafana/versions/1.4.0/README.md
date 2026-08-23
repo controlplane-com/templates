@@ -77,10 +77,8 @@ Exactly one of the two databases must be enabled (the chart enforces this at ren
 ```yaml
 postgresHA:                   # default: highly available PostgreSQL
   enabled: true
-  postgres:
-    username: grafana
-    password: change-me-grafana-db-password # change before installing
-    database: grafana
+  config:
+    credentialsSecretName: my-grafana-db-credentials # see Prerequisites — must exist before install
   replicas: 3
   volumeset:
     capacity: 10              # GiB per replica

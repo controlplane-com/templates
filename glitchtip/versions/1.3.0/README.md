@@ -116,10 +116,8 @@ Exactly one of the two databases must be enabled (the chart enforces this at ren
 ```yaml
 postgresHA: # default: highly available PostgreSQL
   enabled: true
-  postgres:
-    username: glitchtip
-    password: change-me-glitchtip-db # change before installing
-    database: glitchtip
+  config:
+    credentialsSecretName: my-glitchtip-db-credentials # see Prerequisites — must exist before install
   replicas: 3
   volumeset:
     capacity: 10 # initial capacity in GiB per replica (minimum is 10)

@@ -1,0 +1,210 @@
+# ─── Chatwoot web (Rails/Puma) ────────────────────────────────────
+chatwoot:
+  # Community Edition image (MIT core). The `-ce` tag family excludes the
+  # commercially licensed enterprise/ directory. Pin a released tag; never latest.
+  image: chatwoot/chatwoot:v4.16.2-ce
+  # Stateless web tier over shared Postgres/Redis. >=1. Setting >1 REQUIRES
+  # storage.type s3 or s3-compatible — local attachments are per-replica.
+  replicas: 1
+  # Public base URL Chatwoot advertises (widget snippet, email links, callbacks).
+  # Empty = derive from the platform canonical endpoint. Set WITH https:// only
+  # when you front the workload with a custom domain.
+  frontendUrl: ""
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 2Gi            # a Rails process under boot migrations OOMs below this
+
+# ─── Sidekiq worker ───────────────────────────────────────────────
+# Single replica: it also runs database migrations and the first-run bootstrap.
+# Scale throughput with concurrency, not replicas.
+worker:
+  concurrency: 10             # SIDEKIQ_CONCURRENCY; also the worker's Postgres pool size
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 2Gi
+
+# ─── Prerequisite secret (USER-CREATED — MUST EXIST BEFORE INSTALL) ─
+# Dictionary secret holding Chatwoot's root-of-trust keys. Create it FIRST — the
+# deployment WEDGES on a missing secret and looks broken. ALL FOUR keys are
+# WRITE-ONCE: rotating SECRET_KEY_BASE logs out every user; rotating an
+# ACTIVE_RECORD_ENCRYPTION key makes stored two-factor secrets undecryptable.
+#   SECRET_KEY_BASE                               openssl rand -hex 64
+#   ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY          openssl rand -hex 16
+#   ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY    openssl rand -hex 16
+#   ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT  openssl rand -hex 16
+secrets:
+  name: my-chatwoot-secrets
+
+# ─── Attachment storage ───────────────────────────────────────────
+storage:
+  # local | s3 | s3-compatible   (object storage required for replicas > 1)
+  # local keeps files on a volumeset attached to the web workload only, so the
+  # Sidekiq worker cannot read them — attachment emails and ActiveStorage
+  # analyze/purge jobs fail. Use object storage for production.
+  type: local
+  local:
+    volumeset:
+      capacity: 10            # GiB (minimum 10); mounted at /app/storage
+  s3:                         # AWS S3 — keyless only (no static keys accepted)
+    bucket: my-chatwoot-bucket
+    region: us-east-1
+    cloudAccountName: my-s3-cloud-account       # Control Plane cloud account
+    policyName: my-chatwoot-s3-policy           # your bucket-scoped IAM policy (JSON in README)
+  s3Compatible:               # SeaweedFS / MinIO / Spaces — static keys
+    bucket: my-chatwoot-bucket
+    region: us-east-1         # any value; most S3-compatible servers ignore it
+    endpoint: http://my-minio-workload:9000     # S3 API address, with scheme and port
+    forcePathStyle: true      # true for most S3-compatible servers
+    auth:
+      # REQUIRED for this mode — dictionary secret created BEFORE install with
+      # STORAGE_ACCESS_KEY_ID + STORAGE_SECRET_ACCESS_KEY.
+      secretName: my-chatwoot-s3-keys
+
+# ─── SMTP / outbound email (optional) ─────────────────────────────
+# Off by default; the first admin is created without email. With SMTP off,
+# Chatwoot falls back to sendmail (absent from the image), so agent invites,
+# password resets, and email-channel replies FAIL. Configure before inviting agents.
+smtp:
+  enabled: false
+  address: smtp.example.com   # SMTP_ADDRESS (note: not SMTP_HOST)
+  port: 587
+  domain: ""                  # HELO domain; empty = omitted
+  authentication: login       # plain | login | cram_md5; empty = unauthenticated relay
+  enableStarttlsAuto: true    # false for a plaintext mail catcher (e.g. Mailpit :1025)
+  fromEmail: Chatwoot <no-reply@example.com>    # MAILER_SENDER_EMAIL
+  auth:
+    # OPTIONAL prerequisite dictionary secret with SMTP_USERNAME + SMTP_PASSWORD.
+    # Empty = no auth (e.g. my-chatwoot-smtp).
+    secretName: ""
+
+# ─── Access ───────────────────────────────────────────────────────
+publicAccess:
+  enabled: true               # HTTPS UI, API, widget and WebSockets on the auto *.cpln.app endpoint
+internalAccess:
+  type: same-gvc              # none | same-gvc | same-org | workload-list
+  workloads: []               # used only with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Database: highly available PostgreSQL (default) ──────────────
+# Deploys the postgres-highly-available template: 3 Patroni replicas (PostgreSQL
+# 17.5), 3 etcd replicas, and an HAProxy leader endpoint Chatwoot connects to.
+# Its image ships pgvector, which Chatwoot's schema REQUIRES.
+# Enable exactly one of postgresHA / postgres.
+postgresHA:
+  enabled: true
+  config:
+    # Name of the dictionary secret this chart creates and the bundled
+    # postgres-highly-available reads. Since pgHA 2.5.0 the subchart creates no
+    # credentials secret of its own, so both stores are fed the same one, built
+    # from postgres.credentials.* above.
+    credentialsSecretName: my-chatwoot-db-credentials
+  replicas: 3
+  resources:                  # per Patroni replica; the default install runs 3 of these
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 2Gi
+  volumeset:
+    capacity: 10              # GiB per replica (minimum 10)
+  backup:                     # optional database backups — see README storage setup
+    enabled: false
+    mode: logical             # logical | wal-g
+    logical:
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0   # 17.1.0 matches PostgreSQL 17
+      schedule: "0 2 * * *"   # daily at 2am UTC
+    walg:
+      intervalSeconds: 21600
+    provider: aws             # aws | gcp | minio
+    aws:
+      bucket: my-chatwoot-pg-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: my-chatwoot-pg-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: my-chatwoot-pg-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: my-chatwoot-pg-backup-bucket
+      # REQUIRED PREREQUISITE SECRET when provider is `minio` — a `dictionary`
+      # secret holding exactly `accessKey` and `secretKey`. See Backup setup
+      # in the README.
+      credentialsSecretName: my-chatwoot-minio-credentials
+      prefix: postgres/backups
+
+# ─── Database: single-instance PostgreSQL (dev/lightweight) ───────
+# Enable this and disable postgresHA for a smaller, non-HA deployment.
+# The image MUST carry pgvector — Chatwoot's schema runs CREATE EXTENSION
+# "vector", which the stock postgres:18 image does NOT provide (install fails on
+# the schema load). The pgvector/pgvector image below is the same Debian base
+# with the extension preinstalled; keep it unless you supply your own build.
+postgres:
+  enabled: false
+  image: pgvector/pgvector:pg18
+  # Credentials for the bundled database — internal plumbing no human types
+  # elsewhere. Chatwoot CREATES the dictionary secret named by
+  # config.credentialsSecretName below out of these three values, so there is
+  # nothing for you to create before installing.
+  credentials:
+    username: chatwoot
+    password: change-me-chatwoot-pg   # change before install
+    database: chatwoot
+  config:
+    # Name of the dictionary secret this chart creates and the bundled postgres
+    # reads. Secret names are org-wide: give each chatwoot release its own name.
+    # A second release left on this name is REFUSED at install (it is owned by
+    # the first release) — nothing is shared, overwritten or deleted.
+    credentialsSecretName: my-chatwoot-db-credentials
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 1Gi
+  volumeset:
+    capacity: 10              # GiB (minimum 10)
+  backup:                     # optional database backups — see README storage setup
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0   # 18.1.0 matches PostgreSQL 18
+    schedule: "0 2 * * *"     # daily at 2am UTC
+    provider: aws             # aws | gcp | minio
+    aws:
+      bucket: my-chatwoot-pg-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: my-chatwoot-pg-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: my-chatwoot-pg-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: my-chatwoot-pg-backup-bucket
+      # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
+      # only when this backup is enabled with provider: minio. See README storage setup.
+      credentialsSecretName: my-chatwoot-minio-credentials
+      prefix: postgres/backups
+
+# ─── Redis (bundled, single node) ─────────────────────────────────
+# REQUIRED — Sidekiq queues, ActionCable pub/sub, cache, and the one-time
+# install-onboarding flag. One node by design: Chatwoot's ActionCable adapter
+# has no Sentinel support, and Redis does not propagate pub/sub between
+# replicas, so a multi-node topology silently drops live updates.
+redis:
+  image: redis:8
+  auth:
+    password: change-me-chatwoot-redis   # template-managed; wired into REDIS_URL — letters/digits/-/_ only
+  resources:
+    minCpu: 100m
+    maxCpu: 400m
+    minMemory: 256Mi
+    maxMemory: 512Mi
+  volumeset:
+    capacity: 10              # GiB (minimum 10); AOF at /data

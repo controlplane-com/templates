@@ -1,0 +1,134 @@
+# ─── Listmonk Application ─────────────────────────────────────────────────────
+image: listmonk/listmonk:v6.2.0 # official Docker Hub image
+
+resources: # single Go binary — light footprint
+  cpu: 500m
+  memory: 512Mi
+  minCpu: 150m # keeps cpu:minCpu under the platform 4:1 cap (500/150 = 3.3:1)
+  minMemory: 256Mi
+
+# Persistent media uploads (filesystem media store), mounted at /listmonk/uploads
+volumeset:
+  capacity: 10 # initial capacity in GiB (minimum is 10)
+
+# ─── Admin Bootstrap ──────────────────────────────────────────────────────────
+# REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. A `dictionary`
+# secret holding exactly two keys, `username` (min 3 chars) and `password`
+# (min 8 chars); the login form it guards sits on the public endpoint. The
+# Super Admin is created on FIRST install only — editing the secret later does
+# NOT update the account. If the secret does not exist at install time the
+# deployment WEDGES silently — `cpln logs` returns nothing at all. See
+# Prerequisites in the README.
+admin:
+  secretName: my-listmonk-admin # name of your pre-created dictionary secret
+
+timezone: Etc/UTC # container TZ — governs campaign scheduling times
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: true # HTTPS admin UI + public subscription/tracking pages via the canonical *.cpln.app endpoint
+
+internalAccess:
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: []  # only used when type is workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Backing Store: single-instance PostgreSQL (default) ──────────────────────
+postgres:
+  enabled: true
+  image: postgres:18 # listmonk requires Postgres 12+
+  # Credentials for the bundled database — internal plumbing no human types elsewhere.
+  # Listmonk CREATES the dictionary secret named by config.credentialsSecretName below
+  # out of these three values, so there is nothing for you to create before installing.
+  credentials:
+    username: listmonk
+    password: change-me-listmonk-db # change before installing
+    database: listmonk
+  config:
+    # Name of the dictionary secret this chart creates and the bundled postgres reads.
+    # Secret names are org-wide: give each listmonk release its own name. A second
+    # release left on this name is REFUSED at install (it is owned by the first
+    # release) — nothing is shared, overwritten or deleted.
+    credentialsSecretName: my-listmonk-db-credentials
+  resources:
+    minCpu: 200m
+    maxCpu: 500m
+    minMemory: 256Mi
+    maxMemory: 512Mi
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+  # Scheduled DB backups to object storage (off by default) — pass-through to the
+  # postgres template's native backup. See README "Storage setup".
+  backup:
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0 # 18.1.0 = PG18, 17.1.0 = PG17
+    schedule: "0 2 * * *" # daily at 2am UTC
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    provider: aws # aws, gcp, or minio
+    aws:
+      bucket: my-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-backup-cloudaccount
+      policyName: my-backup-policy
+      prefix: listmonk/backups
+    gcp:
+      bucket: my-backup-bucket
+      cloudAccountName: my-backup-cloudaccount
+      prefix: listmonk/backups
+    minio: # any S3-compatible endpoint (e.g. an internal MinIO template)
+      endpoint: http://my-minio-workload:9000
+      bucket: my-backup-bucket
+      # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
+      # only when backup is enabled with provider: minio. See README "Storage setup".
+      credentialsSecretName: my-listmonk-minio-credentials
+      prefix: listmonk/backups
+
+# ─── Backing Store: Highly Available PostgreSQL (durable HA path) ─────────────
+# Enable this and disable postgres for a Patroni-managed 3-replica store with
+# automatic failover and an HAProxy leader endpoint.
+postgresHA:
+  enabled: false
+  config:
+    # Name of the dictionary secret this chart creates and the bundled
+    # postgres-highly-available reads. Since pgHA 2.5.0 the subchart creates no
+    # credentials secret of its own, so both stores are fed the same one, built
+    # from postgres.credentials.* above.
+    credentialsSecretName: my-listmonk-db-credentials
+  replicas: 3
+  volumeset:
+    capacity: 10 # initial capacity in GiB per replica (minimum is 10)
+  # Scheduled backups (off by default) — pass-through to the postgres-highly-available
+  # template's native backup; see README "Storage setup".
+  backup:
+    enabled: false
+    mode: logical # logical or wal-g
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    logical:
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      schedule: "0 2 * * *" # daily at 2am UTC
+    walg:
+      intervalSeconds: 21600 # every 6 hours
+    provider: aws # aws, gcp, or minio
+    aws:
+      bucket: my-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-backup-cloudaccount
+      policyName: my-backup-policy
+      prefix: listmonk/backups
+    gcp:
+      bucket: my-backup-bucket
+      cloudAccountName: my-backup-cloudaccount
+      prefix: listmonk/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: my-backup-bucket
+      # REQUIRED PREREQUISITE SECRET when provider is `minio` — a `dictionary`
+      # secret holding exactly `accessKey` and `secretKey`. See Backup setup
+      # in the README.
+      credentialsSecretName: my-listmonk-minio-credentials
+      prefix: listmonk/backups

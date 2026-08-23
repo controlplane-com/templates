@@ -1,0 +1,19 @@
+kind: policy
+name: {{ include "timescaledb.policy.name" . }}
+description: TimescaleDB policy
+tags: {{- include "timescaledb.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "timescaledb.identity.name" . }}
+targetKind: secret
+targetLinks:
+  {{- /* the user's prerequisite credentials secret */}}
+  - //secret/{{ .Values.config.credentialsSecretName }}
+  {{- if .Values.backup.enabled }}
+  - //secret/{{ include "timescaledb.secretDatabase.name" . }}
+  {{- if and .Values.backup.enabled (eq .Values.backup.provider "minio") }}
+  - //secret/{{ .Values.backup.minio.credentialsSecretName }}
+  {{- end }}
+  {{- end }}

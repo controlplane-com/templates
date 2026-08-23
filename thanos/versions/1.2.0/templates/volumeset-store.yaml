@@ -1,0 +1,14 @@
+{{- if .Values.storeGateway.enabled }}
+kind: volumeset
+name: {{ include "thanos.store.volume.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: Thanos Store Gateway local index/meta cache (rebuilds if lost)
+tags: {{- include "thanos.tags" . | nindent 4 }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.storeGateway.volumeset.capacity }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d
+{{- end }}

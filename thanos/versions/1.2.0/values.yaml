@@ -1,0 +1,84 @@
+image: quay.io/thanos/thanos:v0.42.2
+
+resources: # Thanos Query
+  maxCpu: 500m
+  maxMemory: 1Gi
+  minCpu: 250m
+  minMemory: 512Mi
+
+replicas: 1 # Query is stateless — set 2+ for an HA query tier
+
+# ─── Store endpoints (fan-out wiring) ─────────────────────────────────────────
+# gRPC Store API endpoints Query fans out over — typically the Thanos sidecar of
+# each prometheus-template install, addressed by SERVICE-LEVEL internal DNS
+# ({workload}.{gvc}.cpln.local — the prometheus template is single-replica, so
+# this reaches the one replica directly and is the most reliable form).
+# Cross-GVC targets must allow inbound from this Query workload (same-org or
+# workload-list) on THEIR side. Cross-location traffic incurs egress charges.
+stores: []
+# stores:
+#   - my-prometheus-prometheus.metrics-east.cpln.local:10901
+#   - my-prometheus-b-prometheus.metrics-west.cpln.local:10901
+
+queryReplicaLabels: # external label(s) marking HA duplicates to deduplicate
+  - replica
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: false # true = Query UI/API at a *.cpln.app URL — it has NO built-in auth
+internalAccess:
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # used with workload-list, e.g. //gvc/GVC/workload/NAME
+
+# ─── Long-term storage tier (optional, OFF by default) ────────────────────────
+# Requires the prometheus template's sidecar uploading blocks to the SAME bucket
+# configured under storage: below (see README Storage setup).
+storeGateway:
+  enabled: false # serves historical bucket blocks to Query
+  resources:
+    maxCpu: 500m
+    maxMemory: 1Gi
+    minCpu: 250m
+    minMemory: 512Mi
+  volumeset:
+    capacity: 10 # GiB — local index/meta cache; safe to lose (rebuilds on start)
+
+compactor:
+  enabled: false # compacts + downsamples bucket blocks — MUST be the ONLY compactor on the bucket, across all installs
+  resources:
+    maxCpu: 500m
+    maxMemory: 1Gi
+    minCpu: 250m
+    minMemory: 512Mi
+  volumeset:
+    capacity: 20 # GiB — compaction workspace; size ~2x two weeks of raw blocks
+  retention: # per-resolution bucket retention; "0d" keeps forever
+    raw: "0d"
+    fiveMinutes: "0d"
+    oneHour: "0d"
+
+# ─── Object storage (used only when storeGateway or compactor is enabled) ─────
+# The SAME bucket the prometheus template's sidecar uploads to.
+storage:
+  type: aws # options: aws, gcp, minio
+
+  # AWS S3 — keyless via Control Plane cloud identity.
+  aws:
+    bucket: my-thanos-bucket # bucket must already exist
+    region: us-east-1
+    cloudAccountName: my-s3-cloud-account # Control Plane AWS cloud account
+    policyName: my-thanos-s3-policy # custom IAM policy granting bucket access (bare name)
+
+  # Google Cloud Storage — keyless via Control Plane cloud identity.
+  gcp:
+    bucket: my-thanos-bucket # bucket must already exist
+    cloudAccountName: my-gcs-cloud-account # Control Plane GCP cloud account
+
+  # Any S3-compatible server (MinIO, R2, Wasabi, …) — static keys + endpoint.
+  minio:
+    endpoint: my-minio:9000 # host:port, NO scheme
+    insecure: true # true when the endpoint is plain HTTP
+    bucket: my-thanos-bucket # bucket must already exist
+    region: us-east-1
+    accessKey: my-minio-username
+    accessSecret: my-minio-password

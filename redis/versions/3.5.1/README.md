@@ -2,7 +2,20 @@
 
 Creates a Redis Sentinel cluster on Control Plane with automatic leader election, failover, and an optional backup configuration.
 
-### Operational notes
+### Architecture
+
+- **Stateful Redis workload** — one primary plus replicas, each on its own volume set.
+- **Stateful Sentinel workload** — monitors the primary and promotes a replica on failure; clients discover the current primary through it.
+- **Secrets** — Redis and Sentinel configuration, plus password secrets created only when auth is enabled.
+- **Identities and policies** — separate identities for Redis, Sentinel and the backup job, each granted `reveal` on only the secrets it needs.
+- **Domains** *(optional)* — created when public access is enabled, for external TCP reach.
+- **Volume sets** — persistence for Redis and Sentinel.
+- **Backup cron workload** *(optional)* — a scheduled backup to S3 or GCS.
+- **Grafana dashboard** — shipped with the template.
+
+This template does not create a GVC.
+
+### Important Notes
 
 - **Do not rotate the Redis password in place.** Changing `redis.auth.password.value` on a running cluster deadlocks the rollout: the first restarted node cannot replicate from the not-yet-restarted master (`Unable to AUTH to MASTER: -WRONGPASS`), so its readiness probe never passes and the roll never advances. Re-applying the previous password recovers it. To change the password, uninstall and reinstall, or accept a brief planned outage.
 - **Switching `backup.provider` between `aws` and `gcp` leaves the previous provider's cloud binding on the workload identity.** The rendered manifest is correct, but the platform deep-merges identity updates, so the old block persists until you edit the identity or reinstall the release. Verify the identity after a provider switch if least privilege matters to you.

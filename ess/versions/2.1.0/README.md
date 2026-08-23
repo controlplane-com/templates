@@ -1,5 +1,12 @@
 ## External Secret Syncer (ESS)
 
+### Architecture
+
+- **Syncer workload** — polls each configured provider on its interval and creates or updates Control Plane secrets to match, exposing an admin API on `port`.
+- **Identity and policy** — permission to manage the Control Plane secrets it writes.
+
+The sync configuration is **your** secret, mounted into the workload — this template creates none of its own, and does not create a GVC.
+
 ### Overview
 
 Creates an application that continuously syncs secrets from external providers into Control Plane secrets on a configurable schedule. Supported providers: **HashiCorp Vault**, **AWS Secrets Manager**, **AWS Parameter Store**, **Doppler**, **GCP Secret Manager**, **1Password**, **1Password Connect**, and **Infisical**.
@@ -336,3 +343,18 @@ Priority (highest wins):
 
 - [ESS Documentation](https://docs.controlplane.com/template-catalog/templates/ess)
 - [Image Source Code](https://github.com/controlplane-com/external-secret-syncer)
+
+### Connecting
+
+| What | Value |
+|---|---|
+| Admin API (same GVC) | `RELEASE_NAME-ess.GVC_NAME.cpln.local:3004` |
+| Externally | only from the CIDRs in `allowedIp`, which defaults to a placeholder that admits nothing |
+| Health check | `GET /about` |
+
+The synced secrets themselves are ordinary Control Plane secrets — workloads consume them by name, with no dependency on this template being reachable.
+
+### Links
+
+- [External Secret Syncer source](https://github.com/controlplane-com/external-secret-syncer)
+- [Control Plane secrets](https://docs.controlplane.com/reference/secret)

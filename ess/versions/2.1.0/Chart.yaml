@@ -12,6 +12,6 @@ dependencies:
 
 annotations:
   created: "2025-03-12"
-  lastModified: "2026-08-21"
+  lastModified: "2026-08-23"
   category: "secrets"
   createsGvc: false

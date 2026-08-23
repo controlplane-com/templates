@@ -1,5 +1,18 @@
 ## Ollama
 
+### Architecture
+
+- **Workload** — the Ollama server, with an optional Open WebUI front end.
+- **Volume set** — stores pulled models, which are large; size it for the models you intend to run.
+- **Secret** — the startup script, which pulls `defaultModel` on first boot.
+- **Identity and policy** — `reveal` on the startup secret.
+
+This template does not create a GVC.
+
+### Prerequisites
+
+None. The model named by `defaultModel` is pulled on first start.
+
 ### Warning
 
 You will need to request a quota increase for CPU and memory if your org is at the default quotas. GPU resources require explicit enablement — contact Control Plane support if you do not have access.
@@ -91,3 +104,11 @@ http://RELEASE_NAME-ollama.GVC_NAME.cpln.local:11434
 - [Ollama Documentation](https://github.com/ollama/ollama)
 - [Open WebUI Documentation](https://github.com/open-webui/open-webui)
 - [Ollama Model Library](https://ollama.com/library)
+
+### Important Notes
+
+- **Quotas are the usual first blocker.** CPU and memory beyond the org defaults need a quota increase, and GPU access must be enabled explicitly — see the Warning above.
+- **Models are large and live on the volume set.** Size it for what you intend to pull; a default-sized volume fills quickly once you add a second model.
+- **The first start is slow.** `defaultModel` is downloaded before the server is useful, so an install that looks stuck early is usually still pulling.
+- **The Open WebUI sidecar on `8080` is the exposed interface**; the Ollama API on `11434` is reached internally by the UI. Exposing `11434` directly gives unauthenticated access to the model server.
+- **Uninstalling deletes the volume set**, so every pulled model is downloaded again on the next install.

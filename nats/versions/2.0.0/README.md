@@ -1,5 +1,17 @@
 ## NATS Super Cluster
 
+### Architecture
+
+- **GVC** — created by this template. Give every install its own.
+- **Stateful NATS workloads** — one per location, joined into a super cluster with gateway connections between them.
+- **Volume sets** — JetStream storage per node, when JetStream is enabled.
+- **Secret** — the generated NATS configuration, including the super-cluster routes.
+- **Identity and policy** — `reveal` on the configuration secret.
+
+### Prerequisites
+
+None for a default install.
+
 ### Overview
 
 NATS is an open-source, high-performance, lightweight messaging system optimized for cloud-native architectures. It supports pub/sub, queueing, and request/reply patterns. This template creates a GVC with a super cluster configuration that can span across any regions, with each location running independent replicas. By default it exposes a WebSocket interface on port 443 via Control Plane's TLS termination.
@@ -95,3 +107,10 @@ wss://RELEASE_NAME-nats.GVC_NAME.cpln.app
 ### Supported External Services
 - [NATS Documentation](https://docs.nats.io/)
 - [JetStream Documentation](https://docs.nats.io/nats-concepts/jetstream)
+
+### Important Notes
+
+- **This template creates its own GVC.** Never point it at an existing shared GVC — a template that creates a GVC will adopt one that already exists, and uninstalling then deletes it along with everything else in it.
+- **JetStream state lives on the volume set.** Uninstalling deletes it; a stream's durability is only as good as the storage backing it.
+- **`nats_extra_config` is injected verbatim** into the generated configuration. A syntax error there surfaces as a container that will not start, not as a render failure.
+- **Set `internalAccess` to `none` only if you intend to break clustering** — the nodes reach each other over the same internal path clients use.

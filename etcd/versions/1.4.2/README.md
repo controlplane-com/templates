@@ -2,6 +2,28 @@
 
 etcd is a distributed, reliable key-value store for the most critical data of a distributed system. It provides a reliable way to store data that needs to be accessed by a distributed system or cluster of machines. etcd is essential for maintaining cluster health by providing consistent coordination, service discovery, and configuration management across distributed systems.
 
+### Architecture
+
+- **Stateful etcd workload** — `replicas` nodes forming a Raft cluster, using per-replica addressing so each node can find its peers.
+- **Volume set** — the data directory, one per replica.
+- **Secret** — the startup script that derives each node's identity and peer list at boot.
+- **Identity and policy** — `reveal` on the startup secret.
+
+This template does not create a GVC.
+
+### Prerequisites
+
+None for a default install.
+
+### Connecting
+
+| What | Value |
+|---|---|
+| Client API (same GVC) | `RELEASE_NAME-etcd.GVC_NAME.cpln.local:2379` |
+| Per-replica | `replica-N.RELEASE_NAME-etcd.LOCATION.GVC_NAME.cpln.local:2379` |
+
+Use the fully-qualified internal hostname; the bare workload name is not reliably resolvable.
+
 ### Configuring etcd
 
 Update the `values.yaml` file with your settings:
@@ -55,3 +77,10 @@ A `DB SIZE` near 2.1 GB on every member, plus `NOSPACE` in `alarm list`, confirm
 ### Supported External Services
 - [etcd docs](https://etcd.io/docs/v3.6/)
 - [etcd maintenance and compaction](https://etcd.io/docs/v3.6/op-guide/maintenance/)
+
+### Important Notes
+
+- **`replicas` must be odd and at least 3.** An even count gains no fault tolerance and risks split votes.
+- **Compaction is required, not optional.** etcd retains every superseded revision until told otherwise, so a cluster left uncompacted will fill its backend quota and go read-only. The `tuning` values control this and cannot switch it off.
+- **A full backend quota puts the cluster into a read-only alarm** that survives restarts — it must be cleared explicitly after compacting and defragmenting.
+- **Uninstalling deletes the volume sets**, and with them the entire keyspace.

@@ -1,5 +1,24 @@
 ## Kafka App
 
+### Architecture
+
+- **Stateful Kafka workload** — KRaft-mode brokers; the first nodes take the combined controller and broker roles, the rest are brokers only.
+- **Volume sets** — per-broker log directories.
+- **Secrets** — the broker configuration (including SASL/JAAS), the startup script that substitutes runtime values into it, and the cluster credentials.
+- **Identity and policy** — `reveal` on those secrets, and cloud storage access when backups are enabled.
+- **Kafbat UI workload** *(optional)* — a web console for the cluster.
+- **REST Proxy workload** *(optional)* — HTTP access to produce and consume.
+- **Connectors workload** *(optional)* — Kafka Connect.
+- **Domain** *(optional)* — created for public listener access.
+
+This template does not create a GVC.
+
+### Prerequisites
+
+None for a default install, which runs an internal-only cluster.
+
+Public listener access needs a domain you control and a dedicated load balancer on the GVC. Backups need a bucket and a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account).
+
 ### How to connect to the cluster
 
 You can connect to Kafka from the same GVC in which it's deployed using the following methods:
@@ -237,3 +256,17 @@ These tags are applied to the connector **workload** resource only. Other connec
 
 ### Release Notes
 See [RELEASES.md](https://github.com/controlplane-com/templates/blob/main/kafka/RELEASES.md)
+
+### Links
+
+- [Apache Kafka documentation](https://kafka.apache.org/documentation/)
+- [KRaft mode](https://kafka.apache.org/documentation/#kraft)
+- [Kafbat UI](https://github.com/kafbat/kafka-ui)
+
+### Important Notes
+
+- **`kafka.replicas` sets the cluster size, and the first nodes take the controller role.** Shrinking a running cluster below the controller quorum will make it unavailable.
+- **SASL credentials are plain values today**, so they land in the Helm release. They are non-working placeholders by default, so an install that never sets them has no usable credential rather than a weak one.
+- **The Kafbat UI and REST Proxy images are unpinned** (`:latest`), so a redeploy may pick up newer builds of either.
+- **Replication factor is derived from `kafka.replicas`** unless you override it in `extra_configurations`. A single-broker cluster cannot replicate, so topics created there survive nothing.
+- **Uninstalling deletes the volume sets**, and with them every topic's log.

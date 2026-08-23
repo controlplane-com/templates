@@ -2,6 +2,21 @@
 
 Creates an nginx reverse proxy workload that routes incoming traffic to internally accessible workloads by path. Includes an optional example backend for quick testing.
 
+### Architecture
+
+- **Proxy workload** — the nginx reverse proxy, routing to the targets listed in `locations`.
+- **Secret** — the generated `nginx.conf`.
+- **Identity and policy** — `reveal` on the configuration secret.
+- **Example backend workload** *(optional)* — a demo target, created when `enableExample: true`.
+
+This template does not create a GVC.
+
+### Prerequisites
+
+None for a default install, which deploys the example backend and routes to it.
+
+To proxy to your own services, set `enableExample: false` and add each target to `locations`. Those workloads must already exist in the GVC.
+
 ### Configuration
 
 **Proxy workload** — configure the nginx container image, port, and timeout:
@@ -67,3 +82,9 @@ https://RELEASE_NAME-nginx.GVC_NAME.cpln.app
 
 ### Supported External Services
 - [Nginx Documentation](https://nginx.org/en/docs/)
+
+### Important Notes
+
+- **`enableExample: true` is the default** and deploys a demo backend that all traffic routes to. Set it to `false` before pointing the proxy at your own services.
+- **Targets must be reachable inside the GVC.** Use the fully-qualified internal hostname (`WORKLOAD.GVC.cpln.local`); the bare workload name is not reliably resolvable.
+- **The proxy image is unpinned** (`nginx:latest`), so a redeploy may pick up a newer nginx. Pin it if you need reproducible installs.

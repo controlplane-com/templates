@@ -224,7 +224,7 @@ Scheduled database backups are configured on whichever database path you enabled
     --entry accessKey=ACCESS_KEY \
     --entry secretKey=SECRET_KEY
   ```
-- **Highly available** — set `postgresHA.backup.minio.accessKey` and `.secretKey` directly; the `postgres-highly-available` template still takes them as values.
+- **Highly available** — set `postgresHA.backup.minio.credentialsSecretName` to the same secret created above.
 
 The backing database template's own README carries the full per-provider walkthrough.
 

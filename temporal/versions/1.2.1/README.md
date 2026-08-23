@@ -146,7 +146,7 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
        --entry accessKey=ACCESS_KEY \
        --entry secretKey=SECRET_KEY
      ```
-   - **HA** (`postgresHA.backup`): set `postgresHA.backup.minio.accessKey` and `.secretKey` directly — the `postgres-highly-available` template still takes them as values.
+   - **HA** (`postgresHA.backup`): set `postgresHA.backup.minio.credentialsSecretName` to the same secret created above.
 
 ## Upgrading from 1.0.x
 

@@ -167,8 +167,6 @@ cpln secret create-dictionary --name my-umami-minio-credentials \
   --entry secretKey=MINIO_SECRET_KEY
 ```
 
-(On the `postgresHA` path the MinIO keys are still plain values — `minio.{accessKey,secretKey}` — because that store has not adopted the prerequisite-secret convention yet.)
-
 The backing template's README has the full per-provider walkthrough.
 
 ## Important Notes

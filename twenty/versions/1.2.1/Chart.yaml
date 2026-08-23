@@ -2,7 +2,7 @@ apiVersion: v2
 name: twenty
 description: Twenty open-source CRM — customizable objects, pipelines and views, backed by PostgreSQL and Redis
 type: application
-version: 1.2.0
+version: 1.2.1
 appVersion: "2.26.1"
 
 dependencies:

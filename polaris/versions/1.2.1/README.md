@@ -301,7 +301,7 @@ Then set `provider: aws` and `aws.{bucket,region,cloudAccountName,policyName}`.
 
 **GCP Cloud Storage** — create the bucket and a cloud account, grant its service account **Storage Object Admin** (`roles/storage.objectAdmin`) on the bucket, then set `provider: gcp` and `gcp.{bucket,cloudAccountName}`.
 
-**MinIO / S3-compatible** — set `provider: minio` and `minio.{endpoint,bucket}` (no cloud account needed; the keys authenticate directly). For `postgresHA.backup` the keys are inline values (`minio.accessKey` / `minio.secretKey`); for `postgres.backup` (single-instance) they are a prerequisite dictionary secret named by `postgres.backup.minio.credentialsSecretName`:
+**MinIO / S3-compatible** — set `provider: minio` and `minio.{endpoint,bucket}` (no cloud account needed; the keys authenticate directly). On both paths the keys are a prerequisite dictionary secret, named by `postgresHA.backup.minio.credentialsSecretName` or `postgres.backup.minio.credentialsSecretName`. The same secret serves either:
 
 ```bash
 cpln secret create-dictionary --name my-polaris-minio-credentials \

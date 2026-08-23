@@ -214,7 +214,7 @@ Scheduled backups are configured on whichever database path you enabled — `pos
 
 **AWS S3** — create the bucket, a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account), and an IAM policy scoped to that bucket, then set `…backup.enabled: true`, `…backup.provider: aws`, and `…backup.aws.{bucket,region,cloudAccountName,policyName}`. The policy JSON is the same bucket-scoped document shown above for attachment storage.
 
-**MinIO / S3-compatible** — set `…backup.provider: minio` and `…backup.minio.{endpoint,bucket}`; no cloud account is involved because the keys authenticate directly. For `postgresHA.backup` the keys are inline values (`minio.accessKey` / `minio.secretKey`); for `postgres.backup` (single-instance) they are a prerequisite dictionary secret named by `postgres.backup.minio.credentialsSecretName`:
+**MinIO / S3-compatible** — set `…backup.provider: minio` and `…backup.minio.{endpoint,bucket}`; no cloud account is involved because the keys authenticate directly. On both paths the keys are a prerequisite dictionary secret, named by `postgresHA.backup.minio.credentialsSecretName` or `postgres.backup.minio.credentialsSecretName`. The same secret serves either:
 
 ```bash
 cpln secret create-dictionary --name my-nocodb-minio-credentials \

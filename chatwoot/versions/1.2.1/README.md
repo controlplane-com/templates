@@ -222,7 +222,7 @@ Set `postgresHA.backup.enabled: true` (or `postgres.backup.enabled: true` in sin
 
 - **AWS** — create the bucket, create a [cloud account](https://docs.controlplane.com/guides/create-cloud-account), and create an IAM policy with the JSON above (substituting your backup bucket). Set `backup.provider: aws` plus `backup.aws.bucket`, `region`, `cloudAccountName`, and `policyName`.
 - **GCP** — create the bucket, create a [cloud account](https://docs.controlplane.com/guides/create-cloud-account), and grant its service account **Storage Object Admin** (`roles/storage.objectAdmin`) on that bucket. Set `backup.provider: gcp` plus `backup.gcp.bucket` and `cloudAccountName`.
-- **MinIO / S3-compatible** — create the bucket on your server. Set `backup.provider: minio` plus `backup.minio.endpoint` (scheme + port) and `bucket`. For `postgresHA.backup` the keys are inline values (`backup.minio.accessKey` / `secretKey`); for `postgres.backup` (single-instance) they are a prerequisite dictionary secret named by `postgres.backup.minio.credentialsSecretName`:
+- **MinIO / S3-compatible** — create the bucket on your server. Set `backup.provider: minio` plus `backup.minio.endpoint` (scheme + port) and `bucket`. On both paths the keys are a prerequisite dictionary secret, named by `postgresHA.backup.minio.credentialsSecretName` or `postgres.backup.minio.credentialsSecretName`. The same secret serves either:
 
   ```bash
   cpln secret create-dictionary --name my-chatwoot-minio-credentials \

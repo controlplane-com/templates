@@ -204,7 +204,7 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
 
 1. Create your bucket on the server. Set `backup.minio.bucket`.
 2. Set `backup.minio.endpoint` to the S3 API address including port. For the `minio` marketplace template in the same GVC, this is `http://WORKLOAD_NAME:9000`.
-3. For `postgresHA.backup`, set `backup.minio.accessKey` and `backup.minio.secretKey` to credentials with access to the bucket. For `postgres.backup` (single-instance), create a `dictionary` secret with those credentials and set `postgres.backup.minio.credentialsSecretName` to its name:
+3. Create a `dictionary` secret holding the bucket credentials, and set `credentialsSecretName` to its name on whichever store you use — `postgresHA.backup.minio.credentialsSecretName` or `postgres.backup.minio.credentialsSecretName`. Both take the same secret:
 
 ```bash
 cpln secret create-dictionary --name my-glitchtip-minio-credentials \

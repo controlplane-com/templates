@@ -2,7 +2,7 @@ apiVersion: v2
 name: polaris
 description: Apache Polaris Iceberg REST catalog — the metadata and access-control service for a lakehouse
 type: application
-version: 1.2.0
+version: 1.2.1
 appVersion: "1.7.0"
 
 dependencies:

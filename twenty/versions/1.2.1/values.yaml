@@ -190,6 +190,8 @@ postgresHA:
     minio:
       endpoint: http://my-minio-workload:9000
       bucket: my-twenty-pg-backup-bucket
-      accessKey: my-minio-username
-      secretKey: my-minio-password
+      # REQUIRED PREREQUISITE SECRET when provider is `minio` — a `dictionary`
+      # secret holding exactly `accessKey` and `secretKey`. See Backup setup
+      # in the README.
+      credentialsSecretName: my-twenty-minio-credentials
       prefix: postgres/backups

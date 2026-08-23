@@ -60,8 +60,10 @@ postgresHA:
     minio: # any S3-compatible endpoint, e.g. an internal MinIO template deployment
       endpoint: http://my-minio-workload:9000
       bucket: my-backup-bucket
-      accessKey: my-minio-username
-      secretKey: my-minio-password
+      # REQUIRED PREREQUISITE SECRET when provider is `minio` — a `dictionary`
+      # secret holding exactly `accessKey` and `secretKey`. See Backup setup
+      # in the README.
+      credentialsSecretName: my-keycloak-minio-credentials
       prefix: postgres/backups
 
 # ─── Backing Store: Single-instance PostgreSQL (dev/test) ────────────────────

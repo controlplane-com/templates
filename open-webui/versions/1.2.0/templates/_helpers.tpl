@@ -39,6 +39,7 @@ Open WebUI Policy Name
 {{/* Validation */}}
 
 {{- define "open-webui.validate" -}}
+{{- include "open-webui.validateResourceKnobs" . -}}
 {{- if not (has .Values.internalAccess.type (list "none" "same-gvc" "same-org" "workload-list")) -}}
 {{- fail (printf "open-webui: internalAccess.type must be 'none', 'same-gvc', 'same-org', or 'workload-list', got '%s'" .Values.internalAccess.type) -}}
 {{- end -}}
@@ -70,3 +71,17 @@ Common tags
 {{- define "open-webui.tags" -}}
 {{- include "cpln-common.tags" . }}
 {{- end }}
+
+{{/*
+Reject the pre-rename bare cpu/memory keys. Left unguarded they are silently
+ignored and the chart falls back to its own default limit — wrong resources
+with no signal.
+*/}}
+{{- define "open-webui.validateResourceKnobs" -}}
+{{- if (.Values.resources).cpu -}}
+{{- fail "open-webui: resources.cpu was RENAMED to resources.maxCpu. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- if (.Values.resources).memory -}}
+{{- fail "open-webui: resources.memory was RENAMED to resources.maxMemory. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- end -}}

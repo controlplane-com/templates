@@ -129,9 +129,9 @@ orchestrator:
     # printf '%s' "$(openssl rand -base64 32)" | cpln secret create-opaque --name my-manticore-agent-token --encoding plain -f -
     tokenSecretName: my-manticore-agent-token
     resources:
-      cpu: 250m
+      maxCpu: 250m
       minCpu: 100m
-      memory: 512Mi
+      maxMemory: 512Mi
       minMemory: 128Mi
     import:
       batchSize: 20000            # Rows per INSERT statement

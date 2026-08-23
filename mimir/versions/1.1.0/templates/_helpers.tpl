@@ -99,6 +99,7 @@ limits:
 {{/* Validation */}}
 
 {{- define "mimir.validate" -}}
+{{- include "mimir.validateResourceKnobs" . -}}
 {{- $r := int .Values.replicas -}}
 {{- if and (ne $r 1) (lt $r 3) -}}
 {{- fail "mimir: replicas must be 1 or >= 3 — a 2-replica cluster has no failure tolerance under 3-way replication" -}}
@@ -138,3 +139,17 @@ limits:
 {{- define "mimir.tags" -}}
 {{- include "cpln-common.tags" . }}
 {{- end }}
+
+{{/*
+Reject the pre-rename bare cpu/memory keys. Left unguarded they are silently
+ignored and the chart falls back to its own default limit — wrong resources
+with no signal.
+*/}}
+{{- define "mimir.validateResourceKnobs" -}}
+{{- if (.Values.resources).cpu -}}
+{{- fail "mimir: resources.cpu was RENAMED to resources.maxCpu. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- if (.Values.resources).memory -}}
+{{- fail "mimir: resources.memory was RENAMED to resources.maxMemory. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- end -}}

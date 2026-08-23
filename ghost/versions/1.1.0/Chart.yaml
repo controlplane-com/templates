@@ -2,7 +2,7 @@ apiVersion: v2
 name: ghost
 description: Ghost publishing platform for blogs, newsletters and paid memberships, backed by bundled MySQL
 type: application
-version: 1.0.0
+version: 1.1.0
 appVersion: "6.54.1"
 
 dependencies:
@@ -15,6 +15,6 @@ dependencies:
 
 annotations:
   created: "2026-07-28"
-  lastModified: "2026-08-17"
+  lastModified: "2026-08-23"
   category: "publishing"
   createsGvc: false

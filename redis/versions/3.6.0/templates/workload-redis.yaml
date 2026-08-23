@@ -162,8 +162,8 @@ spec:
             exec {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof "$MASTER_HOST" "$MASTER_PORT"
           fi
       command: /bin/sh
-      cpu: {{ .Values.redis.resources.cpu }}
-      memory: {{ .Values.redis.resources.memory }}
+      cpu: {{ .Values.redis.resources.maxCpu }}
+      memory: {{ .Values.redis.resources.maxMemory }}
       minCpu: {{ .Values.redis.resources.minCpu }}
       minMemory: {{ .Values.redis.resources.minMemory }}
       image: {{ .Values.redis.image }}
@@ -262,8 +262,8 @@ spec:
 {{- if and (hasKey .Values.redis "exporter") .Values.redis.exporter.enabled }}
     - name: redis-exporter
       image: {{ .Values.redis.exporter.image }}
-      cpu: {{ .Values.redis.exporter.resources.cpu }}
-      memory: {{ .Values.redis.exporter.resources.memory }}
+      cpu: {{ .Values.redis.exporter.resources.maxCpu }}
+      memory: {{ .Values.redis.exporter.resources.maxMemory }}
       minCpu: {{ .Values.redis.exporter.resources.minCpu }}
       minMemory: {{ .Values.redis.exporter.resources.minMemory }}
       inheritEnv: false

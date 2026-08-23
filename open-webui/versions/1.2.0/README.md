@@ -1,5 +1,11 @@
 # Open WebUI
 
+> **Upgrading from 1.1.0:** resource blocks that expose both a floor and a ceiling now name the
+> ceiling `maxCpu`/`maxMemory` instead of `cpu`/`memory`, so it is no longer ambiguous which number
+> is the limit. Rename those two keys in your values; an upgrade that still carries the old names is
+> refused at render. Blocks that expose only a limit keep the bare `cpu`/`memory` names.
+
+
 This app deploys [Open WebUI](https://github.com/open-webui/open-webui), a self-hosted, ChatGPT-style chat interface for LLMs with users, RAG (chat grounded in your uploaded documents), and model management. A single stateful workload keeps all of its state on a persistent volume and connects to your models via an in-GVC Ollama server and/or any OpenAI-compatible endpoint. It is **not** exposed to the internet by default — you register the admin account first, then opt in to public access.
 
 ## Architecture
@@ -32,8 +38,8 @@ printf '%s' "$(openssl rand -base64 32)" | cpln secret create-opaque --name my-o
 image: ghcr.io/open-webui/open-webui:v0.11.0
 
 resources:
-  cpu: 1                      # max vCPU
-  memory: 2Gi                 # max memory (RAG loads a local embedding model into RAM on first use)
+  maxCpu: 1                      # max vCPU
+  maxMemory: 2Gi                 # max memory (RAG loads a local embedding model into RAM on first use)
   minCpu: 500m
   minMemory: 1Gi
 ```

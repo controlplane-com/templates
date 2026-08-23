@@ -55,6 +55,7 @@ Must match the subchart's own `mysql.name` helper.
 {{/* Validation */}}
 
 {{- define "ghost.validate" -}}
+{{- include "ghost.validateResourceKnobs" . -}}
 {{- if not .Values.mysql.config.password -}}
 {{- fail "ghost: mysql.config.password must be set" -}}
 {{- end -}}
@@ -80,3 +81,17 @@ Common tags
 {{- define "ghost.tags" -}}
 {{- include "cpln-common.tags" . }}
 {{- end }}
+
+{{/*
+Reject the pre-rename bare cpu/memory keys. Left unguarded they are silently
+ignored and the chart falls back to its own default limit — wrong resources
+with no signal.
+*/}}
+{{- define "ghost.validateResourceKnobs" -}}
+{{- if (.Values.resources).cpu -}}
+{{- fail "ghost: resources.cpu was RENAMED to resources.maxCpu. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- if (.Values.resources).memory -}}
+{{- fail "ghost: resources.memory was RENAMED to resources.maxMemory. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- end -}}

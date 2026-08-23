@@ -52,9 +52,9 @@ pgbouncer:
     workloads:  # Note: can only be used if type is workload-list
       #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
   resources:
-    cpu: 200m
+    maxCpu: 200m
     minCpu: 100m
-    memory: 1Gi
+    maxMemory: 1Gi
     minMemory: 128Mi
 
 backup:

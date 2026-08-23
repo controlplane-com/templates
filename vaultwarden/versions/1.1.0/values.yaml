@@ -1,8 +1,8 @@
 image: vaultwarden/server:1.36.0
 
 resources:
-  cpu: 500m
-  memory: 512Mi
+  maxCpu: 500m
+  maxMemory: 512Mi
   minCpu: 125m
   minMemory: 256Mi
 

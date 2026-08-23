@@ -1,5 +1,11 @@
 # Keycloak
 
+> **Upgrading from 1.3.1:** resource blocks that expose both a floor and a ceiling now name the
+> ceiling `maxCpu`/`maxMemory` instead of `cpu`/`memory`, so it is no longer ambiguous which number
+> is the limit. Rename those two keys in your values; an upgrade that still carries the old names is
+> refused at render. Blocks that expose only a limit keep the bare `cpu`/`memory` names.
+
+
 This app deploys [Keycloak](https://www.keycloak.org/) — open-source identity and access management providing single sign-on, OIDC/SAML, user federation, and fine-grained authorization. It runs clustered Keycloak 26 in production mode with a highly available PostgreSQL backing store by default, delivering zero-downtime restarts and upgrades.
 
 ## Architecture
@@ -47,8 +53,8 @@ image: quay.io/keycloak/keycloak:26.6.3
 replicas: 2          # 2+ = clustered, zero-downtime restarts; 1 = dev mode
 
 resources:           # per replica
-  cpu: 1000m
-  memory: 2Gi        # JVM heap = 70% of this; do not set below 1.5Gi
+  maxCpu: 1000m
+  maxMemory: 2Gi        # JVM heap = 70% of this; do not set below 1.5Gi
   minCpu: 500m
   minMemory: 1Gi
 

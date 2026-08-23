@@ -1,5 +1,11 @@
 # Ghost
 
+> **Upgrading from 1.0.0:** resource blocks that expose both a floor and a ceiling now name the
+> ceiling `maxCpu`/`maxMemory` instead of `cpu`/`memory`, so it is no longer ambiguous which number
+> is the limit. Rename those two keys in your values; an upgrade that still carries the old names is
+> refused at render. Blocks that expose only a limit keep the bare `cpu`/`memory` names.
+
+
 [Ghost](https://ghost.org) is the open-source publishing platform for professional blogs, newsletters, and paid memberships, with a first-class editor and REST Content/Admin APIs. This template deploys a single stateful Ghost workload backed by a bundled MySQL 8 database, with durable content storage and an HTTPS public site.
 
 ## Architecture
@@ -24,8 +30,8 @@
 ```yaml
 image: ghost:6.54.1-alpine
 resources:      # single Node instance
-  cpu: 500m
-  memory: 1024Mi
+  maxCpu: 500m
+  maxMemory: 1024Mi
   minCpu: 250m
   minMemory: 512Mi
 volumeset:

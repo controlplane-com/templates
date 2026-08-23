@@ -10,9 +10,9 @@ spec:
   containers:
     - name: pgbouncer
       image: {{ .Values.pgbouncer.image }}
-      cpu: {{ .Values.pgbouncer.resources.cpu | quote }}
+      cpu: {{ .Values.pgbouncer.resources.maxCpu | quote }}
       minCpu: {{ .Values.pgbouncer.resources.minCpu | quote }}
-      memory: {{ .Values.pgbouncer.resources.memory | quote }}
+      memory: {{ .Values.pgbouncer.resources.maxMemory | quote }}
       minMemory: {{ .Values.pgbouncer.resources.minMemory | quote }}
       inheritEnv: false
       command: "/bin/sh"

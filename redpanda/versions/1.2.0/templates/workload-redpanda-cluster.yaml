@@ -44,11 +44,11 @@ spec:
               - /bin/bash
               - '-c'
               - rpk cluster maintenance enable --wait -X admin.hosts=localhost:{{ .Values.redpanda.listeners.adminApi.port }} || true
-      cpu: '{{ .Values.redpanda.cpu }}'
+      cpu: '{{ .Values.redpanda.maxCpu }}'
       {{- if .Values.redpanda.minCpu }}
       minCpu: '{{ .Values.redpanda.minCpu }}'
       {{- end }}
-      memory: {{ .Values.redpanda.memory }}
+      memory: {{ .Values.redpanda.maxMemory }}
       {{- if .Values.redpanda.minMemory }}
       minMemory: {{ .Values.redpanda.minMemory }}
       {{- end }}

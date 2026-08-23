@@ -1,5 +1,11 @@
 # Grafana Mimir
 
+> **Upgrading from 1.0.0:** resource blocks that expose both a floor and a ceiling now name the
+> ceiling `maxCpu`/`maxMemory` instead of `cpu`/`memory`, so it is no longer ambiguous which number
+> is the limit. Rename those two keys in your values; an upgrade that still carries the old names is
+> refused at render. Blocks that expose only a limit keep the bare `cpu`/`memory` names.
+
+
 This app deploys [Grafana Mimir](https://github.com/grafana/mimir) in monolithic mode — a long-term Prometheus metrics store you own. Your collectors (Prometheus, Grafana Alloy, OpenTelemetry) push metrics in via Prometheus `remote_write`; anything that speaks PromQL (your own Grafana, scripts, dashboards) queries them back, with durable storage in your object bucket.
 
 This is a **self-hosted metrics store for your own metrics from your own sources**. It is separate from — and not a replacement for — Control Plane's built-in observability, which continues to collect and dashboard your workloads' metrics natively.
@@ -28,8 +34,8 @@ An existing bucket in one of the supported backends, and access setup for it (st
 image: grafana/mimir:3.1.3
 
 resources:            # memory governs how many active series you can ingest
-  cpu: 1000m
-  memory: 2Gi
+  maxCpu: 1000m
+  maxMemory: 2Gi
   minCpu: 500m
   minMemory: 1Gi
 

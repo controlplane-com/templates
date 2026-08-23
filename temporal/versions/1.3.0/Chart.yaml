@@ -2,7 +2,7 @@ apiVersion: v2
 name: temporal
 description: Temporal durable-execution platform — gRPC frontend and Web UI, backed by highly available PostgreSQL
 type: application
-version: 1.2.1
+version: 1.3.0
 appVersion: "1.29.7"
 
 dependencies:

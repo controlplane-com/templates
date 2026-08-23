@@ -1,5 +1,11 @@
 # Redpanda
 
+> **Upgrading from 1.1.0:** resource blocks that expose both a floor and a ceiling now name the
+> ceiling `maxCpu`/`maxMemory` instead of `cpu`/`memory`, so it is no longer ambiguous which number
+> is the limit. Rename those two keys in your values; an upgrade that still carries the old names is
+> refused at render. Blocks that expose only a limit keep the bare `cpu`/`memory` names.
+
+
 Redpanda is a Kafka-compatible streaming platform written in C++. It implements the Kafka wire protocol natively, so any Kafka client, SDK, or tool works with it without modification. This template deploys a stateful Redpanda broker cluster with SASL authentication, Schema Registry, an optional HTTP Proxy, and an optional web console.
 
 ## Architecture
@@ -47,8 +53,8 @@ redpanda:
   image: redpandadata/redpanda:v26.1.9
   env: []                    # extra environment variables for the broker container
   replicas: 3                # 1, 3, or 5 — Raft needs an odd number for quorum
-  cpu: 1500m
-  memory: 4Gi
+  maxCpu: 1500m
+  maxMemory: 4Gi
   minCpu: 500m
   minMemory: 2Gi
   smp: 1                     # Seastar reactor threads; floor of the cpu limit
@@ -143,8 +149,8 @@ redpanda_console:
   enabled: true
   name: console
   image: redpandadata/console:v3.7.4
-  cpu: 200m
-  memory: 256Mi
+  maxCpu: 200m
+  maxMemory: 256Mi
   minCpu: 50m
   minMemory: 64Mi
   replicas: 1

@@ -1,5 +1,11 @@
 # Vaultwarden
 
+> **Upgrading from 1.0.0:** resource blocks that expose both a floor and a ceiling now name the
+> ceiling `maxCpu`/`maxMemory` instead of `cpu`/`memory`, so it is no longer ambiguous which number
+> is the limit. Rename those two keys in your values; an upgrade that still carries the old names is
+> refused at render. Blocks that expose only a limit keep the bare `cpu`/`memory` names.
+
+
 This app deploys [Vaultwarden](https://github.com/dani-garcia/vaultwarden), a lightweight self-hosted password manager compatible with all official Bitwarden clients (browser, desktop, mobile). A single stateful workload with its SQLite database on a persistent volume, served over HTTPS on the canonical `*.cpln.app` endpoint.
 
 ## Architecture
@@ -23,8 +29,8 @@ This app deploys [Vaultwarden](https://github.com/dani-garcia/vaultwarden), a li
 image: vaultwarden/server:1.36.0
 
 resources:
-  cpu: 500m
-  memory: 512Mi
+  maxCpu: 500m
+  maxMemory: 512Mi
   minCpu: 125m
   minMemory: 256Mi
 

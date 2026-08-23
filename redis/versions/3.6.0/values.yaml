@@ -1,8 +1,8 @@
 redis:
   image: redis:8
   resources:
-    cpu: 200m
-    memory: 256Mi
+    maxCpu: 200m
+    maxMemory: 256Mi
     minCpu: 80m
     minMemory: 128Mi
   replicas: 3
@@ -71,8 +71,8 @@ redis:
     enabled: false    # adds a redis_exporter sidecar that exposes metrics at :9121/metrics
     image: oliver006/redis_exporter:v1.67.0-alpine
     resources:
-      cpu: 50m
-      memory: 64Mi
+      maxCpu: 50m
+      maxMemory: 64Mi
       minCpu: 25m
       minMemory: 32Mi
     dropMetrics: []  # e.g., ["redis_command_.*", "redis_keyspace_.*"]
@@ -99,8 +99,8 @@ redis:
 sentinel:
   image: redis:8
   resources:
-    cpu: 200m
-    memory: 256Mi
+    maxCpu: 200m
+    maxMemory: 256Mi
     minCpu: 80m
     minMemory: 128Mi
   replicas: 3

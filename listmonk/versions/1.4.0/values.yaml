@@ -2,8 +2,8 @@
 image: listmonk/listmonk:v6.2.0 # official Docker Hub image
 
 resources: # single Go binary — light footprint
-  cpu: 500m
-  memory: 512Mi
+  maxCpu: 500m
+  maxMemory: 512Mi
   minCpu: 150m # keeps cpu:minCpu under the platform 4:1 cap (500/150 = 3.3:1)
   minMemory: 256Mi
 

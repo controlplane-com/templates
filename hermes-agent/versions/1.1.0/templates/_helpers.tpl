@@ -111,6 +111,7 @@ hermes config set agent.reasoning_effort {{ .Values.model.reasoningEffort | quot
 {{/* Validation */}}
 
 {{- define "hermes-agent.validate" -}}
+{{- include "hermes-agent.validateResourceKnobs" . -}}
 {{- if not (has .Values.model.provider (list "anthropic" "openai" "custom")) -}}
 {{- fail (printf "hermes-agent: model.provider must be one of anthropic, openai, custom — got '%s'. Any other OpenAI-compatible endpoint (OpenRouter, Ollama, vLLM, …) uses provider 'custom' with model.baseUrl." .Values.model.provider) -}}
 {{- end -}}
@@ -143,3 +144,17 @@ Common tags
 {{- define "hermes-agent.tags" -}}
 {{- include "cpln-common.tags" . }}
 {{- end }}
+
+{{/*
+Reject the pre-rename bare cpu/memory keys. Left unguarded they are silently
+ignored and the chart falls back to its own default limit — wrong resources
+with no signal.
+*/}}
+{{- define "hermes-agent.validateResourceKnobs" -}}
+{{- if (.Values.resources).cpu -}}
+{{- fail "hermes-agent: resources.cpu was RENAMED to resources.maxCpu. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- if (.Values.resources).memory -}}
+{{- fail "hermes-agent: resources.memory was RENAMED to resources.maxMemory. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- end -}}

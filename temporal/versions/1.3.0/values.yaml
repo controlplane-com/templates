@@ -1,8 +1,8 @@
 image: temporalio/auto-setup:1.29.7 # Temporal server + schema tools; boot runs schema setup, then the server
 
 resources:
-  cpu: 1000m
-  memory: 2Gi
+  maxCpu: 1000m
+  maxMemory: 2Gi
   minCpu: 500m
   minMemory: 1Gi
 
@@ -18,8 +18,8 @@ ui:
   enabled: true
   image: temporalio/ui:2.52.1
   resources:
-    cpu: 500m
-    memory: 512Mi
+    maxCpu: 500m
+    maxMemory: 512Mi
     minCpu: 125m
     minMemory: 128Mi
 

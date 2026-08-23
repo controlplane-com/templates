@@ -2,8 +2,8 @@
 image: ghost:6.54.1-alpine # official Docker Hub image (library/ghost)
 
 resources: # Ghost (Node) app — single instance
-  cpu: 500m
-  memory: 1024Mi
+  maxCpu: 500m
+  maxMemory: 1024Mi
   minCpu: 250m
   minMemory: 512Mi
 

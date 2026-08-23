@@ -120,6 +120,7 @@ Grafana Dashboard Name
 Validate backup configuration - when backup is enabled, backup.provider must be set to 'aws' or 'gcp'
 */}}
 {{- define "redis.validateBackupConfig" -}}
+{{- include "redis.validateResourceKnobs" . -}}
 {{- if .Values.backup.enabled -}}
   {{- $provider := .Values.backup.provider -}}
   {{- if not (or (eq $provider "aws") (eq $provider "gcp")) -}}
@@ -248,3 +249,29 @@ Common labels
 {{- define "redis.tags" -}}
 {{- include "cpln-common.tags" . }}
 {{- end }}
+
+{{/*
+Reject the pre-rename bare cpu/memory keys. Left unguarded they are silently
+ignored and the chart falls back to its own default limit — wrong resources
+with no signal.
+*/}}
+{{- define "redis.validateResourceKnobs" -}}
+{{- if (.Values.redis.resources).cpu -}}
+{{- fail "redis: redis.resources.cpu was RENAMED to redis.resources.maxCpu. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- if (.Values.redis.resources).memory -}}
+{{- fail "redis: redis.resources.memory was RENAMED to redis.resources.maxMemory. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- if (.Values.redis.exporter.resources).cpu -}}
+{{- fail "redis: redis.exporter.resources.cpu was RENAMED to redis.exporter.resources.maxCpu. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- if (.Values.redis.exporter.resources).memory -}}
+{{- fail "redis: redis.exporter.resources.memory was RENAMED to redis.exporter.resources.maxMemory. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- if (.Values.sentinel.resources).cpu -}}
+{{- fail "redis: sentinel.resources.cpu was RENAMED to sentinel.resources.maxCpu. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- if (.Values.sentinel.resources).memory -}}
+{{- fail "redis: sentinel.resources.memory was RENAMED to sentinel.resources.maxMemory. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- end -}}

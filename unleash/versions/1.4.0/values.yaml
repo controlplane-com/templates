@@ -1,8 +1,8 @@
 image: unleashorg/unleash-server:8.0.3
 
 resources:
-  cpu: 1000m
-  memory: 1Gi
+  maxCpu: 1000m
+  maxMemory: 1Gi
   minCpu: 250m
   minMemory: 512Mi
 

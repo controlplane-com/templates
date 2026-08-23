@@ -71,8 +71,8 @@ spec:
       inheritEnv: false
       minCpu: {{ .Values.resources.minCpu | quote }}
       minMemory: {{ .Values.resources.minMemory | quote }}
-      cpu: {{ .Values.resources.cpu | quote }}
-      memory: {{ .Values.resources.memory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
       env:
         # ── LLM provider (key comes from the prerequisite secret) ──
         - name: {{ include "hermes-agent.apiKeyEnv" . }}

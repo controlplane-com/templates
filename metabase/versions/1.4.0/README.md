@@ -1,5 +1,11 @@
 # Metabase
 
+> **Upgrading from 1.3.1:** resource blocks that expose both a floor and a ceiling now name the
+> ceiling `maxCpu`/`maxMemory` instead of `cpu`/`memory`, so it is no longer ambiguous which number
+> is the limit. Rename those two keys in your values; an upgrade that still carries the old names is
+> refused at render. Blocks that expose only a limit keep the bare `cpu`/`memory` names.
+
+
 This app deploys [Metabase](https://www.metabase.com/) open-source BI — dashboards, a SQL editor, and scheduled report subscriptions. The bundled PostgreSQL is Metabase's own **app database** (users, dashboards, saved connections); the databases you analyze are **data sources** you connect in the app after install — they are never installed or touched by this template. The admin account is created automatically on first boot inside the container, and the workload only starts receiving traffic once setup is complete, so there is never a publicly reachable setup page.
 
 ## Architecture
@@ -56,8 +62,8 @@ For optional database backups: a bucket and access setup for one of the supporte
 image: metabase/metabase:v0.63.1.3
 
 resources:
-  cpu: 1000m
-  memory: 2Gi
+  maxCpu: 1000m
+  maxMemory: 2Gi
   minCpu: 500m
   minMemory: 1Gi
 

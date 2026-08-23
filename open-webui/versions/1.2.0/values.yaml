@@ -2,8 +2,8 @@
 image: ghcr.io/open-webui/open-webui:v0.11.0
 
 resources:
-  cpu: 1        # max vCPU
-  memory: 2Gi   # max memory (RAG loads a local embedding model into RAM on first use)
+  maxCpu: 1        # max vCPU
+  maxMemory: 2Gi   # max memory (RAG loads a local embedding model into RAM on first use)
   minCpu: 500m
   minMemory: 1Gi
 

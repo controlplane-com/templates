@@ -1,5 +1,11 @@
 ## Redis Sentinel
 
+> **Upgrading from 3.5.1:** resource blocks that expose both a floor and a ceiling now name the
+> ceiling `maxCpu`/`maxMemory` instead of `cpu`/`memory`, so it is no longer ambiguous which number
+> is the limit. Rename those two keys in your values; an upgrade that still carries the old names is
+> refused at render. Blocks that expose only a limit keep the bare `cpu`/`memory` names.
+
+
 Creates a Redis Sentinel cluster on Control Plane with automatic leader election, failover, and an optional backup configuration.
 
 ### Architecture
@@ -33,8 +39,8 @@ redis:
   resources:
     minCpu: 80m
     minMemory: 128Mi
-    cpu: 200m
-    memory: 256Mi
+    maxCpu: 200m
+    maxMemory: 256Mi
 
 sentinel:
   replicas: 3

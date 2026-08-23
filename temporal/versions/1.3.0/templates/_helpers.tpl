@@ -76,6 +76,7 @@ first two (its two store names are set on the workload, not taken from the secre
 {{/* Validation */}}
 
 {{- define "temporal.validate" -}}
+{{- include "temporal.validateResourceKnobs" . -}}
 {{- if and .Values.postgres.enabled (ne (default "temporal" .Values.postgres.credentials.database) "temporal") -}}
 {{- fail (printf "temporal: postgres.credentials.database must be \"temporal\", got %q. Temporal's server reads DBNAME as the literal \"temporal\" and auto-setup does not create it — any other value wedges the install on 'Unable to setup SQL schema: no usable database connection found'." .Values.postgres.credentials.database) -}}
 {{- end -}}
@@ -105,3 +106,23 @@ Common tags
 {{- define "temporal.tags" -}}
 {{- include "cpln-common.tags" . }}
 {{- end }}
+
+{{/*
+Reject the pre-rename bare cpu/memory keys. Left unguarded they are silently
+ignored and the chart falls back to its own default limit — wrong resources
+with no signal.
+*/}}
+{{- define "temporal.validateResourceKnobs" -}}
+{{- if (.Values.resources).cpu -}}
+{{- fail "temporal: resources.cpu was RENAMED to resources.maxCpu. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- if (.Values.resources).memory -}}
+{{- fail "temporal: resources.memory was RENAMED to resources.maxMemory. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- if (.Values.ui.resources).cpu -}}
+{{- fail "temporal: ui.resources.cpu was RENAMED to ui.resources.maxCpu. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- if (.Values.ui.resources).memory -}}
+{{- fail "temporal: ui.resources.memory was RENAMED to ui.resources.maxMemory. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- end -}}

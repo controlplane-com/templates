@@ -14,8 +14,8 @@ spec:
       inheritEnv: false
       minCpu: {{ .Values.ui.resources.minCpu | quote }}
       minMemory: {{ .Values.ui.resources.minMemory | quote }}
-      cpu: {{ .Values.ui.resources.cpu | quote }}
-      memory: {{ .Values.ui.resources.memory | quote }}
+      cpu: {{ .Values.ui.resources.maxCpu | quote }}
+      memory: {{ .Values.ui.resources.maxMemory | quote }}
       env:
         # FQDN required — short workload names do not resolve over the mesh.
         - name: TEMPORAL_ADDRESS

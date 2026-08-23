@@ -2,7 +2,7 @@ apiVersion: v2
 name: redis
 description: A master-replica Redis configuration with Redis Sentinel
 type: application
-version: 3.5.1
+version: 3.6.0
 appVersion: "8"
 
 annotations:

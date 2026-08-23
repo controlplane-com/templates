@@ -76,6 +76,7 @@ Both hold the same three keys — username, password, database.
 {{/* Validation */}}
 
 {{- define "unleash.validate" -}}
+{{- include "unleash.validateResourceKnobs" . -}}
 {{- include "unleash.validateAdmin" . -}}
 {{- if lt (int .Values.replicas) 1 -}}
 {{- fail (printf "unleash: replicas must be at least 1, got '%v'" .Values.replicas) -}}
@@ -124,3 +125,17 @@ Common tags
 {{- define "unleash.tags" -}}
 {{- include "cpln-common.tags" . }}
 {{- end }}
+
+{{/*
+Reject the pre-rename bare cpu/memory keys. Left unguarded they are silently
+ignored and the chart falls back to its own default limit — wrong resources
+with no signal.
+*/}}
+{{- define "unleash.validateResourceKnobs" -}}
+{{- if (.Values.resources).cpu -}}
+{{- fail "unleash: resources.cpu was RENAMED to resources.maxCpu. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- if (.Values.resources).memory -}}
+{{- fail "unleash: resources.memory was RENAMED to resources.maxMemory. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- end -}}

@@ -198,6 +198,7 @@ The guards exist because 2.1.0 is a clean break — a user carrying 2.0.x values
 forward would otherwise silently ship a public admin UI or an ignored token.
 */}}
 {{- define "manticore.validate" -}}
+{{- include "manticore.validateResourceKnobs" . -}}
 {{- if hasKey .Values.orchestrator.agent "token" -}}
 {{- fail "orchestrator.agent.token was REMOVED in manticore 2.1.0. The bearer token is now a prerequisite opaque secret you create before install; set orchestrator.agent.tokenSecretName to its name instead. See the README Prerequisites section." -}}
 {{- end -}}
@@ -255,3 +256,17 @@ Common labels - delegated to cpln-common
 {{- define "manticore.tags" -}}
 {{- include "cpln-common.tags" . }}
 {{- end }}
+
+{{/*
+Reject the pre-rename bare cpu/memory keys. Left unguarded they are silently
+ignored and the chart falls back to its own default limit — wrong resources
+with no signal.
+*/}}
+{{- define "manticore.validateResourceKnobs" -}}
+{{- if (.Values.orchestrator.agent.resources).cpu -}}
+{{- fail "manticore: orchestrator.agent.resources.cpu was RENAMED to orchestrator.agent.resources.maxCpu. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- if (.Values.orchestrator.agent.resources).memory -}}
+{{- fail "manticore: orchestrator.agent.resources.memory was RENAMED to orchestrator.agent.resources.maxMemory. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- end -}}

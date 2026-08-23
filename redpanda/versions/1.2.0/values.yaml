@@ -5,8 +5,8 @@ redpanda:
   multiZone: false
   env: []
 
-  cpu: 1500m
-  memory: 4Gi
+  maxCpu: 1500m
+  maxMemory: 4Gi
   minCpu: 500m
   minMemory: 2Gi
   # smp: number of Seastar reactor threads — must match the container's vCPU count (floor of cpu limit).
@@ -92,8 +92,8 @@ redpanda_console:
   enabled: true
   name: console
   image: redpandadata/console:v3.7.4
-  cpu: 200m
-  memory: 256Mi
+  maxCpu: 200m
+  maxMemory: 256Mi
   minCpu: 50m
   minMemory: 64Mi
   replicas: 1

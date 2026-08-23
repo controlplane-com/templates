@@ -5,8 +5,8 @@ image: quay.io/keycloak/keycloak:26.6.3
 replicas: 2
 
 resources: # per replica
-  cpu: 1000m
-  memory: 2Gi # JVM heap is sized to 70% of this limit; do not set below 1.5Gi
+  maxCpu: 1000m
+  maxMemory: 2Gi # JVM heap is sized to 70% of this limit; do not set below 1.5Gi
   minCpu: 500m
   minMemory: 1Gi
 

@@ -1,5 +1,11 @@
 # Manticore Search Cluster
 
+> **Upgrading from 2.1.0:** resource blocks that expose both a floor and a ceiling now name the
+> ceiling `maxCpu`/`maxMemory` instead of `cpu`/`memory`, so it is no longer ambiguous which number
+> is the limit. Rename those two keys in your values; an upgrade that still carries the old names is
+> refused at render. Blocks that expose only a limit keep the bare `cpu`/`memory` names.
+
+
 Manticore Search is an open-source full-text search engine. This template deploys a replicated Manticore cluster with Galera replication, an orchestrator that performs coordinated zero-downtime CSV imports from S3, optional S3 backups, and a web dashboard.
 
 ## Architecture
@@ -201,7 +207,7 @@ orchestrator:
     image: ghcr.io/controlplane-com/manticore-orchestrator/manticore-cpln-agent
     tokenSecretName: my-manticore-agent-token   # Opaque secret — MUST EXIST BEFORE INSTALL
     resources:
-      cpu: 250m
+      maxCpu: 250m
       minCpu: 100m
       memory: 512Mi
       minMemory: 128Mi

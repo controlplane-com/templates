@@ -1,5 +1,11 @@
 # Listmonk
 
+> **Upgrading from 1.3.1:** resource blocks that expose both a floor and a ceiling now name the
+> ceiling `maxCpu`/`maxMemory` instead of `cpu`/`memory`, so it is no longer ambiguous which number
+> is the limit. Rename those two keys in your values; an upgrade that still carries the old names is
+> refused at render. Blocks that expose only a limit keep the bare `cpu`/`memory` names.
+
+
 This app deploys [listmonk](https://listmonk.app/) — a high-performance, self-hosted newsletter and mailing list manager (AGPL-3.0). It runs the listmonk server (admin dashboard, campaign engine, public subscription pages, transactional-mail API) backed by a PostgreSQL store, with schema install and admin bootstrap fully automatic on first boot.
 
 ## Architecture
@@ -45,8 +51,8 @@ Optional: a cloud account + bucket if you enable the Postgres backup pass-throug
 image: listmonk/listmonk:v6.2.0
 
 resources:            # single Go binary — light footprint
-  cpu: 500m
-  memory: 512Mi
+  maxCpu: 500m
+  maxMemory: 512Mi
   minCpu: 150m
   minMemory: 256Mi
 

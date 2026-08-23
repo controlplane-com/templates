@@ -70,6 +70,7 @@ Cockroach PgBouncer Startup Secret Name
 Validate that gvc.locations has at least 1 entry
 */}}
 {{- define "cockroach.validateLocations" -}}
+{{- include "cockroach.validateResourceKnobs" . -}}
 {{- if lt (len .Values.gvc.locations) 1 -}}
 {{- fail "gvc.locations must contain at least 1 location" -}}
 {{- end -}}
@@ -84,3 +85,17 @@ Common labels - delegated to cpln-common
 {{- define "cockroach.tags" -}}
 {{- include "cpln-common.tags" . }}
 {{- end }}
+
+{{/*
+Reject the pre-rename bare cpu/memory keys. Left unguarded they are silently
+ignored and the chart falls back to its own default limit — wrong resources
+with no signal.
+*/}}
+{{- define "cockroach.validateResourceKnobs" -}}
+{{- if (.Values.pgbouncer.resources).cpu -}}
+{{- fail "cockroach: pgbouncer.resources.cpu was RENAMED to pgbouncer.resources.maxCpu. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- if (.Values.pgbouncer.resources).memory -}}
+{{- fail "cockroach: pgbouncer.resources.memory was RENAMED to pgbouncer.resources.maxMemory. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- end -}}

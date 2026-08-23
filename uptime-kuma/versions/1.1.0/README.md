@@ -1,5 +1,11 @@
 # Uptime Kuma
 
+> **Upgrading from 1.0.0:** resource blocks that expose both a floor and a ceiling now name the
+> ceiling `maxCpu`/`maxMemory` instead of `cpu`/`memory`, so it is no longer ambiguous which number
+> is the limit. Rename those two keys in your values; an upgrade that still carries the old names is
+> refused at render. Blocks that expose only a limit keep the bare `cpu`/`memory` names.
+
+
 This app deploys [Uptime Kuma](https://github.com/louislam/uptime-kuma), a self-hosted uptime monitoring tool — HTTP(s)/TCP/DNS checks, alerts through 90+ notification providers, and public status pages. A single stateful workload with its SQLite database on a persistent volume, served on the canonical `*.cpln.app` endpoint.
 
 ## Architecture
@@ -20,8 +26,8 @@ None for a default install.
 image: louislam/uptime-kuma:2.4.0
 
 resources:
-  cpu: 500m
-  memory: 512Mi
+  maxCpu: 500m
+  maxMemory: 512Mi
   minCpu: 125m
   minMemory: 256Mi
 

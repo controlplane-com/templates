@@ -75,6 +75,7 @@ Both hold the same three keys — username, password, database.
 {{/* Validation */}}
 
 {{- define "metabase.validate" -}}
+{{- include "metabase.validateResourceKnobs" . -}}
 {{- if not .Values.encryptionKey.secretName -}}
 {{- fail "metabase: encryptionKey.secretName is required — the name of a pre-created opaque secret (encoding: plain) holding the encryption key (min 16 chars)" -}}
 {{- end -}}
@@ -130,3 +131,17 @@ Common tags
 {{- define "metabase.tags" -}}
 {{- include "cpln-common.tags" . }}
 {{- end }}
+
+{{/*
+Reject the pre-rename bare cpu/memory keys. Left unguarded they are silently
+ignored and the chart falls back to its own default limit — wrong resources
+with no signal.
+*/}}
+{{- define "metabase.validateResourceKnobs" -}}
+{{- if (.Values.resources).cpu -}}
+{{- fail "metabase: resources.cpu was RENAMED to resources.maxCpu. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- if (.Values.resources).memory -}}
+{{- fail "metabase: resources.memory was RENAMED to resources.maxMemory. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- end -}}

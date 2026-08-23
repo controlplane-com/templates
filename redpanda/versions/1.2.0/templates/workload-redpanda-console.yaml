@@ -18,11 +18,11 @@ spec:
       args:
         - /scripts/console-init.sh
       inheritEnv: false
-      cpu: {{ .Values.redpanda_console.cpu }}
+      cpu: {{ .Values.redpanda_console.maxCpu }}
       {{- if .Values.redpanda_console.minCpu }}
       minCpu: '{{ .Values.redpanda_console.minCpu }}'
       {{- end }}
-      memory: {{ .Values.redpanda_console.memory }}
+      memory: {{ .Values.redpanda_console.maxMemory }}
       {{- if .Values.redpanda_console.minMemory }}
       minMemory: {{ .Values.redpanda_console.minMemory }}
       {{- end }}

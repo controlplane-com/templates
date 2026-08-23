@@ -1,5 +1,11 @@
 # Unleash
 
+> **Upgrading from 1.3.1:** resource blocks that expose both a floor and a ceiling now name the
+> ceiling `maxCpu`/`maxMemory` instead of `cpu`/`memory`, so it is no longer ambiguous which number
+> is the limit. Rename those two keys in your values; an upgrade that still carries the old names is
+> refused at render. Blocks that expose only a limit keep the bare `cpu`/`memory` names.
+
+
 This app deploys [Unleash](https://www.getunleash.io/) — the open-source feature-flag server — backed by a highly available PostgreSQL cluster by default. The admin UI and the Admin, Client, and Frontend APIs are served on one public HTTPS endpoint; the server is stateless, so it scales to multiple replicas with a single value.
 
 ## Architecture
@@ -53,8 +59,8 @@ For optional database backups: a bucket and access setup for one of the supporte
 image: unleashorg/unleash-server:8.0.3
 
 resources:
-  cpu: 1000m
-  memory: 1Gi
+  maxCpu: 1000m
+  maxMemory: 1Gi
   minCpu: 250m
   minMemory: 512Mi
 

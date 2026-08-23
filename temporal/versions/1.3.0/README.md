@@ -1,5 +1,11 @@
 # Temporal
 
+> **Upgrading from 1.2.1:** resource blocks that expose both a floor and a ceiling now name the
+> ceiling `maxCpu`/`maxMemory` instead of `cpu`/`memory`, so it is no longer ambiguous which number
+> is the limit. Rename those two keys in your values; an upgrade that still carries the old names is
+> refused at render. Blocks that expose only a limit keep the bare `cpu`/`memory` names.
+
+
 This app deploys [Temporal](https://temporal.io/) — an open-source (MIT) durable-execution platform for writing workflows that survive process crashes and outages — backed by a highly available PostgreSQL cluster by default. It ships a single-process Temporal server exposing the gRPC frontend to your workloads, plus the Temporal Web UI, both internal-only. Database and schema setup run automatically at boot, including schema migrations on version upgrades.
 
 ## Architecture
@@ -26,8 +32,8 @@ This app deploys [Temporal](https://temporal.io/) — an open-source (MIT) durab
 image: temporalio/auto-setup:1.29.7 # server + schema tools; boot runs schema setup, then the server
 
 resources:
-  cpu: 1000m
-  memory: 2Gi
+  maxCpu: 1000m
+  maxMemory: 2Gi
   minCpu: 500m
   minMemory: 1Gi
 
@@ -42,8 +48,8 @@ ui:
   enabled: true           # set false to remove the UI workload
   image: temporalio/ui:2.52.1
   resources:
-    cpu: 500m
-    memory: 512Mi
+    maxCpu: 500m
+    maxMemory: 512Mi
     minCpu: 125m
     minMemory: 128Mi
 ```

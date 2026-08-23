@@ -58,12 +58,12 @@ spec:
           recoveryPolicy: retain
           uri: cpln://secret/{{ include "manticore.secretStartupName" . }}.payload
     - name: agent
-      cpu: {{ .Values.orchestrator.agent.resources.cpu | quote }}
-      minCpu: {{ .Values.orchestrator.agent.resources.minCpu | default .Values.orchestrator.agent.resources.cpu | quote }}
+      cpu: {{ .Values.orchestrator.agent.resources.maxCpu | quote }}
+      minCpu: {{ .Values.orchestrator.agent.resources.minCpu | default .Values.orchestrator.agent.resources.maxCpu | quote }}
       image: {{ .Values.orchestrator.agent.image }}:{{ .Values.orchestrator.agent.version }}
       inheritEnv: false
-      memory: {{ .Values.orchestrator.agent.resources.memory | quote }}
-      minMemory: {{ .Values.orchestrator.agent.resources.minMemory | default .Values.orchestrator.agent.resources.memory | quote }}
+      memory: {{ .Values.orchestrator.agent.resources.maxMemory | quote }}
+      minMemory: {{ .Values.orchestrator.agent.resources.minMemory | default .Values.orchestrator.agent.resources.maxMemory | quote }}
       ports:
         - number: 8080
           protocol: http

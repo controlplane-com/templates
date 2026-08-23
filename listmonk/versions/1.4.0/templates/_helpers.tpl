@@ -79,6 +79,7 @@ Both hold the same three keys — username, password, database.
 {{/* Validation */}}
 
 {{- define "listmonk.validate" -}}
+{{- include "listmonk.validateResourceKnobs" . -}}
 {{- include "listmonk.validateAdmin" . -}}
 {{- if and .Values.postgresHA.enabled .Values.postgres.enabled -}}
 {{- fail "listmonk: enable exactly one backing store — set either postgres.enabled or postgresHA.enabled to true, not both" -}}
@@ -124,3 +125,17 @@ Common tags
 {{- define "listmonk.tags" -}}
 {{- include "cpln-common.tags" . }}
 {{- end }}
+
+{{/*
+Reject the pre-rename bare cpu/memory keys. Left unguarded they are silently
+ignored and the chart falls back to its own default limit — wrong resources
+with no signal.
+*/}}
+{{- define "listmonk.validateResourceKnobs" -}}
+{{- if (.Values.resources).cpu -}}
+{{- fail "listmonk: resources.cpu was RENAMED to resources.maxCpu. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- if (.Values.resources).memory -}}
+{{- fail "listmonk: resources.memory was RENAMED to resources.maxMemory. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- end -}}

@@ -93,8 +93,8 @@ spec:
           # when the platform sends SIGKILL after the grace period expires.
           exec redis-sentinel /etc/sentinel/sentinel.conf
       command: /bin/sh
-      cpu: {{ .Values.sentinel.resources.cpu }}
-      memory: {{ .Values.sentinel.resources.memory }}
+      cpu: {{ .Values.sentinel.resources.maxCpu }}
+      memory: {{ .Values.sentinel.resources.maxMemory }}
       minCpu: {{ .Values.sentinel.resources.minCpu }}
       minMemory: {{ .Values.sentinel.resources.minMemory }}
       env:

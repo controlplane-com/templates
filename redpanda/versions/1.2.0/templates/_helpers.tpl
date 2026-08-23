@@ -41,6 +41,7 @@ Helm — see secret-console-init.yaml.
 Top-level validation — included by identity.yaml, which always renders.
 */}}
 {{- define "redpanda.validate" -}}
+{{- include "redpanda.validateResourceKnobs" . -}}
 {{- include "redpanda.validateReplicas" . -}}
 {{- include "redpanda.validateAuth" . -}}
 {{- end }}
@@ -84,3 +85,23 @@ Common labels
 {{- define "redpanda.tags" -}}
 {{- include "cpln-common.tags" . }}
 {{- end }}
+
+{{/*
+Reject the pre-rename bare cpu/memory keys. Left unguarded they are silently
+ignored and the chart falls back to its own default limit — wrong resources
+with no signal.
+*/}}
+{{- define "redpanda.validateResourceKnobs" -}}
+{{- if (.Values.redpanda).cpu -}}
+{{- fail "redpanda: redpanda.cpu was RENAMED to redpanda.maxCpu. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- if (.Values.redpanda).memory -}}
+{{- fail "redpanda: redpanda.memory was RENAMED to redpanda.maxMemory. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- if (.Values.redpanda_console).cpu -}}
+{{- fail "redpanda: redpanda_console.cpu was RENAMED to redpanda_console.maxCpu. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- if (.Values.redpanda_console).memory -}}
+{{- fail "redpanda: redpanda_console.memory was RENAMED to redpanda_console.maxMemory. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- end -}}

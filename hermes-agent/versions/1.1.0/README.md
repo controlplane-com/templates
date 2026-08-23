@@ -1,5 +1,11 @@
 # Hermes Agent
 
+> **Upgrading from 1.0.0:** resource blocks that expose both a floor and a ceiling now name the
+> ceiling `maxCpu`/`maxMemory` instead of `cpu`/`memory`, so it is no longer ambiguous which number
+> is the limit. Rename those two keys in your values; an upgrade that still carries the old names is
+> refused at render. Blocks that expose only a limit keep the bare `cpu`/`memory` names.
+
+
 This app deploys [Hermes Agent](https://github.com/NousResearch/hermes-agent) by Nous Research — a self-hosted, model-agnostic AI agent that wraps any LLM with persistent memory, browser automation, an OpenAI-compatible gateway API, and a web dashboard. You bring the model (an external API key); the agent brings the memory, tools, and interfaces around it.
 
 ## Architecture
@@ -84,8 +90,8 @@ dashboard:
 resources:
   minCpu: 500m
   minMemory: 1Gi
-  cpu: 2000m
-  memory: 4Gi
+  maxCpu: 2000m
+  maxMemory: 4Gi
 ```
 
 ### Storage

@@ -1,0 +1,212 @@
+# ─── NocoDB server ────────────────────────────────────────────────
+nocodb:
+  # Single image: UI + REST/GraphQL API + live updates on :8080.
+  # Runs meta-database migrations automatically on boot. Never use latest.
+  image: nocodb/nocodb:2026.07.0
+  # Stateless app tier over shared Postgres + Redis. >1 REQUIRES storage.type: s3
+  # (local attachments are per-replica and would 404). Jobs run in-process, so a
+  # replica restart abandons any import/export it was running. 2 absorbs the
+  # short Redis restart on the first upgrade after install (see README).
+  replicas: 1
+  # Public base URL. MUST match the URL browsers use — it drives invite/reset
+  # links and the auth cookie secure flag. Empty = derive from the platform
+  # canonical endpoint. Set WITH https:// only for a custom domain.
+  siteUrl: ""
+  resources:
+    # Upstream recommends 4 vCPU / 8 GB for a busy multi-team instance; these are
+    # small-production defaults. Raise maxCpu/maxMemory together for large imports.
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 2Gi
+
+# ─── Prerequisite secret (USER-CREATED — MUST EXIST BEFORE INSTALL) ─
+# Dictionary secret holding NocoDB's root-of-trust keys. Create it FIRST — the
+# deployment WEDGES on a missing secret and looks broken. BOTH keys are
+# WRITE-ONCE: rotating NC_AUTH_JWT_SECRET logs out every user; changing
+# NC_CONNECTION_ENCRYPT_KEY makes stored external-database credentials
+# undecryptable (upstream has no rotation path).
+#   NC_AUTH_JWT_SECRET          openssl rand -hex 64
+#   NC_CONNECTION_ENCRYPT_KEY   openssl rand -hex 32
+secrets:
+  name: my-nocodb-secrets
+
+# ─── Super-admin bootstrap (optional) ─────────────────────────────
+# Empty = off: the FIRST browser signup becomes super admin. Set to an OPTIONAL
+# prerequisite dictionary secret with NC_ADMIN_EMAIL + NC_ADMIN_PASSWORD
+# (e.g. my-nocodb-admin) to bootstrap it instead. NocoDB re-applies these on
+# EVERY boot, so a password changed in the UI is reverted on the next restart.
+# Password rules: 8+ chars with an uppercase letter, a digit and a special char.
+admin:
+  secretName: ""
+
+# ─── Attachment storage ───────────────────────────────────────────
+storage:
+  type: local                 # local | s3  (s3 required for nocodb.replicas > 1)
+  local:
+    volumeset:
+      capacity: 10            # GiB (minimum 10); mounted at /usr/app/data
+  s3:
+    bucket: my-nocodb-bucket
+    region: us-east-1
+    endpoint: ""              # set for S3-compatible servers (e.g. http://my-minio-workload:9000)
+    forcePathStyle: false     # true for most S3-compatible servers (MinIO, SeaweedFS)
+    # Keyless auth (AWS, preferred): Control Plane cloud account + your pre-created
+    # IAM policy scoped to the bucket (full JSON in README). Used only when
+    # auth.secretName is empty.
+    cloudAccountName: my-s3-cloud-account
+    policyName: my-nocodb-s3-policy
+    auth:
+      # Static-key dictionary secret (NC_S3_ACCESS_KEY + NC_S3_ACCESS_SECRET) —
+      # ONLY for S3-compatible servers (requires endpoint set). AWS S3 is always
+      # keyless via the cloud account (e.g. my-nocodb-s3-keys).
+      secretName: ""
+  fileUploadSizeLimit: 20971520   # max single attachment size in BYTES (NC_ATTACHMENT_FIELD_SIZE); 20971520 = 20 MiB
+
+# ─── SMTP / email (optional) ──────────────────────────────────────
+# Off by default. With SMTP off, member invitations and password-reset emails
+# cannot be delivered — configure before inviting collaborators.
+smtp:
+  enabled: false
+  host: smtp.example.com      # NC_SMTP_HOST
+  port: 587                   # NC_SMTP_PORT
+  secure: false               # false = STARTTLS/plain (587); true = implicit TLS (465)
+  from: no-reply@example.com  # NC_SMTP_FROM — From address
+  ignoreTls: false            # true for a plaintext mail catcher
+  rejectUnauthorized: false   # true to require a valid server certificate
+  auth:
+    # OPTIONAL prerequisite dictionary secret with NC_SMTP_USERNAME +
+    # NC_SMTP_PASSWORD. Empty = unauthenticated relay (e.g. my-nocodb-smtp).
+    secretName: ""
+
+# ─── Access ───────────────────────────────────────────────────────
+publicAccess:
+  enabled: true               # HTTPS UI, API and shared views/forms on the auto *.cpln.app endpoint
+internalAccess:
+  type: same-gvc              # none | same-gvc | same-org | workload-list
+  workloads: []               # used only with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Redis (bundled single node) — REQUIRED ───────────────────────
+# Carries job/event pub-sub, the metadata cache and the rate limiter — all three
+# required once nocodb.replicas > 1. Live updates reach the browser over HTTP
+# long-poll (POST /jobs/listen) backed by this pub-sub, NOT over websockets:
+# socket.io at this version is telemetry-only and carries no data events.
+# NocoDB speaks only a plain redis:// URL, so the Sentinel-based redis template
+# is not used. noeviction is mandatory — an evicted key silently drops job events.
+redis:
+  image: redis:8.10.0
+  auth:
+    password: change-me-nocodb-redis   # template-managed; embedded in NC_REDIS_URL — letters/digits/-/_ only
+  resources:
+    minCpu: 100m
+    maxCpu: 400m
+    minMemory: 256Mi
+    maxMemory: 512Mi
+  volumeset:
+    capacity: 10              # GiB (minimum 10); AOF at /data
+
+# ─── Database: single-instance PostgreSQL (default) ───────────────
+# One Postgres workload holding all bases, tables, views, users and automations.
+# Enable exactly one of postgres / postgresHA.
+postgres:
+  enabled: true
+  image: postgres:18          # NocoDB supports PostgreSQL 12+ (the HA path below runs 17)
+  # Credentials for the bundled database — internal plumbing no human types
+  # elsewhere. NocoDB CREATES the dictionary secret named by
+  # config.credentialsSecretName below out of these three values, so there is
+  # nothing for you to create before installing.
+  credentials:
+    username: nocodb
+    password: change-me-nocodb-db     # change before install; letters/digits/-/_ only (embedded in NC_DB)
+    database: nocodb
+  config:
+    # Name of the dictionary secret this chart creates and the bundled postgres
+    # reads. Secret names are org-wide: give each nocodb release its own name.
+    # A second release left on this name is REFUSED at install (it is owned by
+    # the first release) — nothing is shared, overwritten or deleted.
+    credentialsSecretName: my-nocodb-db-credentials
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 1Gi
+  volumeset:
+    capacity: 10              # GiB (minimum 10)
+
+  backup:                     # optional database backups — see README storage setup
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0   # tag must match the postgres major above
+    schedule: "0 2 * * *"     # daily at 2am UTC
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    provider: aws             # aws | gcp | minio
+    aws:
+      bucket: my-nocodb-pg-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: my-nocodb-pg-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: my-nocodb-pg-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: my-nocodb-pg-backup-bucket
+      # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
+      # only when this backup is enabled with provider: minio. See README storage setup.
+      credentialsSecretName: my-nocodb-minio-credentials
+      prefix: postgres/backups
+
+# ─── Database: Highly Available PostgreSQL 17 (opt-in) ────────────
+# Deploys the postgres-highly-available template: 3 Patroni replicas, 3 etcd
+# replicas, and an HAProxy leader endpoint NocoDB connects to. Recommended for
+# production. Enable this and set postgres.enabled: false.
+postgresHA:
+  enabled: false
+  config:
+    # Name of the dictionary secret this chart creates and the bundled
+    # postgres-highly-available reads. Since pgHA 2.5.0 the subchart creates no
+    # credentials secret of its own, so both stores are fed the same one, built
+    # from postgres.credentials.* above.
+    credentialsSecretName: my-nocodb-db-credentials
+  replicas: 3
+  resources:                  # per Patroni replica; the default install runs 3 of these
+    minCpu: 500m
+    maxCpu: 1000m
+    minMemory: 1Gi
+    maxMemory: 2Gi
+  volumeset:
+    capacity: 10              # GiB per replica (minimum 10)
+
+  backup:                     # optional database backups — see README storage setup
+    enabled: false
+    mode: logical             # logical | wal-g
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    logical:
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      schedule: "0 2 * * *"
+    walg:
+      intervalSeconds: 21600
+    provider: aws             # aws | gcp | minio
+    aws:
+      bucket: my-nocodb-pg-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: my-nocodb-pg-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: my-nocodb-pg-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: my-nocodb-pg-backup-bucket
+      accessKey: my-minio-username
+      secretKey: my-minio-password
+      prefix: postgres/backups

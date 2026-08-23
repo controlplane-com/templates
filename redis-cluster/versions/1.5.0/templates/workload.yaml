@@ -23,7 +23,7 @@ spec:
         - name: REDIS_PASSWORD
           value: 'cpln://secret/{{ include "redis-cluster.secretAuthPassword.name" . }}.REDIS_PASSWORD'
         {{- end }}
-      image: docker.io/redis:7.2
+      image: {{ .Values.image }}
       readinessProbe:
         exec:
           command:

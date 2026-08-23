@@ -3,8 +3,8 @@ name: ollama
 description: Ollama local LLM server with a GPU-backed API and an Open WebUI frontend
 
 type: application
-version: 1.1.1
-appVersion: "0.4"
+version: 1.1.2
+appVersion: "0.32.15"
 
 dependencies:
   - name: cpln-common

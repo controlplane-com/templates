@@ -5,14 +5,14 @@ workload:
   containers:
     ui:
       name: ollama-ui
-      image: ghcr.io/open-webui/open-webui:main
+      image: ghcr.io/open-webui/open-webui:v0.11.0 # pinned: `main` is a moving branch build
       port: 8080
       resources:
         cpu: 500m
         memory: 1Gi
     api:
       name: ollama
-      image: ollama/ollama
+      image: ollama/ollama:0.32.15 # pinned: an untagged image resolves to `latest`
       port: 11434
       resources:
         cpu: 6

@@ -20,6 +20,15 @@ Backups need a bucket and a Control Plane [cloud account](https://docs.controlpl
 
 ### Configuration
 
+**Image** — the Redis image used by the cluster nodes. Pinned so installs are reproducible:
+
+```yaml
+image: docker.io/redis:7.2
+```
+
+Until 1.5.0 this was hardcoded in the chart, so pinning or upgrading Redis meant forking the template.
+
+
 **Replicas and resources** — minimum of 6 replicas required for a valid cluster (3 primaries + 3 replicas):
 ```yaml
 replicas: 6

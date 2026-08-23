@@ -1,3 +1,6 @@
+# Redis image for the cluster nodes. Pinned so installs are reproducible.
+image: docker.io/redis:7.2
+
 replicas: 6 # minimum value is 6
 port: 6379
 memory: 250Mi

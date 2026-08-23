@@ -22,7 +22,7 @@ To proxy to your own services, set `enableExample: false` and add each target to
 **Proxy workload** — configure the nginx container image, port, and timeout:
 ```yaml
 proxyWorkload:
-  image: nginx:latest
+  image: nginx:1.31.4 # pinned: `latest` makes installs non-reproducible
   port: 80
   capacityAI: false
   timeoutSeconds: 5
@@ -87,4 +87,4 @@ https://RELEASE_NAME-nginx.GVC_NAME.cpln.app
 
 - **`enableExample: true` is the default** and deploys a demo backend that all traffic routes to. Set it to `false` before pointing the proxy at your own services.
 - **Targets must be reachable inside the GVC.** Use the fully-qualified internal hostname (`WORKLOAD.GVC.cpln.local`); the bare workload name is not reliably resolvable.
-- **The proxy image is unpinned** (`nginx:latest`), so a redeploy may pick up a newer nginx. Pin it if you need reproducible installs.
+- **The example backend image is unpinned.** `gcr.io/knative-samples/helloworld-go` publishes only `:latest`, so the demo target can change under you. It does not affect the proxy itself, which is pinned.

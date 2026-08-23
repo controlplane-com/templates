@@ -36,7 +36,7 @@ Common alternatives: `llava`, `gemma`, `mistral`, `phi3`
 workload:
   containers:
     ui:
-      image: ghcr.io/open-webui/open-webui:main
+      image: ghcr.io/open-webui/open-webui:v0.11.0 # pinned: `main` is a moving branch build
       resources:
         cpu: 500m
         memory: 1Gi
@@ -47,7 +47,7 @@ workload:
 workload:
   containers:
     api:
-      image: ollama/ollama
+      image: ollama/ollama:0.32.15 # pinned: an untagged image resolves to `latest`
       resources:
         cpu: 6
         memory: 8Gi

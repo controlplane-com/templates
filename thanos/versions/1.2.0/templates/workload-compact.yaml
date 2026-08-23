@@ -11,6 +11,13 @@ spec:
     - name: thanos-compact
       image: {{ .Values.image }}
       inheritEnv: false
+      {{- if eq .Values.storage.type "minio" }}
+      env:
+        - name: AWS_ACCESS_KEY_ID
+          value: cpln://secret/{{ .Values.storage.minio.credentialsSecretName }}.accessKey
+        - name: AWS_SECRET_ACCESS_KEY
+          value: cpln://secret/{{ .Values.storage.minio.credentialsSecretName }}.secretKey
+      {{- end }}
       args:
         - compact
         - --wait

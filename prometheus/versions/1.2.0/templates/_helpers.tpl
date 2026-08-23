@@ -96,8 +96,6 @@ config:
   bucket: {{ $os.minio.bucket | quote }}
   endpoint: {{ $os.minio.endpoint | quote }}
   region: {{ $os.minio.region | quote }}
-  access_key: {{ $os.minio.accessKey | quote }}
-  secret_key: {{ $os.minio.accessSecret | quote }}
   insecure: {{ $os.minio.insecure }}
   bucket_lookup_type: path
 {{- end }}
@@ -107,6 +105,7 @@ config:
 {{/* Validation */}}
 
 {{- define "prometheus.validate" -}}
+{{- include "prometheus.validateObjstoreCreds" . -}}
 {{- if not (has .Values.internalAccess.type (list "none" "same-gvc" "same-org" "workload-list")) -}}
 {{- fail (printf "prometheus: internalAccess.type must be none, same-gvc, same-org, or workload-list — got '%s'" .Values.internalAccess.type) -}}
 {{- end -}}
@@ -152,8 +151,7 @@ config:
 {{- if not $m.endpoint -}}{{- fail "prometheus: thanos.objectStorage.minio.endpoint is required (host:port, no scheme)" -}}{{- end -}}
 {{- if contains "://" $m.endpoint -}}{{- fail (printf "prometheus: thanos.objectStorage.minio.endpoint must be host:port with NO scheme — got '%s'" $m.endpoint) -}}{{- end -}}
 {{- if not $m.bucket -}}{{- fail "prometheus: thanos.objectStorage.minio.bucket is required" -}}{{- end -}}
-{{- if not $m.accessKey -}}{{- fail "prometheus: thanos.objectStorage.minio.accessKey is required" -}}{{- end -}}
-{{- if not $m.accessSecret -}}{{- fail "prometheus: thanos.objectStorage.minio.accessSecret is required" -}}{{- end -}}
+{{- if not $m.credentialsSecretName -}}{{- fail "prometheus: minio.credentialsSecretName is required — it names the `dictionary` secret holding `accessKey` and `secretKey`. Create it BEFORE installing." -}}{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- end }}
@@ -164,3 +162,19 @@ config:
 {{- define "prometheus.tags" -}}
 {{- include "cpln-common.tags" . }}
 {{- end }}
+
+{{/*
+MinIO object-storage credentials moved to a prerequisite secret. They are passed as
+AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY rather than written into the config file,
+because a cpln:// reference inside a mounted file is never resolved by the platform.
+*/}}
+{{- define "prometheus.validateObjstoreCreds" -}}
+{{- if eq .Values.thanos.objectStorage.type "minio" -}}
+{{- if or (.Values.thanos.objectStorage.minio).accessKey (.Values.thanos.objectStorage.minio).accessSecret -}}
+{{- fail "prometheus: minio.accessKey and minio.accessSecret were REMOVED — they are now a `dictionary` secret you create, named by minio.credentialsSecretName, holding the keys `accessKey` and `secretKey`. Delete them from your values." -}}
+{{- end -}}
+{{- if not (.Values.thanos.objectStorage.minio).credentialsSecretName -}}
+{{- fail "prometheus: minio.credentialsSecretName is required when the object-storage type is 'minio' — it names the `dictionary` secret holding `accessKey` and `secretKey`. Create it BEFORE installing." -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

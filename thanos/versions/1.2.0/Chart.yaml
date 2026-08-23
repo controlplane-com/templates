@@ -2,7 +2,7 @@ apiVersion: v2
 name: thanos
 description: Thanos Query global PromQL fan-out over Prometheus servers, with optional object-storage long-term retention
 type: application
-version: 1.1.0
+version: 1.2.0
 appVersion: "0.42.2"
 
 dependencies:
@@ -12,6 +12,6 @@ dependencies:
 
 annotations:
   created: "2026-07-29"
-  lastModified: "2026-08-17"
+  lastModified: "2026-08-23"
   category: "observability"
   createsGvc: false

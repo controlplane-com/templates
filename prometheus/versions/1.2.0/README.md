@@ -1,5 +1,21 @@
 # Prometheus
 
+> **MinIO credentials are a prerequisite secret (1.2.0+).** Create a `dictionary` secret holding
+> `accessKey` and `secretKey`, and set `credentialsSecretName` to its name:
+>
+> ```bash
+> cpln secret create-dictionary --name my-prometheus-minio-credentials \
+>   --entry accessKey=MINIO_ACCESS_KEY \
+>   --entry secretKey=MINIO_SECRET_KEY
+> ```
+>
+> They reach the container as `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` rather than being written
+> into the object-storage config file, because a `cpln://` reference inside a mounted file is never
+> resolved. The S3 client picks them up from the environment. AWS and GCP are unaffected — they were
+> already keyless via cloud identity. An upgrade still carrying `accessKey`/`accessSecret` is refused
+> at render.
+
+
 This app deploys [Prometheus](https://prometheus.io/) — the standard open-source metrics database — with the remote-write receiver enabled and a durable TSDB volume. An optional co-located [Thanos](https://thanos.io/) sidecar (on by default) exposes the Store API for a Thanos Query tier and can upload TSDB blocks to your object bucket for long-term durability.
 
 This is a **self-hosted metrics store for your own metrics from your own sources**. It is separate from — and not a replacement for — Control Plane's built-in observability, which continues to collect and dashboard your workloads' metrics natively.
@@ -105,8 +121,9 @@ thanos:
       insecure: true                      # true for plain-HTTP endpoints
       bucket: my-prometheus-bucket
       region: us-east-1
-      accessKey: my-minio-username
-      accessSecret: my-minio-password
+      # REQUIRED PREREQUISITE SECRET when type is `minio` — a `dictionary` secret
+      # holding exactly `accessKey` and `secretKey`.
+      credentialsSecretName: my-prometheus-minio-credentials
 ```
 
 ### Access

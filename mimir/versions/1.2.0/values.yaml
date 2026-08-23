@@ -32,8 +32,11 @@ storage:
     insecure: true # true when the endpoint is plain HTTP
     bucket: my-mimir-bucket # bucket must already exist
     region: us-east-1
-    accessKey: my-minio-username
-    accessSecret: my-minio-password
+    # REQUIRED PREREQUISITE SECRET when type is `minio` — a `dictionary` secret
+    # holding exactly `accessKey` and `secretKey`. They reach Mimir as
+    # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY rather than being written into
+    # mimir.yaml, because a cpln:// reference inside a config file is never resolved.
+    credentialsSecretName: my-mimir-minio-credentials
 
 # ─── Tenancy ──────────────────────────────────────────────────────────────────
 multitenancy:

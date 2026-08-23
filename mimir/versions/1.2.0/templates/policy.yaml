@@ -10,3 +10,6 @@ bindings:
 targetKind: secret
 targetLinks:
   - //secret/{{ include "mimir.secret.config.name" . }}
+  {{- if eq .Values.storage.type "minio" }}
+  - //secret/{{ .Values.storage.minio.credentialsSecretName }}
+  {{- end }}

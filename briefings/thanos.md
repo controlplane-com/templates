@@ -39,3 +39,10 @@
 - Store Gateway slow to become ready on a big bucket = normal (it builds a local index cache first). Its volumeset is a cache — deleting it costs a rebuild, never data.
 - A halted Compactor (critical error) stays running but stops working — check its logs for `halt`; liveness intentionally does not restart it.
 - Old data missing from queries? Long-term reads need BOTH the sidecar uploading blocks (prometheus template) and `storeGateway.enabled` here, on the same bucket.
+
+- **MinIO object-storage credentials are a prerequisite secret from 1.2.0.** They are passed as
+  `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` rather than written into the objstore config, because a
+  `cpln://` reference inside a mounted file is never resolved. The S3 client picks them up from the
+  environment — verified against a live MinIO with negative controls before the design was settled, so
+  no startup-script substitution is needed. AWS and GCP were already keyless via cloud identity and are
+  unchanged.

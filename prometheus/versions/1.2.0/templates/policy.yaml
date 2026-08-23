@@ -10,6 +10,9 @@ bindings:
 targetKind: secret
 targetLinks:
   - //secret/{{ include "prometheus.secret.config.name" . }}
+  {{- if eq .Values.thanos.objectStorage.type "minio" }}
+  - //secret/{{ .Values.thanos.objectStorage.minio.credentialsSecretName }}
+  {{- end }}
   {{- if .Values.thanos.objectStorage.enabled }}
   - //secret/{{ include "prometheus.secret.objstore.name" . }}
   {{- end }}

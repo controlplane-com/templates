@@ -1,5 +1,21 @@
 # Grafana Mimir
 
+> **MinIO credentials are a prerequisite secret (1.2.0+).** Create a `dictionary` secret holding
+> `accessKey` and `secretKey`, and set `credentialsSecretName` to its name:
+>
+> ```bash
+> cpln secret create-dictionary --name my-mimir-minio-credentials \
+>   --entry accessKey=MINIO_ACCESS_KEY \
+>   --entry secretKey=MINIO_SECRET_KEY
+> ```
+>
+> They reach the container as `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` rather than being written
+> into the object-storage config file, because a `cpln://` reference inside a mounted file is never
+> resolved. The S3 client picks them up from the environment. AWS and GCP are unaffected — they were
+> already keyless via cloud identity. An upgrade still carrying `accessKey`/`accessSecret` is refused
+> at render.
+
+
 > **Upgrading from 1.0.0:** resource blocks that expose both a floor and a ceiling now name the
 > ceiling `maxCpu`/`maxMemory` instead of `cpu`/`memory`, so it is no longer ambiguous which number
 > is the limit. Rename those two keys in your values; an upgrade that still carries the old names is
@@ -63,8 +79,9 @@ storage:
     insecure: true                 # true for plain-HTTP endpoints
     bucket: my-mimir-bucket
     region: us-east-1
-    accessKey: my-minio-username
-    accessSecret: my-minio-password
+    # REQUIRED PREREQUISITE SECRET when type is `minio` — a `dictionary` secret
+    # holding exactly `accessKey` and `secretKey`.
+    credentialsSecretName: my-mimir-minio-credentials
 ```
 
 ### Tenancy

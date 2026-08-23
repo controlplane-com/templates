@@ -1,5 +1,21 @@
 # Thanos
 
+> **MinIO credentials are a prerequisite secret (1.2.0+).** Create a `dictionary` secret holding
+> `accessKey` and `secretKey`, and set `credentialsSecretName` to its name:
+>
+> ```bash
+> cpln secret create-dictionary --name my-thanos-minio-credentials \
+>   --entry accessKey=MINIO_ACCESS_KEY \
+>   --entry secretKey=MINIO_SECRET_KEY
+> ```
+>
+> They reach the container as `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` rather than being written
+> into the object-storage config file, because a `cpln://` reference inside a mounted file is never
+> resolved. The S3 client picks them up from the environment. AWS and GCP are unaffected — they were
+> already keyless via cloud identity. An upgrade still carrying `accessKey`/`accessSecret` is refused
+> at render.
+
+
 This app deploys [Thanos](https://thanos.io) Query — a global PromQL layer that fans one query out over many Prometheus servers (via their Thanos sidecar Store API endpoints) and deduplicates HA pairs — plus an optional object-storage tier (Store Gateway + Compactor) for long-term metrics retention.
 
 ## Architecture
@@ -98,8 +114,9 @@ storage:
     insecure: true                   # true for plain-HTTP endpoints
     bucket: my-thanos-bucket
     region: us-east-1
-    accessKey: my-minio-username
-    accessSecret: my-minio-password
+    # REQUIRED PREREQUISITE SECRET when type is `minio` — a `dictionary` secret
+    # holding exactly `accessKey` and `secretKey`.
+    credentialsSecretName: my-thanos-minio-credentials
 ```
 
 ## Wiring Prometheus sources

@@ -45,3 +45,10 @@
 - **remote-write auth secret must exist BEFORE install** when `remoteWrite[].basicAuth` is used — a missing secret wedges the deployment waiting on it.
 - **"Where's the Prometheus UI?"** (1.1.0): it is built in and always on, but reachable **internally only** — `http://{release}-prometheus.{gvc}.cpln.local:9095/query` for the expression browser (`/` and `/graph` both redirect there), plus `/targets`, `/alerts`, `/tsdb-status`. There is deliberately no `publicAccess` knob: the UI has no authentication of its own, so exposing it would publish every metric. Reach it from another workload in the GVC.
 - Spec: `architecture-prometheus.md`. Adjacent templates: `thanos` (query tier), `mimir` (alternative all-in-one remote-write store), `otel-collector` (sender).
+
+- **MinIO object-storage credentials are a prerequisite secret from 1.2.0.** They are passed as
+  `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` rather than written into the objstore config, because a
+  `cpln://` reference inside a mounted file is never resolved. The S3 client picks them up from the
+  environment — verified against a live MinIO with negative controls before the design was settled, so
+  no startup-script substitution is needed. AWS and GCP were already keyless via cloud identity and are
+  unchanged.

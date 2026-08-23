@@ -96,8 +96,6 @@ config:
   bucket: {{ .Values.storage.minio.bucket | quote }}
   endpoint: {{ .Values.storage.minio.endpoint | quote }}
   region: {{ .Values.storage.minio.region | quote }}
-  access_key: {{ .Values.storage.minio.accessKey | quote }}
-  secret_key: {{ .Values.storage.minio.accessSecret | quote }}
   insecure: {{ .Values.storage.minio.insecure }}
   bucket_lookup_type: path
 {{- end -}}
@@ -107,6 +105,7 @@ config:
 {{/* Validation */}}
 
 {{- define "thanos.validate" -}}
+{{- include "thanos.validateObjstoreCreds" . -}}
 {{- if lt (int .Values.replicas) 1 -}}
 {{- fail "thanos: replicas must be at least 1" -}}
 {{- end -}}
@@ -145,8 +144,7 @@ config:
 {{- if not $m.endpoint -}}{{- fail "thanos: storage.minio.endpoint is required (host:port, no scheme)" -}}{{- end -}}
 {{- if contains "://" $m.endpoint -}}{{- fail (printf "thanos: storage.minio.endpoint must be host:port with NO scheme — got '%s'" $m.endpoint) -}}{{- end -}}
 {{- if not $m.bucket -}}{{- fail "thanos: storage.minio.bucket is required" -}}{{- end -}}
-{{- if not $m.accessKey -}}{{- fail "thanos: storage.minio.accessKey is required" -}}{{- end -}}
-{{- if not $m.accessSecret -}}{{- fail "thanos: storage.minio.accessSecret is required" -}}{{- end -}}
+{{- if not $m.credentialsSecretName -}}{{- fail "thanos: minio.credentialsSecretName is required — it names the `dictionary` secret holding `accessKey` and `secretKey`. Create it BEFORE installing." -}}{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- end }}
@@ -160,3 +158,19 @@ Common tags
 {{- define "thanos.tags" -}}
 {{- include "cpln-common.tags" . }}
 {{- end }}
+
+{{/*
+MinIO object-storage credentials moved to a prerequisite secret. They are passed as
+AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY rather than written into the config file,
+because a cpln:// reference inside a mounted file is never resolved by the platform.
+*/}}
+{{- define "thanos.validateObjstoreCreds" -}}
+{{- if eq .Values.storage.type "minio" -}}
+{{- if or (.Values.storage.minio).accessKey (.Values.storage.minio).accessSecret -}}
+{{- fail "thanos: minio.accessKey and minio.accessSecret were REMOVED — they are now a `dictionary` secret you create, named by minio.credentialsSecretName, holding the keys `accessKey` and `secretKey`. Delete them from your values." -}}
+{{- end -}}
+{{- if not (.Values.storage.minio).credentialsSecretName -}}
+{{- fail "thanos: minio.credentialsSecretName is required when the object-storage type is 'minio' — it names the `dictionary` secret holding `accessKey` and `secretKey`. Create it BEFORE installing." -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

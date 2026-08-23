@@ -85,6 +85,13 @@ spec:
         {{- if .Values.thanos.objectStorage.enabled }}
         - --objstore.config-file=/etc/thanos/objstore.yml
         {{- end }}
+      {{- if and .Values.thanos.objectStorage.enabled (eq .Values.thanos.objectStorage.type "minio") }}
+      env:
+        - name: AWS_ACCESS_KEY_ID
+          value: cpln://secret/{{ .Values.thanos.objectStorage.minio.credentialsSecretName }}.accessKey
+        - name: AWS_SECRET_ACCESS_KEY
+          value: cpln://secret/{{ .Values.thanos.objectStorage.minio.credentialsSecretName }}.secretKey
+      {{- end }}
       minCpu: {{ .Values.thanos.sidecar.resources.minCpu | quote }}
       minMemory: {{ .Values.thanos.sidecar.resources.minMemory | quote }}
       cpu: {{ .Values.thanos.sidecar.resources.maxCpu | quote }}

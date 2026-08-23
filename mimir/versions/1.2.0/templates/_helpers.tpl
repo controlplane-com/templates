@@ -58,8 +58,6 @@ common:
       endpoint: {{ .Values.storage.minio.endpoint | quote }}
       region: {{ .Values.storage.minio.region | quote }}
       bucket_name: {{ .Values.storage.minio.bucket | quote }}
-      access_key_id: {{ .Values.storage.minio.accessKey | quote }}
-      secret_access_key: {{ .Values.storage.minio.accessSecret | quote }}
       insecure: {{ .Values.storage.minio.insecure }}
       bucket_lookup_type: path
 {{- end }}
@@ -99,6 +97,7 @@ limits:
 {{/* Validation */}}
 
 {{- define "mimir.validate" -}}
+{{- include "mimir.validateObjstoreCreds" . -}}
 {{- include "mimir.validateResourceKnobs" . -}}
 {{- $r := int .Values.replicas -}}
 {{- if and (ne $r 1) (lt $r 3) -}}
@@ -122,8 +121,7 @@ limits:
 {{- if not $m.endpoint -}}{{- fail "mimir: storage.minio.endpoint is required (host:port, no scheme)" -}}{{- end -}}
 {{- if contains "://" $m.endpoint -}}{{- fail (printf "mimir: storage.minio.endpoint must be host:port with NO scheme — got '%s'" $m.endpoint) -}}{{- end -}}
 {{- if not $m.bucket -}}{{- fail "mimir: storage.minio.bucket is required" -}}{{- end -}}
-{{- if not $m.accessKey -}}{{- fail "mimir: storage.minio.accessKey is required" -}}{{- end -}}
-{{- if not $m.accessSecret -}}{{- fail "mimir: storage.minio.accessSecret is required" -}}{{- end -}}
+{{- if not $m.credentialsSecretName -}}{{- fail "mimir: minio.credentialsSecretName is required — it names the `dictionary` secret holding `accessKey` and `secretKey`. Create it BEFORE installing." -}}{{- end -}}
 {{- end -}}
 {{- if not (has .Values.internalAccess.type (list "none" "same-gvc" "same-org" "workload-list")) -}}
 {{- fail (printf "mimir: internalAccess.type must be none, same-gvc, same-org, or workload-list — got '%s'" .Values.internalAccess.type) -}}
@@ -151,5 +149,21 @@ with no signal.
 {{- end -}}
 {{- if (.Values.resources).memory -}}
 {{- fail "mimir: resources.memory was RENAMED to resources.maxMemory. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+MinIO object-storage credentials moved to a prerequisite secret. They are passed as
+AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY rather than written into the config file,
+because a cpln:// reference inside a mounted file is never resolved by the platform.
+*/}}
+{{- define "mimir.validateObjstoreCreds" -}}
+{{- if eq .Values.storage.type "minio" -}}
+{{- if or (.Values.storage.minio).accessKey (.Values.storage.minio).accessSecret -}}
+{{- fail "mimir: minio.accessKey and minio.accessSecret were REMOVED — they are now a `dictionary` secret you create, named by minio.credentialsSecretName, holding the keys `accessKey` and `secretKey`. Delete them from your values." -}}
+{{- end -}}
+{{- if not (.Values.storage.minio).credentialsSecretName -}}
+{{- fail "mimir: minio.credentialsSecretName is required when the object-storage type is 'minio' — it names the `dictionary` secret holding `accessKey` and `secretKey`. Create it BEFORE installing." -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}

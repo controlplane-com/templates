@@ -11,4 +11,7 @@ bindings:
 targetKind: secret
 targetLinks:
   - //secret/{{ include "thanos.secret.objstore.name" . }}
+  {{- if eq .Values.storage.type "minio" }}
+  - //secret/{{ .Values.storage.minio.credentialsSecretName }}
+  {{- end }}
 {{- end }}

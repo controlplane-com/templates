@@ -151,7 +151,7 @@ pgbouncer:
   poolMode: transaction  # options: session, transaction, statement
   defaultPoolSize: 25    # real Postgres connections per PgBouncer pod
   maxClientConn: 1000    # max app connections per PgBouncer pod
-  maxDbConnections: 100  # hard cap on total Postgres connections regardless of how many PgBouncer pods are running
+  maxDbConnections: 100  # cap on Postgres connections PER PgBouncer pod — multiply by maxReplicas
   minReplicas: 2
   maxReplicas: 4
 ```
@@ -161,7 +161,13 @@ pgbouncer:
 - `session` — connection held for the entire client session. Compatible with all Postgres features but provides less connection reuse. Increase `defaultPoolSize` to match your expected concurrent client count.
 - `statement` — connection returned after every statement. Transactions are not supported. Rarely used.
 
-**`maxDbConnections`** is a hard cap on the total number of real Postgres connections PgBouncer will open, shared across all PgBouncer pods. This prevents connection blowout when PgBouncer scales up — set it to a value your Postgres primary can safely handle.
+**`maxDbConnections` is enforced per PgBouncer pod, not across the deployment.** PgBouncer instances do not
+coordinate, so the real ceiling on server connections is `maxReplicas × maxDbConnections`. With the shipped
+values that is 4 × 100 = 400 against a Postgres `max_connections` of 100, of which
+`superuser_reserved_connections` reserves 3 — so under enough load clients get
+`remaining connection slots are reserved` rather than being queued. Size it so
+`maxReplicas × maxDbConnections` stays comfortably under 97, and treat `defaultPoolSize` the same way.
+
 
 **Scaling:** PgBouncer autoscales on RPS between `minReplicas` and `maxReplicas`. Increase `maxReplicas` for high-throughput workloads where PgBouncer becomes the bottleneck before Postgres does.
 
@@ -189,6 +195,17 @@ cpln workload exec RELEASE_NAME-postgres-ha --gvc GVC_NAME --container patroni-p
   -- patronictl -c /tmp/patroni_config.yml edit-config --force \
      -s ttl=60 -s loop_wait=10 -s retry_timeout=20
 ```
+
+### Losing etcd does not fail the cluster over
+
+`failsafe_mode` is enabled. When the primary cannot reach etcd, it first asks every other member over the
+Patroni REST API whether they still see it as leader; if they all do, it keeps serving reads and writes
+instead of demoting. Patroni only lets a member listed in its `/failsafe` key win a leader race, so this
+cannot split-brain.
+
+Without it, an etcd outage longer than `retry_timeout` demotes a completely healthy primary and costs a
+full restart cycle. The trade-off is that *all* members must answer — if the same network fault also hides
+a replica, the primary demotes as it would have before.
 
 **Keep `loop_wait + 2*retry_timeout <= ttl`.** Patroni does not reject a combination that breaks that rule
 — it silently substitutes `loop_wait: 1` and `retry_timeout: (ttl-1)/2` and carries on. That is why the
@@ -227,6 +244,7 @@ release. Read them back with `cpln secret reveal <name>`.
 
 ## Important Notes
 
+- **A replica that stays down does not fill the primary's disk** — Patroni keeps a replication slot per member, and `max_slot_wal_keep_size` caps the WAL those slots retain at a quarter of `volumeset.capacity`. A member offline long enough to exceed that has its slot invalidated and is re-cloned automatically when it returns.
 - **Minimum Replicas**: For production use, maintain at least 3 PostgreSQL replicas and 3 etcd replicas
 - **Odd Number for etcd**: Always use an odd number of etcd replicas (3, 5, 7) for proper quorum
 - **Resource Allocation**: Ensure adequate CPU and memory resources for both PostgreSQL and etcd workloads

@@ -74,6 +74,15 @@
   yet, so republishing the same version number was acceptable and simpler.
 
 ## Troubleshooting / considerations
+- **DCS timeouts and `failsafe_mode`.** This template had `failsafe_mode: true` from 1.0.0 and the correct
+  `etcd3.hosts` key and credential escaping — it is the reference shape the two single-location HA charts
+  were corrected against on 2026-08-24. Its `max_slot_wal_keep_size` is a fixed `10GB`, which on the default
+  10 GiB volume is too loose to protect much; left as-is rather than retuned blind, since `createsGvc: true`
+  makes this template awkward to test. Worth revisiting.
+- **`maxDbConnections` is per PgBouncer pod, not cluster-wide** — PgBouncer instances do not coordinate,
+  so the real ceiling is `maxReplicas x maxDbConnections`. Shipped values give 4 x 100 = 400 against
+  `max_connections: 100` (97 usable after `superuser_reserved_connections`). The README said the opposite
+  until 2026-08-24. The defaults were left alone deliberately: it is a tuning call, not a bug fix.
 - **DCS timeouts went from 45 / 10 / 15 to 60 / 10 / 20 in 1.1.0, and this was NOT a bug fix.**
   45 / 10 / 15 satisfies Patroni's `loop_wait + 2*retry_timeout <= ttl` and was honoured as written, so
   clusters on 1.0.x are correctly configured — unlike `postgres-highly-available` and

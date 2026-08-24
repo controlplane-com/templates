@@ -25,6 +25,40 @@
 `replicas` (3) | `config.credentialsSecretName` (`my-postgres-ha-credentials`, **must exist before install**) | `image` | `resources.*` (500m-1 / 1-2Gi) | `volumeset.capacity` (10) | `multiZone` (false) | `proxy.enabled` | `pgbouncer.enabled` (false) | `backup.enabled` (false) / `backup.mode` (`logical` | `wal-g`) / `backup.provider` (`aws` | `gcp` | `minio`) | `backup.minio.credentialsSecretName`
 
 ## Troubleshooting / considerations
+- **`failsafe_mode: true` is why an etcd blip no longer costs a failover.** When the primary cannot reach
+  etcd it polls every other member over the Patroni REST API first; if they all still see it as leader it
+  keeps serving instead of demoting. Only a member listed in the DCS `/failsafe` key may win a leader race,
+  so it cannot split-brain. Caveat worth stating to anyone debugging: *all* members must answer, so a fault
+  that also hides a replica still demotes.
+- **The etcd endpoint list is `etcd3.hosts`, NOT `etcd3.host` — and the difference is invisible until it
+  isn't.** The singular key is parsed as ONE `host:port`; a comma-joined list handed to it resolves as a
+  single garbage hostname (`patroni --validate-config` says `Name or service not known`). Through 2.5.x
+  this chart rendered the singular key and survived **only** because the script also exports
+  `PATRONI_ETCD3_HOSTS`, which Patroni maps natively to `etcd3.hosts`, and `hosts` wins in
+  `_get_machines_cache_from_config`. Rename or drop that export and the cluster silently loses its DCS.
+- **Credentials are YAML-escaped before being written into the Patroni config** (`yaml_escape()` escapes
+  `\` and `"`). They are user-chosen prerequisite-secret values now, so this is not theoretical: measured
+  against 11 realistic passwords, the pre-fix template failed 2 and the timescaledb sibling failed 8 —
+  four of those *silently*, yielding a different password than the user set (`#secret` -> null,
+  `{secret}` -> a map, trailing space trimmed).
+- **NEVER put a backtick in a heredoc comment in these startup scripts.** The config heredocs are unquoted
+  (`<<EOF`), so backticks are command substitution. A comment reading ``loop_wait + 2*retry_timeout <= ttl``
+  in backticks was executed at boot, logged `=: No such file or directory`, and the deployed config ended up
+  reading `# Patroni enforces  and, when that is` — the shell deleted the rule from the comment whose
+  purpose was to state it. Caught in live testing 2026-08-24, not by review.
+- **`max_slot_wal_keep_size` is a quarter of `volumeset.capacity`.** Patroni keeps a replication slot per
+  member (`use_slots` defaults true); without a cap, one member staying down retains WAL until the volume
+  fills and takes the primary with it. Exceeding the cap invalidates that member's slot and it is re-cloned.
+- **The wal-g archive settings were misindented and inert in the LOCAL block until 2.6.0.**
+  `archive_mode`/`archive_command`/`archive_timeout`/`restore_command` sat as siblings of `parameters:`
+  instead of inside it, and Patroni ignores unknown keys there (proved: identical effective config to
+  setting nothing at all). The `bootstrap.dcs` copy was correctly nested, so a FRESH install did archive —
+  which is why this was never noticed. The bite is enabling wal-g on an EXISTING cluster: `bootstrap.dcs`
+  is not re-read and the local override did nothing.
+- **`maxDbConnections` is per PgBouncer pod, not cluster-wide** — PgBouncer instances do not coordinate,
+  so the real ceiling is `maxReplicas x maxDbConnections`. Shipped values give 4 x 100 = 400 against
+  `max_connections: 100` (97 usable after `superuser_reserved_connections`). The README said the opposite
+  until 2026-08-24. The defaults were left alone deliberately: it is a tuning call, not a bug fix.
 - **The DCS timeouts were wrong from 1.0.0 through 2.5.x, and Patroni hid it.** The chart shipped
   `ttl: 30`, `loop_wait: 10`, `retry_timeout: 30`, violating Patroni's own
   `loop_wait + 2*retry_timeout <= ttl`. Patroni does not fail on that — `_validate_and_adjust_timeouts`

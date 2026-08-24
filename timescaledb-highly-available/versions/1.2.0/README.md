@@ -120,10 +120,18 @@ pgbouncer:
   poolMode: transaction # session, transaction, statement; transaction breaks SET, temp tables, advisory locks
   defaultPoolSize: 25 # real Postgres connections PgBouncer maintains per pod
   maxClientConn: 1000 # maximum client connections PgBouncer accepts per pod
-  maxDbConnections: 100 # hard cap on total Postgres connections across all pods
+  maxDbConnections: 100 # cap on Postgres connections PER PgBouncer pod — multiply by maxReplicas
   minReplicas: 2
   maxReplicas: 4
 ```
+
+**`maxDbConnections` is enforced per PgBouncer pod, not across the deployment.** PgBouncer instances do not
+coordinate, so the real ceiling on server connections is `maxReplicas × maxDbConnections`. With the shipped
+values that is 4 × 100 = 400 against a Postgres `max_connections` of 100, of which
+`superuser_reserved_connections` reserves 3 — so under enough load clients get
+`remaining connection slots are reserved` rather than being queued. Size it so
+`maxReplicas × maxDbConnections` stays comfortably under 97, and treat `defaultPoolSize` the same way.
+
 
 ### HAProxy leader endpoint
 
@@ -174,6 +182,17 @@ cpln workload exec RELEASE_NAME-timescaledb-ha --gvc GVC_NAME --container patron
   -- patronictl -c /tmp/patroni_config.yml edit-config --force \
      -s ttl=60 -s loop_wait=10 -s retry_timeout=20
 ```
+
+### Losing etcd does not fail the cluster over
+
+`failsafe_mode` is enabled. When the primary cannot reach etcd, it first asks every other member over the
+Patroni REST API whether they still see it as leader; if they all do, it keeps serving reads and writes
+instead of demoting. Patroni only lets a member listed in its `/failsafe` key win a leader race, so this
+cannot split-brain.
+
+Without it, an etcd outage longer than `retry_timeout` demotes a completely healthy primary and costs a
+full restart cycle. The trade-off is that *all* members must answer — if the same network fault also hides
+a replica, the primary demotes as it would have before.
 
 **Keep `loop_wait + 2*retry_timeout <= ttl`.** Patroni does not reject a combination that breaks that rule
 — it silently substitutes `loop_wait: 1` and `retry_timeout: (ttl-1)/2` and carries on. That is why the
@@ -266,6 +285,7 @@ upgrading</b>; if it already matches, no action is needed. Nothing else changes.
 
 ## Important Notes
 
+- **A replica that stays down does not fill the primary's disk** — Patroni keeps a replication slot per member, and `max_slot_wal_keep_size` caps the WAL those slots retain at a quarter of `volumeset.capacity`. A member offline long enough to exceed that has its slot invalidated and is re-cloned automatically when it returns.
 - **Create the credentials secret before installing** — the deployment wedges silently without it, and `cpln logs` returns zero lines. Credentials are baked into the data directory at first boot, so changing the secret later does not change the database password; to reset, uninstall (which deletes the volumes) and reinstall.
 - **Always connect via the proxy, never a replica** — the leader moves on failover; a pinned replica address will break. PgBouncer and backups already route through the proxy.
 - **`proxy.enabled` must stay true for backups** — the logical backup dumps the leader through the proxy endpoint.

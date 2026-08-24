@@ -154,13 +154,21 @@ pgbouncer:
   poolMode: transaction # options: session, transaction, statement
   defaultPoolSize: 25 # real Postgres connections PgBouncer keeps per replica
   maxClientConn: 1000 # client connections PgBouncer accepts per replica
-  maxDbConnections: 100 # hard cap on total Postgres connections
+  maxDbConnections: 100 # cap on Postgres connections PER PgBouncer pod — multiply by maxReplicas
   minReplicas: 2
   maxReplicas: 4
   resources:
     cpu: 200m
     memory: 128Mi
 ```
+
+**`maxDbConnections` is enforced per PgBouncer pod, not across the deployment.** PgBouncer instances do not
+coordinate, so the real ceiling on server connections is `maxReplicas × maxDbConnections`. With the shipped
+values that is 4 × 100 = 400 against a Postgres `max_connections` of 100, of which
+`superuser_reserved_connections` reserves 3 — so under enough load clients get
+`remaining connection slots are reserved` rather than being queued. Size it so
+`maxReplicas × maxDbConnections` stays comfortably under 97, and treat `defaultPoolSize` the same way.
+
 
 - `transaction` — the connection is held for one transaction. Best for most web and API workloads.
   Not compatible with `SET` variables, temporary tables or advisory locks.
@@ -406,6 +414,17 @@ cpln workload exec {release}-postgres --gvc {global.gvc.name} --container patron
   -- patronictl -c /tmp/patroni_config.yml edit-config --force \
      -s ttl=60 -s loop_wait=10 -s retry_timeout=20
 ```
+
+### Losing etcd does not fail the cluster over
+
+`failsafe_mode` is enabled. When the primary cannot reach etcd, it first asks every other member over the
+Patroni REST API whether they still see it as leader; if they all do, it keeps serving reads and writes
+instead of demoting. Patroni only lets a member listed in its `/failsafe` key win a leader race, so this
+cannot split-brain.
+
+Without it, an etcd outage longer than `retry_timeout` demotes a completely healthy primary and costs a
+full restart cycle. The trade-off is that *all* members must answer — if the same network fault also hides
+a replica, the primary demotes as it would have before.
 
 **Keep `loop_wait + 2*retry_timeout <= ttl`.** Patroni does not reject a combination that breaks that rule
 — it silently substitutes `loop_wait: 1` and `retry_timeout: (ttl-1)/2` and carries on. That is why the

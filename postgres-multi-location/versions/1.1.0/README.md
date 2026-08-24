@@ -400,9 +400,16 @@ The cluster ships a fixed Patroni consensus configuration:
 
 | Setting | Value | Meaning |
 |---|---|---|
-| `ttl` | 60s | how long a dead primary's leader lock survives — so also the worst-case failover delay |
-| `retry_timeout` | 20s | how long the primary tolerates losing etcd before it demotes itself |
+| `ttl` | 45s | how long a dead primary's leader lock survives before another member may claim it |
+| `retry_timeout` | 15s | how long the primary tolerates losing etcd before it demotes itself |
 | `loop_wait` | 10s | how often the HA loop runs |
+
+**What that means in practice, measured on a 3-member cluster:** a *planned* failover — a rolling restart,
+or anything that shuts Patroni down cleanly — releases the leader lock immediately and costs a few seconds
+of refused writes. Patroni's own handover took 185 milliseconds; what clients actually wait on is the
+HAProxy health check noticing the change. An *abrupt* loss, where the lock has to expire on its own, took
+about a minute to recover in testing. Lowering `ttl` did not measurably shorten that, so treat it as the
+lock-expiry bound rather than a dial for failover speed.
 
 These are not values you set at install, because Patroni reads them only while the data directory is empty
 — that is, once, when the cluster is first created. From then on they live in etcd, and `patronictl` is
@@ -416,7 +423,7 @@ cpln workload exec {release}-postgres --gvc {global.gvc.name} --container patron
 # Change them — all three together
 cpln workload exec {release}-postgres --gvc {global.gvc.name} --container patroni-postgres \
   -- patronictl -c /tmp/patroni_config.yml edit-config --force \
-     -s ttl=60 -s loop_wait=10 -s retry_timeout=20
+     -s ttl=45 -s loop_wait=10 -s retry_timeout=15
 ```
 
 ### Losing etcd does not fail the cluster over

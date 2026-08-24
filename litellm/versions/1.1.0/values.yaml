@@ -40,6 +40,12 @@ internalAccess:
   #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
 # ─── PostgreSQL (subchart: postgres) — keys / spend / budgets ──────
+# The bundled PostgreSQL can back itself up on a schedule. Every knob of the
+# `postgres` template is available under this key — nothing extra to install:
+#   postgres.backup.enabled: true
+#   postgres.backup.provider: aws | gcp | minio
+#   postgres.backup.aws.bucket / .region / .cloudAccountName / .policyName
+# See "Backing up the bundled database" in the README.
 postgres:
   image: postgres:18
   # Credentials for the bundled database — internal plumbing no human types

@@ -46,3 +46,8 @@ not supported.**
   Only AWS is keyless via a Cloud Account.
 - **Keep locations in one provider and region family.** Cross-region traffic to object storage is billed and
   the README says so; a 3-location cluster spread across providers will be slow and expensive.
+- **`gcp` and `hetzner` object-storage credentials are a prerequisite secret from 2.7.0.** They are supplied
+  as `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` and read via `<use_environment_credentials>`, because a
+  `cpln://` reference inside the disk XML is never resolved. Proven against a live S3-compatible endpoint
+  before the design was settled: 11 objects written through the disk with correct env credentials, and none
+  with wrong ones. `aws` was already keyless; `azure` uses an account key and is unaffected.

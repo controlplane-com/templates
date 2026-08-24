@@ -33,26 +33,28 @@
 | `pgbouncer.enabled` | false | pooler in front of the proxy |
 | `backup.enabled` + `provider` | false / aws | logical cron backup to aws/gcp/minio |
 | `internal_access.type` | same-gvc | firewall scope (internal-only design) |
-| `patroni.ttl` / `loopWait` / `retryTimeout` | 60 / 10 / 20 | DCS consensus timeouts; render fails unless `loopWait + 2*retryTimeout <= ttl` (1.2.0+) |
 
 ## Troubleshooting / considerations
 - **The DCS timeouts were wrong from 1.0.0 through 1.1.x, and Patroni hid it.** The chart shipped
-  `ttl: 30`, `loop_wait: 10`, `retry_timeout: 30`, which violates Patroni's own
+  `ttl: 30`, `loop_wait: 10`, `retry_timeout: 30`, violating Patroni's own
   `loop_wait + 2*retry_timeout <= ttl`. Patroni does not fail on that — `_validate_and_adjust_timeouts`
   **silently** rewrites it to `loop_wait: 1`, `retry_timeout: (ttl-1)/2 = 14` and logs a warning nobody
-  reads. So a cluster configured for a 30-second DCS outage budget actually demoted its primary after 14.
-  1.2.0 exposes all three as `patroni.*` with a valid default (60/10/20) and a render guard that refuses any
-  combination Patroni would rewrite. Found from a production incident: a ~14.8s network blackout
-  between Patroni and etcd exhausted the clamped budget, and the demote/restart-as-standby/re-promote cycle
-  cost ~12s of refused writes while the database itself was healthy throughout.
-- **Upgrading to 1.2.0 does NOT fix a running cluster.** `bootstrap.dcs` is read only when the data directory
-  is empty, i.e. once at first init; after that the values live in etcd and the chart is never consulted.
-  Existing clusters need `patronictl edit-config`, setting all three together — raising `ttl` alone leaves
-  `retry_timeout` clamped and drops `loop_wait` to 1, which multiplies etcd traffic.
+  reads. So a cluster configured for a 30s DCS budget demoted its primary after 14. Found from a production
+  incident: a ~14.8s blackout between Patroni and etcd exhausted the clamped budget, and the
+  demote/restart-as-standby/re-promote cycle cost ~12s of refused writes while the database itself was
+  healthy throughout. **1.2.0 ships 60 / 10 / 20.**
+- **1.2.0 does NOT fix a running cluster.** `bootstrap.dcs` applies once, at first init; after that the
+  values live in etcd. Existing clusters need `patronictl edit-config`, all three set together — raising
+  `ttl` alone leaves `retry_timeout` clamped and drops `loop_wait` to 1, multiplying etcd traffic.
 - **`retry_timeout` is divided across the etcd endpoints.** The per-request read timeout is
-  `retry_timeout / len(endpoints)`, so a 3-node etcd at `retry_timeout: 14` gives 4.67s per request. Useful
-  when reading a customer's logs: a `read timeout=4.666…` is the fingerprint of the clamped value, not of
-  anything they configured.
+  `retry_timeout / len(endpoints)`, so a 3-node etcd at `retry_timeout: 14` gives 4.67s per request. Handy
+  when reading someone's logs: a `read timeout=4.666…` is the fingerprint of a clamped 14, not of anything
+  they configured.
+- **The DCS timeouts are deliberately NOT values.** Patroni reads `bootstrap.dcs` only while the data
+  directory is empty, so a knob would look adjustable while only ever applying at first init, and would do
+  nothing on every cluster that already exists. They are fixed in the chart and retuned with
+  `patronictl edit-config --force -s ttl=… -s loop_wait=… -s retry_timeout=…` against
+  `/tmp/patroni_config.yml`.
 - **Image runs as `postgres` (UID 1000), NOT root** — a real deviation from `postgres-highly-available` (which runs as root). The Patroni start script must not `chown`/`gosu`; volume writability comes from `securityOptions.filesystemGroupId: 1000`. If a fresh install hangs at bootstrap with permission errors on `/home/postgres/pgdata`, this is the cause.
 - **No `wal-g` in the image** (only pgBackRest) — so v1 backup is **logical-only** (`pg_dump` cron). Continuous WAL archiving / point-in-time restore is a staged pgBackRest follow-up, not shipped.
 - **Always connect via the proxy, never a replica** — the leader moves on failover; a pinned replica address will break. Backups and pgbouncer already route through the proxy.

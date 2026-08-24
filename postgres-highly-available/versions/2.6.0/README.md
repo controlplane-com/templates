@@ -165,52 +165,46 @@ pgbouncer:
 
 **Scaling:** PgBouncer autoscales on RPS between `minReplicas` and `maxReplicas`. Increase `maxReplicas` for high-throughput workloads where PgBouncer becomes the bottleneck before Postgres does.
 
-## Patroni consensus timeouts
+## Failover timing
 
-These control how the primary behaves when it cannot reach etcd:
+The cluster ships a fixed Patroni consensus configuration:
 
-```yaml
-patroni:
-  ttl: 60
-  loopWait: 10
-  retryTimeout: 20
-```
+| Setting | Value | Meaning |
+|---|---|---|
+| `ttl` | 60s | how long a dead primary's leader lock survives — so also the worst-case failover delay |
+| `retry_timeout` | 20s | how long the primary tolerates losing etcd before it demotes itself |
+| `loop_wait` | 10s | how often the HA loop runs |
 
-- **`retryTimeout`** — how long a DCS (etcd) outage the primary rides out before demoting itself. This is
-  the number that decides whether a transient network blip costs you a failover.
-- **`ttl`** — how long a genuinely dead primary keeps holding the leader lock, so it also sets the
-  worst-case failover delay. Raising `retryTimeout` requires raising `ttl`.
-- **`loopWait`** — how often the HA loop runs.
-
-Patroni enforces `loopWait + 2*retryTimeout <= ttl`. **If you break that rule Patroni does not fail — it
-silently reduces `loopWait` to 1 and `retryTimeout` to `(ttl-1)/2` and carries on**, so an over-large
-`retryTimeout` quietly becomes a smaller one. This chart refuses to render rather than let that happen, and
-the error tells you what Patroni would have substituted.
-
-Raising `ttl` buys tolerance of longer etcd outages at the cost of slower failover when the primary really
-is dead. The defaults above give a 20-second DCS outage budget and a worst case of 60 seconds to fail over.
-
-**Fixed in 2.6.0.** Versions through 2.5.x shipped `ttl: 30`, `loopWait: 10`, `retryTimeout: 30` —
-which violates the rule, so Patroni ran them as `1` and `14`. The chart asked for a 30-second DCS retry
-budget and got 14. An etcd blackout longer than 14 seconds would demote the primary; the resulting
-fast-shutdown, restart-as-standby and re-promote cost roughly 12 seconds of refused writes, even though the
-database itself was healthy the whole time.
-
-**Upgrading does not fix an existing cluster.** `bootstrap.dcs` is only read when the data directory is
-empty, i.e. once, when the cluster was first initialised. After that the values live in etcd and the chart
-is never consulted again. Installing 2.6.0 fixes new clusters only. To fix a running one, set all three
-together — raising `ttl` alone leaves `retryTimeout` clamped and drops `loopWait` to 1, which multiplies
-your etcd traffic:
+These are not values you set at install, because Patroni reads them only while the data directory is empty
+— that is, once, when the cluster is first created. From then on they live in etcd, and `patronictl` is
+what changes them:
 
 ```bash
-patronictl -c /patroni/patroni.yml edit-config
-#   ttl: 60
-#   loop_wait: 10
-#   retry_timeout: 20
+# Show what this cluster is actually running
+cpln workload exec RELEASE_NAME-postgres-ha --gvc GVC_NAME --container patroni-postgres \
+  -- patronictl -c /tmp/patroni_config.yml show-config
+
+# Change them — all three together
+cpln workload exec RELEASE_NAME-postgres-ha --gvc GVC_NAME --container patroni-postgres \
+  -- patronictl -c /tmp/patroni_config.yml edit-config --force \
+     -s ttl=60 -s loop_wait=10 -s retry_timeout=20
 ```
 
-Run `patronictl -c /patroni/patroni.yml show-config` first to see what your cluster is actually starting
-from.
+**Keep `loop_wait + 2*retry_timeout <= ttl`.** Patroni does not reject a combination that breaks that rule
+— it silently substitutes `loop_wait: 1` and `retry_timeout: (ttl-1)/2` and carries on. That is why the
+three move together: raising `ttl` on its own leaves `retry_timeout` clamped, and raising `retry_timeout`
+on its own does nothing at all.
+
+**2.6.0 corrects a defect here.** Versions through 2.5.x shipped `ttl: 30` alongside `retry_timeout: 30`,
+which breaks the rule above, so Patroni ran those clusters at `loop_wait: 1` and `retry_timeout: 14`. The
+chart asked for a 30-second tolerance and delivered 14. An etcd outage longer than that demoted a healthy
+primary, and the shutdown, restart-as-standby and re-promote that followed cost roughly 12 seconds of
+refused writes.
+
+**Upgrading does not fix a cluster that already exists** — its configuration was written to etcd when it
+was created, and the chart is never consulted again. Run the `edit-config` command above to move an
+existing cluster to 60 / 10 / 20.
+
 
 ## Connecting to PostgreSQL
 

@@ -382,6 +382,47 @@ for MinIO.
 
 Internal only — there is no public access in this version.
 
+## Failover timing
+
+The cluster ships a fixed Patroni consensus configuration:
+
+| Setting | Value | Meaning |
+|---|---|---|
+| `ttl` | 60s | how long a dead primary's leader lock survives — so also the worst-case failover delay |
+| `retry_timeout` | 20s | how long the primary tolerates losing etcd before it demotes itself |
+| `loop_wait` | 10s | how often the HA loop runs |
+
+These are not values you set at install, because Patroni reads them only while the data directory is empty
+— that is, once, when the cluster is first created. From then on they live in etcd, and `patronictl` is
+what changes them:
+
+```bash
+# Show what this cluster is actually running
+cpln workload exec {release}-postgres --gvc {global.gvc.name} --container patroni-postgres \
+  -- patronictl -c /tmp/patroni_config.yml show-config
+
+# Change them — all three together
+cpln workload exec {release}-postgres --gvc {global.gvc.name} --container patroni-postgres \
+  -- patronictl -c /tmp/patroni_config.yml edit-config --force \
+     -s ttl=60 -s loop_wait=10 -s retry_timeout=20
+```
+
+**Keep `loop_wait + 2*retry_timeout <= ttl`.** Patroni does not reject a combination that breaks that rule
+— it silently substitutes `loop_wait: 1` and `retry_timeout: (ttl-1)/2` and carries on. That is why the
+three move together: raising `ttl` on its own leaves `retry_timeout` clamped, and raising `retry_timeout`
+on its own does nothing at all.
+
+**1.1.0 widens the tolerance.** Versions through 1.0.x shipped `ttl: 45`, `loop_wait: 10`,
+`retry_timeout: 15`. That is a valid combination and Patroni honoured it as written, so existing clusters
+are not misconfigured. The change is one of margin: 15 seconds is thin for a cluster whose etcd quorum
+spans regions, where a blip between locations can plausibly outlast it and demote a healthy primary. The
+new values widen that margin, at the cost of taking worst-case failover from 45 to 60 seconds.
+
+**Upgrading does not change a cluster that already exists** — its configuration was written to etcd when it
+was created, and 45 / 10 / 15 keeps working. Run the `edit-config` command above only if you want the wider
+tolerance.
+
+
 ## Operating the cluster
 
 Member names are `{workload}-{location}-{index}`, e.g. `my-db-postgres-aws-us-east-1-0`.

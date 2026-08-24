@@ -84,7 +84,6 @@ PgBouncer Workload Name
 Validate backup configuration - when backup is enabled, backup.provider must be set to 'aws', 'gcp', or 'minio'
 */}}
 {{- define "tsdb-ha.validateBackupConfig" -}}
-{{- include "tsdb-ha.validatePatroniTimeouts" . -}}
 {{- if .Values.backup.enabled -}}
   {{- $provider := .Values.backup.provider -}}
   {{- if not (or (eq $provider "aws") (eq $provider "gcp") (eq $provider "minio")) -}}
@@ -148,29 +147,5 @@ instead of silently restarting against a different password.
 {{- end -}}
 {{- if or (hasKey .Values.backup.minio "accessKey") (hasKey .Values.backup.minio "secretKey") -}}
 {{- fail "timescaledb-highly-available: backup.minio.accessKey and backup.minio.secretKey were REMOVED — they are now a `dictionary` secret you create, named by backup.minio.credentialsSecretName, holding the keys `accessKey` and `secretKey`. Delete them from your values. See Storage setup in the README." -}}
-{{- end -}}
-{{- end -}}
-
-{{/*
-Patroni enforces `loop_wait + 2*retry_timeout <= ttl` and, when it is violated,
-SILENTLY reduces loop_wait to 1 and retry_timeout to (ttl-1)/2 rather than
-failing. That is how this chart shipped a 30s DCS retry budget that ran as 14s.
-Fail at render instead, so the number in values is the number in force.
-*/}}
-{{- define "tsdb-ha.validatePatroniTimeouts" -}}
-{{- $ttl := int .Values.patroni.ttl -}}
-{{- $lw := int .Values.patroni.loopWait -}}
-{{- $rt := int .Values.patroni.retryTimeout -}}
-{{- if lt $ttl 20 -}}
-{{- fail (printf "timescaledb-highly-available: patroni.ttl must be at least 20 (Patroni's minimum), got %d." $ttl) -}}
-{{- end -}}
-{{- if lt $rt 3 -}}
-{{- fail (printf "timescaledb-highly-available: patroni.retryTimeout must be at least 3 (Patroni's minimum), got %d." $rt) -}}
-{{- end -}}
-{{- if lt $lw 1 -}}
-{{- fail (printf "timescaledb-highly-available: patroni.loopWait must be at least 1, got %d." $lw) -}}
-{{- end -}}
-{{- if gt (add $lw (mul 2 $rt)) $ttl -}}
-{{- fail (printf "timescaledb-highly-available: patroni.loopWait + 2*patroni.retryTimeout must be <= patroni.ttl, but %d + 2*%d = %d exceeds ttl %d. Patroni would silently reduce loopWait to 1 and retryTimeout to %d instead of using your values — raise ttl or lower retryTimeout." $lw $rt (add $lw (mul 2 $rt)) $ttl (div (sub $ttl 1) 2)) -}}
 {{- end -}}
 {{- end -}}

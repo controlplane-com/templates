@@ -3,7 +3,7 @@ name: clickhouse
 description: Fast, open source column-oriented database management system
 
 type: application
-version: 2.6.1
+version: 2.7.0
 appVersion: "25.10"
 
 annotations:

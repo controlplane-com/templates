@@ -128,13 +128,7 @@ true
   {{- if not .Values.gcp.bucket -}}
     {{- fail "All fields are required for GCP. Missing: gcp.bucket" -}}
   {{- end -}}
-  {{- if not .Values.gcp.accessKeyId -}}
-    {{- fail "All fields are required for GCP. Missing: gcp.accessKeyId" -}}
-  {{- end -}}
-  {{- if not .Values.gcp.secretAccessKey -}}
-    {{- fail "All fields are required for GCP. Missing: gcp.secretAccessKey" -}}
-  {{- end -}}
-{{- end -}}
+    {{- end -}}
 {{- if eq $provider "azure" -}}
   {{- if not .Values.azure.storageAccount -}}
     {{- fail "All fields are required for Azure. Missing: azure.storageAccount" -}}
@@ -153,13 +147,7 @@ true
   {{- if not .Values.hetzner.region -}}
     {{- fail "All fields are required for Hetzner. Missing: hetzner.region" -}}
   {{- end -}}
-  {{- if not .Values.hetzner.accessKeyId -}}
-    {{- fail "All fields are required for Hetzner. Missing: hetzner.accessKeyId" -}}
-  {{- end -}}
-  {{- if not .Values.hetzner.secretAccessKey -}}
-    {{- fail "All fields are required for Hetzner. Missing: hetzner.secretAccessKey" -}}
-  {{- end -}}
-{{- end -}}
+    {{- end -}}
 {{- end -}}
 
 {{- define "clickhouse.validateLocations" -}}
@@ -180,10 +168,31 @@ Common labels - delegated to cpln-common
 {{- end }}
 {{/* Validation */}}
 {{- define "clickhouse.validate" -}}
+{{- include "clickhouse.validateStorageCreds" . -}}
 {{- if or (hasKey .Values.database "password") (hasKey .Values.database "name") -}}
 {{- fail "clickhouse: database.password and database.name were REMOVED — they are now a `dictionary` secret you create, named by database.credentialsSecretName, holding the keys `password` and `database`. Delete them from your values. See Prerequisites in the README." -}}
 {{- end -}}
 {{- if not .Values.database.credentialsSecretName -}}
 {{- fail "clickhouse: database.credentialsSecretName is required — it names the `dictionary` secret holding `password` and `database`. Create it BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Object-storage credentials for gcp and hetzner moved to prerequisite secrets. They
+are supplied as AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY and read via
+<use_environment_credentials>, because a cpln:// reference inside the disk XML is
+never resolved by the platform.
+*/}}
+{{- define "clickhouse.validateStorageCreds" -}}
+{{- range $p := list "gcp" "hetzner" -}}
+{{- if eq $.Values.provider $p -}}
+{{- $c := index $.Values $p -}}
+{{- if or $c.accessKeyId $c.secretAccessKey -}}
+{{- fail (printf "clickhouse: %s.accessKeyId and %s.secretAccessKey were REMOVED — they are now a `dictionary` secret you create, named by %s.credentialsSecretName, holding those two keys. Delete them from your values." $p $p $p) -}}
+{{- end -}}
+{{- if not $c.credentialsSecretName -}}
+{{- fail (printf "clickhouse: %s.credentialsSecretName is required — it names the `dictionary` secret holding accessKeyId and secretAccessKey. Create it BEFORE installing." $p) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}

@@ -12,6 +12,18 @@ spec:
       image: {{ .Values.server.image }}
       inheritEnv: false
       env:
+      {{- if eq .Values.provider "gcp" }}
+      - name: AWS_ACCESS_KEY_ID
+        value: cpln://secret/{{ .Values.gcp.credentialsSecretName }}.accessKeyId
+      - name: AWS_SECRET_ACCESS_KEY
+        value: cpln://secret/{{ .Values.gcp.credentialsSecretName }}.secretAccessKey
+      {{- end }}
+      {{- if eq .Values.provider "hetzner" }}
+      - name: AWS_ACCESS_KEY_ID
+        value: cpln://secret/{{ .Values.hetzner.credentialsSecretName }}.accessKeyId
+      - name: AWS_SECRET_ACCESS_KEY
+        value: cpln://secret/{{ .Values.hetzner.credentialsSecretName }}.secretAccessKey
+      {{- end }}
       - name: LOCATIONS_STR
         value: "{{- range $i, $loc := .Values.gvc.locations -}}{{ $loc.name }}:{{ $loc.replicas }}{{ if lt $i (sub (len $.Values.gvc.locations) 1) }},{{ end }}{{- end }}"
       - name: CLICKHOUSE_PASSWORD

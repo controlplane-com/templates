@@ -1,5 +1,12 @@
 # ClickHouse
 
+> **Object-storage credentials are a prerequisite secret (2.7.0+)** for the `gcp` and `hetzner` providers.
+> They reach ClickHouse as `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` and are read through
+> `<use_environment_credentials>`, because a `cpln://` reference inside the disk XML is never resolved.
+> `aws` was already keyless via cloud identity and `azure` uses an account key, so neither changes.
+> An upgrade still carrying `accessKeyId`/`secretAccessKey` is refused at render.
+
+
 This template deploys ClickHouse in either **single-node** or **cluster** mode depending on how locations are configured in `values.yaml`. All deployments use object storage (AWS S3, GCS, Azure Blob Storage, or Hetzner Object Storage) as the primary data store.
 
 ClickHouse is a high-performance column-oriented analytical database designed for real-time querying and data warehousing at scale. Storage includes:
@@ -135,7 +142,13 @@ For ClickHouse to have access to a GCS bucket, ensure the following prerequisite
 
 4. Under `Permissions`, assign the role `Storage Object Admin` and click `Done`.
 
-5. You will be provided a new HMAC key, update `accessKeyId` and `secretAccessKey` with the values provided.
+5. You will be provided a new HMAC key. Store it in a `dictionary` secret and set `gcp.credentialsSecretName` to that secret's name:
+
+```bash
+cpln secret create-dictionary --name my-clickhouse-gcs-credentials \
+  --entry accessKeyId=YOUR_HMAC_ACCESS_KEY \
+  --entry secretAccessKey=YOUR_HMAC_SECRET
+```
 
 To configure using the CLI:
 
@@ -207,8 +220,13 @@ Available regions:
 3. Update `values.yaml`:
    - `hetzner.bucket` — the bucket name
    - `hetzner.region` — the region (e.g. `nbg1`)
-   - `hetzner.accessKeyId` — the access key from step 2
-   - `hetzner.secretAccessKey` — the secret key from step 2
+   - `hetzner.credentialsSecretName` — the name of a `dictionary` secret holding the key pair from step 2:
+
+     ```bash
+     cpln secret create-dictionary --name my-clickhouse-hetzner-credentials \
+       --entry accessKeyId=YOUR_ACCESS_KEY \
+       --entry secretAccessKey=YOUR_SECRET_KEY
+     ```
 
 ## Connecting to ClickHouse
 

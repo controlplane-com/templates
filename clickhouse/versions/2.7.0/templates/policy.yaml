@@ -14,6 +14,12 @@ targetLinks:
   - //secret/{{ .Values.database.credentialsSecretName }}
   - //secret/{{ include "clickhouse.secretKeeper.name" . }}
   - //secret/{{ include "clickhouse.secretServer.name" . }}
+  {{- if eq .Values.provider "gcp" }}
+  - //secret/{{ .Values.gcp.credentialsSecretName }}
+  {{- end }}
+  {{- if eq .Values.provider "hetzner" }}
+  - //secret/{{ .Values.hetzner.credentialsSecretName }}
+  {{- end }}
   {{- if eq .Values.provider "aws" }}
   - //secret/{{ include "clickhouse.secretS3.name" . }}
   {{- end }}

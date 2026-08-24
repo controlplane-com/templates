@@ -57,6 +57,12 @@ internalAccess: # internal firewall scope
 # ─── Backing database (postgres subchart) ─────────────────────────
 # Bundled plumbing: it serves Gitea only and is unreachable from outside the
 # GVC — but the password is used AS-IS, so change it before installing.
+# The bundled PostgreSQL can back itself up on a schedule. Every knob of the
+# `postgres` template is available under this key — nothing extra to install:
+#   postgres.backup.enabled: true
+#   postgres.backup.provider: aws | gcp | minio
+#   postgres.backup.aws.bucket / .region / .cloudAccountName / .policyName
+# See "Backing up the bundled database" in the README.
 postgres:
   image: postgres:18
   # Gitea CREATES the dictionary secret named by config.credentialsSecretName below

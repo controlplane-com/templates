@@ -124,6 +124,36 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`c
 
 The bundled database credentials moved from `postgres.config.username/password/database` to `postgres.credentials.username/password/database`, and `postgres.config.credentialsSecretName` names the secret this template now creates from them. If you carry the old keys the install fails with `config.username was REMOVED in postgres 3.4.0` — move the three keys and you are done. **Ignore that message's advice to create a secret yourself; this template creates it**, and the database password stays a value exactly as before.
 
+## Backing up the bundled database
+
+The bundled PostgreSQL is the `postgres` template, so **every backup option that template has is
+already available here** — there is nothing extra to install and no separate release to manage.
+It is off by default:
+
+```yaml
+postgres:
+  backup:
+    enabled: true
+    schedule: "0 2 * * *"      # daily at 02:00 UTC
+    provider: aws              # aws | gcp | minio
+    aws:
+      bucket: my-postgres-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: my-postgres-backup-policy   # bucket-scoped IAM policy
+      prefix: postgres/backups
+```
+
+Enabling it adds one `cron` workload that runs `pg_dumpall` and uploads a gzipped dump. The
+bundled database's identity picks up the bucket-scoped policy automatically.
+
+For the bucket, cloud account and IAM policy setup — including the exact policy JSON per
+provider — follow the Storage setup section of the [`postgres` template README](../../../postgres).
+
+**A zero-length backup object is a failed run, not a backup.** If the dump cannot reach the
+database, the upload still writes a ~20-byte empty gzip under a normal timestamped filename.
+Check the object size before restoring from one.
+
 ## Important Notes
 
 - **The prerequisite secret must exist before install** — `secrets.name` is a dictionary secret with `SECRET_KEY_BASE`, `LOCKBOX_MASTER_KEY`, and `PGRST_JWT_SECRET`. A missing secret wedges the deployment.

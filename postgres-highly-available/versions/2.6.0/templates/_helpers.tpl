@@ -91,6 +91,7 @@ PgBouncer Workload Name
 Validate backup mode - must be "logical" or "wal-g"
 */}}
 {{- define "pg-ha.validateBackupMode" -}}
+{{- include "pg-ha.validatePatroniTimeouts" . -}}
 {{- $mode := .Values.backup.mode -}}
 {{- if and .Values.backup.enabled (not (or (eq $mode "logical") (eq $mode "wal-g"))) -}}
   {{- fail (printf "Invalid backup.mode: '%s'. Must be either 'logical' or 'wal-g'." $mode) -}}
@@ -166,5 +167,29 @@ before anything is applied.
 {{- if not .Values.backup.minio.credentialsSecretName -}}
 {{- fail "postgres-highly-available: backup.minio.credentialsSecretName is required when backup.provider is 'minio' — it names the `dictionary` secret holding `accessKey` and `secretKey`. Create it BEFORE installing; see Backup setup in the README." -}}
 {{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Patroni enforces `loop_wait + 2*retry_timeout <= ttl` and, when it is violated,
+SILENTLY reduces loop_wait to 1 and retry_timeout to (ttl-1)/2 rather than
+failing. That is how this chart shipped a 30s DCS retry budget that ran as 14s.
+Fail at render instead, so the number in values is the number in force.
+*/}}
+{{- define "pg-ha.validatePatroniTimeouts" -}}
+{{- $ttl := int .Values.patroni.ttl -}}
+{{- $lw := int .Values.patroni.loopWait -}}
+{{- $rt := int .Values.patroni.retryTimeout -}}
+{{- if lt $ttl 20 -}}
+{{- fail (printf "postgres-highly-available: patroni.ttl must be at least 20 (Patroni's minimum), got %d." $ttl) -}}
+{{- end -}}
+{{- if lt $rt 3 -}}
+{{- fail (printf "postgres-highly-available: patroni.retryTimeout must be at least 3 (Patroni's minimum), got %d." $rt) -}}
+{{- end -}}
+{{- if lt $lw 1 -}}
+{{- fail (printf "postgres-highly-available: patroni.loopWait must be at least 1, got %d." $lw) -}}
+{{- end -}}
+{{- if gt (add $lw (mul 2 $rt)) $ttl -}}
+{{- fail (printf "postgres-highly-available: patroni.loopWait + 2*patroni.retryTimeout must be <= patroni.ttl, but %d + 2*%d = %d exceeds ttl %d. Patroni would silently reduce loopWait to 1 and retryTimeout to %d instead of using your values — raise ttl or lower retryTimeout." $lw $rt (add $lw (mul 2 $rt)) $ttl (div (sub $ttl 1) 2)) -}}
 {{- end -}}
 {{- end -}}

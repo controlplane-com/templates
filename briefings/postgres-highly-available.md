@@ -21,10 +21,27 @@
 | secret `{release}-postgres-ha-config` | Non-sensitive backup config only; gated on `backup.enabled` |
 | identity + policy | `reveal` on the startup secrets and the user's prerequisite secrets |
 
-## Key knobs (shipped 2.5.0 defaults)
-`replicas` (3) | `config.credentialsSecretName` (`my-postgres-ha-credentials`, **must exist before install**) | `image` | `resources.*` (500m-1 / 1-2Gi) | `volumeset.capacity` (10) | `multiZone` (false) | `proxy.enabled` | `pgbouncer.enabled` (false) | `backup.enabled` (false) / `backup.mode` (`logical` | `wal-g`) / `backup.provider` (`aws` | `gcp` | `minio`) | `backup.minio.credentialsSecretName`
+## Key knobs (shipped 2.6.0 defaults)
+`replicas` (3) | `config.credentialsSecretName` (`my-postgres-ha-credentials`, **must exist before install**) | `image` | `resources.*` (500m-1 / 1-2Gi) | `volumeset.capacity` (10) | `multiZone` (false) | `patroni.ttl` (60) / `patroni.loopWait` (10) / `patroni.retryTimeout` (20) | `proxy.enabled` | `pgbouncer.enabled` (false) | `backup.enabled` (false) / `backup.mode` (`logical` | `wal-g`) / `backup.provider` (`aws` | `gcp` | `minio`) | `backup.minio.credentialsSecretName`
 
 ## Troubleshooting / considerations
+- **The DCS timeouts were wrong from 1.0.0 through 2.5.x, and Patroni hid it.** The chart shipped
+  `ttl: 30`, `loop_wait: 10`, `retry_timeout: 30`, which violates Patroni's own
+  `loop_wait + 2*retry_timeout <= ttl`. Patroni does not fail on that — `_validate_and_adjust_timeouts`
+  **silently** rewrites it to `loop_wait: 1`, `retry_timeout: (ttl-1)/2 = 14` and logs a warning nobody
+  reads. So a cluster configured for a 30-second DCS outage budget actually demoted its primary after 14.
+  2.6.0 exposes all three as `patroni.*` with a valid default (60/10/20) and a render guard that refuses any
+  combination Patroni would rewrite. Found from a production incident: a ~14.8s network blackout
+  between Patroni and etcd exhausted the clamped budget, and the demote/restart-as-standby/re-promote cycle
+  cost ~12s of refused writes while the database itself was healthy throughout.
+- **Upgrading to 2.6.0 does NOT fix a running cluster.** `bootstrap.dcs` is read only when the data directory
+  is empty, i.e. once at first init; after that the values live in etcd and the chart is never consulted.
+  Existing clusters need `patronictl edit-config`, setting all three together — raising `ttl` alone leaves
+  `retry_timeout` clamped and drops `loop_wait` to 1, which multiplies etcd traffic.
+- **`retry_timeout` is divided across the etcd endpoints.** The per-request read timeout is
+  `retry_timeout / len(endpoints)`, so a 3-node etcd at `retry_timeout: 14` gives 4.67s per request. Useful
+  when reading a customer's logs: a `read timeout=4.666…` is the fingerprint of the clamped value, not of
+  anything they configured.
 - **2.5.0 removed the `postgres:` block.** `username`/`password`/`database` are now a `dictionary` prerequisite secret named by `config.credentialsSecretName`. 2.4.2 and earlier shipped `username: username` / `password: password` — a working superuser login published in a public repo, so anyone on ≤2.4.2 should treat those credentials as compromised rather than merely upgrade. A render guard refuses an upgrade that still carries the old block and names the replacement.
 - **The credentials are expanded by the STARTUP SCRIPT at runtime, not by Helm at render.** Patroni's config is written by a shell script into `/tmp/patroni_config.yml`, and a `cpln://` reference would be inert there — it is not an env var, so the platform never resolves it. The script uses `${PGUSER}`, `${PGPASSWORD}` and `${APP_DATABASE}`, which works only because both heredocs are **unquoted** (`<<EOF`). **If you ever quote those heredocs, every credential silently becomes an empty string.**
 - **`PGUSER`/`PGPASSWORD` exist in TWO containers and they are not interchangeable.** The wal-g sidecar has its own pair, gated behind `backup.mode=wal-g`. The startup script runs in the MAIN container. During the 2.5.0 work the sidecar's copies made the wiring look complete while a default install would have expanded to nothing; a count of secret references in a default render is what caught it.

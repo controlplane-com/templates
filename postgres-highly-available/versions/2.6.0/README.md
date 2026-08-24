@@ -165,6 +165,53 @@ pgbouncer:
 
 **Scaling:** PgBouncer autoscales on RPS between `minReplicas` and `maxReplicas`. Increase `maxReplicas` for high-throughput workloads where PgBouncer becomes the bottleneck before Postgres does.
 
+## Patroni consensus timeouts
+
+These control how the primary behaves when it cannot reach etcd:
+
+```yaml
+patroni:
+  ttl: 60
+  loopWait: 10
+  retryTimeout: 20
+```
+
+- **`retryTimeout`** — how long a DCS (etcd) outage the primary rides out before demoting itself. This is
+  the number that decides whether a transient network blip costs you a failover.
+- **`ttl`** — how long a genuinely dead primary keeps holding the leader lock, so it also sets the
+  worst-case failover delay. Raising `retryTimeout` requires raising `ttl`.
+- **`loopWait`** — how often the HA loop runs.
+
+Patroni enforces `loopWait + 2*retryTimeout <= ttl`. **If you break that rule Patroni does not fail — it
+silently reduces `loopWait` to 1 and `retryTimeout` to `(ttl-1)/2` and carries on**, so an over-large
+`retryTimeout` quietly becomes a smaller one. This chart refuses to render rather than let that happen, and
+the error tells you what Patroni would have substituted.
+
+Raising `ttl` buys tolerance of longer etcd outages at the cost of slower failover when the primary really
+is dead. The defaults above give a 20-second DCS outage budget and a worst case of 60 seconds to fail over.
+
+**Fixed in 2.6.0.** Versions through 2.5.x shipped `ttl: 30`, `loopWait: 10`, `retryTimeout: 30` —
+which violates the rule, so Patroni ran them as `1` and `14`. The chart asked for a 30-second DCS retry
+budget and got 14. An etcd blackout longer than 14 seconds would demote the primary; the resulting
+fast-shutdown, restart-as-standby and re-promote cost roughly 12 seconds of refused writes, even though the
+database itself was healthy the whole time.
+
+**Upgrading does not fix an existing cluster.** `bootstrap.dcs` is only read when the data directory is
+empty, i.e. once, when the cluster was first initialised. After that the values live in etcd and the chart
+is never consulted again. Installing 2.6.0 fixes new clusters only. To fix a running one, set all three
+together — raising `ttl` alone leaves `retryTimeout` clamped and drops `loopWait` to 1, which multiplies
+your etcd traffic:
+
+```bash
+patronictl -c /patroni/patroni.yml edit-config
+#   ttl: 60
+#   loop_wait: 10
+#   retry_timeout: 20
+```
+
+Run `patronictl -c /patroni/patroni.yml show-config` first to see what your cluster is actually starting
+from.
+
 ## Connecting to PostgreSQL
 
 Connect to the PostgreSQL cluster using the appropriate endpoint:

@@ -3,12 +3,12 @@ name: postgres-highly-available
 description: Multi-replica PostgreSQL 17 cluster with Patroni failover and etcd consensus in one location
 
 type: application
-version: 2.5.1
+version: 2.6.0
 appVersion: "17"
 
 annotations:
   created: "2025-10-02"
-  lastModified: "2026-08-22"
+  lastModified: "2026-08-24"
   category: "database"
   createsGvc: false
 

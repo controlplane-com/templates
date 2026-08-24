@@ -20,6 +20,24 @@ postgres:
   # Prerequisites in the README for the create-dictionary command.
   credentialsSecretName: my-timescaledb-ha-credentials
 
+# ─── Patroni consensus timeouts ───────────────────────────────────
+# Patroni enforces `loop_wait + 2*retry_timeout <= ttl`. If the combination
+# breaks that rule Patroni SILENTLY reduces loop_wait and retry_timeout to fit,
+# so an over-large retry_timeout does not do what it looks like it does — this
+# chart shipped ttl 30 / loop_wait 10 / retry_timeout 30 through 2.5.x, which
+# Patroni ran as 1 / 14. The values below satisfy the rule and are used as
+# written; the chart refuses to render if you break it.
+#
+#   retryTimeout — how long a DCS (etcd) outage the primary rides out before
+#                  demoting itself. Raise it to tolerate longer network blips.
+#   ttl          — how long a genuinely dead primary holds the leader lock, so
+#                  it also sets the worst-case failover delay. Raising
+#                  retryTimeout requires raising ttl.
+patroni:
+  ttl: 60
+  loopWait: 10
+  retryTimeout: 20
+
 multiZone: false        # spread replicas across zones in the location
 
 # ─── Storage (per replica) ────────────────────────────────────────

@@ -1,0 +1,89 @@
+{{- if .Values.storeGateway.enabled }}
+kind: workload
+name: {{ include "thanos.store.name" . }}
+description: Thanos Store Gateway — serves historical object-storage blocks over the Store API
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "thanos.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "thanos.identity.name" . }}
+  containers:
+    - name: thanos-store
+      image: {{ .Values.image }}
+      inheritEnv: false
+      {{- if eq .Values.storage.type "minio" }}
+      env:
+        - name: AWS_ACCESS_KEY_ID
+          value: cpln://secret/{{ .Values.storage.minio.credentialsSecretName }}.accessKey
+        - name: AWS_SECRET_ACCESS_KEY
+          value: cpln://secret/{{ .Values.storage.minio.credentialsSecretName }}.secretKey
+      {{- end }}
+      args:
+        - store
+        - --data-dir=/data
+        - --objstore.config-file=/etc/thanos/objstore.yml
+        - --http-address=0.0.0.0:10902
+        - --grpc-address=0.0.0.0:10901
+      minCpu: {{ .Values.storeGateway.resources.minCpu | quote }}
+      minMemory: {{ .Values.storeGateway.resources.minMemory | quote }}
+      cpu: {{ .Values.storeGateway.resources.maxCpu | quote }}
+      memory: {{ .Values.storeGateway.resources.maxMemory | quote }}
+      ports:
+        - number: 10902
+          protocol: http
+        - number: 10901
+          protocol: tcp
+      volumes:
+        - path: /etc/thanos/objstore.yml
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "thanos.secret.objstore.name" . }}.payload
+        - path: /data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "thanos.store.volume.name" . }}
+      # /-/ready waits for the initial index build over the bucket, which is
+      # slow on a large bucket — hence the generous ceiling.
+      readinessProbe:
+        httpGet:
+          path: /-/ready
+          port: 10902
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 15
+        failureThreshold: 18  # platform caps failureThreshold at 20; 18x15s keeps a ~270s init window
+        successThreshold: 1
+        timeoutSeconds: 3
+      livenessProbe:
+        httpGet:
+          path: /-/healthy
+          port: 10902
+          scheme: HTTP
+        initialDelaySeconds: 30
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  # The thanos image runs non-root (USER 1001); make the fresh cache volumeset
+  # writable by it (mkdir on first boot) — same pattern as the prometheus template.
+  securityOptions:
+    runAsUser: 1001
+    filesystemGroupId: 1001
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      inboundAllowCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+{{- end }}

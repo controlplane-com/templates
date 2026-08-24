@@ -1,0 +1,17 @@
+{{- if include "thanos.storageEnabled" . }}
+kind: policy
+name: {{ include "thanos.policy.name" . }}
+description: Thanos objstore secret access
+tags: {{- include "thanos.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "thanos.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "thanos.secret.objstore.name" . }}
+  {{- if eq .Values.storage.type "minio" }}
+  - //secret/{{ .Values.storage.minio.credentialsSecretName }}
+  {{- end }}
+{{- end }}

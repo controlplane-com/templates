@@ -1,0 +1,21 @@
+kind: identity
+name: {{ include "thanos.identity.name" . }}
+description: Thanos workload identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "thanos.tags" . | nindent 4 }}
+{{- if include "thanos.storageEnabled" . }}
+{{- if eq .Values.storage.type "aws" }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.storage.aws.cloudAccountName }}
+  policyRefs:
+    - cpln-connector
+    - {{ .Values.storage.aws.policyName | quote }}
+{{- else if eq .Values.storage.type "gcp" }}
+gcp:
+  cloudAccountLink: //cloudaccount/{{ .Values.storage.gcp.cloudAccountName }}
+  bindings:
+    - resource: //storage.googleapis.com/projects/_/buckets/{{ .Values.storage.gcp.bucket }}
+      roles:
+        - roles/storage.objectAdmin
+{{- end }}
+{{- end }}

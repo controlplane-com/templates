@@ -1,0 +1,91 @@
+{{- include "thanos.validate" . }}
+kind: workload
+name: {{ include "thanos.name" . }}
+description: Thanos Query — global PromQL fan-out with HA deduplication
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "thanos.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //identity/{{ include "thanos.identity.name" . }}
+  containers:
+    - name: thanos-query
+      image: {{ .Values.image }}
+      inheritEnv: false
+      # Endpoints ride as args on purpose: changing stores: on helm upgrade
+      # changes the workload spec and guarantees a redeploy with the new
+      # fan-out list (a config-file mount would leave running replicas stale).
+      args:
+        - query
+        - --http-address=0.0.0.0:10902
+        - --grpc-address=0.0.0.0:10901
+        - --query.auto-downsampling
+        {{- range .Values.queryReplicaLabels }}
+        - --query.replica-label={{ . }}
+        {{- end }}
+        {{- range .Values.stores }}
+        - --endpoint={{ . }}
+        {{- end }}
+        {{- if .Values.storeGateway.enabled }}
+        - --endpoint={{ include "thanos.store.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:10901
+        {{- end }}
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      ports:
+        - number: 10902
+          protocol: http
+        - number: 10901
+          protocol: tcp
+      readinessProbe:
+        httpGet:
+          path: /-/ready
+          port: 10902
+          scheme: HTTP
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        failureThreshold: 12
+        successThreshold: 1
+        timeoutSeconds: 3
+      # Liveness is /-/healthy (static "server up") — deliberately NOT
+      # /-/ready, which can flap on store hiccups and cause restart loops.
+      livenessProbe:
+        httpGet:
+          path: /-/healthy
+          port: 10902
+          scheme: HTTP
+        initialDelaySeconds: 15
+        periodSeconds: 15
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.replicas }}
+      metric: disabled
+      minScale: {{ .Values.replicas }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}

@@ -12,6 +12,21 @@ spec:
     - name: pgbouncer
       image: {{ .Values.pgbouncer.image }}
       inheritEnv: false
+      # The upstream entrypoint writes DB_USER/DB_PASSWORD into userlist.txt between
+      # double quotes WITHOUT escaping, so a credential containing a quote yields a
+      # malformed file and every authentication fails. Write it ourselves first,
+      # escaped the way pgbouncer expects (a quote is doubled); the entrypoint then
+      # leaves it alone, because it only generates when the user is absent.
+      # This must happen at runtime: DB_PASSWORD is a cpln:// reference the platform
+      # resolves into the env var, so its value does not exist at render time.
+      command: /bin/sh
+      args:
+        - -c
+        - |
+          esc() { printf '%s' "$1" | sed 's/"/""/g'; }
+          printf '"%s" "%s"\n' "$(esc "$DB_USER")" "$(esc "$DB_PASSWORD")" \
+            > /etc/pgbouncer/userlist.txt
+          exec /entrypoint.sh /usr/bin/pgbouncer /etc/pgbouncer/pgbouncer.ini
       cpu: {{ .Values.pgbouncer.resources.cpu | quote }}
       memory: {{ .Values.pgbouncer.resources.memory | quote }}
       env:

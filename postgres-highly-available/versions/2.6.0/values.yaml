@@ -82,7 +82,7 @@ backup:
   mode: logical  # logical or wal-g
   resources: # applies to whichever mode is enabled
     cpu: 100m
-    memory: 128Mi
+    memory: 512Mi # 128Mi OOMKills wal-g mid-backup (exitCode 137) and silently produces no base backup
 
   logical: # logical backup settings
     image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0 # tag 17.1.0 = Postgres 17, 18.1.0 = Postgres 18

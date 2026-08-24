@@ -89,7 +89,7 @@ backup:
   schedule: "0 2 * * *"   # daily at 2am UTC
   resources:
     cpu: 100m
-    memory: 128Mi
+    memory: 512Mi # 128Mi OOMKills wal-g mid-backup (exitCode 137) and silently produces no base backup
 
   provider: aws           # options: aws, gcp, minio
 

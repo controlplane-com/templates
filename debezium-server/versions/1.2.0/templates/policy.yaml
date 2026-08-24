@@ -12,6 +12,8 @@ targetKind: secret
 targetLinks:
   - //secret/{{ include "debezium.config.name" . }}
   - //secret/{{ include "debezium.credentials.name" . }}
+  {{- /* the user's prerequisite credentials secret */}}
+  - //secret/{{ .Values.credentialsSecretName }}
   {{- if and (eq .Values.source.type "postgres") (gt (int .Values.source.postgres.heartbeatIntervalMs) 0) }}
   - //secret/{{ include "debezium.entrypoint.name" . }}
   {{- end }}

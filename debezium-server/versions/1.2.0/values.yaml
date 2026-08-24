@@ -3,6 +3,13 @@
 
 image: quay.io/debezium/server:3.0
 
+# REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL.
+# A `dictionary` secret holding every credential this connector needs. Which keys
+# it must contain depends on your source and sink; the README lists them per
+# combination. Credentials are not values because they are issued by systems you
+# own — a value would put them in the Helm release.
+credentialsSecretName: my-debezium-credentials
+
 resources:
   cpu: 500m
   memory: 512Mi
@@ -20,7 +27,7 @@ source:
     port: 5432             # Default port varies by type (postgres:5432, mysql:3306, mongodb:27017, sqlserver:1433, oracle:1521)
     name: "mydb"           # Required: database name (or SID for Oracle)
     user: "dbuser"         # Required: database username
-    password: "changeme"   # Required: database password (stored in credentials secret)
+    # password comes from the `sourcePassword` key of your credentials secret
 
   # Server name used as prefix for topic names
   serverName: "dbserver1"
@@ -48,7 +55,10 @@ source:
 
   # MongoDB-specific settings
   mongodb:
-    connectionString: ""                  # Full connection string (overrides hostname/port)
+    # Set true to connect with a full connection string instead of hostname/port.
+    # The string itself is the `mongodbConnectionString` key of your credentials
+    # secret, because it embeds credentials.
+    useConnectionString: false
     replicaSet: ""                        # Replica set name
 
   # SQL Server-specific settings
@@ -78,14 +88,14 @@ source:
     redis:
       address: ""                         # Redis address (e.g., redis.mygvc.cpln.local:6379)
       key: "debezium:offsets"             # Redis key for offsets
-      password: ""                        # Redis password (stored in credentials secret)
+      authEnabled: false                  # true = read `offsetRedisPassword` from your credentials secret
       ssl: false                          # Enable SSL/TLS
 
     # JDBC storage settings
     jdbc:
       url: ""                             # JDBC URL (e.g., jdbc:postgresql://host:5432/dbname)
       user: ""                            # JDBC username
-      password: ""                        # JDBC password (stored in credentials secret)
+      # password comes from the `offsetJdbcPassword` key of your credentials secret
       tableName: "debezium_offsets"       # Table name for storing offsets
 
   # Schema history storage (required for MySQL and SQL Server)
@@ -101,14 +111,14 @@ source:
     redis:
       address: ""
       key: "debezium:schema-history"
-      password: ""
+      authEnabled: false                  # true = read `schemaHistoryRedisPassword` from your credentials secret
       ssl: false
 
     # JDBC storage settings
     jdbc:
       url: ""
       user: ""
-      password: ""
+      # password comes from the `schemaHistoryJdbcPassword` key of your credentials secret
       tableName: "debezium_schema_history"
 
   # Error retry configuration
@@ -131,12 +141,12 @@ sink:
     securityProtocol: "PLAINTEXT"         # Security protocol: PLAINTEXT, SSL, SASL_PLAINTEXT, SASL_SSL
     saslMechanism: ""                     # SASL mechanism: PLAIN, SCRAM-SHA-256, SCRAM-SHA-512
     saslUsername: ""                      # SASL username
-    saslPassword: ""                      # SASL password (stored in credentials secret)
+    # saslPassword comes from the `kafkaSaslPassword` key of your credentials secret
 
   # Redis sink settings (Redis Streams)
   redis:
     address: ""                           # Required: Redis address (e.g., redis.mygvc.cpln.local:6379)
-    password: ""                          # Redis password (stored in credentials secret)
+    authEnabled: false                    # true = read `sinkRedisPassword` from your credentials secret
     ssl: false                            # Enable SSL/TLS
     streamName: ""                        # Stream name prefix (events sent to {streamName}.{table})
 
@@ -145,7 +155,7 @@ sink:
     url: ""                               # Required: NATS URL (e.g., nats://nats.mygvc.cpln.local:4222)
     subject: ""                           # Subject prefix (events sent to {subject}.{table})
     username: ""                          # NATS username
-    password: ""                          # NATS password (stored in credentials secret)
+    # password comes from the `natsPassword` key of your credentials secret
 
   # HTTP sink settings (webhooks)
   http:
@@ -153,8 +163,8 @@ sink:
     headers: {}                           # Additional headers (key-value pairs)
     authType: ""                          # Auth type: none, basic, bearer
     username: ""                          # Basic auth username
-    password: ""                          # Basic auth password (stored in credentials secret)
-    bearerToken: ""                       # Bearer token (stored in credentials secret)
+    # password / bearerToken come from the `httpPassword` / `httpBearerToken`
+    # keys of your credentials secret, per authType
 
   # AWS Kinesis sink settings (uses Universal Cloud Identity)
   kinesis:
@@ -180,11 +190,11 @@ sink:
     serviceUrl: ""                        # Required: Pulsar service URL
     topic: ""                             # Topic prefix
     authPluginClassName: ""               # Auth plugin class (e.g., org.apache.pulsar.client.impl.auth.AuthenticationToken)
-    authToken: ""                         # Auth token (stored in credentials secret)
+    authEnabled: false                    # true = read `pulsarAuthToken` from your credentials secret
 
   # Azure Event Hubs sink settings
   eventhubs:
-    connectionString: ""                  # Required: Event Hubs connection string (stored in credentials secret)
+    # connectionString comes from the `eventhubsConnectionString` key of your credentials secret
     hubName: ""                           # Required: Event Hub name
 
 # =============================================================================
@@ -198,7 +208,7 @@ format:
   schemaRegistry:
     url: ""                               # Schema registry URL
     username: ""                          # Schema registry username
-    password: ""                          # Schema registry password (stored in credentials secret)
+    # password comes from the `schemaRegistryPassword` key of your credentials secret
 
 # =============================================================================
 # Volumeset Configuration (for file-based offset/schema-history storage)

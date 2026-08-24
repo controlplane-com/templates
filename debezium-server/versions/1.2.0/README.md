@@ -21,6 +21,55 @@ This template deploys Debezium Server on Control Plane with:
 - Universal Cloud Identity integration for AWS and GCP sinks
 - Automatic secret management for credentials
 
+## Prerequisites
+
+**One `dictionary` secret must exist before you install**, holding every credential this connector needs.
+These are issued by systems you own — the source database, the sink, a schema registry — so they are not
+values: a value would put each of them in the Helm release.
+
+Which keys the secret needs depends on your source and sink. Create only the ones your configuration uses:
+
+| Key | Needed when |
+|---|---|
+| `sourcePassword` | always |
+| `mongodbConnectionString` | `source.type: mongodb` with `useConnectionString: true` |
+| `offsetRedisPassword` | `source.offset.storage: redis` and `authEnabled: true` |
+| `offsetJdbcPassword` | `source.offset.storage: jdbc` |
+| `schemaHistoryRedisPassword` | schema history on redis with `authEnabled: true` |
+| `schemaHistoryJdbcPassword` | schema history on jdbc |
+| `kafkaSaslPassword` | `sink.type: kafka` with a `saslUsername` set |
+| `sinkRedisPassword` | `sink.type: redis` with `authEnabled: true` |
+| `natsPassword` | `sink.type: nats-jetstream` with a `username` set |
+| `httpPassword` / `httpBearerToken` | `sink.type: http`, per `authType` |
+| `pulsarAuthToken` | `sink.type: pulsar` with `authEnabled: true` |
+| `eventhubsConnectionString` | `sink.type: eventhubs` |
+| `schemaRegistryPassword` | a schema registry with a `username` set |
+
+For the default PostgreSQL-to-Kafka shape that is a single key:
+
+```bash
+cpln secret create-dictionary --name my-debezium-credentials \
+  --entry sourcePassword='YOUR-DATABASE-PASSWORD'
+```
+
+Set `credentialsSecretName` to the name you used. Secret names are organization-wide, so give each release
+its own.
+
+**If the secret does not exist at install time, the deployment wedges silently.** `cpln logs` returns
+**zero lines** — the container never starts, so it has nothing to log. Read `status.versions[].message`:
+
+```bash
+cpln workload get-deployments RELEASE_NAME-debezium --gvc GVC_NAME -o yaml
+```
+
+Note this is `get-deployments` — plain `cpln workload get` has no `versions` field.
+
+<b>Upgrading from 1.1.x:</b> every credential moved out of values into this secret, and the five settings that
+were previously inferred from a credential simply being set now have explicit switches —
+`source.mongodb.useConnectionString`, `source.offset.redis.authEnabled`,
+`source.schemaHistory.redis.authEnabled`, `sink.redis.authEnabled` and `sink.pulsar.authEnabled`. An upgrade
+that still carries any removed credential is refused at render.
+
 ## Quick Start
 
 ### PostgreSQL to Kafka
@@ -33,7 +82,7 @@ source:
     port: 5432
     name: mydb
     user: debezium
-    password: secret123
+    # password comes from the `sourcePassword` key of your credentials secret
   serverName: myserver
   tableIncludeList: "public.users,public.orders"
   postgres:
@@ -61,7 +110,7 @@ source:
     port: 3306
     name: mydb
     user: debezium
-    password: secret123
+    # password comes from the `sourcePassword` key of your credentials secret
   serverName: myserver
   mysql:
     serverId: 85744
@@ -84,7 +133,7 @@ source:
     port: 5432
     name: mydb
     user: debezium
-    password: secret123
+    # password comes from the `sourcePassword` key of your credentials secret
   serverName: myserver
 
 sink:
@@ -189,7 +238,7 @@ source:
     redis:
       address: redis.mygvc.cpln.local:6379
       key: debezium:offsets
-      password: ""
+      # password, when the store needs auth, comes from your credentials secret
       ssl: false
 ```
 
@@ -204,7 +253,7 @@ source:
     jdbc:
       url: jdbc:postgresql://postgres.mygvc.cpln.local:5432/offsets
       user: debezium
-      password: secret123
+      # password comes from the `sourcePassword` key of your credentials secret
       tableName: debezium_offsets
 ```
 
@@ -234,7 +283,7 @@ format:
   schemaRegistry:
     url: http://schema-registry.mygvc.cpln.local:8081
     username: ""
-    password: ""
+    # password, when the sink needs auth, comes from your credentials secret
 ```
 
 ## Universal Cloud Identity

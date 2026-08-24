@@ -95,6 +95,7 @@ Validation Helpers
 Validate source configuration
 */}}
 {{- define "debezium.validateSource" -}}
+{{- include "debezium.validateCredentials" . -}}
 {{- $validTypes := list "postgres" "mysql" "mongodb" "sqlserver" "oracle" -}}
 {{- if not (has .Values.source.type $validTypes) -}}
 {{- fail (printf "Invalid source.type '%s'. Must be one of: %s" .Values.source.type (join ", " $validTypes)) -}}
@@ -104,9 +105,6 @@ Validate source configuration
 {{- end -}}
 {{- if not .Values.source.database.user -}}
 {{- fail "source.database.user is required" -}}
-{{- end -}}
-{{- if not .Values.source.database.password -}}
-{{- fail "source.database.password is required" -}}
 {{- end -}}
 {{- end -}}
 
@@ -157,9 +155,6 @@ Validate sink configuration
   {{- end -}}
 {{- end -}}
 {{- if eq .Values.sink.type "eventhubs" -}}
-  {{- if not .Values.sink.eventhubs.connectionString -}}
-  {{- fail "sink.eventhubs.connectionString is required when sink.type is 'eventhubs'" -}}
-  {{- end -}}
   {{- if not .Values.sink.eventhubs.hubName -}}
   {{- fail "sink.eventhubs.hubName is required when sink.type is 'eventhubs'" -}}
   {{- end -}}
@@ -280,3 +275,56 @@ Common labels/tags
 app.cpln.io/name: {{ .Release.Name }}
 app.cpln.io/instance: {{ .Release.Name }}
 {{- end }}
+
+{{/*
+Every externally-issued credential moved into one prerequisite secret. Which keys it
+needs depends on the source and sink in use, so the guard rejects the old values
+rather than trying to predict the key set.
+*/}}
+{{- define "debezium.validateCredentials" -}}
+{{- if not .Values.credentialsSecretName -}}
+{{- fail "debezium-server: credentialsSecretName is required — it names the `dictionary` secret holding this connector's credentials. Create it BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- if (.Values.source.database).password -}}
+{{- fail "debezium-server: source.database.password was REMOVED — every credential is now a key in the `dictionary` secret named by credentialsSecretName. Delete it from your values; see Prerequisites in the README for the key names." -}}
+{{- end -}}
+{{- if (.Values.source.mongodb).connectionString -}}
+{{- fail "debezium-server: source.mongodb.connectionString was REMOVED — every credential is now a key in the `dictionary` secret named by credentialsSecretName. Delete it from your values; see Prerequisites in the README for the key names." -}}
+{{- end -}}
+{{- if (.Values.source.offset.redis).password -}}
+{{- fail "debezium-server: source.offset.redis.password was REMOVED — every credential is now a key in the `dictionary` secret named by credentialsSecretName. Delete it from your values; see Prerequisites in the README for the key names." -}}
+{{- end -}}
+{{- if (.Values.source.offset.jdbc).password -}}
+{{- fail "debezium-server: source.offset.jdbc.password was REMOVED — every credential is now a key in the `dictionary` secret named by credentialsSecretName. Delete it from your values; see Prerequisites in the README for the key names." -}}
+{{- end -}}
+{{- if (.Values.source.schemaHistory.redis).password -}}
+{{- fail "debezium-server: source.schemaHistory.redis.password was REMOVED — every credential is now a key in the `dictionary` secret named by credentialsSecretName. Delete it from your values; see Prerequisites in the README for the key names." -}}
+{{- end -}}
+{{- if (.Values.source.schemaHistory.jdbc).password -}}
+{{- fail "debezium-server: source.schemaHistory.jdbc.password was REMOVED — every credential is now a key in the `dictionary` secret named by credentialsSecretName. Delete it from your values; see Prerequisites in the README for the key names." -}}
+{{- end -}}
+{{- if (.Values.sink.kafka).saslPassword -}}
+{{- fail "debezium-server: sink.kafka.saslPassword was REMOVED — every credential is now a key in the `dictionary` secret named by credentialsSecretName. Delete it from your values; see Prerequisites in the README for the key names." -}}
+{{- end -}}
+{{- if (.Values.sink.redis).password -}}
+{{- fail "debezium-server: sink.redis.password was REMOVED — every credential is now a key in the `dictionary` secret named by credentialsSecretName. Delete it from your values; see Prerequisites in the README for the key names." -}}
+{{- end -}}
+{{- if (.Values.sink.nats).password -}}
+{{- fail "debezium-server: sink.nats.password was REMOVED — every credential is now a key in the `dictionary` secret named by credentialsSecretName. Delete it from your values; see Prerequisites in the README for the key names." -}}
+{{- end -}}
+{{- if (.Values.sink.http).password -}}
+{{- fail "debezium-server: sink.http.password was REMOVED — every credential is now a key in the `dictionary` secret named by credentialsSecretName. Delete it from your values; see Prerequisites in the README for the key names." -}}
+{{- end -}}
+{{- if (.Values.sink.http).bearerToken -}}
+{{- fail "debezium-server: sink.http.bearerToken was REMOVED — every credential is now a key in the `dictionary` secret named by credentialsSecretName. Delete it from your values; see Prerequisites in the README for the key names." -}}
+{{- end -}}
+{{- if (.Values.sink.pulsar).authToken -}}
+{{- fail "debezium-server: sink.pulsar.authToken was REMOVED — every credential is now a key in the `dictionary` secret named by credentialsSecretName. Delete it from your values; see Prerequisites in the README for the key names." -}}
+{{- end -}}
+{{- if (.Values.sink.eventhubs).connectionString -}}
+{{- fail "debezium-server: sink.eventhubs.connectionString was REMOVED — every credential is now a key in the `dictionary` secret named by credentialsSecretName. Delete it from your values; see Prerequisites in the README for the key names." -}}
+{{- end -}}
+{{- if (.Values.format.schemaRegistry).password -}}
+{{- fail "debezium-server: format.schemaRegistry.password was REMOVED — every credential is now a key in the `dictionary` secret named by credentialsSecretName. Delete it from your values; see Prerequisites in the README for the key names." -}}
+{{- end -}}
+{{- end -}}

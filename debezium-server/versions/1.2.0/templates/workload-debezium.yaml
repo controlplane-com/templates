@@ -35,21 +35,21 @@ spec:
         - name: DB_USER
           value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.db-user'
         - name: DB_PASSWORD
-          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.db-password'
+          value: 'cpln://secret/{{ .Values.credentialsSecretName }}.sourcePassword'
 
         {{- /* MongoDB connection string */}}
-        {{- if and (eq .Values.source.type "mongodb") .Values.source.mongodb.connectionString }}
+        {{- if and (eq .Values.source.type "mongodb") .Values.source.mongodb.useConnectionString }}
         - name: MONGODB_CONNECTION_STRING
-          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.mongodb-connection-string'
+          value: 'cpln://secret/{{ .Values.credentialsSecretName }}.mongodbConnectionString'
         {{- end }}
 
         {{- /* Offset storage credentials */}}
         {{- if eq .Values.source.offset.storage "redis" }}
         - name: OFFSET_REDIS_ADDRESS
           value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.offset-redis-address'
-        {{- if .Values.source.offset.redis.password }}
+        {{- if .Values.source.offset.redis.authEnabled }}
         - name: OFFSET_REDIS_PASSWORD
-          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.offset-redis-password'
+          value: 'cpln://secret/{{ .Values.credentialsSecretName }}.offsetRedisPassword'
         {{- end }}
         {{- end }}
         {{- if eq .Values.source.offset.storage "jdbc" }}
@@ -58,7 +58,7 @@ spec:
         - name: OFFSET_JDBC_USER
           value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.offset-jdbc-user'
         - name: OFFSET_JDBC_PASSWORD
-          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.offset-jdbc-password'
+          value: 'cpln://secret/{{ .Values.credentialsSecretName }}.offsetJdbcPassword'
         {{- end }}
 
         {{- /* Schema history storage credentials */}}
@@ -66,9 +66,9 @@ spec:
         {{- if eq .Values.source.schemaHistory.storage "redis" }}
         - name: SCHEMA_HISTORY_REDIS_ADDRESS
           value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.schema-history-redis-address'
-        {{- if .Values.source.schemaHistory.redis.password }}
+        {{- if .Values.source.schemaHistory.redis.authEnabled }}
         - name: SCHEMA_HISTORY_REDIS_PASSWORD
-          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.schema-history-redis-password'
+          value: 'cpln://secret/{{ .Values.credentialsSecretName }}.schemaHistoryRedisPassword'
         {{- end }}
         {{- end }}
         {{- if eq .Values.source.schemaHistory.storage "jdbc" }}
@@ -77,7 +77,7 @@ spec:
         - name: SCHEMA_HISTORY_JDBC_USER
           value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.schema-history-jdbc-user'
         - name: SCHEMA_HISTORY_JDBC_PASSWORD
-          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.schema-history-jdbc-password'
+          value: 'cpln://secret/{{ .Values.credentialsSecretName }}.schemaHistoryJdbcPassword'
         {{- end }}
         {{- end }}
 
@@ -89,16 +89,16 @@ spec:
         - name: KAFKA_SASL_USERNAME
           value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.kafka-sasl-username'
         - name: KAFKA_SASL_PASSWORD
-          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.kafka-sasl-password'
+          value: 'cpln://secret/{{ .Values.credentialsSecretName }}.kafkaSaslPassword'
         {{- end }}
         {{- end }}
 
         {{- if eq .Values.sink.type "redis" }}
         - name: SINK_REDIS_ADDRESS
           value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.sink-redis-address'
-        {{- if .Values.sink.redis.password }}
+        {{- if .Values.sink.redis.authEnabled }}
         - name: SINK_REDIS_PASSWORD
-          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.sink-redis-password'
+          value: 'cpln://secret/{{ .Values.credentialsSecretName }}.sinkRedisPassword'
         {{- end }}
         {{- end }}
 
@@ -109,7 +109,7 @@ spec:
         - name: NATS_USERNAME
           value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.nats-username'
         - name: NATS_PASSWORD
-          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.nats-password'
+          value: 'cpln://secret/{{ .Values.credentialsSecretName }}.natsPassword'
         {{- end }}
         {{- end }}
 
@@ -120,26 +120,26 @@ spec:
         - name: HTTP_SINK_USERNAME
           value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.http-sink-username'
         - name: HTTP_SINK_PASSWORD
-          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.http-sink-password'
+          value: 'cpln://secret/{{ .Values.credentialsSecretName }}.httpPassword'
         {{- end }}
         {{- if eq .Values.sink.http.authType "bearer" }}
         - name: HTTP_SINK_BEARER_TOKEN
-          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.http-sink-bearer-token'
+          value: 'cpln://secret/{{ .Values.credentialsSecretName }}.httpBearerToken'
         {{- end }}
         {{- end }}
 
         {{- if eq .Values.sink.type "pulsar" }}
         - name: PULSAR_SERVICE_URL
           value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.pulsar-service-url'
-        {{- if .Values.sink.pulsar.authToken }}
+        {{- if .Values.sink.pulsar.authEnabled }}
         - name: PULSAR_AUTH_TOKEN
-          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.pulsar-auth-token'
+          value: 'cpln://secret/{{ .Values.credentialsSecretName }}.pulsarAuthToken'
         {{- end }}
         {{- end }}
 
         {{- if eq .Values.sink.type "eventhubs" }}
         - name: EVENTHUBS_CONNECTION_STRING
-          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.eventhubs-connection-string'
+          value: 'cpln://secret/{{ .Values.credentialsSecretName }}.eventhubsConnectionString'
         {{- end }}
 
         {{- /* Schema registry credentials */}}
@@ -150,7 +150,7 @@ spec:
         - name: SCHEMA_REGISTRY_USERNAME
           value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.schema-registry-username'
         - name: SCHEMA_REGISTRY_PASSWORD
-          value: 'cpln://secret/{{ include "debezium.credentials.name" . }}.schema-registry-password'
+          value: 'cpln://secret/{{ .Values.credentialsSecretName }}.schemaRegistryPassword'
         {{- end }}
         {{- end }}
 

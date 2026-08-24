@@ -1,0 +1,17 @@
+apiVersion: v2
+name: debezium-server
+description: Standalone Debezium Server streaming database change events to Kafka, Redis, NATS or cloud sinks
+type: application
+version: 1.2.0
+appVersion: "3.0"
+
+annotations:
+  created: "2026-04-03"
+  lastModified: "2026-08-23"
+  category: "event-streaming"
+  createsGvc: false
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

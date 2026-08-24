@@ -43,10 +43,13 @@ Does not create a GVC.
   confirmed LSN does not advance and WAL accumulates even though the connector is working correctly.
 - **Offsets live on the volumeset.** Deleting it makes the connector re-snapshot the whole source on next
   start — on a large table that is a very expensive accident.
-- **~12 credentials are still plain values** — the source password, offset and schema-history stores, every
-  sink type, and the schema registry. Converting them is real design work, not a sweep: the `-credentials`
-  secret mixes them with **derived** values (database hostname, Kafka bootstrap servers) that a user should
-  not have to supply, so it needs the split-the-secret shape postgres uses, plus a key set that varies by
-  source/sink combination. Tracked as audit item A2.
+- **All credentials are a prerequisite secret from 1.2.0.** One `dictionary` secret named by
+  `credentialsSecretName` holds every one — source password, offset and schema-history stores, each sink
+  type, and the schema registry. The key set varies by source/sink combination and the README lists it.
+  Five settings that were previously inferred from a credential simply being non-empty now have explicit
+  switches (`useConnectionString`, and `authEnabled` on offset redis, schema-history redis, sink redis and
+  pulsar), because with the credential gone there was nothing left to infer from.
+- **The chart secret still exists and is correct** — it keeps the values the chart *derives* (database
+  hostname, Kafka bootstrap servers, usernames, URLs). Only the sensitive half moved.
 - **One connector per deployment.** Capturing from several sources means several releases.
 - **`cdc-pipeline` pins this at 1.1.1**, so bumping this template does not affect that chart.

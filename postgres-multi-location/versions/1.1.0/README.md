@@ -350,6 +350,10 @@ No cloud account is needed — credentials are supplied as a secret.
 
 ## Restoring a backup
 
+**A zero-length backup object is a FAILED run, not a backup.** If `pg_dumpall` cannot reach the cluster,
+the upload pipeline still writes a ~20-byte empty gzip under a normal-looking timestamped filename, and the
+job exits non-zero. Check the object size before restoring from it: a real dump is kilobytes at minimum.
+
 **Logical** — stream the dump back through the proxy, which writes to the current primary. Set
 `WORKLOAD_NAME` to `{release}-postgres-proxy` and run from a client with bucket access:
 

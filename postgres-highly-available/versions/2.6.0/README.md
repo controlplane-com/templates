@@ -372,6 +372,11 @@ cpln secret create-dictionary --name my-postgres-ha-minio-credentials \
 
 ### Logical
 
+**A zero-length backup object is a FAILED run, not a backup.** If `pg_dumpall` cannot reach the cluster,
+the upload pipeline still writes a ~20-byte empty gzip under a normal-looking timestamped filename, and the
+job exits non-zero. Check the object size before restoring from it: a real dump is kilobytes at minimum.
+
+
 Run the following command with password from a client with access to the bucket. Set `WORKLOAD_NAME` to match the proxy workload so restores write to the leader.
 
 S3

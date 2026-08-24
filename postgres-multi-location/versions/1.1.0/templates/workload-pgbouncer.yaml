@@ -1,0 +1,87 @@
+{{- include "pg-ml.validate" . -}}
+{{- if .Values.pgbouncer.enabled }}
+kind: workload
+name: {{ include "pg-ml.pgbouncer.name" . }}
+description: PgBouncer connection pooler, present in every location
+gvc: {{ .Values.global.gvc.name }}
+tags:
+  {{- include "pg-ml.tags" . | nindent 2 }}
+spec:
+  type: standard
+  containers:
+    - name: pgbouncer
+      image: {{ .Values.pgbouncer.image }}
+      inheritEnv: false
+      cpu: {{ .Values.pgbouncer.resources.cpu | quote }}
+      memory: {{ .Values.pgbouncer.resources.memory | quote }}
+      env:
+        # Pools into HAProxy, not into a member directly, so leader routing and
+        # failover stay transparent to the pooler.
+        - name: DB_HOST
+          value: {{ include "pg-ml.proxy.name" . }}.{{ .Values.global.gvc.name }}.cpln.local
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_USER
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.username
+        - name: DB_PASSWORD
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
+        - name: DB_NAME
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.database
+        - name: POOL_MODE
+          value: {{ .Values.pgbouncer.poolMode | quote }}
+        - name: DEFAULT_POOL_SIZE
+          value: {{ .Values.pgbouncer.defaultPoolSize | quote }}
+        - name: MAX_CLIENT_CONN
+          value: {{ .Values.pgbouncer.maxClientConn | quote }}
+        - name: MAX_DB_CONNECTIONS
+          value: {{ .Values.pgbouncer.maxDbConnections | quote }}
+        - name: AUTH_TYPE
+          value: plain
+      ports:
+        - number: 5432
+          protocol: tcp
+  identityLink: //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "pg-ml.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.pgbouncer.maxReplicas | int }}
+      metric: rps
+      minScale: {{ .Values.pgbouncer.minReplicas | int }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  localOptions:
+    # Written in full — see the note on the Patroni workload.
+    {{- range $location := .Values.global.gvc.locations }}
+    - location: //location/{{ $location.name }}
+      autoscaling:
+        maxConcurrency: 0
+        maxScale: {{ $.Values.pgbouncer.maxReplicas | int }}
+        metric: rps
+        minScale: {{ $.Values.pgbouncer.minReplicas | int }}
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      suspend: false
+      timeoutSeconds: 5
+    {{- end }}
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      outboundAllowCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false
+{{- end }}

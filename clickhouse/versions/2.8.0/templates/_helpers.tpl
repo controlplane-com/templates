@@ -136,8 +136,8 @@ true
   {{- if not .Values.azure.container -}}
     {{- fail "All fields are required for Azure. Missing: azure.container" -}}
   {{- end -}}
-  {{- if not .Values.azure.accountKey -}}
-    {{- fail "All fields are required for Azure. Missing: azure.accountKey" -}}
+  {{- if not .Values.azure.credentialsSecretName -}}
+    {{- fail "All fields are required for Azure. Missing: azure.credentialsSecretName" -}}
   {{- end -}}
 {{- end -}}
 {{- if eq $provider "hetzner" -}}
@@ -169,6 +169,9 @@ Common labels - delegated to cpln-common
 {{/* Validation */}}
 {{- define "clickhouse.validate" -}}
 {{- include "clickhouse.validateStorageCreds" . -}}
+{{- if hasKey .Values.azure "accountKey" -}}
+{{- fail "clickhouse: azure.accountKey was REMOVED — it is now a `dictionary` secret you create, named by azure.credentialsSecretName, holding the key `accountKey`. Delete it from your values. See Prerequisites in the README." -}}
+{{- end -}}
 {{- if or (hasKey .Values.database "password") (hasKey .Values.database "name") -}}
 {{- fail "clickhouse: database.password and database.name were REMOVED — they are now a `dictionary` secret you create, named by database.credentialsSecretName, holding the keys `password` and `database`. Delete them from your values. See Prerequisites in the README." -}}
 {{- end -}}

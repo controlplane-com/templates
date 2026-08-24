@@ -20,6 +20,9 @@ targetLinks:
   {{- if eq .Values.provider "hetzner" }}
   - //secret/{{ .Values.hetzner.credentialsSecretName }}
   {{- end }}
+  {{- if eq .Values.provider "azure" }}
+  - //secret/{{ .Values.azure.credentialsSecretName }}
+  {{- end }}
   {{- if eq .Values.provider "aws" }}
   - //secret/{{ include "clickhouse.secretS3.name" . }}
   {{- end }}

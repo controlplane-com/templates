@@ -32,7 +32,9 @@ gcp: # If enabled, all fields below are required - See README for guidance
 azure: # If enabled, all fields below are required - See README for guidance
   storageAccount: myclickhousestorage # Name of your Azure Storage Account
   container: clickhouse-data # Name of your Blob Storage container
-  accountKey: my-azure-storage-account-key # Access key for your Azure Storage Account
+  # REQUIRED PREREQUISITE SECRET — a `dictionary` secret holding exactly
+  # `accountKey` for your Azure Storage Account.
+  credentialsSecretName: my-clickhouse-azure-credentials
 
 hetzner: # If enabled, all fields below are required - See README for guidance
   bucket: clickhouse-hetzner-bucket # Name of your Hetzner Object Storage bucket

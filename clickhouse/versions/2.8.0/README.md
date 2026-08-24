@@ -184,7 +184,15 @@ ClickHouse uses Azure's native Blob Storage SDK. A Cloud Account is not required
 4. Update `values.yaml`:
    - `azure.storageAccount` — the storage account name
    - `azure.container` — the container name from step 2
-   - `azure.accountKey` — the access key from step 3
+   - `azure.credentialsSecretName` — the name of a `dictionary` secret holding the access key from step 3:
+
+     ```bash
+     cpln secret create-dictionary --name my-clickhouse-azure-credentials \
+       --entry accountKey=YOUR_ACCOUNT_KEY
+     ```
+
+     The key is never a value: it is read from this secret into the container's environment and
+     referenced from the storage config, so it never lands in the Helm release.
 
 To configure using the CLI:
 

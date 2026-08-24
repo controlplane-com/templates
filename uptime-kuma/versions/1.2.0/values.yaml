@@ -11,7 +11,10 @@ volumeset:
 
 # ─── Access ───────────────────────────────────────────────────────────────────
 publicAccess:
-  enabled: true # dashboard + public status pages on the canonical *.cpln.app HTTPS endpoint
+  # Uptime Kuma has no configurable credential: the admin account is claimed by
+  # whoever first reaches the setup wizard. Create it over `cpln port-forward`,
+  # THEN set this true. See Connecting in the README.
+  enabled: false # dashboard + public status pages on the canonical *.cpln.app HTTPS endpoint
 
 internalAccess: # internal firewall scope (in-GVC callers, e.g. status-page consumers)
   type: same-gvc # options: none, same-gvc, same-org, workload-list

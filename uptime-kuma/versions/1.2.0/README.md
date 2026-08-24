@@ -39,21 +39,41 @@ volumeset:
 
 ```yaml
 publicAccess:
-  enabled: true               # dashboard + public status pages on the canonical *.cpln.app HTTPS endpoint
+  enabled: false              # see First run — the admin account is unclaimed until you create it
 
 internalAccess:               # internal firewall scope (in-GVC callers, e.g. status-page consumers)
   type: same-gvc              # none, same-gvc, same-org, workload-list
   workloads: []               # used with workload-list, e.g. //gvc/GVC/workload/NAME
 ```
 
+## First run
+
+Uptime Kuma has no configurable admin credential. The account is created by whoever first
+reaches the setup wizard — so the dashboard ships **private**, and you claim the account over a
+tunnel before exposing anything.
+
+```bash
+# 1. reach the private dashboard (works even with the workload fully closed)
+cpln port-forward RELEASE_NAME-uptime-kuma 3001:3001 --gvc GVC_NAME
+
+# 2. open http://localhost:3001 and complete the setup wizard
+
+# 3. only then expose it, if you want public status pages
+cpln helm upgrade RELEASE_NAME ./uptime-kuma/versions/1.2.0 --gvc GVC_NAME \
+  --set publicAccess.enabled=true
+```
+
+A firewall change takes roughly 30 seconds to a few minutes to propagate, so give step 3 time
+before deciding it did not work.
+
 ## Connecting
 
 | What | Value |
 |---|---|
-| Dashboard (public) | `https://<canonical>.cpln.app` — `status.canonicalEndpoint` of `{release}-uptime-kuma` |
-| Status pages (public) | `https://<canonical>.cpln.app/status/{slug}` — no login required |
+| Dashboard (after enabling publicAccess) | `https://<canonical>.cpln.app` — `status.canonicalEndpoint` of `{release}-uptime-kuma` |
+| Status pages (after enabling publicAccess) | `https://<canonical>.cpln.app/status/{slug}` — no login required |
 | Internal (same GVC) | `http://{release}-uptime-kuma.{gvc}.cpln.local:3001` |
-| Login | Admin account you create in the first-visit setup wizard |
+| Login | Admin account you create in the first-visit setup wizard — see First run |
 
 Monitors, notification providers, and status pages are all configured in the app UI after login — none of them are deploy-time values.
 

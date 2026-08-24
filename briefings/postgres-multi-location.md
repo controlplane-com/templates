@@ -74,6 +74,33 @@
   yet, so republishing the same version number was acceptable and simpler.
 
 ## Troubleshooting / considerations
+- **DCS timeouts and `failsafe_mode`.** This template had `failsafe_mode: true` from 1.0.0 and the correct
+  `etcd3.hosts` key and credential escaping — it is the reference shape the two single-location HA charts
+  were corrected against on 2026-08-24. Its `max_slot_wal_keep_size` is a fixed `10GB`, which on the default
+  10 GiB volume is too loose to protect much; left as-is rather than retuned blind, since `createsGvc: true`
+  makes this template awkward to test. Worth revisiting.
+- **`maxDbConnections` is per PgBouncer pod, not cluster-wide** — PgBouncer instances do not coordinate,
+  so the real ceiling is `maxReplicas x maxDbConnections`. Shipped values give 4 x 100 = 400 against
+  `max_connections: 100` (97 usable after `superuser_reserved_connections`). The README said the opposite
+  until 2026-08-24. The defaults were left alone deliberately: it is a tuning call, not a bug fix.
+- **DCS timeouts went from 45 / 10 / 15 to 60 / 10 / 20 in 1.1.0, and this was NOT a bug fix.**
+  45 / 10 / 15 satisfies Patroni's `loop_wait + 2*retry_timeout <= ttl` and was honoured as written, so
+  clusters on 1.0.x are correctly configured — unlike `postgres-highly-available` and
+  `timescaledb-highly-available`, which shipped a combination Patroni silently clamped to `1 / 14`. The
+  change here is margin: 15s was the tightest DCS budget in the catalog, sitting in the template most
+  exposed to long blips because its etcd quorum spans regions. A ~14.8s blackout was observed in production
+  on a sibling template, which is uncomfortably close. Cost is worst-case failover moving 45s → 60s.
+- **Existing clusters keep 45 / 10 / 15 after an upgrade** — `bootstrap.dcs` applies once, at first init.
+  That is fine and needs no action; use `patronictl edit-config` only to opt into the wider tolerance.
+- **`retry_timeout` is divided across the etcd endpoints.** The per-request read timeout is
+  `retry_timeout / len(endpoints)`, so a 3-node etcd at `retry_timeout: 14` gives 4.67s per request. Handy
+  when reading someone's logs: a `read timeout=4.666…` is the fingerprint of a clamped 14, not of anything
+  they configured.
+- **The DCS timeouts are deliberately NOT values.** Patroni reads `bootstrap.dcs` only while the data
+  directory is empty, so a knob would look adjustable while only ever applying at first init, and would do
+  nothing on every cluster that already exists. They are fixed in the chart and retuned with
+  `patronictl edit-config --force -s ttl=… -s loop_wait=… -s retry_timeout=…` against
+  `/tmp/patroni_config.yml`.
 
 - **A wedged install is almost always the missing credentials secret.** `postgres.credentialsSecretName`
   names a secret the chart does **not** create; without it the workload sits waiting on a secret

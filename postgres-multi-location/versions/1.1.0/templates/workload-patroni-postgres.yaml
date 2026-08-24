@@ -1,0 +1,264 @@
+{{- include "pg-ml.validate" . -}}
+kind: workload
+name: {{ include "pg-ml.name" . }}
+description: PostgreSQL 17 Patroni cluster stretched across locations
+gvc: {{ .Values.global.gvc.name }}
+tags:
+  # Members must resolve each other during a simultaneous cold start, before any
+  # of them is ready — Patroni's /readiness only returns 200 once a leader exists
+  # or Postgres is up, which is exactly the cold multi-location case.
+  cpln/publishNotReadyAddresses: "true"
+  {{- include "pg-ml.tags" . | nindent 2 }}
+spec:
+  type: stateful
+  containers:
+    - name: patroni-postgres
+      image: {{ .Values.image }}
+      command: "/bin/bash"
+      args:
+        - "/patroni/start.sh"
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      env:
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        # From the user-created prerequisite secret — never rendered into the
+        # Helm release. start.sh fails loudly if any key is missing.
+        - name: PG_USERNAME
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.username
+        - name: PG_PASSWORD
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
+        - name: PG_DATABASE
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.database
+      {{- if and .Values.backup.enabled (eq .Values.backup.mode "wal-g") }}
+        - name: WALG_COMPRESSION_METHOD
+          value: zstd
+        {{- if eq .Values.backup.provider "aws" }}
+        - name: WALG_S3_PREFIX
+          value: s3://{{ .Values.backup.aws.bucket }}/{{ .Values.backup.aws.prefix }}
+        - name: AWS_REGION
+          value: {{ .Values.backup.aws.region | quote }}
+        - name: AWS_S3_FORCE_PATH_STYLE
+          value: "true"
+        {{- end }}
+        {{- if eq .Values.backup.provider "gcp" }}
+        - name: WALG_GS_PREFIX
+          value: gs://{{ .Values.backup.gcp.bucket }}/{{ .Values.backup.gcp.prefix }}
+        {{- end }}
+        {{- if eq .Values.backup.provider "minio" }}
+        - name: WALG_S3_PREFIX
+          value: s3://{{ .Values.backup.minio.bucket }}/{{ .Values.backup.minio.prefix }}
+        - name: AWS_ENDPOINT
+          value: {{ .Values.backup.minio.endpoint | quote }}
+        - name: AWS_S3_FORCE_PATH_STYLE
+          value: "true"
+        - name: AWS_REGION
+          value: us-east-1
+        - name: AWS_ACCESS_KEY_ID
+          value: cpln://secret/{{ .Values.backup.minio.credentialsSecretName }}.accessKey
+        - name: AWS_SECRET_ACCESS_KEY
+          value: cpln://secret/{{ .Values.backup.minio.credentialsSecretName }}.secretKey
+        {{- end }}
+      {{- end }}
+      ports:
+        - number: 8008
+          protocol: tcp
+        - number: 5432
+          protocol: tcp
+      volumes:
+        - path: /var/lib/postgresql/data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "pg-ml.volume.name" . }}
+        - path: /patroni/start.sh
+          uri: cpln://secret/{{ include "pg-ml.secretStartup.name" . }}.payload
+      lifecycle:
+        preStop:
+          exec:
+            command:
+              - /bin/bash
+              - -c
+              - |
+                set -uo pipefail
+                # The Patroni member name is {workload}-{location}-{index} here, NOT
+                # $HOSTNAME. start.sh writes it to /tmp/patroni_name; posting the wrong
+                # leader name makes the switchover fail silently and turns a planned
+                # restart into a hard failover.
+                NAME=$(cat /tmp/patroni_name 2>/dev/null || echo "")
+                ROLE=$(curl -fs --max-time 2 http://localhost:8008/patroni | python3 -c 'import sys,json; print(json.load(sys.stdin).get("role",""))' 2>/dev/null || echo "")
+                if { [ "$ROLE" = "master" ] || [ "$ROLE" = "primary" ]; } && [ -n "$NAME" ]; then
+                  curl -fs --max-time 10 -X POST http://localhost:8008/switchover -H 'Content-Type: application/json' -d "{\"leader\":\"${NAME}\"}" || true
+                  for i in $(seq 1 20); do
+                    R=$(curl -fs --max-time 1 http://localhost:8008/patroni | python3 -c 'import sys,json; print(json.load(sys.stdin).get("role",""))' 2>/dev/null)
+                    [ "$R" = "replica" ] && break
+                    sleep 1
+                  done
+                fi
+      livenessProbe:
+        httpGet:
+          path: /liveness
+          port: 8008
+          scheme: HTTP
+        # Declared because the API backfills it; omitting it means every install
+        # drifts from its own manifest the moment it is created.
+        initialDelaySeconds: 60
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 6
+        successThreshold: 1
+      readinessProbe:
+        httpGet:
+          path: /readiness
+          port: 8008
+          scheme: HTTP
+        # Declared because the API backfills it (see the liveness probe above).
+        initialDelaySeconds: 10
+        periodSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 3
+        successThreshold: 1
+    {{- if and .Values.backup.enabled (eq .Values.backup.mode "wal-g") }}
+    # WAL-G base backup sidecar. It runs on every member in every location and
+    # pushes only from the one currently holding the leader lock, so the archive
+    # follows the primary across a failover with no location selector.
+    - name: wal-g-backup
+      image: {{ .Values.image }}
+      command: "/bin/bash"
+      args:
+        - "/walg/backup.sh"
+      inheritEnv: false
+      cpu: {{ .Values.backup.resources.cpu | quote }}
+      memory: {{ .Values.backup.resources.memory | quote }}
+      env:
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        - name: PATRONI_API
+          value: http://127.0.0.1:8008
+        - name: WALG_BACKUP_INTERVAL_SECONDS
+          value: {{ .Values.backup.walg.intervalSeconds | quote }}
+        - name: WALG_COMPRESSION_METHOD
+          value: zstd
+        - name: PGHOST
+          value: 127.0.0.1
+        - name: PGPORT
+          value: "5432"
+        - name: PGUSER
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.username
+        - name: PGPASSWORD
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
+        - name: PGDATABASE
+          value: postgres
+        {{- if eq .Values.backup.provider "aws" }}
+        - name: WALG_S3_PREFIX
+          value: s3://{{ .Values.backup.aws.bucket }}/{{ .Values.backup.aws.prefix }}
+        - name: AWS_REGION
+          value: {{ .Values.backup.aws.region | quote }}
+        - name: AWS_S3_FORCE_PATH_STYLE
+          value: "true"
+        {{- end }}
+        {{- if eq .Values.backup.provider "gcp" }}
+        - name: WALG_GS_PREFIX
+          value: gs://{{ .Values.backup.gcp.bucket }}/{{ .Values.backup.gcp.prefix }}
+        {{- end }}
+        {{- if eq .Values.backup.provider "minio" }}
+        - name: WALG_S3_PREFIX
+          value: s3://{{ .Values.backup.minio.bucket }}/{{ .Values.backup.minio.prefix }}
+        - name: AWS_ENDPOINT
+          value: {{ .Values.backup.minio.endpoint | quote }}
+        - name: AWS_S3_FORCE_PATH_STYLE
+          value: "true"
+        - name: AWS_REGION
+          value: us-east-1
+        - name: AWS_ACCESS_KEY_ID
+          value: cpln://secret/{{ .Values.backup.minio.credentialsSecretName }}.accessKey
+        - name: AWS_SECRET_ACCESS_KEY
+          value: cpln://secret/{{ .Values.backup.minio.credentialsSecretName }}.secretKey
+        {{- end }}
+      volumes:
+        - path: /var/lib/postgresql/data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "pg-ml.volume.name" . }}
+        - path: /walg/backup.sh
+          uri: cpln://secret/{{ include "pg-ml.secretWALG.name" . }}.payload
+    {{- end }}
+  identityLink: //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "pg-ml.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ (index .Values.global.gvc.locations 0).replicas | int }}
+      metric: disabled
+      minScale: {{ (index .Values.global.gvc.locations 0).replicas | int }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  localOptions:
+    # Written in FULL for every location: a minimal localOptions entry makes the
+    # API backfill its own defaults, which would leave a location eligible to
+    # scale on concurrency and boot Patroni members nobody asked for.
+    {{- range $location := .Values.global.gvc.locations }}
+    - location: //location/{{ $location.name }}
+      autoscaling:
+        maxConcurrency: 0
+        maxScale: {{ $location.replicas | int }}
+        metric: disabled
+        minScale: {{ $location.replicas | int }}
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      suspend: false
+      timeoutSeconds: 5
+    {{- end }}
+  rolloutOptions:
+    {{- /*
+    maxUnavailableReplicas is deliberately NOT set: the API does not retain it,
+    so sending it produced permanent drift AND implied the rolling restart was
+    limited. It is not — an upgrade restarts every location together.
+    terminationGracePeriodSeconds is declared because the API backfills 90.
+    */}}
+    maxSurgeReplicas: 0%
+    minReadySeconds: 60
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      {{- if and .Values.backup.enabled (eq .Values.backup.mode "wal-g") (eq .Values.backup.provider "minio") }}
+      # The MinIO/S3-compatible endpoint is an arbitrary user-supplied address,
+      # so it cannot be resolved to an allowlisted hostname at render time.
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      outboundAllowCIDR: []
+      {{- end }}
+      {{- if and .Values.backup.enabled (eq .Values.backup.mode "wal-g") }}
+      {{- if eq .Values.backup.provider "aws" }}
+      outboundAllowHostname:
+        - s3.{{ .Values.backup.aws.region }}.amazonaws.com
+        - s3.amazonaws.com
+      {{- end }}
+      {{- if eq .Values.backup.provider "gcp" }}
+      outboundAllowHostname:
+        - storage.googleapis.com
+      {{- end }}
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    # Required for the per-replica, location-qualified names Patroni advertises
+    # as restapi/postgresql connect_address.
+    replicaDirect: true
+  securityOptions:
+    filesystemGroupId: 999
+  supportDynamicTags: false

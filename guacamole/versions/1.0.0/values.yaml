@@ -1,0 +1,82 @@
+# ─── Guacamole web application (Tomcat) ───────────────────────────
+guacamole:
+  # Apache Guacamole web app: UI, REST API and the browser-facing tunnel on :8080.
+  image: guacamole/guacamole:1.6.0
+  resources:
+    minCpu: 500m
+    maxCpu: 1000m
+    minMemory: 1Gi
+    maxMemory: 2Gi   # JVM heap defaults to ~1/4 of this
+
+# ─── guacd (protocol daemon) ──────────────────────────────────────
+# Runs beside the web app in the same workload and is reached over loopback :4822.
+# Its port is intentionally NOT published: guacd is unauthenticated.
+# Protocols compiled into this tag: RDP, VNC, SSH, telnet (no Kubernetes).
+guacd:
+  image: guacamole/guacd:1.6.0
+  resources:
+    minCpu: 100m
+    maxCpu: 1000m
+    minMemory: 256Mi
+    maxMemory: 1Gi   # raise for many concurrent RDP sessions
+
+# ─── Admin account (REQUIRED PREREQUISITE SECRET) ─────────────────
+# CREATE IT BEFORE YOU INSTALL. A `dictionary` secret with exactly two keys,
+# `username` and `password` — it replaces Guacamole's well-known guacadmin/guacadmin
+# account before the web app ever starts. If the secret does not exist the whole
+# deployment WEDGES silently and `cpln logs` returns nothing; the only diagnostic is
+# `status.versions[].message` from `cpln workload get-deployments`.
+# Applied on FIRST BOOT ONLY: rotating this secret later does NOT change your login.
+admin:
+  secretName: my-guacamole-admin
+
+# Log verbosity for both containers: trace | debug | info | error.
+# (`warn` is excluded on purpose — guacd spells it `warning` and the web app `warn`.)
+logLevel: info
+
+# ─── Access ───────────────────────────────────────────────────────
+# A firewall change takes ~30 s to a few minutes to propagate.
+publicAccess:
+  enabled: false  # false = internal only; true = UI on the auto-assigned *.cpln.app HTTPS endpoint
+internalAccess:
+  type: same-gvc  # none | same-gvc | same-org | workload-list
+  workloads: []   # used only with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# Networks the gateway may DIAL OUT to — i.e. which remote desktops/SSH hosts it can
+# reach on the public internet. Same-GVC targets are unaffected by this setting.
+outboundAccess:
+  allowCIDR:
+    - 0.0.0.0/0
+
+# ─── PostgreSQL (subchart: postgres) — users, connections, history ─
+# The bundled PostgreSQL can back itself up on a schedule. Every knob of the
+# `postgres` template is available under this key — nothing extra to install:
+#   postgres.backup.enabled: true
+#   postgres.backup.provider: aws | gcp | minio
+#   postgres.backup.aws.bucket / .region / .cloudAccountName / .policyName
+# See "Backing up the bundled database" in the README.
+postgres:
+  # Also used for the schema-bootstrap sidecar, so its psql matches the server version.
+  image: postgres:18
+  # Credentials for the bundled database — internal plumbing no human types elsewhere.
+  # Guacamole CREATES the dictionary secret named by config.credentialsSecretName below
+  # out of these three values, so there is nothing for you to create before installing.
+  credentials:
+    username: guacamole
+    password: change-me-guacamole-db   # template-managed cred for the bundled DB — change before install
+    database: guacamole
+  config:
+    # Name of the dictionary secret this chart creates and the bundled postgres reads.
+    # Secret names are org-wide: give each guacamole release its own name. A second
+    # release left on this name is REFUSED at install (it is owned by the first
+    # release) — nothing is shared, overwritten or deleted.
+    credentialsSecretName: my-guacamole-db-credentials
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 1Gi
+  volumeset:
+    capacity: 10   # GiB (minimum 10)

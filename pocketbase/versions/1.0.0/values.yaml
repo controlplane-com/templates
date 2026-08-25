@@ -1,0 +1,51 @@
+image: ghcr.io/muchobien/pocketbase:0.40.1 # must run as root with `pocketbase` on PATH
+
+resources:
+  maxCpu: 500m
+  maxMemory: 1Gi
+  minCpu: 125m # ratio to maxCpu may not exceed 4:1 on a stateful workload
+  minMemory: 256Mi
+
+volumeset:
+  capacity: 10 # GiB (minimum 10) — SQLite database, uploaded files, and any local backups
+
+# ─── Credentials (REQUIRED — create this secret BEFORE installing) ────────────
+# A dictionary secret with exactly three keys:
+#   email          superuser login for the dashboard at /_/
+#   password       superuser password, at least 8 characters (re-applied on EVERY
+#                  start — the secret is authoritative; changing it in the
+#                  dashboard is reverted)
+#   encryptionKey  EXACTLY 32 characters (openssl rand -hex 16) — encrypts SMTP,
+#                  OAuth2 and S3 settings at rest. NEVER change it after install.
+# Installing without this secret wedges the deployment silently: no logs at all.
+# The missing name appears only in `cpln workload get-deployments` under
+# status.versions[].message. See the README.
+credentials:
+  secretName: my-pocketbase-credentials
+
+# ─── Backup ───────────────────────────────────────────────────────────────────
+# Scheduled, crash-consistent snapshots of the data volume, managed by the
+# platform (no cloud account or bucket required). SQLite recovers cleanly from a
+# snapshot via its WAL. A final snapshot is always taken on uninstall.
+backup:
+  enabled: true # periodic snapshots of the data volume
+  schedule: "0 3 * * *" # cron in UTC — default daily at 03:00 (hourly is the most frequent the platform allows)
+  retention: 7d # how long each snapshot is kept (e.g. 7d, 720h, 30d)
+
+# ─── API ──────────────────────────────────────────────────────────────────────
+cors:
+  allowedOrigins: # browser origins allowed to call the API; ["*"] allows any
+    - "*"
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  # Safe to leave on: the superuser is created from the secret above BEFORE the
+  # server starts listening, so there is no unclaimed-admin window, and new
+  # collections are superuser-only until you write an API rule.
+  enabled: true # REST API, realtime and the /_/ dashboard on the canonical *.cpln.app HTTPS endpoint
+
+internalAccess: # internal firewall scope (in-GVC callers of the API)
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # used with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME

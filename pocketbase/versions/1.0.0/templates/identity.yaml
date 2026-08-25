@@ -1,0 +1,5 @@
+kind: identity
+name: {{ include "pocketbase.identity.name" . }}
+description: PocketBase workload identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "pocketbase.tags" . | nindent 4 }}

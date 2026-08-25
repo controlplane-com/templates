@@ -25,6 +25,16 @@
 `replicas` (3) | `config.credentialsSecretName` (`my-postgres-ha-credentials`, **must exist before install**) | `image` | `resources.*` (500m-1 / 1-2Gi) | `volumeset.capacity` (10) | `multiZone` (false) | `proxy.enabled` | `pgbouncer.enabled` (false) | `backup.enabled` (false) / `backup.mode` (`logical` | `wal-g`) / `backup.provider` (`aws` | `gcp` | `minio`) | `backup.minio.credentialsSecretName`
 
 ## Troubleshooting / considerations
+- **Patroni metrics are scraped from port 8008, and that port MUST stay `protocol: tcp`.**
+  2.7.0 wires `metrics: {path: /metrics, port: 8008}` on the patroni container; the platform
+  scrapes it with no exporter. Declaring 8008 as `protocol: http` - which is what three of the
+  four other metrics-enabled templates do, so it is the natural thing to copy - **breaks the
+  cluster**: the HAProxy startup gate never clears (`waiting for patroni endpoints to answer
+  before starting haproxy`), so no writes reach the database while Patroni itself still reports
+  a healthy leader and two streaming replicas. Measured 2026-08-25. Same family as the Trino
+  X-Forwarded-Proto break: putting a port on the mesh's HTTP path changes how it is handled.
+  Verified working on `tcp` via the federate endpoint - all eight metric families present,
+  three series each.
 - **`failsafe_mode: true` is why an etcd blip no longer costs a failover.** When the primary cannot reach
   etcd it polls every other member over the Patroni REST API first; if they all still see it as leader it
   keeps serving instead of demoting. Only a member listed in the DCS `/failsafe` key may win a leader race,

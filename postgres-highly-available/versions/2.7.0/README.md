@@ -230,6 +230,32 @@ was created, and the chart is never consulted again. Run the `edit-config` comma
 existing cluster to 45 / 10 / 15.
 
 
+## Cluster metrics
+
+Patroni serves Prometheus metrics on its REST API port, and the platform scrapes them into the
+built-in metrics stack automatically — there is no exporter to run and nothing to configure.
+They appear in Grafana alongside the standard workload metrics, labelled by `workload`,
+`replica` and `container`.
+
+| Metric | Tells you |
+|---|---|
+| `patroni_primary` | which replica currently holds the leader lock (`1` on exactly one member) |
+| `patroni_replica` | which members are followers |
+| `patroni_postgres_streaming` | whether a follower is actually streaming from the primary |
+| `patroni_xlog_location` | WAL position per member — the basis for replication lag |
+| `patroni_postgres_timeline` | timeline number; it increments on every failover |
+| `patroni_dcs_last_seen` | when this member last reached etcd |
+| `patroni_failsafe_mode_is_active` | `1` while the primary is riding out an etcd outage instead of demoting |
+| `patroni_cluster_unlocked` | `1` when no member holds the leader lock |
+
+Useful alerts: `patroni_primary` summing to anything other than `1` across the cluster,
+`patroni_cluster_unlocked` staying `1`, or `patroni_postgres_streaming` dropping to `0` on a
+follower.
+
+These are **cluster-state** metrics, not database performance. They answer "who is primary, is
+replication healthy, did we fail over" — not connection counts, cache hit ratio or slow queries.
+For those you would add a `postgres_exporter` sidecar, which this template does not ship.
+
 ## Connecting to PostgreSQL
 
 Connect to the PostgreSQL cluster using the appropriate endpoint:

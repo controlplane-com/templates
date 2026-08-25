@@ -63,6 +63,11 @@ spec:
       {{- end }}
       image: {{ .Values.image }}
       inheritEnv: false
+      # Patroni serves Prometheus metrics on its REST API port. The platform scrapes
+      # this into the built-in metrics stack — no exporter sidecar needed.
+      metrics:
+        path: /metrics
+        port: 8008
       ports:
         - number: 8008
           protocol: tcp

@@ -6,6 +6,8 @@ resources:
   maxCpu: 1
   maxMemory: 2Gi
 
+# Patroni's Prometheus metrics are scraped by the platform automatically on the
+# REST API port — no knob, no exporter. See "Cluster metrics" in the README.
 image: controlplanecorporation/patroni-postgres:0.7
 
 # ─── Database credentials ─────────────────────────────────────────────────────

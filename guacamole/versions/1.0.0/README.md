@@ -67,10 +67,6 @@ publicAccess:
 internalAccess:
   type: same-gvc  # none | same-gvc | same-org | workload-list
   workloads: []   # used only with workload-list
-
-outboundAccess:
-  allowCIDR:      # which external networks the gateway may DIAL OUT to
-    - 0.0.0.0/0
 ```
 
 ### PostgreSQL
@@ -140,12 +136,12 @@ For the bucket, [cloud account](https://docs.controlplane.com/guides/create-clou
 
 ## Important Notes
 
-- **The admin secret must exist before install.** A missing one wedges the deployment *silently*: `cpln logs` returns zero lines because no container ever starts. The only diagnostic is `status.versions[].message` from `cpln workload get-deployments {release}-guacamole -o yaml`. It recovers on its own within ~6–11 minutes of creating the secret, or immediately with `cpln workload force-redeployment`.
-- **The admin password is applied on FIRST BOOT ONLY.** Rotating the secret afterwards does not change your login — change the password in the Guacamole UI instead.
+- **An upgrade does not drop the endpoint, but it does drop sessions.** A rolling upgrade served 112/112 requests with no failures, and a replica-down test served 204/204 — so the gateway itself stays reachable. Existing logins do not survive it: auth tokens are rejected afterwards and users must sign in again, and any open remote session ends. Reconnecting re-establishes it.
+- **The admin secret must exist before install.** A missing one wedges the deployment *silently*: `cpln logs` returns zero lines because no container ever starts. The only diagnostic is `status.versions[].message` from `cpln workload get-deployments {release}-guacamole -o yaml`. It recovers on its own within about ten minutes of creating the secret (measured: 9 min 46 s), or immediately with a forced redeployment.
+- **The admin password is applied on FIRST BOOT ONLY.** It seeds the database once, so rotating the secret afterwards does not change your login — verified by rotating it, forcing a redeployment, and confirming the original password still worked. Change the password in the Guacamole UI instead.
 - **`guacadmin`/`guacadmin` is never valid here** — the stock account is renamed and re-hashed before Tomcat binds a port.
 - **Single replica by design.** Guacamole keeps auth tokens in each Tomcat's memory with no cross-instance sharing, and the platform offers no session affinity, so a second replica would randomly log users out. Any restart — an upgrade, a replica reschedule, or rotating any referenced secret — **drops active desktop sessions and logs everyone out**. Nothing persisted is lost.
 - **Public access is off by default.** This gateway fronts your internal machines, so expose it deliberately (see Connecting) rather than by default. Firewall changes take ~30 s to a few minutes to propagate.
-- **`outboundAccess.allowCIDR` decides which external networks the gateway may dial.** Narrow it if all your targets are in the GVC — same-GVC destinations are governed by their own internal firewall, not by this setting.
 - **Give each release its own `postgres.config.credentialsSecretName`.** Secret names are org-wide, so a second release left on the default name is refused at install.
 - **Connections, users and history survive reinstall** in the Postgres volumeset; delete that volumeset to wipe everything.
 

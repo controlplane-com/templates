@@ -46,10 +46,6 @@ internalAccess:
 
 # Networks the gateway may DIAL OUT to — i.e. which remote desktops/SSH hosts it can
 # reach on the public internet. Same-GVC targets are unaffected by this setting.
-outboundAccess:
-  allowCIDR:
-    - 0.0.0.0/0
-
 # ─── PostgreSQL (subchart: postgres) — users, connections, history ─
 # The bundled PostgreSQL can back itself up on a schedule. Every knob of the
 # `postgres` template is available under this key — nothing extra to install:

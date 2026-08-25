@@ -178,10 +178,14 @@ spec:
     timeoutSeconds: 600
   firewallConfig:
     external:
+      # Guacamole dials out to whatever hosts its connections target, so this
+      # stays open, matching the rest of the catalog. It was briefly exposed as
+      # a knob; testing could not show that narrowing it actually restricts
+      # egress (a plain `cpln apply` workload behaved identically), so shipping
+      # it would have offered a containment guarantee we cannot stand behind --
+      # on a remote-access gateway, the worst place for one.
       outboundAllowCIDR:
-        {{- range .Values.outboundAccess.allowCIDR }}
-        - {{ . | quote }}
-        {{- end }}
+        - 0.0.0.0/0
       {{- if .Values.publicAccess.enabled }}
       inboundAllowCIDR:
         - 0.0.0.0/0

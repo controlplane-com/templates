@@ -1,0 +1,17 @@
+---
+kind: policy
+name: {{ include "searxng.policy.name" . }}
+description: SearXNG secret access
+tags: {{- include "searxng.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "searxng.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "searxng.secret.settings.name" . }}
+  - //secret/{{ .Values.secretKey.secretName }}
+  {{- if eq (include "searxng.redisAuthEnabled" .) "true" }}
+  - //secret/{{ include "searxng.redis.secretPassword.name" . }}
+  {{- end }}

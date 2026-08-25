@@ -142,7 +142,8 @@ Keep `limiter.enabled: false` for this: the limiter's bot detection rejects requ
 - **`redis.redis.replicas` must stay 1** (the chart refuses anything else). SearXNG's client cannot ask Sentinel which node is the master, so extra replicas would serve read-only connections and silently break the limiter.
 - **The datastore is single-instance.** If it restarts, rate-limit counters reset and a non-public instance simply runs without a limiter until it returns. Nothing durable is lost — nothing durable is stored there.
 - **Rotating the signing key invalidates every saved preference**, since preferences live in a cookie signed with it. Reinstalling loses nothing else, as long as you reuse the same secret.
-- **`/config`, `/stats` and `/metrics` are unauthenticated** and are published along with the UI. Set `extraSettings: {general: {enable_metrics: false}}` to close `/metrics`.
+- **`/config` and `/stats` are unauthenticated** and are published along with the UI whenever `publicAccess.enabled` is true — `/config` lists your engine and plugin configuration. Set `extraSettings: {general: {enable_metrics: false}}` to stop collecting the data behind `/stats`.
+- **`/metrics` is off by default and cannot be opened without a password.** It returns 404 unless you set `extraSettings: {general: {open_metrics: "<password>"}}`, after which it requires that password via HTTP basic auth.
 
 ## Links
 

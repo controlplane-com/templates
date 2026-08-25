@@ -15,6 +15,14 @@ spec:
       cpu: {{ .Values.resources.maxCpu | quote }}
       minMemory: {{ .Values.resources.minMemory | quote }}
       memory: {{ .Values.resources.maxMemory | quote }}
+      {{- if .Values.redis.enabled }}
+      # Wrapper that waits for the datastore, then execs the image's own
+      # entrypoint. Without it SearXNG wins the boot race against redis and
+      # comes up with the limiter permanently disabled -- see the script.
+      command: "/bin/sh"
+      args:
+        - "/usr/local/bin/searxng-startup.sh"
+      {{- end }}
       env:
         # ── Signing key (user prerequisite opaque secret, read as .payload) ──
         # SEARXNG_SECRET overrides server.secret_key from settings.yml
@@ -55,6 +63,11 @@ spec:
         - path: /etc/searxng/settings.yml
           recoveryPolicy: retain
           uri: cpln://secret/{{ include "searxng.secret.settings.name" . }}.payload
+        {{- if .Values.redis.enabled }}
+        - path: /usr/local/bin/searxng-startup.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "searxng.secret.startup.name" . }}.payload
+        {{- end }}
       readinessProbe:
         httpGet:
           path: /healthz

@@ -8,6 +8,10 @@
 {{- printf "%s-searxng-settings" .Release.Name }}
 {{- end }}
 
+{{- define "searxng.secret.startup.name" -}}
+{{- printf "%s-searxng-startup" .Release.Name }}
+{{- end }}
+
 {{- define "searxng.identity.name" -}}
 {{- printf "%s-searxng-identity" .Release.Name }}
 {{- end }}

@@ -1,3 +1,4 @@
+{{- include "redis-cluster.validateEngine" . -}}
 kind: workload
 name: {{ include "redis-cluster.name" . }}
 description: Redis Cluster
@@ -23,7 +24,7 @@ spec:
         - name: REDIS_PASSWORD
           value: 'cpln://secret/{{ include "redis-cluster.secretAuthPassword.name" . }}.REDIS_PASSWORD'
         {{- end }}
-      image: {{ .Values.image }}
+      image: {{ include "redis-cluster.image" . }}
       readinessProbe:
         exec:
           command:

@@ -104,3 +104,29 @@ app.cpln.io/instance: {{ .Release.Name }}
 {{- end }}
 {{- end }}
 {{- end }}
+
+{{/*
+Redis Cluster Node Image — selected by the `engine` knob.
+`redis` (default) uses .Values.image; `valkey` uses .Values.valkeyImage and
+ignores .Values.image entirely.
+*/}}
+{{- define "redis-cluster.image" -}}
+{{- if eq (.Values.engine | default "redis") "valkey" -}}
+{{- .Values.valkeyImage -}}
+{{- else -}}
+{{- .Values.image -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Redis Cluster Engine Validation
+*/}}
+{{- define "redis-cluster.validateEngine" -}}
+{{- $e := .Values.engine | default "redis" -}}
+{{- if not (or (eq $e "redis") (eq $e "valkey")) -}}
+{{- fail (printf "redis-cluster: engine must be \"redis\" or \"valkey\" (got %q). It selects which server image every cluster node runs; see values.yaml." $e) -}}
+{{- end -}}
+{{- if and (eq $e "valkey") (not .Values.valkeyImage) -}}
+{{- fail "redis-cluster: valkeyImage must be set when engine is \"valkey\"" -}}
+{{- end -}}
+{{- end }}

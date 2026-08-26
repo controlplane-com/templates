@@ -20,7 +20,16 @@ Backups need a bucket and a Control Plane [cloud account](https://docs.controlpl
 
 ### Configuration
 
-**Image** — the Redis image used by the cluster nodes. Pinned so installs are reproducible:
+**Engine** — which server the cluster nodes run. `redis` is the default and changes nothing:
+
+```yaml
+engine: redis                     # redis | valkey
+valkeyImage: valkey/valkey:8.1.9  # used for every node when engine is valkey; `image` is then ignored
+```
+
+See [Engine: Redis or Valkey](#engine-redis-or-valkey) for what changes and what does not.
+
+**Image** — the Redis image used by the cluster nodes, when `engine` is `redis`. Pinned so installs are reproducible:
 
 ```yaml
 image: docker.io/redis:7.2
@@ -74,6 +83,38 @@ volumeset:
     minFreePercentage: 10
     scalingFactor: 1.2
 ```
+
+### Engine: Redis or Valkey
+
+Set `engine: valkey` to run every cluster node on [Valkey](https://valkey.io/) instead of Redis.
+Valkey is the BSD-3-Clause fork of Redis 7.2, stewarded by the Linux Foundation. It has no paid
+edition, so nothing in it is feature-gated.
+
+**Nothing else in this template changes.** The Valkey image ships `redis-server`, `redis-cli`,
+`redis-sentinel`, `redis-benchmark`, `redis-check-rdb` and `redis-check-aof` compatibility
+symlinks, so the cluster bootstrap script, the config directives, the readiness probe and the
+backup job all run unmodified. Sharding, `MOVED` redirects, `cluster-announce-hostname`, auth via
+`redis.password`, replica counts, backups and firewall behaviour are identical on both engines.
+
+```yaml
+engine: valkey
+valkeyImage: valkey/valkey:8.1.9
+```
+
+| | `engine: redis` (default) | `engine: valkey` |
+|---|---|---|
+| Image knob read | `image` | `valkeyImage` |
+| Default | `docker.io/redis:7.2` | `valkey/valkey:8.1.9` |
+| License | Redis RSALv2 / SSPLv1 | BSD-3-Clause |
+| `INFO server` reports | `redis_version:7.2.x` | `server_name:valkey`, `valkey_version:8.1.9`, and `redis_version:7.2.4` for client compatibility |
+
+Notes that matter in practice:
+
+- **Pick the engine at install time.** Switching an existing release is not supported — see Important Notes.
+- **Use the Debian-based Valkey tags.** The `-alpine` tags have no `bash`, and the cluster start script and the readiness probe both require it.
+- **`valkeyImage` wins whenever `engine` is `valkey`** — `image` is ignored entirely, so a Redis tag left in `image` has no effect.
+- **The marketplace card still shows the Redis version.** A chart's `appVersion` is a constant and cannot follow a values knob.
+- **Do not enable `dual-channel-replication-enabled`** on Valkey; a known upstream defect confuses replica accounting.
 
 ### Accessing redis-cluster
 
@@ -190,9 +231,13 @@ gsutil cp gs://BUCKET_NAME/PREFIX/BACKUP_FILE.rdb.gz - \
 - **Authentication is off by default.** `redis: {}` means no `requirepass`, so anything `internalAccess` admits has full access. Set `redis.password` to enable it.
 - **Your client must speak the Redis Cluster protocol.** A plain client pointed at one node receives `MOVED` redirects it will not follow — the most common cause of "it does not work" here.
 - **This is not interchangeable with the `redis` template.** That one is primary/replica with Sentinel and a single write endpoint; this one shards the keyspace. Moving between them is a data migration.
+- **The engine is chosen at install, not switched later.** Moving an existing release between `redis` and `valkey` is unsupported and untested. It is also unsafe whenever `image` has been moved off the pinned `redis:7.2` default: a data directory written by Redis 7.4 or later uses an RDB format Valkey refuses (`Can't handle RDB format version 15`), and the node exits rather than starting. Migrate with dump/restore or replication instead.
 - **The default `250Mi` per node is a floor, not a recommendation.** A cache left at the default will begin evicting almost immediately under real load.
 
 ### Links
 
 - [Redis Cluster specification](https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/)
 - [Redis documentation](https://redis.io/docs/latest/)
+- [Valkey documentation](https://valkey.io/topics/)
+- [Valkey cluster tutorial](https://valkey.io/topics/cluster-tutorial/)
+- [Migrating from Redis to Valkey](https://valkey.io/topics/migration/)

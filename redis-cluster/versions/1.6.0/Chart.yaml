@@ -1,14 +1,14 @@
 apiVersion: v2
 name: redis-cluster
-description: Redis cluster
+description: Sharded Redis or Valkey cluster with replicas
 type: application
 
-version: 1.5.0
+version: 1.6.0
 appVersion: "7.2"
 
 annotations:
   created: "2024-09-26"
-  lastModified: "2026-08-23"
+  lastModified: "2026-08-26"
   category: "database"
   createsGvc: false
 

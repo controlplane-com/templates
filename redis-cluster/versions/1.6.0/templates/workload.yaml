@@ -32,9 +32,9 @@ spec:
             - "-c"
             - >-
                 if [ ! -z "$REDIS_PASSWORD" ]; then
-                  redis-cli -p "$CUSTOM_REDIS_PORT" --no-auth-warning -a "$REDIS_PASSWORD" ping;
+                  redis-cli -p "$CUSTOM_REDIS_PORT" --no-auth-warning -a "$REDIS_PASSWORD" ping | grep -q PONG;
                 else
-                  redis-cli -p "$CUSTOM_REDIS_PORT" ping;
+                  redis-cli -p "$CUSTOM_REDIS_PORT" ping | grep -q PONG;
                 fi
         failureThreshold: 10
         initialDelaySeconds: 20

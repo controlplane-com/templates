@@ -1,4 +1,4 @@
-{{ include "validateAuth" (dict "auth" .Values.redis.auth) }}
+{{ include "redis.validateEngine" . }}{{ include "validateAuth" (dict "auth" .Values.redis.auth) }}
 kind: workload
 name: {{ include "redis.name" . }}
 description: Redis
@@ -166,7 +166,7 @@ spec:
       memory: {{ .Values.redis.resources.maxMemory }}
       minCpu: {{ .Values.redis.resources.minCpu }}
       minMemory: {{ .Values.redis.resources.minMemory }}
-      image: {{ .Values.redis.image }}
+      image: {{ include "redis.serverImage" . }}
       readinessProbe:
         exec:
           command:

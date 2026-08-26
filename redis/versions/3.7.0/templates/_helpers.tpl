@@ -114,6 +114,34 @@ Grafana Dashboard Name
 {{- end }}
 
 
+{{/* Engine selection */}}
+
+{{/*
+Server image for the Redis tier. `engine: valkey` swaps BOTH tiers onto
+.Values.valkeyImage; redis.image / sentinel.image are then ignored. The Valkey
+image ships redis-server / redis-cli / redis-sentinel compatibility symlinks, so
+no command, config directive or probe in this chart changes with the engine.
+*/}}
+{{- define "redis.serverImage" -}}
+{{- if eq (.Values.engine | default "redis") "valkey" -}}
+{{- .Values.valkeyImage -}}
+{{- else -}}
+{{- .Values.redis.image -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Server image for the Sentinel tier. Moves with the Redis tier by design — a
+Redis-Sentinel/Valkey-server hybrid is untested and unsupported.
+*/}}
+{{- define "redis.sentinelImage" -}}
+{{- if eq (.Values.engine | default "redis") "valkey" -}}
+{{- .Values.valkeyImage -}}
+{{- else -}}
+{{- .Values.sentinel.image -}}
+{{- end -}}
+{{- end }}
+
 {{/* Validation */}}
 
 {{/*
@@ -273,5 +301,19 @@ with no signal.
 {{- end -}}
 {{- if (.Values.sentinel.resources).memory -}}
 {{- fail "redis: sentinel.resources.memory was RENAMED to sentinel.resources.maxMemory. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Validate the engine choice. An unrecognised value would otherwise fall through
+to the redis branch and silently install the wrong server.
+*/}}
+{{- define "redis.validateEngine" -}}
+{{- $e := .Values.engine | default "redis" -}}
+{{- if not (or (eq $e "redis") (eq $e "valkey")) -}}
+{{- fail (printf "redis: engine must be \"redis\" or \"valkey\" (got %q). It selects which server image both tiers run; see values.yaml." $e) -}}
+{{- end -}}
+{{- if and (eq $e "valkey") (not .Values.valkeyImage) -}}
+{{- fail "redis: valkeyImage must be set when engine is \"valkey\"" -}}
 {{- end -}}
 {{- end -}}

@@ -1,4 +1,4 @@
-{{ include "validateAuth" (dict "auth" .Values.sentinel.auth) }}
+{{ include "redis.validateEngine" . }}{{ include "validateAuth" (dict "auth" .Values.sentinel.auth) }}
 kind: workload
 name: {{ include "redis.sentinel.name" . }}
 description: Redis Sentinel
@@ -123,7 +123,7 @@ spec:
       {{- if .Values.sentinel.env }}
 {{ toYaml .Values.sentinel.env | indent 8 }}
       {{- end }}
-      image: {{ .Values.sentinel.image }}
+      image: {{ include "redis.sentinelImage" . }}
       readinessProbe:
         exec:
           command:

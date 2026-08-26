@@ -1,3 +1,17 @@
+# ─── Engine ───────────────────────────────────────────────────────────────────
+# Which server this deployment runs. `redis` is the default and changes nothing.
+# `valkey` runs BOTH the Redis and Sentinel tiers on the image below — Valkey is
+# the BSD-licensed fork of Redis 7.2 and ships redis-server / redis-cli /
+# redis-sentinel compatibility symlinks, so every command, config directive and
+# probe in this chart is identical.
+# Chosen at INSTALL time: an existing data directory cannot be moved between
+# engines (Valkey refuses the RDB/AOF format that redis:8 writes).
+engine: redis                     # redis | valkey
+# Used for BOTH tiers when engine is valkey; redis.image / sentinel.image are
+# then ignored. Only the Debian-based tags are supported (the -alpine tags have
+# no bash and this chart's probes require it).
+valkeyImage: valkey/valkey:8.1.9
+
 redis:
   image: redis:8
   resources:
@@ -17,7 +31,7 @@ redis:
     password:
       enabled: false
       value: change-me-redis-password
-  serverCommand: redis-server  # Can be overridden based on the version of redis image
+  serverCommand: redis-server  # correct for both engines — the Valkey image ships a redis-server symlink
   # extraArgs: "--maxclients 20000 --maxmemory 200mb --maxmemory-policy allkeys-lru"
   publicAccess:
     enabled: false

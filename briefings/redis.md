@@ -1,6 +1,7 @@
 # Redis — Maintainer Briefing
 
 ## What it is
+- Runs **Redis (default) or Valkey** — one `engine` knob, chosen at install. Valkey is the BSD-3-Clause (permissive: use, modify, redistribute, no strings) fork of Redis 7.2 stewarded by the Linux Foundation; no paid edition exists, so nothing in it is feature-gated.
 - Master-replica Redis with a Redis Sentinel quorum in front: automatic leader election, automatic failover, and Sentinel-based master discovery for clients. Optional persistence, metrics exporter, scheduled S3/GCS backups, and public TCP exposure.
 - License: the shipped `redis:8` image is tri-licensed **RSALv2 / SSPLv1 / AGPLv3** — Redis 8 added the AGPLv3 option, which is why 3.5.0 moved the default off 7.4 (dual RSALv2/SSPL, neither OSI-approved). Free to self-host either way; no registration, no paid edition.
 - Doubles as catalog infrastructure: seven other templates take this chart as a dependency, so a change here has blast radius beyond its own installs (see the dependent-pin note below).
@@ -14,8 +15,8 @@
 ## Architecture on cpln
 | Resource | Purpose |
 |---|---|
-| `{release}-redis` (stateful, 3 replicas, :6379) | `redis:8`; boot script asks Sentinel who the master is, then boots as master or `--replicaof`; replication-aware readiness probe |
-| `{release}-sentinel` (stateful, 3 replicas, :26379) | `redis:8` in sentinel mode; quorum `(replicas/2)+1`; `down-after-milliseconds 5000`, `failover-timeout 10000` |
+| `{release}-redis` (stateful, 3 replicas, :6379) | `redis:8` (or `valkeyImage` under `engine: valkey`); boot script asks Sentinel who the master is, then boots as master or `--replicaof`; replication-aware readiness probe |
+| `{release}-sentinel` (stateful, 3 replicas, :26379) | `redis:8` (or `valkeyImage`) in sentinel mode; quorum `(replicas/2)+1`; `down-after-milliseconds 5000`, `failover-timeout 10000` |
 | `{release}-redis-config` / `{release}-sentinel-config` (opaque, `encoding: plain`) | file-mounted `redis.conf` / `sentinel.conf` |
 | `{release}-redis-auth-password` / `{release}-sentinel-auth-password` (dictionary) | only when inline `auth.password.enabled` |
 | `{release}-redis-vs` / `{release}-sentinel-vs` volumesets | opt-in; AOF+RDB data at `redis.dataDir`, sentinel `CONFIG REWRITE` state at `/etc/sentinel` |
@@ -29,9 +30,11 @@
 ## Key knobs
 | Knob | Default | Meaning |
 |---|---|---|
+| `engine` | `redis` | `redis` \| `valkey`. Selects the server image for **both** tiers at once; validated at render with a named `fail`. Install-time only |
+| `valkeyImage` | `valkey/valkey:8.1.9` | used for BOTH tiers when `engine: valkey`, at which point `redis.image`/`sentinel.image` are ignored. Debian tags only — `-alpine` has no bash |
 | `redis.image` / `sentinel.image` | `redis:8` (both) | live tag resolves to 8.10.0; `redis:7.4` still renders if you must pin back |
 | `redis.replicas` / `sentinel.replicas` | `3` / `3` | sentinel must be odd; `1`+`1` proven for dev shapes |
-| `redis.resources.*` / `sentinel.resources.*` | `cpu: 200m` `minCpu: 80m` · `memory: 256Mi` `minMemory: 128Mi` | note the **pre-rename** key names (`cpu`/`memory`, not `maxCpu`/`maxMemory`) — a rename is a future clean-break version |
+| `redis.resources.*` / `sentinel.resources.*` | `maxCpu: 200m` `minCpu: 80m` · `maxMemory: 256Mi` `minMemory: 128Mi` | **renamed in 3.6.0**: the limit is `maxCpu`/`maxMemory`. A values file still carrying bare `cpu`/`memory` is refused at render with a named `fail` |
 | `redis.auth.password.{enabled,value}` | `false` / `change-me-redis-password` | template-created secret; sentinel side is `change-me-sentinel-password` |
 | `redis.auth.fromSecret.{enabled,name,passwordKey}` | `false` / `example-redis-auth-password` / `password` | user-supplied dictionary secret; only one auth method may be enabled per tier |
 | `redis.persistence.enabled` / `sentinel.persistence.enabled` | `false` / `false` | redis = AOF+RDB durability at `redis.dataDir` (`/data`); sentinel = post-failover master survives restart (**recommended on in prod**) |
@@ -51,6 +54,7 @@ Optional prerequisite secret for `auth.fromSecret` (dictionary; the README's exa
 (the entry key must match `passwordKey`, default `password`)
 
 ## Availability posture
+- The HA shape is **identical on both engines** — 3 data + 3 sentinels, quorum 2. Valkey gates nothing (BSD-3, no paid edition), and the Valkey render differs from the Redis render only in the image string.
 - **HA is the default shape**: 3 data nodes + 3 sentinels, quorum 2. Clients discover the master via `SENTINEL get-master-addr-by-name mymaster`, never by pinning pod-0.
 - **Measured failover (hung master):** `+sdown` at ~5.2 s (matches `down-after-milliseconds 5000`), `+switch-master` at 6.7 s, `+failover-end` at 7.7 s. On the pure-default no-auth cluster, ~8.4 s end to end. Old master rejoins cleanly as a replica; no split brain observed.
 - A **fast crash** (container back in ~1 s) correctly does *not* trigger failover — sentinel logs `+reboot master`. That is what most "kill the master" attempts actually produce here.
@@ -70,3 +74,17 @@ Optional prerequisite secret for `auth.fromSecret` (dictionary; the README's exa
 - Redis 8 refuses `DEBUG` subcommands unless `enable-debug-command` is set (same on 7.4.10) — affects operator muscle memory (`DEBUG SLEEP`), not the chart. Use `CLIENT PAUSE` to simulate a hung master.
 - Benign cold-start noise, self-clearing within ~8 s: `delayed_connect_error:_Connection_refused` from `_accesslog`, `Failed to read response from the server: Success` on replicas' first handshake, `detected child with unmatched pid` during the initial AOF rewrite. Steady state logs zero error/warn lines.
 - **`aws::ReadOnlyAccess` was removed from the backup identity in 3.5.1.** It granted read access to every bucket in the AWS account and contains no write actions, so it was never carrying the backup — what it did carry was account-wide read. The identity is now `cpln-connector` plus the user's bucket-scoped policy only. The documented IAM policy was widened to ten actions at the same time, because `ReadOnlyAccess` had been silently supplying any read action a user's policy omitted; **an upgrading user must update their IAM policy first**.
+
+### Valkey engine (3.7.0)
+- **The engine cannot be changed on an existing install.** Measured locally at the pinned tags: `redis:8` (8.10.1) writes **RDB 15**, and Valkey 8 refuses anything in its foreign range — the container exits 1 with `# Can't handle RDB format version 15` / `# Error reading the RDB base file appendonly.aof.1.base.rdb, AOF loading aborted`, i.e. a crash loop. With persistence off it silently starts empty instead, which is worse. Migrate by dump/restore or replication, never by flipping the knob.
+- **The reverse direction happens to work but is still unsupported here:** Valkey 8 writes RDB 11, and `redis:8` loaded a Valkey-written AOF cleanly (20/20 keys) in the same local probe. Untested on the platform, so do not document it as a migration path.
+- **`redis-server` / `redis-cli` / `redis-sentinel` work unchanged under Valkey** because the image ships compatibility symlinks (Valkey's own `make install` default, `USE_REDIS_SYMLINKS?=yes`). All six were confirmed present at `valkey/valkey:8.1.9`. That is why no script, probe or config directive changed — and why `valkeyImage` is pinned to an exact tag rather than a floating one: the symlinks are an upstream default a future release could flip.
+- **`masterauth` and `client-output-buffer-limit slave` are still accepted at 8.1.9** — verified by starting `valkey-server`/`valkey-sentinel` on this chart's real rendered config payloads (zero `Bad directive` lines, `Ready to accept connections`, `CONFIG GET` echoes both back). Valkey's docs prefer `primaryauth`/`replica`; the aliases are retained.
+- **Valkey reports `redis_version:7.2.4`** in `INFO` for client compatibility. To tell what is actually running read `server_name:valkey` and `valkey_version`. Anything that version-gates on `redis_version` will believe it is talking to Redis 7.2.
+- **`appVersion` still shows the Redis version** on the marketplace card even for a Valkey install — a chart's appVersion is a constant and cannot follow a values knob. Deliberate: it describes what a default install runs.
+- **Only the Debian-based Valkey tags work here.** `valkey/valkey:8.1.9` has `bash 5.2.37` (confirmed), which the readiness probe and the `publicAccess` liveness probe (`exec 3<>/dev/tcp/...`) both require; the `-alpine` tags do not.
+- **Do not set `dual-channel-replication-enabled yes` via `extraArgs` on Valkey** — [valkey-io/valkey#2338](https://github.com/valkey-io/valkey/issues/2338) makes Sentinel see duplicate replicas. It defaults to `no` and the chart never sets it.
+- The image runs as **root** with the entrypoint bypassed (`uid=0`, confirmed), same as `redis:*`, so the volumesets need no `securityOptions.filesystemGroupId`. `io-threads` defaults to `1`, so the 200m CPU floor is unchanged.
+- The backup image is engine-agnostic: it drives `redis-cli --rdb`, `INFO replication` and `CLUSTER INFO`, all of which behave identically on Valkey (`CLUSTER INFO` errors the same way on a standalone server, so the script's standalone branch is taken).
+- **`persistence` is an INSTALL-TIME choice, like `engine`.** Enabling it on an already-running release stalls the rollout indefinitely: replicas sit on `Replica N will be restarted shortly`, the volume set's volumes stay `unbound`, `/data` stays on the container overlay, and a forced redeployment does not clear it. Measured at 27 minutes with no progress (2026-08-26). Controls that isolate it: a fresh install with persistence works in 53 s, and an image-only upgrade on a workload that already owns its volume rolls fine — so the problem is specifically ADDING a volume to a live release. Engine-independent; reproduced under `engine: redis`. Pre-existing, not introduced by the Valkey work, and awaiting a maintainer ruling.
+- **A hung exec readiness probe does not show up in per-replica `ready`.** Reproduced on both engines (2:15 Valkey, 2:30 Redis) while the pod refused every command. The chart's probe body is correct — it exits 0 on a healthy master and a synced replica and hangs on a paused one — so do not read `ready` as proof a Redis node is serving; ask the node.

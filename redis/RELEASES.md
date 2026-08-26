@@ -1,3 +1,10 @@
+# Release Notes - Version 3.7.0
+
+## What's New
+
+- **Valkey engine option**: `engine: valkey` runs both the Redis and Sentinel tiers on `valkeyImage` (default `valkey/valkey:8.1.9`) instead of `redis.image`/`sentinel.image`. Valkey is the BSD-3-Clause fork of Redis 7.2 stewarded by the Linux Foundation. Nothing else in the chart changes — the Valkey image ships `redis-server`/`redis-cli`/`redis-sentinel` compatibility symlinks, so every command, config directive and probe is identical. `engine: redis` remains the default and an install that does not set it is unchanged. The engine is an **install-time** choice: an existing data directory cannot be moved between engines, because Valkey refuses the RDB format `redis:8` writes.
+
+
 # Release Notes - Version 3.4.1
 
 ## What's New

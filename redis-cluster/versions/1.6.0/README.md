@@ -227,11 +227,15 @@ gsutil cp gs://BUCKET_NAME/PREFIX/BACKUP_FILE.rdb.gz - \
 
 ### Important Notes
 
-- **`replicas` has a hard floor of 6.** Redis Cluster needs three masters for quorum, and this template pairs each with a replica. Fewer will not form a cluster.
+- **`replicas` is effectively pinned at 6.** Redis Cluster needs three masters for quorum and this template pairs each with a replica, so fewer will not form a cluster. Raising it does not work either: the platform caps replica-direct workloads at 6 by a built-in org quota, and `replicas: 8` is rejected at apply with `exceed the autoscaling.maxScale of 6 (quota: replicas-per-replica-direct-workload)`. Treat 6 as the only supported value.
 - **Authentication is off by default.** `redis: {}` means no `requirepass`, so anything `internalAccess` admits has full access. Set `redis.password` to enable it.
 - **Your client must speak the Redis Cluster protocol.** A plain client pointed at one node receives `MOVED` redirects it will not follow — the most common cause of "it does not work" here.
 - **This is not interchangeable with the `redis` template.** That one is primary/replica with Sentinel and a single write endpoint; this one shards the keyspace. Moving between them is a data migration.
-- **The engine is chosen at install, not switched later.** Moving an existing release between `redis` and `valkey` is unsupported and untested. It is also outright unsafe once `image` has been moved off the pinned `redis:7.2` default: newer Redis releases write a newer on-disk format that Valkey rejects — measured on `redis:8`, the node fails with `Can't handle RDB format version 15` and exits instead of starting. Migrate with dump/restore or replication instead.
+- **The engine is chosen at install, not switched later.** On the pinned `redis:7.2` default a switch to `valkey` does in fact carry the data across — tested, and all 48 keys survived with the cluster re-forming from its persisted `nodes.conf`. It is still **unsupported**, because that only holds while `image` is untouched.
+
+  Move `image` to a newer Redis and the same switch destroys the node instead. Newer Redis releases write an on-disk format Valkey rejects: measured on `redis:8`, the node logs `Can't handle RDB format version 15` and exits rather than starting.
+
+  **The failure is close to invisible**, which is the reason this is not merely "your call". The start script discards server output, so `cpln logs` returns **zero lines** for the failing node and the deployment message is empty — there is nothing to read but a node that never becomes ready. Migrate with dump/restore or replication instead of relying on the switch.
 - **The default `250Mi` per node is a floor, not a recommendation.** A cache left at the default will begin evicting almost immediately under real load.
 
 ### Links

@@ -40,25 +40,14 @@ client can speak the Redis Cluster protocol and follow `MOVED`/`ASK` redirects.
   admits has full access. This is why the credential audit did not flag it — there is no weak default
   password because there is no password at all. Setting `redis.password` creates the auth secret and turns it
   on; that value is a plain Helm value, so it lands in the release.
-- **`replicas` has a hard floor of 6.** Redis Cluster needs three masters for quorum, and this chart pairs
-  each with a replica. Fewer will not form a cluster.
+- **`replicas` is effectively pinned at 6.** Three masters for quorum, each paired with a replica. Raising it fails too: a built-in org quota caps replica-direct workloads at 6, and `replicas: 8` is rejected at apply (`quota: replicas-per-replica-direct-workload`). Measured 2026-08-26.
 - **Clients must speak the cluster protocol.** A plain Redis client pointed at one node gets `MOVED`
   redirects it does not follow. This is the most common "it does not work" report, and it is a client
   problem, not a deployment one.
 - **Not interchangeable with the `redis` template.** That one is primary/replica with Sentinel and a single
   write endpoint; this one shards the keyspace. Migrating between them is a data migration, not a values
   change.
-- **The engine is an install-time choice; do not flip it on a live release.** Unsupported and untested in
-  both directions. The RDB-format argument used for the `redis` template lands *differently here* and it is
-  worth knowing why. This chart's default `docker.io/redis:7.2` writes **RDB 11**, which Valkey 8.1.9
-  genuinely *can* read: measured locally, a redis:7.2 data dir loaded under Valkey with all 48 keys intact
-  and `cluster_state:ok`. That is a real difference from the `redis` template, whose `redis:8` default is
-  refused outright — worth stating rather than smoothing over. The hazard here is that `image` became
-  user-settable in 1.5.0: point it at a newer Redis and the data dir gains a newer format Valkey rejects
-  (measured on `redis:8`/8.10.1: **RDB 15** — note the spec's "RDB 12" figure is wrong, use the measured
-  number). Valkey then fails with `Can't handle RDB format version 15`, aborts AOF load and **exits 1** —
-  a crash loop with no self-recovery. So "it happens to work on the default pin" is not a supported path;
-  treat the knob as install-time regardless.
+- **The engine is an install-time choice.** It is now TESTED, not merely asserted: on the pinned `redis:7.2` default a live switch to Valkey carried all 48 keys across and the cluster re-formed from `nodes.conf`. Still documented unsupported, because that only holds while `image` is untouched — on `redis:8` the node hits `Can't handle RDB format version 15` and exits. **The failure is nearly invisible: the start script discards server output, so `cpln logs` returns zero lines and the deployment message is empty.** That diagnosability gap is the real hazard, not the format mismatch.
 - **The block is asymmetric, and both directions are UNTESTED on-platform.** The sibling `redis` build
   measured valkey→redis loading cleanly (a Valkey-written AOF read by `redis:8`), and redis→valkey failing.
   Neither direction has been exercised on Control Plane, and this chart adds cluster state (`nodes.conf`,
@@ -77,3 +66,4 @@ client can speak the Redis Cluster protocol and follow `MOVED`/`ASK` redirects.
   constant (`"7.2"`) and cannot follow a values knob.
 - **The default `250Mi` per node is a floor, not a recommendation.** A cache sized at the default will start
   evicting almost immediately under real load.
+- **`POD_NAME` is injected by the platform**, equal to the replica name (measured: `POD_NAME=test-rcv-redis-cluster-0`), despite `inheritEnv: false` and it being undocumented. `scripts/redis-start.sh` derives its ordinal from it, so the cluster forms only because of this undocumented behaviour. `CPLN_NAME`, `CPLN_MAIN` and `KUBERNETES_*` are injected too.

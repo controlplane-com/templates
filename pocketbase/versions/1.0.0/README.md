@@ -34,7 +34,7 @@ This app deploys [PocketBase](https://pocketbase.io), an open-source backend tha
   cpln workload get-deployments {release}-pocketbase --gvc {gvc} -o yaml
   ```
 
-  under `status.versions[].message`. Create the secret and the deployment recovers by itself in roughly 5–10 minutes, or run `cpln workload force-redeployment {release}-pocketbase --gvc {gvc}` to skip the wait.
+  under `status.versions[].message`. Create the secret and the deployment recovers by itself in up to about ten minutes (measured: 10 min 11 s), or run `cpln workload force-redeployment {release}-pocketbase --gvc {gvc}` to skip the wait.
 
 ## Configuration
 
@@ -110,8 +110,16 @@ internalAccess:               # internal firewall scope (in-GVC callers of the A
 
 ## Important Notes
 
-- **Single instance, no HA — this does not scale horizontally.** PocketBase is single-server by design (embedded SQLite, no clustering), and each stateful replica on this platform would get its own volume and therefore its own empty database. There is deliberately no `replicas` knob. Every `helm upgrade` that changes the container spec is a short full outage while the one replica hands the volume over; a node reschedule and a secret rotation cost the same gap. Data is not at risk — the same volume reattaches.
-- **The superuser password is re-applied from the secret on EVERY start.** Changing it in the dashboard is reverted at the next restart — change it in the secret instead. Note that changing the secret changes your login, and that updating a referenced secret restarts the workload by itself.
+- **Single instance, no HA — this does not scale horizontally.** PocketBase is single-server by design (embedded SQLite, no clustering), and each stateful replica on this platform would get its own volume and therefore its own empty database. There is deliberately no `replicas` knob. Every `helm upgrade` that changes the container spec is a full outage while the one replica hands the volume over — **measured at about 85 seconds** (88 s on a forced redeployment, 83 s on an upgrade, 87 s on a replica stop), during which requests fail with 503. A node reschedule and a forced redeployment after a secret rotation cost the same gap; volume detach and reattach dominates it. Data is not at risk — the same volume reattaches.
+- **The superuser password is re-applied from the secret on EVERY start.** Changing it in the dashboard is reverted at the next restart — change it in the secret instead, and note that this changes your login.
+- **After updating the credentials secret you must force a redeployment — the workload does NOT pick it up on its own.** Measured: eleven minutes after a rotation the container still held the old environment, the old password still authenticated, and the workload reported `ready: true` the whole time. There is no error and no warning, so a rotation looks like it worked while the old credential stays valid indefinitely. Apply it with:
+
+  ```bash
+  cpln workload force-redeployment {release}-pocketbase --gvc {gvc}
+  ```
+
+  The rotation takes effect once the new replica is serving (about 85 seconds, see below); until then the old password continues to work.
+- **Realtime subscriptions are capped at ten minutes per connection.** The platform closes any request at `timeoutSeconds`, which this template already sets to the maximum the platform allows (600). Server-Sent Events are not exempt: a subscription is cut cleanly at exactly ten minutes, whether or not it is idle. No events are lost while the stream is open — the cut is a clean EOF, not an error — but **your client must reconnect and resubscribe**. The official PocketBase SDKs do this automatically; a hand-rolled `EventSource` or `curl` consumer must handle it. Confirmed by lowering `timeoutSeconds` to 60, which cut the identical stream at exactly 60 seconds.
 - **Never change `encryptionKey` after install.** It encrypts the SMTP password, OAuth2 client secrets, and S3 backup credentials stored inside the database; changing it orphans all of them with no way back.
 - **Uploads and local backup ZIPs share the volume with the database.** A file-heavy app needs more than the 10 GiB default; raise `volumeset.capacity` at install time.
 - **Backups are platform volume snapshots**, not off-site copies — they live in the platform storage layer alongside the volume. For an off-platform copy, use PocketBase's own S3 backups under Settings → Backups.

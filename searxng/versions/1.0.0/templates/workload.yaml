@@ -72,16 +72,21 @@ spec:
         httpGet:
           path: /healthz
           port: 8080
+        # Budget must exceed the startup gate's wait (45 s) plus app start.
+        # 5 + 20x5 = 105 s. failureThreshold is capped at 20 by the platform.
         initialDelaySeconds: 5
         periodSeconds: 5
-        failureThreshold: 12
+        failureThreshold: 20
         successThreshold: 1
         timeoutSeconds: 3
       livenessProbe:
         httpGet:
           path: /healthz
           port: 8080
-        initialDelaySeconds: 30
+        # First check must land AFTER the startup gate could still be waiting
+        # (45 s) plus app start, or a slow datastore gets the container killed
+        # mid-wait -- measured as a ~195 s crash-loop when these were equal.
+        initialDelaySeconds: 90
         periodSeconds: 30
         failureThreshold: 5
         successThreshold: 1

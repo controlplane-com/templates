@@ -3,9 +3,10 @@
 # `valkey` runs every node on the image below — Valkey is the BSD-licensed fork
 # of Redis 7.2 and ships redis-server / redis-cli compatibility symlinks, so the
 # cluster bootstrap, config directives and probes are identical.
-# Chosen at INSTALL time: switching an existing release between engines is
-# unsupported and untested (and hard-fails if `image` was moved off redis:7.2 —
-# Valkey cannot read an RDB written by Redis 7.4+). See the README.
+# Chosen at INSTALL time: switching an existing release between engines is not
+# supported. It happens to work on the pinned redis:7.2 default (tested), but
+# hard-fails once `image` moves to a newer Redis — Valkey cannot read the RDB
+# format those write, and the node exits with no log output. See the README.
 engine: redis                     # redis | valkey
 # Used for every node when engine is valkey; `image` below is then ignored.
 # Only the Debian-based tags are supported (the -alpine tags have no bash and the

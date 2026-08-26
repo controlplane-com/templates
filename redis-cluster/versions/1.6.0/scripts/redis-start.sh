@@ -80,10 +80,39 @@ else
                 break
             else
                 echo "Creating Cluster"
-                if [ ! -z "$REDIS_PASSWORD" ]; then
-                    redis-cli $AUTH_PARAMS -p "$CUSTOM_REDIS_PORT" --cluster create $NODE_LIST --cluster-replicas 1 --cluster-yes
-                else
-                    redis-cli -p "$CUSTOM_REDIS_PORT" --cluster create $NODE_LIST --cluster-replicas 1 --cluster-yes
+                # `--cluster create` RE-RESOLVES every peer hostname, and a name
+                # that answered the ping loop moments earlier can briefly stop
+                # resolving ("Invalid IP address or hostname specified"). Under
+                # `set -e` that killed the container, so one transient DNS blip
+                # cost a full restart -- measured at 7 restarts and ~20 minutes to
+                # converge on a default install, with cluster_state:fail visible
+                # throughout. Retry in-process instead.
+                #
+                # Bounded, and still exits non-zero when exhausted: a real
+                # misconfiguration must stay loud. Only the transient case is
+                # absorbed. `if` is deliberate -- `cmd && break` would make the
+                # && list's non-zero status trip `set -e` on a failed attempt.
+                create_attempts=0
+                cluster_created=false
+                while [ "$create_attempts" -lt 12 ]; do
+                    if [ ! -z "$REDIS_PASSWORD" ]; then
+                        if redis-cli $AUTH_PARAMS -p "$CUSTOM_REDIS_PORT" --cluster create $NODE_LIST --cluster-replicas 1 --cluster-yes; then
+                            cluster_created=true
+                            break
+                        fi
+                    else
+                        if redis-cli -p "$CUSTOM_REDIS_PORT" --cluster create $NODE_LIST --cluster-replicas 1 --cluster-yes; then
+                            cluster_created=true
+                            break
+                        fi
+                    fi
+                    create_attempts=$((create_attempts + 1))
+                    echo "cluster create failed (attempt $create_attempts/12) - retrying in 5s"
+                    sleep 5
+                done
+                if [ "$cluster_created" != true ]; then
+                    echo "FATAL: cluster create did not succeed after 12 attempts" >&2
+                    exit 1
                 fi
                 break
             fi   

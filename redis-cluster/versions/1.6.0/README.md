@@ -227,6 +227,7 @@ gsutil cp gs://BUCKET_NAME/PREFIX/BACKUP_FILE.rdb.gz - \
 
 ### Important Notes
 
+- **A transient DNS blip during first-boot no longer restarts the node.** Cluster creation re-resolves every peer hostname, and a name that answered moments earlier can briefly stop resolving. That used to kill the container and was measured costing 7 restarts and ~20 minutes on a default install. It now retries in place, and still fails loudly if creation genuinely cannot succeed.
 - **Changing `port` also moves the cluster bus.** Redis derives the bus as `port + 10000` and this template declares both, so a custom `port` needs no extra configuration — but any firewall or client expecting `16379` must move with it.
 - **`replicas` is effectively pinned at 6.** Redis Cluster needs three masters for quorum and this template pairs each with a replica, so fewer will not form a cluster. Raising it does not work either: the platform caps replica-direct workloads at 6 by a built-in org quota, and `replicas: 8` is rejected at apply with `exceed the autoscaling.maxScale of 6 (quota: replicas-per-replica-direct-workload)`. Treat 6 as the only supported value.
 - **Authentication is off by default.** `redis: {}` means no `requirepass`, so anything `internalAccess` admits has full access. Set `redis.password` to enable it.

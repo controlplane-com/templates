@@ -1,0 +1,62 @@
+# ─── Engine ───────────────────────────────────────────────────────────────────
+# Which server the cluster nodes run. `redis` is the default and changes nothing.
+# `valkey` runs every node on the image below — Valkey is the BSD-licensed fork
+# of Redis 7.2 and ships redis-server / redis-cli compatibility symlinks, so the
+# cluster bootstrap, config directives and probes are identical.
+# Chosen at INSTALL time: switching an existing release between engines is
+# unsupported and untested (and hard-fails if `image` was moved off redis:7.2 —
+# Valkey cannot read an RDB written by Redis 7.4+). See the README.
+engine: redis                     # redis | valkey
+# Used for every node when engine is valkey; `image` below is then ignored.
+# Only the Debian-based tags are supported (the -alpine tags have no bash and the
+# start script requires it).
+valkeyImage: valkey/valkey:8.1.9
+
+# Redis image for the cluster nodes. Pinned so installs are reproducible.
+image: docker.io/redis:7.2
+
+replicas: 6 # minimum value is 6
+port: 6379
+memory: 250Mi
+cpu: 200m
+
+internalAccess: # Sets the internal firewall scope - if set to none, replicas will not be able to reach each other
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads:  # Note: can only be used if type is same-gvc or workload-list
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+volumeset:
+  capacity: 10 # initial capacity in GiB (minimum is 10)
+  autoscaling:
+    enabled: false # Set to true to enable autoscaling
+    maxCapacity: 100 # Maximum capacity in GiB when autoscaling is enabled
+    minFreePercentage: 10 # Minimum free percentage to trigger scaling when autoscaling is enabled
+    scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
+
+# Configure Redis authentication by uncommenting and setting the password field
+redis: {}
+  # password: "your-secure-password-here"
+
+backup:
+  enabled: false
+  image: ghcr.io/controlplane-com/backup-images/redis-backup:1.0.0
+  schedule: "0 2 * * *"  # daily at 2am UTC
+
+  resources:
+    cpu: 100m
+    memory: 512Mi # cluster mode dumps every primary sequentially; 128Mi OOMs during GCS uploads
+
+  provider: aws # Options: aws or gcp
+
+  aws:
+    bucket: my-backup-bucket
+    region: us-east-1
+    cloudAccountName: my-backup-cloudaccount
+    policyName: my-backup-policy
+    prefix: "redis-cluster/backups"
+
+  gcp:
+    bucket: ""
+    cloudAccountName: ""
+    prefix: "redis-cluster/backups"

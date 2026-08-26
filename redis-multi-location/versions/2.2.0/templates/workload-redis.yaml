@@ -1,0 +1,180 @@
+{{- include "redis-ml.validate" . -}}
+kind: workload
+name: {{ include "redis-ml.name" . }}
+description: Redis
+tags:
+  cpln/publishNotReadyAddresses: "true"
+  {{- include "redis-ml.tags" . | nindent 2 }}
+gvc: {{ .Values.global.gvc.name }}
+spec:
+  type: stateful
+  containers:
+    - name: redis
+      command: /bin/sh
+      args:
+        - '-c'
+        - |-
+          mkdir -p /etc/redis
+          cp /config/redis.conf /etc/redis/redis.conf
+          {{- if .Values.redis.passwordSecretName }}
+
+          # Auth is appended to this per-boot COPY rather than baked into the
+          # config secret: the password comes from a user-created secret and must
+          # never be rendered into the chart's own secret or the Helm release.
+          # (No strip needed here, unlike sentinel.conf — the config is re-copied
+          # from the secret on every boot, so turning the password off is clean.)
+          # Written quoted and escaped so a space, `#` or quote cannot corrupt it.
+          REDIS_PASSWORD_ESC=$(printf '%s' "$REDIS_PASSWORD" | sed 's/[\\"]/\\&/g')
+          printf '\nrequirepass "%s"\nmasterauth "%s"\n' "$REDIS_PASSWORD_ESC" "$REDIS_PASSWORD_ESC" >> /etc/redis/redis.conf
+          {{- end }}
+
+          POD_ID=$(echo "$HOSTNAME" | rev | cut -d'-' -f1 | rev)
+          LOCATION=${CPLN_LOCATION##*/}
+          WORKLOAD_NAME=${CPLN_WORKLOAD##*/}
+          SELF_HOST="replica-${POD_ID}.${WORKLOAD_NAME}.${LOCATION}.${CPLN_GVC}.cpln.local"
+          SELF_PORT=6379
+
+          echo "\nreplica-announce-ip ${SELF_HOST}" >> /etc/redis/redis.conf
+          echo "\nreplica-announce-port ${SELF_PORT}" >> /etc/redis/redis.conf
+
+          # Sentinel endpoints — one per location, rendered at template time
+          SENTINELS="{{ range $loc := .Values.global.gvc.locations }}replica-0.{{ include "redis-ml.sentinel.name" $ }}.{{ $loc.name }}.{{ $.Values.global.gvc.name }}.cpln.local {{ end }}"
+
+          # Ask any sentinel who the master is, retrying until one responds.
+          # On cold start, sentinels respond from their static config (replica-0 of the
+          # primary location); after failover, they respond with the elected master.
+          # The pod whose announced identity matches becomes master; all others replicate.
+          MASTER_HOST=""
+          MASTER_PORT=""
+          until echo "$MASTER_PORT" | grep -qE '^[0-9]+$'; do
+            for S_HOST in $SENTINELS; do
+              if [ -n "$SENTINEL_PASSWORD" ]; then
+                INFO=$(redis-cli -h "$S_HOST" -p 26379 --no-auth-warning -a "$SENTINEL_PASSWORD" SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
+              else
+                INFO=$(redis-cli -h "$S_HOST" -p 26379 SENTINEL get-master-addr-by-name mymaster 2>/dev/null)
+              fi
+              MASTER_HOST=$(echo "$INFO" | head -1)
+              MASTER_PORT=$(echo "$INFO" | tail -1)
+              echo "$MASTER_PORT" | grep -qE '^[0-9]+$' && break
+              echo "Sentinel at $S_HOST not responding, trying next"
+            done
+            echo "$MASTER_PORT" | grep -qE '^[0-9]+$' || sleep 5
+          done
+          echo "Sentinel says master=$MASTER_HOST:$MASTER_PORT (self=$SELF_HOST:$SELF_PORT)"
+
+          if [ "$MASTER_HOST" = "$SELF_HOST" ] && [ "$MASTER_PORT" = "$SELF_PORT" ]; then
+            echo "Booting as master"
+            exec {{ .Values.redis.serverCommand | default "redis-server" }} /etc/redis/redis.conf {{ .Values.redis.extraArgs | default "" }} --dir /data
+          else
+            echo "Booting as replica of $MASTER_HOST:$MASTER_PORT"
+            exec {{ .Values.redis.serverCommand | default "redis-server" }} /etc/redis/redis.conf {{ .Values.redis.extraArgs | default "" }} --dir /data --replicaof "$MASTER_HOST" "$MASTER_PORT"
+          fi
+      cpu: {{ .Values.redis.resources.cpu | quote }}
+      memory: {{ .Values.redis.resources.memory | quote }}
+      image: {{ .Values.redis.image | default "redis:7.4" }}
+      inheritEnv: false
+      {{- if or .Values.redis.passwordSecretName .Values.sentinel.passwordSecretName }}
+      env:
+        {{- /* Both come from user-created secrets, so neither transits values. */}}
+        {{- if .Values.redis.passwordSecretName }}
+        - name: REDIS_PASSWORD
+          value: cpln://secret/{{ .Values.redis.passwordSecretName }}.payload
+        {{- end }}
+        {{- if .Values.sentinel.passwordSecretName }}
+        - name: SENTINEL_PASSWORD
+          value: cpln://secret/{{ .Values.sentinel.passwordSecretName }}.payload
+        {{- end }}
+      {{- else }}
+      env: []
+      {{- end }}
+      ports:
+        - number: 6379
+          protocol: tcp
+      volumes:
+        - path: /data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "redis-ml.volume.name" . }}
+        - path: /config/redis.conf
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "redis-ml.secretConfig.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      metric: disabled
+      minScale: {{ .Values.redis.replicasPerLocation | int }}
+      maxScale: {{ .Values.redis.replicasPerLocation | int }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 15
+  rolloutOptions:
+    {{- /*
+    maxUnavailableReplicas is deliberately NOT set: the API drops it on a
+    stateful workload, so sending it produced permanent drift AND implied a
+    rolling-restart limit that is not in force.
+    terminationGracePeriodSeconds is declared because the API backfills 90.
+    */}}
+    scalingPolicy: Parallel
+    terminationGracePeriodSeconds: 90
+  firewallConfig:
+    {{- /*
+    The `external` block is ALWAYS rendered, and every field in it declared —
+    the API backfills the empty lists, so omitting the block made a default
+    install drift against its own manifest from the moment it was created.
+    */}}
+    external:
+      {{- if or .Values.firewall.externalInboundAllowCIDR .Values.redis.publicAccess.enabled }}
+      inboundAllowCIDR:
+        {{- if .Values.firewall.externalInboundAllowCIDR }}
+        {{- range (splitList "," .Values.firewall.externalInboundAllowCIDR) }}
+        - {{ . | trim }}
+        {{- end }}
+        {{- else }}
+        - 0.0.0.0/0
+        {{- end }}
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      {{- if .Values.firewall.externalOutboundAllowCIDR }}
+      outboundAllowCIDR:
+        {{- range (splitList "," .Values.firewall.externalOutboundAllowCIDR) }}
+        - {{ . | trim }}
+        {{- end }}
+      {{- else }}
+      outboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.firewall.internalAllowType }}
+      {{- if .Values.firewall.workloads }}
+      inboundAllowWorkload: {{ .Values.firewall.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  identityLink: //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "redis-ml.identity.name" . }}
+  loadBalancer:
+    replicaDirect: true
+  localOptions:
+    {{- /*
+    Written in FULL for every location: a minimal localOptions entry makes the
+    API backfill its OWN defaults, which would leave a location eligible to
+    scale on concurrency and boot Redis instances nobody asked for.
+    */}}
+    {{- range $location := .Values.global.gvc.locations }}
+    - location: //location/{{ $location.name }}
+      autoscaling:
+        maxConcurrency: 0
+        metric: disabled
+        minScale: {{ $.Values.redis.replicasPerLocation | int }}
+        maxScale: {{ $.Values.redis.replicasPerLocation | int }}
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      suspend: false
+      timeoutSeconds: 15
+    {{- end }}
+  supportDynamicTags: false

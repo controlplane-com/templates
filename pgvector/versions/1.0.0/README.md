@@ -35,7 +35,7 @@ The database credentials are a secret you create yourself — this chart never w
    returns zero lines, because the container never starts. The only diagnostic is
    `status.versions[].message` in `cpln workload get-deployments {release}-pgvector -o yaml` (note
    **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the secret and it
-   recovers on its own in roughly 6–10 minutes, or run
+   recovers on its own in up to about ten minutes (measured: 10 min 11 s), or run
    `cpln workload force-redeployment {release}-pgvector`.
 
 2. **For backups only** — a bucket and, for AWS or GCP, a Control Plane
@@ -107,7 +107,7 @@ the endpoint your applications connect to, reading the same credentials secret a
 pgbouncer:
   enabled: false
   image: edoburu/pgbouncer:v1.25.1-p0
-  poolMode: transaction # options: session, transaction, statement; transaction mode does not keep session GUCs
+  poolMode: transaction # session, transaction, statement; in transaction mode session GUCs LEAK between clients
   defaultPoolSize: 25   # number of real Postgres connections PgBouncer maintains
   maxClientConn: 1000   # maximum number of client connections PgBouncer accepts
   replicas: 1
@@ -295,13 +295,30 @@ fixes and refinements, not a missing index type.
   `vector` is created first, so the server returns healthy with `vector` but without your extra
   extension — create it by hand, or reinstall while the volume is still empty.
 - **`publicAccess` is unencrypted** — the image ships no TLS certificate, so `sslmode=require` fails.
-- **In `transaction` pool mode, `SET hnsw.ef_search` does not survive to the next statement** — the
-  symptom is silently worse search results, never an error. Use
-  `BEGIN; SET LOCAL hnsw.ef_search = 100; SELECT ...; COMMIT;` or `poolMode: session`.
+- **In `transaction` pool mode, a plain `SET hnsw.ef_search` LEAKS BETWEEN CLIENTS.** This is an
+  isolation problem, not just a tuning one: PgBouncer hands the same server connection to different
+  clients, so your `SET` can be read — or overwritten — by someone else's session. Measured with 16
+  concurrent clients in transaction mode: 5 kept their own value, **9 read a different client's
+  value**, and 2 got `ERROR: unrecognized configuration parameter "hnsw.ef_search"`. Connecting
+  directly does not leak, and `poolMode: session` was clean 16/16.
+
+  It matters here specifically because `ef_search` is the knob that controls recall — raising it to
+  400 took an exact-match test from 4/5 to 5/5. Set it per query inside a transaction, which was also
+  clean 16/16:
+
+  ```sql
+  BEGIN; SET LOCAL hnsw.ef_search = 100; SELECT ...; COMMIT;
+  ```
+
+  Or use `poolMode: session`, at the cost of the connection multiplexing PgBouncer is there for.
 - **Do not scale this workload past one replica** — a second stateful replica gets its own volume,
   which is a second empty database, not a replica.
-- **A `helm upgrade` restarts the server.** Nothing limits the rollout on a stateful workload, so
-  treat every upgrade as a short planned write outage.
+- **A `helm upgrade` restarts the server — measured at 92 seconds of failed writes.** Nothing
+  limits the rollout on a stateful workload, so treat every upgrade as a planned write outage of
+  roughly a minute and a half. Losing a replica costs about the same (84 s measured). Data is
+  never at risk — the same volume reattaches.
+- **Restore with a PostgreSQL 18 `psql`.** An older client emits `invalid command \unrestrict`
+  against a PG18 dump. The restore still completes, but the error is alarming and avoidable.
 - **`helm uninstall` deletes the volume set**, so data does not survive a reinstall. Your credentials
   secret is left alone.
 - **Firewall changes take 30 seconds to a few minutes to take effect.** After changing

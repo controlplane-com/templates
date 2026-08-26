@@ -44,7 +44,7 @@ publicAccess:
 pgbouncer:
   enabled: false
   image: edoburu/pgbouncer:v1.25.1-p0
-  poolMode: transaction # options: session, transaction, statement; transaction mode does not keep session GUCs
+  poolMode: transaction # session, transaction, statement; in transaction mode session GUCs LEAK between clients
   defaultPoolSize: 25   # number of real Postgres connections PgBouncer maintains
   maxClientConn: 1000   # maximum number of client connections PgBouncer accepts
   replicas: 1

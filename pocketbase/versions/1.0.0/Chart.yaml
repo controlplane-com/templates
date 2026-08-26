@@ -1,0 +1,17 @@
+apiVersion: v2
+name: pocketbase
+description: Open-source backend in one file — SQLite, REST API, realtime, auth, file storage
+type: application
+version: 1.0.0
+appVersion: "0.40.1"
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+
+annotations:
+  created: "2026-08-25"
+  lastModified: "2026-08-25"
+  category: "database"
+  createsGvc: false

@@ -1,0 +1,113 @@
+{{- include "pocketbase.validate" . }}
+kind: workload
+name: {{ include "pocketbase.name" . }}
+description: PocketBase — SQLite-backed REST API, realtime, auth, file storage, and admin dashboard
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "pocketbase.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "pocketbase.identity.name" . }}
+  containers:
+    - name: pocketbase
+      image: {{ .Values.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      # The image's own entrypoint.sh is versioned by the image repo, not by
+      # PocketBase, so it is bypassed entirely: this chart depends on the pinned
+      # binary and nothing that can drift under the tag.
+      #
+      # `upsert` runs to completion BEFORE the server binds, so the superuser
+      # always exists before the port is open (and is re-applied on every start
+      # — the secret is the source of truth for the login). `set -e` turns a
+      # rejected credential into a visible crash instead of a silent skip, and
+      # `exec` makes pocketbase PID 1 so SIGTERM closes SQLite cleanly.
+      #
+      # Credentials are read from the environment inside the container, never
+      # interpolated by Helm — a `cpln://secret/...` reference is only resolved
+      # by the platform when it injects an env var.
+      command: /bin/sh
+      args:
+        - -c
+        - |
+          set -e
+          pocketbase superuser upsert "$PB_SUPERUSER_EMAIL" "$PB_SUPERUSER_PASSWORD" \
+            --dir=/pb_data --encryptionEnv=PB_ENCRYPTION_KEY
+          exec pocketbase serve --http=0.0.0.0:8090 --dir=/pb_data \
+            --encryptionEnv=PB_ENCRYPTION_KEY --origins={{ join "," .Values.cors.allowedOrigins | quote }}
+      env:
+        - name: PB_SUPERUSER_EMAIL
+          value: cpln://secret/{{ include "pocketbase.secret.credentials.name" . }}.email
+        - name: PB_SUPERUSER_PASSWORD
+          value: cpln://secret/{{ include "pocketbase.secret.credentials.name" . }}.password
+        - name: PB_ENCRYPTION_KEY
+          value: cpln://secret/{{ include "pocketbase.secret.credentials.name" . }}.encryptionKey
+      # `serve --http` defaults to 127.0.0.1:8090, which nothing outside the
+      # container could reach — 0.0.0.0 is set explicitly in args above.
+      ports:
+        - number: 8090
+          protocol: http
+      volumes:
+        - path: /pb_data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "pocketbase.volume.name" . }}
+      readinessProbe:
+        httpGet:
+          path: /api/health
+          port: 8090
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 5
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 3
+      livenessProbe:
+        httpGet:
+          path: /api/health
+          port: 8090
+          scheme: HTTP
+        initialDelaySeconds: 60
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+  # Exactly one replica, always. PocketBase is single-server by design (embedded
+  # SQLite, no clustering), and each stateful replica gets its OWN volume — a
+  # second replica would serve a different, empty database behind the same
+  # endpoint. There is no `replicas` knob for this reason.
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    # Realtime is Server-Sent Events — one long HTTP response, not an upgraded
+    # connection — so it is subject to the request timeout. 600s is the platform
+    # maximum, which puts the ceiling above PocketBase's own 5-minute idle
+    # disconnect, letting the client's reconnect cycle govern a quiet stream.
+    timeoutSeconds: 600
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}

@@ -1,0 +1,207 @@
+---
+kind: workload
+name: {{ include "guacamole.name" . }}
+description: Apache Guacamole — clientless remote desktop gateway, HTTP :8080
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "guacamole.tags" . | nindent 4 }}
+spec:
+  # standard, not stateful: this tier mounts no volumeset — every byte Guacamole
+  # persists lives in the bundled PostgreSQL.
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "guacamole.identity.name" . }}
+  containers:
+    - name: guacamole
+      image: {{ .Values.guacamole.image }}
+      # Wrapper, not the image entrypoint: it hands the schema to the init sidecar
+      # and refuses to start Tomcat until the admin account has been rewritten.
+      # Invoked as `sh <path>` because a secret-mounted file is not executable.
+      command: /bin/sh
+      args:
+        - /cpln/start.sh
+      inheritEnv: false
+      minCpu: {{ .Values.guacamole.resources.minCpu | quote }}
+      cpu: {{ .Values.guacamole.resources.maxCpu | quote }}
+      minMemory: {{ .Values.guacamole.resources.minMemory | quote }}
+      memory: {{ .Values.guacamole.resources.maxMemory | quote }}
+      env:
+        # ── Database (postgres subchart) — users, connections, permissions, history ──
+        # The 1.6.0 entrypoint enables `enable-environment-properties`, so every
+        # property is read from the environment and the password stays a
+        # platform-resolved cpln:// reference (never interpolated at render time).
+        - name: POSTGRESQL_ENABLED
+          value: "true"
+        - name: POSTGRESQL_HOSTNAME
+          value: {{ include "guacamole.postgres.host" . | quote }}
+        - name: POSTGRESQL_PORT
+          value: "5432"
+        - name: POSTGRESQL_DATABASE
+          value: cpln://secret/{{ include "guacamole.secret.db.name" . }}.database
+        - name: POSTGRESQL_USERNAME
+          value: cpln://secret/{{ include "guacamole.secret.db.name" . }}.username
+        - name: POSTGRESQL_PASSWORD
+          value: cpln://secret/{{ include "guacamole.secret.db.name" . }}.password
+        # ── guacd, in this same workload, over loopback ──
+        - name: GUACD_HOSTNAME
+          value: "127.0.0.1"
+        - name: GUACD_PORT
+          value: "4822"
+        # ── Serve at / rather than /guacamole/ ──
+        - name: WEBAPP_CONTEXT
+          value: "ROOT"
+        # ── Tomcat RemoteIpValve: without it every request appears to come from the
+        # mesh proxy, so connection history is useless and the built-in brute-force
+        # ban (BAN_ENABLED=true in the image) would lock out all users at once. ──
+        - name: REMOTE_IP_VALVE_ENABLED
+          value: "true"
+        - name: LOG_LEVEL
+          value: {{ .Values.logLevel | quote }}
+      ports:
+        - number: 8080
+          protocol: http
+      readinessProbe:
+        # No dedicated health endpoint upstream. With WEBAPP_CONTEXT=ROOT a 200 on /
+        # means the webapp actually deployed (a failed deploy gives Tomcat's 404),
+        # and the start wrapper guarantees the schema is present by then.
+        # Budget 10 + 20×15 = 310s: covers Postgres coming up, the schema load and
+        # the Tomcat deploy.
+        httpGet:
+          path: /
+          port: 8080
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 15
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        # initialDelay deliberately >= the readiness budget, so liveness never kills
+        # a container that is legitimately still waiting on the schema.
+        httpGet:
+          path: /
+          port: 8080
+          scheme: HTTP
+        initialDelaySeconds: 300
+        periodSeconds: 30
+        failureThreshold: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+      volumes:
+        - path: /cpln/start.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "guacamole.secret.start.name" . }}.payload
+        - path: /guac-init
+          recoveryPolicy: retain
+          uri: scratch://guac-init
+    - name: guacd
+      image: {{ .Values.guacd.image }}
+      # No `ports` on purpose: guacd speaks an UNAUTHENTICATED protocol. Containers
+      # in one workload share a network namespace, so the web app reaches it on
+      # 127.0.0.1:4822 while nothing outside the replica can.
+      inheritEnv: false
+      minCpu: {{ .Values.guacd.resources.minCpu | quote }}
+      cpu: {{ .Values.guacd.resources.maxCpu | quote }}
+      minMemory: {{ .Values.guacd.resources.minMemory | quote }}
+      memory: {{ .Values.guacd.resources.maxMemory | quote }}
+      env:
+        # Post-migration name; GUACD_LOG_LEVEL is deprecated at this tag.
+        - name: LOG_LEVEL
+          value: {{ .Values.logLevel | quote }}
+      readinessProbe:
+        tcpSocket:
+          port: 4822
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 3
+      livenessProbe:
+        tcpSocket:
+          port: 4822
+        initialDelaySeconds: 30
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 3
+    - name: schema-init
+      # The postgres image, so psql always matches the bundled server version.
+      # It applies the schema exported by the guacamole container, rewrites the
+      # stock guacadmin account, then idles — a container that exits is restarted.
+      image: {{ .Values.postgres.image }}
+      command: /bin/sh
+      args:
+        - /cpln/init.sh
+      inheritEnv: false
+      # Not a user knob: a bootstrap sidecar that idles has nothing to tune.
+      minCpu: "100m"
+      cpu: "100m"
+      minMemory: "128Mi"
+      memory: "128Mi"
+      env:
+        - name: PGHOST
+          value: {{ include "guacamole.postgres.host" . | quote }}
+        - name: PGPORT
+          value: "5432"
+        - name: PGUSER
+          value: cpln://secret/{{ include "guacamole.secret.db.name" . }}.username
+        - name: PGPASSWORD
+          value: cpln://secret/{{ include "guacamole.secret.db.name" . }}.password
+        - name: PGDATABASE
+          value: cpln://secret/{{ include "guacamole.secret.db.name" . }}.database
+        # ── Admin login (user-created prerequisite dictionary secret) ──
+        - name: GUACAMOLE_ADMIN_USERNAME
+          value: cpln://secret/{{ .Values.admin.secretName }}.username
+        - name: GUACAMOLE_ADMIN_PASSWORD
+          value: cpln://secret/{{ .Values.admin.secretName }}.password
+      volumes:
+        - path: /cpln/init.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "guacamole.secret.init.name" . }}.payload
+        - path: /guac-init
+          recoveryPolicy: retain
+          uri: scratch://guac-init
+  defaultOptions:
+    autoscaling:
+      # Pinned to one replica: Guacamole holds auth tokens in each Tomcat's memory
+      # with no cross-instance sharing (GUACAMOLE-283), and the platform offers no
+      # session affinity — a second replica would randomly log users out.
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+    capacityAI: false
+    debug: false
+    suspend: false
+    # Platform maximum. WebSockets (Guacamole's primary tunnel) are unaffected,
+    # but the HTTP tunnel fallback long-polls and wants every second available.
+    timeoutSeconds: 600
+  firewallConfig:
+    external:
+      # Guacamole dials out to whatever hosts its connections target, so this
+      # stays open, matching the rest of the catalog. It was briefly exposed as
+      # a knob; testing could not show that narrowing it actually restricts
+      # egress (a plain `cpln apply` workload behaved identically), so shipping
+      # it would have offered a containment guarantee we cannot stand behind --
+      # on a remote-access gateway, the worst place for one.
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  supportDynamicTags: false

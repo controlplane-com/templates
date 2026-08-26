@@ -1,0 +1,7 @@
+{{- include "guacamole.validate" . }}
+---
+kind: identity
+name: {{ include "guacamole.identity.name" . }}
+description: Guacamole identity
+tags: {{- include "guacamole.tags" . | nindent 4 }}
+gvc: {{ .Values.global.cpln.gvc }}

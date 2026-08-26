@@ -92,6 +92,8 @@ redis:
     dropMetrics: []  # e.g., ["redis_command_.*", "redis_keyspace_.*"]
   dataDir: /data
   persistence:
+    # Set at INSTALL time. Enabling this on an already-running release stalls
+    # the rollout indefinitely (volumes stay unbound) — see the README.
     enabled: false
     volumes:
       data:
@@ -158,6 +160,8 @@ sentinel:
   # CONFIG REWRITE. Replicas query sentinel at startup, so persisted state lets
   # them rejoin the real master rather than redis-0. Recommended ON in prod.
   persistence:
+    # Set at INSTALL time. Enabling this on an already-running release stalls
+    # the rollout indefinitely (volumes stay unbound) — see the README.
     enabled: false
     volumes:
       data:

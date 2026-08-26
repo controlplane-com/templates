@@ -1,0 +1,68 @@
+# ─── SearXNG ──────────────────────────────────────────────────────
+image: searxng/searxng:2026.8.22-9fea41204
+replicas: 1                    # 1 = proven single shape; >=2 = load-balanced tier (limiter state is shared via redis)
+resources:
+  minCpu: 250m
+  maxCpu: 1000m
+  minMemory: 256Mi
+  maxMemory: 512Mi
+
+# ─── Search behaviour ─────────────────────────────────────────────
+instanceName: SearXNG          # shown in the UI and returned by /config
+formats:                       # allowed: html, json, csv, rss (upstream default is html only)
+  - html
+  - json                       # the JSON API AI agents call: /search?q=...&format=json
+imageProxy: true               # proxy result images through this instance instead of hotlinking third parties
+baseUrl: ""                    # set only behind a custom domain, e.g. https://search.example.com (empty = derive from request)
+limiter:
+  enabled: false               # bot-detection rate limiter; requires redis.enabled. NOTE: it 429s non-browser clients, including the JSON API
+extraSettings: {}              # merged into settings.yml verbatim, e.g. {general: {enable_metrics: false}}
+
+# ─── Signing key (USER-CREATED PREREQUISITE — MUST EXIST BEFORE INSTALL) ─
+# Opaque secret, encoding: plain, whose payload is the session/CSRF signing key.
+# Create it FIRST — a missing secret WEDGES the deployment silently (logs
+# return zero lines; the reason appears only in status.versions[].message).
+# The exact create command is in the README Prerequisites section.
+# Never rotate it casually: it invalidates every saved preference cookie.
+secretKey:
+  secretName: my-searxng-secret-key
+
+# ─── Access ───────────────────────────────────────────────────────
+# SearXNG has NO login of any kind. Default is private — see the README
+# "Reaching the UI" section for the port-forward command.
+# Before setting publicAccess.enabled: true, turn limiter.enabled on.
+publicAccess:
+  enabled: false               # true = UI + API on the canonical *.cpln.app endpoint, unauthenticated
+internalAccess:
+  type: same-gvc               # options: none, same-gvc, same-org, workload-list
+  workloads: []                # used only with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Redis (subchart: redis) — limiter counters / shared state ────
+# Pinned single-instance ON PURPOSE: SearXNG's valkey client is not
+# Sentinel-aware, so it must talk to the master directly. redis.replicas
+# must stay 1 (validated). One sentinel is required by the redis chart's
+# boot-time master discovery; it cannot be scaled to zero.
+redis:
+  enabled: true                # false = no datastore; limiter must then stay off
+  redis:
+    image: redis:8
+    replicas: 1                # MUST be 1 (validated) — SearXNG must reach the master directly
+    auth:
+      password:
+        enabled: false         # true = require AUTH; password is wired into the connection URL
+        value: change-me-searxng-redis
+    resources:
+      minCpu: 80m
+      maxCpu: 200m
+      minMemory: 128Mi
+      maxMemory: 256Mi
+  sentinel:
+    image: redis:8
+    replicas: 1
+    resources:
+      minCpu: 80m
+      maxCpu: 200m
+      minMemory: 128Mi
+      maxMemory: 256Mi

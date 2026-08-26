@@ -271,13 +271,23 @@ Complete these before installing with `backup.enabled: true`.
 
 ### Restoring a backup
 
-Download and decompress the file, then copy it over `/data/dump.rdb` on the replica you want to
-restore and restart that replica — Redis loads `dump.rdb` from its data directory at start:
+**Restoring is not a one-liner here, and the obvious approach silently does nothing.** This chart
+runs with `appendonly yes`, so Redis loads `appendonlydir/` at start and **ignores `dump.rdb`
+entirely** — copying a downloaded RDB into the data directory changes nothing, with no error.
+Note also that the Redis image ships neither `aws` nor `gsutil`, so the download happens outside
+the container.
+
+Fetch the object first:
 
 ```sh
-aws s3 cp s3://BUCKET_NAME/PREFIX/BACKUP_FILE.rdb.gz - | gunzip > /data/dump.rdb   # AWS S3
-gsutil cp gs://BUCKET_NAME/PREFIX/BACKUP_FILE.rdb.gz - | gunzip > /data/dump.rdb   # GCS
+aws s3 cp s3://BUCKET_NAME/PREFIX/BACKUP_FILE.rdb.gz - | gunzip > ./dump.rdb   # AWS S3
+gsutil cp gs://BUCKET_NAME/PREFIX/BACKUP_FILE.rdb.gz - | gunzip > ./dump.rdb   # GCS
 ```
+
+Loading it then requires starting the instance with AOF disabled so the RDB is read, and
+re-enabling AOF afterwards so it is rewritten from memory. **That sequence has not been verified
+against this template.** Rehearse it against a scratch install before you need it rather than
+first attempting a restore during an incident.
 
 ## Public access
 

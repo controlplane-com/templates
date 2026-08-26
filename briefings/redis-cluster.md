@@ -50,13 +50,19 @@ client can speak the Redis Cluster protocol and follow `MOVED`/`ASK` redirects.
   change.
 - **The engine is an install-time choice; do not flip it on a live release.** Unsupported and untested in
   both directions. The RDB-format argument used for the `redis` template lands *differently here* and it is
-  worth knowing why: this chart's default `docker.io/redis:7.2` writes **RDB 11**, which Valkey 8.1.9
-  genuinely *can* read — measured locally, a redis:7.2 data dir loaded under Valkey with all keys intact and
-  `cluster_state:ok`. The hazard is `image` being user-settable since 1.5.0: point it at `redis:7.4` or
-  `redis:8` and the data dir becomes RDB 12+ (measured **RDB 15** on redis:8.10.1), which Valkey refuses with
-  `Can't handle RDB format version 15`, aborting AOF load and **exiting 1** — a crash loop with no
-  self-recovery. So "it happens to work on the default pin" is not a supported path; treat the knob as
-  install-time regardless.
+  worth knowing why. This chart's default `docker.io/redis:7.2` writes **RDB 11**, which Valkey 8.1.9
+  genuinely *can* read: measured locally, a redis:7.2 data dir loaded under Valkey with all 48 keys intact
+  and `cluster_state:ok`. That is a real difference from the `redis` template, whose `redis:8` default is
+  refused outright — worth stating rather than smoothing over. The hazard here is that `image` became
+  user-settable in 1.5.0: point it at a newer Redis and the data dir gains a newer format Valkey rejects
+  (measured on `redis:8`/8.10.1: **RDB 15** — note the spec's "RDB 12" figure is wrong, use the measured
+  number). Valkey then fails with `Can't handle RDB format version 15`, aborts AOF load and **exits 1** —
+  a crash loop with no self-recovery. So "it happens to work on the default pin" is not a supported path;
+  treat the knob as install-time regardless.
+- **The block is asymmetric, and both directions are UNTESTED on-platform.** The sibling `redis` build
+  measured valkey→redis loading cleanly (a Valkey-written AOF read by `redis:8`), and redis→valkey failing.
+  Neither direction has been exercised on Control Plane, and this chart adds cluster state (`nodes.conf`,
+  slot ownership) on top of the key data, so do not treat either as a migration path without a test round.
 - **`INFO` reports `redis_version:7.2.4` under Valkey** for client compatibility. To tell what is actually
   running read `server_name:valkey` and `valkey_version`. Anything that version-gates on `redis_version`
   will believe it is talking to Redis 7.2.

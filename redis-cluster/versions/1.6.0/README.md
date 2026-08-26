@@ -231,7 +231,7 @@ gsutil cp gs://BUCKET_NAME/PREFIX/BACKUP_FILE.rdb.gz - \
 - **Authentication is off by default.** `redis: {}` means no `requirepass`, so anything `internalAccess` admits has full access. Set `redis.password` to enable it.
 - **Your client must speak the Redis Cluster protocol.** A plain client pointed at one node receives `MOVED` redirects it will not follow — the most common cause of "it does not work" here.
 - **This is not interchangeable with the `redis` template.** That one is primary/replica with Sentinel and a single write endpoint; this one shards the keyspace. Moving between them is a data migration.
-- **The engine is chosen at install, not switched later.** Moving an existing release between `redis` and `valkey` is unsupported and untested. It is also unsafe whenever `image` has been moved off the pinned `redis:7.2` default: a data directory written by Redis 7.4 or later uses an RDB format Valkey refuses (`Can't handle RDB format version 15`), and the node exits rather than starting. Migrate with dump/restore or replication instead.
+- **The engine is chosen at install, not switched later.** Moving an existing release between `redis` and `valkey` is unsupported and untested. It is also outright unsafe once `image` has been moved off the pinned `redis:7.2` default: newer Redis releases write a newer on-disk format that Valkey rejects — measured on `redis:8`, the node fails with `Can't handle RDB format version 15` and exits instead of starting. Migrate with dump/restore or replication instead.
 - **The default `250Mi` per node is a floor, not a recommendation.** A cache left at the default will begin evicting almost immediately under real load.
 
 ### Links

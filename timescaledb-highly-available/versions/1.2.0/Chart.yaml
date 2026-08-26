@@ -7,7 +7,7 @@ appVersion: "pg18.4-ts2.28.3"
 
 annotations:
   created: "2026-07-27"
-  lastModified: "2026-08-24"
+  lastModified: "2026-08-25"
   category: "database"
   postgresVersion: "18"
   createsGvc: false

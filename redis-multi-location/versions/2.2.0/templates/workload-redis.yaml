@@ -71,7 +71,7 @@ spec:
           fi
       cpu: {{ .Values.redis.resources.cpu | quote }}
       memory: {{ .Values.redis.resources.memory | quote }}
-      image: {{ .Values.redis.image | default "redis:7.4" }}
+      image: {{ include "redis-ml.serverImage" . }}
       inheritEnv: false
       {{- if or .Values.redis.passwordSecretName .Values.sentinel.passwordSecretName }}
       env:

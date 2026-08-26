@@ -17,9 +17,23 @@ global:
       - name: aws-eu-central-1
       - name: aws-us-west-2
 
+# ─── Engine ───────────────────────────────────────────────────────────────────
+# Which server this deployment runs. `redis` is the default and changes nothing.
+# `valkey` runs BOTH the Redis and Sentinel tiers on the image below — Valkey is
+# the BSD-licensed fork of Redis 7.2 and ships redis-server / redis-cli /
+# redis-sentinel compatibility symlinks, so nothing else in this chart changes.
+# Chosen at INSTALL time: an existing data directory cannot be moved between
+# engines (Valkey cannot read RDB/AOF files written by Redis 7.4+).
+engine: redis # redis | valkey
+# Used for BOTH tiers when engine is valkey; redis.image / sentinel.image are
+# then ignored. Use a DEBIAN-based tag: both tiers build their config with
+# `echo "\n..."`, which busybox does not expand, so an `-alpine` tag fails at
+# start with `Bad directive` (true of the redis `-alpine` tags too).
+valkeyImage: valkey/valkey:8.1.9
+
 # ─── Redis ────────────────────────────────────────────────────────────────────
 redis:
-  image: redis:7.4
+  image: redis:7.4 # ignored when engine is valkey
   # Redis instances in EVERY location. Deliberately its own knob rather than
   # `global.gvc.locations[].replicas`: that list is shared with a parent chart,
   # where `replicas` already means the parent's own members per location.
@@ -27,7 +41,7 @@ redis:
   resources:
     cpu: 200m
     memory: 256Mi
-  serverCommand: redis-server # valkey-server for a Valkey image
+  serverCommand: redis-server # correct for both engines — the Valkey image ships a redis-server symlink
   extraArgs: "" # e.g. "--maxmemory 200mb --maxmemory-policy allkeys-lru"
   # OPTIONAL PREREQUISITE SECRET — empty means no Redis password at all.
   # An `opaque` secret (encoding `plain`) whose payload IS the password; it is
@@ -48,7 +62,7 @@ redis:
 # ─── Sentinel ─────────────────────────────────────────────────────────────────
 # Exactly one Sentinel per location — the count is not configurable.
 sentinel:
-  image: redis:7.4
+  image: redis:7.4 # ignored when engine is valkey
   resources:
     cpu: 200m
     memory: 256Mi

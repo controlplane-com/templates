@@ -95,6 +95,38 @@ Total Sentinel Replica Count (exactly 1 per location)
 {{- end }}
 
 
+{{/* Engine and images */}}
+
+{{/*
+Redis server image. `engine` decides WHICH knob is read; the other is inert —
+there is deliberately no "explicitly-set image wins" precedence, because Helm
+cannot tell an explicit value from a default without comparing against a magic
+string. A user wanting a different Valkey tag sets valkeyImage.
+The inline defaults mirror the values.yaml defaults so a parent chart that
+overrides only part of this block still renders.
+*/}}
+{{- define "redis-ml.serverImage" -}}
+{{- if eq (.Values.engine | default "redis") "valkey" -}}
+{{- .Values.valkeyImage | default "valkey/valkey:8.1.9" -}}
+{{- else -}}
+{{- .Values.redis.image | default "redis:7.4" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Sentinel image — the SAME valkeyImage as the server tier. Running a different
+Valkey build for server and sentinel is a trap, not a feature, so one knob
+binds both.
+*/}}
+{{- define "redis-ml.sentinelImage" -}}
+{{- if eq (.Values.engine | default "redis") "valkey" -}}
+{{- .Values.valkeyImage | default "valkey/valkey:8.1.9" -}}
+{{- else -}}
+{{- .Values.sentinel.image | default "redis:7.4" -}}
+{{- end -}}
+{{- end }}
+
+
 {{/* Validation */}}
 
 {{/*
@@ -136,8 +168,22 @@ field its database tier requires. Nested, the field is simply ignored.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- include "redis-ml.validateEngine" . -}}
 {{- include "redis-ml.validatePublicAccess" . -}}
 {{- include "redis-ml.validateBackupConfig" . -}}
+{{- end -}}
+
+{{/*
+Validate the engine choice
+*/}}
+{{- define "redis-ml.validateEngine" -}}
+{{- $e := .Values.engine | default "redis" -}}
+{{- if not (or (eq $e "redis") (eq $e "valkey")) -}}
+{{- fail (printf "redis-multi-location: engine must be \"redis\" or \"valkey\" (got %q). It selects which server image BOTH the Redis and Sentinel tiers run; see values.yaml." $e) -}}
+{{- end -}}
+{{- if and (eq $e "valkey") (not .Values.valkeyImage) -}}
+{{- fail "redis-multi-location: valkeyImage must be set when engine is \"valkey\"" -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

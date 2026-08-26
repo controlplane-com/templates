@@ -1,8 +1,8 @@
 # Redis Multi-Location
 
 One Redis master-replica cluster whose members span locations, with Redis Sentinel running in every
-location to elect a new master when the current one is lost. For a single-location cluster, use the
-`redis` template instead.
+location to elect a new master when the current one is lost. Runs **Redis (the default) or Valkey** —
+one `engine` knob, chosen at install. For a single-location cluster, use the `redis` template instead.
 
 ## Architecture
 
@@ -63,6 +63,34 @@ That arithmetic decides what survives.
 
 An even count buys nothing over the odd count below it.
 
+## Engine: Redis or Valkey
+
+`engine` picks the server both tiers run. It is the only difference between the two shapes — topology,
+replica counts, config, Sentinel behaviour, secrets, firewall and backups are identical.
+
+| | `engine: redis` (default) | `engine: valkey` |
+|---|---|---|
+| Image | `redis.image` / `sentinel.image` (`redis:7.4`) | `valkeyImage` (`valkey/valkey:8.1.9`) for **both** tiers |
+| License | Redis Source Available / SSPL | BSD-3-Clause, Linux Foundation — no paid edition, nothing feature-gated |
+| On-disk format | RDB 12 | RDB 11 (the Redis 7.2 format) |
+
+[Valkey](https://valkey.io/) is the fork of Redis 7.2 that the Linux Foundation stewards. Its image
+ships `redis-server`, `redis-cli` and `redis-sentinel` compatibility symlinks, so every command,
+config directive and connection string in this template is unchanged — including `masterauth`,
+`sentinel auth-pass` and the `replica-announce-ip` hostname discovery this chart relies on across
+locations.
+
+- **`engine` binds both tiers at once.** You cannot run a Valkey server behind a Redis Sentinel by
+  accident; setting `engine: valkey` makes `redis.image` and `sentinel.image` inert.
+- **Pick the engine at install — it cannot be changed later.** See Important Notes.
+- **Set `valkeyImage` to a Debian-based tag.** Both tiers assemble their config with `echo "\n..."`,
+  which busybox does not expand, so an `-alpine` tag fails at start with `Bad directive`. The same is
+  true of the `redis` `-alpine` tags.
+- **Valkey 9.x tags are reachable through `valkeyImage` but are not tested here**, and Valkey 9 writes
+  a format (RDB 80) no Redis can read.
+- **`INFO` reports `redis_version:7.2.4` on Valkey** for client compatibility. Read `server_name` and
+  `valkey_version` to see what is really running.
+
 ## Configuration
 
 ### GVC and locations
@@ -84,11 +112,28 @@ global:
       - name: aws-us-west-2
 ```
 
+### Engine
+
+```yaml
+# Which server this deployment runs. `redis` is the default and changes nothing.
+# `valkey` runs BOTH the Redis and Sentinel tiers on the image below — Valkey is
+# the BSD-licensed fork of Redis 7.2 and ships redis-server / redis-cli /
+# redis-sentinel compatibility symlinks, so nothing else in this chart changes.
+# Chosen at INSTALL time: an existing data directory cannot be moved between
+# engines (Valkey cannot read RDB/AOF files written by Redis 7.4+).
+engine: redis # redis | valkey
+# Used for BOTH tiers when engine is valkey; redis.image / sentinel.image are
+# then ignored. Use a DEBIAN-based tag: both tiers build their config with
+# `echo "\n..."`, which busybox does not expand, so an `-alpine` tag fails at
+# start with `Bad directive` (true of the redis `-alpine` tags too).
+valkeyImage: valkey/valkey:8.1.9
+```
+
 ### Redis
 
 ```yaml
 redis:
-  image: redis:7.4
+  image: redis:7.4 # ignored when engine is valkey
   # Redis instances in EVERY location. Deliberately its own knob rather than
   # `global.gvc.locations[].replicas`: that list is shared with a parent chart,
   # where `replicas` already means the parent's own members per location.
@@ -96,7 +141,7 @@ redis:
   resources:
     cpu: 200m
     memory: 256Mi
-  serverCommand: redis-server # valkey-server for a Valkey image
+  serverCommand: redis-server # correct for both engines — the Valkey image ships a redis-server symlink
   extraArgs: "" # e.g. "--maxmemory 200mb --maxmemory-policy allkeys-lru"
   # OPTIONAL PREREQUISITE SECRET — empty means no Redis password at all.
   # An `opaque` secret (encoding `plain`) whose payload IS the password; it is
@@ -119,7 +164,7 @@ redis:
 
 ```yaml
 sentinel:
-  image: redis:7.4
+  image: redis:7.4 # ignored when engine is valkey
   resources:
     cpu: 200m
     memory: 256Mi
@@ -277,6 +322,12 @@ redis-cli -h {release}-redis -p 6379 --no-auth-warning -a "$REDIS_PASSWORD" GET 
 
 ## Important Notes
 
+- **`engine` is an install-time choice and cannot be changed on an existing install.** This chart ships
+  `appendonly yes`, and `redis:7.4` writes its AOF base file in RDB format 12, which Valkey 8 refuses:
+  it exits 1 with `Can't handle RDB format version 12` / `Error reading the RDB base file
+  appendonly.aof.N.base.rdb, AOF loading aborted`, so every replica crash-loops. Setting `engine` back
+  to `redis` recovers the data untouched. Migrate between engines with a dump/restore or by replicating
+  into a fresh install — never by flipping the knob.
 - **Create the password secrets before installing.** `redis.passwordSecretName` and
   `sentinel.passwordSecretName` name secrets the chart does not create; pointing either at a secret
   that does not exist wedges the deployment waiting on it.
@@ -313,4 +364,5 @@ redis-cli -h {release}-redis -p 6379 --no-auth-warning -a "$REDIS_PASSWORD" GET 
 - [Redis Sentinel documentation](https://redis.io/docs/latest/operate/oss_and_stack/management/sentinel/)
 - [Redis replication](https://redis.io/docs/latest/operate/oss_and_stack/management/replication/)
 - [Redis persistence (RDB and AOF)](https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/)
+- [Valkey documentation](https://valkey.io/topics/)
 - [Create a Control Plane cloud account](https://docs.controlplane.com/guides/create-cloud-account)

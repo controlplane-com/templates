@@ -88,7 +88,7 @@ spec:
           exec redis-sentinel /etc/sentinel/sentinel.conf {{ .Values.sentinel.extraArgs | default "" }}
       cpu: {{ .Values.sentinel.resources.cpu | quote }}
       memory: {{ .Values.sentinel.resources.memory | quote }}
-      image: {{ .Values.sentinel.image | default "redis:7.4" }}
+      image: {{ include "redis-ml.sentinelImage" . }}
       inheritEnv: false
       {{- if or .Values.redis.passwordSecretName .Values.sentinel.passwordSecretName }}
       env:

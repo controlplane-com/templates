@@ -1,0 +1,6 @@
+{{- include "redis-ml.validate" . -}}
+kind: identity
+name: {{ include "redis-ml.sentinelIdentity.name" . }}
+description: Sentinel Identity
+tags: {{- include "redis-ml.tags" . | nindent 4 }}
+gvc: {{ .Values.global.gvc.name }}

@@ -1,0 +1,19 @@
+apiVersion: v2
+name: pgvector
+description: PostgreSQL with pgvector for vector similarity search and embedding storage
+
+type: application
+version: 1.0.0
+appVersion: "0.8.6-pg18"
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+
+annotations:
+  created: "2026-08-26"
+  lastModified: "2026-08-26"
+  category: "database"
+  postgresVersion: "18"
+  createsGvc: false

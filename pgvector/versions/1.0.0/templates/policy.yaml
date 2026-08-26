@@ -1,0 +1,19 @@
+{{- include "pgvector.validate" . -}}
+kind: policy
+name: {{ include "pgvector.policy.name" . }}
+description: pgvector policy
+tags: {{- include "pgvector.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pgvector.identity.name" . }}
+targetKind: secret
+targetLinks:
+  # The user-created database credentials — reveal on exactly that one secret.
+  - //secret/{{ .Values.config.credentialsSecretName }}
+  # The chart-created first-boot SQL, mounted as a file by the database workload.
+  - //secret/{{ include "pgvector.secret.init.name" . }}
+  {{- if and .Values.backup.enabled (eq .Values.backup.provider "minio") }}
+  - //secret/{{ .Values.backup.minio.credentialsSecretName }}
+  {{- end }}

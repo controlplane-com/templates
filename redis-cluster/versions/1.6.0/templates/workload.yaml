@@ -32,9 +32,9 @@ spec:
             - "-c"
             - >-
                 if [ ! -z "$REDIS_PASSWORD" ]; then
-                  redis-cli --no-auth-warning -a "$REDIS_PASSWORD" ping;
+                  redis-cli -p "$CUSTOM_REDIS_PORT" --no-auth-warning -a "$REDIS_PASSWORD" ping;
                 else
-                  redis-cli ping;
+                  redis-cli -p "$CUSTOM_REDIS_PORT" ping;
                 fi
         failureThreshold: 10
         initialDelaySeconds: 20
@@ -46,7 +46,10 @@ spec:
       ports:
         - number: {{ .Values.port }}
           protocol: tcp
-        - number: 16379
+        # Cluster bus. Redis derives it as port+10000 when `cluster-port` is
+        # unset, so this must track `port` — hardcoding 16379 left the bus
+        # undeclared for any non-default port and gossip could not form.
+        - number: {{ add .Values.port 10000 }}
           protocol: tcp
       volumes:
         - path: /data

@@ -30,7 +30,7 @@ fi
 
 # Waiting for redis to become Healthy
 while true; do
-    response=$(redis-cli $AUTH_PARAMS ping 2>&1)
+    response=$(redis-cli $AUTH_PARAMS -p "$CUSTOM_REDIS_PORT" ping 2>&1)
     # Check if the response is "PONG"
     if [[ "$response" == *"PONG"* ]]; then
         echo "Redis node is HEALTHY"
@@ -50,11 +50,11 @@ done
 NODE_LIST=$(echo $NODE_LIST | sed 's/ $//')
 
 # Cluster init
-cluster_status=$(redis-cli $AUTH_PARAMS cluster info | grep "cluster_state" | cut -d':' -f2 | tr -d '\r')
+cluster_status=$(redis-cli $AUTH_PARAMS -p "$CUSTOM_REDIS_PORT" cluster info | grep "cluster_state" | cut -d':' -f2 | tr -d '\r')
 
 if [[ "$cluster_status" == "ok" ]]; then
     echo "Redis cluster is HEALTHY"
-    cluster_status=$(redis-cli $AUTH_PARAMS cluster info)
+    cluster_status=$(redis-cli $AUTH_PARAMS -p "$CUSTOM_REDIS_PORT" cluster info)
     echo "$cluster_status"
 else
     while true; do
@@ -74,16 +74,16 @@ else
 
         # If this is replica *-0, all nodes are healthy, and the cluster is not initiated, create the cluster
         if [[ $PET_ORDINAL == 0 && "$all_nodes_healthy" == true ]]; then
-            cluster_status=$(redis-cli $AUTH_PARAMS cluster info | grep "cluster_state" | cut -d':' -f2 | tr -d '\r')
+            cluster_status=$(redis-cli $AUTH_PARAMS -p "$CUSTOM_REDIS_PORT" cluster info | grep "cluster_state" | cut -d':' -f2 | tr -d '\r')
             if [ "$cluster_status" = "ok" ]; then
                 echo "All nodes are healthy and cluster status is OK."
                 break
             else
                 echo "Creating Cluster"
                 if [ ! -z "$REDIS_PASSWORD" ]; then
-                    redis-cli $AUTH_PARAMS --cluster create $NODE_LIST --cluster-replicas 1 --cluster-yes
+                    redis-cli $AUTH_PARAMS -p "$CUSTOM_REDIS_PORT" --cluster create $NODE_LIST --cluster-replicas 1 --cluster-yes
                 else
-                    redis-cli --cluster create $NODE_LIST --cluster-replicas 1 --cluster-yes
+                    redis-cli -p "$CUSTOM_REDIS_PORT" --cluster create $NODE_LIST --cluster-replicas 1 --cluster-yes
                 fi
                 break
             fi   

@@ -227,6 +227,7 @@ gsutil cp gs://BUCKET_NAME/PREFIX/BACKUP_FILE.rdb.gz - \
 
 ### Important Notes
 
+- **Changing `port` also moves the cluster bus.** Redis derives the bus as `port + 10000` and this template declares both, so a custom `port` needs no extra configuration — but any firewall or client expecting `16379` must move with it.
 - **`replicas` is effectively pinned at 6.** Redis Cluster needs three masters for quorum and this template pairs each with a replica, so fewer will not form a cluster. Raising it does not work either: the platform caps replica-direct workloads at 6 by a built-in org quota, and `replicas: 8` is rejected at apply with `exceed the autoscaling.maxScale of 6 (quota: replicas-per-replica-direct-workload)`. Treat 6 as the only supported value.
 - **Authentication is off by default.** `redis: {}` means no `requirepass`, so anything `internalAccess` admits has full access. Set `redis.password` to enable it.
 - **Your client must speak the Redis Cluster protocol.** A plain client pointed at one node receives `MOVED` redirects it will not follow — the most common cause of "it does not work" here.

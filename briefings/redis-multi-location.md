@@ -110,3 +110,6 @@ unauthenticated no matter what `requirepass` says, while every status surface re
 Redis instance in every location at once, dropping the master out of quorum and starting a failover
 (`+odown` → `+try-failover`). It resolved harmlessly only because no replica was promotable. Changing
 the **Sentinel** password alone is safe — no vote at all. Documented in the README.
+- **Rotating a password needs a forced redeployment.** Both tiers read the secret at container start, and updating it in place does NOT trigger a restart: measured at 5 minutes with the version unchanged and the old password still returning `PONG`. Healthy status throughout, so it looks like it worked. Redeploy Sentinel first, then Redis.
+- **The 2.1.0 ACL trap is closed under Valkey.** The persisted `sentinel.conf` carried a password HASH rather than `user default … nopass`, verified on an authless→auth upgrade, which is the harder direction.
+- **Open, pre-existing:** the backup cron sets `REDIS_HOST` to the load-balanced service name, so a snapshot lands on a non-deterministic replica rather than the master. Untested (no bucket in the round) and unresolved.

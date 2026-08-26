@@ -331,9 +331,18 @@ redis-cli -h {release}-redis -p 6379 --no-auth-warning -a "$REDIS_PASSWORD" GET 
 - **Create the password secrets before installing.** `redis.passwordSecretName` and
   `sentinel.passwordSecretName` name secrets the chart does not create; pointing either at a secret
   that does not exist wedges the deployment waiting on it.
-- **Changing or removing a password takes effect on the next restart**, not immediately — both tiers
-  read the secret at container start, and Sentinel rewrites its own config from it every start.
-  Restart Sentinel first, then Redis.
+- **Changing or removing a password requires a forced redeployment — it does NOT apply on its own.**
+  Both tiers read the secret at container start, and Sentinel rewrites its own config from it every
+  start, so a rotation only lands when a replica restarts. Updating the secret in place does not
+  trigger one: measured at 5 minutes with the workload version unchanged and the **old password
+  still accepted**. There is no error and the workload stays healthy throughout, so a rotation looks
+  like it worked while the old credential keeps working indefinitely. Apply it with:
+
+  ```bash
+  cpln workload force-redeployment <workload> --gvc <gvc>
+  ```
+
+  Redeploy Sentinel first, then Redis.
 - **Changing the REDIS password briefly takes the master out of quorum.** Every Redis instance in every
   location restarts at once, so Sentinel loses the master and starts a failover (`+odown` →
   `+try-failover`). Measured 2026-08-13: it resolved on its own with no data loss and no split, because

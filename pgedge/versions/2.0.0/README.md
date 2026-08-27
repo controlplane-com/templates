@@ -308,7 +308,7 @@ Set your desired backup schedule in the values file and configure your AWS S3 or
 backup:
   enabled: false
   image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
-  schedule: "0 2 * * *"   # daily at 2am UTC — runs in locations[0] only
+  schedule: "0 2 * * *"   # daily at 2am UTC — runs in locations[0] only; keep the quotes
 
   resources:
     cpu: 100m

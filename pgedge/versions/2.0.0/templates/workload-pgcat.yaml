@@ -7,7 +7,7 @@ spec:
   type: standard
   containers:
     - name: pgcat
-      image: {{ .Values.pgcat.image }}
+      image: {{ .Values.pgcat.image | quote }}
       command: "/bin/sh"
       args:
         - "/etc/pgcat/start.sh"
@@ -74,7 +74,7 @@ spec:
       outboundAllowCIDR:
         - 0.0.0.0/0  # Required to reach pgEdge nodes across locations
     internal:
-      inboundAllowType: {{ .Values.internal_access.type }}
+      inboundAllowType: {{ .Values.internal_access.type | quote }}
       {{- if .Values.internal_access.workloads }}
       inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
       {{- end }}

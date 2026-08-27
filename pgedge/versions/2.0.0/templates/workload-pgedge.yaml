@@ -7,7 +7,7 @@ spec:
   type: stateful
   containers:
     - name: pgedge
-      image: {{ .Values.image }}
+      image: {{ .Values.image | quote }}
       command: "/bin/bash"
       args:
         - "/pgedge/start.sh"
@@ -56,7 +56,7 @@ spec:
       outboundAllowCIDR:
         - 0.0.0.0/0  # Required for inter-node Spock replication across locations
     internal:
-      inboundAllowType: {{ .Values.internal_access.type }}
+      inboundAllowType: {{ .Values.internal_access.type | quote }}
       {{- if .Values.internal_access.workloads }}
       inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
       {{- end }}

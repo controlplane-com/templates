@@ -39,7 +39,7 @@ spec:
           value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.username
         - name: PG_DATABASE
           value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.database
-      image: {{ .Values.backup.image }}
+      image: {{ .Values.backup.image | quote }}
       inheritEnv: false
   defaultOptions:
     autoscaling:
@@ -75,6 +75,6 @@ spec:
     concurrencyPolicy: Forbid
     historyLimit: 5
     restartPolicy: Never
-    schedule: {{ .Values.backup.schedule }}
+    schedule: {{ .Values.backup.schedule | quote }}
   supportDynamicTags: false
 {{- end }}

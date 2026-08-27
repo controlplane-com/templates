@@ -1,4 +1,7 @@
-image: ghcr.io/coreruleset/coraza-crs@sha256:eed7280e0de4820507b500b1ee10de820c175165d5cce329609bf34f32977af8 # Coraza GitHub image
+# Pinned by digest = tag 4.25-caddy-alpine-202607180107 (OWASP CRS 4.25.0, Caddy v2.11.2).
+# Only the *-caddy-alpine-* variants work with this template, and only a datecode or a
+# digest is safe to pin — moving tags such as -lts get repointed upstream.
+image: ghcr.io/coreruleset/coraza-crs@sha256:21e95b2117c8c818f263944f45bd233608b3d18dd95653f71539972eb0cdfca1
 
 # MUST BE CHANGED
 targetWorkload: my-workload.my-gvc.cpln.local # Workload internal name of the workload to proxy traffic to

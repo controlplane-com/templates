@@ -100,7 +100,7 @@ hardcoded value of 5:
 Every failure sits on the 5 s timeout and CPU alone moves it: roughly **8.5 ms per KB at `cpu: 1000m`**,
 scaling inversely with CPU and relatively worse below about `250m`, where CPU throttling bites. As a rule,
 `largest body ≈ 120 KB × cpu-cores × timeoutSeconds` — so the shipped `500m` / `30 s` gives about
-**1.7 MB**, enough for ordinary form posts and JSON APIs.
+**1.8 MB**, enough for ordinary form posts and JSON APIs.
 
 For more, raise `resources.cpu` first (faster, rather than merely more patient), then `timeoutSeconds`, and
 raise `resources.memory` with them — one inspected 3 MB body peaked at 124 MiB, which is why the default is
@@ -156,10 +156,19 @@ the container's log:
 cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-coraza-waf"} |= "[FATAL]"' --limit 100 --since 30m
 ```
 
-The usual causes are an `image` that is not a Caddy variant, or a moving tag that upstream repointed to a
-build whose internal configuration differs. Drop the `|= "[FATAL]"` filter to see the `[INFO]` lines as
-well — on a healthy start those show which handler index was resolved and what the WAF was pointed at,
-which is the quickest way to confirm the proxy is configured the way you intended.
+Drop the `|= "[FATAL]"` filter to see the `[INFO]` lines as well — on a healthy start those show which
+handler index was resolved and what the WAF was pointed at, which is the quickest way to confirm the proxy
+is configured the way you intended.
+
+**There are two different failure signatures, and only one of them produces a `[FATAL]` line:**
+
+| What you see | What it means |
+|---|---|
+| `[FATAL]` after ~30 s | Caddy is running but its admin API never became reachable, or the reverse-proxy handler could not be found. Usually a moving tag that upstream repointed to a build whose internal configuration differs. |
+| **No `[FATAL]`**, last log line `Launching caddy run …`, and `exitCode: 127` | **The image is not a Caddy variant at all.** The container exits in under a second — before the hook's deadline — so no hook output is ever written. Check `image`: only the `-caddy-alpine` builds work with this template. |
+
+The second case is the more common mistake, because the newest CRS tags (`4.28`) exist only as `-nginx`
+and `-apache` builds. Reaching for "the latest CRS" lands on an image with no Caddy in it.
 
 Log ingestion runs a few minutes behind live, so wait before concluding the query returned nothing.
 

@@ -95,3 +95,7 @@ surface stayed green. Hence the handler-resolution loop.
 GVC: that the platform accepts the `command`/`args` override with the hook still gated by `postStart`, and
 that `[INFO]`/`[FATAL]` then appear in `cpln logs`. The 30 s deadline is already settled — a probe hook ran
 602 s unkilled.
+- **Two failure signatures, and only one writes `[FATAL]`.** A non-Caddy image exits **127 in under a second** — the chart's `args` hand `caddy run ...` to the image entrypoint's `exec "$@"`, and an nginx or apache build has no caddy binary — so the container dies long before the hook's 30 s deadline and takes the log-forwarding tail with it. The operator sees `Launching caddy run ...` as the last line plus `exitCode: 127`, never a `[FATAL]`. Both signatures are in the README; do not "fix" the missing FATAL, it is structural.
+- **`timeoutSeconds` is enforced at the PUBLIC edge only.** Measured: `/delay/40` through a WAF set to 30 returned 200 at 40 s internally but 504 at 30.12 s publicly. A body-size or latency test run from inside the GVC will find no 504 at any size and is a false negative.
+- **Max inspected body at the shipped defaults is ~1.8 MB** (measured on the public path: 1700 KB → 200 at 29.77 s, 1900 KB → 504 at 30.04 s). Pre-1.2.0 defaults 504'd at **50 KB in 5.04 s**.
+- **Unresolved:** back-to-back large POSTs returned fast 503s at one replica; re-issued singly the same 1 MB body returned 200 in 15.4 s, with no OOM and no restarts. Not root-caused.

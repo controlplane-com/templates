@@ -15,7 +15,8 @@ proxy in front of a workload you already run. Traffic enters the WAF, is inspect
 | secret `-custom-rules` | your own rules, layered on top of the Core Rule Set |
 | identity + policy | `reveal` on those two secrets |
 
-Does not create a GVC, and does not deploy the workload it protects.
+Does not create a GVC, and does not deploy the workload it protects. The container's `command`/`args` run
+the image's own entrypoint behind a `tail` — see the hook-visibility trap below; do not "simplify" it away.
 
 ## Key knobs (shipped defaults, 1.2.0)
 
@@ -24,9 +25,14 @@ Does not create a GVC, and does not deploy the workload it protects.
 | `image` | `coraza-crs@sha256:21e95b21…` | = tag `4.25-caddy-alpine-202607180107`, CRS 4.25.0, Caddy v2.11.2 |
 | `targetWorkload` | `my-workload.my-gvc.cpln.local` | must be fully qualified |
 | `targetPort` / `WAFPort` | `8080` / `80` | upstream port, and the port clients reach |
-| `resources` | `50m` / `128Mi` | limits only, so bare `cpu`/`memory` naming is correct |
+| `resources` | `500m` / `512Mi` | limits only, so bare `cpu`/`memory` naming is correct |
+| `timeoutSeconds` | `30` | request timeout; was hardcoded at 5 before 1.2.0 |
 | `multiZone` | `false` | spread replicas across zones |
-| `diskBodyInspection` | `true` | buffer oversized bodies to disk so they are still inspected |
+
+`diskBodyInspection` was **removed** in 1.2.0: it only set `SecRequestBodyNoFilesLimit`, which this
+Coraza build does not enforce. At `NoFilesLimit=1000` a 5 KB benign body returns 200 (a Reject would be
+403) while the same body carrying SQLi returns 403 — read and inspected five times past the "limit". If a
+future image starts honouring the directive, the knob becomes real again.
 
 ## The 1.2.0 incident, and why the hook changed
 
@@ -37,40 +43,55 @@ assumptions about the image's internals. 1.2.0 turns each into a checked precond
 
 | Assumption (≤1.1.1) | Failure mode | 1.2.0 |
 |---|---|---|
-| admin API answers on `127.0.0.1:2019` — **unbounded** `until` loop | hangs until the platform kills the hook; that *is* the customer's symptom | 30 s deadline, then exit 1 naming the likely cause |
+| admin API answers on `127.0.0.1:2019` — unbounded `until` loop | see the folded-scalar bug below | 30 s deadline, then exit 1 naming the likely cause |
 | `reverse_proxy` sits at the **hardcoded** `…/handle/1` | only true for the current Caddyfile | reads `…/handle/N/handler`, patches the entry that *is* `reverse_proxy`, exits 1 if none |
 | a failed patch logged `[WARN]` and **exited 0** | WAF serves unconfigured while reporting healthy | non-200 exits 1; the config is also read back and compared to the intended upstream |
 
-**Non-zero is deliberate** (reasoning is in the script's comments): it restarts the container, which is
-loud, whereas exiting 0 leaves a security appliance silently misconfigured. Fail closed and visible.
+**1.1.1's wait loop never ran, on any image.** Its `payload:` was a YAML **folded** (`>`) scalar, which
+kept a newline inside the `until` condition (`until wget … ⏎ 2>/dev/null; do`). The newline terminates the
+`wget`, so the condition's status comes from a bare redirection — always 0, loop body never entered. 1.1.1
+therefore did not hang; it **failed open in 0 s**, reporting `ready: True` with an unconfigured proxy.
+1.2.0 uses a literal (`|-`) block: anything reformatting this secret must keep literal block scalars.
 
-**How bad the hardcoded index was — measured, not argued.** Pointing the patch at `handle/0` (the `waf`
-handler) returns **`HTTP/1.1 200 OK`** and rewrites that entry into a second `reverse_proxy`. The list
-becomes `0 -> reverse_proxy, 1 -> reverse_proxy`: the WAF is gone, traffic still flows, every status
-surface reads healthy. A positional patch can delete the firewall, not merely misconfigure the proxy.
+**A positional patch deletes the WAF rather than misconfiguring it — confirmed live.** PATCHing `handle/0`
+returns `200 OK` and leaves `0 -> reverse_proxy, 1 -> reverse_proxy`; every attack that had returned 403
+then returned **200 with the upstream's real body**, rule evaluations dropped to zero, and every health
+surface stayed green. Hence the handler-resolution loop.
 
 ## Troubleshooting traps
 
+- **A `postStart` hook's output reaches NO log surface** — not `cpln logs`, `get-deployments`, or the
+  event log the platform's own message points at, all three checked with positive controls. **And
+  `/proc/1/fd/1` does not fix it here**: caddy marks its process non-dumpable, so the kernel makes
+  `/proc/1/fd` root:root 0500 even though PID 1 runs as caddy(1000) (control: an alpine PID 1 at uid 1000
+  *is* writable). So the hook writes `/tmp/coraza-hook.log` and the container command `tail -F`s it before
+  `exec`ing the entrypoint. Those two ends must stay in step, and overriding `command`/`args` removes the
+  only surface carrying the diagnosis.
+- **Body inspection is CPU-bound, and `timeoutSeconds` is the wall it hits.** ~8.5 ms/KB at `cpu: 1000m`,
+  scaling inversely with CPU and relatively worse below ~250m. Rule of thumb:
+  `largest body ≈ 120 KB × cpu-cores × timeoutSeconds`. The pre-1.2.0 defaults (`50m`, hardcoded 5 s)
+  504'd every POST body over ~30 KB — measured 504 at 50 KB, 200 KB, 400 KB and 600 KB, all at ~5.2-5.3 s,
+  with CPU alone fixing them. GET traffic is unaffected, so smoke tests never catch it. `timeoutSeconds`
+  also caps how long the protected upstream may take, so a low value 504s slow application endpoints too.
+- **Memory scales with body size.** A single inspected 3 MB body peaked at 123.8 MiB against a 128 MiB
+  limit — 97%, with no concurrency at all. Hence the 512Mi default.
+- **CRS rule 920450 blocks any request carrying `Expect: 100-continue`.** Size held constant, an identical
+  2 KB body is 200 without the header and 403 with it; clients add it for large uploads. `SecRuleRemoveById
+  920450` in the custom-rules secret fixes it (verified: the bundled custom rule and SQLi blocking both
+  still fire afterwards). The rules.d file loads *after* CRS, which is what makes removal work.
 - **Pin a datecode or a digest, never `-lts` or `caddy-alpine`.** Moving tags get repointed and change the
   image under a deployment nobody touched. This is the one knob that has caused a customer outage.
-- **Only `*-caddy-alpine-*` variants work** — `-nginx-`/`-apache-` have no Caddy and no admin API
-  (`4.28-nginx-202607180107` has neither `caddy`, `wget`, nor `nc`). The trap: the newest CRS releases are
-  nginx/apache only, so chasing the highest CRS number lands on an image this template cannot drive.
-  `4.25` is the newest CRS with a Caddy build.
-- **The image has no `jq`** (busybox `sh` plus `wget`, `nc`, `curl`), so handler resolution queries
-  `…/handle/N/handler` one index at a time rather than parsing JSON.
-- **This only protects traffic that goes through it.** If the protected workload stays publicly reachable
-  on its own endpoint, requests bypass inspection entirely.
-- **`targetWorkload` must be fully qualified**; a bare name is not reliably resolvable and the symptom is
-  a WAF that starts fine and 502s every request.
-- **`diskBodyInspection: false` trades coverage for memory** — oversized bodies are not inspected at all
-  rather than buffered. A silent inspection gap, not a performance tweak.
-- **Custom rules layer on top of CRS**, so a colliding rule ID silently overrides a CRS rule.
-- **The startup secret is a literal (`|-`) block as of 1.2.0**, not the folded (`>`) block ≤1.1.1 used.
-  Folding joined same-indent lines with spaces, so the script's line structure depended on YAML folding —
-  workable, but easy to break with an innocuous edit and hard to extract faithfully for testing.
+- **Only `*-caddy-alpine-*` variants work** — `-nginx-`/`-apache-` have no Caddy and no admin API, and
+  the newest CRS releases are nginx/apache only, so chasing the highest CRS number lands on an image this
+  template cannot drive. `4.25` is the newest with a Caddy build; on nginx the symptom is a misleading
+  `invalid host in upstream`, because `BACKEND` carries a scheme that variant rejects.
+- **Smaller ones:** it only protects traffic routed through it, so the protected workload must not stay
+  publicly reachable; `targetWorkload` must be fully qualified; the image has no `jq` (hence the
+  index-at-a-time handler resolution); Envoy normalizes paths before Caddy sees them, so an unencoded
+  `/../../etc/passwd` arrives already collapsed (not a bypass, but the encoded form is what CRS inspects);
+  and a custom rule whose ID collides with a CRS rule silently overrides it.
 
-**Not verified:** the 30 s deadline is sized to fire before any platform-side lifecycle-hook timeout, but
-that timeout was never measured — all 1.2.0 verification ran in Docker against the real images, not on a
-live GVC. If the platform kills a `postStart` hook sooner than 30 s, the `[FATAL]` line never reaches the
-log and the operator sees the same opaque failure. Worth one live install to settle.
+**Needs live re-verification.** The `tail` forwarder was proven in Docker on the pinned digest, not on a
+GVC: that the platform accepts the `command`/`args` override with the hook still gated by `postStart`, and
+that `[INFO]`/`[FATAL]` then appear in `cpln logs`. The 30 s deadline is already settled — a probe hook ran
+602 s unkilled.

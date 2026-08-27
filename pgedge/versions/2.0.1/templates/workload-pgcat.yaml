@@ -75,7 +75,30 @@ spec:
         - 0.0.0.0/0  # Required to reach pgEdge nodes across locations
     internal:
       inboundAllowType: {{ .Values.internal_access.type | quote }}
-      {{- if .Values.internal_access.workloads }}
+      {{- if eq .Values.internal_access.type "workload-list" }}
+      {{- /*
+        This list governs ALL inbound internal traffic, INCLUDING traffic between
+        THIS release's own workloads: Spock logical replication between pgEdge
+        nodes across locations, and pgcat's connections to every node. A list
+        naming only clients denies replication and the mesh silently diverges,
+        so the chart adds its own workloads rather than requiring the user to
+        know. Confirmed live in etcd-multi-location and clickhouse (2026-08-27),
+        where the same omission destroyed the cluster while every replica
+        reported ready.
+      */}}
+      {{- $own := list
+            (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.name" .))
+            (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.pgcat.name" .)) }}
+      inboundAllowWorkload:
+        {{- range $own }}
+        - {{ . }}
+        {{- end }}
+        {{- range .Values.internal_access.workloads }}
+        {{- if not (has . $own) }}
+        - {{ . }}
+        {{- end }}
+        {{- end }}
+      {{- else if .Values.internal_access.workloads }}
       inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
       {{- end }}
   loadBalancer:

@@ -3,7 +3,7 @@ name: pgedge
 description: Active-active distributed PostgreSQL with Spock multi-master replication across global locations
 
 type: application
-version: 2.0.0
+version: 2.0.1
 appVersion: "17"
 
 annotations:

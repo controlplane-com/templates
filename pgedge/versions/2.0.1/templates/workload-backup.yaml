@@ -54,9 +54,27 @@ spec:
     suspend: true    # a GVC location this release did not ask for must NOT run a second backup
     timeoutSeconds: 5
   localOptions:
+  {{- /*
+    Every field defaultOptions carries is repeated here. The API BACKFILLS a
+    PARTIAL localOptions block with its OWN platform defaults rather than with
+    this workload's defaultOptions -- measured on cockroach 2026-08-27, where a
+    two-field block was stored as seven, silently turning `capacityAI` ON in the
+    one location the cron actually runs and cutting timeoutSeconds to 5. Send
+    the whole block or none of it; half is what produces the contradiction.
+  */}}
   {{- range $i, $loc := .Values.locations }}
-    - location: //location/{{ $loc.name }}
+    - autoscaling:
+        maxConcurrency: 0
+        maxScale: 1
+        metric: disabled
+        minScale: 1
+        scaleToZeroDelay: 300
+        target: 95
+      capacityAI: false
+      debug: false
+      location: //location/{{ $loc.name }}
       suspend: {{ if eq $i 0 }}false{{ else }}true{{ end }}
+      timeoutSeconds: 5
   {{- end }}
   firewallConfig:
     external:

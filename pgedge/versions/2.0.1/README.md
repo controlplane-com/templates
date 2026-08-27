@@ -177,7 +177,9 @@ internal_access:
 
 - `same-gvc`: Allow access from all workloads in the same GVC
 - `same-org`: Allow access from all workloads in the org
-- `workload-list`: Allow access only from specified workloads
+- `workload-list`: Allow access only from specified workloads. List **only your clients** — the
+  pgEdge nodes replicate to each other with Spock and pgcat connects to every node, so the chart
+  always adds this release's own workloads to the list.
 
 ### pgcat Settings
 

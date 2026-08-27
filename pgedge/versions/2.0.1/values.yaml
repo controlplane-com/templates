@@ -49,7 +49,8 @@ pgcat:
 
 internal_access: # Sets both pgedge and pgcat workloads
   type: same-gvc  # options: same-gvc, same-org, workload-list
-  workloads:  # Only used when type is workload-list
+  workloads:  # Only used when type is workload-list; list only your clients --
+              # this release's pgedge and pgcat workloads are added automatically
     #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
 backup:

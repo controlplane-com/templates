@@ -34,7 +34,7 @@ reads near users, and active-active deployments that must survive the loss of a 
 | `pgcat.defaultPoolSize` | 25 | the only connection knob pgcat honours. `pgcat.maxClientConn` existed through 1.1.1 and did nothing — pgcat v1.2.0 has no such setting (absent from `SHOW CONFIG`, absent from the binary), and it was removed in 2.0.0 |
 | `resources` | `500m`/`1Gi` → `2`/`4Gi` | `2` / `500m` is exactly 4:1, the stateful ceiling — raising `maxCpu` alone is rejected at apply |
 | `multiZone` | `false` | |
-| `internal_access.type` | `same-gvc` | off-convention key name, deliberately left alone in 2.0.0 |
+| `internal_access.type` | `same-gvc` | off-convention key name, deliberately left alone in 2.0.0. With `workload-list` the chart adds its OWN pgedge+pgcat workloads (2.0.1) — the list governs Spock replication between nodes, so a clients-only list silently breaks the mesh |
 | `backup.enabled` | `false` | `aws` or `gcp`; target is `locations[0]`, not configurable |
 
 `global.cpln.gvc` is injected at install and is not declared in values.

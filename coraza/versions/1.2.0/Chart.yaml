@@ -1,0 +1,18 @@
+apiVersion: v2
+name: coraza
+description: Coraza web application firewall with the OWASP Core Rule Set, proxying a target workload
+
+type: application
+version: 1.2.0
+appVersion: "4.25.0"
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+
+annotations:
+  created: "2025-10-23"
+  lastModified: "2026-08-27"
+  category: "security"
+  createsGvc: false

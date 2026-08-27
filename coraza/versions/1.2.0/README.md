@@ -83,10 +83,9 @@ lands on an image this template cannot drive. Take the newest `*-caddy-alpine-*`
 
 ## Request size, CPU and timeout
 
-Inspecting a request body is CPU work proportional to its size, and `timeoutSeconds` cuts the request off
-part-way through. Those two numbers together set the largest request body this WAF can accept — and a body
-over the limit is a **504 from the WAF**, which looks like an application fault rather than a WAF setting.
-GET traffic is unaffected, so a smoke test never reveals it.
+Inspecting a request body costs CPU in proportion to its size, and `timeoutSeconds` cuts the request off
+part-way through. Together they set the largest body this WAF accepts; anything larger is a **504 from the
+WAF**, which reads as an application fault. GET traffic is unaffected, so smoke tests never reveal it.
 
 Measured on the platform, same body, only `resources.cpu` changed, with `timeoutSeconds` at its old
 hardcoded value of 5:
@@ -95,26 +94,19 @@ hardcoded value of 5:
 |---|---|---|
 | 1 KB | 200 (1.89 s) | 200 (0.15 s) |
 | 50 KB | **504** (5.20 s) | 200 (0.57 s) |
-| 200 KB | **504** (5.30 s) | 200 (1.75 s) |
 | 400 KB | **504** (5.30 s) | 200 (3.75 s) |
 | 600 KB | **504** (5.32 s) | 200 (5.14 s) |
 
-Every failure lands at the 5 s timeout, and CPU alone moves them — inspection cost is roughly **8.5 ms per
-KB at `cpu: 1000m`**, scaling inversely with CPU and getting relatively worse below about `250m`, where CPU
-throttling starts to bite. As a working rule:
+Every failure sits on the 5 s timeout and CPU alone moves it: roughly **8.5 ms per KB at `cpu: 1000m`**,
+scaling inversely with CPU and relatively worse below about `250m`, where CPU throttling bites. As a rule,
+`largest body ≈ 120 KB × cpu-cores × timeoutSeconds` — so the shipped `500m` / `30 s` gives about
+**1.7 MB**, enough for ordinary form posts and JSON APIs.
 
-```
-largest body ≈ 120 KB × (cpu in millicores ÷ 1000) × timeoutSeconds
-```
-
-The shipped defaults — `cpu: 500m`, `timeoutSeconds: 30` — give roughly **1.7 MB**, which covers ordinary
-form posts and JSON APIs. If you need more, raise `resources.cpu` first (it makes requests faster rather
-than merely more patient), then `timeoutSeconds`, and raise `resources.memory` with them: a 3 MB body
-inspected in one request peaked at 124 MiB, which is why the default is no longer 128Mi.
-
-Two ceilings you cannot raise from here: Coraza stops inspecting bodies above **13 MB**
+For more, raise `resources.cpu` first (faster, rather than merely more patient), then `timeoutSeconds`, and
+raise `resources.memory` with them — one inspected 3 MB body peaked at 124 MiB, which is why the default is
+no longer 128Mi. Two ceilings you cannot raise here: Coraza stops inspecting above **13 MB**
 (`SecRequestBodyLimit`, fixed in the image), and `timeoutSeconds` also caps how long your own upstream has
-to answer — set it above the slowest response your application produces.
+to answer, so set it above your application's slowest response.
 
 ## Connecting
 
@@ -144,10 +136,10 @@ The secret is loaded **after** the Core Rule Set, so it can also switch a CRS ru
 SecRuleRemoveById 920450
 ```
 
-Rule 920450 is the one worth knowing about: it blocks any request carrying an `Expect: 100-continue`
-header, which HTTP clients add for large uploads. Measured on this image, an identical 2 KB body returns
-200 without the header and 403 with it — so an application behind this WAF that receives large uploads
-will see 403s that have nothing to do with the payload. Removing it leaves the rest of CRS untouched.
+Rule 920450 blocks any request carrying an `Expect: 100-continue` header, which HTTP clients add for large
+uploads: measured on this image, an identical 2 KB body returns 200 without the header and 403 with it. An
+app behind this WAF that receives large uploads will see 403s unrelated to the payload. Removing that one
+rule leaves the rest of CRS untouched.
 
 ## Logging
 

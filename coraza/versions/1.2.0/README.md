@@ -62,24 +62,16 @@ multiZone: false
 
 ## Choosing an image tag
 
-This is the one setting that has broken a running deployment, so it is worth getting right.
+**Only the Caddy variants work.** The `-nginx-` and `-apache-` builds of `coraza-crs` ship no Caddy binary,
+so this template cannot configure them. The newest CRS releases are published *only* as nginx and apache
+variants, so reaching for the highest version number lands on an image this template cannot drive — take
+the newest `*-caddy-alpine-*` build instead.
 
-**Pin a datecode or a digest. Never pin a moving tag.** Upstream publishes both:
+**Pin a digest or a datecode, never a moving tag.** `4.25-caddy-alpine-lts` and `caddy-alpine` are
+repointed by upstream, so the image can change under a deployment you have not touched. A digest
+(`coraza-crs@sha256:…`) or a datecode (`4.25-caddy-alpine-202607180107`) names one specific build.
 
-| Tag form | Example | Safe to pin? |
-|---|---|---|
-| Digest | `coraza-crs@sha256:21e95b21…` | Yes — cannot change |
-| Datecode | `4.25-caddy-alpine-202607180107` | Yes — a datecode is a specific build |
-| Moving | `4.25-caddy-alpine-lts`, `caddy-alpine` | **No** — upstream repoints these |
-
-A moving tag changes the image under a deployment that you have not touched. The next replica to start
-pulls a different build, and the WAF's behaviour changes with no change on your side — including its
-internal Caddy configuration, which this template's startup hook has to configure.
-
-**Only the Caddy variants work.** The `-nginx-` and `-apache-` builds of `coraza-crs` ship no Caddy
-binary and no admin API, so the startup hook cannot configure them. This matters because the newest CRS
-releases are published *only* as nginx and apache variants — reaching for the highest CRS version number
-lands on an image this template cannot drive. Take the newest `*-caddy-alpine-*` datecode instead.
+The shipped default is a pinned digest, and is the newest Caddy build available.
 
 ## Request size, CPU and timeout
 
@@ -146,32 +138,6 @@ rule leaves the rest of CRS untouched.
 All Coraza logging goes to `/dev/stdout` so it is readable in the built-in logging interface. Redirect
 it by changing the `CORAZA_*` environment variables in the workload configuration.
 
-## If the workload restart-loops on `PostStartHook failed`
-
-The startup hook configures the image's reverse proxy, and it exits non-zero rather than bring the WAF up
-unconfigured. That platform message says only that the hook failed; the hook itself writes the reason to
-the container's log:
-
-```bash
-cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-coraza-waf"} |= "[FATAL]"' --limit 100 --since 30m
-```
-
-Drop the `|= "[FATAL]"` filter to see the `[INFO]` lines as well — on a healthy start those show which
-handler index was resolved and what the WAF was pointed at, which is the quickest way to confirm the proxy
-is configured the way you intended.
-
-**There are two different failure signatures, and only one of them produces a `[FATAL]` line:**
-
-| What you see | What it means |
-|---|---|
-| `[FATAL]` after ~30 s | Caddy is running but its admin API never became reachable, or the reverse-proxy handler could not be found. Usually a moving tag that upstream repointed to a build whose internal configuration differs. |
-| **No `[FATAL]`**, last log line `Launching caddy run …`, and `exitCode: 127` | **The image is not a Caddy variant at all.** The container exits in under a second — before the hook's deadline — so no hook output is ever written. Check `image`: only the `-caddy-alpine` builds work with this template. |
-
-The second case is the more common mistake, because the newest CRS tags (`4.28`) exist only as `-nginx`
-and `-apache` builds. Reaching for "the latest CRS" lands on an image with no Caddy in it.
-
-Log ingestion runs a few minutes behind live, so wait before concluding the query returned nothing.
-
 ## Important Notes
 
 - **This only protects traffic that goes through it.** The WAF is a proxy, so the workload behind it must not remain publicly reachable on its own endpoint, or requests bypass inspection entirely.
@@ -180,7 +146,7 @@ Log ingestion runs a few minutes behind live, so wait before concluding the quer
 - **CRS blocks any request carrying an `Expect: 100-continue` header** (rule 920450), which some HTTP clients add for large uploads. Switch that one rule off in the custom-rules secret if your clients send it.
 - **A request body too large to inspect inside `timeoutSeconds` returns 504 from the WAF, not from your application.** Size `resources.cpu` and `timeoutSeconds` together — see *Request size, CPU and timeout*.
 - **Custom rules layer on top of CRS**, so a rule ID that collides with a CRS rule silently overrides it.
-- **A failed startup hook restarts the container on purpose.** A WAF serving with no reverse-proxy configuration is worse than one that is visibly down.
+- **A failed startup hook restarts the container on purpose.** A WAF serving with no reverse-proxy configuration is worse than one that is visibly down. If the workload will not start, check `cpln logs` for a `[FATAL]` line naming the reason; an incompatible (non-Caddy) image instead exits immediately with `exitCode: 127`.
 - **Do not override the container's `command`/`args`.** They run the image's own entrypoint behind a `tail` that forwards the startup hook's output onto the container log — a `postStart` hook's own output reaches no log surface, so replacing them leaves a failed hook with no diagnosis at all.
 
 ## Links

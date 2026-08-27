@@ -3,7 +3,7 @@ name: coraza
 description: Coraza web application firewall with the OWASP Core Rule Set, proxying a target workload
 
 type: application
-version: 1.2.1
+version: 1.2.2
 appVersion: "4.28.0"
 
 dependencies:

@@ -60,12 +60,6 @@ timeoutSeconds: 30
 multiZone: false
 ```
 
-### Body inspection
-
-```yaml
-diskBodyInspection: true # When true, request bodies exceeding the in-memory limit are buffered to disk for inspection. Disable to keep all body inspection in memory.
-```
-
 ## Choosing an image tag
 
 This is the one setting that has broken a running deployment, so it is worth getting right.
@@ -144,6 +138,17 @@ SecRule REQUEST_URI "@rx attack" "id:1001,phase:1,deny,msg:'Blocked attack attem
 Rules use [seclang directives](https://coraza.io/docs/seclang/directives/). After changing the secret,
 restart the workload replicas — rules are read at startup.
 
+The secret is loaded **after** the Core Rule Set, so it can also switch a CRS rule off:
+
+```
+SecRuleRemoveById 920450
+```
+
+Rule 920450 is the one worth knowing about: it blocks any request carrying an `Expect: 100-continue`
+header, which HTTP clients add for large uploads. Measured on this image, an identical 2 KB body returns
+200 without the header and 403 with it — so an application behind this WAF that receives large uploads
+will see 403s that have nothing to do with the payload. Removing it leaves the rest of CRS untouched.
+
 ## Logging
 
 All Coraza logging goes to `/dev/stdout` so it is readable in the built-in logging interface. Redirect
@@ -171,7 +176,7 @@ Log ingestion runs a few minutes behind live, so wait before concluding the quer
 - **This only protects traffic that goes through it.** The WAF is a proxy, so the workload behind it must not remain publicly reachable on its own endpoint, or requests bypass inspection entirely.
 - **Pin a digest or a datecode, never `-lts` or `caddy-alpine`** — moving tags change the image under a running deployment. Only `*-caddy-alpine-*` variants work.
 - **CRS rule updates require a deliberate `image` change.** That is the right default for a security control, but new CRS releases are not picked up on their own.
-- **`diskBodyInspection: false` trades coverage for memory.** With it off, request bodies above the in-memory limit are not inspected at all rather than being buffered — a silent inspection gap, not a performance tweak.
+- **CRS blocks any request carrying an `Expect: 100-continue` header** (rule 920450), which some HTTP clients add for large uploads. Switch that one rule off in the custom-rules secret if your clients send it.
 - **A request body too large to inspect inside `timeoutSeconds` returns 504 from the WAF, not from your application.** Size `resources.cpu` and `timeoutSeconds` together — see *Request size, CPU and timeout*.
 - **Custom rules layer on top of CRS**, so a rule ID that collides with a CRS rule silently overrides it.
 - **A failed startup hook restarts the container on purpose.** A WAF serving with no reverse-proxy configuration is worse than one that is visibly down.

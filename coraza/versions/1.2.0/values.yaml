@@ -23,5 +23,3 @@ resources:
 timeoutSeconds: 30
 
 multiZone: false
-
-diskBodyInspection: true # When true, request bodies exceeding the in-memory limit are buffered to disk for inspection. Disable to keep all body inspection in memory.

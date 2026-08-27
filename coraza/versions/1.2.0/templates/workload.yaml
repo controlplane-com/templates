@@ -28,6 +28,25 @@ spec:
         {{- end }}
         - name: PORT
           value: "{{ .Values.WAFPort }}"
+      # The image's own ENTRYPOINT and CMD, with one process started in front of them:
+      # a `tail` that forwards the postStart hook's log file onto THIS container's
+      # stdout. A postStart hook runs as a separate exec session whose output no log
+      # surface collects, so without this the hook's [INFO]/[FATAL] diagnosis reaches
+      # nobody and the operator sees only "PostStartHook failed" (measured). The tail
+      # inherits the container's real stdout and keeps it across the exec, so its
+      # output is ordinary container output.
+      #
+      # `-F` retries until the file exists, so the hook may write before the tail
+      # starts; `-n +1` emits from the first line rather than the last ten. Nothing
+      # truncates the file — a truncate here would race the hook's first line.
+      # `exec` keeps caddy as PID 1, so signal handling and graceful shutdown are
+      # unchanged. The command below is the pinned image's own ENTRYPOINT + CMD.
+      command: /bin/sh
+      args:
+        - -c
+        - |
+          tail -n +1 -F /tmp/coraza-hook.log 2>/dev/null &
+          exec /entrypoint.sh caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
       image: {{ .Values.image }}
       inheritEnv: false
       lifecycle:

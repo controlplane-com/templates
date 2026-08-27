@@ -108,15 +108,20 @@ it by changing the `CORAZA_*` environment variables in the workload configuratio
 
 ## If the workload restart-loops on `PostStartHook failed`
 
-The startup hook configures the image's reverse proxy, and it exits non-zero rather than bring the WAF
-up unconfigured. Its output names the reason:
+The startup hook configures the image's reverse proxy, and it exits non-zero rather than bring the WAF up
+unconfigured. That platform message says only that the hook failed; the hook itself writes the reason to
+the container's log:
 
 ```bash
-cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-coraza-waf"}' --limit 100 --since 30m
+cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-coraza-waf"} |= "[FATAL]"' --limit 100 --since 30m
 ```
 
-Look for a `[FATAL]` line. The usual causes are an `image` that is not a Caddy variant, or a moving tag
-that upstream repointed to a build whose internal configuration differs.
+The usual causes are an `image` that is not a Caddy variant, or a moving tag that upstream repointed to a
+build whose internal configuration differs. Drop the `|= "[FATAL]"` filter to see the `[INFO]` lines as
+well — on a healthy start those show which handler index was resolved and what the WAF was pointed at,
+which is the quickest way to confirm the proxy is configured the way you intended.
+
+Log ingestion runs a few minutes behind live, so wait before concluding the query returned nothing.
 
 ## Important Notes
 
@@ -126,6 +131,7 @@ that upstream repointed to a build whose internal configuration differs.
 - **`diskBodyInspection: false` trades coverage for memory.** With it off, request bodies above the in-memory limit are not inspected at all rather than being buffered — a silent inspection gap, not a performance tweak.
 - **Custom rules layer on top of CRS**, so a rule ID that collides with a CRS rule silently overrides it.
 - **A failed startup hook restarts the container on purpose.** A WAF serving with no reverse-proxy configuration is worse than one that is visibly down.
+- **Do not override the container's `command`/`args`.** They run the image's own entrypoint behind a `tail` that forwards the startup hook's output onto the container log — a `postStart` hook's own output reaches no log surface, so replacing them leaves a failed hook with no diagnosis at all.
 
 ## Links
 

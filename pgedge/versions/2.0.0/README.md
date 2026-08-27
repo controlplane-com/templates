@@ -82,16 +82,16 @@ and is **not** protected — nothing at render time can see it. Migrate instead:
 5. Uninstall the old release **against the GVC you originally installed it into**, not the GVC it
    created. That is where Helm tracks the release, and it takes the created GVC with it.
 
-### Existing data directories: allow-list the Spock output plugin
+### Turning replication on in an existing 1.x cluster
 
-2.0.0 writes `output_plugin_libraries = 'pgoutput, test_decoding, spock_output'` into
-`postgresql.conf`. Without it PostgreSQL 17.11 refuses to create any Spock replication slot
-(`library "spock_output" may not be used as an output plugin`), every subscription sits at `down`,
-and each node silently accepts writes that never leave it.
+**If you are running 1.x, your cluster is almost certainly not replicating.** PostgreSQL 17.11
+refuses to create any Spock replication slot unless `spock_output` is allow-listed
+(`library "spock_output" may not be used as an output plugin`), so every subscription sits at
+`down` and each node silently accepts writes that never leave it.
 
-That line is written by `initdb`, so it only lands on a **fresh** data directory. A node whose
-volume was created by an earlier chart keeps the old setting after a `helm upgrade`. Run this once
-**on every such node**, connecting directly to the node rather than through pgcat:
+2.0.0 writes the setting into `postgresql.conf` at `initdb`, so a new 2.0.0 install is unaffected —
+this section is for a **1.x cluster you are still running**, whether or not you plan to migrate.
+Run it once **on every node**, connecting directly to the node rather than through pgcat:
 
 ```bash
 psql "host=replica-0.RELEASE_NAME-pgedge.LOCATION.GVC_NAME.cpln.local user=USERNAME dbname=DATABASE" \
@@ -103,9 +103,14 @@ psql "host=replica-0.RELEASE_NAME-pgedge.LOCATION.GVC_NAME.cpln.local user=USERN
 single bogus plugin named `"pgoutput, test_decoding, spock_output"` and the error persists. Confirm
 with `SHOW output_plugin_libraries;` — the output must have no quotation marks in it.
 
-Then `cpln workload force-redeployment RELEASE_NAME-pgedge --gvc GVC_NAME`. The startup daemon
-rebuilds any subscription whose slot is missing, so nothing else is needed. Confirm with
-`SELECT subscription_name, status FROM spock.sub_show_status();` — every row must read `replicating`.
+**Do not restart or force-redeploy a 1.x cluster to apply this.** `pg_reload_conf()` is enough —
+subscriptions were measured reaching `replicating` within seconds of the reload alone. Restarting
+every 1.x node at once triggers the slot-cleanup defect that 2.0.0 fixes: each node drops the
+replication slots of every peer it can reach, the subscriptions survive so nothing rebuilds them,
+and the mesh does not recover on its own.
+
+Confirm with `SELECT subscription_name, status FROM spock.sub_show_status();` — every row must read
+`replicating`.
 
 ## Configuration
 

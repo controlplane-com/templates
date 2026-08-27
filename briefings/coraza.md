@@ -68,7 +68,12 @@ surface stayed green. Hence the handler-resolution loop.
   `exec`ing the entrypoint. Those two ends must stay in step, and overriding `command`/`args` removes the
   only surface carrying the diagnosis.
 - **Body inspection is CPU-bound, and `timeoutSeconds` is the wall it hits.** ~8.5 ms/KB at `cpu: 1000m`,
-  scaling inversely with CPU and relatively worse below ~250m. Rule of thumb:
+  scaling inversely with CPU and relatively worse below ~250m. The cliff is why the default is 500m
+  rather than 250m: measured in Docker on the pinned digest, a 200 KB body took **13.2 s at 0.25 CPU
+  and 1.53 s at 0.5** — an 8.6x gain for 2x the CPU, because quota throttling bites below roughly
+  250m. (Docker figures on a faster core than the platform's; the platform rate is ~17.5 ms/KB at
+  500m. Use the platform number for sizing, the Docker pair only as evidence for the cliff.)
+  Rule of thumb:
   `largest body ≈ 120 KB × cpu-cores × timeoutSeconds`. The pre-1.2.0 defaults (`50m`, hardcoded 5 s)
   504'd every POST body over ~30 KB — measured 504 at 50 KB, 200 KB, 400 KB and 600 KB, all at ~5.2-5.3 s,
   with CPU alone fixing them. GET traffic is unaffected, so smoke tests never catch it. `timeoutSeconds`

@@ -1,0 +1,76 @@
+# ─── Locations ────────────────────────────────────────────────────────────────
+# This chart deploys into the GVC you install into — it does NOT create one.
+# Every location listed here MUST already exist in that GVC, or the pgEdge nodes
+# refuse to initialise with a named error (see Prerequisites in the README).
+# Extra locations in the GVC are fine: nothing pgEdge-related runs in them.
+locations: # For replicas: use 1 for dev/testing, 3 for production
+  - name: aws-us-west-2
+    replicas: 3
+  - name: aws-us-east-2
+    replicas: 3
+  - name: aws-eu-central-1
+    replicas: 3
+
+image: ghcr.io/pgedge/pgedge-postgres:17-spock5-standard
+
+resources:
+  minCpu: 500m
+  minMemory: 1Gi
+  maxCpu: 2
+  maxMemory: 4Gi
+
+postgres:
+  # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL.
+  # A `dictionary` secret holding exactly three keys: `username`, `password`
+  # and `database`. If it does not exist at install time the deployment
+  # WEDGES silently — `cpln logs` returns nothing at all. See Prerequisites
+  # in the README for the exact `cpln secret create-dictionary` command.
+  credentialsSecretName: my-pgedge-credentials
+
+multiZone: false  # Set to true to spread replicas across availability zones within each location
+
+volumeset:
+  capacity: 10  # Initial capacity in GiB (minimum is 10)
+  autoscaling:
+    enabled: false  # Set to true to enable autoscaling
+    maxCapacity: 100  # Maximum capacity in GiB when autoscaling is enabled
+    minFreePercentage: 10  # Minimum free percentage to trigger scaling
+    scalingFactor: 1.2  # How much to scale up when triggered
+
+pgcat:
+  image: ghcr.io/postgresml/pgcat:v1.2.0 # pinned: `latest` makes installs non-reproducible
+  poolMode: transaction  # options: session, transaction, statement
+  defaultPoolSize: 25    # Real Postgres connections pgcat maintains per pool
+  resources:
+    cpu: 500m
+    memory: 256Mi
+  minReplicas: 2         # per location
+  maxReplicas: 4         # per location
+
+internal_access: # Sets both pgedge and pgcat workloads
+  type: same-gvc  # options: same-gvc, same-org, workload-list
+  workloads:  # Only used when type is workload-list
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+backup:
+  enabled: false
+  image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+  schedule: "0 2 * * *"   # daily at 2am UTC — runs in locations[0] only
+
+  resources:
+    cpu: 100m
+    memory: 128Mi
+
+  provider: aws  # Options: aws or gcp
+
+  aws:
+    bucket: my-backup-bucket
+    region: us-east-1
+    cloudAccountName: my-backup-cloudaccount
+    policyName: my-backup-policy
+    prefix: pgedge/backups  # folder where backups will be stored
+
+  gcp:
+    bucket: my-backup-bucket
+    cloudAccountName: my-backup-cloudaccount
+    prefix: pgedge/backups  # folder where backups will be stored

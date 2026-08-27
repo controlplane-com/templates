@@ -1,0 +1,86 @@
+---
+kind: workload
+name: {{ include "pgedge.pgcat.name" . }}
+description: pgCat connection pooler for pgEdge
+tags: {{- include "pgedge.tags" . | nindent 2 }}
+spec:
+  type: standard
+  containers:
+    - name: pgcat
+      image: {{ .Values.pgcat.image | quote }}
+      command: "/bin/sh"
+      args:
+        - "/etc/pgcat/start.sh"
+      env:
+        - name: PG_USERNAME
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.username
+        - name: PG_PASSWORD
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
+        - name: PG_DATABASE
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.database
+        - name: PGCAT_ADMIN_PASSWORD
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
+        {{- include "pgedge.locationEnv" . | nindent 8 }}
+      cpu: {{ .Values.pgcat.resources.cpu | quote }}
+      memory: {{ .Values.pgcat.resources.memory | quote }}
+      inheritEnv: false
+      ports:
+        - number: 5432
+          protocol: tcp
+      volumes:
+        - path: /etc/pgcat/start.sh
+          uri: cpln://secret/{{ include "pgedge.secretPgcatConfig.name" . }}.payload
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pgedge.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      metric: disabled   # a GVC location this release did not ask for runs NOTHING
+      minScale: 0
+      maxScale: 0
+      maxConcurrency: 0
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: {{ .Values.multiZone }}
+    suspend: false
+    timeoutSeconds: 5
+  {{- /*
+    Every localOptions entry must carry the COMPLETE field set defaultOptions
+    carries: localOptions is a full override, and a field left out would fall
+    through to the null shape above and produce zero replicas in a location the
+    user did ask for.
+  */}}
+  localOptions:
+    {{- range $location := .Values.locations }}
+    - location: //location/{{ $location.name }}
+      autoscaling:
+        metric: rps
+        minScale: {{ $.Values.pgcat.minReplicas }}
+        maxScale: {{ $.Values.pgcat.maxReplicas }}
+        maxConcurrency: 0
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      multiZone:
+        enabled: {{ $.Values.multiZone }}
+      suspend: false
+      timeoutSeconds: 5
+    {{- end }}
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0  # Required to reach pgEdge nodes across locations
+    internal:
+      inboundAllowType: {{ .Values.internal_access.type | quote }}
+      {{- if .Values.internal_access.workloads }}
+      inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

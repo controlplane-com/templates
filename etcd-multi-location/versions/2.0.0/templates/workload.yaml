@@ -85,7 +85,26 @@ spec:
       outboundBlockedCIDR: []
     internal:
       inboundAllowType: {{ .Values.internalAccess.type }}
-      {{- if .Values.internalAccess.workloads }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      {{- /*
+        This list governs ALL inbound internal traffic, INCLUDING raft peer traffic
+        on 2380 between the members of THIS workload. A list that omits this
+        workload blocks the members from each other and quorum is lost
+        cluster-wide, while Helm prints `upgraded successfully` (measured
+        2026-08-27: every member unhealthy within ~2 min by following the README;
+        re-adding this workload recovered the cluster in 116 s). No legitimate
+        configuration denies the members to each other, so the chart appends
+        itself rather than requiring the user to know.
+      */}}
+      {{- $self := printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "etcd-ml.name" .) }}
+      inboundAllowWorkload:
+        - {{ $self | quote }}
+        {{- range .Values.internalAccess.workloads }}
+        {{- if ne . $self }}
+        - {{ . | quote }}
+        {{- end }}
+        {{- end }}
+      {{- else if .Values.internalAccess.workloads }}
       inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
       {{- end }}
   loadBalancer:

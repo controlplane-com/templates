@@ -39,7 +39,7 @@
 | `tuning.autoCompactionMode` / `.autoCompactionRetention` | `periodic` / `1h` | Cannot be set to "off" |
 | `tuning.quotaBackendBytes` | `0` | Backend ceiling in bytes; `0` means etcd's own 2 GiB, and is omitted from the render |
 | `volumeset.capacity` | `10` GiB | Platform minimum |
-| `internalAccess.type` / `.workloads` | `same-gvc` / `[]` | Who may reach `:2379` |
+| `internalAccess.type` / `.workloads` | `same-gvc` / `[]` | Who may reach `:2379`. The list also governs **raft peer traffic between the members**, so the chart appends its own workload — list only clients. Omitting it destroyed the cluster while Helm reported success (2026-08-27). |
 | `recovery.forceNewClusterInLocation` | `""` | Emergency single-member rebuild after permanent quorum loss |
 
 - **The default is 2 locations, deliberately, and it is not a recommendation.** 3 is the recommended production shape (the README table says so). With the GVC gone, no hardcoded list can be right for a user's GVC, so the default is the *smallest cluster the chart allows* rather than a three-location guess that quietly triples spend. It also keeps `helm template --set global.cpln.gvc=…` rendering clean, which a one-location default could not (the ≥2 guard).
@@ -91,7 +91,7 @@ The failure this version exists to kill: **a GVC with fewer locations than `glob
 | Write latency (leader in eu-central) | p50 **95.7 / 185.7 / 236.4 ms** from eu / east / west — one cross-region RTT is the floor |
 | Auto-compaction | fired at the 1 h mark, freed 569 KB, `dbSize` flat afterwards under load |
 | Firewall propagation | 147 s to deny, 124 s to re-allow |
-| **`helm upgrade`** | **all three locations restart together — 66 s of lost quorum** |
+| **`helm upgrade`** | **all three locations restart together — ~105 s rollout, ~20-30 s of lost quorum. A NO-OP upgrade costs the same, so there is no safe one.** |
 
 ## Guard timing (measured 2026-08-27, in the shipped image, Docker)
 | Case | Result |

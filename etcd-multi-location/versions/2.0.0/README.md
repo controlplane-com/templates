@@ -115,9 +115,13 @@ volumeset:
 ```yaml
 internalAccess:
   type: same-gvc # options: same-gvc, same-org, workload-list
-  workloads: [] # only used when type is workload-list
+  workloads: [] # only used when type is workload-list; the etcd workload is added automatically
   #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
 ```
+
+The members reach each other over the same internal firewall, so `workload-list` would cut
+the cluster off from itself. The chart therefore always adds its own workload to the list —
+you only list the clients.
 
 Cross-location traffic inside one GVC is same-GVC traffic, so the default covers a stretched cluster with no extra rule. There is deliberately **no public access**: etcd here has no TLS and no authentication.
 
@@ -207,8 +211,8 @@ A `DB SIZE` near 2.1 GB on every member, plus `NOSPACE` in `alarm list`, confirm
 - **Never suspend a location on this workload.** Suspending and resuming a location permanently withdraws its endpoints from the other locations' service discovery while every status surface still reads healthy. This template therefore exposes no suspend knob; add or remove locations by editing the GVC and `global.locations` together.
 - **Allow about two minutes of convergence after a cold install** before concluding a member is unreachable — cross-region service discovery can lag `ready: true` by well over a minute.
 - **Changing `global.locations` reprovisions the cluster.** Every member restarts with a new cluster list; this is not etcd's graceful `member add`/`member remove` path. Plan it as a maintenance window.
-- **No TLS, no authentication.** Anything permitted by `internalAccess` has full read/write on the keyspace. Scope it with `workload-list` if the GVC holds workloads that should not have it. Firewall changes take up to a couple of minutes to take effect.
-- **A `helm upgrade` takes the whole cluster down for about 66 seconds** (measured, 3 locations). Members in every location restart together, quorum is lost, and writes time out until it returns; the cluster recovers on its own. Nothing serializes the restart: the field that would limit it (`rolloutOptions.maxUnavailableReplicas`) is **not retained by the platform**, so the chart deliberately does not set it. Plan upgrades as a short planned outage. Whether more members per location would shorten it is untested — do not assume it helps.
+- **No TLS, no authentication.** Anything permitted by `internalAccess` has full read/write on the keyspace. Scope it with `workload-list` if the GVC holds workloads that should not have it; list only your clients, since the chart adds the etcd workload itself. Firewall changes take up to a couple of minutes to take effect.
+- **Every `helm upgrade` restarts all three locations together — a ~105 s rollout with roughly 20-30 s of lost quorum** (measured, 3 locations). This includes a **no-op** upgrade that changes nothing, so there is no "safe" upgrade to plan around. Writes time out while quorum is gone and the cluster recovers on its own; data survives. Nothing serializes the restart: the field that would limit it (`rolloutOptions.maxUnavailableReplicas`) is **not retained by the platform**, so the chart deliberately does not set it. Plan upgrades as a short planned outage. Whether more members per location would shorten it is untested — do not assume it helps.
 - **Auto-compaction cannot be turned off**, only retuned (`tuning.autoCompactionMode` / `.autoCompactionRetention`). Revisions accumulate with time alone, so an uncompacted cluster hits etcd's 2 GiB backend quota and goes read-only weeks after install, with no warning.
 
 ## Links

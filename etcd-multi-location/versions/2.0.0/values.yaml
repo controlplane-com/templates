@@ -42,7 +42,7 @@ volumeset:
 
 internalAccess:
   type: same-gvc # options: same-gvc, same-org, workload-list
-  workloads: [] # only used when type is workload-list
+  workloads: [] # only used when type is workload-list; the etcd workload is added automatically
   #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
 # ─── Disaster recovery ────────────────────────────────────────────────────────

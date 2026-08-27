@@ -2,7 +2,7 @@
 kind: workload
 name: {{ include "etcd-ml.name" . }}
 description: etcd multi-location
-gvc: {{ .Values.global.gvc.name }}
+gvc: {{ .Values.global.cpln.gvc }}
 tags:
   cpln/publishNotReadyAddresses: "true"
   {{- include "etcd-ml.tags" . | nindent 2 }}
@@ -28,13 +28,20 @@ spec:
           uri: cpln://volumeset/{{ include "etcd-ml.volume.name" . }}
         - path: /etcd/start.sh
           uri: cpln://secret/{{ include "etcd-ml.secretStartup.name" . }}
-  identityLink: //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "etcd-ml.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "etcd-ml.identity.name" . }}
   defaultOptions:
+    {{- /*
+    minScale/maxScale are 0 so a GVC location this release did not ask for runs
+    NOTHING: an undeclared location gets desiredScale: None. localOptions below
+    supplies the real count (always 1) for each configured location. Without
+    this, an extra GVC location silently starts an etcd member whose
+    --initial-cluster does not contain itself.
+    */}}
     autoscaling:
       maxConcurrency: 0
-      maxScale: 1
+      maxScale: 0
       metric: disabled
-      minScale: 1
+      minScale: 0
       scaleToZeroDelay: 300
       target: 100
     capacityAI: false
@@ -42,7 +49,7 @@ spec:
     suspend: false
     timeoutSeconds: 5
   localOptions:
-    {{- range .Values.global.gvc.locations }}
+    {{- range .Values.global.locations }}
     - location: //location/{{ .name }}
       autoscaling:
         maxConcurrency: 0

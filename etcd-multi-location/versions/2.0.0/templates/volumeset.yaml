@@ -1,7 +1,7 @@
 kind: volumeset
 name: {{ include "etcd-ml.volume.name" . }}
 description: etcd volumeset
-gvc: {{ .Values.global.gvc.name }}
+gvc: {{ .Values.global.cpln.gvc }}
 tags:
   {{- include "etcd-ml.tags" . | nindent 2 }}
   workload: {{ include "etcd-ml.name" . }}

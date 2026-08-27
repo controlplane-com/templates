@@ -40,32 +40,69 @@ etcd Volume Set Name
 {{- printf "%s-etcd-vs" .Release.Name }}
 {{- end }}
 
+{{/*
+GVC-read Policy Name
+*/}}
+{{- define "etcd-ml.policy.gvc.name" -}}
+{{- printf "%s-etcd-gvc-policy" .Release.Name }}
+{{- end }}
+
 
 {{/* Validation */}}
+
+{{/*
+The chart stopped creating a GVC in 2.0.0. Refuse to render if the values still
+carry the 1.x `global.gvc` key — an in-place `helm upgrade` from 1.x would drop
+`kind: gvc` from the manifest, and Helm deletes what a chart no longer declares,
+taking the GVC and every workload, volumeset and identity inside it. Measured:
+6 seconds, while printing `upgraded successfully`.
+*/}}
+{{- define "etcd-ml.validateNoLegacyGvc" -}}
+{{- if hasKey (.Values.global | default dict) "gvc" -}}
+{{- fail "etcd-multi-location 2.0.0: the `global.gvc` values key was REMOVED. This chart no longer creates a GVC — it deploys into the GVC you install into, and `global.gvc.locations` moved to `global.locations`. DO NOT `helm upgrade` a 1.x release onto 2.0.0: the upgrade drops `kind: gvc` from the manifest and Helm deletes what a chart no longer declares, which DESTROYS that GVC and every workload, volumeset and identity inside it. Install 2.0.0 as a NEW release against an existing GVC, copy your keyspace across, then uninstall the old release. See `Migrating from 1.x` in the README." -}}
+{{- end -}}
+{{- end -}}
 
 {{/*
 Validate locations, replicas and raft timers.
 */}}
 {{- define "etcd-ml.validate" -}}
-{{- if not .Values.global.gvc -}}
-{{- fail "global.gvc must be set with a `name` and a `locations` list" -}}
+{{- include "etcd-ml.validateNoLegacyGvc" . -}}
+{{- if not .Values.global.locations -}}
+{{- fail "etcd-multi-location: global.locations is required — it is the cluster roster, one etcd member per location, and every entry must already exist in the GVC you install into." -}}
 {{- end -}}
-{{- if not .Values.global.gvc.name -}}
-{{- fail "global.gvc.name is required — it names the GVC this chart deploys into" -}}
+{{- if lt (len (.Values.global.locations | default list)) 2 -}}
+{{- fail "etcd-multi-location requires at least 2 locations in global.locations. For a single-location cluster, use the etcd template instead." -}}
 {{- end -}}
-{{- if lt (len (.Values.global.gvc.locations | default list)) 2 -}}
-{{- fail "etcd-multi-location requires at least 2 locations in global.gvc.locations. For a single-location cluster, use the etcd template instead." -}}
+{{/*
+A duplicate no longer produces a duplicated locationLinks entry (the GVC is
+gone) — it produces duplicated localOptions entries, which the platform accepts
+without validating, and a duplicated `--initial-cluster` entry, i.e. the same
+member name declared twice. etcd rejects that at boot, but only after the whole
+cluster has been provisioned.
+*/}}
+{{- $seen := dict -}}
+{{- range .Values.global.locations -}}
+{{- if not .name -}}
+{{- fail "etcd-multi-location: every entry in global.locations needs a `name`." -}}
+{{- end -}}
+{{- if hasKey $seen .name -}}
+{{- fail (printf "etcd-multi-location: location '%s' is listed more than once in global.locations. A duplicate declares the same etcd member name twice, which etcd rejects at boot. List each location exactly once." .name) -}}
+{{- end -}}
+{{- $_ := set $seen .name true -}}
 {{- end -}}
 {{/*
 Standalone mode is "this chart is the top-level chart", which .Chart.IsRoot
-answers directly. Gating on createGvc was wrong (a standalone user pointed at an
-existing GVC also set it false, silently disabling the guard), and a parent-set
-values flag was a weaker version of the same idea.
+answers directly. A parent (postgres-multi-location) carries `replicas` in the
+same shared list for ITS OWN tier; etcd always runs exactly one member per
+location and ignores it. Gating on createGvc was wrong (a standalone user
+pointed at an existing GVC also set it false, silently disabling the guard),
+and a parent-set values flag was a weaker version of the same idea.
 */}}
 {{- if .Chart.IsRoot -}}
-{{- range .Values.global.gvc.locations -}}
+{{- range .Values.global.locations -}}
 {{- if and (hasKey . "replicas") (ne (int .replicas) 1) -}}
-{{- fail "etcd-multi-location runs exactly one member per location, so global.gvc.locations[].replicas must be 1. A second member in a location adds cost and reduces fault tolerance: it makes that location's loss a quorum loss." -}}
+{{- fail "etcd-multi-location runs exactly one member per location, so global.locations[].replicas must be 1. A second member in a location adds cost and reduces fault tolerance: it makes that location's loss a quorum loss." -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
@@ -80,11 +117,14 @@ values flag was a weaker version of the same idea.
 {{- include "etcd-ml.validateCompaction" . -}}
 {{/*
 A typo here is a silent no-op, and it is read for the first time during an
-outage — so it must fail at render, not at 3am.
+outage — so it must fail at render, not at 3am. Note this can only check the
+VALUES list: a location that is in the values but not in the GVC passes here and
+never applies the flag, because no member runs there. The startup script warns
+about exactly that case from the members that DO run.
 */}}
 {{- with .Values.recovery.forceNewClusterInLocation -}}
 {{- $names := list -}}
-{{- range $.Values.global.gvc.locations -}}
+{{- range $.Values.global.locations -}}
 {{- $names = append $names .name -}}
 {{- end -}}
 {{- if not (has . $names) -}}

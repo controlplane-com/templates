@@ -2,14 +2,14 @@ apiVersion: v2
 name: etcd-multi-location
 description: A stretched etcd cluster with one member per location for cross-region coordination
 type: application
-version: 1.0.2
+version: 2.0.0
 appVersion: "3.6.5"
 
 annotations:
   created: "2026-08-10"
-  lastModified: "2026-08-17"
+  lastModified: "2026-08-27"
   category: "key-value store"
-  createsGvc: true
+  createsGvc: false
 
 dependencies:
   - name: cpln-common

@@ -1,16 +1,23 @@
-# ─── GVC and locations ────────────────────────────────────────────────────────
-# Lives under `global` so a parent chart (postgres-multi-location) sets it once
-# and Helm propagates it here. See README before changing.
+# ─── Locations ────────────────────────────────────────────────────────────────
+# This chart deploys into the GVC you install into — it does NOT create one.
+# Every location listed here MUST already exist in that GVC: a location the GVC
+# lacks contributes a declared etcd member that can never start, which shrinks
+# the cluster to a bare majority while every status surface reads healthy.
+# The members refuse to bootstrap in that state rather than form it.
+#
+# Lives under `global` so a parent chart (postgres-multi-location consumes this
+# one as a subchart) sets the list once and Helm propagates it here — the two
+# lists can then never be edited apart.
 
 global:
-  gvc:
-    name: etcd-multi-location-gvc # the GVC this chart creates
-    # One etcd member per location. Minimum 2; 3 survives losing one location,
-    # 5 survives losing two. See the quorum table in the README.
-    locations:
-      - name: aws-us-east-1
-      - name: aws-eu-central-1
-      - name: aws-us-west-2
+  # One etcd member per location. Minimum 2; 3 survives losing one location,
+  # 5 survives losing two. See the quorum table in the README — 3 is the
+  # recommended production shape. This default is the smallest cluster the
+  # chart allows, because no location list can be right for every GVC: set it
+  # to YOUR GVC's locations before installing.
+  locations:
+    - name: aws-us-east-1
+    - name: aws-us-west-2
 
 # ─── etcd ─────────────────────────────────────────────────────────────────────
 image: controlplanecorporation/etcd:0.1

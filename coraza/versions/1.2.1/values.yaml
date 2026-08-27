@@ -1,4 +1,4 @@
-# Pinned by digest = tag 4.28-caddy-alpine-202608260808 (OWASP CRS 4.25.0, Caddy v2.11.2).
+# Pinned by digest = tag 4.28-caddy-alpine-202608260808 (OWASP CRS 4.28.0, Caddy v2.11.3).
 # Only the *-caddy-alpine-* variants work with this template, and only a datecode or a
 # digest is safe to pin — moving tags such as -lts get repointed upstream.
 image: ghcr.io/coreruleset/coraza-crs@sha256:ed1e4a656e83f1ba17d629f30de0910d491b1cc13e5e8e7e9b9f2ac9a35bac1b

@@ -2,7 +2,7 @@
 kind: volumeset
 name: {{ include "pgedge.volume.name" . }}
 description: pgEdge volumeset
-gvc: {{ .Values.gvc.name }}
+gvc: {{ .Values.global.cpln.gvc }}
 tags: {{- include "pgedge.tags" . | nindent 2 }}
 spec:
   fileSystemType: ext4

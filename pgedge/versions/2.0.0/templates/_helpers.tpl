@@ -57,6 +57,13 @@ pgEdge Policy Name
 {{- end }}
 
 {{/*
+pgEdge GVC-read Policy Name
+*/}}
+{{- define "pgedge.policy.gvc.name" -}}
+{{- printf "%s-pgedge-gvc-policy" .Release.Name }}
+{{- end }}
+
+{{/*
 pgEdge Volume Set Name
 */}}
 {{- define "pgedge.volume.name" -}}
@@ -101,11 +108,11 @@ Validate backup configuration - when backup is enabled, backup.provider must be 
 {{- end }}
 
 {{/*
-Validate that gvc.locations has at least 1 entry
+Validate that locations has at least 1 entry
 */}}
 {{- define "pgedge.validateLocations" -}}
-{{- if lt (len .Values.gvc.locations) 1 -}}
-{{- fail "gvc.locations must contain at least 1 location" -}}
+{{- if lt (len .Values.locations) 1 -}}
+{{- fail "locations must contain at least 1 location" -}}
 {{- end -}}
 {{- end -}}
 
@@ -113,11 +120,68 @@ Validate that gvc.locations has at least 1 entry
 Validate that each location has at least 1 replica
 */}}
 {{- define "pgedge.validateReplicas" -}}
-{{- range .Values.gvc.locations -}}
+{{- range .Values.locations -}}
 {{- if lt (.replicas | int) 1 -}}
 {{- fail (printf "location '%s' must have at least 1 replica" .name) -}}
 {{- end -}}
 {{- end -}}
+{{- end -}}
+
+{{/*
+Validate that no location is listed twice. With the GVC gone a duplicate no
+longer produces a duplicated locationLinks entry -- it produces duplicated
+localOptions entries (which the platform accepts without validating) and a
+duplicated peer list, i.e. duplicate Spock node names and subscription names.
+*/}}
+{{- define "pgedge.validateUniqueLocations" -}}
+{{- $seen := dict -}}
+{{- range .Values.locations -}}
+{{- if hasKey $seen .name -}}
+{{- fail (printf "pgedge: location '%s' is listed more than once in `locations`. Duplicate entries produce duplicate Spock node names and duplicate subscription names. List each location exactly once." .name) -}}
+{{- end -}}
+{{- $_ := set $seen .name true -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The chart stopped creating a GVC in 2.0.0. Refuse to render if the values still
+carry the 1.x `gvc` key -- an in-place `helm upgrade` from 1.x would drop
+`kind: gvc` from the manifest, and Helm deletes what a chart no longer declares,
+taking the GVC and everything inside it.
+*/}}
+{{- define "pgedge.validateNoLegacyGvc" -}}
+{{- if hasKey .Values "gvc" -}}
+{{- fail "pgedge 2.0.0: the `gvc` values key was REMOVED. This chart no longer creates a GVC -- it deploys into the GVC you install into, and `gvc.locations` moved to the top-level `locations`. DO NOT `helm upgrade` a 1.x release onto 2.0.0: the upgrade drops `kind: gvc` from the manifest and Helm deletes what a chart no longer declares, which DESTROYS that GVC and every workload, volumeset and identity inside it. Install 2.0.0 as a NEW release against an existing GVC, move your data, then uninstall the old release. See `Migrating from 1.x` in the README." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Single aggregate validator. Invoked once, from identity.yaml, which is
+unconditionally rendered -- so `is validation still wired up?` is one grep.
+*/}}
+{{- define "pgedge.validate" -}}
+{{- include "pgedge.validateNoLegacyGvc" . -}}
+{{- include "pgedge.validateLocations" . -}}
+{{- include "pgedge.validateReplicas" . -}}
+{{- include "pgedge.validateUniqueLocations" . -}}
+{{- include "pgedge.validateBackupConfig" . -}}
+{{- include "pgedge.validateCredentials" . -}}
+{{- end -}}
+
+{{/*
+The topology, rendered ONCE for the whole chart. Both the pgEdge and the pgcat
+startup scripts build their peer/server lists from these, so the two tiers can
+never disagree. `PGEDGE_` and not `CPLN_`: env names starting with CPLN_ are
+rejected by the API at apply time, invisibly to `helm template`.
+pgcat needs PGEDGE_WORKLOAD because its own CPLN_WORKLOAD names pgcat.
+*/}}
+{{- define "pgedge.locationEnv" -}}
+- name: PGEDGE_LOCATIONS
+  value: "{{ range .Values.locations }}{{ .name }} {{ end }}"
+- name: PGEDGE_REPLICAS
+  value: "{{ range .Values.locations }}{{ .replicas }} {{ end }}"
+- name: PGEDGE_WORKLOAD
+  value: {{ include "pgedge.name" . | quote }}
 {{- end -}}
 
 

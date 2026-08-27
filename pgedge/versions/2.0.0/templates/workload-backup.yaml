@@ -30,7 +30,7 @@ spec:
           value: {{ .Values.backup.gcp.prefix | quote }}
       {{- end }}
         - name: PG_HOST
-          value: replica-0.{{ include "pgedge.name" . }}.{{ (index .Values.gvc.locations 0).name }}.{{ .Values.gvc.name }}.cpln.local
+          value: replica-0.{{ include "pgedge.name" . }}.{{ (index .Values.locations 0).name }}.{{ .Values.global.cpln.gvc }}.cpln.local
         - name: PG_PASSWORD
           value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
         - name: PG_PORT
@@ -51,10 +51,10 @@ spec:
       target: 95
     capacityAI: false
     debug: false
-    suspend: false
+    suspend: true    # a GVC location this release did not ask for must NOT run a second backup
     timeoutSeconds: 5
   localOptions:
-  {{- range $i, $loc := .Values.gvc.locations }}
+  {{- range $i, $loc := .Values.locations }}
     - location: //location/{{ $loc.name }}
       suspend: {{ if eq $i 0 }}false{{ else }}true{{ end }}
   {{- end }}
@@ -70,7 +70,7 @@ spec:
     internal:
       inboundAllowType: none
       inboundAllowWorkload: []
-  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "pgedge.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pgedge.identity.name" . }}
   job:
     concurrencyPolicy: Forbid
     historyLimit: 5

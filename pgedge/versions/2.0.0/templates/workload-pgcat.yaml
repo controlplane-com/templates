@@ -20,6 +20,7 @@ spec:
           value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.database
         - name: PGCAT_ADMIN_PASSWORD
           value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
+        {{- include "pgedge.locationEnv" . | nindent 8 }}
       cpu: {{ .Values.pgcat.resources.cpu | quote }}
       memory: {{ .Values.pgcat.resources.memory | quote }}
       inheritEnv: false
@@ -29,12 +30,12 @@ spec:
       volumes:
         - path: /etc/pgcat/start.sh
           uri: cpln://secret/{{ include "pgedge.secretPgcatConfig.name" . }}.payload
-  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "pgedge.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pgedge.identity.name" . }}
   defaultOptions:
     autoscaling:
-      metric: rps
-      minScale: {{ .Values.pgcat.minReplicas }}
-      maxScale: {{ .Values.pgcat.maxReplicas }}
+      metric: disabled   # a GVC location this release did not ask for runs NOTHING
+      minScale: 0
+      maxScale: 0
       maxConcurrency: 0
       scaleToZeroDelay: 300
       target: 100
@@ -44,6 +45,29 @@ spec:
       enabled: {{ .Values.multiZone }}
     suspend: false
     timeoutSeconds: 5
+  {{- /*
+    Every localOptions entry must carry the COMPLETE field set defaultOptions
+    carries: localOptions is a full override, and a field left out would fall
+    through to the null shape above and produce zero replicas in a location the
+    user did ask for.
+  */}}
+  localOptions:
+    {{- range $location := .Values.locations }}
+    - location: //location/{{ $location.name }}
+      autoscaling:
+        metric: rps
+        minScale: {{ $.Values.pgcat.minReplicas }}
+        maxScale: {{ $.Values.pgcat.maxReplicas }}
+        maxConcurrency: 0
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      multiZone:
+        enabled: {{ $.Values.multiZone }}
+      suspend: false
+      timeoutSeconds: 5
+    {{- end }}
   firewallConfig:
     external:
       inboundAllowCIDR: []

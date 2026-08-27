@@ -25,6 +25,7 @@ spec:
           value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
         - name: PG_DATABASE
           value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.database
+        {{- include "pgedge.locationEnv" . | nindent 8 }}
       ports:
         - number: 5432
           protocol: tcp
@@ -34,13 +35,13 @@ spec:
           uri: cpln://volumeset/{{ include "pgedge.volume.name" . }}
         - path: /pgedge/start.sh
           uri: cpln://secret/{{ include "pgedge.secretStartup.name" . }}.payload
-  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "pgedge.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pgedge.identity.name" . }}
   defaultOptions:
     autoscaling:
       maxConcurrency: 0
-      maxScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      maxScale: 0   # a GVC location this release did not ask for runs NOTHING
       metric: disabled
-      minScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      minScale: 0   # localOptions below supplies the real count for each configured location
       scaleToZeroDelay: 300
       target: 100
     capacityAI: false
@@ -65,7 +66,7 @@ spec:
       ports: []
     replicaDirect: true  # Each replica gets its own addressable DNS endpoint
   localOptions:
-    {{- range $location := .Values.gvc.locations }}
+    {{- range $location := .Values.locations }}
     - location: //location/{{ $location.name }}
       autoscaling:
         maxConcurrency: 0

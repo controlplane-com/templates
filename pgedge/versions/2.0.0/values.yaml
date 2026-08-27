@@ -1,12 +1,15 @@
-gvc:
-  name: pgedge-gvc
-  locations: # For replicas: use 1 for dev/testing, 3 for production
-    - name: aws-us-west-2
-      replicas: 3
-    - name: aws-us-east-2
-      replicas: 3
-    - name: aws-eu-central-1
-      replicas: 3
+# ─── Locations ────────────────────────────────────────────────────────────────
+# This chart deploys into the GVC you install into — it does NOT create one.
+# Every location listed here MUST already exist in that GVC, or the pgEdge nodes
+# refuse to initialise with a named error (see Prerequisites in the README).
+# Extra locations in the GVC are fine: nothing pgEdge-related runs in them.
+locations: # For replicas: use 1 for dev/testing, 3 for production
+  - name: aws-us-west-2
+    replicas: 3
+  - name: aws-us-east-2
+    replicas: 3
+  - name: aws-eu-central-1
+    replicas: 3
 
 image: ghcr.io/pgedge/pgedge-postgres:17-spock5-standard
 
@@ -42,8 +45,8 @@ pgcat:
   resources:
     cpu: 500m
     memory: 256Mi
-  minReplicas: 2
-  maxReplicas: 4
+  minReplicas: 2         # per location
+  maxReplicas: 4         # per location
 
 internal_access: # Sets both pgedge and pgcat workloads
   type: same-gvc  # options: same-gvc, same-org, workload-list
@@ -53,7 +56,7 @@ internal_access: # Sets both pgedge and pgcat workloads
 backup:
   enabled: false
   image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
-  schedule: "0 2 * * *"   # daily at 2am UTC
+  schedule: "0 2 * * *"   # daily at 2am UTC — runs in locations[0] only
 
   resources:
     cpu: 100m

@@ -1,8 +1,7 @@
 ---
-{{- include "pgedge.validateBackupConfig" . -}}
-{{- include "pgedge.validateCredentials" . }}
+{{- include "pgedge.validate" . }}
 kind: identity
-gvc: {{ .Values.gvc.name }}
+gvc: {{ .Values.global.cpln.gvc }}
 name: {{ include "pgedge.identity.name" . }}
 description: pgEdge identity
 tags: {{- include "pgedge.tags" . | nindent 2 }}

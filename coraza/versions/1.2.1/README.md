@@ -74,6 +74,13 @@ The shipped default is a pinned digest of the newest Caddy build at release time
 
 ## Request size, CPU and timeout
 
+Bodies larger than Coraza's in-memory limit are buffered to disk under `/tmp/coraza` and inspected in
+full — there is nothing to enable. The startup hook creates that directory unconditionally, which
+matters if you point `image` at an older `coraza-crs` build: those do not create it themselves, and
+without it every large request fails with a 500 and `failed to append request body: ... no such file
+or directory`, which reads as a WAF fault rather than a missing directory.
+
+
 Inspecting a request body costs CPU in proportion to its size, and `timeoutSeconds` cuts the request off
 part-way through. Together they set the largest body this WAF accepts; anything larger is a **504 from the
 WAF**, which reads as an application fault. GET traffic is unaffected, so smoke tests never reveal it.

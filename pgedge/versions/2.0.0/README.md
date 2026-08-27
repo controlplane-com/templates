@@ -198,6 +198,8 @@ pgcat:
 
 pgcat runs in the same locations as pgEdge, `minReplicas` to `maxReplicas` in each.
 
+**Read/write routing.** pgcat parses each query and sends writes to `replica-0` of your first location and reads to the other nodes. A cluster of exactly one node has no other node, so reads are served by that node too — otherwise every `SELECT` would fail with `AllServersDown`. This switches on node count alone and needs no configuration.
+
 **Pool modes:**
 - `transaction` — connection held only for the duration of a transaction. Best for most web and API workloads. Not compatible with session-level features like `SET` variables, temporary tables, or advisory locks.
 - `session` — connection held for the entire client session. Compatible with all Postgres features but provides less connection reuse.

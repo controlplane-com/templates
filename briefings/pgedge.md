@@ -103,6 +103,13 @@ reads near users, and active-active deployments that must survive the loss of a 
   node in the cluster claims it in `spock.subscription.sub_slot_name`, skips the cleanup entirely if any
   peer is unreachable (unknown claims), and repairs a subscription whose slot is positively confirmed
   missing by dropping and recreating it.
+- **pgcat's read/write split turns itself off on a one-node cluster.** `primary_reads_enabled` defaults
+  to `false` in pgcat, so with read/write splitting on, every plain `SELECT` goes to a `replica` entry.
+  A single-node install has none (its only server is the `primary`), so through 1.1.1 reads failed with
+  `could not get connection from the pool - AllServersDown` while writes succeeded — and `values.yaml`
+  suggests exactly that shape for dev/testing. From 2.0.0 the pgcat startup script counts the nodes it
+  built and sets `primary_reads_enabled` accordingly; multi-node routing is unchanged (reads never hit
+  the write target).
 - **DDL does not replicate.** A plain `CREATE TABLE` lands on one node only. Either run it on every node
   (the auto-repset trigger fires locally on each) or `spock.replicate_ddl()` once and then
   `spock.repset_add_table()` on every **other** node — running that on the broadcasting node fails with a

@@ -78,7 +78,37 @@ spec:
     internal:
       inboundAllowType: {{ .Values.keeper.internalAccess.type }}
       {{- $wl := .Values.keeper.internalAccess.workloads | default (list) }}
-      {{- if $wl }}
+      {{- if eq .Values.keeper.internalAccess.type "workload-list" }}
+      {{- /*
+        This list governs ALL inbound internal traffic, INCLUDING traffic between
+        the workloads of THIS release: Keeper's Raft on 9234, the servers' calls
+        to Keeper on 9181, and server-to-server replication and distributed
+        queries on 9000/9009. A list naming only clients cuts the cluster off
+        from itself -- measured 2026-08-27 by following the README: Raft denied
+        (`rbac_access_denied_matched_policy[none] ... "10.0.84.230:9234"`),
+        quorum lost, cross-shard queries failing with `Code: 279`, while
+        get-deployments reported every replica `ready=true restarts=0`. Adding
+        the release's own links restored `zk_synced_followers 2`.
+
+        Both own links are included on both workloads rather than the minimum
+        each strictly needs. The over-grant is one release's workloads reaching
+        each other inside one GVC; the under-grant is a silently destroyed
+        cluster, and getting the direction wrong is exactly how this shipped.
+      */}}
+      {{- $own := list (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "clickhouse.server.name" .)) }}
+      {{- if not (include "clickhouse.isSingleNode" .) }}
+      {{- $own = append $own (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "clickhouse.keeper.name" .)) }}
+      {{- end }}
+      inboundAllowWorkload:
+        {{- range $own }}
+        - {{ . }}
+        {{- end }}
+        {{- range $wl }}
+        {{- if not (has . $own) }}
+        - {{ . }}
+        {{- end }}
+        {{- end }}
+      {{- else if $wl }}
       inboundAllowWorkload:
         {{- range $wl }}
         - {{ . }}

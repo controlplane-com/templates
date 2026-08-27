@@ -74,7 +74,8 @@ server:
     memory: 2Gi
   internalAccess:
     type: same-gvc # options: same-gvc, same-org, workload-list, none
-    workloads: [] # required when type is workload-list; e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME
+    workloads: [] # required when type is workload-list; list only your clients -- this release's
+    # own server and keeper workloads are added automatically, e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
 # ─── Keeper (cluster modes only) ──────────────────────────────────────────────
 keeper: # cluster modes only
@@ -84,4 +85,5 @@ keeper: # cluster modes only
     memory: 2Gi
   internalAccess:
     type: same-gvc # options: same-gvc, same-org, workload-list, none
-    workloads: [] # required when type is workload-list; e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME
+    workloads: [] # required when type is workload-list; list only your clients -- this release's
+    # own server and keeper workloads are added automatically, e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME

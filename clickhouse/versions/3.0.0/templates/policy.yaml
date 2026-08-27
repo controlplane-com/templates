@@ -10,7 +10,10 @@ bindings:
 targetKind: secret
 targetLinks:
   - //secret/{{ .Values.database.credentialsSecretName }}
+  {{- if not (include "clickhouse.isSingleNode" .) }}
+  {{- /* single-node renders no Keeper, so granting reveal on its secret is a dangling grant */}}
   - //secret/{{ include "clickhouse.secretKeeper.name" . }}
+  {{- end }}
   - //secret/{{ include "clickhouse.secretServer.name" . }}
   {{- if eq .Values.provider "gcp" }}
   - //secret/{{ .Values.gcp.credentialsSecretName }}

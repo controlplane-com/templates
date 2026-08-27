@@ -52,7 +52,7 @@ to initialise with a named error in `cpln logs`:
 ```
 
 If **every** location you list is absent from the GVC, nothing starts at all and there is no container to
-log anything: `cpln workload get-deployments` shows zero replicas and `desiredScale: None` in every
+log anything: `cpln workload get-deployments` shows zero replicas and `desiredScale: 0` in every
 location. That is why the pre-flight check above matters.
 
 **One `dictionary` secret must exist BEFORE you install.** This is the password you put in every client
@@ -187,7 +187,8 @@ server:
     memory: 2Gi
   internalAccess:
     type: same-gvc # options: same-gvc, same-org, workload-list, none
-    workloads: [] # required when type is workload-list; e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME
+    workloads: [] # required when type is workload-list; list only your clients -- this release's
+    # own server and keeper workloads are added automatically, e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
 keeper: # cluster modes only
   image: clickhouse/clickhouse-keeper:25.10
@@ -196,7 +197,8 @@ keeper: # cluster modes only
     memory: 2Gi
   internalAccess:
     type: same-gvc # options: same-gvc, same-org, workload-list, none
-    workloads: [] # required when type is workload-list; e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME
+    workloads: [] # required when type is workload-list; list only your clients -- this release's
+    # own server and keeper workloads are added automatically, e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME
 ```
 
 An access-knob change takes up to about five minutes to propagate — re-test before concluding it did not
@@ -389,6 +391,10 @@ position in `locations`.
 - **Keeper is the availability floor.** Three members tolerate one loss; the single-shard shape has one member and tolerates none. If a majority of Keeper locations are missing from the GVC, the containers exit with a named error rather than waiting for an election that can never complete
 - **`helm upgrade` restarts every replica in every location at once** — nothing serialises a rolling restart on a stateful workload, so treat an upgrade as a planned query interruption
 - **Keep locations and the bucket in the same provider and region family.** Cross-region traffic to object storage is billed on every query that misses the local cache
+- **With `workload-list`, list only your clients.** The server and Keeper reach each other over the same internal firewall, so the chart adds this release's own workloads to the list for you
+- **A rolling upgrade of a 3-shard cluster is about 83 seconds of total unavailability** (measured), and changing a Keeper setting costs roughly 60 seconds of coordination outage. Plan both as query interruptions
+- **Renaming `clusterName` orphans existing `Distributed` tables** — they keep pointing at the old cluster and fail with `Code: 701`. Recreate them after a rename
+- **With one replica per shard, losing a shard fails every distributed query** (~60 s to surface), not just the rows on that shard. Add replicas if partial results are not acceptable
 
 ## Links
 

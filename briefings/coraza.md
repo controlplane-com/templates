@@ -86,10 +86,10 @@ surface stayed green. Hence the handler-resolution loop.
   still fire afterwards). The rules.d file loads *after* CRS, which is what makes removal work.
 - **Pin a datecode or a digest, never `-lts` or `caddy-alpine`.** Moving tags get repointed and change the
   image under a deployment nobody touched. This is the one knob that has caused a customer outage.
-- **Only `*-caddy-alpine-*` variants work** — `-nginx-`/`-apache-` have no Caddy and no admin API, and
-  the newest CRS releases are nginx/apache only, so chasing the highest CRS number lands on an image this
-  template cannot drive. `4.25` is the newest with a Caddy build; on nginx the symptom is a misleading
-  `invalid host in upstream`, because `BACKEND` carries a scheme that variant rejects.
+- **Only `*-caddy-alpine-*` variants work** — `-nginx-`/`-apache-` have no Caddy and no admin API. Upstream
+  publishes a caddy-alpine build alongside them for each CRS release, so take the newest of those rather
+  than the newest tag overall. On nginx the symptom is a misleading `invalid host in upstream`, because
+  `BACKEND` carries a scheme that variant rejects.
 - **Smaller ones:** it only protects traffic routed through it, so the protected workload must not stay
   publicly reachable; `targetWorkload` must be fully qualified; the image has no `jq` (hence the
   index-at-a-time handler resolution); Envoy normalizes paths before Caddy sees them, so an unencoded

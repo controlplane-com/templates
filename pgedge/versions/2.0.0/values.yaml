@@ -41,7 +41,6 @@ pgcat:
   image: ghcr.io/postgresml/pgcat:v1.2.0 # pinned: `latest` makes installs non-reproducible
   poolMode: transaction  # options: session, transaction, statement
   defaultPoolSize: 25    # Real Postgres connections pgcat maintains per pool
-  maxClientConn: 1000    # Maximum client connections pgcat accepts
   resources:
     cpu: 500m
     memory: 256Mi

@@ -31,6 +31,7 @@ reads near users, and active-active deployments that must survive the loss of a 
 | `postgres.credentialsSecretName` | `my-pgedge-credentials` | **prerequisite** `dictionary` secret (1.1.0+): `username`, `password`, `database` |
 | `pgcat.image` | `ghcr.io/postgresml/pgcat:v1.2.0` | pinned in 1.1.0; was `:latest` |
 | `pgcat.poolMode` / `minReplicas` / `maxReplicas` | `transaction` / 2 / 4 | min/max are per location |
+| `pgcat.defaultPoolSize` | 25 | the only connection knob pgcat honours. `pgcat.maxClientConn` existed through 1.1.1 and did nothing — pgcat v1.2.0 has no such setting (absent from `SHOW CONFIG`, absent from the binary), and it was removed in 2.0.0 |
 | `resources` | `500m`/`1Gi` → `2`/`4Gi` | `2` / `500m` is exactly 4:1, the stateful ceiling — raising `maxCpu` alone is rejected at apply |
 | `multiZone` | `false` | |
 | `internal_access.type` | `same-gvc` | off-convention key name, deliberately left alone in 2.0.0 |

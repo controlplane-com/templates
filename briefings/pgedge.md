@@ -86,7 +86,29 @@ reads near users, and active-active deployments that must survive the loss of a 
   `replica`, even though Spock is multi-master.
 - **`helm upgrade` restarts every pgEdge replica at once** — the API drops
   `rolloutOptions.maxUnavailableReplicas` on a `stateful` workload, so nothing serialises the rollout.
-  Treat an upgrade as a planned write interruption.
+  Treat an upgrade as a planned write interruption (~2 min measured).
+- **`spock_output` must be allow-listed, and 2.0.0 is the first version that does it.** PG 17.11 ships
+  `output_plugin_libraries = 'pgoutput, test_decoding'`, so through 1.1.1 Spock could never create a
+  replication slot: every subscription sat at `down`, every node accepted writes that never replicated,
+  and every status surface read `ready: true`. Symptom in the server log (not `cpln logs`):
+  `library "spock_output" may not be used as an output plugin`. The chart now writes the GUC in the
+  `postgresql.conf` heredoc — which runs **only on a fresh initdb**, so a pre-existing data directory
+  needs `ALTER SYSTEM SET output_plugin_libraries = pgoutput, test_decoding, spock_output` (UNQUOTED —
+  quoting it stores one bogus plugin named `"pgoutput, test_decoding, spock_output"`).
+- **The daemon's orphan-slot cleanup used to destroy the mesh on a simultaneous restart.** Through 1.1.1
+  it dropped every slot with `active = false`, locally and on every peer. A rolling `helm upgrade`
+  restarts all replicas at once, so every legitimate slot is briefly inactive and all of them were
+  dropped; the `spock.subscription` rows survive, so the creation loop logged `already exists --
+  skipping` and nothing ever recreated the slot. It did not self-heal. 2.0.0 drops a slot only when no
+  node in the cluster claims it in `spock.subscription.sub_slot_name`, skips the cleanup entirely if any
+  peer is unreachable (unknown claims), and repairs a subscription whose slot is positively confirmed
+  missing by dropping and recreating it.
+- **DDL does not replicate.** A plain `CREATE TABLE` lands on one node only. Either run it on every node
+  (the auto-repset trigger fires locally on each) or `spock.replicate_ddl()` once and then
+  `spock.repset_add_table()` on every **other** node — running that on the broadcasting node fails with a
+  duplicate key, and skipping it strands writes made on the other nodes.
+- **Every table needs a PRIMARY KEY, or `CREATE TABLE` itself fails** — the chart's auto-repset event
+  trigger adds each table to `default`, which replicates UPDATE/DELETE and so requires a key.
 - **In-container verification works from 2.0.0.** The `createsGvc` policy-hook trap is gone: resources land
   in the GVC named by `--gvc`, so `exec`, `logs` and `uninstall` all work against the slot you installed into.
 - **GVC-level env vars cannot reach these containers** — all three set `inheritEnv: false`. Newly relevant

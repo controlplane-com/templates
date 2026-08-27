@@ -429,7 +429,7 @@ unset PGPASSWORD
 - **Release names must be unique per organization**: secrets are organization-wide, so two releases with the same name collide even in different GVCs
 - **Conflict resolution**: Concurrent writes to the same row from different nodes are resolved by last-update-wins based on commit timestamp. For workloads requiring stronger consistency, route writes for a given entity to a single node using application-level logic
 - **multiZone**: Verify your selected location supports multiple availability zones before enabling
-- **`helm upgrade` restarts every pgEdge replica at once** — nothing serialises a rolling restart on a stateful workload, so treat an upgrade as a planned write interruption
+- **`helm upgrade` restarts every pgEdge replica at once** — nothing serialises a rolling restart on a stateful workload, so treat an upgrade as a planned write interruption of roughly two minutes. The mesh reconciles itself: on boot each node keeps replication slots that a subscription still owns, drops only genuinely orphaned ones, and rebuilds any subscription whose slot has gone missing
 
 ## Links
 

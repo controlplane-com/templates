@@ -25,7 +25,7 @@ cannot reach it.
 ### Image
 
 ```yaml
-# Pinned by digest = tag 4.25-caddy-alpine-202607180107 (OWASP CRS 4.25.0, Caddy v2.11.2).
+# Pinned by digest = tag 4.28-caddy-alpine-202608260808 (OWASP CRS 4.25.0, Caddy v2.11.2).
 # Only the *-caddy-alpine-* variants work with this template, and only a datecode or a
 # digest is safe to pin — moving tags such as -lts get repointed upstream.
 image: ghcr.io/coreruleset/coraza-crs@sha256:21e95b2117c8c818f263944f45bd233608b3d18dd95653f71539972eb0cdfca1
@@ -68,10 +68,9 @@ each CRS release — take the newest of those.
 
 **Pin a digest or a datecode, never a moving tag.** `4.25-caddy-alpine-lts` and `caddy-alpine` are
 repointed by upstream, so the image can change under a deployment you have not touched. A digest
-(`coraza-crs@sha256:…`) or a datecode (`4.25-caddy-alpine-202607180107`) names one specific build.
+(`coraza-crs@sha256:…`) or a datecode (`4.28-caddy-alpine-202608260808`) names one specific build.
 
-The shipped default is a pinned digest of a specific build. Newer CRS releases ship their own
-`*-caddy-alpine-*` builds; see version 1.2.1, which pins CRS 4.28.
+The shipped default is a pinned digest of the newest Caddy build at release time.
 
 ## Request size, CPU and timeout
 
@@ -96,7 +95,7 @@ scaling inversely with CPU and relatively worse below about `250m`, where CPU th
 
 For more, raise `resources.cpu` first (faster, rather than merely more patient), then `timeoutSeconds`, and
 raise `resources.memory` with them — one inspected 3 MB body peaked at 124 MiB, which is why the default is
-no longer 128Mi. Two ceilings you cannot raise here: Coraza stops inspecting above **13 MB**
+no longer 128Mi. Two ceilings you cannot raise here: Coraza stops inspecting above **12.5 MiB**
 (`SecRequestBodyLimit`, fixed in the image), and `timeoutSeconds` also caps how long your own upstream has
 to answer, so set it above your application's slowest response.
 

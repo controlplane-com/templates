@@ -97,13 +97,12 @@ reads near users, and active-active deployments that must survive the loss of a 
   needs `ALTER SYSTEM SET output_plugin_libraries = pgoutput, test_decoding, spock_output` (UNQUOTED —
   quoting it stores one bogus plugin named `"pgoutput, test_decoding, spock_output"`).
 - **The daemon's orphan-slot cleanup used to destroy the mesh on a simultaneous restart.** Through 1.1.1
-  it dropped every slot with `active = false`, locally and on every peer. A rolling `helm upgrade`
-  restarts all replicas at once, so every legitimate slot is briefly inactive and all of them were
-  dropped; the `spock.subscription` rows survive, so the creation loop logged `already exists --
-  skipping` and nothing ever recreated the slot. It did not self-heal. 2.0.0 drops a slot only when no
-  node in the cluster claims it in `spock.subscription.sub_slot_name`, skips the cleanup entirely if any
-  peer is unreachable (unknown claims), and repairs a subscription whose slot is positively confirmed
-  missing by dropping and recreating it.
+  it dropped every slot with `active = false`, locally and on every peer — and a `helm upgrade` restarts
+  all replicas at once, so every legitimate slot is briefly inactive. The `spock.subscription` rows
+  survive, so the creation loop then logged `already exists -- skipping` and nothing recreated the slot;
+  it did not self-heal. 2.0.0 drops a slot only when nothing in the cluster claims it in
+  `spock.subscription.sub_slot_name`, skips the cleanup entirely when any peer is unreachable (claims
+  unknown), and rebuilds a subscription whose slot the provider confirms missing.
 - **pgcat's read/write split turns itself off on a one-node cluster.** `primary_reads_enabled` defaults
   to `false` in pgcat, so with read/write splitting on, every plain `SELECT` goes to a `replica` entry.
   A single-node install has none (its only server is the `primary`), so through 1.1.1 reads failed with

@@ -103,13 +103,8 @@ psql "host=replica-0.RELEASE_NAME-pgedge.LOCATION.GVC_NAME.cpln.local user=USERN
 single bogus plugin named `"pgoutput, test_decoding, spock_output"` and the error persists. Confirm
 with `SHOW output_plugin_libraries;` — the output must have no quotation marks in it.
 
-If subscriptions were already `down`, drop and let the node rebuild them after the reload:
-
-```sql
-SELECT spock.sub_drop(sub_name) FROM spock.subscription;
-```
-
-then `cpln workload force-redeployment RELEASE_NAME-pgedge --gvc GVC_NAME`. Check the result with
+Then `cpln workload force-redeployment RELEASE_NAME-pgedge --gvc GVC_NAME`. The startup daemon
+rebuilds any subscription whose slot is missing, so nothing else is needed. Confirm with
 `SELECT subscription_name, status FROM spock.sub_show_status();` — every row must read `replicating`.
 
 ## Configuration
@@ -268,17 +263,11 @@ SELECT spock.repset_add_table('default', 'orders'::regclass);
 ```
 
 Step 2 is needed because Spock suppresses event triggers while applying replicated changes, so the
-auto-add trigger fires only on the node where `replicate_ddl` was called. Running step 2 on *that*
-node instead fails with `duplicate key value violates unique constraint
-"replication_set_table_pkey"` — and if you stop there, writes made on the other nodes never leave
-them, because outbound filtering happens on the node the write lands on. Verify with:
-
-```sql
-SELECT node_name, set_name, relname FROM spock.tables, spock.local_node, spock.node
- WHERE spock.node.node_id = spock.local_node.node_id AND relname = 'orders';
-```
-
-Run it on each node; every node must return a row.
+auto-add trigger fires only on the node that called `replicate_ddl`. Running step 2 on *that* node
+fails with `duplicate key value violates unique constraint "replication_set_table_pkey"`, and
+skipping it strands writes made on the other nodes — outbound filtering happens where the write
+lands. Confirm with `SELECT * FROM spock.tables WHERE relname = 'orders';` on every node: each must
+return a row.
 
 ### Other DDL
 

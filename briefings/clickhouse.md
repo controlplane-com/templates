@@ -82,3 +82,4 @@ read cache. **From 3.0.0 it deploys into an existing GVC and creates none.**
   fresh install.
 - **Keep locations and the bucket in one region family.** Distributed queries fan out cross-region and every
   cache miss pulls from object storage — both are billed.
+- **The boot-time GVC read is bounded with `timeout`, and that bound is load-bearing.** `-T` is a per-operation timeout, not a retry cap: GNU wget (the server image) defaults to `--tries=20` and retries connect and DNS failures, so an unreachable API could consume ~200 s per invocation and ~600 s across the three-attempt loop — past the platform's readiness budget, in exactly the transient failure the guard exists to tolerate. BusyBox wget (keeper) has no `--tries`, so the bound cannot come from wget itself. `timeout` is present in both images. Measured: server 15 s / rc=124 (vs 33 s for only three retries); keeper stops at its own `-T 10`. Worst case is now 45 s. Do not remove the `timeout` prefix.

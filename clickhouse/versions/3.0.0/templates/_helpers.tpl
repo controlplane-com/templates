@@ -318,7 +318,15 @@ done
 GVC_LOCS=""
 GVC_READ_OK="false"
 for _try in 1 2 3; do
-    if GVC_JSON=$(wget -q -O - -T 10 \
+    # `timeout` bounds the WHOLE call. -T is a per-operation timeout, not a retry
+    # cap: GNU wget (the server image) defaults to --tries=20 and retries connect
+    # and DNS failures, so an unreachable API can consume ~200s per invocation and
+    # ~600s across this loop -- past the platform's readiness budget, in exactly
+    # the transient failure this guard exists to tolerate. BusyBox wget (keeper)
+    # has no --tries, so a portable bound has to come from outside wget.
+    # Measured: server 15s rc=124 (vs 33s for only three retries); keeper stops at
+    # its own -T 10. `timeout` is present in both images.
+    if GVC_JSON=$(timeout 15 wget -q -O - -T 10 \
             --header="Authorization: ${CPLN_TOKEN:-}" \
             "${CPLN_ENDPOINT:-http://api.cpln.io}/org/${CPLN_ORG:-}/gvc/${GVC}" 2>/dev/null); then
         GVC_LOCS=$(printf '%s' "$GVC_JSON" | tr -d ' \n' \

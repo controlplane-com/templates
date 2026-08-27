@@ -1,5 +1,4 @@
 {{- if not (include "clickhouse.isSingleNode" .) }}
-{{ include "clickhouse.validateLocations" . }}
 kind: workload
 name: {{ include "clickhouse.keeper.name" . }}
 description: clickhouse keeper
@@ -12,8 +11,7 @@ spec:
       image: {{ .Values.keeper.image }}
       inheritEnv: false
       env:
-      - name: LOCATIONS_STR
-        value: "{{- range $i, $loc := .Values.gvc.locations -}}{{ $loc.name }}:{{ $loc.replicas }}{{ if lt $i (sub (len $.Values.gvc.locations) 1) }},{{ end }}{{- end }}"
+      {{- include "clickhouse.locationsEnv" . | nindent 6 }}
       memory: {{ .Values.keeper.resources.memory | quote }}
       command: "/bin/bash"
       args:
@@ -29,23 +27,31 @@ spec:
           uri: cpln://volumeset/{{ include "clickhouse.volumeKeeper.name" . }}
         - path: /scripts/keeper-startup.sh
           uri: cpln://secret/{{ include "clickhouse.secretKeeper.name" . }}
-  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "clickhouse.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "clickhouse.identity.name" . }}
   defaultOptions:
     autoscaling:
       keda: {}
       maxConcurrency: 0
-      maxScale: 1
+      maxScale: 0
       metric: disabled
-      minScale: 1
+      minScale: 0
       scaleToZeroDelay: 300
       target: 100
     capacityAI: false
     debug: false
     suspend: false
     timeoutSeconds: 5
-  {{- $locs := .Values.gvc.locations }}
+  {{- /*
+    Keeper members are replica-0 of the FIRST THREE locations only. 2.8.0
+    rendered a localOptions entry for every location and set `suspend: true`
+    on index >= 3; with defaultOptions pinned to 0/0 that entry is unnecessary,
+    and dropping it removes this chart's only use of localOptions[].suspend --
+    a field that permanently breaks a workload's inbound reachability from
+    other locations.
+  */}}
   localOptions:
-  {{- range $i, $loc := $locs }}
+  {{- range $i, $loc := .Values.locations }}
+  {{- if lt $i 3 }}
     - autoscaling:
         maxConcurrency: 0
         metric: disabled
@@ -56,8 +62,9 @@ spec:
       capacityAI: false
       debug: false
       location: //location/{{ $loc.name }}
-      suspend: {{ if ge $i 3 }}true{{ else }}false{{ end }}
+      suspend: false
       timeoutSeconds: 5
+  {{- end }}
   {{- end }}
   firewallConfig:
     external:
@@ -69,8 +76,16 @@ spec:
       outboundAllowPort: []
       outboundBlockedCIDR: []
     internal:
-      inboundAllowType: {{ .Values.keeper.internal_access.type }}
+      inboundAllowType: {{ .Values.keeper.internalAccess.type }}
+      {{- $wl := .Values.keeper.internalAccess.workloads | default (list) }}
+      {{- if $wl }}
+      inboundAllowWorkload:
+        {{- range $wl }}
+        - {{ . }}
+        {{- end }}
+      {{- else }}
       inboundAllowWorkload: []
+      {{- end }}
   loadBalancer:
     direct:
       enabled: false

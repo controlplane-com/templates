@@ -1,5 +1,3 @@
-{{ include "clickhouse.validateStorage" . }}
----
 kind: policy
 name: {{ include "clickhouse.policy.name" . }}
 description: Clickhouse policy
@@ -8,7 +6,7 @@ bindings:
   - permissions:
       - reveal
     principalLinks:
-      - //gvc/{{ .Values.gvc.name }}/identity/{{ include "clickhouse.identity.name" . }}
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "clickhouse.identity.name" . }}
 targetKind: secret
 targetLinks:
   - //secret/{{ .Values.database.credentialsSecretName }}

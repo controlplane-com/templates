@@ -1,5 +1,13 @@
-{{ include "clickhouse.validateLocations" . }}
-{{ include "clickhouse.validateStorage" . }}
+{{- /*
+  The aggregate validator is invoked from BOTH here and identity.yaml. It is
+  defined once and emits nothing, so the second call costs nothing -- but
+  Helm renders templates in reverse-lexical order within a directory, which
+  puts workload-server.yaml FIRST and identity.yaml LAST. Wiring it only to
+  identity.yaml meant a malformed `locations` (empty, or missing a name)
+  crashed here with a Go-template error before the friendly message could
+  fire. Do not rely on which of the two Helm reaches first.
+*/ -}}
+{{- include "clickhouse.validate" . -}}
 kind: workload
 name: {{ include "clickhouse.server.name" . }}
 description: clickhouse server
@@ -28,8 +36,7 @@ spec:
       - name: AZURE_STORAGE_ACCOUNT_KEY
         value: cpln://secret/{{ .Values.azure.credentialsSecretName }}.accountKey
       {{- end }}
-      - name: LOCATIONS_STR
-        value: "{{- range $i, $loc := .Values.gvc.locations -}}{{ $loc.name }}:{{ $loc.replicas }}{{ if lt $i (sub (len $.Values.gvc.locations) 1) }},{{ end }}{{- end }}"
+      {{- include "clickhouse.locationsEnv" . | nindent 6 }}
       - name: CLICKHOUSE_PASSWORD
         value: cpln://secret/{{ .Values.database.credentialsSecretName }}.password
       - name: CLICKHOUSE_DATABASE
@@ -77,14 +84,14 @@ spec:
           recoveryPolicy: retain
           uri: cpln://secret/{{ include "clickhouse.secretHetzner.name" . }}
         {{- end }}
-  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "clickhouse.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "clickhouse.identity.name" . }}
   defaultOptions:
     autoscaling:
       keda: {}
       maxConcurrency: 0
-      maxScale: {{ if eq ((index .Values.gvc.locations 0).replicas | int) 0 }}1{{ else }}{{ (index .Values.gvc.locations 0).replicas | int }}{{ end }}
+      maxScale: 0
       metric: disabled
-      minScale: 1
+      minScale: 0
       scaleToZeroDelay: 300
       target: 100
     capacityAI: false
@@ -92,18 +99,18 @@ spec:
     suspend: false
     timeoutSeconds: 5
   localOptions:
-  {{- range $location := .Values.gvc.locations }}
+  {{- range $location := .Values.locations }}
   - autoscaling:
       maxConcurrency: 0
-      maxScale: {{ if eq ($location.replicas | int) 0 }}1{{ else }}{{ $location.replicas | int }}{{ end }}
+      maxScale: {{ $location.replicas | int }}
       metric: disabled
-      minScale: {{ if eq ($location.replicas | int) 0 }}0{{ else }}{{ $location.replicas | int }}{{ end }}
+      minScale: {{ $location.replicas | int }}
       scaleToZeroDelay: 300
       target: 100
     capacityAI: false
     debug: false
     location: //location/{{ $location.name }}
-    suspend: {{ if eq ($location.replicas | int) 0 }}true{{ else }}false{{ end }}
+    suspend: false
     timeoutSeconds: 10
   {{- end }}
   firewallConfig:
@@ -116,8 +123,16 @@ spec:
       outboundAllowPort: []
       outboundBlockedCIDR: []
     internal:
-      inboundAllowType: {{ .Values.server.internal_access.type }}
+      inboundAllowType: {{ .Values.server.internalAccess.type }}
+      {{- $wl := .Values.server.internalAccess.workloads | default (list) }}
+      {{- if $wl }}
+      inboundAllowWorkload:
+        {{- range $wl }}
+        - {{ . }}
+        {{- end }}
+      {{- else }}
       inboundAllowWorkload: []
+      {{- end }}
   loadBalancer:
     direct:
       enabled: false

@@ -1,8 +1,7 @@
 {{- include "clickhouse.validate" . -}}
-{{ include "clickhouse.validateStorage" . }}
 ---
 kind: identity
-gvc: {{ .Values.gvc.name }}
+gvc: {{ .Values.global.cpln.gvc }}
 name: {{ include "clickhouse.identity.name" . }}
 description: Clickhouse identity
 tags: {{- include "clickhouse.tags" . | nindent 4 }}

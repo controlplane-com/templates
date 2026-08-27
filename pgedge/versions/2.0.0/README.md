@@ -82,6 +82,36 @@ and is **not** protected — nothing at render time can see it. Migrate instead:
 5. Uninstall the old release **against the GVC you originally installed it into**, not the GVC it
    created. That is where Helm tracks the release, and it takes the created GVC with it.
 
+### Existing data directories: allow-list the Spock output plugin
+
+2.0.0 writes `output_plugin_libraries = 'pgoutput, test_decoding, spock_output'` into
+`postgresql.conf`. Without it PostgreSQL 17.11 refuses to create any Spock replication slot
+(`library "spock_output" may not be used as an output plugin`), every subscription sits at `down`,
+and each node silently accepts writes that never leave it.
+
+That line is written by `initdb`, so it only lands on a **fresh** data directory. A node whose
+volume was created by an earlier chart keeps the old setting after a `helm upgrade`. Run this once
+**on every such node**, connecting directly to the node rather than through pgcat:
+
+```bash
+psql "host=replica-0.RELEASE_NAME-pgedge.LOCATION.GVC_NAME.cpln.local user=USERNAME dbname=DATABASE" \
+  -c "ALTER SYSTEM SET output_plugin_libraries = pgoutput, test_decoding, spock_output;" \
+  -c "SELECT pg_reload_conf();"
+```
+
+**The value must be unquoted here.** `ALTER SYSTEM` quotes it for you; quoting it yourself stores a
+single bogus plugin named `"pgoutput, test_decoding, spock_output"` and the error persists. Confirm
+with `SHOW output_plugin_libraries;` — the output must have no quotation marks in it.
+
+If subscriptions were already `down`, drop and let the node rebuild them after the reload:
+
+```sql
+SELECT spock.sub_drop(sub_name) FROM spock.subscription;
+```
+
+then `cpln workload force-redeployment RELEASE_NAME-pgedge --gvc GVC_NAME`. Check the result with
+`SELECT subscription_name, status FROM spock.sub_show_status();` — every row must read `replicating`.
+
 ## Configuration
 
 ### pgEdge Settings
@@ -191,27 +221,67 @@ reliably from every workload type.
 
 ## Schema Changes (DDL)
 
-Spock replicates row-level changes (`INSERT`, `UPDATE`, `DELETE`) automatically. DDL (`CREATE TABLE`, `ALTER TABLE`, etc.) must be broadcast using `spock.replicate_ddl()` so it executes on all nodes.
+Spock replicates row-level changes (`INSERT`, `UPDATE`, `DELETE`) automatically. **DDL does not
+replicate.** A plain `CREATE TABLE` or `ALTER TABLE` applies only to the node you ran it on; the
+other nodes never learn about it, and rows written into the table on one node cannot be applied on
+a node where it does not exist.
+
+**Every table must have a PRIMARY KEY.** This template adds each new table to the `default`
+replication set automatically, and that set replicates `UPDATE`/`DELETE`, which Spock cannot do
+without a key. A table without one does not merely fail to replicate — the `CREATE TABLE` itself is
+rejected:
+
+```
+ERROR:  table events cannot be added to replication set default
+DETAIL:  table does not have PRIMARY KEY and given replication set is configured to replicate UPDATEs and/or DELETEs
+```
 
 ### Creating a table
 
-Run `spock.replicate_ddl()` once on any single node to create the table on all nodes, then add it to the replication set on every node so DML replicates in all directions:
+The simplest correct procedure is to run the same `CREATE TABLE` on **every** node. The auto-add
+trigger fires locally on each one, so the table ends up in the `default` replication set everywhere
+and DML replicates in all directions:
 
 ```sql
--- Step 1: Run on ONE node only -- creates the table on all nodes
+-- Run on EVERY node, connecting to each directly (not through pgcat)
+CREATE TABLE orders (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  amount numeric,
+  created_at timestamptz DEFAULT now()
+);
+```
+
+For larger clusters you can broadcast the DDL instead — but it takes **two** steps, and the second
+one runs on the other nodes, not on the node that broadcast:
+
+```sql
+-- Step 1: on ONE node -- creates the table on all nodes
 SELECT spock.replicate_ddl('CREATE TABLE orders (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   amount numeric,
   created_at timestamptz DEFAULT now()
 );');
 
--- Step 2: Run on ONE node -- adds the table to the replication set on all nodes
+-- Step 2: on every OTHER node -- adds the table to that node's replication set
 SELECT spock.repset_add_table('default', 'orders'::regclass);
 ```
 
-Step 2 is required because Spock suppresses event triggers during replication apply to prevent loops, so the auto-add trigger only fires on the node where `replicate_ddl` was called. The `repset_add_table` call itself replicates to all other nodes automatically.
+Step 2 is needed because Spock suppresses event triggers while applying replicated changes, so the
+auto-add trigger fires only on the node where `replicate_ddl` was called. Running step 2 on *that*
+node instead fails with `duplicate key value violates unique constraint
+"replication_set_table_pkey"` — and if you stop there, writes made on the other nodes never leave
+them, because outbound filtering happens on the node the write lands on. Verify with:
+
+```sql
+SELECT node_name, set_name, relname FROM spock.tables, spock.local_node, spock.node
+ WHERE spock.node.node_id = spock.local_node.node_id AND relname = 'orders';
+```
+
+Run it on each node; every node must return a row.
 
 ### Other DDL
+
+`ALTER TABLE` and `DROP TABLE` have the same rule — apply on every node, or broadcast once:
 
 ```sql
 SELECT spock.replicate_ddl('ALTER TABLE orders ADD COLUMN status text DEFAULT ''pending'';');

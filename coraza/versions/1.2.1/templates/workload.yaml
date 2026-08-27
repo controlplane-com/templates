@@ -1,0 +1,97 @@
+kind: workload
+name: {{ include "coraza.name" . }}
+description: Coraza Web Application Firewall (WAF)
+tags: {{- include "coraza.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: coraza-crs
+      cpu: {{ .Values.resources.cpu | quote }}
+      env:
+        - name: ACCESSLOG
+          value: /dev/stdout
+        - name: BACKEND
+          value: http://{{ .Values.targetWorkload }}:{{ .Values.targetPort }}
+        - name: CORAZA_AUDIT_LOG
+          value: /dev/stdout
+        - name: CORAZA_AUDIT_LOG_PARTS
+          value: ABDEFHIJZ
+        - name: CORAZA_DEBUG_LOG
+          value: /dev/stdout
+        - name: CORAZA_DEBUG_LOGLEVEL
+          value: '1'
+        - name: CORAZA_RULE_ENGINE
+          value: 'On'
+        - name: PORT
+          value: "{{ .Values.WAFPort }}"
+      # The image's own ENTRYPOINT and CMD, with one process started in front of them:
+      # a `tail` that forwards the postStart hook's log file onto THIS container's
+      # stdout. A postStart hook runs as a separate exec session whose output no log
+      # surface collects, so without this the hook's [INFO]/[FATAL] diagnosis reaches
+      # nobody and the operator sees only "PostStartHook failed" (measured). The tail
+      # inherits the container's real stdout and keeps it across the exec, so its
+      # output is ordinary container output.
+      #
+      # `-F` retries until the file exists, so the hook may write before the tail
+      # starts; `-n +1` emits from the first line rather than the last ten. Nothing
+      # truncates the file — a truncate here would race the hook's first line.
+      # `exec` keeps caddy as PID 1, so signal handling and graceful shutdown are
+      # unchanged. The command below is the pinned image's own ENTRYPOINT + CMD.
+      command: /bin/sh
+      args:
+        - -c
+        - |
+          tail -n +1 -F /tmp/coraza-hook.log 2>/dev/null &
+          exec /entrypoint.sh caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+      image: {{ .Values.image }}
+      inheritEnv: false
+      lifecycle:
+        postStart:
+          exec:
+            command:
+              - /bin/sh
+              - /opt/coraza/startup.sh
+      memory: {{ .Values.resources.memory | quote }}
+      ports:
+        - number: {{ .Values.WAFPort }}
+          protocol: http
+      volumes:
+        - path: /opt/coraza/rules.d/custom.conf
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "coraza.secretRules.name" . }}
+        - path: /opt/coraza/startup.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "coraza.secretStartup.name" . }}
+  defaultOptions:
+    multiZone:
+      enabled: {{ .Values.multiZone }}
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 3
+      metric: cpu
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: {{ .Values.timeoutSeconds | int }}
+  firewallConfig:
+    external:
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+      inboundAllowWorkload: []
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "coraza.identity.name" . }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

@@ -79,7 +79,7 @@ spec:
     capacityAI: false
     debug: false
     suspend: false
-    timeoutSeconds: 5
+    timeoutSeconds: {{ .Values.timeoutSeconds | int }}
   firewallConfig:
     external:
       inboundAllowCIDR:

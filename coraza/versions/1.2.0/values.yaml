@@ -10,9 +10,17 @@ targetPort: 8080 # Port of the workload to proxy traffic to
 
 WAFPort: 80 # Port on the WAF workload to expose to the internet
 
+# Coraza inspects request bodies on the CPU, so these size the largest body the WAF
+# can inspect inside timeoutSeconds. See "Request size, CPU and timeout" in the README
+# before lowering them — 50m/128Mi, the pre-1.2.0 defaults, 504 on any body over ~30 KB.
 resources:
-  cpu: 50m
-  memory: 128Mi
+  cpu: 500m
+  memory: 512Mi
+
+# Request timeout, in seconds, for everything passing through the WAF. It caps both the
+# time Coraza spends inspecting a request body and the time the upstream has to answer;
+# anything slower gets a 504 from the WAF, not from your application.
+timeoutSeconds: 30
 
 multiZone: false
 

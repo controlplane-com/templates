@@ -42,12 +42,20 @@ targetPort: 8080 # Port of the workload to proxy traffic to
 WAFPort: 80 # Port on the WAF workload to expose to the internet
 ```
 
-### Resources and placement
+### Resources, timeout and placement
 
 ```yaml
+# Coraza inspects request bodies on the CPU, so these size the largest body the WAF
+# can inspect inside timeoutSeconds. See "Request size, CPU and timeout" in the README
+# before lowering them — 50m/128Mi, the pre-1.2.0 defaults, 504 on any body over ~30 KB.
 resources:
-  cpu: 50m
-  memory: 128Mi
+  cpu: 500m
+  memory: 512Mi
+
+# Request timeout, in seconds, for everything passing through the WAF. It caps both the
+# time Coraza spends inspecting a request body and the time the upstream has to answer;
+# anything slower gets a 504 from the WAF, not from your application.
+timeoutSeconds: 30
 
 multiZone: false
 ```
@@ -78,6 +86,41 @@ internal Caddy configuration, which this template's startup hook has to configur
 binary and no admin API, so the startup hook cannot configure them. This matters because the newest CRS
 releases are published *only* as nginx and apache variants — reaching for the highest CRS version number
 lands on an image this template cannot drive. Take the newest `*-caddy-alpine-*` datecode instead.
+
+## Request size, CPU and timeout
+
+Inspecting a request body is CPU work proportional to its size, and `timeoutSeconds` cuts the request off
+part-way through. Those two numbers together set the largest request body this WAF can accept — and a body
+over the limit is a **504 from the WAF**, which looks like an application fault rather than a WAF setting.
+GET traffic is unaffected, so a smoke test never reveals it.
+
+Measured on the platform, same body, only `resources.cpu` changed, with `timeoutSeconds` at its old
+hardcoded value of 5:
+
+| POST body | `cpu: 50m` (pre-1.2.0 default) | `cpu: 1000m` |
+|---|---|---|
+| 1 KB | 200 (1.89 s) | 200 (0.15 s) |
+| 50 KB | **504** (5.20 s) | 200 (0.57 s) |
+| 200 KB | **504** (5.30 s) | 200 (1.75 s) |
+| 400 KB | **504** (5.30 s) | 200 (3.75 s) |
+| 600 KB | **504** (5.32 s) | 200 (5.14 s) |
+
+Every failure lands at the 5 s timeout, and CPU alone moves them — inspection cost is roughly **8.5 ms per
+KB at `cpu: 1000m`**, scaling inversely with CPU and getting relatively worse below about `250m`, where CPU
+throttling starts to bite. As a working rule:
+
+```
+largest body ≈ 120 KB × (cpu in millicores ÷ 1000) × timeoutSeconds
+```
+
+The shipped defaults — `cpu: 500m`, `timeoutSeconds: 30` — give roughly **1.7 MB**, which covers ordinary
+form posts and JSON APIs. If you need more, raise `resources.cpu` first (it makes requests faster rather
+than merely more patient), then `timeoutSeconds`, and raise `resources.memory` with them: a 3 MB body
+inspected in one request peaked at 124 MiB, which is why the default is no longer 128Mi.
+
+Two ceilings you cannot raise from here: Coraza stops inspecting bodies above **13 MB**
+(`SecRequestBodyLimit`, fixed in the image), and `timeoutSeconds` also caps how long your own upstream has
+to answer — set it above the slowest response your application produces.
 
 ## Connecting
 
@@ -129,6 +172,7 @@ Log ingestion runs a few minutes behind live, so wait before concluding the quer
 - **Pin a digest or a datecode, never `-lts` or `caddy-alpine`** — moving tags change the image under a running deployment. Only `*-caddy-alpine-*` variants work.
 - **CRS rule updates require a deliberate `image` change.** That is the right default for a security control, but new CRS releases are not picked up on their own.
 - **`diskBodyInspection: false` trades coverage for memory.** With it off, request bodies above the in-memory limit are not inspected at all rather than being buffered — a silent inspection gap, not a performance tweak.
+- **A request body too large to inspect inside `timeoutSeconds` returns 504 from the WAF, not from your application.** Size `resources.cpu` and `timeoutSeconds` together — see *Request size, CPU and timeout*.
 - **Custom rules layer on top of CRS**, so a rule ID that collides with a CRS rule silently overrides it.
 - **A failed startup hook restarts the container on purpose.** A WAF serving with no reverse-proxy configuration is worse than one that is visibly down.
 - **Do not override the container's `command`/`args`.** They run the image's own entrypoint behind a `tail` that forwards the startup hook's output onto the container log — a `postStart` hook's own output reaches no log surface, so replacing them leaves a failed hook with no diagnosis at all.

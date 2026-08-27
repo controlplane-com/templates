@@ -419,7 +419,9 @@ unset PGPASSWORD
 - **Release names must be unique per organization**: secrets are organization-wide, so two releases with the same name collide even in different GVCs
 - **Conflict resolution**: Concurrent writes to the same row from different nodes are resolved by last-update-wins based on commit timestamp. For workloads requiring stronger consistency, route writes for a given entity to a single node using application-level logic
 - **multiZone**: Verify your selected location supports multiple availability zones before enabling
-- **`helm upgrade` restarts every pgEdge replica at once** — nothing serialises a rolling restart on a stateful workload, so treat an upgrade as a planned write interruption of roughly two minutes. The mesh reconciles itself: on boot each node keeps replication slots that a subscription still owns, drops only genuinely orphaned ones, and rebuilds any subscription whose slot has gone missing
+- **`helm upgrade` restarts every pgEdge replica at once** — nothing serialises a rolling restart on a stateful workload, so treat an upgrade as a planned write interruption. **Measured at ~60 seconds**; pgcat also bans a backend for 60 s after a failed health check, so allow for that on top. The mesh reconciles itself: on boot each node keeps replication slots that a subscription still owns, drops only genuinely orphaned ones, and rebuilds any subscription whose slot has gone missing
+- **Self-repair restores replication, not history.** When a broken subscription is rebuilt, rows written while it was down are **not** backfilled — replication resumes from that point forward. If a node was isolated and took writes, reconcile those rows yourself
+- **pgcat splits reads and writes by statement shape, not by what the statement does.** `WITH ins AS (INSERT ...) SELECT ...` reads as a `SELECT` and is routed to a replica. Send anything that writes through a connection you know reaches the primary
 
 ## Links
 

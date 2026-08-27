@@ -63,15 +63,15 @@ multiZone: false
 ## Choosing an image tag
 
 **Only the Caddy variants work.** The `-nginx-` and `-apache-` builds of `coraza-crs` ship no Caddy binary,
-so this template cannot configure them. The newest CRS releases are published *only* as nginx and apache
-variants, so reaching for the highest version number lands on an image this template cannot drive — take
-the newest `*-caddy-alpine-*` build instead.
+so this template cannot configure them. Upstream publishes a `*-caddy-alpine-*` build alongside them for
+each CRS release — take the newest of those.
 
 **Pin a digest or a datecode, never a moving tag.** `4.25-caddy-alpine-lts` and `caddy-alpine` are
 repointed by upstream, so the image can change under a deployment you have not touched. A digest
 (`coraza-crs@sha256:…`) or a datecode (`4.25-caddy-alpine-202607180107`) names one specific build.
 
-The shipped default is a pinned digest, and is the newest Caddy build available.
+The shipped default is a pinned digest of a specific build. Newer CRS releases ship their own
+`*-caddy-alpine-*` builds; see version 1.2.1, which pins CRS 4.28.
 
 ## Request size, CPU and timeout
 

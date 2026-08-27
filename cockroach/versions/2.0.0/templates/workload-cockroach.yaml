@@ -1,4 +1,3 @@
-{{- include "cockroach.validateLocations" . -}}
 ---
 kind: workload
 name: {{ include "cockroach.name" . }}
@@ -20,6 +19,7 @@ spec:
           value: cpln://secret/{{ include "cockroach.secretDatabase.name" . }}.db
         - name: DB_USER
           value: cpln://secret/{{ include "cockroach.secretDatabase.name" . }}.user
+        {{- include "cockroach.locationEnv" . | nindent 8 }}
       ports:
         - number: 8080
           protocol: tcp
@@ -55,9 +55,9 @@ spec:
   defaultOptions:
     autoscaling:
       maxConcurrency: 0
-      maxScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      maxScale: 0   # a GVC location this release did not ask for runs NOTHING
       metric: disabled
-      minScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      minScale: 0   # localOptions below supplies the real count for each configured location
       scaleToZeroDelay: 300
       target: 100
     capacityAI: false
@@ -74,24 +74,30 @@ spec:
       {{- if .Values.pgbouncer.enabled }}
       inboundAllowType: workload-list
       inboundAllowWorkload:
-        - //gvc/{{ .Values.gvc.name }}/workload/{{ include "cockroach.name" . }}
-        - //gvc/{{ .Values.gvc.name }}/workload/{{ include "cockroach.pgbouncer.name" . }}
+        - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "cockroach.name" . }}
+        - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "cockroach.pgbouncer.name" . }}
       {{- else }}
       inboundAllowType: {{ .Values.internal_access.type }}
       {{- if .Values.internal_access.workloads }}
       inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
       {{- end }}
       {{- end }}
-  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "cockroach.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "cockroach.identity.name" . }}
   loadBalancer:
     replicaDirect: true
+  {{- /*
+    Every localOptions entry must carry the COMPLETE field set defaultOptions
+    carries: localOptions is a full override, and a field left out would fall
+    through to the 0/0 shape above and produce no nodes in a location the user
+    did ask for.
+  */}}
   localOptions:
-    {{- range $location := .Values.gvc.locations }}
+    {{- range $location := .Values.locations }}
     - autoscaling:
         maxConcurrency: 0
-        maxScale: {{ if eq ($location.replicas | int) 0 }}1{{ else }}{{ $location.replicas | int }}{{ end }}
+        maxScale: {{ $location.replicas | int }}
         metric: disabled
-        minScale: {{ if eq ($location.replicas | int) 0 }}0{{ else }}{{ $location.replicas | int }}{{ end }}
+        minScale: {{ $location.replicas | int }}
         scaleToZeroDelay: 300
         target: 100
       capacityAI: false
@@ -99,7 +105,7 @@ spec:
       location: //location/{{ $location.name }}
       multiZone:
         enabled: {{ $.Values.multiZone }}
-      suspend: {{ if eq ($location.replicas | int) 0 }}true{{ else }}false{{ end }}
+      suspend: false
       timeoutSeconds: 10
     {{- end }}
   supportDynamicTags: false

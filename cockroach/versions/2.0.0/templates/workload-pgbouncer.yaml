@@ -18,6 +18,8 @@ spec:
       command: "/bin/sh"
       args:
         - "/pgbouncer/start.sh"
+      env:
+        {{- include "cockroach.locationEnv" . | nindent 8 }}
       volumes:
         - path: /pgbouncer/start.sh
           uri: cpln://secret/{{ include "cockroach.pgbouncer.secretStartup.name" . }}
@@ -33,18 +35,36 @@ spec:
       ports:
         - number: 5432
           protocol: tcp
-  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "cockroach.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "cockroach.identity.name" . }}
   defaultOptions:
     autoscaling:
-      metric: rps
-      minScale: {{ .Values.pgbouncer.minReplicas }}
-      maxScale: {{ .Values.pgbouncer.maxReplicas }}
+      metric: disabled   # a GVC location this release did not ask for runs NOTHING
+      minScale: 0        # localOptions below supplies the real counts
+      maxScale: 0
       maxConcurrency: 0
       scaleToZeroDelay: 300
       target: 100
     capacityAI: false
     debug: false
     timeoutSeconds: 5
+  {{- /*
+    A full override, like the CockroachDB tier: every field defaultOptions
+    carries must be repeated, or it falls through to the 0/0 shape above.
+  */}}
+  localOptions:
+    {{- range $location := .Values.locations }}
+    - location: //location/{{ $location.name }}
+      autoscaling:
+        metric: rps
+        minScale: {{ $.Values.pgbouncer.minReplicas }}
+        maxScale: {{ $.Values.pgbouncer.maxReplicas }}
+        maxConcurrency: 0
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      timeoutSeconds: 5
+    {{- end }}
   firewallConfig:
     internal:
       inboundAllowType: {{ .Values.pgbouncer.internal_access.type }}

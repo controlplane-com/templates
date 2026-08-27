@@ -1,12 +1,14 @@
-gvc:
-  name: cockroach-gvc
-  locations:
-    - name: aws-us-east-1
-      replicas: 3
-    - name: aws-eu-central-1
-      replicas: 3
-    - name: aws-us-west-2
-      replicas: 3
+# ─── Locations ────────────────────────────────────────────────────────────────
+# This chart deploys into the GVC you install into — it does NOT create one.
+# Every location listed here MUST already exist in that GVC, or the CockroachDB
+# nodes refuse to initialise with a named error (see Prerequisites in the README).
+# Extra locations in the GVC are fine: nothing CockroachDB-related runs in them.
+#
+# Surviving the loss of a whole location needs at least THREE locations. One
+# location with three replicas survives a node loss, not a region loss.
+locations:
+  - name: aws-us-east-1
+    replicas: 3
 
 image: cockroachdb/cockroach:v25.4.0
 
@@ -40,8 +42,8 @@ pgbouncer:
   defaultPoolSize: 25    # number of real CockroachDB connections PgBouncer maintains per pod
   maxClientConn: 250     # maximum number of client connections PgBouncer accepts per pod
   maxDbConnections: 100  # hard cap on total CockroachDB connections regardless of how many PgBouncer pods are running
-  minReplicas: 2
-  maxReplicas: 4
+  minReplicas: 2         # per location
+  maxReplicas: 4         # per location
   serverCheckDelay: 30      # seconds between idle server connection health checks (default 30)
   serverConnectTimeout: 2   # seconds before giving up on a new server connection (default 15)
   serverLoginRetry: 0       # seconds before retrying a failed server login; 0 = no caching of failures (default 15)
@@ -62,7 +64,7 @@ backup:
   image: ghcr.io/controlplane-com/backup-images/cockroach-backup:1.1
   schedule: "0 2 * * *"
   activeDeadlineSeconds: 14400   # hard kill after 4 hours if backup hangs
-  location: aws-us-east-1        # run the backup job in the same region as your storage bucket
+  location: aws-us-east-1        # MUST be one of `locations` above; put it near your bucket
   resources:
     cpu: 500m
     memory: 512Mi

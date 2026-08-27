@@ -7,7 +7,7 @@ bindings:
   - permissions:
       - reveal
     principalLinks:
-      - //gvc/{{ .Values.gvc.name }}/identity/{{ include "cockroach.identity.name" . }}
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "cockroach.identity.name" . }}
 targetKind: secret
 targetLinks:
   - //secret/{{ include "cockroach.secretStartup.name" . }}

@@ -4,7 +4,6 @@ kind: workload
 name: {{ include "cockroach.backup.name" . }}
 description: CockroachDB Backup
 tags: {{- include "cockroach.tags" . | nindent 4 }}
-gvc: {{ .Values.gvc.name }}
 spec:
   type: cron
   containers:
@@ -18,9 +17,9 @@ spec:
           value: {{ .Values.backup.provider }}
         - name: COCKROACH_HOST
           {{- if .Values.pgbouncer.enabled }}
-          value: {{ include "cockroach.pgbouncer.name" . }}.{{ .Values.gvc.name }}.cpln.local
+          value: {{ include "cockroach.pgbouncer.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local
           {{- else }}
-          value: {{ include "cockroach.name" . }}.{{ .Values.gvc.name }}.cpln.local
+          value: {{ include "cockroach.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local
           {{- end }}
         - name: COCKROACH_PORT
           {{- if .Values.pgbouncer.enabled }}
@@ -54,8 +53,14 @@ spec:
       target: 95
     capacityAI: false
     debug: false
-    suspend: true
+    suspend: true    # a GVC location this release did not ask for must NOT run a second backup
     timeoutSeconds: 3600
+  {{- /*
+    Unsuspended in exactly one location. backup.location is checked at render
+    time against `locations` -- the platform accepts a localOptions entry for a
+    location that does not exist, stores it, and the cron then never runs
+    anywhere with nothing to observe.
+  */}}
   localOptions:
     - location: //location/{{ .Values.backup.location }}
       suspend: false

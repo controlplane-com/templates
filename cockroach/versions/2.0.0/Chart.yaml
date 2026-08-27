@@ -3,14 +3,14 @@ name: cockroach
 description: CockroachDB distributed SQL database with PostgreSQL wire compatibility and multi-location survivability
 
 type: application
-version: 1.5.0
+version: 2.0.0
 appVersion: "25.4.0"
 
 annotations:
   created: "2025-08-25"
-  lastModified: "2026-08-23"
+  lastModified: "2026-08-27"
   category: "database"
-  createsGvc: true
+  createsGvc: false
 
 dependencies:
   - name: cpln-common

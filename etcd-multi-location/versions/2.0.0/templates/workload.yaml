@@ -27,6 +27,7 @@ spec:
           recoveryPolicy: retain
           uri: cpln://volumeset/{{ include "etcd-ml.volume.name" . }}
         - path: /etcd/start.sh
+          recoveryPolicy: retain   # API backfill, declared so rendered == stored
           uri: cpln://secret/{{ include "etcd-ml.secretStartup.name" . }}
   identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "etcd-ml.identity.name" . }}
   defaultOptions:
@@ -106,6 +107,8 @@ spec:
         {{- end }}
       {{- else if .Values.internalAccess.workloads }}
       inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- else }}
+      inboundAllowWorkload: []   # API backfill, declared so rendered == stored
       {{- end }}
   loadBalancer:
     direct:

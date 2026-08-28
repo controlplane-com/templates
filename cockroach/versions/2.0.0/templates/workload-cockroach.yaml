@@ -32,25 +32,39 @@ spec:
               - /bin/sh
               - -c
               - "cockroach node drain --insecure --host=localhost:26257 --self || true"
+      {{- /*
+        scheme/initialDelaySeconds/successThreshold and the recoveryPolicy below
+        are all values the API BACKFILLS. Declaring them changes nothing about
+        what runs -- it makes the rendered manifest equal the stored resource, so
+        the deployment UI stops showing a permanent chart-vs-resource difference.
+        Measured 2026-08-28 with render-vs-stored.py against this release.
+      */}}
       livenessProbe:
         httpGet:
           path: /health
           port: 8080
+          scheme: HTTP
+        initialDelaySeconds: 60
         periodSeconds: 10
         timeoutSeconds: 5
+        successThreshold: 1
         failureThreshold: 6
       readinessProbe:
         httpGet:
           path: /health
           port: 8080
+          scheme: HTTP
+        initialDelaySeconds: 10
         periodSeconds: 5
         timeoutSeconds: 3
+        successThreshold: 1
         failureThreshold: 3
       volumes:
         - path: /cockroach/cockroach-data
           recoveryPolicy: retain
           uri: cpln://volumeset/{{ include "cockroach.volume.name" . }}
         - path: /cockroach/start.sh
+          recoveryPolicy: retain
           uri: cpln://secret/{{ include "cockroach.secretStartup.name" . }}
   defaultOptions:
     autoscaling:
@@ -67,9 +81,14 @@ spec:
     suspend: false
     timeoutSeconds: 10
   firewallConfig:
+    {{- /* the four empty lists are API backfills, declared so rendered == stored */}}
     external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
       outboundAllowCIDR:
       - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
     internal:
       {{- if .Values.pgbouncer.enabled }}
       inboundAllowType: workload-list
@@ -99,6 +118,8 @@ spec:
         {{- end }}
       {{- else if .Values.internal_access.workloads }}
       inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
+      {{- else }}
+      inboundAllowWorkload: []   # API backfill, declared so rendered == stored
       {{- end }}
       {{- end }}
   identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "cockroach.identity.name" . }}

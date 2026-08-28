@@ -57,6 +57,7 @@ spec:
           recoveryPolicy: retain
           uri: cpln://volumeset/{{ include "clickhouse.volumeServer.name" . }}
         - path: /scripts/server-startup.sh
+          recoveryPolicy: retain   # API backfill, declared so rendered == stored
           uri: cpln://secret/{{ include "clickhouse.secretServer.name" . }}
         - path: /var/lib/clickhouse_cache
           recoveryPolicy: retain

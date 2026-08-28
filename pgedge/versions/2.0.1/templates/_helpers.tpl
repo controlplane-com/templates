@@ -177,9 +177,11 @@ pgcat needs PGEDGE_WORKLOAD because its own CPLN_WORKLOAD names pgcat.
 */}}
 {{- define "pgedge.locationEnv" -}}
 - name: PGEDGE_LOCATIONS
-  value: "{{ range .Values.locations }}{{ .name }} {{ end }}"
+  {{- $names := list }}{{ range .Values.locations }}{{ $names = append $names .name }}{{ end }}
+  value: {{ join " " $names | quote }}
 - name: PGEDGE_REPLICAS
-  value: "{{ range .Values.locations }}{{ .replicas }} {{ end }}"
+  {{- $reps := list }}{{ range .Values.locations }}{{ $reps = append $reps .replicas }}{{ end }}
+  value: {{ join " " $reps | quote }}
 - name: PGEDGE_WORKLOAD
   value: {{ include "pgedge.name" . | quote }}
 {{- end -}}

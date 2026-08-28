@@ -78,7 +78,27 @@ spec:
         - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "cockroach.pgbouncer.name" . }}
       {{- else }}
       inboundAllowType: {{ .Values.internal_access.type }}
-      {{- if .Values.internal_access.workloads }}
+      {{- if eq .Values.internal_access.type "workload-list" }}
+      {{- /*
+        This list governs ALL inbound internal traffic, INCLUDING node-to-node
+        gossip and range replication between the replicas of THIS workload. The
+        pgbouncer branch above already adds this workload to its own list; the
+        else branch did not, so with pgbouncer DISABLED a workload-list naming
+        only clients denied the nodes each other. Measured 2026-08-27: `node
+        status` showed `2,false,false / 3,false,false` while every replica still
+        reported `ready: true`; adding the workload to its own list brought all
+        three back. Same defect confirmed in etcd-multi-location, clickhouse and
+        pgedge in this batch.
+      */}}
+      {{- $self := printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "cockroach.name" .) }}
+      inboundAllowWorkload:
+        - {{ $self }}
+        {{- range .Values.internal_access.workloads }}
+        {{- if ne . $self }}
+        - {{ . }}
+        {{- end }}
+        {{- end }}
+      {{- else if .Values.internal_access.workloads }}
       inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
       {{- end }}
       {{- end }}

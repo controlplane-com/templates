@@ -1,3 +1,6 @@
+{{- /* See the note in secret.yaml: validation runs at every entry point that
+       iterates `locations`, because template order is not guaranteed. */ -}}
+{{- include "nats.validate" . -}}
 {{- $natsConfig := .Values.nats_defaults }}
 ---
 kind: workload
@@ -16,17 +19,17 @@ spec:
       inheritEnv: false
       memory: {{ .Values.resources.memory | quote }}
       ports:
-        {{- if and $natsConfig.websocket $natsConfig.websocket.enabled }}
+        {{- if $natsConfig.websocket.enabled }}
         - number: {{ $natsConfig.websocket.port }}
           protocol: http
         {{- end }}
         - number: {{ $natsConfig.port }}
           protocol: tcp
-        {{- if $natsConfig.cluster }}
         - number: {{ $natsConfig.cluster.port }}
           protocol: tcp
-        {{- end }}
-        {{- if $natsConfig.gateway }}
+        {{- if gt (len .Values.locations) 1 }}
+        {{- /* Published only for a multi-location release — with one location
+               nothing listens on the gateway port. */}}
         - number: {{ $natsConfig.gateway.port }}
           protocol: tcp
         {{- end }}
@@ -43,17 +46,48 @@ spec:
           uri: cpln://volumeset/{{ include "nats.volumeset.name" . }}
         {{- end }}
   defaultOptions:
+    {{- /*
+    minScale/maxScale are 0 so a GVC location this release did not ask for runs
+    NOTHING: an undeclared location gets desiredScale 0 and its deployment reads
+    "This workload location is deactivated because maxScale is set to 0".
+    localOptions below supplies the real per-location count. Without this, an
+    extra GVC location silently starts NATS servers that name their cluster
+    after that location — no route reaches them and no gateway names them, so
+    they accept clients into a cluster of one and drop what those clients
+    publish.
+    */}}
     autoscaling:
       maxConcurrency: 0
-      maxScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      maxScale: 0
       metric: disabled
-      minScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      minScale: 0
       scaleToZeroDelay: 300
       target: 100
     capacityAI: false
     debug: false
     suspend: false
     timeoutSeconds: 10
+  localOptions:
+    {{- /*
+    Every field is sent on every entry. The API completes a PARTIAL localOptions
+    entry from PLATFORM defaults rather than from this workload's defaultOptions
+    — measured turning capacityAI ON against a chart that sets it false — so a
+    half-specified entry silently gets settings the chart never asked for.
+    */}}
+    {{- range .Values.locations }}
+    - autoscaling:
+        maxConcurrency: 0
+        maxScale: {{ .replicas | int }}
+        metric: disabled
+        minScale: {{ .replicas | int }}
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      location: //location/{{ .name }}
+      suspend: false
+      timeoutSeconds: 10
+    {{- end }}
   firewallConfig:
     external:
       inboundAllowCIDR: {{ toYaml .Values.allowCIDR | nindent 6 }}
@@ -64,25 +98,34 @@ spec:
       outboundBlockedCIDR: []
     internal:
       inboundAllowType: {{ .Values.internalAccess.type }}
-      {{- if .Values.internalAccess.workloads }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      {{- /*
+        This list governs ALL inbound internal traffic, INCLUDING the route
+        connections between this workload's own replicas on the cluster port and
+        the gateway connections between locations. A list naming only client
+        workloads cuts the cluster off from itself: routes never establish, each
+        server runs alone, and JetStream loses its meta group — while every
+        replica still reports ready: true, because this workload has no
+        readiness probe and readiness says nothing about clustering. The same
+        defect was measured in etcd-multi-location, cockroach, clickhouse and
+        pgedge. No legitimate configuration denies the servers to each other, so
+        the chart adds this workload rather than requiring the user to know.
+      */}}
+      {{- $self := printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "nats.name" .) }}
+      inboundAllowWorkload:
+        {{- include "nats.ownWorkloadLinks" . | nindent 8 }}
+        {{- range .Values.internalAccess.workloads }}
+        {{- if ne . $self }}
+        - {{ . | quote }}
+        {{- end }}
+        {{- end }}
+      {{- else if .Values.internalAccess.workloads }}
       inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
       {{- end }}
-  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "nats.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "nats.identity.name" . }}
   loadBalancer:
+    {{- /* Peer addressing (replica-N.<workload>.<location>.<gvc>.cpln.local) is
+           what the route and gateway URLs are built from, so this is required,
+           not optional. */}}
     replicaDirect: true
-  localOptions:
-    {{- range $location := .Values.gvc.locations }}
-    - autoscaling:
-        maxConcurrency: 0
-        maxScale: {{ if eq ($location.replicas | int) 0 }}1{{ else }}{{ $location.replicas | int }}{{ end }}
-        metric: disabled
-        minScale: {{ if eq ($location.replicas | int) 0 }}1{{ else }}{{ $location.replicas | int }}{{ end }}
-        scaleToZeroDelay: 300
-        target: 100
-      capacityAI: false
-      debug: false
-      location: //location/{{ $location.name }}
-      suspend: {{ if eq ($location.replicas | int) 0 }}true{{ else }}false{{ end }}
-      timeoutSeconds: 10
-    {{- end }}
   supportDynamicTags: false

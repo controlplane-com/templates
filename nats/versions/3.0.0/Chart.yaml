@@ -1,15 +1,15 @@
 apiVersion: v2
 name: nats
-description: NATS super cluster across regions
+description: High-performance messaging with clustering, JetStream and cross-region super clusters
 type: application
-version: 2.0.0
-appVersion: "2.11.6"
+version: 3.0.0
+appVersion: "2.11.6-alpine"
 
 annotations:
   created: "2025-07-04"
-  lastModified: "2026-08-23"
+  lastModified: "2026-08-28"
   category: "queue"
-  createsGvc: true
+  createsGvc: false
 
 dependencies:
   - name: cpln-common

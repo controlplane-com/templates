@@ -3,51 +3,62 @@
 ## What it is
 - TiDB: a distributed, MySQL-compatible SQL database that scales horizontally and keeps serving through node loss. Three tiers: **PD** (placement driver — the cluster's brain, holds metadata and decides where data lives), **TiKV** (the storage nodes), and **tidb-server** (the stateless MySQL-protocol front door).
 - Apache-2.0. Nothing gated, nothing to register.
-- **This template creates its OWN GVC** (`createsGvc: true`) from `gvc.name` and `gvc.locations` — it is one of eight templates that do. `global.cpln.gvc` is deliberately unused.
+- **From 2.0.0 the chart deploys into `global.cpln.gvc` and creates no GVC** (`createsGvc: false`). 1.x created its own from `gvc.name`.
 
 ## Common use cases
 - A MySQL-compatible database that outgrows a single instance — same wire protocol, so existing clients and ORMs work unchanged.
-- Multi-region deployments where data should be replicated across locations rather than sitting in one.
+- Multi-location deployments where data should be replicated across locations rather than sitting in one.
 - Workloads wanting horizontal write scaling, which the single-primary `mysql` and `postgres` templates cannot offer.
 
 ## Architecture on cpln
 | Resource | Purpose |
 |---|---|
-| `gvc` `{gvc.name}` | **Created by the chart** across `gvc.locations`. Must NOT already exist — see traps |
-| workload `{release}-tidb-pd` (stateful) | PD quorum, one replica per location, `gvc.pdReplicas` total |
-| workload `{release}-tidb-tikv` (stateful) | Storage nodes, `replicas` per location |
-| workload `{release}-tidb-server` (stateful) | MySQL front door :4000 |
-| workload `{release}-tidb-db-init` | One-shot database/user bootstrap when `autoCreateDatabase.enabled` |
-| workload `{release}-tidb-backup` (cron) | Optional `br`-based backup to S3 or GCS |
-| volumesets, secrets (startup scripts), identity, policy | Per-tier config and least-privilege secret access |
+| workload `{release}-pd` (stateful) | PD quorum, `pdReplicas` members spread across `locations`, `replicaDirect` |
+| workload `{release}-tikv` (stateful) | Storage nodes, `locations[].replicas` per location |
+| workload `{release}-server` (standard) | MySQL front door :4000, status :10080 |
+| workload `{release}-tidb-db-init` | One-shot database/user bootstrap when `autoCreateDatabase.deployInitWorkload` |
+| workload `{release}-tidb-backup` (cron) | Optional `br` backup to S3 or GCS, unsuspended in one location |
+| volumesets, secrets (startup scripts), identity, 2 policies | Per-tier config, secret reveal, and `view` on the ONE install GVC |
 
-## Key knobs (shipped defaults)
+## Key knobs (shipped defaults, 2.0.0)
 | Knob | Default | Meaning |
 |---|---|---|
-| `devMode` | `false` | Bypasses the 3-location requirement AND relaxes replica rules. Dev/test only |
-| `gvc.name` / `gvc.locations` | `tidb-gvc` / 3 locations × 1 replica | The GVC the chart creates and the locations it spans |
-| `gvc.pdReplicas` | `3` | `3`, `5`, `7` — plus `1` in devMode only |
-| `resources.{pd,server,tikv}` | 2 cpu / 4-2-4 Gi | Per-tier sizing; single-value blocks, so bare `cpu`/`memory` |
-| `autoCreateDatabase.*` | on, `deployInitWorkload: true` | Bootstraps database/user. Turn the init workload off afterwards |
+| `locations` | one entry: `aws-us-east-1` × 3 | Must already exist in the install GVC. `replicas` = TiKV **and** tidb-server nodes there |
+| `pdReplicas` | `3` | `1`, `3`, `5`, `7`. Spread evenly, remainder to the first locations |
+| `images.{pd,tikv,server}` | `v8.5.7` | Bump with `backup.image` — `br` enforces a version match |
+| `resources.{pd,server,tikv}` | 2 cpu / 4-2-4 Gi | Single-value blocks, so bare `cpu`/`memory` |
+| `autoCreateDatabase.*` | on, `deployInitWorkload: true`, `credentialsSecretName: my-tidb-credentials` | Prerequisite `dictionary` secret with `rootPassword`, `user`, `password`, `db` |
 | `volumeset.{tikv,pd}.capacity` | `10` GiB | TiKV supports autoscaling; PD does not |
-| `exposeServer` / `external_access.*` | `false` / `[]` | Public MySQL endpoint and per-tier egress |
-| `internal_access.{server,tikv,pd}.type` | `same-gvc` | Who may reach each tier |
-| `backup.*` | off, `provider: aws` | `br` backup to S3 or GCS; image must match the cluster version |
+| `exposeServer` | `false` | Opens public inbound — but see traps, it does NOT publish MySQL |
+| `external_access.*_outboundAllowCIDR` | `[]` | Per-tier egress; backups force `0.0.0.0/0` on TiKV |
+| `internal_access.{server,tikv,pd}.type` | `same-gvc` | Who may reach each tier. This release's own workloads are ALWAYS included |
+| `backup.*` | off, `provider: aws`, `location: aws-us-east-1` | `location` must be one of `locations` — refused at render otherwise |
+
+## What 2.0.0 changed
+- **No `kind: gvc`.** Deploys into the install GVC; `gvc.locations` → `locations`, `gvc.pdReplicas` → `pdReplicas`, `gvc.name` gone.
+- **Three-layer defence against a location mismatch**: (1) a render-time `fail` if the `gvc` values key is still present, so an in-place 1.x upgrade cannot run; (2) `defaultOptions.minScale/maxScale: 0` on every tier with `localOptions` carrying the real counts, so an undeclared GVC location starts nothing; (3) a boot-time GVC read in PD's startup script (`$CPLN_ENDPOINT/org/$CPLN_ORG/gvc/$CPLN_GVC`, `view` scoped by `targetLinks` to that one GVC) that hard-fails on a fresh data directory and warns on an initialised one. PD and TiKV also refuse to start in a location not in `locations`.
+- **`devMode` removed.** It only waived the three-location requirement; the default is now one location, and PD's `max-replicas` is derived (TiKV node count, capped at 3) instead of special-cased.
+- **`replicas: 0` refused.** 1.x mapped it to `localOptions[].suspend`, which permanently withdraws a workload's endpoints from other locations' service discovery.
+- **`workload-list` self-inclusion.** A single `tidb.ownWorkloadLinks` helper adds all five of this release's workloads to every tier's internal firewall list. Without it a `workload-list` naming only clients cuts the cluster off from itself while every replica still reports `ready: true` — confirmed in four other templates this batch.
+- **PD endpoints rendered once** (`tidb.pdEndpointList`). The startup scripts previously assumed one PD per location, which is only true while `pdReplicas` equals the location count.
+- **Complete `localOptions` blocks everywhere.** The backup cron and db-init previously sent `location` + `suspend` only; the API completes a partial entry from PLATFORM defaults, so they actually ran with `capacityAI: true`, a 5-second timeout, and (for the cron) autoscaling up to 5 concurrent pods.
+- **`location-labels = ["region"]` is now set on every shape**, not only multi-location ones. PD persists `[replication]` at bootstrap, so a cluster that starts without it can never become region-aware afterwards.
 
 ## Availability posture
-- Production shape is **3 locations, `pdReplicas: 3`** — PD holds a quorum one member per location and TiKV replicates regions across them. Verified 2026-08-07: converged in **2 m 51 s**, query-ready ~5 min, 66 regions replicated evenly one per location.
-- `devMode: true` collapses this to a single location for testing. It is **not** an HA shape and the values comment says so.
-- tidb-server readiness requires a quorum of TiKV stores (2 in production, the actual store count in devMode).
+- Default is **one location, 3 TiKV + 3 PD**: survives a node loss, not a location loss.
+- Location survival needs **≥3 locations with PD spread one per location**. Verified on 1.x: converged in 2 m 51 s, query-ready ~5 min, 66 regions replicated one per location.
+- tidb-server readiness requires 2 TiKV stores `Up` (1 on a single-store install) — a quorum, not all of them, so one location down does not make it unready.
 
 ## Troubleshooting / considerations
-- **`gvc.name` must name a GVC that does NOT already exist.** The chart creates it; if it matches an existing GVC, Helm *adopts* it and `helm uninstall` then **deletes that GVC and everything in it** — observed 2026-08-07 destroying a shared test GVC, despite a `keep` resource-policy annotation. Adoption also pins the release name permanently. Every deployment gets its own pristine GVC by design.
-- **GCS backups did not work before 1.7.0, on any version.** Two independent causes, both fixed: `backup.sh` never passed `--send-credentials-to-tikv=false` (BR exited 1 instantly, looking like a silent job failure), and TiKV's legacy GCS backend could not use the metadata server, failing SST uploads with `I/O permission denied`. v8.5.7 enables the `gcp_v2` backend, which supports ADC. AWS S3 was unaffected and always worked.
-- **The backup image version must match the cluster.** From v8.5.7 BR enforces version checks even with `--check-requirements=false`, so a mismatched `backup.image` is rejected outright. Bump both together.
-- **Region-aware placement never actually worked before 1.7.0.** Store labels were written to a top-level `[labels]` table that TiKV ignores (it needs `[server] labels`) using the key `zone`, which no `location-labels` entry referenced. Stores registered with `labels=[]`. Fixed and verified: each store now reports `region=<its location>`.
-- **PD reads `[replication]` only at bootstrap**, then persists it to etcd and ignores the file forever. A config change that looks right in the container can differ from live cluster state — always check the PD API, not `pd.toml`.
-- **`db-init` completes then restarts forever** (it exits 0 and is restarted), so a healthy install never shows all-green. Known, not fixed. Set `autoCreateDatabase.deployInitWorkload: false` after first boot to remove it.
-- **The `tidb-server` image has no mysql client** — use a separate `mysql:8` workload to connect for testing.
-- **`autoCreateDatabase.database` ships working credentials as defaults** (`myrootpw` / `mypw`), which the 2026-08-05 no-working-secrets ruling prohibits. Pre-existing; change them on every install until it is fixed.
-- **Backups force outbound `0.0.0.0/0` on TiKV** regardless of `external_access.tikv_outboundAllowCIDR` — noted in the values comment.
-- Spec/reports: archived under `.pipeline-archive/tidb/`. Adjacent: `mysql` (single-instance MySQL), `cockroach` (other distributed SQL).
-- **`aws::ReadOnlyAccess` was removed from the backup identity in 1.8.1.** It granted read access to every bucket in the AWS account and contains no write actions, so it was never carrying the backup — what it did carry was account-wide read. The identity is now `cpln-connector` plus the user's bucket-scoped policy only. The documented IAM policy was widened to ten actions at the same time, because `ReadOnlyAccess` had been silently supplying any read action a user's policy omitted; **an upgrading user must update their IAM policy first**.
+- **NOT YET TESTED.** 2.0.0 was built after the four merged GVC conversions and has not been deployed. Everything below carried forward from 1.x still applies; the 2.0.0-specific items are chart-level and unverified live.
+- **`exposeServer` is a defect, not a feature.** It opens public inbound on the server workload, but MySQL is TCP on 4000 and would need a `loadBalancer.direct` block, which the template does not render — so it publishes nothing usable, while the workload's only `http` port is TiDB's unauthenticated status/API port 10080. It has never been tested (three test rounds all left it `false`). Left unchanged in 2.0.0 and documented as untested; **needs a maintainer ruling** — fix it with a direct LB on 4000, or remove the knob.
+- **GCS backups did not work before 1.7.0.** Two causes, both fixed: `backup.sh` never passed `--send-credentials-to-tikv=false`, and TiKV's legacy GCS backend could not use the metadata server. v8.5.7 enables `gcp_v2`, which supports ADC. AWS S3 was unaffected.
+- **The backup image version must match the cluster.** From v8.5.7 `br` enforces the check even with `--check-requirements=false`.
+- **The restore path has never been exercised** against a backup this template produced, and SST object naming differs between the S3 (`1/<name>`) and GCS (`1_<name>`) backends. The README says so rather than implying a rehearsed procedure.
+- **Region-aware placement was broken before 1.7.0** — store labels went to a top-level `[labels]` table TiKV ignores, under the key `zone`, which no `location-labels` entry referenced. Fixed there (`[server] labels`, key `region`) and verified: each store reports `region=<its location>`. 2.0.0 does not change the mechanism; it only extends `location-labels` to single-location installs so the option stays open later.
+- **PD reads `[replication]` only at bootstrap**, then persists it to etcd and ignores the file forever. Always check the PD API, not `pd.toml`. This is also why `max-replicas` is fixed for the life of the cluster.
+- **`db-init` completes then restarts forever** (it exits 0 and is restarted), so a healthy install never shows all-green. Known, not fixed. Set `autoCreateDatabase.deployInitWorkload: false` after first boot.
+- **The `tidb-server` image has no mysql client** — connect from another workload in the GVC.
+- **A missing credentials secret wedges the deployment silently.** `cpln logs` returns zero lines; read `status.versions[].message` via `get-deployments`. Self-heals in ~5.5–10.5 min once created.
+- Spec/reports: archived under `.pipeline-archive/tidb/`. Adjacent: `mysql` (single-instance MySQL), `cockroach` (other distributed SQL, and the closest reference for this conversion).
+- **`aws::ReadOnlyAccess` was removed from the backup identity in 1.8.1.** It granted read on every bucket in the account and no write actions. The documented IAM policy was widened to ten actions at the same time; an upgrading user must update their IAM policy first.

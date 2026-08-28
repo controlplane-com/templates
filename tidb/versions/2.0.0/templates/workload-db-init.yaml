@@ -1,0 +1,94 @@
+{{ if and .Values.autoCreateDatabase.enabled .Values.autoCreateDatabase.deployInitWorkload }}
+---
+kind: workload
+name: {{ include "tidb.dbInit.name" . }}
+description: TiDB database initialization
+tags: {{- include "tidb.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: tidb-db-init
+      image: mysql:8
+      # The API backfills these three; declared so rendered == stored. Same values
+      # it already ran at, not a knob -- a one-shot init job has no tuning story.
+      cpu: "50m"
+      memory: "128Mi"
+      inheritEnv: false
+      command: "/bin/bash"
+      args:
+        - /scripts/db-init.sh
+      volumes:
+        - path: /scripts/db-init.sh
+          recoveryPolicy: retain   # API backfill, declared so rendered == stored
+          uri: cpln://secret/{{ include "tidb.dbInit.name" . }}.payload
+      env:
+        - name: TIDB_HOST
+          value: {{ include "tidb.server.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local
+        - name: TIDB_PORT
+          value: "4000"
+        - name: ROOT_PW
+          value: cpln://secret/{{ .Values.autoCreateDatabase.credentialsSecretName }}.rootPassword
+        - name: APP_DB
+          value: cpln://secret/{{ .Values.autoCreateDatabase.credentialsSecretName }}.db
+        - name: APP_USER
+          value: cpln://secret/{{ .Values.autoCreateDatabase.credentialsSecretName }}.user
+        - name: APP_PW
+          value: cpln://secret/{{ .Values.autoCreateDatabase.credentialsSecretName }}.password
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "tidb.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 0   # the job runs in exactly one location, named below
+      metric: disabled
+      minScale: 0
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 10
+  {{- /*
+    One entry, for the first configured location. 1.x rendered an entry for
+    EVERY location and set `suspend: true` on all but the first; with
+    defaultOptions pinned to 0/0 those entries are unnecessary, and dropping them
+    removes this chart's last use of localOptions[].suspend — a field that
+    permanently withdraws a workload's endpoints from other locations' service
+    discovery, with no way back short of recreating the workload.
+
+    The entry carries every field defaultOptions carries: the API completes a
+    partial localOptions entry from PLATFORM defaults, not from this workload's
+    defaultOptions. 1.x sent only `location` and `suspend`, so the job actually
+    ran with capacityAI on and a 5-second timeout.
+  */}}
+  localOptions:
+    - autoscaling:
+        maxConcurrency: 0
+        maxScale: 1
+        metric: disabled
+        minScale: 1
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      location: //location/{{ (index .Values.locations 0).name }}
+      suspend: false
+      timeoutSeconds: 10
+  firewallConfig:
+    {{- /* the empty lists are API backfills, declared so rendered == stored */}}
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+      inboundAllowWorkload: []
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false
+{{ end }}

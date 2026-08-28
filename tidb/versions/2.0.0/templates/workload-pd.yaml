@@ -1,0 +1,102 @@
+---
+kind: workload
+name: {{ include "tidb.pd.name" . }}
+description: TiDB placement driver
+tags: {{- include "tidb.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  containers:
+    - name: tidb-pd
+      cpu: {{ .Values.resources.pd.cpu | quote }}
+      image: {{ .Values.images.pd }}
+      inheritEnv: false
+      memory: {{ .Values.resources.pd.memory | quote }}
+      command: "/bin/bash"
+      args:
+        - "/scripts/pd-startup.sh"
+      ports:
+        - number: 2379
+          protocol: tcp
+        - number: 2380
+          protocol: tcp
+      env:
+        - name: LOCATIONS
+          value: {{ include "tidb.locationNames" . | quote }}
+      volumes:
+        - path: /data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "tidb.pdVolume.name" . }}
+        - path: /scripts/pd-startup.sh
+          recoveryPolicy: retain   # API backfill, declared so rendered == stored
+          uri: cpln://secret/{{ include "tidb.pdSecret.name" . }}.payload
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "tidb.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      metric: disabled
+      maxScale: 0   # a GVC location this release did not ask for runs NOTHING
+      minScale: 0   # localOptions below supplies the real count for each configured location
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  {{- $locs := .Values.locations }}
+  {{- $numLocs := len $locs }}
+  {{- $pdReplicas := int .Values.pdReplicas }}
+  {{- $baseReplicas := div $pdReplicas $numLocs }}
+  {{- $remainder := mod $pdReplicas $numLocs }}
+  {{- /*
+    Every field defaultOptions carries is REPEATED in every entry. A localOptions
+    entry is not a patch onto defaultOptions: the API completes a partial entry
+    from its OWN platform defaults, so an omitted field falls through to a
+    platform value rather than to the 0/0 shape above.
+  */}}
+  localOptions:
+  {{- range $i, $loc := $locs }}
+    {{- /*
+        Replica distribution logic:
+        - Distributes pdReplicas evenly across locations
+        - Extra replicas (remainder) go to the first locations
+        Example with 3 locations:
+          pdReplicas=3: 1,1,1  |  pdReplicas=5: 2,2,1  |  pdReplicas=7: 3,2,2
+        tidb.pdEndpointList in _helpers.tpl reproduces exactly this split, so
+        the endpoints TiKV and tidb-server dial always match the PD members that
+        actually exist.
+    */ -}}
+    {{- $replicas := $baseReplicas }}
+    {{- if lt $i $remainder }}
+      {{- $replicas = add $baseReplicas 1 }}
+    {{- end }}
+    {{- if gt (int $replicas) 0 }}
+    - autoscaling:
+        metric: disabled
+        maxConcurrency: 0
+        minScale: {{ $replicas }}
+        maxScale: {{ $replicas }}
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      location: //location/{{ $loc.name }}
+      suspend: false
+      timeoutSeconds: 5
+    {{- end }}
+  {{- end }}
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: {{ .Values.external_access.pd_outboundAllowCIDR }}
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      {{- include "tidb.internalFirewall" (dict "root" . "access" .Values.internal_access.pd) | nindent 6 }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: true
+  supportDynamicTags: false

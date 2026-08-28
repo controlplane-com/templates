@@ -1,0 +1,118 @@
+---
+kind: workload
+name: {{ include "tidb.server.name" . }}
+description: TiDB server
+tags: {{- include "tidb.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: tidb-server
+      cpu: {{ .Values.resources.server.cpu | quote }}
+      image: {{ .Values.images.server }}
+      command: "/bin/bash"
+      args:
+        - "/scripts/server-startup.sh"
+      inheritEnv: false
+      env:
+        - name: PD_ENDPOINTS
+          value: {{ include "tidb.pdEndpointList" . | quote }}
+        {{- if .Values.autoCreateDatabase.enabled }}
+        - name: ROOT_PW
+          value: cpln://secret/{{ .Values.autoCreateDatabase.credentialsSecretName }}.rootPassword
+        - name: APP_DB
+          value: cpln://secret/{{ .Values.autoCreateDatabase.credentialsSecretName }}.db
+        - name: APP_USER
+          value: cpln://secret/{{ .Values.autoCreateDatabase.credentialsSecretName }}.user
+        - name: APP_PW
+          value: cpln://secret/{{ .Values.autoCreateDatabase.credentialsSecretName }}.password
+        {{- end }}
+      memory: {{ .Values.resources.server.memory | quote }}
+      ports:
+        - number: 10080
+          protocol: http
+        - number: 4000
+          protocol: tcp
+      readinessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - '-c'
+            - >-
+              for endpoint in {{ include "tidb.pdEndpointList" . }};
+              do
+                stores=$(curl -sf --max-time 4 "http://${endpoint}/pd/api/v1/stores" 2>/dev/null || echo "");
+                if [ -z "$stores" ]; then continue; fi;
+                stores_clean=$(echo "$stores" | sed 's/"state_name":[[:space:]]*"/"state_name":"/g');
+                up_count=$(echo "$stores_clean" | grep -o '"state_name":"Up"' | wc -l | tr -d ' ');
+                total_count=$(echo "$stores_clean" | grep -o '"state_name":' | wc -l | tr -d ' ');
+                echo "$up_count / $total_count TiKV stores Up at $endpoint";
+                {{- /* A quorum of TiKV's replication factor, not every store —
+                       requiring all of them would leave tidb-server permanently
+                       unready whenever one location is down, which is the
+                       opposite of what the replication is for. */}}
+                if [ "$up_count" -ge {{ include "tidb.readyStores" . }} ]; then echo "Sufficient TiKV stores healthy."; exit 0; fi;
+              done;
+              echo "TiKV not ready yet"; exit 1
+        failureThreshold: 12
+        initialDelaySeconds: 15
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+      volumes:
+        - path: /scripts/server-startup.sh
+          recoveryPolicy: retain   # API backfill, declared so rendered == stored
+          uri: cpln://secret/{{ include "tidb.serverSecret.name" . }}.payload
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "tidb.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 0   # a GVC location this release did not ask for runs NOTHING
+      metric: disabled
+      minScale: 0   # localOptions below supplies the real count for each configured location
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 10
+  {{- /*
+    A full override: every field defaultOptions carries is repeated here, because
+    the API completes a partial localOptions entry from PLATFORM defaults rather
+    than from this workload's own defaultOptions.
+  */}}
+  localOptions:
+    {{- range $location := .Values.locations }}
+    - autoscaling:
+        maxConcurrency: 0
+        maxScale: {{ $location.replicas | int }}
+        metric: disabled
+        minScale: {{ $location.replicas | int }}
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      location: //location/{{ $location.name }}
+      suspend: false
+      timeoutSeconds: 10
+    {{- end }}
+  firewallConfig:
+    external:
+      {{- if .Values.exposeServer }}
+      inboundAllowCIDR:
+        - "0.0.0.0/0"
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: {{ .Values.external_access.server_outboundAllowCIDR }}
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      {{- include "tidb.internalFirewall" (dict "root" . "access" .Values.internal_access.server) | nindent 6 }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

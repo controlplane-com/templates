@@ -1,0 +1,102 @@
+---
+kind: workload
+name: {{ include "tidb.tikv.name" . }}
+description: TiKV storage
+tags: {{- include "tidb.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  containers:
+    - name: tidb-tikv
+      cpu: {{ .Values.resources.tikv.cpu | quote }}
+      image: {{ .Values.images.tikv }}
+      command: "/bin/bash"
+      args:
+        - "/scripts/tikv-startup.sh"
+      inheritEnv: false
+      memory: {{ .Values.resources.tikv.memory | quote }}
+      ports:
+        - number: 20160
+          protocol: tcp
+        - number: 20180
+          protocol: tcp
+      env:
+        - name: LOCATIONS
+          value: {{ include "tidb.locationNames" . | quote }}
+        - name: PD_ENDPOINTS
+          value: {{ include "tidb.pdEndpointList" . | quote }}
+      readinessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - '-c'
+            - >-
+              for endpoint in {{ include "tidb.pdEndpointList" . }};
+              do if curl -sf --max-time 4 "http://$endpoint/pd/health" | grep -q '"health":[[:space:]]*true';
+              then exit 0; fi; done;
+              echo "no healthy PDs"; exit 1
+        failureThreshold: 10
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+      volumes:
+        - path: /data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "tidb.tikvVolume.name" . }}
+        - path: /scripts/tikv-startup.sh
+          recoveryPolicy: retain   # API backfill, declared so rendered == stored
+          uri: cpln://secret/{{ include "tidb.tikvSecret.name" . }}.payload
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "tidb.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 0   # a GVC location this release did not ask for runs NOTHING
+      metric: disabled
+      minScale: 0   # localOptions below supplies the real count for each configured location
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 10
+  {{- /*
+    A full override: every field defaultOptions carries is repeated here, because
+    the API completes a partial localOptions entry from PLATFORM defaults rather
+    than from this workload's own defaultOptions.
+
+    1.x also mapped `replicas: 0` onto localOptions[].suspend. That is gone —
+    a location with 0 replicas is now refused at render. Suspending a location
+    permanently withdraws that workload's endpoints from other locations' service
+    discovery, and resuming does not restore them.
+  */}}
+  localOptions:
+    {{- range $location := .Values.locations }}
+    - autoscaling:
+        maxConcurrency: 0
+        maxScale: {{ $location.replicas | int }}
+        metric: disabled
+        minScale: {{ $location.replicas | int }}
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      location: //location/{{ $location.name }}
+      suspend: false
+      timeoutSeconds: 10
+    {{- end }}
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: {{ if .Values.backup.enabled }}["0.0.0.0/0"]{{ else }}{{ .Values.external_access.tikv_outboundAllowCIDR }}{{ end }}
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      {{- include "tidb.internalFirewall" (dict "root" . "access" .Values.internal_access.tikv) | nindent 6 }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: true
+  supportDynamicTags: false

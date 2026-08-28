@@ -1,0 +1,105 @@
+# ─── Locations ────────────────────────────────────────────────────────────────
+# This chart deploys into the GVC you install into — it does NOT create one.
+# Every location listed here MUST already exist in that GVC, or PD refuses to
+# bootstrap with a named error (see Prerequisites in the README).
+# Extra locations in the GVC are fine: nothing TiDB-related runs in them.
+#
+# `replicas` is the number of TiKV nodes AND TiDB server nodes in that location.
+# The default — one location, three nodes — survives the loss of a node.
+# Surviving the loss of a whole LOCATION needs at least three locations.
+locations:
+  - name: aws-us-east-1
+    replicas: 3
+
+# PD (placement driver) members, spread evenly across `locations`. PD is Raft
+# based, so odd counts only: 1, 3, 5 or 7. 1 is a single point of failure and is
+# for testing only.
+pdReplicas: 3
+
+images:
+  server: pingcap/tidb:v8.5.7
+  tikv: pingcap/tikv:v8.5.7
+  pd: pingcap/pd:v8.5.7
+
+resources:
+  pd:
+    cpu: 2
+    memory: 4Gi
+  server:
+    cpu: 2
+    memory: 2Gi
+  tikv:
+    cpu: 2
+    memory: 4Gi
+
+autoCreateDatabase: # Enable to automatically create the database on initialization
+  enabled: true
+  deployInitWorkload: true # Set to false after the DB has been initialized to remove the init workload and save resources
+  # REQUIRED PREREQUISITE SECRET when autoCreateDatabase.enabled — CREATE IT
+  # BEFORE YOU INSTALL. A `dictionary` secret holding exactly four keys:
+  # `rootPassword`, `user`, `password` and `db`. If it does not exist at install
+  # time the deployment WEDGES silently — `cpln logs` returns nothing at all.
+  # See Prerequisites in the README for the create-dictionary command.
+  credentialsSecretName: my-tidb-credentials
+
+volumeset:
+  tikv:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+    autoscaling:
+      enabled: false # Set to true to enable autoscaling
+      maxCapacity: 100 # Maximum capacity in GiB
+      minFreePercentage: 10 # Minimum free percentage before scaling triggers
+      scalingFactor: 1.2 # Multiplier applied to current capacity when scaling
+  pd:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+# Opens the TiDB server workload to inbound traffic from the internet. It does
+# NOT publish the MySQL port — see Important Notes in the README before using it.
+exposeServer: false
+
+external_access: # Set if client is outside the GVC or in another location
+  server_outboundAllowCIDR: []
+  tikv_outboundAllowCIDR: [] # Note: when backup.enabled is true, the template automatically allows outbound access (0.0.0.0/0) regardless of this value.
+  pd_outboundAllowCIDR: []
+
+# Who may reach each tier from inside the org. Every workload this release
+# creates is ALWAYS allowed, whatever is set here — the tiers have to reach each
+# other, and each tier's own replicas have to reach each other.
+internal_access:
+  server:
+    type: same-gvc # options: same-gvc, same-org, workload-list
+    workloads:  # Note: can only be used if type is workload-list
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+  tikv:
+    type: same-gvc # options: same-gvc, same-org, workload-list
+    workloads:  # Note: can only be used if type is workload-list
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+  pd:
+    type: same-gvc # options: same-gvc, same-org, workload-list
+    workloads:  # Note: can only be used if type is workload-list
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+backup:
+  enabled: false
+  image: ghcr.io/controlplane-com/backup-images/tidb-backup:8.5.7
+  schedule: "0 2 * * *"  # daily at 2am UTC
+  activeDeadlineSeconds: 14400  # 4 hours max per backup job
+  location: aws-us-east-1  # MUST be one of `locations` above; put it near your bucket
+
+  resources:
+    cpu: 1
+    memory: 1Gi
+
+  provider: aws # Options: aws or gcp
+
+  aws:
+    bucket: my-backup-bucket
+    region: us-east-1
+    cloudAccountName: my-backup-cloudaccount
+    policyName: my-backup-policy
+    prefix: tidb/backups
+
+  gcp:
+    bucket: my-backup-bucket
+    cloudAccountName: my-backup-cloudaccount
+    prefix: tidb/backups

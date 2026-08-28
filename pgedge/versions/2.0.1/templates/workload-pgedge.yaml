@@ -1,0 +1,120 @@
+---
+kind: workload
+name: {{ include "pgedge.name" . }}
+description: pgEdge distributed multi-master PostgreSQL
+tags: {{- include "pgedge.tags" . | nindent 2 }}
+spec:
+  type: stateful
+  containers:
+    - name: pgedge
+      image: {{ .Values.image | quote }}
+      command: "/bin/bash"
+      args:
+        - "/pgedge/start.sh"
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      inheritEnv: false
+      env:
+        - name: PGDATA
+          value: /pgvol/pgdata
+        - name: PG_USERNAME
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.username
+        - name: PG_PASSWORD
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
+        - name: PG_DATABASE
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.database
+        {{- include "pgedge.locationEnv" . | nindent 8 }}
+      ports:
+        - number: 5432
+          protocol: tcp
+      volumes:
+        - path: /pgvol
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "pgedge.volume.name" . }}
+        - path: /pgedge/start.sh
+          uri: cpln://secret/{{ include "pgedge.secretStartup.name" . }}.payload
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pgedge.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 0   # a GVC location this release did not ask for runs NOTHING
+      metric: disabled
+      minScale: 0   # localOptions below supplies the real count for each configured location
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: {{ .Values.multiZone }}
+    suspend: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0  # Required for inter-node Spock replication across locations
+    internal:
+      inboundAllowType: {{ .Values.internal_access.type | quote }}
+      {{- if eq .Values.internal_access.type "workload-list" }}
+      {{- /*
+        This list governs ALL inbound internal traffic, INCLUDING traffic between
+        THIS release's own workloads: Spock logical replication between pgEdge
+        nodes across locations, and pgcat's connections to every node. A list
+        naming only clients denies replication and the mesh silently diverges,
+        so the chart adds its own workloads rather than requiring the user to
+        know. Confirmed live in etcd-multi-location and clickhouse (2026-08-27),
+        where the same omission destroyed the cluster while every replica
+        reported ready.
+      */}}
+      {{- $own := list
+            (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.name" .))
+            (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.pgcat.name" .)) }}
+      {{- /*
+        The backup cron connects DIRECTLY to replica-0 of the pgedge workload
+        (PG_HOST), so it is a third own-workload that must be allowed. Omitting
+        it was measured 2026-08-28: every scheduled run failed with
+        `pg_dumpall: error: ... server closed the connection unexpectedly`.
+      */}}
+      {{- if .Values.backup.enabled }}
+      {{- $own = append $own (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.backup.name" .)) }}
+      {{- end }}
+      inboundAllowWorkload:
+        {{- range $own }}
+        - {{ . }}
+        {{- end }}
+        {{- range .Values.internal_access.workloads }}
+        {{- if not (has . $own) }}
+        - {{ . }}
+        {{- end }}
+        {{- end }}
+      {{- else if .Values.internal_access.workloads }}
+      inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: true  # Each replica gets its own addressable DNS endpoint
+  localOptions:
+    {{- range $location := .Values.locations }}
+    - location: //location/{{ $location.name }}
+      autoscaling:
+        maxConcurrency: 0
+        maxScale: {{ $location.replicas | int }}
+        metric: disabled
+        minScale: {{ $location.replicas | int }}
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      multiZone:
+        enabled: {{ $.Values.multiZone }}
+      suspend: false
+      timeoutSeconds: 5
+    {{- end }}
+  securityOptions:
+    filesystemGroupId: 1000
+    runAsUser: 26
+  supportDynamicTags: false

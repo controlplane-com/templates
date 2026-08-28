@@ -2,7 +2,7 @@
 kind: workload
 name: {{ include "airflow.redis.name" . }}
 description: Airflow Redis
-gvc: {{ .Values.gvc.name }}
+gvc: {{ .Values.global.cpln.gvc }}
 tags:
   {{- include "airflow.tags" . | nindent 2 }}
 spec:
@@ -19,6 +19,36 @@ spec:
       volumes:
         - path: /data
           uri: cpln://volumeset/{{ include "airflow.redisVolume.name" . }}
+  {{- /*
+    One broker, in the one configured location. Before 2.0.0 this workload
+    declared no options at all, which left it on the platform defaults: one Redis
+    per GVC location, each on its own volume, splitting the Celery queue.
+  */}}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 0
+      metric: disabled
+      minScale: 0
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  localOptions:
+    - autoscaling:
+        maxConcurrency: 0
+        maxScale: 1
+        metric: disabled
+        minScale: 1
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      location: //location/{{ .Values.location }}
+      suspend: false
+      timeoutSeconds: 5
   firewallConfig:
     external:
       inboundAllowCIDR: []
@@ -28,12 +58,11 @@ spec:
       outboundAllowPort: []
       outboundBlockedCIDR: []
     internal:
-      inboundAllowType: same-gvc
-      inboundAllowWorkload: []
+      {{- /* keda=true: the KEDA operator polls the Celery queue length here */}}
+      {{- include "airflow.internalFirewall" (dict "root" . "keda" true) | nindent 6 }}
   loadBalancer:
     direct:
       enabled: false
       ports: []
     replicaDirect: false
-
   supportDynamicTags: false

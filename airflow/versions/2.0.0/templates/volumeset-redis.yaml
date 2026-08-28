@@ -2,7 +2,7 @@
 kind: volumeset
 name: {{ include "airflow.redisVolume.name" . }}
 description: Airflow Redis volume set
-gvc: {{ .Values.gvc.name }}
+gvc: {{ .Values.global.cpln.gvc }}
 tags:
   {{- include "airflow.tags" . | nindent 4 }}
 spec:

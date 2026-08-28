@@ -2,12 +2,12 @@
 kind: workload
 name: {{ include "airflow.postgres.name" . }}
 description: Airflow Postgres
-gvc: {{ .Values.gvc.name }}
+gvc: {{ .Values.global.cpln.gvc }}
 tags:
   {{- include "airflow.tags" . | nindent 2 }}
 spec:
   type: stateful
-  identityLink: //identity/{{ include "airflow.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "airflow.identity.name" . }}
   containers:
     - name: postgresql
       env:
@@ -42,12 +42,51 @@ spec:
       volumes:
         - path: /var/lib/postgresql/data
           uri: 'cpln://volumeset/{{ include "airflow.postgresVolume.name" . }}'
+  {{- /*
+    One replica, in the one configured location. Before 2.0.0 this workload
+    carried minScale/maxScale 1 in defaultOptions with no localOptions, so a GVC
+    with N locations would have started N Postgres instances -- each on its own
+    volume, each a SEPARATE metadata database, and only one of them the one
+    Airflow was talking to.
+  */}}
   defaultOptions:
     autoscaling:
+      maxConcurrency: 0
+      maxScale: 0
       metric: disabled
-      minScale: 1
-      maxScale: 1
+      minScale: 0
+      scaleToZeroDelay: 300
+      target: 100
     capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  localOptions:
+    - autoscaling:
+        maxConcurrency: 0
+        maxScale: 1
+        metric: disabled
+        minScale: 1
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      location: //location/{{ .Values.location }}
+      suspend: false
+      timeoutSeconds: 5
   firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
     internal:
-      inboundAllowType: same-gvc
+      {{- include "airflow.internalFirewall" (dict "root" . "keda" false) | nindent 6 }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

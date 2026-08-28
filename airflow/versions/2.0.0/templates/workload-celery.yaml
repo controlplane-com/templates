@@ -2,11 +2,11 @@
 kind: workload
 name: {{ include "airflow.celery.name" . }}
 description: Airflow Celery worker
-gvc: {{ .Values.gvc.name }}
+gvc: {{ .Values.global.cpln.gvc }}
 tags: {{- include "airflow.tags" . | nindent 4 }}
 spec:
   type: stateful
-  identityLink: //identity/{{ include "airflow.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "airflow.identity.name" . }}
   containers:
     - name: celery-worker
       cpu: {{ .Values.airflow.celeryWorker.resources.cpu | quote }}
@@ -25,15 +25,20 @@ spec:
         - name: AIRFLOW__CORE__FERNET_KEY
           value: cpln://secret/{{ .Values.airflow.auth.secretName }}.fernetKey
         - name: AIRFLOW__API__BASE_URL
-          value: http://{{ include "airflow.webserver.name" . }}:{{ .Values.airflow.webPort }}
+          value: http://{{ include "airflow.webserver.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:{{ .Values.airflow.webPort }}
         - name: AIRFLOW__CELERY__BROKER_URL
-          value: redis://{{ include "airflow.redis.name" . }}.{{ .Values.gvc.name }}.cpln.local
+          value: redis://{{ include "airflow.redis.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local
         - name: AIRFLOW__CELERY__RESULT_BACKEND
-          value: db+postgresql://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ include "airflow.postgres.name" . }}:5432/{{ .Values.postgres.config.database }}
-        {{- if .Values.keda.enabled }}
+          value: db+postgresql://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ include "airflow.postgres.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:5432/{{ .Values.postgres.config.database }}
+        {{- /*
+          Unconditional since 2.0.0. It used to be gated on keda.enabled, which
+          was harmless while KEDA defaulted ON -- but KEDA now defaults OFF, and
+          the gate would have left airflow.celery.workerConcurrency doing
+          nothing in a default install while still appearing in values.yaml.
+          Applying it always keeps the default behaviour 1.5.0 actually had.
+        */}}
         - name: AIRFLOW__CELERY__WORKER_CONCURRENCY
           value: "{{ .Values.airflow.celery.workerConcurrency }}"
-        {{- end }}
         {{- if .Values.gitSync.enabled }}
         - name: AIRFLOW__CORE__DAGS_FOLDER
           value: /opt/airflow/dags-sync/current{{ if .Values.gitSync.subPath }}/{{ .Values.gitSync.subPath }}{{ end }}
@@ -44,7 +49,7 @@ spec:
         - name: AIRFLOW__CORE__EXECUTOR
           value: CeleryExecutor
         - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
-          value: postgresql+psycopg2://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ include "airflow.postgres.name" . }}:5432/{{ .Values.postgres.config.database }}
+          value: postgresql+psycopg2://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ include "airflow.postgres.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:5432/{{ .Values.postgres.config.database }}
         - name: AIRFLOW__LOGGING__REMOTE_LOGGING
           value: 'False'
       image: {{ .Values.airflow.celeryWorker.image }}
@@ -54,30 +59,37 @@ spec:
         - path: /opt/airflow
           recoveryPolicy: retain
           uri: cpln://volumeset/{{ include "airflow.volume.name" . }}
-  {{- if .Values.keda.enabled }}
+  {{- /*
+    KEDA is a GVC-LEVEL setting, and this chart no longer creates the GVC -- so
+    keda.enabled now means "my GVC already has spec.keda.enabled: true", and the
+    webserver checks that at boot. With it off, workers run at a fixed
+    airflow.celeryWorker.replicas.
+
+    Either way defaultOptions pins 0/0, so a GVC location this release did not
+    ask for starts NO workers, and the single localOptions entry supplies the
+    real counts. Every field is repeated in the entry -- including the whole
+    keda block -- because the API completes a partial localOptions entry from
+    PLATFORM defaults, not from this workload's defaultOptions.
+  */}}
   defaultOptions:
-      autoscaling:
-        keda:
-          cooldownPeriod: {{ .Values.keda.cooldownPeriod }}
-          initialCooldownPeriod: {{ .Values.keda.initialCooldownPeriod }}
-          pollingInterval: {{ .Values.keda.pollingInterval }}
-          triggers:
-            - name: redis-trigger
-              type: redis
-              metadata:
-                address: {{ include "airflow.redis.name" . }}.{{ .Values.gvc.name }}.cpln.local:6379
-                listLength: "{{ .Values.keda.listLength }}"
-                listName: default
-        maxConcurrency: 0
-        maxScale: {{ .Values.keda.maxScale }}
-        metric: keda
-        minScale: {{ .Values.keda.minScale }}
-        scaleToZeroDelay: {{ .Values.keda.scaleToZeroDelay }}
+    autoscaling:
+      {{- include "airflow.celeryAutoscaling" (dict "root" . "scale" (dict "min" 0 "max" 0)) | nindent 6 }}
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  localOptions:
+    - autoscaling:
+        {{- if .Values.keda.enabled }}
+        {{- include "airflow.celeryAutoscaling" (dict "root" . "scale" (dict "min" (int .Values.keda.minScale) "max" (int .Values.keda.maxScale))) | nindent 8 }}
+        {{- else }}
+        {{- include "airflow.celeryAutoscaling" (dict "root" . "scale" (dict "min" (int .Values.airflow.celeryWorker.replicas) "max" (int .Values.airflow.celeryWorker.replicas))) | nindent 8 }}
+        {{- end }}
       capacityAI: false
       debug: false
+      location: //location/{{ .Values.location }}
       suspend: false
       timeoutSeconds: 5
-  {{- end }}        
   firewallConfig:
     external:
       inboundAllowCIDR: []
@@ -88,8 +100,7 @@ spec:
       outboundAllowPort: []
       outboundBlockedCIDR: []
     internal:
-      inboundAllowType: same-gvc
-      inboundAllowWorkload: []
+      {{- include "airflow.internalFirewall" (dict "root" . "keda" false) | nindent 6 }}
   loadBalancer:
     direct:
       enabled: false

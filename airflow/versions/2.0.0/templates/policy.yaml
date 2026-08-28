@@ -8,10 +8,11 @@ bindings:
   - permissions:
       - reveal
     principalLinks:
-      - //gvc/{{ .Values.gvc.name }}/identity/{{ include "airflow.identity.name" . }}
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "airflow.identity.name" . }}
 targetKind: secret
 targetLinks:
   - //secret/{{ include "airflow.secret.name" . }}
+  - //secret/{{ include "airflow.webserverScript.name" . }}
   - //secret/{{ .Values.airflow.auth.secretName }}
   {{- if and .Values.gitSync.enabled .Values.gitSync.auth.secretName }}
   - //secret/{{ .Values.gitSync.auth.secretName }}

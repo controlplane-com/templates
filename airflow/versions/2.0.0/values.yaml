@@ -1,11 +1,15 @@
-# ─── Global Virtual Cloud (GVC) ───────────────────────────────────────────────
-# This template CREATES its GVC (KEDA is a GVC-level setting). Point it at a NEW
-# name — never at a GVC that already holds other workloads, because uninstalling
-# the release deletes the GVC it adopted along with everything in it.
-gvc:
-  name: airflow
-  locations:
-    - name: aws-eu-central-1
+# ─── Location ─────────────────────────────────────────────────────────────────
+# This chart deploys into the GVC you install into — it does NOT create one.
+# Airflow runs in exactly ONE location, and this names it. It MUST already be a
+# location of that GVC; the webserver reads the GVC at boot and refuses a fresh
+# install if it is not (see Important Notes in the README).
+# Extra locations in the GVC are fine: nothing Airflow-related runs in them.
+#
+# One location is not a simplification. A `shared` volumeset provisions ONE
+# VOLUME PER LOCATION, so the Airflow home — DAGs and task logs — written in one
+# location is invisible in another, and the metadata database and Celery broker
+# are each a single volume bound to a single replica.
+location: aws-us-east-1
 
 # ─── Postgres (Airflow metadata database) ─────────────────────────────────────
 # Bundled plumbing: it serves Airflow only, is unreachable from outside the GVC,
@@ -19,7 +23,7 @@ postgres:
     maxMemory: 1024Mi
   config:
     username: username
-    password: change-me-airflow-db # set at FIRST install; see Upgrading in the README
+    password: change-me-airflow-db # set at FIRST install; see Migrating in the README
     database: airflow
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)
@@ -42,6 +46,7 @@ airflow:
       memory: 3Gi
   celeryWorker:
     image: controlplanecorporation/celery:v1
+    replicas: 1 # fixed worker count; ignored when keda.enabled is true
     resources:
       cpu: 256m
       memory: 512Mi
@@ -68,7 +73,7 @@ airflow:
     minFileProcessInterval: 10 # minimum interval between processing a DAG file (seconds)
 
   celery:
-    workerConcurrency: 1 # tasks each worker runs concurrently, when KEDA is enabled
+    workerConcurrency: 1 # tasks each worker runs concurrently
 
 volumeset:
   airflow:
@@ -81,6 +86,13 @@ volumeset:
 # takes up to a couple of minutes to propagate.
 firewallConfig:
   inboundAllowCIDR: []
+
+# Who may reach Airflow's workloads from inside the org. Every workload this
+# release creates is ALWAYS allowed, whatever is set here — the webserver and the
+# workers have to reach the metadata database, the broker and each other.
+internalAccess:
+  type: same-gvc # options: same-gvc, same-org, workload-list
+  workloads: [] # only with workload-list, e.g. - //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
 # ─── DAG delivery (git-sync) ──────────────────────────────────────────────────
 gitSync:
@@ -96,9 +108,18 @@ gitSync:
     secretName: ""
 
 # ─── KEDA autoscaling (Celery workers) ────────────────────────────────────────
+# OFF by default, because KEDA is a GVC-LEVEL setting this chart can no longer
+# turn on for you: enabling it means editing the GVC you install into (see
+# Prerequisites in the README). Leave it off and workers run at a fixed
+# `airflow.celeryWorker.replicas`.
+#
+# Turning it on WITHOUT enabling KEDA on the GVC fails SILENTLY: the workload is
+# accepted, never autoscales, and simply sits at `minScale` forever — at
+# minScale 0 that is zero workers and every task queues with no error anywhere
+# (measured 2026-08-28). The webserver checks the GVC at boot and says so.
 keda:
-  enabled: true
-  minScale: 1 # minimum number of Celery workers
+  enabled: false
+  minScale: 1 # minimum number of Celery workers; 0 = scale to zero when idle
   maxScale: 3 # maximum number of Celery workers
   scaleToZeroDelay: 300 # idle time before scaling to zero (seconds)
   listLength: 3 # Redis queue length that triggers a scale-up

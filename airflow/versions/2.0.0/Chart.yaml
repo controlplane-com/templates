@@ -1,15 +1,15 @@
 apiVersion: v2
 name: airflow
-description: Apache Airflow with CeleryExecutor, KEDA autoscaling, Redis and Postgres
+description: Apache Airflow with CeleryExecutor, Redis broker and Postgres metadata database
 type: application
-version: 1.5.0
+version: 2.0.0
 appVersion: "3.0.3"
 
 annotations:
   created: "2025-08-14"
-  lastModified: "2026-08-19"
+  lastModified: "2026-08-28"
   category: "workflow-orchestration"
-  createsGvc: true
+  createsGvc: false
 
 dependencies:
   - name: cpln-common

@@ -9,6 +9,11 @@ spec:
   containers:
     - name: tidb-db-init
       image: mysql:8
+      # The API backfills these three; declared so rendered == stored. Same values
+      # it already ran at, not a knob -- a one-shot init job has no tuning story.
+      cpu: "50m"
+      memory: "128Mi"
+      inheritEnv: false
       command: "/bin/bash"
       args:
         - /scripts/db-init.sh

@@ -141,6 +141,7 @@ Values that moved or were removed in 3.0.0 — the chart names each one at rende
 - **Locations in the GVC that are not in `locations` run nothing.** Their deployment reads `This workload location is deactivated because maxScale is set to 0`. That is intended, not a failure.
 - **JetStream state lives on the volume set.** Uninstalling deletes it. Streams default to `num_replicas: 1`, so a stream only survives a server loss if you set `num_replicas` to 3 or more when you create it — that is per-stream, in your application, not a setting in this template.
 - **`nats_extra_config` is injected verbatim.** A syntax error there is a container that will not start, not a render failure.
+- **Pinning a single `/32` in `allowCIDR` will lock you out when your egress IP rotates.** Measured: a corporate proxy pool moved the client to a different address and the endpoint began returning 403 against a perfectly healthy workload; widening the range restored access in ~4 minutes. Use a range wide enough to cover your egress, not just the address you happen to have today.
 - **A firewall change takes up to ~10 minutes to propagate.** After changing `allowCIDR` or `internalAccess`, keep re-testing rather than concluding the knob is broken.
 
 ## Links

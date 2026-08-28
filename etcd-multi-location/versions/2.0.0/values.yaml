@@ -1,0 +1,53 @@
+# ─── Locations ────────────────────────────────────────────────────────────────
+# This chart deploys into the GVC you install into — it does NOT create one.
+# Every location listed here MUST already exist in that GVC: a location the GVC
+# lacks contributes a declared etcd member that can never start, which shrinks
+# the cluster to a bare majority while every status surface reads healthy.
+# The members refuse to bootstrap in that state rather than form it.
+#
+# Lives under `global` so a parent chart (postgres-multi-location consumes this
+# one as a subchart) sets the list once and Helm propagates it here — the two
+# lists can then never be edited apart.
+
+global:
+  # One etcd member per location. Minimum 2; 3 survives losing one location,
+  # 5 survives losing two. See the quorum table in the README — 3 is the
+  # recommended production shape. This default is the smallest cluster the
+  # chart allows, because no location list can be right for every GVC: set it
+  # to YOUR GVC's locations before installing.
+  locations:
+    - name: aws-us-east-1
+    - name: aws-us-west-2
+
+# ─── etcd ─────────────────────────────────────────────────────────────────────
+image: controlplanecorporation/etcd:0.1
+
+resources:
+  cpu: 500m
+  memory: 512Mi
+
+# Raft timers, tuned for cross-region round trips (measured 63-140 ms).
+# Raise both if your locations are more than ~250 ms apart.
+tuning:
+  heartbeatIntervalMs: 250 # ~0.5-1.5x the worst round trip between locations
+  electionTimeoutMs: 5000 # must be >= 10x heartbeatIntervalMs; maximum 50000
+  # etcd keeps every superseded revision until told otherwise, so compaction is
+  # required rather than optional and cannot be switched off here.
+  autoCompactionMode: periodic # periodic (retention is a duration) or revision (a revision count)
+  autoCompactionRetention: 1h # periodic needs an explicit unit (1h, 30m, 24h); revision takes a count
+  quotaBackendBytes: 0 # backend size limit in bytes; 0 = etcd's own default of 2 GiB
+
+volumeset:
+  capacity: 10 # initial capacity in GiB (minimum is 10)
+
+internalAccess:
+  type: same-gvc # options: same-gvc, same-org, workload-list
+  workloads: [] # only used when type is workload-list; the etcd workload is added automatically
+  #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Disaster recovery ────────────────────────────────────────────────────────
+recovery:
+  # EMERGENCY ONLY. Set to the surviving location's name to restart that member
+  # as a new single-member cluster after permanently losing quorum. Read the
+  # "Recovering from a lost location" section of the README first.
+  forceNewClusterInLocation: ""

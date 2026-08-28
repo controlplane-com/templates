@@ -12,6 +12,8 @@ locations:
 
 image: cockroachdb/cockroach:v25.4.0
 
+# Confirm every location in your GVC supports multi-zone before enabling this --
+# a location that does not will wedge with no error. See the README.
 multiZone: false
 
 resources:

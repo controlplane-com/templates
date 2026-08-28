@@ -26,7 +26,7 @@ region, and multi-region deployments needing a single logical database rather th
 | `locations` | `[{aws-us-east-1, replicas: 3}]` | top-level from 2.0.0 (was `gvc.locations`); **single-location default**, was 3×3 |
 | `image` | `cockroachdb/cockroach:v25.4.0` | `appVersion` `25.4.0`, bare — correct |
 | `resources` | `cpu: 2`, `memory: 4Gi` | limit-only block, so bare names are right |
-| `multiZone` | `false` | |
+| `multiZone` | `false` | **confirm the GVC's locations support multi-zone first** — an unsupported location accepts it and wedges with no error. Isolated 2026-08-27 to *stateful + block volumeset* in `aws-us-west-2`; standard workloads and volume-less stateful ones are fine there, and east-1/east-2 are unaffected |
 | `pgbouncer.enabled` | `true` | 2–4 replicas **per location** |
 | `backup.enabled` / `.location` | `false` / `aws-us-east-1` | `.location` must be one of `locations` — **enforced at render** |
 

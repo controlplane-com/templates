@@ -83,6 +83,7 @@ nodes: that survives the loss of a node, not the loss of a region — see
 ```yaml
 image: cockroachdb/cockroach:v25.4.0
 multiZone: false   # spread replicas across availability zones within each location
+                   # CONFIRM your GVC's locations support multi-zone first -- see Important Notes
 resources:
   cpu: 2
   memory: 4Gi
@@ -346,6 +347,8 @@ Running the second statement without the first fails with
 
 ## Important Notes
 
+- **Before enabling `multiZone`, confirm every location in your GVC supports multi-zone placement.** A location that does not accepts the setting and then wedges — the workload never becomes ready and nothing explains why. Measured on `aws-us-west-2`, where a stateful workload with a block volumeset wedges while the same location works for standard workloads; `aws-us-east-1` and `aws-us-east-2` were unaffected. Check with your Control Plane contact if you are unsure, and leave it `false` if you are.
+- **A one-node deployment is refused at render.** Each node joins every *other* replica, so a single node has nothing to join. Use at least 3 replicas in total — 3 in one location is the smallest supported shape.
 - **Never `helm upgrade` a 1.x release onto 2.0.0** — it deletes the GVC the 1.x release created, and everything in it. See [Migrating from 1.x](#migrating-from-1x).
 - **Every location in `locations` must already exist in the GVC.** A location the GVC lacks is accepted silently by the platform; the nodes catch it at boot and refuse to initialise rather than forming a cluster whose regions can never exist.
 - **Removing a location from `locations` does not drain its nodes.** They refuse to start rather than rejoining from a region the database was not told about. Decommission those nodes first if they hold data.

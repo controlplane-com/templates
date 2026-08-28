@@ -153,6 +153,32 @@ joined. Refuse it instead.
 {{- end -}}
 
 {{/*
+Refuse a one-node deployment: it can NEVER start.
+
+Each node builds its --join list from every replica EXCEPT itself, so with a
+single node the list is empty and CockroachDB exits immediately:
+
+  Starting CockroachDB on ... with join []
+  ERROR: invalid argument "" for "-j, --join" flag
+  exitCode 4, permanent crash loop
+
+Measured 2026-08-27. Nothing in the chart caught it, and `validateReplicas`
+("must have at least 1 replica") actively read as endorsing the shape. A single
+node would need `--single-node`, which this chart deliberately does not use --
+it builds a joined cluster. Three is the smallest useful size, matching
+CockroachDB's default replication factor of 3.
+*/}}
+{{- define "cockroach.validateNotSingleNode" -}}
+{{- $total := 0 -}}
+{{- range .Values.locations -}}
+{{- $total = add $total (.replicas | int) -}}
+{{- end -}}
+{{- if eq $total 1 -}}
+{{- fail "cockroach: a one-node deployment cannot start. Each node joins every OTHER replica, so a single node gets an empty --join list and exits with `invalid argument \"\" for \"-j, --join\"`. Use at least 3 replicas in total (CockroachDB's default replication factor is 3); 3 replicas in one location is the smallest supported shape." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Validate that no location is listed twice. A duplicate produces duplicate
 --join entries, duplicate PgBouncer backends, a duplicated localOptions entry
 (which the platform accepts without validating), and an `ADD REGION` that fails
@@ -257,6 +283,7 @@ error instead of the destructive-upgrade refusal.
 {{- include "cockroach.validateNoLegacyGvc" . -}}
 {{- include "cockroach.validateLocations" . -}}
 {{- include "cockroach.validateReplicas" . -}}
+{{- include "cockroach.validateNotSingleNode" . -}}
 {{- include "cockroach.validateUniqueLocations" . -}}
 {{- include "cockroach.validateBackupLocation" . -}}
 {{- include "cockroach.validateBackupConfig" . -}}

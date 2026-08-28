@@ -29,7 +29,6 @@
 | `resources.{pd,server,tikv}` | 2 cpu / 4-2-4 Gi | Single-value blocks, so bare `cpu`/`memory` |
 | `autoCreateDatabase.*` | on, `deployInitWorkload: true`, `credentialsSecretName: my-tidb-credentials` | Prerequisite `dictionary` secret with `rootPassword`, `user`, `password`, `db` |
 | `volumeset.{tikv,pd}.capacity` | `10` GiB | TiKV supports autoscaling; PD does not |
-| `exposeServer` | `false` | Opens public inbound — but see traps, it does NOT publish MySQL |
 | `external_access.*_outboundAllowCIDR` | `[]` | Per-tier egress; backups force `0.0.0.0/0` on TiKV |
 | `internal_access.{server,tikv,pd}.type` | `same-gvc` | Who may reach each tier. This release's own workloads are ALWAYS included |
 | `backup.*` | off, `provider: aws`, `location: aws-us-east-1` | `location` must be one of `locations` — refused at render otherwise |
@@ -51,7 +50,8 @@
 
 ## Troubleshooting / considerations
 - **NOT YET TESTED.** 2.0.0 was built after the four merged GVC conversions and has not been deployed. Everything below carried forward from 1.x still applies; the 2.0.0-specific items are chart-level and unverified live.
-- **`exposeServer` is a defect, not a feature.** It opens public inbound on the server workload, but MySQL is TCP on 4000 and would need a `loadBalancer.direct` block, which the template does not render — so it publishes nothing usable, while the workload's only `http` port is TiDB's unauthenticated status/API port 10080. It has never been tested (three test rounds all left it `false`). Left unchanged in 2.0.0 and documented as untested; **needs a maintainer ruling** — fix it with a direct LB on 4000, or remove the knob.
+- **`exposeServer` was REMOVED in 2.0.0** (maintainer ruling). It opened public inbound on the server workload but rendered no `loadBalancer.direct`, so TCP 4000 was never published — the only `http` port is TiDB's unauthenticated status/API port 10080, which is what the canonical endpoint would have served. Never tested in three rounds. A values file still setting it now fails at render rather than being silently ignored.
+- **db-init is a `cron`, not a `standard` workload** (2.0.0). As a standard workload it completed, was restarted, and completed again — reporting `ready: false` and `Deployment does not have minimum availability` permanently while the cluster was healthy. Re-running is harmless: the script fast-exits when the database exists, before the non-idempotent `CREATE USER`.
 - **GCS backups did not work before 1.7.0.** Two causes, both fixed: `backup.sh` never passed `--send-credentials-to-tikv=false`, and TiKV's legacy GCS backend could not use the metadata server. v8.5.7 enables `gcp_v2`, which supports ADC. AWS S3 was unaffected.
 - **The backup image version must match the cluster.** From v8.5.7 `br` enforces the check even with `--check-requirements=false`.
 - **The restore path has never been exercised** against a backup this template produced, and SST object naming differs between the S3 (`1/<name>`) and GCS (`1_<name>`) backends. The README says so rather than implying a rehearsed procedure.

@@ -1,0 +1,29 @@
+{{- include "redis-ml.validate" . -}}
+{{- /*
+The Redis instances read their own GVC at boot to confirm it really has every
+location this release declares. The platform does not validate that: a
+localOptions entry naming a location the GVC lacks is accepted, stored and
+inert, so that location's Redis instances AND its Sentinel never start while
+every status surface reads healthy — and Sentinel's failover vote needs a
+majority of the one-per-location instances, so the automatic failover this
+template exists to provide is silently gone. Worse, if the FIRST declared
+location is the missing one, the `sentinel monitor` bootstrap address points at
+a host that will never exist and no master ever forms.
+
+Scoped to the ONE install GVC; never `target: all`, which would grant view on
+every GVC in the org. Only the Redis identity is bound — Sentinel does its own
+location check without the API (see the Sentinel workload), so it needs no
+GVC read and gets no extra grant.
+*/}}
+kind: policy
+name: {{ include "redis-ml.policy.gvc.name" . }}
+description: Redis multi-location GVC read policy
+tags: {{- include "redis-ml.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - view
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "redis-ml.identity.name" . }}
+targetKind: gvc
+targetLinks:
+  - //gvc/{{ .Values.global.cpln.gvc }}

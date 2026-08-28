@@ -5,7 +5,7 @@ description: Redis
 tags:
   cpln/publishNotReadyAddresses: "true"
   {{- include "redis-ml.tags" . | nindent 2 }}
-gvc: {{ .Values.global.gvc.name }}
+gvc: {{ .Values.global.cpln.gvc }}
 spec:
   type: stateful
   containers:
@@ -34,11 +34,239 @@ spec:
           SELF_HOST="replica-${POD_ID}.${WORKLOAD_NAME}.${LOCATION}.${CPLN_GVC}.cpln.local"
           SELF_PORT=6379
 
+          # The cluster roster, rendered at template time. Every check below and
+          # every Sentinel endpoint is built from it plus ${CPLN_GVC} at runtime —
+          # this chart no longer names a GVC, so a render-time name could only
+          # ever drift from where the workload actually runs.
+          CONFIGURED_LOCS="{{- range $loc := .Values.global.locations }}{{ $loc.name }} {{ end }}"
+          CONFIGURED_LOCS="${CONFIGURED_LOCS% }"
+          BOOTSTRAP_LOC="{{ (index .Values.global.locations 0).name }}"
+          TOTAL_LOCS={{ len .Values.global.locations }}
+          # The same quorum the Sentinel config is rendered with — a majority of
+          # the one-per-location Sentinels.
+          SENTINEL_QUORUM={{ add (div (len .Values.global.locations) 2) 1 }}
+
+          # --- Data-directory freshness ---
+          # Read once, here, because the location checks below key off it: a
+          # FRESH instance has never held data, so refusing to start it costs
+          # nothing. An initialised instance is a live cluster node and must
+          # never be taken down by a configuration check.
+          # The chart ships `appendonly yes`, so the on-disk marker is
+          # appendonlydir/, NOT dump.rdb — both are tested anyway so this stays
+          # correct if extraArgs turns AOF off. `lost+found` is excluded: an ext4
+          # volume set always has one, which would make every mount look used.
+          if [ -d /data/appendonlydir ] || [ -f /data/dump.rdb ]; then
+            FRESH="false"
+          else
+            FRESH="true"
+          fi
+
+          # --- Check A: never start in a location this release did not declare ---
+          # defaultOptions.minScale/maxScale are 0, so the platform should never
+          # place a replica in an undeclared location. This is the last line of
+          # defence if it does. Such an instance would announce a hostname no
+          # Sentinel monitors and hold writes nothing else replicates.
+          # Unconditional — fresh or not, this instance must not join.
+          case " ${CONFIGURED_LOCS} " in
+            *" ${LOCATION} "*) : ;;
+            *) echo "[redis] FATAL: this instance is running in location '${LOCATION}', which is not in the configured location list (${CONFIGURED_LOCS})." >&2
+               echo "[redis] No Sentinel monitors it and no client is routed to it, so any write it accepts is lost." >&2
+               echo "[redis] Remove this location from GVC '${CPLN_GVC}', or add it to global.locations in your values." >&2
+               exit 1 ;;
+          esac
+
+          # --- GVC location reconciliation (Checks B, C and D) ---
+          # The platform accepts a localOptions entry naming a location the GVC
+          # does not have: it is stored verbatim and is simply inert. Nothing
+          # reports it, so a typo in global.locations yields a cluster whose
+          # Sentinel quorum can never be met — the automatic failover this
+          # template exists to provide — while every status surface reads
+          # healthy. Helm cannot see a live GVC at render time, and peer
+          # unreachability is not usable as the signal, because surviving a
+          # location outage IS the product. So ask the GVC itself.
+          #
+          # WHY PERL AND NOT CURL: neither pinned image has curl OR wget
+          # (probed 2026-08-28 on redis:7.4 and valkey/valkey:8.1.9 — both are
+          # Debian, both ship perl with IO::Socket::INET and bash, neither ships
+          # an HTTP client). The alternative considered was a curl sidecar
+          # writing its verdict to a shared scratch:// volume, as guacamole does
+          # for its schema step. It was rejected: it needs a SECOND pinned image
+          # to maintain, it costs an extra container on every replica in every
+          # location (9 by default here), and it would not actually remove this
+          # logic from this container — the fatal/warn decision depends on
+          # data-directory freshness, which only this container can see. So the
+          # sidecar would move the HTTP call and add a handshake that can hang.
+          # $CPLN_ENDPOINT is plain HTTP, so no TLS is needed.
+          cat > /tmp/gvc-read.pl <<'GVCREADPL'
+          use strict;
+          use warnings;
+          use IO::Socket::INET;
+          my $ep = $ENV{CPLN_ENDPOINT} || 'http://api.cpln.io';
+          my $org = $ENV{CPLN_ORG} || '';
+          my $gvc = $ENV{CPLN_GVC} || '';
+          my $tok = $ENV{CPLN_TOKEN} || '';
+          $ep =~ s{/+$}{};
+          my ($scheme, $host, $port);
+          if ($ep =~ m{^(https?)://([^/:]+)(?::(\d+))?}) {
+            $scheme = $1;
+            $host = $2;
+            $port = defined $3 ? $3 : ($1 eq 'https' ? 443 : 80);
+          } else {
+            print STDERR "endpoint-unparseable\n";
+            exit 3;
+          }
+          if ($scheme eq 'https') {
+            print STDERR "https-unsupported\n";
+            exit 4;
+          }
+          my $code = 0;
+          my $bdy = '';
+          eval {
+            # Two independent bounds. Timeout=>5 bounds a connect() that hangs
+            # (a blackholed address: measured 5s). alarm 8 bounds a server that
+            # accepts and never answers (measured 8s). An NXDOMAIN control
+            # returns in 1s and proves neither, which is why both were measured
+            # against genuinely slow failures instead.
+            local $SIG{ALRM} = sub { die "timeout\n" };
+            alarm 8;
+            my $s = IO::Socket::INET->new(
+              PeerAddr => $host, PeerPort => $port, Proto => 'tcp', Timeout => 5
+            ) or die "connect\n";
+            # HTTP/1.0 so the reply can never be chunk-encoded: a chunk boundary
+            # landing inside locationLinks would silently truncate the list.
+            print $s "GET /org/$org/gvc/$gvc HTTP/1.0\r\n"
+              . "Host: $host\r\n"
+              . "Authorization: $tok\r\n"
+              . "Accept: application/json\r\n"
+              . "User-Agent: redis-multi-location-gvc-check\r\n\r\n";
+            my $resp = do { local $/; <$s> };
+            close $s;
+            alarm 0;
+            $resp = '' unless defined $resp;
+            ($code) = $resp =~ m{^HTTP/\d\.\d\s+(\d+)};
+            (undef, $bdy) = split /\r?\n\r?\n/, $resp, 2;
+            1;
+          } or do {
+            print STDERR "err:$@";
+            exit 2;
+          };
+          $code = 0 unless defined $code;
+          $bdy = '' unless defined $bdy;
+          if ($code != 200) {
+            print STDERR "http-$code\n";
+            exit 5;
+          }
+          my @l;
+          if ($bdy =~ /"locationLinks"\s*:\s*\[([^\]]*)\]/s) {
+            my $x = $1;
+            while ($x =~ m{"[^"]*/location/([^"/]+)"}g) {
+              push @l, $1;
+            }
+          }
+          print join(" ", @l), "\n";
+          exit(@l ? 0 : 6);
+          GVCREADPL
+
+          GVC_LOCS=""
+          GVC_READ_OK="false"
+          GVC_ERR=""
+          for _try in 1 2 3; do
+            # `timeout 12` is the backstop if perl itself wedges; the script's
+            # own two bounds normally fire first. Theoretical worst case
+            # 3x12 + 2x2 = 40s. MEASURED end to end in this rendered script,
+            # 2026-08-28, identical on redis:7.4 and valkey/valkey:8.1.9:
+            # 22s against a blackholed address (connect hangs) and 30s against
+            # an accept-never-respond server. An NXDOMAIN control returned in
+            # 1s and proves neither bound, which is why it was not used.
+            GVC_LOCS=$(timeout 12 perl /tmp/gvc-read.pl 2>/tmp/gvc-read.err) && GVC_READ_OK="true"
+            [ "$GVC_READ_OK" = "true" ] && break
+            GVC_ERR=$(cat /tmp/gvc-read.err 2>/dev/null || echo unknown)
+            sleep 2
+          done
+          rm -f /tmp/gvc-read.pl /tmp/gvc-read.err
+
+          if [ "$GVC_READ_OK" != "true" ]; then
+            # A control-plane hiccup must never be the reason a cache refuses to
+            # start. Skip the API-backed checks; Check A above still applies.
+            echo "[redis] WARNING: could not read the location list of GVC '${CPLN_GVC}' (${GVC_ERR}) — skipping the GVC location check." >&2
+          else
+            PRESENT=0
+            MISSING=""
+            EXTRA=""
+            BOOTSTRAP_PRESENT="false"
+            for LOC in ${CONFIGURED_LOCS}; do
+              case " ${GVC_LOCS} " in
+                *" ${LOC} "*) PRESENT=$((PRESENT + 1)) ;;
+                *) MISSING="${MISSING}${LOC} " ;;
+              esac
+            done
+            case " ${GVC_LOCS} " in
+              *" ${BOOTSTRAP_LOC} "*) BOOTSTRAP_PRESENT="true" ;;
+            esac
+            for LOC in ${GVC_LOCS}; do
+              case " ${CONFIGURED_LOCS} " in
+                *" ${LOC} "*) : ;;
+                *) EXTRA="${EXTRA}${LOC} " ;;
+              esac
+            done
+            if [ -n "${EXTRA}" ]; then
+              echo "[redis] GVC '${CPLN_GVC}' also has locations this release does not use: ${EXTRA% } — nothing runs there (minScale/maxScale are 0 outside localOptions)."
+            fi
+
+            # --- Check B: the bootstrap master's location must exist ---
+            # Deliberately FIRST. Every Sentinel is seeded with `sentinel monitor
+            # mymaster replica-0.<redis>.<first location>...`, and every Redis
+            # instance boots as a replica of whatever Sentinel names. If that
+            # first location is the missing one, the address points at a host
+            # that will never exist: every instance boots as a replica, no master
+            # ever forms, and the cluster accepts no writes at all. That is more
+            # specific and more actionable than "a location is missing".
+            if [ "${BOOTSTRAP_PRESENT}" != "true" ]; then
+              if [ "${FRESH}" = "true" ]; then
+                echo "[redis] FATAL: the first location in global.locations ('${BOOTSTRAP_LOC}') is not in GVC '${CPLN_GVC}' (which has: ${GVC_LOCS})." >&2
+                echo "[redis] Every Sentinel is seeded to monitor replica-0 in that location, so no instance would ever be told it is the master and the cluster would accept no writes." >&2
+                echo "[redis] Add '${BOOTSTRAP_LOC}' to the GVC, or list a location the GVC has FIRST in global.locations." >&2
+                exit 1
+              fi
+              echo "[redis] WARNING: the first location in global.locations ('${BOOTSTRAP_LOC}') is not in GVC '${CPLN_GVC}'. This instance is already initialised, so it keeps running rather than taking a live cluster down — but a fresh Sentinel would seed an address that does not exist." >&2
+            # --- Check C: Sentinel must be able to reach its failover quorum ---
+            # One Sentinel per location, so the number that can exist is the
+            # number of declared locations the GVC actually has. Below quorum,
+            # no failover can ever be voted — which is the entire product.
+            elif [ "${PRESENT}" -lt "${SENTINEL_QUORUM}" ]; then
+              if [ "${FRESH}" = "true" ]; then
+                echo "[redis] FATAL: Sentinel can never reach its failover quorum. ${PRESENT} of ${TOTAL_LOCS} configured locations (${CONFIGURED_LOCS}) exist in GVC '${CPLN_GVC}' (which has: ${GVC_LOCS}), and the quorum is ${SENTINEL_QUORUM}." >&2
+                echo "[redis] Sentinel runs one instance per configured location, so at most ${PRESENT} can ever vote. The cluster would run and report healthy with NO automatic failover. Refusing to bootstrap it." >&2
+                echo "[redis] Add the missing location(s) to the GVC, or remove them from global.locations in your values: ${MISSING% }" >&2
+                exit 1
+              fi
+              echo "[redis] WARNING: only ${PRESENT} of ${TOTAL_LOCS} configured locations exist in GVC '${CPLN_GVC}' — below the Sentinel quorum of ${SENTINEL_QUORUM}, so no failover can be voted. This instance is already initialised, so it keeps serving. Missing: ${MISSING% }" >&2
+            # --- Check D: every declared location must exist ---
+            # Asymmetric on purpose: hard-fail ONLY on a fresh data directory. A
+            # location removed from the GVC is indistinguishable from one that is
+            # down, and surviving that is exactly what this template is for, so
+            # hard-failing an initialised instance would turn "lost one location"
+            # into "lost the cluster".
+            elif [ -n "${MISSING}" ]; then
+              if [ "${FRESH}" = "true" ]; then
+                echo "[redis] FATAL: locations declared in global.locations are not in GVC '${CPLN_GVC}': ${MISSING% }" >&2
+                echo "[redis] GVC '${CPLN_GVC}' has: ${GVC_LOCS}" >&2
+                echo "[redis] ${PRESENT} of ${TOTAL_LOCS} declared locations can actually start. Sentinel would meet its quorum of ${SENTINEL_QUORUM} with nothing to spare, so losing any one location would end automatic failover permanently. Refusing to bootstrap it." >&2
+                echo "[redis] Add the missing location(s) to the GVC, or remove them from global.locations in your values." >&2
+                exit 1
+              fi
+              echo "[redis] WARNING: locations declared in global.locations are not in GVC '${CPLN_GVC}': ${MISSING% } — instances there will never appear." >&2
+            else
+              echo "[redis] GVC location check OK — '${CPLN_GVC}' has every configured location (${CONFIGURED_LOCS})"
+            fi
+          fi
+
           echo "\nreplica-announce-ip ${SELF_HOST}" >> /etc/redis/redis.conf
           echo "\nreplica-announce-port ${SELF_PORT}" >> /etc/redis/redis.conf
 
-          # Sentinel endpoints — one per location, rendered at template time
-          SENTINELS="{{ range $loc := .Values.global.gvc.locations }}replica-0.{{ include "redis-ml.sentinel.name" $ }}.{{ $loc.name }}.{{ $.Values.global.gvc.name }}.cpln.local {{ end }}"
+          # Sentinel endpoints — one per location. The location names come from
+          # the values at render time; the GVC comes from ${CPLN_GVC} at runtime.
+          SENTINELS="{{ range $loc := .Values.global.locations }}replica-0.{{ include "redis-ml.sentinel.name" $ }}.{{ $loc.name }}.${CPLN_GVC}.cpln.local {{ end }}"
 
           # Ask any sentinel who the master is, retrying until one responds.
           # On cold start, sentinels respond from their static config (replica-0 of the
@@ -98,11 +326,19 @@ spec:
           recoveryPolicy: retain
           uri: cpln://secret/{{ include "redis-ml.secretConfig.name" . }}
   defaultOptions:
+    {{- /*
+    minScale/maxScale are 0 so a GVC location this release did not ask for runs
+    NOTHING — the deployment there reads `This workload location is deactivated
+    because maxScale is set to 0`. localOptions below supplies the real
+    per-location count. Without this, an extra GVC location silently starts Redis
+    instances that no Sentinel monitors and no client is routed to, and any write
+    they accept is lost.
+    */}}
     autoscaling:
       maxConcurrency: 0
       metric: disabled
-      minScale: {{ .Values.redis.replicasPerLocation | int }}
-      maxScale: {{ .Values.redis.replicasPerLocation | int }}
+      minScale: 0
+      maxScale: 0
       scaleToZeroDelay: 300
       target: 100
     capacityAI: false
@@ -150,20 +386,25 @@ spec:
       outboundAllowPort: []
       outboundBlockedCIDR: []
     internal:
-      inboundAllowType: {{ .Values.firewall.internalAllowType }}
-      {{- if .Values.firewall.workloads }}
-      inboundAllowWorkload: {{ .Values.firewall.workloads | toYaml | nindent 8 }}
-      {{- end }}
-  identityLink: //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "redis-ml.identity.name" . }}
+      {{- /*
+      One helper, one `inboundAllowWorkload` key. See redis-ml.ownWorkloadLinks:
+      this list also governs Redis-to-Redis replication and every instance's
+      query to Sentinel, so a list naming only clients cuts the cluster off from
+      itself while every replica still reports ready.
+      */}}
+      {{- include "redis-ml.internalFirewall" . | nindent 6 }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "redis-ml.identity.name" . }}
   loadBalancer:
     replicaDirect: true
   localOptions:
     {{- /*
-    Written in FULL for every location: a minimal localOptions entry makes the
-    API backfill its OWN defaults, which would leave a location eligible to
-    scale on concurrency and boot Redis instances nobody asked for.
+    Written in FULL for every location: localOptions is a full override, not a
+    patch onto defaultOptions, and the API completes a partial entry from its
+    OWN platform defaults — measured on a sibling template as capacityAI ON
+    against a chart saying false. A field left out here would also fall through
+    to the 0/0 shape above and start nothing in a location the user did ask for.
     */}}
-    {{- range $location := .Values.global.gvc.locations }}
+    {{- range $location := .Values.global.locations }}
     - location: //location/{{ $location.name }}
       autoscaling:
         maxConcurrency: 0

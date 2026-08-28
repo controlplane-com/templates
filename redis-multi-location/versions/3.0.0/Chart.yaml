@@ -2,14 +2,14 @@ apiVersion: v2
 name: redis-multi-location
 description: One Redis or Valkey cluster stretched across locations, with Sentinel failover on location loss
 type: application
-version: 2.2.0
+version: 3.0.0
 appVersion: "7.4"
 
 annotations:
   created: "2025-12-13"
-  lastModified: "2026-08-26"
+  lastModified: "2026-08-28"
   category: "cache"
-  createsGvc: true
+  createsGvc: false
 
 dependencies:
   - name: cpln-common

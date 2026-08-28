@@ -5,7 +5,7 @@ description: Sentinel
 tags:
   cpln/publishNotReadyAddresses: "true"
   {{- include "redis-ml.tags" . | nindent 2 }}
-gvc: {{ .Values.global.gvc.name }}
+gvc: {{ .Values.global.cpln.gvc }}
 spec:
   type: stateful
   containers:
@@ -38,7 +38,7 @@ spec:
             # All sentinels agree on the same initial master: replica-0 of the primary (first) location.
             # After any failover, sentinel persists the elected master via CONFIG REWRITE so this
             # bootstrap line only matters on a completely fresh (never-started) sentinel.
-            echo "sentinel monitor mymaster replica-0.{{ include "redis-ml.name" . }}.{{ (index .Values.global.gvc.locations 0).name }}.${CPLN_GVC}.cpln.local 6379 {{ add (div (len .Values.global.gvc.locations) 2) 1 }}" >> /etc/sentinel/sentinel.conf
+            echo "sentinel monitor mymaster replica-0.{{ include "redis-ml.name" . }}.{{ (index .Values.global.locations 0).name }}.${CPLN_GVC}.cpln.local 6379 {{ add (div (len .Values.global.locations) 2) 1 }}" >> /etc/sentinel/sentinel.conf
           }
 
           # Passwords come from user-created secrets, so they cannot live in the
@@ -83,6 +83,27 @@ spec:
             fi
           }
 
+          # --- Never start in a location this release did not declare ---
+          # defaultOptions.minScale/maxScale are 0, so the platform should never
+          # place a Sentinel in an undeclared location. This is the last line of
+          # defence if it does, and a stray Sentinel is not harmless: it joins
+          # the Sentinel gossip and counts toward the ODOWN agreement, skewing
+          # the very quorum arithmetic the location list was chosen for.
+          # No API call here on purpose — this check needs only the rendered list
+          # and $CPLN_LOCATION, so the Sentinel identity needs no GVC-read grant.
+          # The GVC itself is reconciled by the Redis tier, which has the
+          # data-directory freshness signal the fatal/warn split depends on.
+          SENTINEL_LOCATION=${CPLN_LOCATION##*/}
+          CONFIGURED_LOCS="{{- range $loc := .Values.global.locations }}{{ $loc.name }} {{ end }}"
+          CONFIGURED_LOCS="${CONFIGURED_LOCS% }"
+          case " ${CONFIGURED_LOCS} " in
+            *" ${SENTINEL_LOCATION} "*) : ;;
+            *) echo "[sentinel] FATAL: this Sentinel is running in location '${SENTINEL_LOCATION}', which is not in the configured location list (${CONFIGURED_LOCS})." >&2
+               echo "[sentinel] It would join the Sentinel quorum and vote on failovers for a location this release does not manage." >&2
+               echo "[sentinel] Remove this location from GVC '${CPLN_GVC}', or add it to global.locations in your values." >&2
+               exit 1 ;;
+          esac
+
           bootstrap_sentinel_conf
           apply_auth
           exec redis-sentinel /etc/sentinel/sentinel.conf {{ .Values.sentinel.extraArgs | default "" }}
@@ -114,11 +135,18 @@ spec:
           recoveryPolicy: retain
           uri: cpln://volumeset/{{ include "redis-ml.sentinelVolume.name" . }}
   defaultOptions:
+    {{- /*
+    minScale/maxScale are 0 so a GVC location this release did not ask for runs
+    NOTHING — the deployment there reads `This workload location is deactivated
+    because maxScale is set to 0`. localOptions below supplies the real count of
+    exactly 1 per declared location. Without this, an extra GVC location silently
+    starts a Sentinel that votes in failovers for a cluster it is not part of.
+    */}}
     autoscaling:
       maxConcurrency: 0
       metric: disabled
-      minScale: 1
-      maxScale: 1
+      minScale: 0
+      maxScale: 0
       scaleToZeroDelay: 300
       target: 100
     capacityAI: false
@@ -160,11 +188,14 @@ spec:
       outboundAllowPort: []
       outboundBlockedCIDR: []
     internal:
-      inboundAllowType: {{ .Values.firewall.internalAllowType }}
-      {{- if .Values.firewall.workloads }}
-      inboundAllowWorkload: {{ .Values.firewall.workloads | toYaml | nindent 8 }}
-      {{- end }}
-  identityLink: //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "redis-ml.sentinelIdentity.name" . }}
+      {{- /*
+      One helper, one `inboundAllowWorkload` key — identical to the Redis tier.
+      This list governs Sentinel's monitoring of every Redis instance and its
+      gossip with its peer Sentinels, so a list naming only clients would leave
+      every Sentinel isolated while all of them still report ready.
+      */}}
+      {{- include "redis-ml.internalFirewall" . | nindent 6 }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "redis-ml.sentinelIdentity.name" . }}
   loadBalancer:
     replicaDirect: true
   localOptions:
@@ -172,7 +203,7 @@ spec:
     Written in FULL for every location, for the same reason as the Redis tier:
     a minimal entry makes the API backfill its own autoscaling defaults.
     */}}
-    {{- range $location := .Values.global.gvc.locations }}
+    {{- range $location := .Values.global.locations }}
     - location: //location/{{ $location.name }}
       autoscaling:
         maxConcurrency: 0

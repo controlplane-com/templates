@@ -3,7 +3,7 @@ kind: identity
 name: {{ include "redis-ml.identity.name" . }}
 description: Redis Identity
 tags: {{- include "redis-ml.tags" . | nindent 4 }}
-gvc: {{ .Values.global.gvc.name }}
+gvc: {{ .Values.global.cpln.gvc }}
 {{- if and .Values.backup.enabled (eq .Values.backup.provider "aws") }}
 {{- /*
 `cpln-connector` plus the user's own bucket-scoped policy, and nothing else.

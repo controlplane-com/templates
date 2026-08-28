@@ -17,7 +17,7 @@ spec:
         - port: 6379
           prefix: /
           replica: {{ $i }}
-          workloadLink: //gvc/{{ $.Values.global.gvc.name }}/workload/{{ include "redis-ml.name" $ }}
+          workloadLink: //gvc/{{ $.Values.global.cpln.gvc }}/workload/{{ include "redis-ml.name" $ }}
     {{- end }}
   {{- end }}
 {{- end }}

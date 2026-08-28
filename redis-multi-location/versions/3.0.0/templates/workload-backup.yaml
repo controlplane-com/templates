@@ -4,7 +4,7 @@ kind: workload
 name: {{ include "redis-ml.backup.name" . }}
 description: Redis Backup
 tags: {{- include "redis-ml.tags" . | nindent 4 }}
-gvc: {{ .Values.global.gvc.name }}
+gvc: {{ .Values.global.cpln.gvc }}
 spec:
   type: cron
   containers:
@@ -29,7 +29,7 @@ spec:
           value: {{ .Values.backup.gcp.prefix | quote }}
       {{- end }}
         - name: REDIS_HOST
-          value: {{ include "redis-ml.name" . }}.{{ .Values.global.gvc.name }}.cpln.local
+          value: {{ include "redis-ml.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local
         - name: REDIS_PORT
           value: "6379"
       {{- if .Values.redis.passwordSecretName }}
@@ -60,7 +60,7 @@ spec:
     rather than the workload's, which would silently cut a long dump short at the
     platform default instead of this job's timeoutSeconds: 3600.
     */}}
-    - location: //location/{{ (index .Values.global.gvc.locations 0).name }}
+    - location: //location/{{ (index .Values.global.locations 0).name }}
       autoscaling:
         maxConcurrency: 0
         maxScale: 1
@@ -84,7 +84,7 @@ spec:
     internal:
       inboundAllowType: none
       inboundAllowWorkload: []
-  identityLink: //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "redis-ml.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "redis-ml.identity.name" . }}
   job:
     concurrencyPolicy: Forbid
     historyLimit: 5

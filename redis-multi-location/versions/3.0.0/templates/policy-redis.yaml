@@ -7,7 +7,7 @@ bindings:
   - permissions:
       - reveal
     principalLinks:
-      - //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "redis-ml.identity.name" . }}
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "redis-ml.identity.name" . }}
 targetKind: secret
 targetLinks:
   - //secret/{{ include "redis-ml.secretConfig.name" . }}

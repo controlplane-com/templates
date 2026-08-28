@@ -2,12 +2,17 @@
 
 One Redis master-replica cluster whose members span locations, with Redis Sentinel running in every
 location to elect a new master when the current one is lost. Runs **Redis (the default) or Valkey** —
-one `engine` knob, chosen at install. For a single-location cluster, use the `redis` template instead.
+one `engine` knob, chosen at install. This chart deploys into an existing GVC and requires that GVC to
+have **at least two locations**; for a single-location cluster, use the `redis` template instead.
+
+> **Upgrading from 2.x?** Do **not** `helm upgrade` onto this version — it would delete your GVC and
+> everything in it. See [Migrating from 2.x](#migrating-from-2x). The chart refuses to render if your
+> values still carry the 2.x `global.gvc` key.
 
 ## Architecture
 
-- **GVC** — multi-location, pinned to `global.gvc.locations`. **Created by this chart** standalone; as
-  a subchart the parent owns the GVC and this chart creates none.
+- **No GVC** — this chart deploys into the GVC you install it into. Every location in
+  `global.locations` must already exist there.
 - **Redis workload** (`{release}-redis`, stateful) — `redis.replicasPerLocation` instances in every
   location. One is the master; the rest replicate from it, across locations.
 - **Sentinel workload** (`{release}-sentinel`, stateful) — exactly one per location, monitoring the
@@ -18,12 +23,18 @@ one `engine` knob, chosen at install. For a single-location cluster, use the `re
 - **Domains** — one per public address, mapping a TCP port to each replica. Optional (`publicAccess`).
 - **Identities, policies and config secrets** — one identity per tier, each with `reveal` on exactly
   the secrets that tier reads, plus a bucket-scoped cloud binding when backups are on.
+- **GVC-read policy** (`{release}-redis-gvc-policy`) — grants the Redis identity `view` on **only** the
+  one GVC it runs in, so the instances can check at boot that the GVC really has every location this
+  release declares.
 
 ## Prerequisites
 
-1. **A GVC name that is not yet taken** (standalone installs). This chart creates the GVC named in
-   `global.gvc.name`. Helm **adopts** a GVC that already exists and `helm uninstall` then **deletes**
-   it, along with every unrelated workload in it.
+1. **An existing GVC with at least two locations**, and `global.locations` listing exactly the
+   locations you want this release to run in. Every name you list must already be in that GVC — the
+   platform does **not** validate this, so a location the GVC lacks is stored and silently does
+   nothing, which quietly removes the Sentinel quorum that makes failover work. The Redis instances
+   check this themselves at boot and refuse to bootstrap a cluster that could never fail over. Extra
+   locations in the GVC are fine; nothing runs in them.
 
 2. **For authentication only** — one or two `opaque` secrets, created **before** installing. Passwords
    are never values, so they never land in the Helm release:
@@ -48,7 +59,9 @@ one `engine` knob, chosen at install. For a single-location cluster, use the `re
    See [Storage setup](#storage-setup) for the exact steps per provider.
 
 4. **For public access only** — a domain you control, with its DNS records added **before** you
-   install. See [Public access](#public-access).
+   install, **and a dedicated load balancer already enabled on the GVC**. This chart no longer creates
+   the GVC, so it can no longer turn that on for you; enable it on the GVC first (it is a paid
+   feature). See [Public access](#public-access).
 
 ## How many locations do you need?
 
@@ -93,24 +106,20 @@ locations.
 
 ## Configuration
 
-### GVC and locations
+### Locations
 
 ```yaml
 global:
-  gvc:
-    # This chart CREATES this GVC when it is installed standalone, and creates
-    # nothing when it is a subchart (the parent owns the GVC). Standalone, the
-    # name must NOT already exist: Helm adopts a GVC that does, and
-    # `helm uninstall` then DELETES it and everything in it.
-    name: redis-multi-location-gvc
-    # Minimum 2 locations. Sentinel runs exactly one instance per location and
-    # a failover needs a majority of them, so an odd count is what buys
-    # automatic failover: 3 locations survive losing one, 5 survive losing two.
-    locations:
-      - name: aws-us-east-1
-      - name: aws-eu-central-1
-      - name: aws-us-west-2
+  locations:
+    - name: aws-us-east-1
+    - name: aws-eu-central-1
+    - name: aws-us-west-2
 ```
+
+Every entry must already exist in the GVC you install into. Minimum 2; an **odd** count is what buys
+automatic failover, because the vote needs a majority of the one-per-location Sentinels. `replicas` is
+not read here — use `redis.replicasPerLocation`. The **first** location listed is where the initial
+master is seeded and where the backup cron runs.
 
 ### Engine
 
@@ -135,7 +144,7 @@ valkeyImage: valkey/valkey:8.1.9
 redis:
   image: redis:7.4 # ignored when engine is valkey
   # Redis instances in EVERY location. Deliberately its own knob rather than
-  # `global.gvc.locations[].replicas`: that list is shared with a parent chart,
+  # `global.locations[].replicas`: that list is shared with a parent chart,
   # where `replicas` already means the parent's own members per location.
   replicasPerLocation: 2
   resources:
@@ -182,7 +191,12 @@ sentinel:
 ```yaml
 firewall:
   internalAllowType: same-gvc # options: same-gvc, same-org, workload-list
-  workloads: [] # only used when internalAllowType is workload-list
+  # Only used when internalAllowType is workload-list. This release's OWN
+  # workloads (Redis, Sentinel, the backup cron) are added automatically — the
+  # list also governs Redis-to-Redis replication and Sentinel's monitoring of
+  # both, so a list naming only clients would cut the cluster off from itself.
+  # List your clients here; do not list this release's workloads.
+  workloads: []
   #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
   externalInboundAllowCIDR: "" # comma-separated; defaults to 0.0.0.0/0 when publicAccess is on
   externalOutboundAllowCIDR: "" # comma-separated
@@ -292,8 +306,10 @@ first attempting a restore during an incident.
 ## Public access
 
 Redis and Sentinel can be exposed over the internet as raw TCP, one port per replica, via a Control
-Plane `domain`. Enabling either one turns on a **dedicated load balancer** on the GVC, which is a paid
-feature. Set an address you own, and add the TXT and CNAME records the first deploy asks for **before**
+Plane `domain`. This needs a **dedicated load balancer on the GVC**, which is a paid feature — and
+because this chart no longer creates the GVC, **you must enable that on the GVC yourself before
+installing**. Enable it in the Control Plane console on the GVC's load balancer settings. A `domain`
+pointed at a GVC without one will not serve traffic. Set an address you own, and add the TXT and CNAME records the first deploy asks for **before**
 that deploy completes — Control Plane rejects a domain whose ownership is unproven. Disable DNS
 proxying if your registrar offers it: TCP traffic must pass through directly.
 
@@ -311,9 +327,9 @@ Add `--no-auth-warning -a "$PASSWORD"` to either if you set the matching passwor
 
 | What | Where |
 |---|---|
-| Redis, load-balanced across replicas | `{release}-redis.{global.gvc.name}.cpln.local:6379` |
-| Redis, one specific replica | `replica-{i}.{release}-redis.{location}.{global.gvc.name}.cpln.local:6379` |
-| Sentinel | `{release}-sentinel.{global.gvc.name}.cpln.local:26379`, or `replica-0.{release}-sentinel.{location}.{global.gvc.name}.cpln.local:26379` |
+| Redis, load-balanced across replicas | `{release}-redis.{gvc}.cpln.local:6379` |
+| Redis, one specific replica | `replica-{i}.{release}-redis.{location}.{gvc}.cpln.local:6379` |
+| Sentinel | `{release}-sentinel.{gvc}.cpln.local:26379`, or `replica-0.{release}-sentinel.{location}.{gvc}.cpln.local:26379` |
 | Redis, public (when enabled) | `redis.my-domain.com:6380+i` |
 | Credentials | the opaque secrets named by `redis.passwordSecretName` / `sentinel.passwordSecretName` — `cpln secret reveal <name>` |
 
@@ -321,14 +337,42 @@ Writes must go to the **current master**, which moves on failover. Ask Sentinel 
 `-a` flags if you did not set the matching password:
 
 ```bash
-MASTER_INFO=$(redis-cli -h {release}-sentinel -p 26379 --no-auth-warning -a "$SENTINEL_PASSWORD" \
+MASTER_INFO=$(redis-cli -h {release}-sentinel.{gvc}.cpln.local -p 26379 --no-auth-warning -a "$SENTINEL_PASSWORD" \
   SENTINEL get-master-addr-by-name mymaster)
 MASTER_HOST=$(echo $MASTER_INFO | cut -d' ' -f1)
 MASTER_PORT=$(echo $MASTER_INFO | cut -d' ' -f2)
 
 redis-cli -h $MASTER_HOST -p $MASTER_PORT --no-auth-warning -a "$REDIS_PASSWORD" SET my-key "Hello world"
-redis-cli -h {release}-redis -p 6379 --no-auth-warning -a "$REDIS_PASSWORD" GET my-key
+redis-cli -h {release}-redis.{gvc}.cpln.local -p 6379 --no-auth-warning -a "$REDIS_PASSWORD" GET my-key
 ```
+
+## Migrating from 2.x
+
+**2.x created its own GVC. 3.0.0 does not, and there is no in-place upgrade path.** A `helm upgrade`
+from 2.x drops `kind: gvc` from the release manifest, and Helm deletes what a chart no longer declares
+— which destroys that GVC and **every workload, volume set and identity inside it**, in seconds, while
+printing `upgraded successfully`. The chart refuses to render when the 2.x `global.gvc` key is still
+present, but an upgrade run with **no values at all** falls back to 3.0.0's own defaults and cannot be
+caught that way. Do not attempt it.
+
+Migrate to a **new release** instead:
+
+1. Pick or create a GVC with the locations you want, and confirm it has at least two.
+2. Install 3.0.0 as a **new release** into that GVC, with `global.locations` listing exactly those
+   locations. Keep the old release running.
+3. Move the data. Point a client at the old cluster's current master and the new one's, and copy the
+   keyspace across — `redis-cli --scan` plus `DUMP`/`RESTORE`, or `redis-cli` replication from the old
+   master, whichever suits your dataset. Verify the new cluster serves reads and writes.
+4. Cut clients over to the new release's hostnames (the GVC name in every hostname changes).
+5. `helm uninstall` the **old** release. This deletes the old GVC it created, so make sure nothing else
+   depends on it and that step 3 is genuinely complete — the old volume sets go with it.
+
+Values that changed:
+
+| 2.x | 3.0.0 |
+|---|---|
+| `global.gvc.name` | removed — the GVC comes from where you install |
+| `global.gvc.locations` | `global.locations` |
 
 ## Important Notes
 
@@ -359,9 +403,16 @@ redis-cli -h {release}-redis -p 6379 --no-auth-warning -a "$REDIS_PASSWORD" GET 
   no replica was eligible for promotion — but treat a Redis password change as a planned restart of the
   whole tier, not a rolling one. Changing the SENTINEL password alone is safe: sentinel-only restarts
   produced no failover vote at all.
-- **The GVC in `global.gvc.name` must not already exist** on a standalone install. Helm adopts an
-  existing one and deletes it on uninstall, taking every unrelated workload with it.
-- **`global.gvc.locations[].replicas` is deliberately not read** — set `redis.replicasPerLocation`,
+- **Never `helm upgrade` a 2.x release onto 3.0.0** — it deletes the GVC and everything in it. See
+  [Migrating from 2.x](#migrating-from-2x).
+- **Every location in `global.locations` must already exist in the GVC.** The platform accepts a
+  location the GVC lacks, stores it, and silently runs nothing there — which removes the Sentinel
+  quorum failover depends on while every status surface reads healthy. On a **fresh** install the
+  Redis instances detect this and refuse to start, naming the missing locations in their logs; on an
+  **already-initialised** cluster they warn and keep serving, so that losing a location cannot also
+  take the cluster down. Read `cpln logs` for the `{release}-redis` workload for lines starting
+  `[redis]`.
+- **`global.locations[].replicas` is deliberately not read** — set `redis.replicasPerLocation`,
   which applies to every location. The chart fails at render if you set the former.
 - **Two locations give you no automatic failover**, because the Sentinel vote cannot reach a majority;
   and replication is asynchronous, so any failover can lose the writes the promoted replica had not
@@ -370,11 +421,15 @@ redis-cli -h {release}-redis -p 6379 --no-auth-warning -a "$REDIS_PASSWORD" GET 
   a rolling-restart limit on a stateful workload, so treat any upgrade as a planned write outage.
 - **Never suspend a location.** Suspending and resuming one permanently withdraws its endpoints from
   the other locations' service discovery while every status surface still reads healthy. To remove a
-  location, remove it from `global.gvc.locations`.
+  location, remove it from `global.locations`.
+- **Extra locations in the GVC are harmless.** A location this release does not declare gets
+  `minScale`/`maxScale` of 0 and starts nothing; its deployment reads `This workload location is
+  deactivated because maxScale is set to 0`.
 - **Allow ~2 minutes after a cold install** before believing a replica is unreachable — cross-region
   service discovery can take that long to converge, and a firewall change a further 30–150 s.
-- **As a subchart, this chart creates no GVC and no dedicated load balancer.** A parent that turns on
-  `publicAccess` must set `spec.loadBalancer.dedicated` on its own GVC resource.
+- **`publicAccess` needs a dedicated load balancer that this chart cannot enable.** It no longer
+  creates the GVC, so enable the dedicated load balancer on your GVC before installing with public
+  access on; otherwise the `domain` is created and never serves traffic.
 - **Data survives an upgrade but not an uninstall** — `helm uninstall` deletes the volume sets.
 
 ## Links

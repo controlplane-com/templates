@@ -5,7 +5,7 @@ name: {{ include "tidb.dbInit.name" . }}
 description: TiDB database initialization
 tags: {{- include "tidb.tags" . | nindent 4 }}
 spec:
-  type: standard
+  type: cron
   containers:
     - name: tidb-db-init
       image: mysql:8
@@ -90,5 +90,21 @@ spec:
       enabled: false
       ports: []
     replicaDirect: false
+  job:
+    # A cron models "run to completion"; the previous `standard` workload could
+    # not. It completed, was restarted, completed again -- reporting
+    # `ready: false` and `Deployment does not have minimum availability`
+    # permanently while the cluster was perfectly healthy (measured: 7 restarts,
+    # every one exitCode 0, reason Completed).
+    #
+    # Re-running is harmless: the script fast-exits when the database already
+    # exists, before it reaches the non-idempotent CREATE USER. So every run
+    # after the first is a no-op of a second or two. The schedule only controls
+    # how soon after install the database appears.
+    activeDeadlineSeconds: 600
+    concurrencyPolicy: Forbid
+    historyLimit: 5
+    restartPolicy: Never
+    schedule: {{ .Values.autoCreateDatabase.schedule | quote }}
   supportDynamicTags: false
 {{ end }}

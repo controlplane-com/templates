@@ -381,7 +381,21 @@ Helm does not render templates in a predictable order, so a malformed
 the user gets `range can't iterate over []` instead of a sentence telling them
 what to fix. Validation is idempotent, so running it twice costs nothing.
 */}}
+{{/*
+`exposeServer` was removed in 2.0.0. It opened public inbound on the server
+workload but rendered no `loadBalancer.direct`, so TCP 4000 was never published;
+the only `http` port is TiDB's unauthenticated status/API port 10080, which is
+what the canonical endpoint would have served. It was never tested. Fail loudly
+rather than silently ignoring a key someone set on purpose.
+*/}}
+{{- define "tidb.validateNoExposeServer" -}}
+{{- if hasKey .Values "exposeServer" -}}
+{{- fail "tidb: `exposeServer` was REMOVED in 2.0.0. It never published the MySQL port -- it opened public inbound while port 4000 needs a `loadBalancer.direct` block the chart does not render, leaving TiDB's unauthenticated status port 10080 as the only thing the canonical endpoint would serve. Reach the server over internal GVC DNS, or with `cpln port-forward RELEASE-server 4000:4000 --gvc GVC`." -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "tidb.validate" -}}
+{{- include "tidb.validateNoExposeServer" . -}}
 {{- include "tidb.validateNoLegacyGvc" . -}}
 {{- include "tidb.validateNoDevMode" . -}}
 {{- include "tidb.validateLocations" . -}}

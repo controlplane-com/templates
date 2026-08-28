@@ -41,7 +41,9 @@ autoCreateDatabase: # Enable to automatically create the database on initializat
   # time the deployment WEDGES silently — `cpln logs` returns nothing at all.
   # See Prerequisites in the README for the create-dictionary command.
   credentialsSecretName: my-tidb-credentials
-
+  # How often the init job runs. It fast-exits once the database exists, so
+  # this only controls how soon after install that happens.
+  schedule: "*/5 * * * *"
 volumeset:
   tikv:
     capacity: 10 # initial capacity in GiB (minimum is 10)
@@ -55,7 +57,6 @@ volumeset:
 
 # Opens the TiDB server workload to inbound traffic from the internet. It does
 # NOT publish the MySQL port — see Important Notes in the README before using it.
-exposeServer: false
 
 external_access: # Set if client is outside the GVC or in another location
   server_outboundAllowCIDR: []

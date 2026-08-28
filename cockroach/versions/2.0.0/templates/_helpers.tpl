@@ -98,9 +98,11 @@ PgBouncer needs CRDB_WORKLOAD because its own CPLN_WORKLOAD names PgBouncer.
 */ -}}
 {{- include "cockroach.validateLocations" . -}}
 - name: CRDB_LOCATIONS
-  value: "{{ range .Values.locations }}{{ .name }} {{ end }}"
+  {{- $names := list }}{{ range .Values.locations }}{{ $names = append $names .name }}{{ end }}
+  value: {{ join " " $names | quote }}
 - name: CRDB_REPLICAS
-  value: "{{ range .Values.locations }}{{ .replicas }} {{ end }}"
+  {{- $reps := list }}{{ range .Values.locations }}{{ $reps = append $reps .replicas }}{{ end }}
+  value: {{ join " " $reps | quote }}
 - name: CRDB_WORKLOAD
   value: {{ include "cockroach.name" . | quote }}
 {{- end -}}

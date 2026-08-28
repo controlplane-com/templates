@@ -9,8 +9,12 @@
   nothing to buy or register, nothing enterprise-gated.
 - Deliberately **not** a Patroni "standby cluster" (a separate consensus store per region): a
   standby leader is read-only and promoting it is a manual operation.
-- Ships with `etcd-multi-location` as a subchart (alias `etcd`). The two were designed, tested and
-  merged together.
+- Ships with `etcd-multi-location` as a subchart (alias `etcd`), pinned to **2.0.0** since this
+  chart's 2.0.0. The two were designed, tested and merged together, and are converted together.
+- **2.0.0 is the GVC-removal conversion.** 1.x created its own GVC; 2.0.0 does not, and refuses to
+  render if the 1.x `global.gvc` key is still present. It sits third in the grafana stack's forced
+  order — `etcd-multi-location` -> **`postgres-multi-location`** -> `redis-multi-location` ->
+  `grafana-multi-location` — and `grafana-multi-location` cannot convert until this publishes.
 
 ## Common use cases
 
@@ -23,37 +27,136 @@
 
 | Resource | Purpose |
 |---|---|
-| `gvc` | **Always created** by this chart — it is what pins the locations. Rendered under `{{ if .Chart.IsRoot }}`; the etcd subchart gates its own GVC the same way, so a release has exactly one |
+| *(no `gvc`)* | **2.0.0 creates none.** `createsGvc: false`; every resource lands in `.Values.global.cpln.gvc`. `templates/gvc.yaml` was deleted |
 | `workload` (stateful) `{release}-postgres` | Patroni + PostgreSQL 17; `replicas` per location, `replicaDirect: true`. Gains a `wal-g-backup` sidecar in wal-g mode |
 | `workload` (standard) `{release}-postgres-proxy` | HAProxy in **every** location, all routing to the one current primary via Patroni's `/primary` check |
 | `workload` (standard) `{release}-postgres-pgbouncer` | Optional pooler, one tier per location, pooling into that location's HAProxy |
 | `workload` (cron) `{release}-postgres-backup` | Optional nightly `pg_dumpall`; suspended in every location except `backup.location` |
 | `volumeset` `{release}-postgres-vs` | `PGDATA`, `ext4`, 10 GiB, final snapshot + 7-day retention |
 | `identity` + `policy` | `reveal` on exactly the secrets in play; `aws`/`gcp` bucket-scoped binding only when backups are on |
+| `policy` `{release}-postgres-gvc-policy` | **New in 2.0.0.** `view` on exactly the one install GVC, for the boot-time location check. Never `target: all` |
 | secrets | Patroni `start.sh`, HAProxy `start.sh`, wal-g `backup.sh` (all opaque/plain). **No credential secret is created by the chart** |
 | subchart `etcd-multi-location` (aliased `etcd`) | The consensus store — one member per location |
 
-- Applications connect to `{release}-postgres-proxy.{global.gvc.name}.cpln.local:5432` (or the
-  pgbouncer workload when enabled) and never need to know where the primary is. Internal only.
-- GVC name and location list live under **`global.gvc`** so Helm propagates them to the etcd
-  subchart — the two lists are never edited separately.
+- Applications connect to `{release}-postgres-proxy.{gvc}.cpln.local:5432` (or the pgbouncer workload
+  when enabled) and never need to know where the primary is. Internal only.
+- The location list lives under **`global.locations`** so Helm propagates it to the etcd subchart —
+  the two lists are never edited separately. Both startup scripts now derive the GVC from
+  **`${CPLN_GVC}`** rather than from Helm, so a hostname can never drift from where the workload runs.
 
 ## Key knobs
 
 | Knob | Default | Meaning |
 |---|---|---|
-| `global.gvc.name` / `.locations[]` | `postgres-multi-location-gvc`, 3 AWS locations × 1 | **≥2 required**; `replicas` = Patroni members per location. The GVC **must not already exist** |
+| `global.locations[]` | `aws-us-east-1`, `aws-eu-central-1`, `aws-us-west-2`, all `replicas: 1` | The cluster roster. **≥2 required**, no duplicates; `replicas` = Patroni members per location (etcd always runs 1 and ignores it). Renamed from `global.gvc.locations` in 2.0.0; `global.gvc` now hard-fails at render |
 | `image` | `controlplanecorporation/patroni-postgres:0.7` | PostgreSQL 17 / Patroni 4.0.4 |
 | `postgres.credentialsSecretName` | `my-postgres-credentials` | **Required prerequisite** `dictionary` secret with `username`, `password`, `database`. Nothing else carries the credentials |
 | `primaryLocation` | `""` | Preferred location for the primary. Since 1.0.2 it places the primary on a **fresh install** (bootstrap head start) as well as biasing failover (`failover_priority`); empty = neither renders |
 | `resources.minCpu/minMemory/maxCpu/maxMemory` | `500m` / `1Gi` / `1` / `2Gi` | Per Patroni member; ratio 2:1 |
 | `volumeset.capacity` / `.autoscaling.*` | `10` GiB / off | Data volume |
-| `internalAccess.type` / `.workloads` | `same-gvc` / `[]` | Who may connect (all tiers) |
+| `internalAccess.type` / `.workloads` | `same-gvc` / `[]` | Who may connect (all tiers). The list also governs **Patroni-to-Patroni replication and the proxy's health checks**, so the chart appends its own workloads — list only clients |
 | `proxy.enabled` … `.maxReplicas` | `true` / `haproxy:2.9` / `100m`+`128Mi` / `2` / `2` | HAProxy tier **per location**; force-enabled when pgbouncer is on |
 | `pgbouncer.enabled` / `.poolMode` / `.defaultPoolSize` / `.maxClientConn` / `.maxDbConnections` | `false` / `transaction` / `25` / `1000` / `100` | Pooler tier per location, `200m`+`128Mi`, 2–4 replicas |
 | `backup.enabled` / `.mode` / `.location` | `false` / `logical` / `aws-us-east-1` | `logical` = nightly cron, `wal-g` = sidecar. `location` is **logical-only** |
 | `backup.provider` + `.aws` / `.gcp` / `.minio` | `aws` | `minio.credentialsSecretName` is a second required prerequisite secret (`accessKey`, `secretKey`) |
-| `etcd.*` | see the chart's own README | Subchart; it decides its own GVC/replica guards from `.Chart.IsRoot`, so the parent passes nothing |
+| `etcd.*` | see the chart's own README | Subchart (**2.0.0**); it decides its own replica guard from `.Chart.IsRoot`, so the parent passes nothing. Setting `etcd.internalAccess.type: workload-list` needs `//gvc/{gvc}/workload/{release}-postgres` added BY HAND — etcd only appends itself |
+
+## 2.0.0 — GVC removal (2026-08-28)
+
+### Migrating from 1.x — the whole point of the major bump
+
+- **Never `helm upgrade` a 1.x release onto 2.0.0.** The upgrade drops `kind: gvc` from the manifest
+  and Helm prunes what a chart no longer declares — measured on a sibling template at **6 seconds to
+  delete a GVC and everything in it, while printing `upgraded successfully`**. Here that is the data
+  volumes.
+- The chart therefore **fails at render** on `hasKey .Values.global "gvc"`. Verified against the real
+  1.1.0 `values.yaml` via `-f`, and against `--set global.gvc.name=…`,
+  `--set global.gvc.locations[0].name=…` and `--set-json 'global.gvc={}'`.
+- **One hole is not closable at render**: an upgrade run with *no* values at all sees only 2.0.0's
+  defaults and the guard cannot fire. That is why the migration prose exists in both the README and
+  here. Migration is: dump the old cluster -> install 2.0.0 as a NEW release into an EXISTING GVC ->
+  restore -> uninstall the old release (which takes the GVC it created).
+- **A quirk worth knowing when reading an error:** the etcd subchart's templates render before the
+  parent's, so on a shared failure (`global.gvc` present, or a 1-location list) the message the user
+  sees says **`etcd-multi-location`**, not `postgres-multi-location`. The refusal is correct and the
+  remedy it names is correct; only the chart name is confusing. Helm offers no way to reorder this.
+
+### The three-layer defence against a GVC/values mismatch
+
+| Layer | Mechanism | Closes |
+|---|---|---|
+| `defaultOptions.minScale/maxScale: 0` on all three long-running tiers | `localOptions` supplies the real per-location counts; an undeclared GVC location reads `This workload location is deactivated because maxScale is set to 0` | GVC has locations the values do not list — **by construction** |
+| **Check A** (values only, unconditional) | `CPLN_LOCATION` must be in the configured list, else `exit 1` | Last line of defence if the platform places a replica anyway |
+| **Checks B and C** (boot-time GVC read) | `curl $CPLN_ENDPOINT/org/$CPLN_ORG/gvc/$CPLN_GVC` -> `spec.staticPlacement.locationLinks`, via the new `{release}-postgres-gvc-policy`. **B**: the etcd DCS can never reach quorum (`2*PRESENT <= TOTAL`). **C**: any declared location missing from the GVC | Values list a location the GVC lacks — which the platform does not validate at all |
+
+- **Check A matters more here than in etcd.** A Patroni member in an undeclared location gets the
+  FULL `etcd3.hosts` list, so it joins the DCS normally and **can win the leader election** — while
+  the HAProxy backend list is rendered from the same values and does not contain it. Every client
+  then loses the primary while every replica reports `ready: true`. Hence unconditional, fresh or not.
+- **B and C are asymmetric on purpose: hard-fail on a FRESH `PGDATA`, WARNING on an initialised one.**
+  A location removed from the GVC is indistinguishable from a location that is down, and surviving
+  that is exactly what this template is for — hard-failing an initialised member would turn "lost one
+  location" into "lost the cluster".
+- **A failed GVC read is a WARNING, never a failure.** Without the `gvc` policy the call is 403 and
+  the check skips itself; a control-plane hiccup must not stop a database.
+- The same GVC read also warns when **`primaryLocation`** or **`backup.location`** names a location
+  the GVC lacks. Render can only compare those against the values list. The backup cron has no script
+  of its own to warn from, so the Patroni members say it — a cron unsuspended only in a location the
+  GVC lacks never runs anywhere and nothing else reports it.
+
+**Measured in the real image (`controlplanecorporation/patroni-postgres:0.7`, Ubuntu 22.04, root,
+curl 7.81, `/usr/bin/timeout`), 2026-08-28, by running the rendered script against a stub GVC API:**
+
+| Case | Result |
+|---|---|
+| all 3 locations present, fresh | `GVC location check OK`, proceeds |
+| GVC has a 4th location | informational "also has locations this release does not use", proceeds |
+| 2 of 3 present, fresh | **FATAL, exit 1** (Check C), names the missing location |
+| 2 of 3 present, initialised | WARNING, proceeds |
+| 1 of 3 present, fresh | **FATAL, exit 1** (Check B, quorum arithmetic) |
+| 1 of 3 present, initialised | WARNING, proceeds |
+| running in an undeclared location | **FATAL, exit 1** (Check A) |
+| API returns 404 | WARNING, proceeds, **7 s** |
+| **blackhole `192.0.2.1` (connect hangs)** | WARNING, proceeds, **31 s** including container start |
+
+- The blackhole is the control that matters: an NXDOMAIN host returns instantly and would prove
+  nothing about a hang. `curl --max-time` is **per attempt, not a total** (`--retry 3 --max-time 10`
+  was measured at 46 s elsewhere), so the retry is done in shell with `timeout 12` + `--max-time 8`
+  x3. Worst case 40 s, comfortably inside the liveness budget (`initialDelaySeconds` 60 +
+  6 x 10 s ~ 110 s).
+
+### `workload-list` self-inclusion (the batch-wide defect)
+
+- `internalAccess.type: workload-list` governs **all** inbound internal traffic, including
+  Patroni-to-Patroni streaming replication and REST calls on 8008, HAProxy health-checking every
+  member, PgBouncer pooling into HAProxy, and the nightly dump connecting through HAProxy. A list
+  naming only clients cut the cluster off from itself in all four templates tested this batch, while
+  every replica still reported `ready: true`.
+- Fixed with a single **`pg-ml.ownWorkloadLinks`** helper — the same shape as `cockroach` 2.0.0 —
+  used at every call site, each member gated on the toggle that creates it (proxy, pgbouncer, backup
+  cron). Hand-listing at one site is how the first cockroach fix missed its backup cron.
+- **The etcd subchart is separate**: `etcd.internalAccess` is its own knob and etcd appends only
+  itself, so a user setting it to `workload-list` must add `{release}-postgres` by hand. Both the
+  values comment and the README say so. Left as documentation rather than plumbing, because a parent
+  cannot compute a workload link into a subchart's values at render time.
+
+### Other 2.0.0 changes
+
+- Vendored subchart bumped **`etcd-multi-location` 1.0.2 -> 2.0.0** (the converted child). Its
+  `global.gvc.locations` became `global.locations`, which is the same rename this chart makes, so one
+  edit serves both.
+- `localOptions` entries were already written in full and stay that way: the API completes a partial
+  entry from **platform** defaults, not from the workload's `defaultOptions` (measured elsewhere as
+  `capacityAI` ON against a chart saying false, and `maxScale: 5` on a backup cron).
+- **The default is still 3 locations, deliberately diverging from `etcd-multi-location` 2.0.0**,
+  which dropped to its 2-location minimum. Rationale: the headline promise here is *automatic*
+  promotion, and 2 locations cannot deliver it (the DCS loses quorum on either loss), so a
+  2-location default would ship a cluster that silently fails to do the thing the template is for.
+  Any default list must be edited to match the user's GVC regardless, so "smallest allowed" buys
+  nothing. **Flagged for the maintainer** as a deliberate inconsistency across the converted stack.
+- **Single-location is not supported and cannot be.** The DCS is a stretched etcd cluster with one
+  member per location; `postgres-highly-available` is the single-location template and uses the
+  single-location `etcd` chart. The >=2 guard therefore stays, and a 1-location GVC starts nothing.
 
 ## The `-ml` infix was dropped from every rendered name (2026-08-12, edited into 1.0.2 in place)
 
@@ -77,8 +180,8 @@
 - **DCS timeouts and `failsafe_mode`.** This template had `failsafe_mode: true` from 1.0.0 and the correct
   `etcd3.hosts` key and credential escaping — it is the reference shape the two single-location HA charts
   were corrected against on 2026-08-24. Its `max_slot_wal_keep_size` is a fixed `10GB`, which on the default
-  10 GiB volume is too loose to protect much; left as-is rather than retuned blind, since `createsGvc: true`
-  makes this template awkward to test. Worth revisiting.
+  10 GiB volume is too loose to protect much; left as-is rather than retuned blind. Worth revisiting —
+  and 2.0.0 makes it cheaper to test, since the template no longer creates its own GVC.
 - **`maxDbConnections` is per PgBouncer pod, not cluster-wide** — PgBouncer instances do not coordinate,
   so the real ceiling is `maxReplicas x maxDbConnections`. Shipped values give 4 x 100 = 400 against
   `max_connections: 100` (97 usable after `superuser_reserved_connections`). The README said the opposite
@@ -108,10 +211,8 @@
   is a placeholder, not a working name.
 - **Rotating that secret does not change the database.** The password is baked into `PGDATA` at first
   bootstrap. Change it with `ALTER ROLE` first, then update the secret to match.
-- **The GVC is created unconditionally, and Helm will adopt one that already exists — then delete it
-  on uninstall**, taking unrelated workloads with it (this destroyed `test-gvc` on 2026-08-07, despite
-  a `resource-policy: keep` annotation). There is no `createGvc: false` escape hatch: the GVC is what
-  pins the locations. Always point a test install at a fresh name.
+- **`global.locations` must match the GVC (2.0.0).** Neither direction is validated by the platform,
+  so the chart closes both — see "The three-layer defence" below.
 - **"Why didn't it fail over?" is usually arithmetic, not a bug.** The consensus store needs a
   majority to grant the leader lock, with one member per location: 2 locations survive **0** losses,
   3 survive 1, 5 survive 2. On 2 locations the survivor holds current data but stays **read-only**;
@@ -226,7 +327,7 @@ A default install originally showed configuration drift against its own manifest
 
 Why it matters beyond tidiness: a template that drifts from creation teaches its users that drift is normal, which is exactly how a real, unintended change later goes unnoticed. Check with a no-op `helm upgrade` — every resource must report `Unchanged`.
 
-The bundled etcd subchart must be pinned to **1.0.1 or later**, or the etcd tier still drifts even when this chart's own resources are clean.
+The bundled etcd subchart must be pinned to **1.0.1 or later** (2.0.0 as of this chart's 2.0.0), or the etcd tier still drifts even when this chart's own resources are clean.
 
 ## 1.0.2 — `primaryLocation` now actually places the primary (2026-08-11)
 - `failover_priority` is a failover tiebreaker and had **no effect on initial bootstrap**, so a fresh

@@ -1,0 +1,25 @@
+{{- include "pg-ml.validate" . -}}
+kind: policy
+name: {{ include "pg-ml.policy.name" . }}
+description: PostgreSQL multi-location policy
+tags:
+  {{- include "pg-ml.tags" . | nindent 2 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pg-ml.identity.name" . }}
+targetKind: secret
+targetLinks:
+  # The user-created database credentials — reveal on exactly that one secret.
+  - //secret/{{ .Values.postgres.credentialsSecretName }}
+  - //secret/{{ include "pg-ml.secretStartup.name" . }}
+  {{- if or .Values.proxy.enabled .Values.pgbouncer.enabled }}
+  - //secret/{{ include "pg-ml.secretProxyStartup.name" . }}
+  {{- end }}
+  {{- if and .Values.backup.enabled (eq .Values.backup.mode "wal-g") }}
+  - //secret/{{ include "pg-ml.secretWALG.name" . }}
+  {{- end }}
+  {{- if and .Values.backup.enabled (eq .Values.backup.provider "minio") }}
+  - //secret/{{ .Values.backup.minio.credentialsSecretName }}
+  {{- end }}

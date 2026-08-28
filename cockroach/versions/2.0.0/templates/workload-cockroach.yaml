@@ -74,8 +74,7 @@ spec:
       {{- if .Values.pgbouncer.enabled }}
       inboundAllowType: workload-list
       inboundAllowWorkload:
-        - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "cockroach.name" . }}
-        - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "cockroach.pgbouncer.name" . }}
+        {{- include "cockroach.ownWorkloadLinks" . | nindent 8 }}
       {{- else }}
       inboundAllowType: {{ .Values.internal_access.type }}
       {{- if eq .Values.internal_access.type "workload-list" }}
@@ -90,11 +89,11 @@ spec:
         three back. Same defect confirmed in etcd-multi-location, clickhouse and
         pgedge in this batch.
       */}}
-      {{- $self := printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "cockroach.name" .) }}
+      {{- $own := splitList "\n" (trim (include "cockroach.ownWorkloadLinks" .)) }}
       inboundAllowWorkload:
-        - {{ $self }}
+        {{- include "cockroach.ownWorkloadLinks" . | nindent 8 }}
         {{- range .Values.internal_access.workloads }}
-        {{- if ne . $self }}
+        {{- if not (has (printf "- %s" .) $own) }}
         - {{ . }}
         {{- end }}
         {{- end }}

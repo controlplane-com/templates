@@ -68,7 +68,17 @@ spec:
   firewallConfig:
     internal:
       inboundAllowType: {{ .Values.pgbouncer.internal_access.type }}
-      {{- if .Values.pgbouncer.internal_access.workloads }}
+      {{- if eq .Values.pgbouncer.internal_access.type "workload-list" }}
+      {{- /* the backup cron reaches PgBouncer too -- see cockroach.ownWorkloadLinks */}}
+      {{- $own := splitList "\n" (trim (include "cockroach.ownWorkloadLinks" .)) }}
+      inboundAllowWorkload:
+        {{- include "cockroach.ownWorkloadLinks" . | nindent 8 }}
+        {{- range .Values.pgbouncer.internal_access.workloads }}
+        {{- if not (has (printf "- %s" .) $own) }}
+        - {{ . }}
+        {{- end }}
+        {{- end }}
+      {{- else if .Values.pgbouncer.internal_access.workloads }}
       inboundAllowWorkload: {{ .Values.pgbouncer.internal_access.workloads | toYaml | nindent 8 }}
       {{- end }}
     external:

@@ -279,6 +279,30 @@ The legacy-GVC check runs FIRST: a 1.x values file has no top-level `locations`,
 so any other check would fire first and report a confusing missing-locations
 error instead of the destructive-upgrade refusal.
 */}}
+{{/*
+Every workload in THIS release, as firewall links.
+
+The internal firewall list governs intra-release traffic: node-to-node gossip and
+range replication between the CockroachDB replicas, PgBouncer's connections to the
+nodes, and the backup cron, which reaches BOTH the nodes on 26257 and PgBouncer.
+So an `internal_access` list naming only clients cuts the release off from itself.
+
+Defined once and used by every workload that renders a list. The first fix for
+this hand-listed the members at one call site and missed the backup cron -- the
+same omission that broke pgedge's backups (measured 2026-08-28: ten consecutive
+`pg_dumpall: error ... server closed the connection unexpectedly`).
+*/}}
+{{- define "cockroach.ownWorkloadLinks" -}}
+{{- $gvc := .Values.global.cpln.gvc -}}
+- //gvc/{{ $gvc }}/workload/{{ include "cockroach.name" . }}
+{{- if .Values.pgbouncer.enabled }}
+- //gvc/{{ $gvc }}/workload/{{ include "cockroach.pgbouncer.name" . }}
+{{- end }}
+{{- if .Values.backup.enabled }}
+- //gvc/{{ $gvc }}/workload/{{ include "cockroach.backup.name" . }}
+{{- end }}
+{{- end -}}
+
 {{- define "cockroach.validate" -}}
 {{- include "cockroach.validateNoLegacyGvc" . -}}
 {{- include "cockroach.validateLocations" . -}}

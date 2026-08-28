@@ -71,6 +71,15 @@ spec:
       {{- $own := list
             (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.name" .))
             (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.pgcat.name" .)) }}
+      {{- /*
+        The backup cron connects DIRECTLY to replica-0 of the pgedge workload
+        (PG_HOST), so it is a third own-workload that must be allowed. Omitting
+        it was measured 2026-08-28: every scheduled run failed with
+        `pg_dumpall: error: ... server closed the connection unexpectedly`.
+      */}}
+      {{- if .Values.backup.enabled }}
+      {{- $own = append $own (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.backup.name" .)) }}
+      {{- end }}
       inboundAllowWorkload:
         {{- range $own }}
         - {{ . }}

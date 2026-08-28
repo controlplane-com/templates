@@ -55,9 +55,6 @@ volumeset:
   pd:
     capacity: 10 # initial capacity in GiB (minimum is 10)
 
-# Opens the TiDB server workload to inbound traffic from the internet. It does
-# NOT publish the MySQL port — see Important Notes in the README before using it.
-
 external_access: # Set if client is outside the GVC or in another location
   server_outboundAllowCIDR: []
   tikv_outboundAllowCIDR: [] # Note: when backup.enabled is true, the template automatically allows outbound access (0.0.0.0/0) regardless of this value.

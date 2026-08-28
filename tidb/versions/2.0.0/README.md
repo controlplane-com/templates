@@ -164,6 +164,7 @@ autoCreateDatabase:
   enabled: true
   deployInitWorkload: true
   credentialsSecretName: my-tidb-credentials
+  schedule: "*/5 * * * *"  # how soon after install the DB appears; later runs are no-ops
 ```
 
 `credentialsSecretName` names the prerequisite `dictionary` secret above. After the first deploy has
@@ -341,7 +342,7 @@ into a scratch release before you need one.
 - **Every location in `locations` must already exist in the GVC.** A location the GVC lacks is accepted silently by the platform; PD refuses to bootstrap and says so in its logs. A GVC location you did *not* list simply runs nothing.
 - **PD's replication factor is fixed when the cluster first bootstraps.** It is the number of TiKV nodes you configure, capped at 3, and PD persists it — scaling TiKV up later does not raise it. Start with at least 3 TiKV nodes if you ever want 3-way replication.
 - **There is no public access to the MySQL port.** Reach the server over internal GVC DNS, or with `cpln port-forward RELEASE_NAME-server 4000:4000 --gvc GVC_NAME`. (`exposeServer` was removed in 2.0.0: it opened public inbound without publishing port 4000, leaving TiDB's unauthenticated status port as the only thing served.)
-- **Set `autoCreateDatabase.deployInitWorkload: false` after the first deploy** and upgrade, to remove the one-time job. It completes, exits 0 and is then restarted forever, so a healthy install never shows all-green until you remove it.
+- **The database-init job is a cron that runs on a schedule, and that is intentional.** It fast-exits once the database exists (measured: ~200-300 ms), so every run after the first is a no-op; `autoCreateDatabase.schedule` only controls how soon after install the database appears. Set `autoCreateDatabase.deployInitWorkload: false` and upgrade if you would rather remove it entirely once initialised.
 - **Credentials apply on first initialization only.** Changing the secret afterwards does not change the cluster; rotate with `ALTER USER` inside TiDB first, then update the secret and force a redeployment — a `cpln://` reference is resolved when a replica starts and is never re-resolved while it runs.
 - **Access changes take up to about 10 minutes to propagate.** After flipping an `internal_access` value, keep re-polling rather than concluding the knob is broken.
 
@@ -352,5 +353,3 @@ into a scratch release before you need one.
 - [PD configuration reference](https://docs.pingcap.com/tidb/stable/pd-configuration-file/)
 - [TiKV configuration reference](https://docs.pingcap.com/tidb/stable/tikv-configuration-file/)
 - [BR backup and restore](https://docs.pingcap.com/tidb/stable/backup-and-restore-overview/)
-
-- **The database-init job runs on a schedule, and that is intentional.** It fast-exits once the database exists, so every run after the first is a no-op of a second or two; `autoCreateDatabase.schedule` only controls how soon after install the database appears.

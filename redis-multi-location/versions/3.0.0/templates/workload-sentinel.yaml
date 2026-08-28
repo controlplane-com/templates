@@ -157,8 +157,12 @@ spec:
     {{- /*
     See the Redis workload: maxUnavailableReplicas is dropped by the API on a
     stateful workload, and terminationGracePeriodSeconds is backfilled to 90.
+    minReadySeconds is declared because the API backfills 0 -- measured on
+    both workloads 2026-08-28, where it was the only render-vs-stored
+    difference left.
     */}}
     scalingPolicy: Parallel
+    minReadySeconds: 0
     terminationGracePeriodSeconds: 90
   firewallConfig:
     {{- /* Always rendered and fully declared — see the Redis workload. */}}

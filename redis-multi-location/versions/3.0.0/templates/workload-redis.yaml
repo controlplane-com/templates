@@ -132,19 +132,35 @@ spec:
             my $s = IO::Socket::INET->new(
               PeerAddr => $host, PeerPort => $port, Proto => 'tcp', Timeout => 5
             ) or die "connect\n";
-            # HTTP/1.0 so the reply can never be chunk-encoded: a chunk boundary
-            # landing inside locationLinks would silently truncate the list.
-            print $s "GET /org/$org/gvc/$gvc HTTP/1.0\r\n"
+            # HTTP/1.1 is REQUIRED: $CPLN_ENDPOINT is behind istio-envoy, which
+            # answers HTTP/1.0 with `426 Upgrade Required`. Measured 2026-08-28 --
+            # 1.0 got 426 with the location list never parsed, 1.1 got 200 with all
+            # three locations. The earlier 1.0 choice made every check fail open, so
+            # the guards below were dead code in production.
+            #
+            # `Connection: close` keeps read-to-EOF valid under 1.1. The chunk
+            # boundary that motivated 1.0 does not occur -- the API sends
+            # content-length -- and the chunked case is now DETECTED below rather
+            # than silently truncating locationLinks.
+            print $s "GET /org/$org/gvc/$gvc HTTP/1.1\r\n"
               . "Host: $host\r\n"
               . "Authorization: $tok\r\n"
               . "Accept: application/json\r\n"
+              . "Connection: close\r\n"
               . "User-Agent: redis-multi-location-gvc-check\r\n\r\n";
             my $resp = do { local $/; <$s> };
             close $s;
             alarm 0;
             $resp = '' unless defined $resp;
             ($code) = $resp =~ m{^HTTP/\d\.\d\s+(\d+)};
-            (undef, $bdy) = split /\r?\n\r?\n/, $resp, 2;
+            my ($hdr, $body) = split /\r?\n\r?\n/, $resp, 2;
+            # Never seen in practice (the API sends content-length), but a chunked
+            # reply would put length prefixes inside the body and could truncate the
+            # location list mid-parse. Refuse to read it rather than half-read it.
+            if (defined $hdr && $hdr =~ m{^transfer-encoding:\s*chunked}mi) {
+              die "chunked\n";
+            }
+            $bdy = $body;
             1;
           } or do {
             print STDERR "err:$@";
@@ -351,8 +367,12 @@ spec:
     stateful workload, so sending it produced permanent drift AND implied a
     rolling-restart limit that is not in force.
     terminationGracePeriodSeconds is declared because the API backfills 90.
+    minReadySeconds is declared because the API backfills 0 -- measured on
+    both workloads 2026-08-28, where it was the only render-vs-stored
+    difference left.
     */}}
     scalingPolicy: Parallel
+    minReadySeconds: 0
     terminationGracePeriodSeconds: 90
   firewallConfig:
     {{- /*

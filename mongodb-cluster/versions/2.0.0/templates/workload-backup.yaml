@@ -1,4 +1,5 @@
-{{- include "mongo-cluster.validateBackupConfig" . }}
+{{- /* Validation runs at every entry point that iterates `locations`. */ -}}
+{{- include "mongo-cluster.validate" . -}}
 {{- if .Values.backup.enabled }}
 
 {{- if eq .Values.backup.mode "logical" }}
@@ -18,8 +19,10 @@ spec:
       env:
         - name: BACKUP_PROVIDER
           value: {{ .Values.backup.provider | quote }}
+        {{- /* replica-0 in backup.location always exists: backup.location is one
+               of `locations` and every location has at least 1 replica. */}}
         - name: MONGO_HOST
-          value: replica-0.{{ include "mongo-cluster.name" . }}.{{ include "mongo-cluster.backup.location" . }}.{{ .Values.gvc.name }}.cpln.local
+          value: replica-0.{{ include "mongo-cluster.name" . }}.{{ .Values.backup.location }}.{{ .Values.global.cpln.gvc }}.cpln.local
         - name: MONGO_USER
           value: 'cpln://secret/{{ .Values.mongodb.credentialsSecretName }}.username'
         - name: MONGO_PASSWORD
@@ -49,11 +52,35 @@ spec:
       target: 95
     capacityAI: false
     debug: false
-    suspend: true
+    suspend: true # a GVC location this release did not ask for must NOT run a second backup
     timeoutSeconds: 3600
+  {{- /*
+    Unsuspended in exactly one location. backup.location is checked at render time
+    against `locations` -- the platform accepts a localOptions entry for a location
+    that does not exist, stores it, and the cron then never runs anywhere with
+    nothing to observe.
+
+    Every field defaultOptions carries is REPEATED here. A localOptions entry is
+    not a patch onto defaultOptions: the API completes a partial entry from its
+    OWN platform defaults. Measured on a sibling template -- with only `location`
+    and `suspend` sent, the one location that actually ran the backup was stored
+    with timeoutSeconds 5 instead of 3600, capacityAI true instead of false, and
+    autoscaling {metric: concurrency, minScale: 1, maxScale: 5}, i.e. eligible to
+    run FIVE concurrent backup pods. 1.x sent exactly that partial entry.
+  */}}
   localOptions:
-    - location: //location/{{ include "mongo-cluster.backup.location" . }}
+    - location: //location/{{ .Values.backup.location }}
+      autoscaling:
+        maxConcurrency: 0
+        maxScale: 1
+        metric: disabled
+        minScale: 1
+        scaleToZeroDelay: 300
+        target: 95
+      capacityAI: false
+      debug: false
       suspend: false
+      timeoutSeconds: 3600
   firewallConfig:
     {{- /* Every field declared — the API backfills the empty lists. */}}
     external:
@@ -74,8 +101,10 @@ spec:
       {{- end }}
       outboundBlockedCIDR: []
     internal:
+      {{- /* Nothing connects TO the cron; it only dials out to replica-0. */}}
       inboundAllowType: none
-  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "mongo-cluster.identity.name" . }}
+      inboundAllowWorkload: []
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "mongo-cluster.identity.name" . }}
   job:
     activeDeadlineSeconds: 14400
     concurrencyPolicy: Forbid
@@ -100,7 +129,7 @@ spec:
       args:
         - -c
         - |
-          MONGO_URI="mongodb://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@replica-0.{{ include "mongo-cluster.name" . }}.{{ include "mongo-cluster.backup.location" . }}.{{ .Values.gvc.name }}.cpln.local:27017/admin?replicaSet=rs0&authSource=admin&authMechanism=SCRAM-SHA-256"
+          MONGO_URI="mongodb://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@replica-0.{{ include "mongo-cluster.name" . }}.{{ .Values.backup.location }}.${CPLN_GVC}.cpln.local:27017/admin?replicaSet=rs0&authSource=admin&authMechanism=SCRAM-SHA-256"
           echo "Starting physical backup..."
           OUTPUT=$(pbm backup --type=physical --wait --mongodb-uri="${MONGO_URI}" 2>&1) || true
           if echo "${OUTPUT}" | grep -q "saved to remote store"; then
@@ -128,13 +157,26 @@ spec:
       target: 95
     capacityAI: false
     debug: false
-    suspend: true
+    suspend: true # a GVC location this release did not ask for must NOT trigger a second backup
     timeoutSeconds: 3600
+  {{- /* Full entry, for the reason given on the logical cron above. */}}
   localOptions:
-    - location: //location/{{ include "mongo-cluster.backup.location" . }}
+    - location: //location/{{ .Values.backup.location }}
+      autoscaling:
+        maxConcurrency: 0
+        maxScale: 1
+        metric: disabled
+        minScale: 1
+        scaleToZeroDelay: 300
+        target: 95
+      capacityAI: false
+      debug: false
       suspend: false
+      timeoutSeconds: 3600
   firewallConfig:
-    {{- /* Every field declared — the API backfills the empty lists. */}}
+    {{- /* Every field declared — the API backfills the empty lists. The trigger
+           itself uploads nothing: the pbm-agent sidecars do, from the MongoDB
+           workload, which is where the object-storage egress is allowed. */}}
     external:
       inboundAllowCIDR: []
       inboundBlockedCIDR: []
@@ -144,7 +186,8 @@ spec:
       outboundBlockedCIDR: []
     internal:
       inboundAllowType: none
-  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "mongo-cluster.identity.name" . }}
+      inboundAllowWorkload: []
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "mongo-cluster.identity.name" . }}
   job:
     activeDeadlineSeconds: 14400
     concurrencyPolicy: Forbid

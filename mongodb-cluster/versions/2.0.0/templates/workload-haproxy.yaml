@@ -1,4 +1,6 @@
 {{- if .Values.proxy.enabled }}
+{{- /* Validation runs at every entry point that iterates `locations`. */ -}}
+{{- include "mongo-cluster.validate" . -}}
 ---
 kind: workload
 name: {{ include "mongo-cluster.proxy.name" . }}
@@ -13,8 +15,8 @@ spec:
       command: /bin/sh
       args:
         - /proxy/start.sh
-      cpu: {{ .Values.proxy.resources.cpu }}
-      memory: {{ .Values.proxy.resources.memory }}
+      cpu: {{ .Values.proxy.resources.cpu | quote }}
+      memory: {{ .Values.proxy.resources.memory | quote }}
       ports:
         - number: 27017
           protocol: tcp
@@ -37,26 +39,49 @@ spec:
         - path: /proxy/start.sh
           recoveryPolicy: retain
           uri: cpln://secret/{{ include "mongo-cluster.secretProxyStartup.name" . }}.payload
-  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "mongo-cluster.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "mongo-cluster.identity.name" . }}
   defaultOptions:
+    {{- /*
+    0/0 for the same reason as the MongoDB tier: a GVC location this release did
+    not ask for must run nothing. localOptions below supplies the real counts.
+    */}}
     autoscaling:
-      metric: rps
-      minScale: {{ .Values.proxy.minReplicas }}
-      maxScale: {{ .Values.proxy.maxReplicas }}
       maxConcurrency: 0
+      maxScale: 0
+      metric: disabled
+      minScale: 0
       scaleToZeroDelay: 300
       target: 100
     capacityAI: false
     debug: false
     multiZone:
       enabled: {{ .Values.multiZone }}
+    suspend: false
     timeoutSeconds: 5
+  localOptions:
+    {{- /* A full override, like the MongoDB tier: every field defaultOptions
+           carries must be repeated, or the API completes the entry from its own
+           platform defaults rather than from defaultOptions. */}}
+    {{- range $location := .Values.locations }}
+    - location: //location/{{ $location.name }}
+      autoscaling:
+        maxConcurrency: 0
+        maxScale: {{ $.Values.proxy.maxReplicas }}
+        metric: rps
+        minScale: {{ $.Values.proxy.minReplicas }}
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      multiZone:
+        enabled: {{ $.Values.multiZone }}
+      suspend: false
+      timeoutSeconds: 5
+    {{- end }}
   firewallConfig:
     internal:
       inboundAllowType: {{ .Values.firewall.internalAllowType }}
-      {{- if .Values.firewall.workloads }}
-      inboundAllowWorkload: {{ .Values.firewall.workloads | toYaml | nindent 8 }}
-      {{- end }}
+      {{- include "mongo-cluster.inboundAllowWorkload" . | nindent 6 }}
     {{- /* Every field declared — the API backfills the empty lists. */}}
     external:
       inboundAllowCIDR: []
@@ -81,4 +106,5 @@ spec:
     minReadySeconds: 0
     scalingPolicy: OrderedReady
     terminationGracePeriodSeconds: 90
+  supportDynamicTags: false
 {{- end }}

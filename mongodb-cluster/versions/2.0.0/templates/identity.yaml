@@ -1,6 +1,12 @@
+{{- /*
+The single unconditional entry point for validation — "is validation still wired
+up?" is one grep. Every template that iterates `locations` includes it again,
+because Helm does not render templates in a guaranteed order.
+*/ -}}
+{{- include "mongo-cluster.validate" . -}}
 ---
 kind: identity
-gvc: {{ .Values.gvc.name }}
+gvc: {{ .Values.global.cpln.gvc }}
 name: {{ include "mongo-cluster.identity.name" . }}
 description: MongoDB identity
 tags: {{- include "mongo-cluster.tags" . | nindent 2 }}

@@ -1,3 +1,5 @@
+{{- /* Validation runs at every entry point that iterates `locations`. */ -}}
+{{- include "mongo-cluster.validate" . -}}
 ---
 kind: workload
 name: {{ include "mongo-cluster.name" . }}
@@ -102,11 +104,20 @@ spec:
           uri: 'cpln://secret/{{ include "mongo-cluster.secretPbmStartup.name" . }}'
     {{- end }}
   defaultOptions:
+    {{- /*
+    minScale/maxScale are 0 so a GVC location this release did not ask for runs
+    NOTHING: an undeclared location gets desiredScale 0 and its deployment reads
+    "This workload location is deactivated because maxScale is set to 0".
+    localOptions below supplies the real per-location counts. Without this, an
+    extra GVC location silently starts mongod members that add THEMSELVES to the
+    replica set as voting members nobody sized the quorum for, and that HAProxy
+    has no backend for. It also stops a volume being provisioned there.
+    */}}
     autoscaling:
       maxConcurrency: 0
-      maxScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      maxScale: 0
       metric: disabled
-      minScale: {{ (index .Values.gvc.locations 0).replicas | int }}
+      minScale: 0
       scaleToZeroDelay: 300
       target: 100
     capacityAI: false
@@ -115,39 +126,16 @@ spec:
       enabled: {{ .Values.multiZone }}
     suspend: false
     timeoutSeconds: 10
-  firewallConfig:
-    {{- /*
-    Every field of `external` is declared — the API backfills the empty lists,
-    so omitting them made a default install drift against its own manifest from
-    the moment it was created. MongoDB is reachable on the INTERNAL network
-    only; there is no public endpoint and no knob to create one.
-    */}}
-    external:
-      inboundAllowCIDR: []
-      inboundBlockedCIDR: []
-      {{- if and .Values.backup.enabled (eq .Values.backup.mode "physical") }}
-      {{- /* The pbm-agent sidecar uploads to object storage from this workload. */}}
-      outboundAllowCIDR:
-        - 0.0.0.0/0
-      {{- else }}
-      {{- /* mongod needs no egress: replication is internal GVC traffic. */}}
-      outboundAllowCIDR: []
-      {{- end }}
-      outboundAllowHostname: []
-      outboundAllowPort: []
-      outboundBlockedCIDR: []
-    internal:
-      inboundAllowType: {{ .Values.firewall.internalAllowType }}
-      {{- if .Values.firewall.workloads }}
-      inboundAllowWorkload: {{ .Values.firewall.workloads | toYaml | nindent 8 }}
-      {{- end }}
-  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "mongo-cluster.identity.name" . }}
-  securityOptions:
-    filesystemGroupId: 1001
-  loadBalancer:
-    replicaDirect: true
   localOptions:
-    {{- range $location := .Values.gvc.locations }}
+    {{- /*
+    Every field defaultOptions carries is REPEATED on every entry. A localOptions
+    entry is not a patch onto defaultOptions: the API completes a PARTIAL entry
+    from its OWN platform defaults — measured on a sibling template turning
+    capacityAI ON against a chart that set it false, and making a backup cron
+    eligible for five concurrent pods. A half-specified entry silently gets
+    settings the chart never asked for, and none of it is visible in the chart.
+    */}}
+    {{- range $location := .Values.locations }}
     - location: //location/{{ $location.name }}
       autoscaling:
         maxConcurrency: 0
@@ -163,6 +151,41 @@ spec:
       suspend: false
       timeoutSeconds: 10
     {{- end }}
+  firewallConfig:
+    {{- /*
+    Every field of `external` is declared — the API backfills the empty lists,
+    so omitting them made a default install drift against its own manifest from
+    the moment it was created. MongoDB is reachable on the INTERNAL network
+    only; there is no public endpoint and no knob to create one.
+    */}}
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      {{- if and .Values.backup.enabled (eq .Values.backup.mode "physical") }}
+      {{- /* The pbm-agent sidecar uploads to object storage from this workload. */}}
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      {{- /* mongod needs no egress: replication is internal GVC traffic, and the
+             boot-time GVC read goes to $CPLN_ENDPOINT over the internal path. */}}
+      outboundAllowCIDR: []
+      {{- end }}
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.firewall.internalAllowType }}
+      {{- /*
+      Exactly ONE inboundAllowWorkload key, rendered by a helper that always
+      includes this release's own workloads — member-to-member replication,
+      HAProxy's checks and the backup cron all arrive on this path.
+      */}}
+      {{- include "mongo-cluster.inboundAllowWorkload" . | nindent 6 }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "mongo-cluster.identity.name" . }}
+  securityOptions:
+    filesystemGroupId: 1001
+  loadBalancer:
+    replicaDirect: true
   rolloutOptions:
     {{- /*
     maxUnavailableReplicas is deliberately NOT set: the API DROPS it on a

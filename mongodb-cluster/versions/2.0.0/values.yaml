@@ -1,15 +1,26 @@
-gvc:
-  name: mongodb-gvc
-  locations:
-    - name: aws-us-east-1
-      replicas: 3
-    - name: aws-us-west-2
-      replicas: 3
-    - name: aws-eu-central-1
-      replicas: 3
+# ─── Locations ────────────────────────────────────────────────────────────────
+# This chart deploys into the GVC you install into — it does NOT create one.
+# Every location listed here MUST already exist in that GVC. A location the GVC
+# lacks contributes HAProxy backends and seed hosts for members that never start,
+# so you silently get a smaller replica set than you configured. The members check
+# this against the live GVC at boot and say so (see Important Notes in the README).
+#
+# One entry per location; `replicas` = mongod members in that location.
+#
+# The default is ONE location with THREE members: the smallest shape that both
+# installs on any single-location GVC and survives losing a member. Set it to
+# YOUR GVC's locations before installing. MongoDB allows at most 7 VOTING members
+# and every member here votes, so the chart refuses a total above 7 (1.x defaulted
+# to 9, where the 8th and 9th silently never joined). See the quorum table in the
+# README.
+locations:
+  - name: aws-us-east-1
+    replicas: 3
 
 image: percona/percona-server-mongodb:8.0
 
+# Spread each location's members across availability zones. Confirm your
+# locations support multi-zone before enabling.
 multiZone: false
 
 resources:
@@ -36,25 +47,30 @@ mongodb:
   keyfileSecretName: my-mongodb-keyfile
 
 volumeset:
-  capacity: 10 # initial capacity in GiB (minimum is 10)
+  capacity: 10 # initial capacity in GiB per member (minimum is 10)
   autoscaling:
     enabled: false
     maxCapacity: 100
     minFreePercentage: 10
     scalingFactor: 1.2
 
+# ─── Access ───────────────────────────────────────────────────────────────────
+# There is no public endpoint: MongoDB is reachable on the internal network only.
 firewall:
   internalAllowType: same-gvc # options: same-gvc, same-org, workload-list
-  workloads: []
+  workloads: [] # only used with workload-list; this release's own workloads are added automatically
   # - //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
+# ─── HAProxy ──────────────────────────────────────────────────────────────────
+# Only the primary accepts writes. The proxy gives clients one stable address and
+# routes to whichever member is primary right now.
 proxy:
   enabled: true
   image: haproxy:2.9
   resources:
     cpu: 100m
     memory: 128Mi
-  minReplicas: 2
+  minReplicas: 2 # per configured location
   maxReplicas: 2
 
 backup:
@@ -62,7 +78,12 @@ backup:
   mode: logical # options: logical, physical
 
   schedule: "0 2 * * *" # daily at 2am UTC
-  
+
+  # The ONE location the backup job runs in. Must be one of `locations` above —
+  # the platform accepts a location that is not, stores it, and the job then never
+  # runs anywhere with nothing to observe. (1.x derived this from backup.aws.region.)
+  location: aws-us-east-1
+
   provider: aws # options: aws or gcp
 
   # Logical backup (mongodump)

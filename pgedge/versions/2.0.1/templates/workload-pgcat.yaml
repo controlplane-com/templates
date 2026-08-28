@@ -29,6 +29,7 @@ spec:
           protocol: tcp
       volumes:
         - path: /etc/pgcat/start.sh
+          recoveryPolicy: retain
           uri: cpln://secret/{{ include "pgedge.secretPgcatConfig.name" . }}.payload
   identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pgedge.identity.name" . }}
   defaultOptions:
@@ -69,10 +70,14 @@ spec:
       timeoutSeconds: 5
     {{- end }}
   firewallConfig:
+    {{- /* the empty lists are API backfills, declared so rendered == stored */}}
     external:
       inboundAllowCIDR: []
+      inboundBlockedCIDR: []
       outboundAllowCIDR:
         - 0.0.0.0/0  # Required to reach pgEdge nodes across locations
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
     internal:
       inboundAllowType: {{ .Values.internal_access.type | quote }}
       {{- if eq .Values.internal_access.type "workload-list" }}
@@ -109,6 +114,8 @@ spec:
         {{- end }}
       {{- else if .Values.internal_access.workloads }}
       inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
+      {{- else }}
+      inboundAllowWorkload: []   # API backfill, declared so rendered == stored
       {{- end }}
   loadBalancer:
     direct:

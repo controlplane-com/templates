@@ -26,6 +26,7 @@ spec:
           recoveryPolicy: retain
           uri: cpln://volumeset/{{ include "clickhouse.volumeKeeper.name" . }}
         - path: /scripts/keeper-startup.sh
+          recoveryPolicy: retain   # API backfill, declared so rendered == stored
           uri: cpln://secret/{{ include "clickhouse.secretKeeper.name" . }}
   identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "clickhouse.identity.name" . }}
   defaultOptions:

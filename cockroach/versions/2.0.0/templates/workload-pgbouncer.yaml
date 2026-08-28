@@ -20,8 +20,16 @@ spec:
         - "/pgbouncer/start.sh"
       env:
         {{- include "cockroach.locationEnv" . | nindent 8 }}
+      {{- /*
+        recoveryPolicy, initialDelaySeconds and successThreshold are API
+        backfills, declared so the rendered manifest equals the stored resource
+        and the deployment UI shows no permanent difference. Measured 2026-08-28
+        with render-vs-stored.py. There is no httpGet scheme here because this
+        probe is exec: the API backfills probe defaults per probe TYPE.
+      */}}
       volumes:
         - path: /pgbouncer/start.sh
+          recoveryPolicy: retain
           uri: cpln://secret/{{ include "cockroach.pgbouncer.secretStartup.name" . }}
       readinessProbe:
         exec:
@@ -29,8 +37,10 @@ spec:
             - /bin/sh
             - -c
             - "psql -h 127.0.0.1 -p 5432 -U root -d {{ .Values.database.name }} -c 'SELECT 1' -q 2>/dev/null"
+        initialDelaySeconds: 10
         periodSeconds: 5
         timeoutSeconds: 3
+        successThreshold: 1
         failureThreshold: 4
       ports:
         - number: 5432
@@ -46,6 +56,7 @@ spec:
       target: 100
     capacityAI: false
     debug: false
+    suspend: false
     timeoutSeconds: 5
   {{- /*
     A full override, like the CockroachDB tier: every field defaultOptions
@@ -63,6 +74,7 @@ spec:
         target: 100
       capacityAI: false
       debug: false
+      suspend: false
       timeoutSeconds: 5
     {{- end }}
   firewallConfig:
@@ -80,13 +92,19 @@ spec:
         {{- end }}
       {{- else if .Values.pgbouncer.internal_access.workloads }}
       inboundAllowWorkload: {{ .Values.pgbouncer.internal_access.workloads | toYaml | nindent 8 }}
+      {{- else }}
+      inboundAllowWorkload: []
       {{- end }}
     external:
       inboundAllowCIDR: []
+      inboundBlockedCIDR: []
       outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
   loadBalancer:
     direct:
       enabled: false
       ports: []
     replicaDirect: false
+  supportDynamicTags: false
 {{- end }}

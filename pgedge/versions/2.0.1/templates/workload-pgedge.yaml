@@ -34,6 +34,7 @@ spec:
           recoveryPolicy: retain
           uri: cpln://volumeset/{{ include "pgedge.volume.name" . }}
         - path: /pgedge/start.sh
+          recoveryPolicy: retain
           uri: cpln://secret/{{ include "pgedge.secretStartup.name" . }}.payload
   identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pgedge.identity.name" . }}
   defaultOptions:
@@ -51,10 +52,14 @@ spec:
     suspend: false
     timeoutSeconds: 5
   firewallConfig:
+    {{- /* the empty lists are API backfills, declared so rendered == stored */}}
     external:
       inboundAllowCIDR: []
+      inboundBlockedCIDR: []
       outboundAllowCIDR:
         - 0.0.0.0/0  # Required for inter-node Spock replication across locations
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
     internal:
       inboundAllowType: {{ .Values.internal_access.type | quote }}
       {{- if eq .Values.internal_access.type "workload-list" }}
@@ -91,6 +96,8 @@ spec:
         {{- end }}
       {{- else if .Values.internal_access.workloads }}
       inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
+      {{- else }}
+      inboundAllowWorkload: []   # API backfill, declared so rendered == stored
       {{- end }}
   loadBalancer:
     direct:

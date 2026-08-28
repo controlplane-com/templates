@@ -1,0 +1,65 @@
+# ─── Locations ────────────────────────────────────────────────────────────────
+# This chart deploys into the GVC you install into — it does NOT create one.
+# Every location listed here MUST already exist in that GVC. A location the GVC
+# lacks contributes route and gateway URLs for servers that never start: the
+# other servers retry those peers forever and you silently have less redundancy
+# than you configured. The servers check this against the live GVC at boot and
+# say so (see Important Notes in the README).
+#
+# One entry = one NATS cluster; `replicas` = servers in that cluster. Two or more
+# locations are joined into a super cluster over NATS gateways.
+#
+# The default is ONE location with THREE servers: the smallest shape that both
+# installs on any single-location GVC and is a real NATS cluster — 3 is NATS's
+# recommended cluster size and the minimum for fault-tolerant JetStream. Set it
+# to YOUR GVC's locations before installing. See the quorum table in the README.
+locations:
+  - name: aws-us-east-1
+    replicas: 3
+
+image: nats:2.11.6-alpine # official NATS image tag — bump to upgrade NATS
+
+resources:
+  cpu: 100m
+  memory: 256Mi
+
+# ─── NATS listeners ───────────────────────────────────────────────────────────
+# Each listener binds 0.0.0.0 on the port below. Monitoring is fixed on 8222 and
+# is not published as a container port.
+nats_defaults:
+  port: 4222 # client port (nats:// and internal GVC clients)
+  cluster:
+    port: 6222 # route connections between replicas in the SAME location
+  gateway:
+    port: 7222 # gateway connections BETWEEN locations; unused with one location
+  websocket:
+    enabled: true # publishes the workload's public endpoint; Control Plane serves it on 443
+    port: 8080
+    compression: false
+    noTls: true # Control Plane terminates TLS — leave true unless you supply certs
+
+# Inbound public CIDRs for the WebSocket endpoint, which Control Plane exposes on
+# port 443. EMPTY = no public access, which is the default: this chart configures
+# NO NATS authentication, so opening it to 0.0.0.0/0 publishes an unauthenticated
+# message bus to the internet — measured handing an anonymous outside client the
+# cluster name, every server name and their private IPs. Add your own ranges here
+# only alongside an `authorization { … }` block in `nats_extra_config`.
+allowCIDR: []
+
+# ─── JetStream ────────────────────────────────────────────────────────────────
+jetstream:
+  enabled: false # set to true for durable streams, consumers, K/V and object store
+
+volumeset:
+  capacity: 10 # initial capacity in GiB per replica (minimum is 10)
+
+# Any additional valid NATS configuration — appended verbatim to the generated
+# server config at startup. A syntax error here is a container that will not
+# start, not a render failure.
+nats_extra_config: ""
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+internalAccess:
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # only used when type is workload-list; the NATS workload is added automatically
+  #- //gvc/GVC_NAME/workload/WORKLOAD_NAME

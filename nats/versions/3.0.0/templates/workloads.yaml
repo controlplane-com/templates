@@ -34,10 +34,16 @@ spec:
           protocol: tcp
         {{- end }}
       volumes:
+        {{- /* recoveryPolicy is an API backfill on a secret file mount, declared
+               so the rendered manifest equals the stored resource and the
+               deployment UI shows no permanent difference. Measured across four
+               sibling templates 2026-08-28 with render-vs-stored.py. */}}
         - path: /etc/nats/start.sh
+          recoveryPolicy: retain
           uri: cpln://secret/{{ include "nats.secret.name" . }}.payload
         {{- if and .Values.nats_extra_config (ne (.Values.nats_extra_config | trim) "") }}
         - path: /etc/nats/nats-extra.conf
+          recoveryPolicy: retain
           uri: cpln://secret/{{ include "nats.extraData.name" . }}.payload
         {{- end }}
         {{- if .Values.jetstream.enabled }}
@@ -121,6 +127,8 @@ spec:
         {{- end }}
       {{- else if .Values.internalAccess.workloads }}
       inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- else }}
+      inboundAllowWorkload: []   # API backfill, declared so rendered == stored
       {{- end }}
   identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "nats.identity.name" . }}
   loadBalancer:

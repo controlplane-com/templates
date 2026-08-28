@@ -6,7 +6,7 @@ primary's location is lost. For a single-location cluster, use `postgres-highly-
 
 ## Architecture
 
-- **GVC** — multi-location, pinned to `global.gvc.locations`. **Created by this chart**, always.
+- **No GVC** — this chart deploys into the **existing** GVC you install into. Every location in `global.locations` must already be one of that GVC's locations.
 - **Patroni workload** (`{release}-postgres`, stateful) — PostgreSQL 17 + Patroni, one or more members per location.
 - **HAProxy workload** (`{release}-postgres-proxy`, standard) — one tier per location, every one routing to the single current primary. Optional (`proxy.enabled`).
 - **PgBouncer workload** (`{release}-postgres-pgbouncer`, standard) — one tier per location, pooling into HAProxy. Optional (`pgbouncer.enabled`).
@@ -14,13 +14,19 @@ primary's location is lost. For a single-location cluster, use `postgres-highly-
 - **WAL-G sidecar** — continuous WAL archiving plus periodic base backups from whichever member is primary. Optional (`backup.mode: wal-g`).
 - **Volume set** (`{release}-postgres-vs`) — `PGDATA`, `ext4`, snapshots with 7-day retention.
 - **etcd** (`etcd-multi-location` subchart) — the consensus store, one member per location.
-- **Identity, policy and secrets** — `reveal` on exactly the secrets this release uses, plus a bucket-scoped cloud binding when backups are on.
+- **Identity, policies and secrets** — `reveal` on exactly the secrets this release uses, `view` on exactly the one install GVC (for the boot-time location check), plus a bucket-scoped cloud binding when backups are on.
 
 ## Prerequisites
 
-1. **A GVC name that is not yet taken.** This chart creates the GVC named in `global.gvc.name`.
-   Helm **adopts** a GVC that already exists and `helm uninstall` then **deletes** it, along with
-   every unrelated workload in it. Point `global.gvc.name` at a name nothing else uses.
+1. **An existing GVC with at least 2 locations, and `global.locations` set to match it.** This
+   chart does not create a GVC — it deploys into the one you install into. The platform does not
+   validate the pairing in either direction, so the chart closes both:
+   - A GVC location this release does not list runs **nothing** (its deployment reads
+     `This workload location is deactivated because maxScale is set to 0`).
+   - A `global.locations` entry the GVC does not have is accepted and stored by the platform, and
+     is simply inert. The members read the GVC at boot and **refuse to bootstrap** in that state,
+     naming the missing location. On an already-initialised cluster they log a warning and keep
+     serving instead — a location removed from a GVC looks exactly like a location that is down.
 
 2. **A database credentials secret — create it BEFORE installing.** A `dictionary` secret with
    exactly the keys `username`, `password` and `database`. If it does not exist at install time the
@@ -60,26 +66,51 @@ With N locations you survive `floor((N-1)/2)` losses, so an even count buys noth
 count below it. Two locations cannot form a symmetric quorum, which is why that topology is a warm
 standby rather than an automatic-failover cluster.
 
+## Migrating from 1.x
+
+**1.x created its own GVC. 2.0.0 does not — it deploys into the GVC you install it into.**
+
+**Never `helm upgrade` a 1.x release onto 2.0.0.** The upgrade drops `kind: gvc` from the release
+manifest, and Helm deletes what a chart no longer declares — which destroys that GVC and **every
+workload, volume set and identity inside it**, including this cluster's data volumes. Measured on a
+sibling template: **6 seconds, while printing `upgraded successfully`.**
+
+The chart therefore **refuses to render** if your values still carry the 1.x `global.gvc` key. That
+guard cannot fire on an upgrade run with *no* values at all, which sees only 2.0.0's defaults — so
+the procedure below is the safety, not the guard.
+
+Migrate to a **new release** instead:
+
+1. Take a backup of the 1.x cluster (`backup.mode: logical`, or a manual `pg_dumpall`).
+2. Rename `global.gvc.locations` to `global.locations` in your values and delete `global.gvc.name`.
+   Every location listed must exist in the GVC you are installing into.
+3. Install 2.0.0 as a **new release** into an **existing** GVC — not the GVC the 1.x release created,
+   which is still owned by that release.
+4. Restore the dump into the new cluster and move your applications' connection strings over.
+5. `cpln helm uninstall` the old release, which takes the GVC it created with it.
+
 ## Configuration
 
-### GVC and locations
+### Locations
 
 ```yaml
+# This chart deploys into the GVC you install into — it does NOT create one.
+# Every location listed here MUST already exist in that GVC.
+#
+# Lives under `global` so the bundled etcd-multi-location subchart gets the same
+# list automatically — the two lists can then never be edited apart.
+#
+# Minimum 2 locations. 3 gives automatic failover, 5 survives losing two;
+# 2 gives a warm standby with MANUAL promotion. See the table above.
+# `replicas` is Patroni members per location; etcd always runs 1 per location.
 global:
-  gvc:
-    # This chart CREATES this GVC. It must NOT already exist: Helm adopts a GVC
-    # that does, and `helm uninstall` then DELETES it and everything in it.
-    name: postgres-multi-location-gvc
-    # Minimum 2 locations. 3 gives automatic failover, 5 survives losing two;
-    # 2 gives a warm standby with MANUAL promotion. See the README table.
-    # `replicas` is Patroni members per location; etcd always runs 1 per location.
-    locations:
-      - name: aws-us-east-1
-        replicas: 1
-      - name: aws-eu-central-1
-        replicas: 1
-      - name: aws-us-west-2
-        replicas: 1
+  locations:
+    - name: aws-us-east-1
+      replicas: 1
+    - name: aws-eu-central-1
+      replicas: 1
+    - name: aws-us-west-2
+      replicas: 1
 ```
 
 ### PostgreSQL / Patroni
@@ -124,7 +155,12 @@ volumeset:
 
 internalAccess:
   type: same-gvc # options: same-gvc, same-org, workload-list
-  workloads: [] # only used when type is workload-list
+  # Only used when type is workload-list. This chart's OWN workloads (Patroni,
+  # the proxy, PgBouncer, the backup cron) are added automatically — the list
+  # also governs Patroni-to-Patroni replication and the proxy's health checks,
+  # so a list naming only clients would cut the cluster off from itself. List
+  # your clients here; do not list this release's workloads.
+  workloads: []
     #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
 ```
 
@@ -235,7 +271,7 @@ backup:
     prefix: postgres/backups # folder within the bucket
 
   minio: # a self-hosted MinIO workload, or any S3-compatible endpoint
-    endpoint: http://my-minio-workload:9000 # e.g. http://WORKLOAD_NAME:9000 in the same GVC
+    endpoint: http://my-minio-workload:9000 # e.g. http://WORKLOAD.GVC.cpln.local:9000 in the same GVC
     bucket: my-postgres-bucket
     # REQUIRED PREREQUISITE SECRET when provider is `minio` — a `dictionary`
     # secret holding `accessKey` and `secretKey`. See Storage setup in the README.
@@ -261,6 +297,9 @@ etcd:
     capacity: 10
   internalAccess:
     type: same-gvc
+    # etcd adds its OWN workload automatically, but not this chart's Patroni
+    # workload. If you set type to workload-list here you MUST add
+    # //gvc/YOUR_GVC/workload/RELEASE-postgres yourself, or Patroni loses its DCS.
     workloads: []
   recovery:
     # EMERGENCY ONLY — see "Recovering from a lost location" in the README.
@@ -330,7 +369,8 @@ No cloud account is needed — credentials are supplied as a secret.
 1. Create the bucket in MinIO. Set `backup.minio.bucket` to its name.
 
 2. Set `backup.minio.endpoint` to the S3 API address including the port. For the `minio` template
-   deployed in the same GVC that is `http://WORKLOAD_NAME:9000`.
+   deployed in the same GVC that is `http://WORKLOAD.GVC.cpln.local:9000` — use the fully-qualified
+   internal name, because a bare short name does not resolve for every workload type.
 
    **The endpoint must be reachable from EVERY location in the GVC.** In `wal-g` mode every member
    runs `restore_command`, so a MinIO workload that exists in only one location leaves the members in
@@ -354,15 +394,16 @@ No cloud account is needed — credentials are supplied as a secret.
 the upload pipeline still writes a ~20-byte empty gzip under a normal-looking timestamped filename, and the
 job exits non-zero. Check the object size before restoring from it: a real dump is kilobytes at minimum.
 
-**Logical** — stream the dump back through the proxy, which writes to the current primary. Set
-`WORKLOAD_NAME` to `{release}-postgres-proxy` and run from a client with bucket access:
+**Logical** — stream the dump back through the proxy, which writes to the current primary. Run from a
+client workload in the same GVC that has bucket access, using the **fully-qualified** proxy hostname
+(the bare short name does not resolve for a `standard` workload):
 
 ```bash
 export PGPASSWORD="PASSWORD"
 
 aws s3 cp "s3://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" - \
   | gunzip \
-  | psql --host=WORKLOAD_NAME --port=5432 --username=USERNAME --dbname=postgres
+  | psql --host={release}-postgres-proxy.{gvc}.cpln.local --port=5432 --username=USERNAME --dbname=postgres
 
 unset PGPASSWORD
 ```
@@ -385,14 +426,14 @@ for MinIO.
 
 | What | Where |
 |---|---|
-| PostgreSQL, pooled (when `pgbouncer.enabled`) | `{release}-postgres-pgbouncer.{global.gvc.name}.cpln.local:5432` |
-| PostgreSQL (recommended otherwise) | `{release}-postgres-proxy.{global.gvc.name}.cpln.local:5432` — always the current primary, from any location |
-| PostgreSQL, direct to one member | `replica-{i}.{release}-postgres.{location}.{global.gvc.name}.cpln.local:5432` |
+| PostgreSQL, pooled (when `pgbouncer.enabled`) | `{release}-postgres-pgbouncer.{gvc}.cpln.local:5432` |
+| PostgreSQL (recommended otherwise) | `{release}-postgres-proxy.{gvc}.cpln.local:5432` — always the current primary, from any location |
+| PostgreSQL, direct to one member | `replica-{i}.{release}-postgres.{location}.{gvc}.cpln.local:5432` |
 | Patroni REST API | port `8008` on the same per-member names (`/primary`, `/replica`, `/health`, `/liveness`) |
 | HAProxy health / stats | `:8404/healthz` and `:8405/stats` on the proxy |
 | Credentials | the `dictionary` secret named by `postgres.credentialsSecretName` — `cpln secret reveal <name>` |
 
-Internal only — there is no public access in this version.
+`{gvc}` is the GVC you installed into. Internal only — there is no public access in this version.
 
 ## Failover timing
 
@@ -417,11 +458,11 @@ what changes them:
 
 ```bash
 # Show what this cluster is actually running
-cpln workload exec {release}-postgres --gvc {global.gvc.name} --container patroni-postgres \
+cpln workload exec {release}-postgres --gvc {gvc} --container patroni-postgres \
   -- patronictl -c /tmp/patroni_config.yml show-config
 
 # Change them — all three together
-cpln workload exec {release}-postgres --gvc {global.gvc.name} --container patroni-postgres \
+cpln workload exec {release}-postgres --gvc {gvc} --container patroni-postgres \
   -- patronictl -c /tmp/patroni_config.yml edit-config --force \
      -s ttl=45 -s loop_wait=10 -s retry_timeout=15
 ```
@@ -460,11 +501,11 @@ Member names are `{workload}-{location}-{index}`, e.g. `my-db-postgres-aws-us-ea
 
 ```bash
 # Every member, its location, role and replication lag
-cpln workload exec {release}-postgres --gvc {global.gvc.name} --container patroni-postgres \
+cpln workload exec {release}-postgres --gvc {gvc} --container patroni-postgres \
   -- patronictl -c /tmp/patroni_config.yml list
 
 # Move a live primary to another location (a planned, near-zero-downtime handover)
-cpln workload exec {release}-postgres --gvc {global.gvc.name} --container patroni-postgres \
+cpln workload exec {release}-postgres --gvc {gvc} --container patroni-postgres \
   -- patronictl -c /tmp/patroni_config.yml switchover --candidate {release}-postgres-{location}-0 --force
 ```
 
@@ -481,15 +522,9 @@ this is never needed — losing one location is an automatic failover.
 
 ## Important Notes
 
-- **Resource names no longer carry the `-ml` infix, and that is a FRESH-INSTALL-ONLY change.** Every PostgreSQL-side workload, secret, identity, policy and — critically — the **volume set** is now named `{release}-postgres…` instead of `{release}-postgres-ml…`. The bundled etcd resources were NOT renamed (`{release}-etcd`, `{release}-etcd-vs` and the rest are unchanged), so etcd's volume set is not orphaned by this. Running `helm upgrade` over an install created before this change **DELETES the old volume set** — `cpln helm upgrade` names it in its cleanup phase and it is gone seconds later, with no reachable final snapshot despite `createFinalSnapshot`. **Back up before you upgrade** (`backup.mode: logical` or a `pg_dumpall`).
-
-  A measured 1.0.1 → 1.0.2 upgrade did not lose data, but only by a race worth understanding: Helm creates the new workload before deleting the old one, and the bundled etcd's volume set was NOT renamed, so the cluster still had its DCS and all three new members cloned from the still-running old primary (`bootstrapped from leader …`). That old primary kept serving for **86 s** after Helm reported it deleted, and a 7.5 MB database cloned in **12 s**. A database that cannot be base-backed-up inside that window has no fallback, because the volume holding it is already destroyed. The large-database case is inferred, not observed — do not rely on the race.
-
-  Two more consequences of the same upgrade, both measured: the cluster had **no writable primary for ~2 m 22 s** (the etcd tier is bounced by the same upgrade, so Patroni cannot expire the stale leader key immediately), and **`{release}-postgres-ml-proxy` is deleted and never returns** — every application connection string must move to `{release}-postgres-proxy`.
-
-  The safe path is unchanged: back up, uninstall, reinstall, restore.
+- **Never `helm upgrade` a 1.x release onto 2.0.0.** The chart refuses to render if the 1.x `global.gvc` key is still in your values, because the upgrade would delete the GVC and everything in it. See [Migrating from 1.x](#migrating-from-1x).
 - **Create the credentials secret before installing.** `postgres.credentialsSecretName` names a secret the chart does not create; without it the deployment waits forever on a secret that does not exist.
-- **The GVC in `global.gvc.name` must not already exist.** Helm adopts an existing one and deletes it on uninstall, taking every unrelated workload with it.
+- **`global.locations` must match the GVC you install into.** A GVC location this release does not list runs nothing; a listed location the GVC lacks makes the members refuse to bootstrap, naming it. See [Migrating from 1.x](#migrating-from-1x) if you are coming from a 1.x release.
 - **Set `primaryLocation` before the first install if you care where the primary is.** It places the primary on a fresh install, biases later failover elections, and — changed on a live cluster — moves the leader at the cost of a full restart. If the preferred location is unavailable at bootstrap, another location initialises the cluster after 90 s and logs a WARNING; move the primary afterwards with `patronictl switchover`.
 - **Rotating the credentials secret does not change the database.** The password is written into `PGDATA` at first bootstrap; change it afterwards with `ALTER ROLE`, then update the secret to match.
 - **Replication is asynchronous, so a failover can lose recent transactions** — the replication lag at the instant of failure, bounded by 32 MiB of WAL. A replica lagging more than that is also excluded from the leader race, so check `pg_stat_replication` first if a failover does not happen with three healthy locations.
@@ -499,7 +534,7 @@ this is never needed — losing one location is an automatic failover.
 - **A `helm upgrade` interrupts writes in EVERY location for about two minutes.** Members do not restart one at a time: the chart asks for that (`rolloutOptions.maxUnavailableReplicas`) but the platform does not retain the field, so nothing limits the rollout and all members go down together. Measured at **~117 s** of failed writes across a 3-location cluster on an upgrade that changed nothing at all. Treat any upgrade as a planned write outage.
 - **A restart of the etcd tier costs about 20 seconds of writes.** `failsafe_mode` is enabled, which lets the primary keep serving while the DCS is unreachable — measured holding for ~60 s with zero failed writes — but it requires the primary to reach *every* member's REST API, and once replica readiness flips that precondition is lost and the primary demotes. The cluster recovers automatically.
 - **Enabling `wal-g` on a running cluster can take ~10 minutes to settle in one location**, during which that location may still run the previous spec (observed: the leader briefly held `archive_mode: off` while wal-g was considered enabled, so nothing was archived). Verify `archive_mode` is on in every location before relying on the archive.
-- **Never suspend a location.** Suspending and resuming one permanently withdraws its endpoints from the other locations' service discovery while every status surface still reads healthy. To remove a location, remove it from `global.gvc.locations`.
+- **Never suspend a location.** Suspending and resuming one permanently withdraws its endpoints from the other locations' service discovery while every status surface still reads healthy. To remove a location, remove it from `global.locations` **and** from the GVC.
 - **Allow ~2 minutes after a cold install** before believing a member is unreachable — cross-region service discovery can take that long to converge. `internalAccess` changes take a further 30–150 s.
 - **Cost scales with write volume × members outside the primary's location**, because each receives a full copy of the WAL stream and cross-region traffic is billed.
 

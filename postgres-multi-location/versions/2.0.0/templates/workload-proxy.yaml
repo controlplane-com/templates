@@ -3,7 +3,7 @@
 kind: workload
 name: {{ include "pg-ml.proxy.name" . }}
 description: HAProxy leader-only PostgreSQL endpoint, present in every location
-gvc: {{ .Values.global.gvc.name }}
+gvc: {{ .Values.global.cpln.gvc }}
 tags:
   {{- include "pg-ml.tags" . | nindent 2 }}
 spec:
@@ -26,14 +26,15 @@ spec:
           protocol: http
       volumes:
         - path: /proxy/start.sh
+          recoveryPolicy: retain   # API backfill, declared so rendered == stored
           uri: cpln://secret/{{ include "pg-ml.secretProxyStartup.name" . }}.payload
-  identityLink: //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "pg-ml.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pg-ml.identity.name" . }}
   defaultOptions:
     autoscaling:
       maxConcurrency: 0
-      maxScale: {{ .Values.proxy.maxReplicas | int }}
-      metric: rps
-      minScale: {{ .Values.proxy.minReplicas | int }}
+      maxScale: 0        # a GVC location this release did not ask for runs NOTHING
+      metric: disabled
+      minScale: 0        # localOptions below supplies the real counts
       scaleToZeroDelay: 300
       target: 100
     capacityAI: false
@@ -41,8 +42,8 @@ spec:
     suspend: false
     timeoutSeconds: 5
   localOptions:
-    # Written in full — see the note on the Patroni workload.
-    {{- range $location := .Values.global.gvc.locations }}
+    # A full override, not a patch — written in full; see the Patroni workload.
+    {{- range $location := .Values.global.locations }}
     - location: //location/{{ $location.name }}
       autoscaling:
         maxConcurrency: 0
@@ -57,13 +58,36 @@ spec:
       timeoutSeconds: 5
     {{- end }}
   firewallConfig:
+    {{- /* the empty lists are API backfills, declared so rendered == stored */}}
     external:
       inboundAllowCIDR: []
+      inboundBlockedCIDR: []
       outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
     internal:
       inboundAllowType: {{ .Values.internalAccess.type }}
-      {{- if .Values.internalAccess.workloads }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      {{- /*
+        This list governs ALL inbound internal traffic. PgBouncer and the
+        nightly logical dump both connect to this tier on 5432, so a list
+        naming only clients silently breaks them while every replica reports
+        `ready: true`.
+        The chart appends its own workloads rather than requiring the user to
+        know — see pg-ml.ownWorkloadLinks.
+      */}}
+      {{- $own := splitList "\n" (trim (include "pg-ml.ownWorkloadLinks" .)) }}
+      inboundAllowWorkload:
+        {{- include "pg-ml.ownWorkloadLinks" . | nindent 8 }}
+        {{- range .Values.internalAccess.workloads }}
+        {{- if not (has (printf "- %s" .) $own) }}
+        - {{ . }}
+        {{- end }}
+        {{- end }}
+      {{- else if .Values.internalAccess.workloads }}
       inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- else }}
+      inboundAllowWorkload: []   # API backfill, declared so rendered == stored
       {{- end }}
   loadBalancer:
     direct:

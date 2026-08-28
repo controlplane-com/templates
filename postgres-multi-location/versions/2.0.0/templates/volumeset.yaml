@@ -2,7 +2,7 @@
 kind: volumeset
 name: {{ include "pg-ml.volume.name" . }}
 description: PostgreSQL multi-location data volume
-gvc: {{ .Values.global.gvc.name }}
+gvc: {{ .Values.global.cpln.gvc }}
 tags:
   {{- include "pg-ml.tags" . | nindent 2 }}
   workload: {{ include "pg-ml.name" . }}

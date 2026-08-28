@@ -2,7 +2,7 @@
 kind: workload
 name: {{ include "pg-ml.name" . }}
 description: PostgreSQL 17 Patroni cluster stretched across locations
-gvc: {{ .Values.global.gvc.name }}
+gvc: {{ .Values.global.cpln.gvc }}
 tags:
   # Members must resolve each other during a simultaneous cold start, before any
   # of them is ready — Patroni's /readiness only returns 200 once a leader exists
@@ -73,6 +73,7 @@ spec:
           recoveryPolicy: retain
           uri: cpln://volumeset/{{ include "pg-ml.volume.name" . }}
         - path: /patroni/start.sh
+          recoveryPolicy: retain   # API backfill, declared so rendered == stored
           uri: cpln://secret/{{ include "pg-ml.secretStartup.name" . }}.payload
       lifecycle:
         preStop:
@@ -181,15 +182,25 @@ spec:
           recoveryPolicy: retain
           uri: cpln://volumeset/{{ include "pg-ml.volume.name" . }}
         - path: /walg/backup.sh
+          recoveryPolicy: retain   # API backfill, declared so rendered == stored
           uri: cpln://secret/{{ include "pg-ml.secretWALG.name" . }}.payload
     {{- end }}
-  identityLink: //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "pg-ml.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pg-ml.identity.name" . }}
   defaultOptions:
+    {{- /*
+    minScale/maxScale are 0 so a GVC location this release did not ask for runs
+    NOTHING — the deployment there reads `This workload location is deactivated
+    because maxScale is set to 0`. localOptions below supplies the real per
+    location count. Without this, an extra GVC location silently starts a
+    Patroni member whose location is not in the proxy's backend list: it joins
+    the cluster through the DCS, can win the leader election, and then no
+    HAProxy tier routes to it.
+    */}}
     autoscaling:
       maxConcurrency: 0
-      maxScale: {{ (index .Values.global.gvc.locations 0).replicas | int }}
+      maxScale: 0
       metric: disabled
-      minScale: {{ (index .Values.global.gvc.locations 0).replicas | int }}
+      minScale: 0
       scaleToZeroDelay: 300
       target: 100
     capacityAI: false
@@ -197,10 +208,13 @@ spec:
     suspend: false
     timeoutSeconds: 5
   localOptions:
-    # Written in FULL for every location: a minimal localOptions entry makes the
-    # API backfill its own defaults, which would leave a location eligible to
-    # scale on concurrency and boot Patroni members nobody asked for.
-    {{- range $location := .Values.global.gvc.locations }}
+    # Written in FULL for every location: localOptions is a full override, not a
+    # patch onto defaultOptions, and the API completes a partial entry from its
+    # OWN platform defaults — measured on a sibling template as capacityAI ON
+    # against a chart saying false, and an autoscaling shape eligible for five
+    # replicas. A field left out here would also fall through to the 0/0 shape
+    # above and start nothing in a location the user did ask for.
+    {{- range $location := .Values.global.locations }}
     - location: //location/{{ $location.name }}
       autoscaling:
         maxConcurrency: 0
@@ -226,8 +240,11 @@ spec:
     scalingPolicy: OrderedReady
     terminationGracePeriodSeconds: 90
   firewallConfig:
+    {{- /* the empty lists are API backfills, declared so rendered == stored */}}
     external:
       inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundBlockedCIDR: []
       {{- if and .Values.backup.enabled (eq .Values.backup.mode "wal-g") (eq .Values.backup.provider "minio") }}
       # The MinIO/S3-compatible endpoint is an arbitrary user-supplied address,
       # so it cannot be resolved to an allowlisted hostname at render time.
@@ -236,21 +253,39 @@ spec:
       {{- else }}
       outboundAllowCIDR: []
       {{- end }}
-      {{- if and .Values.backup.enabled (eq .Values.backup.mode "wal-g") }}
-      {{- if eq .Values.backup.provider "aws" }}
+      {{- if and .Values.backup.enabled (eq .Values.backup.mode "wal-g") (eq .Values.backup.provider "aws") }}
       outboundAllowHostname:
         - s3.{{ .Values.backup.aws.region }}.amazonaws.com
         - s3.amazonaws.com
-      {{- end }}
-      {{- if eq .Values.backup.provider "gcp" }}
+      {{- else if and .Values.backup.enabled (eq .Values.backup.mode "wal-g") (eq .Values.backup.provider "gcp") }}
       outboundAllowHostname:
         - storage.googleapis.com
-      {{- end }}
+      {{- else }}
+      outboundAllowHostname: []
       {{- end }}
     internal:
       inboundAllowType: {{ .Values.internalAccess.type }}
-      {{- if .Values.internalAccess.workloads }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      {{- /*
+        This list governs ALL inbound internal traffic, INCLUDING Patroni-to-
+        Patroni streaming replication and REST calls on 8008 between the members
+        of THIS workload, and HAProxy's health checks against them. A list that
+        names only clients cuts the cluster off from itself while every replica
+        still reports `ready: true`. The chart appends its own workloads rather
+        than requiring the user to know — see pg-ml.ownWorkloadLinks.
+      */}}
+      {{- $own := splitList "\n" (trim (include "pg-ml.ownWorkloadLinks" .)) }}
+      inboundAllowWorkload:
+        {{- include "pg-ml.ownWorkloadLinks" . | nindent 8 }}
+        {{- range .Values.internalAccess.workloads }}
+        {{- if not (has (printf "- %s" .) $own) }}
+        - {{ . }}
+        {{- end }}
+        {{- end }}
+      {{- else if .Values.internalAccess.workloads }}
       inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- else }}
+      inboundAllowWorkload: []   # API backfill, declared so rendered == stored
       {{- end }}
   loadBalancer:
     direct:

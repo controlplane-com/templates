@@ -3,7 +3,7 @@
 kind: workload
 name: {{ include "pg-ml.pgbouncer.name" . }}
 description: PgBouncer connection pooler, present in every location
-gvc: {{ .Values.global.gvc.name }}
+gvc: {{ .Values.global.cpln.gvc }}
 tags:
   {{- include "pg-ml.tags" . | nindent 2 }}
 spec:
@@ -33,7 +33,7 @@ spec:
         # Pools into HAProxy, not into a member directly, so leader routing and
         # failover stay transparent to the pooler.
         - name: DB_HOST
-          value: {{ include "pg-ml.proxy.name" . }}.{{ .Values.global.gvc.name }}.cpln.local
+          value: {{ include "pg-ml.proxy.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local
         - name: DB_PORT
           value: "5432"
         - name: DB_USER
@@ -55,13 +55,13 @@ spec:
       ports:
         - number: 5432
           protocol: tcp
-  identityLink: //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "pg-ml.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pg-ml.identity.name" . }}
   defaultOptions:
     autoscaling:
       maxConcurrency: 0
-      maxScale: {{ .Values.pgbouncer.maxReplicas | int }}
-      metric: rps
-      minScale: {{ .Values.pgbouncer.minReplicas | int }}
+      maxScale: 0        # a GVC location this release did not ask for runs NOTHING
+      metric: disabled
+      minScale: 0        # localOptions below supplies the real counts
       scaleToZeroDelay: 300
       target: 100
     capacityAI: false
@@ -69,8 +69,8 @@ spec:
     suspend: false
     timeoutSeconds: 5
   localOptions:
-    # Written in full — see the note on the Patroni workload.
-    {{- range $location := .Values.global.gvc.locations }}
+    # A full override, not a patch — written in full; see the Patroni workload.
+    {{- range $location := .Values.global.locations }}
     - location: //location/{{ $location.name }}
       autoscaling:
         maxConcurrency: 0
@@ -85,13 +85,35 @@ spec:
       timeoutSeconds: 5
     {{- end }}
   firewallConfig:
+    {{- /* the empty lists are API backfills, declared so rendered == stored */}}
     external:
       inboundAllowCIDR: []
+      inboundBlockedCIDR: []
       outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
     internal:
       inboundAllowType: {{ .Values.internalAccess.type }}
-      {{- if .Values.internalAccess.workloads }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      {{- /*
+        This list governs ALL inbound internal traffic to the pooler. Your
+        application clients belong here; this release's own workloads are
+        appended so the tier is never cut off from the rest of the stack.
+        The chart appends its own workloads rather than requiring the user to
+        know — see pg-ml.ownWorkloadLinks.
+      */}}
+      {{- $own := splitList "\n" (trim (include "pg-ml.ownWorkloadLinks" .)) }}
+      inboundAllowWorkload:
+        {{- include "pg-ml.ownWorkloadLinks" . | nindent 8 }}
+        {{- range .Values.internalAccess.workloads }}
+        {{- if not (has (printf "- %s" .) $own) }}
+        - {{ . }}
+        {{- end }}
+        {{- end }}
+      {{- else if .Values.internalAccess.workloads }}
       inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- else }}
+      inboundAllowWorkload: []   # API backfill, declared so rendered == stored
       {{- end }}
   loadBalancer:
     direct:

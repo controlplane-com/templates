@@ -3,7 +3,7 @@
 kind: workload
 name: {{ include "pg-ml.backup.name" . }}
 description: Scheduled logical backup (pg_dumpall) for PostgreSQL multi-location
-gvc: {{ .Values.global.gvc.name }}
+gvc: {{ .Values.global.cpln.gvc }}
 tags:
   {{- include "pg-ml.tags" . | nindent 2 }}
 spec:
@@ -18,7 +18,7 @@ spec:
         # Dump through the proxy so the job always talks to the current primary,
         # in whichever location it currently sits.
         - name: PG_HOST
-          value: {{ include "pg-ml.proxy.name" . }}.{{ .Values.global.gvc.name }}.cpln.local
+          value: {{ include "pg-ml.proxy.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local
         - name: PG_PORT
           value: "5432"
         - name: PG_USER
@@ -53,7 +53,7 @@ spec:
         - name: MINIO_SECRET_KEY
           value: cpln://secret/{{ .Values.backup.minio.credentialsSecretName }}.secretKey
       {{- end }}
-  identityLink: //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "pg-ml.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pg-ml.identity.name" . }}
   # A cron workload runs in EVERY location of its GVC, which would produce one
   # duplicate dump per location every night. Suspend everywhere by default and
   # un-suspend only in backup.location. Both blocks are written in FULL — a
@@ -84,8 +84,11 @@ spec:
       suspend: false
       timeoutSeconds: 3600
   firewallConfig:
+    {{- /* the empty lists are API backfills, declared so rendered == stored */}}
     external:
       inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundBlockedCIDR: []
       {{- if eq .Values.backup.provider "minio" }}
       # The MinIO/S3-compatible endpoint is an arbitrary user-supplied address,
       # so it cannot be resolved to an allowlisted hostname at render time.
@@ -101,12 +104,16 @@ spec:
       outboundAllowHostname:
         - s3.{{ .Values.backup.aws.region }}.amazonaws.com
         - s3.amazonaws.com
-      {{- end }}
-      {{- if eq .Values.backup.provider "gcp" }}
+      {{- else if eq .Values.backup.provider "gcp" }}
       outboundAllowHostname:
         - storage.googleapis.com
+      {{- else }}
+      outboundAllowHostname: []
       {{- end }}
     internal:
+      # Nothing connects INTO a cron, so this is deliberately not wired to
+      # internalAccess.type: the job only makes outbound connections, to the
+      # HAProxy tier (which lists this workload via pg-ml.ownWorkloadLinks).
       inboundAllowType: same-gvc
       inboundAllowWorkload: []
   job:

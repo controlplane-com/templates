@@ -73,8 +73,7 @@ Monitoring is fixed on `8222` and is not published as a container port. The char
 
 ```yaml
 # Inbound public CIDRs for the WebSocket endpoint (Control Plane serves it on 443).
-allowCIDR:
-  - 0.0.0.0/0
+allowCIDR: []  # empty = no public access; see Important Notes before opening it
 ```
 
 ### JetStream
@@ -85,11 +84,6 @@ jetstream:
 
 volumeset:
   capacity: 10 # initial capacity in GiB per replica (minimum is 10)
-  autoscaling:
-    enabled: false
-    maxCapacity: 100
-    minFreePercentage: 10
-    scalingFactor: 1.2
 ```
 
 ### Extra configuration
@@ -142,7 +136,7 @@ Values that moved or were removed in 3.0.0 — the chart names each one at rende
 
 ## Important Notes
 
-- **This chart configures no NATS authentication, and `allowCIDR` defaults to `0.0.0.0/0`.** With WebSocket enabled that publishes an unauthenticated message bus to the internet. Narrow `allowCIDR` to your own ranges, or add an `authorization { … }` block via `nats_extra_config`.
+- **`allowCIDR` is empty by default, so there is no public access.** This chart configures no NATS authentication, so opening it publishes an unauthenticated message bus — an anonymous client receives the cluster name, every server name and their private IPs. Add ranges only alongside an `authorization { … }` block in `nats_extra_config`. Reach a closed deployment with `cpln port-forward`.
 - **Every location in `locations` must already exist in the GVC.** The platform accepts a location a GVC does not have without any error — the servers there simply never start. Each server checks this against the live GVC at boot: with JetStream enabled a fresh server refuses to start, and an already-initialised one warns and keeps serving rather than taking a live cluster down. Look for `[nats]` lines in the workload log.
 - **Locations in the GVC that are not in `locations` run nothing.** Their deployment reads `This workload location is deactivated because maxScale is set to 0`. That is intended, not a failure.
 - **JetStream state lives on the volume set.** Uninstalling deletes it. Streams default to `num_replicas: 1`, so a stream only survives a server loss if you set `num_replicas` to 3 or more when you create it — that is per-stream, in your application, not a setting in this template.

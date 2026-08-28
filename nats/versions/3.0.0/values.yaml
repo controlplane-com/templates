@@ -39,11 +39,12 @@ nats_defaults:
     noTls: true # Control Plane terminates TLS — leave true unless you supply certs
 
 # Inbound public CIDRs for the WebSocket endpoint, which Control Plane exposes on
-# port 443. NOTE: this chart configures NO NATS authentication, so the default
-# below publishes an unauthenticated message bus to the whole internet. Narrow it
-# to your own ranges, or add `authorization { … }` via `nats_extra_config`.
-allowCIDR:
-  - 0.0.0.0/0
+# port 443. EMPTY = no public access, which is the default: this chart configures
+# NO NATS authentication, so opening it to 0.0.0.0/0 publishes an unauthenticated
+# message bus to the internet — measured handing an anonymous outside client the
+# cluster name, every server name and their private IPs. Add your own ranges here
+# only alongside an `authorization { … }` block in `nats_extra_config`.
+allowCIDR: []
 
 # ─── JetStream ────────────────────────────────────────────────────────────────
 jetstream:
@@ -51,11 +52,6 @@ jetstream:
 
 volumeset:
   capacity: 10 # initial capacity in GiB per replica (minimum is 10)
-  autoscaling:
-    enabled: false
-    maxCapacity: 100
-    minFreePercentage: 10
-    scalingFactor: 1.2
 
 # Any additional valid NATS configuration — appended verbatim to the generated
 # server config at startup. A syntax error here is a container that will not

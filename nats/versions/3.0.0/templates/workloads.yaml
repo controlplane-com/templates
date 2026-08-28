@@ -96,7 +96,8 @@ spec:
     {{- end }}
   firewallConfig:
     external:
-      inboundAllowCIDR: {{ toYaml .Values.allowCIDR | nindent 6 }}
+      {{- /* empty list must render inline as [] -- `toYaml` + `nindent` puts it on its own line */}}
+      inboundAllowCIDR:{{ if .Values.allowCIDR }}{{ toYaml .Values.allowCIDR | nindent 6 }}{{ else }} []{{ end }}
       inboundBlockedCIDR: []
       outboundAllowCIDR: []
       outboundAllowHostname: []

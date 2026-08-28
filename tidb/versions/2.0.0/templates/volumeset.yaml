@@ -1,6 +1,6 @@
 kind: volumeset
 name: {{ include "tidb.pdVolume.name" . }}
-gvc: {{ .Values.gvc.name }}
+gvc: {{ .Values.global.cpln.gvc }}
 tags:
   {{- include "tidb.tags" . | nindent 2 }}
   workload: {{ include "tidb.pd.name" . }}
@@ -15,7 +15,7 @@ spec:
 ---
 kind: volumeset
 name: {{ include "tidb.tikvVolume.name" . }}
-gvc: {{ .Values.gvc.name }}
+gvc: {{ .Values.global.cpln.gvc }}
 tags:
   {{- include "tidb.tags" . | nindent 2 }}
   workload: {{ include "tidb.tikv.name" . }}

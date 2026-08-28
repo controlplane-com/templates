@@ -13,8 +13,10 @@ spec:
       args:
         - "/scripts/server-startup.sh"
       inheritEnv: false
-      {{- if .Values.autoCreateDatabase.enabled }}
       env:
+        - name: PD_ENDPOINTS
+          value: {{ include "tidb.pdEndpointList" . | quote }}
+        {{- if .Values.autoCreateDatabase.enabled }}
         - name: ROOT_PW
           value: cpln://secret/{{ .Values.autoCreateDatabase.credentialsSecretName }}.rootPassword
         - name: APP_DB
@@ -23,7 +25,7 @@ spec:
           value: cpln://secret/{{ .Values.autoCreateDatabase.credentialsSecretName }}.user
         - name: APP_PW
           value: cpln://secret/{{ .Values.autoCreateDatabase.credentialsSecretName }}.password
-      {{- end }}
+        {{- end }}
       memory: {{ .Values.resources.server.memory | quote }}
       ports:
         - number: 10080
@@ -36,19 +38,7 @@ spec:
             - /bin/sh
             - '-c'
             - >-
-              for endpoint in
-              {{- $pdName := include "tidb.pd.name" . -}}
-              {{- $gvcName := .Values.gvc.name -}}
-              {{- $locs := .Values.gvc.locations -}}
-              {{- $numLocs := len $locs -}}
-              {{- $pdReplicas := .Values.gvc.pdReplicas | int -}}
-              {{- $baseReplicas := div $pdReplicas $numLocs -}}
-              {{- $remainder := mod $pdReplicas $numLocs -}}
-              {{- range $i, $loc := $locs -}}
-                {{- $locReplicas := $baseReplicas -}}
-                {{- if lt $i $remainder -}}{{- $locReplicas = add $baseReplicas 1 -}}{{- end -}}
-                {{- range $r := until ($locReplicas | int) }} replica-{{ $r }}.{{ $pdName }}.{{ $loc.name }}.{{ $gvcName }}.cpln.local:2379{{ end -}}
-              {{- end }};
+              for endpoint in {{ include "tidb.pdEndpointList" . }};
               do
                 stores=$(curl -sf --max-time 4 "http://${endpoint}/pd/api/v1/stores" 2>/dev/null || echo "");
                 if [ -z "$stores" ]; then continue; fi;
@@ -56,11 +46,11 @@ spec:
                 up_count=$(echo "$stores_clean" | grep -o '"state_name":"Up"' | wc -l | tr -d ' ');
                 total_count=$(echo "$stores_clean" | grep -o '"state_name":' | wc -l | tr -d ' ');
                 echo "$up_count / $total_count TiKV stores Up at $endpoint";
-                {{- /* devMode: as many stores as the install actually has (often 1).
-                       Production: 2 = quorum of the 3-way replication, NOT 3 — requiring
-                       every store up would mean one location down keeps tidb-server
-                       permanently unready, which is the opposite of what HA is for. */}}
-                if [ "$up_count" -ge {{ if .Values.devMode }}{{ include "tidb.devModeMaxReplicas" . }}{{ else }}2{{ end }} ]; then echo "Sufficient TiKV stores healthy."; exit 0; fi;
+                {{- /* A quorum of TiKV's replication factor, not every store —
+                       requiring all of them would leave tidb-server permanently
+                       unready whenever one location is down, which is the
+                       opposite of what the replication is for. */}}
+                if [ "$up_count" -ge {{ include "tidb.readyStores" . }} ]; then echo "Sufficient TiKV stores healthy."; exit 0; fi;
               done;
               echo "TiKV not ready yet"; exit 1
         failureThreshold: 12
@@ -70,36 +60,39 @@ spec:
         timeoutSeconds: 5
       volumes:
         - path: /scripts/server-startup.sh
+          recoveryPolicy: retain   # API backfill, declared so rendered == stored
           uri: cpln://secret/{{ include "tidb.serverSecret.name" . }}.payload
-  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ include "tidb.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "tidb.identity.name" . }}
   defaultOptions:
     autoscaling:
-      keda: {}
       maxConcurrency: 0
-      maxScale: 1
+      maxScale: 0   # a GVC location this release did not ask for runs NOTHING
       metric: disabled
-      minScale: 1
+      minScale: 0   # localOptions below supplies the real count for each configured location
       scaleToZeroDelay: 300
-      target: 95
+      target: 100
     capacityAI: false
     debug: false
-    multiZone:
-      enabled: false
     suspend: false
-    timeoutSeconds: 5
+    timeoutSeconds: 10
+  {{- /*
+    A full override: every field defaultOptions carries is repeated here, because
+    the API completes a partial localOptions entry from PLATFORM defaults rather
+    than from this workload's own defaultOptions.
+  */}}
   localOptions:
-    {{- range $location := .Values.gvc.locations }}
+    {{- range $location := .Values.locations }}
     - autoscaling:
         maxConcurrency: 0
-        maxScale: {{ if eq ($location.replicas | int) 0 }}1{{ else }}{{ $location.replicas | int }}{{ end }}
+        maxScale: {{ $location.replicas | int }}
         metric: disabled
-        minScale: {{ if eq ($location.replicas | int) 0 }}0{{ else }}{{ $location.replicas | int }}{{ end }}
+        minScale: {{ $location.replicas | int }}
         scaleToZeroDelay: 300
         target: 100
       capacityAI: false
       debug: false
       location: //location/{{ $location.name }}
-      suspend: {{ if eq ($location.replicas | int) 0 }}true{{ else }}false{{ end }}
+      suspend: false
       timeoutSeconds: 10
     {{- end }}
   firewallConfig:
@@ -116,10 +109,7 @@ spec:
       outboundAllowPort: []
       outboundBlockedCIDR: []
     internal:
-      inboundAllowType: {{ .Values.internal_access.server.type }}
-      {{- if .Values.internal_access.server.workloads }}
-      inboundAllowWorkload: {{ .Values.internal_access.server.workloads | toYaml | nindent 8 }}
-      {{- end }}
+      {{- include "tidb.internalFirewall" (dict "root" . "access" .Values.internal_access.server) | nindent 6 }}
   loadBalancer:
     direct:
       enabled: false

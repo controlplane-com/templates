@@ -3,14 +3,14 @@ name: tidb
 description: TiDB distributed SQL database with MySQL compatibility, separate TiKV storage and PD components
 
 type: application
-version: 1.8.1
+version: 2.0.0
 appVersion: "8.5.7"
 
 annotations:
   created: "2025-09-04"
-  lastModified: "2026-08-23"
+  lastModified: "2026-08-28"
   category: "database"
-  createsGvc: true
+  createsGvc: false
 
 dependencies:
   - name: cpln-common

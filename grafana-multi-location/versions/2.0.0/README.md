@@ -575,6 +575,11 @@ evaluator. Two consequences:
   run `helm upgrade --set alerting.location=<surviving-location>`, and the UI is completely unaffected
   in the meantime — dashboards look perfectly healthy while nothing is being evaluated. This is the
   failure `alerting.highAvailability.enabled` exists to remove.
+  **This silent shape only happens AFTER the cluster is initialised.** If `alerting.location` is
+  missing from the GVC at install time you find out immediately and loudly: it must also appear in
+  `global.locations`, and etcd and Patroni refuse to bootstrap on a fresh data directory for any
+  location the GVC lacks, so the whole stack crash-loops with a named error rather than coming up
+  half-working (measured 2026-08-29).
 - **Silences are not expected to propagate between instances** (untested here). A silence created against the UI tier is not
   guaranteed to be honoured by the evaluator. Create silences against the evaluator directly, from a
   workload in the same GVC:

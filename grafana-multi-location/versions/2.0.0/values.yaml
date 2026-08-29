@@ -1,29 +1,33 @@
-# ─── GVC and locations ────────────────────────────────────────────────────────
-# Lives under `global` so the postgres-multi-location subchart — its own etcd
-# subchart, two levels down — and the optional redis-multi-location subchart get
-# the same GVC and locations automatically. Never maintain two location lists.
+# ─── Locations ────────────────────────────────────────────────────────────────
+# This chart deploys into the GVC you install into — it does NOT create one.
+# Every location listed here MUST already exist in that GVC. The platform does
+# not validate that: a location the GVC lacks is stored verbatim and is simply
+# inert, so nothing runs there and no deployment reports a failure. Both Grafana
+# tiers read the GVC at boot and log a warning naming the mismatch. Extra
+# locations in the GVC are fine — nothing here runs in them.
+#
+# Lives under `global` so BOTH subcharts get the same list automatically — the
+# postgres-multi-location database (and its own etcd, two levels down) and the
+# optional redis-multi-location alerting coordinator. Never maintain two lists.
+#
+# Minimum 2 locations, and minimum 3 with alerting HA enabled below. The
+# database tier needs 3 for automatic failover and 5 to survive losing two —
+# see the survival table in the README.
+# `replicas` here sets the POSTGRES members in that location, and nothing else.
+# Every other tier ignores it and has its own count:
+#   etcd     — always exactly 1 per location, not configurable. Quorum is a
+#              majority of LOCATIONS, so a second member in one buys nothing.
+#   Grafana  — the top-level `replicas` below, applied to every location.
+#   Redis    — redisML.redis.replicasPerLocation (alerting HA only).
 
 global:
-  gvc:
-    # This chart CREATES this GVC. It must NOT already exist: Helm adopts a GVC
-    # that does, and `helm uninstall` then DELETES it and everything in it.
-    name: grafana-multi-location-gvc
-    # Minimum 2 locations, and minimum 3 with alerting HA enabled below. The
-    # database tier needs 3 for automatic failover and 5 to survive losing two —
-    # see the survival table in the README.
-    # `replicas` here sets the POSTGRES members in that location, and nothing else.
-    # Every other tier ignores it and has its own count:
-    #   etcd     — always exactly 1 per location, not configurable. Quorum is a
-    #              majority of LOCATIONS, so a second member in one buys nothing.
-    #   Grafana  — the top-level `replicas` below, applied to every location.
-    #   Redis    — redisML.redis.replicasPerLocation (alerting HA only).
-    locations:
-      - name: aws-us-east-1
-        replicas: 1
-      - name: aws-eu-central-1
-        replicas: 1
-      - name: aws-us-west-2
-        replicas: 1
+  locations:
+    - name: aws-us-east-1
+      replicas: 1
+    - name: aws-eu-central-1
+      replicas: 1
+    - name: aws-us-west-2
+      replicas: 1
 
 # ─── Grafana UI tier ──────────────────────────────────────────────────────────
 image: grafana/grafana:13.1.3
@@ -139,7 +143,12 @@ publicAccess:
 
 internalAccess:
   type: same-gvc # options: none, same-gvc, same-org, workload-list
-  workloads: [] # used with workload-list
+  # Only used when type is workload-list. This chart's OWN workloads (the UI
+  # tier and, when it renders, the alert evaluator) are added automatically —
+  # the list also governs the in-GVC path the README's silence procedure uses,
+  # so a list naming only clients would deny it. List your clients here; do not
+  # list this release's workloads.
+  workloads: []
   # workloads:
   #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
@@ -164,6 +173,16 @@ postgresML:
     # A `dictionary` secret holding exactly `username`, `password` and
     # `database`. If it does not exist the deployment wedges waiting on it.
     credentialsSecretName: my-grafana-db-credentials
+
+  # The database tier's own internal firewall. Leave it at same-gvc unless you
+  # have a reason not to: this chart's Grafana workloads are NOT added to the
+  # subchart's list automatically (a parent cannot inject a rendered name into a
+  # subchart's values), so switching to workload-list without listing them cuts
+  # Grafana off from its own database. The chart refuses to render in that state
+  # and prints the exact links to add.
+  internalAccess:
+    type: same-gvc # options: same-gvc, same-org, workload-list
+    workloads: []
 
   # Preferred location for the database primary. Keep it aligned with
   # alerting.location so the hot path has no cross-region hop. With alerting HA
@@ -221,11 +240,28 @@ postgresML:
 # Sentinel per location; failover needs a majority of them, which is why alerting
 # HA requires 3+ locations.
 redisML:
+  # Which server the coordination tier runs. `redis` changes nothing. `valkey`
+  # runs BOTH the Redis and Sentinel tiers on valkeyImage — the BSD-licensed
+  # fork of Redis 7.2, which ships redis-server/redis-cli/redis-sentinel
+  # compatibility symlinks, so Grafana's Sentinel client is unchanged. Chosen at
+  # INSTALL time: a data directory cannot be moved between engines.
+  engine: redis # redis | valkey
+  valkeyImage: valkey/valkey:8.1.9 # used for both tiers when engine is valkey
+
+  # Same rule as postgresML.internalAccess above: Grafana is not added to this
+  # list automatically, and blocked from Sentinel it boots fine and every
+  # instance sends its own copy of every alert. The chart refuses to render if
+  # you set workload-list without listing the Grafana workloads.
+  firewall:
+    internalAllowType: same-gvc # options: same-gvc, same-org, workload-list
+    workloads: []
+
   redis:
     # OPTIONAL hardening, off by default. Opaque secret (encoding: plain) whose
     # payload is the password; it MUST EXIST BEFORE INSTALL, and Grafana reads the
     # same one, so a misspelt name stops the UI tier too. "" leans on the same-GVC
-    # firewall instead — fine for a GVC this chart owns.
+    # firewall instead — reasonable when nothing untrusted shares the GVC, which
+    # you now choose rather than the chart choosing for you.
     passwordSecretName: ""
     image: redis:7.4
     replicasPerLocation: 1 # Redis members per location; 1 is plenty for alert coordination

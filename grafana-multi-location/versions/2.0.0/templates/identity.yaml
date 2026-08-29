@@ -10,7 +10,7 @@ bucket-scoped binding; this one does not.
 */}}
 kind: identity
 name: {{ include "grafana-ml.identity.name" . }}
-gvc: {{ .Values.global.gvc.name }}
+gvc: {{ .Values.global.cpln.gvc }}
 description: Grafana multi-location identity
 tags:
   {{- include "grafana-ml.tags" . | nindent 2 }}

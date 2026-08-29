@@ -2,7 +2,8 @@
 
 ## What it is
 
-- Grafana OSS **13.1.3** running in every location of a chart-created multi-location GVC, behind one
+- Grafana OSS **13.1.3** running in every location of an EXISTING multi-location GVC (2.0.0 stopped
+  creating one; 1.x created its own), behind one
   georouted `*.cpln.app` endpoint, with all app state in a **stretched Patroni cluster**
   (`postgres-multi-location` subchart, which itself consumes `etcd-multi-location` — three levels).
 - **Two alerting shapes, one knob: `alerting.highAvailability.enabled`, default `false`.**
@@ -29,9 +30,10 @@
 
 | Resource | Purpose |
 |---|---|
-| `gvc` | **Always created**, gated only by `{{ if .Chart.IsRoot }}`. There is no `createGvc` knob — the GVC is what pins the locations. Both subcharts suppress theirs, so a release renders exactly one |
+| ~~`gvc`~~ | **Not created since 2.0.0.** The chart deploys into `global.cpln.gvc`; `global.locations` must be a subset of that GVC's locations. Nothing in the release renders a `kind: gvc` |
 | `workload` (standard) `{release}-grafana` | UI/API tier, `replicas` per location, `execute_alerts=false`, public by default |
 | `workload` (standard) `{release}-grafana-alerting` | The dedicated evaluator: 1 replica, `alerting.location` only, `execute_alerts=true`, **never public**. Suppressed entirely when `alerting.enabled: false` **or when `alerting.highAvailability.enabled` is true** |
+| `policy` (GVC) `{release}-grafana-gvc-policy` | 2.0.0. `view` on the ONE install GVC for the shared identity, so both boot wrappers can read its location list. Never `target: all` |
 | `identity` + `policy` | **One** identity shared by every Grafana workload; `reveal` on exactly the secrets they mount. No cloud bindings — this chart touches no object storage. **The rendered policy is byte-identical in both alerting modes** (verified) |
 | `secret` `{release}-grafana-datasources` | Datasource provisioning file, mounted by every Grafana workload. Only when `datasources.definitions` is set |
 | subchart `postgres-multi-location` (aliased `postgresML`) | The app database: HAProxy leader endpoint per location, one Patroni primary, async replicas |
@@ -46,7 +48,7 @@
 
 | Knob | Default | Meaning |
 |---|---|---|
-| `global.gvc.name` / `.locations[]` | `grafana-multi-location-gvc`, 3 AWS locations × 1 | **≥2 required, ≥3 with alerting HA**; `replicas` here is DATABASE members per location, ignored by the Redis tier. The GVC **must not already exist** |
+| `global.locations[]` | 3 AWS locations × 1 | 2.0.0 name (`global.gvc.locations` in 1.x). **≥2 required, ≥3 with alerting HA**; `replicas` here is DATABASE members per location, ignored by the Redis and Grafana tiers. Every entry **must already exist in the install GVC** |
 | `image` | `grafana/grafana:13.1.3` | Alpine variant required — the boot wrapper needs a shell |
 | `replicas` | `1` | Grafana UI instances **per location**. No alerting-related restriction of any kind |
 | `database.maxOpenConn` | `10` | Per instance, enforced at render time against an 80 ceiling. HA off: `(replicas × locations + 1) × this`, the `+1` being the evaluator. **HA on: the `+1` is dropped** because that workload does not exist |
@@ -120,8 +122,8 @@
   maxScale: 0` is accepted, stored verbatim, and yields 0 replicas there and 1 in the selected
   location. Note those zero-scaled locations report `ready: false` on their deployment — that is
   normal and not a failure to wait on.
-- **The GVC is created unconditionally and Helm will adopt one that already exists — then delete it
-  on uninstall**, taking unrelated workloads with it. Always a fresh name.
+- **(1.x only) The GVC is created unconditionally and Helm will adopt one that already exists — then
+  delete it on uninstall**, taking unrelated workloads with it. Fixed in 2.0.0, which creates none.
 
 ## Measured behaviour (test rounds 1-2, 2026-08-11)
 | Event | Result |
@@ -367,3 +369,96 @@ password envs matched the created secrets.
   living in exactly one location holds the only endpoints, and callers elsewhere reach it — the same
   shape as the proven Thanos east → Prometheus west path. Do not cite the failover caveat to claim a
   single-location dependency is unreachable.
+
+## 2.0.0 — deploy into an existing GVC (2026-08-29)
+
+**MAJOR, no upgrade path.** 1.x created its own GVC; 2.0.0 creates none and deploys into
+`global.cpln.gvc`. A `helm upgrade` across that boundary drops `kind: gvc` from the manifest and Helm
+prunes it, destroying the GVC and every workload, volumeset and identity in it — here that is both
+Grafana tiers, the whole Patroni cluster and its data volumes, etcd, and the Redis tier. The last of
+the eleven conversions, and the only one vendoring **two** converted subcharts.
+
+- **Dependency pins are load-bearing:** `postgres-multi-location` **1.0.3 → 2.0.0**,
+  `redis-multi-location` **2.1.0 → 3.0.0**. Both children stopped creating GVCs in those versions; a
+  parent cannot convert while vendoring a GVC-creating child. The bump also closes a pre-existing lag
+  (grafana was two versions behind on each) and brings the Valkey engine within reach — exposed as
+  `redisML.engine` (default `redis`) rather than left silently reachable only via `--set`.
+- **`global.gvc.locations` → `global.locations`**, matching both children, so ONE shared list still
+  serves all three charts. `replicas` on each entry is still Patroni members per location; redis-ml
+  ignores it (and its "replicas is not read here" guard is `.Chart.IsRoot`-gated, so it does not fire
+  on this parent).
+- **Three-layer defence**, per the catalog pattern:
+  1. Render-time `fail` on `global.gvc` (`grafana-ml.validateNoLegacyGvc`). **Verified against the
+     shipped 1.1.1 values file with `-f`, not just `--set`.** Caveat worth knowing: the message the
+     user sees names **`etcd-multi-location`**, not this chart — Helm renders the deepest subchart
+     first and all four charts carry the same guard on the same key. The README says so.
+  2. `defaultOptions.minScale/maxScale: 0` on the UI tier (the evaluator already had it), with
+     complete per-location `localOptions`. An undeclared GVC location then starts nothing.
+  3. Boot-time GVC read in **both** Grafana wrappers, with a `view` policy scoped by `targetLinks` to
+     the one install GVC.
+- **The boot check uses `curl`, and severity is deliberately different from the siblings.**
+  `grafana/grafana:13.1.3` ships curl 8.21.0, bash and `timeout`, and **no perl and no python3**
+  (probed 2026-08-29), so the location list is parsed with `sed`. curl speaks HTTP/1.1 (verified on
+  the wire against a real server — the redis-ml HTTP/1.0 `426` trap does not apply). Bounds measured
+  in that image: `--connect-timeout 5` gave 21 s over the whole 3-attempt loop against a blackholed
+  address; `--max-time 8` returned at exactly 8.0 s against an accept-never-respond server where an
+  otherwise identical unbounded call was still hanging at 31 s.
+
+### The one deliberate deviation — no fresh/initialised asymmetry
+
+Both Grafana tiers are **stateless**: no volumeset, all state in the shared Patroni cluster. There is
+no data directory to read freshness from, so the sibling rule ("fatal on a FRESH data directory, warn
+on an initialised one") has nothing to key off. `.Release.IsInstall` was considered and rejected — it
+renders a different container argument on install than on upgrade, which is permanent drift on the
+first no-op upgrade. So the split is by what a failure can cost:
+
+| Check | Severity | Why |
+|---|---|---|
+| Guard A — replica running in a location not in `global.locations` | **FATAL**, both tiers | Killing a replica the release never asked for cannot reduce capacity in a location it did; it is also outside the connection budget the chart validated |
+| Guard A2 — evaluator running outside `alerting.location` | **FATAL** | A second live evaluator sends every notification twice, the exact failure the design prevents |
+| GVC read: declared locations missing, quorum below majority, extra locations | **WARNING** | Grafana holds no data to corrupt, but it does serve dashboards; crash-looping every instance over a topology mismatch turns a degraded deployment into an outage |
+
+**Open for a maintainer ruling:** the one mismatch with no user-visible symptom is
+`alerting.location` missing from the GVC — the evaluator workload then holds zero replicas everywhere
+and not one rule is ever evaluated, while every dashboard looks healthy. It is called out by name in
+the boot warning and in the README, but it is a log line, not a refusal. Making it fatal would take
+the UI down over an alerting misconfiguration; leaving it a warning is the current choice.
+
+### Firewall — the most complex `ownWorkloadLinks` instance in the catalog
+
+- `grafana-ml.ownWorkloadLinks` names the UI tier always and the evaluator gated on
+  `grafana-ml.evaluatorRenders` — the same helper that decides whether the workload exists at all.
+  `grafana-ml.internalFirewall` emits exactly ONE `inboundAllowWorkload` key and de-duplicates a user
+  entry that repeats an own workload.
+- **The children do NOT go in the parent's list, and the parent's workloads DO belong in theirs.**
+  Traffic is one-directional: Grafana → HAProxy `:5432`/`:8404` and Grafana → Sentinel `:26379` /
+  Redis `:6379`. Neither child ever initiates to Grafana.
+- A parent **cannot** inject a rendered workload name into a subchart's values (values.yaml has no
+  templating), so `grafana-ml.validateSubchartFirewall` **refuses to render** when
+  `postgresML.internalAccess.type` or `redisML.firewall.internalAllowType` is `workload-list` without
+  the Grafana links, and prints the exact strings to paste. Without it the failure is silent: Grafana
+  hangs in its 300 s database gate and restart-loops, or boots fine and duplicates every alert.
+- `inboundAllowWorkload` is emitted **only** under `workload-list`. 1.1.1's drift gate ran clean on
+  the `same-gvc` default with the key absent, so declaring it would be unverified churn.
+
+### Verified at build time (renders and image probes, NOT a deploy)
+
+| Check | Result |
+|---|---|
+| `helm template --set global.cpln.gvc=test-gvc`, no other values | 19 documents, **zero `kind: gvc`** |
+| HA render | 29 documents, zero `kind: gvc` |
+| Legacy guard | fires on `-f ../1.1.1/values.yaml`, on `--set global.gvc.name=…`, and on a minimal 1.x fragment |
+| Subchart-firewall guard | fails without the links, renders with them, silent when redis is not rendered |
+| Duplicate YAML keys | none, in either mode (duplicate-key-rejecting loader) |
+| `localOptions` completeness | every entry has the full `defaultOptions` key set; `maxScale: 0` on both tiers' defaults |
+| Container fields | `cpu`, `memory`, `inheritEnv` declared everywhere; every volume has `recoveryPolicy` |
+| `bash -n` | both rendered boot wrappers, in both modes |
+| Boot wrapper, run in the real image | Guard A and A2 exit 1 with their messages; the three warning arms and the read-failure arm all exit 0 |
+| Lint | clean (2 pre-existing R1 WARNs on the how-to-enable Redis-auth snippet) |
+| README URLs | 6/6 return 200 |
+
+**Not verified — the test round settles these:** the no-op-upgrade drift gate in both modes; the boot
+check against the REAL `$CPLN_ENDPOINT` behind istio-envoy (proven against a real HTTP/1.1 server, not
+against the platform); the `view` policy actually returning 200 rather than 403; `redisML.engine:
+valkey` end to end under Grafana's Sentinel client; and an install into a GVC that genuinely has an
+extra or a missing location.

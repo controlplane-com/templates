@@ -8,10 +8,12 @@ Grafana, use the `grafana` template instead.
 
 ## Architecture
 
-- **GVC** — multi-location, pinned to `global.gvc.locations`. **Created by this chart**, always.
+- **No GVC** — this chart deploys into the GVC you install it into. Every location in
+  `global.locations` must already exist there; both Grafana tiers check that at boot and log a
+  warning naming any mismatch.
 - **Grafana UI workload** (`{release}-grafana`, standard) — `replicas` instances per location, HTTP :3000, public by default. Alert execution is off here by default, and on in every instance when alerting HA is enabled.
 - **Alert evaluator workload** (`{release}-grafana-alerting`, standard) — the same image, **exactly one replica**, in `alerting.location` only, never public. This is the only instance that evaluates rules. Optional: not created when `alerting.highAvailability.enabled` is true, or when `alerting.enabled` is false.
-- **Identity and policy** — one identity shared by every Grafana workload, with `reveal` on exactly the secrets they mount. Identical in both alerting modes.
+- **Identity and policies** — one identity shared by every Grafana workload, with `reveal` on exactly the secrets they mount (identical in both alerting modes), plus a second policy granting `view` on the one install GVC so the boot check can read its location list.
 - **Datasource secret** (`{release}-grafana-datasources`) — the provisioning file, mounted by every Grafana workload. Optional (`datasources.definitions`).
 - **App database** (`postgres-multi-location` subchart) — one Patroni cluster stretched across the same locations, with its own HAProxy tier per location and an etcd consensus store.
 - **Alerting coordination** (`redis-multi-location` subchart) — one Redis and one Sentinel per location, coordinating exactly-once notification delivery. Optional: **only** when `alerting.highAvailability.enabled` is true.
@@ -21,9 +23,12 @@ live in the shared database. There is no volume, no session affinity and nothing
 
 ## Prerequisites
 
-1. **A GVC name that is not yet taken.** This chart creates the GVC named in `global.gvc.name`.
-   Helm **adopts** a GVC that already exists and `helm uninstall` then **deletes** it, along with
-   every unrelated workload in it. Point `global.gvc.name` at a name nothing else uses.
+1. **An existing GVC with at least 2 locations** (3 for automatic database failover, and 3 is the
+   minimum for alerting HA). This chart does **not** create one — it deploys into the GVC you install
+   into, and every entry in `global.locations` must already be one of that GVC's locations. The
+   platform does not validate that: a location the GVC lacks is stored verbatim and is simply inert,
+   so nothing runs there and no deployment reports a failure. Both Grafana tiers read the GVC at boot
+   and log a warning naming the mismatch — see [Important Notes](#important-notes).
 
 2. **Three secrets, all created BEFORE installing.** Missing any of them wedges the deployment
    waiting on a secret reference that never resolves, which looks like a broken install.
@@ -58,6 +63,51 @@ live in the shared database. There is no volume, no session affinity and nothing
    **AWS S3**, **Google Cloud Storage**, and **MinIO / any S3-compatible endpoint**. See
    [Storage setup](#storage-setup).
 
+## Migrating from 1.x
+
+**1.x created its own GVC. 2.0.0 does not — it deploys into the GVC you install it into.**
+
+**Never `helm upgrade` a 1.x release onto 2.0.0.** The upgrade drops `kind: gvc` from the release
+manifest, and Helm deletes what a chart no longer declares — which destroys that GVC and **every
+workload, volume set and identity inside it**: both Grafana tiers, the whole Patroni cluster and its
+data volumes, the etcd store behind it, and the Redis coordination tier. Measured on a sibling
+template: **6 seconds, while printing `upgraded successfully`.**
+
+The chart therefore **refuses to render** if your values still carry the 1.x `global.gvc` key. Two
+things to know about that guard:
+
+- It cannot fire on an upgrade run with *no* values at all, which sees only 2.0.0's defaults. The
+  procedure below is the safety; the guard is a backstop.
+- The error you actually see usually names **`etcd-multi-location`** or **`postgres-multi-location`**,
+  not this chart. Helm renders the deepest subchart first and every chart in the stack carries the same
+  guard on the same key, so a subchart's copy aborts the render first. The remedy is identical.
+
+Migrate to a **new release** instead:
+
+1. Back up the 1.x database — `postgresML.backup.mode: logical`, or a manual `pg_dumpall` through the
+   old release's `{release}-postgres-proxy` endpoint.
+2. In your values, rename `global.gvc.locations` to `global.locations` and delete `global.gvc.name`.
+   Every location you list must already exist in the GVC you are installing into.
+3. Install 2.0.0 as a **new release** into an **existing** GVC — not the GVC the 1.x release created,
+   which is still owned by that release and goes away when you uninstall it.
+4. Restore the dump into the new cluster — `postgres-multi-location`'s **Restoring a backup** section
+   has the exact command, run from a client workload in the same GVC (neither the Grafana image nor the
+   Patroni image is where you run it from). Grafana's dashboards, users, datasources, alert rules and
+   alert state all live in that database, so restoring it moves everything. Reuse the **same**
+   `admin.secretKeySecretName` secret: it decrypts the datasource credentials stored in the dump, and a
+   different key makes every saved datasource credential unreadable.
+5. Point your users at the new release's canonical endpoint and `cpln helm uninstall` the old release,
+   which takes the GVC it created with it.
+
+Values that changed:
+
+| 1.x | 2.0.0 |
+|---|---|
+| `global.gvc.name` | removed — the GVC comes from where you install |
+| `global.gvc.locations` | `global.locations` |
+| `postgresML` pinned at 1.0.3 | pinned at **2.0.0** (no GVC of its own) |
+| `redisML` pinned at 2.1.0 | pinned at **3.0.0** (no GVC of its own; adds `redisML.engine`) |
+
 ## How many locations do you need?
 
 The database's consensus store commits a write only when a **majority** of its members agree, and it
@@ -80,30 +130,38 @@ render below that. Its Redis tier elects a master by a majority of locations (on
 
 ## Configuration
 
-### GVC and locations
+### Locations
 
 ```yaml
+# This chart deploys into the GVC you install into — it does NOT create one.
+# Every location listed here MUST already exist in that GVC. The platform does
+# not validate that: a location the GVC lacks is stored verbatim and is simply
+# inert, so nothing runs there and no deployment reports a failure. Both Grafana
+# tiers read the GVC at boot and log a warning naming the mismatch. Extra
+# locations in the GVC are fine — nothing here runs in them.
+#
+# Lives under `global` so BOTH subcharts get the same list automatically — the
+# postgres-multi-location database (and its own etcd, two levels down) and the
+# optional redis-multi-location alerting coordinator. Never maintain two lists.
+#
+# Minimum 2 locations, and minimum 3 with alerting HA enabled below. The
+# database tier needs 3 for automatic failover and 5 to survive losing two —
+# see the survival table in the README.
+# `replicas` here sets the POSTGRES members in that location, and nothing else.
+# Every other tier ignores it and has its own count:
+#   etcd     — always exactly 1 per location, not configurable. Quorum is a
+#              majority of LOCATIONS, so a second member in one buys nothing.
+#   Grafana  — the top-level `replicas` below, applied to every location.
+#   Redis    — redisML.redis.replicasPerLocation (alerting HA only).
+
 global:
-  gvc:
-    # This chart CREATES this GVC. It must NOT already exist: Helm adopts a GVC
-    # that does, and `helm uninstall` then DELETES it and everything in it.
-    name: grafana-multi-location-gvc
-    # Minimum 2 locations, and minimum 3 with alerting HA enabled below. The
-    # database tier needs 3 for automatic failover and 5 to survive losing two —
-    # see the survival table in the README.
-    # `replicas` here sets the POSTGRES members in that location, and nothing else.
-    # Every other tier ignores it and has its own count:
-    #   etcd     — always exactly 1 per location, not configurable. Quorum is a
-    #              majority of LOCATIONS, so a second member in one buys nothing.
-    #   Grafana  — the top-level `replicas` below, applied to every location.
-    #   Redis    — redisML.redis.replicasPerLocation (alerting HA only).
-    locations:
-      - name: aws-us-east-1
-        replicas: 1
-      - name: aws-eu-central-1
-        replicas: 1
-      - name: aws-us-west-2
-        replicas: 1
+  locations:
+    - name: aws-us-east-1
+      replicas: 1
+    - name: aws-eu-central-1
+      replicas: 1
+    - name: aws-us-west-2
+      replicas: 1
 ```
 
 ### Grafana UI tier
@@ -145,7 +203,7 @@ alerting:
   highAvailability:
     enabled: false
   # Dedicated-evaluator mode ONLY — where the one evaluator runs. Required in
-  # that mode, must be one of global.gvc.locations, IGNORED when HA is on.
+  # that mode, must be one of global.locations, IGNORED when HA is on.
   location: aws-us-east-1
   # Dedicated-evaluator mode ONLY — in HA mode the UI tier's `resources` apply.
   resources:
@@ -228,10 +286,20 @@ publicAccess:
 
 internalAccess:
   type: same-gvc # options: none, same-gvc, same-org, workload-list
-  workloads: [] # used with workload-list
+  # Only used when type is workload-list. This chart's OWN workloads (the UI
+  # tier and, when it renders, the alert evaluator) are added automatically —
+  # the list also governs the in-GVC path the README's silence procedure uses,
+  # so a list naming only clients would deny it. List your clients here; do not
+  # list this release's workloads.
+  workloads: []
   # workloads:
   #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
 ```
+
+The two subcharts keep their **own** firewall lists and add only their own workloads. Switching
+`postgresML.internalAccess.type` or `redisML.firewall.internalAllowType` to `workload-list` without
+listing the Grafana workloads would cut Grafana off from its database or its alerting coordinator, so
+the chart refuses to render in that state and prints the exact links to add.
 
 `publicAccess` applies to the UI tier only. The dedicated alert evaluator is never reachable from the
 internet; it honours `internalAccess` so you can reach it inside the GVC. With alerting HA on there is
@@ -243,6 +311,16 @@ no evaluator workload, and the Redis tier is in-GVC only.
 postgresML:
   postgres:
     credentialsSecretName: my-grafana-db-credentials
+
+  # The database tier's own internal firewall. Leave it at same-gvc unless you
+  # have a reason not to: this chart's Grafana workloads are NOT added to the
+  # subchart's list automatically (a parent cannot inject a rendered name into a
+  # subchart's values), so switching to workload-list without listing them cuts
+  # Grafana off from its own database. The chart refuses to render in that state
+  # and prints the exact links to add.
+  internalAccess:
+    type: same-gvc # options: same-gvc, same-org, workload-list
+    workloads: []
 
   # Preferred location for the database primary. Keep it aligned with
   # alerting.location so the hot path has no cross-region hop. With alerting HA
@@ -307,6 +385,22 @@ Rendered **only** when `alerting.highAvailability.enabled` is true; ignored enti
 
 ```yaml
 redisML:
+  # Which server the coordination tier runs. `redis` changes nothing. `valkey`
+  # runs BOTH the Redis and Sentinel tiers on valkeyImage — the BSD-licensed
+  # fork of Redis 7.2, which ships redis-server/redis-cli/redis-sentinel
+  # compatibility symlinks, so Grafana's Sentinel client is unchanged. Chosen at
+  # INSTALL time: a data directory cannot be moved between engines.
+  engine: redis # redis | valkey
+  valkeyImage: valkey/valkey:8.1.9 # used for both tiers when engine is valkey
+
+  # Same rule as postgresML.internalAccess above: Grafana is not added to this
+  # list automatically, and blocked from Sentinel it boots fine and every
+  # instance sends its own copy of every alert. The chart refuses to render if
+  # you set workload-list without listing the Grafana workloads.
+  firewall:
+    internalAllowType: same-gvc # options: same-gvc, same-org, workload-list
+    workloads: []
+
   redis:
     # OPTIONAL, off by default. Opaque secret (encoding: plain) whose payload is
     # the password — see "Authenticating the Redis tier" below.
@@ -331,12 +425,13 @@ redisML:
 #### Authenticating the Redis tier
 
 **Off by default: enabling alerting HA is one flag and needs no extra secrets.** The tier is reachable
-only from inside the GVC this chart creates, and that is the boundary it relies on.
+only from inside the GVC, and the same-GVC firewall is the boundary it relies on.
 
-Turn authentication on if you deploy anything else into that GVC. The firewall is a real boundary but
-not one the chart controls after install, and write access to an authless Redis is enough to
-**suppress your alert notifications** — a hostile or simply buggy neighbour can claim another peer
-already sent them. Alert coordination is precisely the thing you do not want failing quietly.
+**Since 2.0.0 that GVC is yours, not this chart's** — it is the GVC you installed into, and it very
+likely already holds other workloads. Weigh the default accordingly: write access to an authless Redis
+is enough to **suppress your alert notifications**, because a hostile or simply buggy neighbour can
+claim another peer already sent them. Alert coordination is precisely the thing you do not want failing
+quietly. Turn authentication on unless you control everything in the GVC.
 
 Create either or both secrets **before installing**, then name them:
 
@@ -483,7 +578,7 @@ evaluator. Two consequences:
 - **Silences are not expected to propagate between instances** (untested here). A silence created against the UI tier is not
   guaranteed to be honoured by the evaluator. Create silences against the evaluator directly, from a
   workload in the same GVC:
-  `curl -u admin:PASSWORD http://{release}-grafana-alerting.{global.gvc.name}.cpln.local:3000/api/alertmanager/grafana/api/v2/silences`
+  `curl -u admin:PASSWORD http://{release}-grafana-alerting.{gvc}.cpln.local:3000/api/alertmanager/grafana/api/v2/silences`
   lists them; creating one is a POST with a body. The API requires credentials — unauthenticated returns 401.
   **That address only answers from inside `alerting.location`** — the name resolves to the GVC VIP
   everywhere, but there is no local upstream in the other locations, so they get a 503. Run the
@@ -497,33 +592,29 @@ time; with HA on, `alerting.location` and `alerting.resources` are ignored.
 
 | What | Where |
 |---|---|
-| Grafana UI / API (public) | `status.canonicalEndpoint` of `{release}-grafana` — `cpln workload get {release}-grafana --gvc {global.gvc.name} -o yaml` |
-| Grafana UI / API (internal) | `{release}-grafana.{global.gvc.name}.cpln.local:3000` |
-| Alert evaluator (internal only) | `{release}-grafana-alerting.{global.gvc.name}.cpln.local:3000` — dedicated-evaluator mode only |
-| App database | `{release}-postgres-proxy.{global.gvc.name}.cpln.local:5432` — always the current primary |
-| Alerting Redis (internal only) | `replica-0.{release}-redis.{location}.{global.gvc.name}.cpln.local:6379` — alerting HA only |
-| Alerting Sentinel (internal only) | `replica-0.{release}-sentinel.{location}.{global.gvc.name}.cpln.local:26379`, master name `mymaster` — alerting HA only |
+| Grafana UI / API (public) | `status.canonicalEndpoint` of `{release}-grafana` — `cpln workload get {release}-grafana --gvc {gvc} -o yaml` |
+| Grafana UI / API (internal) | `{release}-grafana.{gvc}.cpln.local:3000` |
+| Alert evaluator (internal only) | `{release}-grafana-alerting.{gvc}.cpln.local:3000` — dedicated-evaluator mode only |
+| App database | `{release}-postgres-proxy.{gvc}.cpln.local:5432` — always the current primary |
+| Alerting Redis (internal only) | `replica-0.{release}-redis.{location}.{gvc}.cpln.local:6379` — alerting HA only |
+| Alerting Sentinel (internal only) | `replica-0.{release}-sentinel.{location}.{gvc}.cpln.local:26379`, master name `mymaster` — alerting HA only |
 | Admin login | `admin.user`, and the password in the secret named by `admin.passwordSecretName` — `cpln secret reveal <name> -o json` |
 
 ## Important Notes
 
-- **Resource names no longer carry the `-ml` infix, and that is a FRESH-INSTALL-ONLY change.** Both Grafana workloads, the identity, policy and datasource secret are now named `{release}-grafana…` instead of `{release}-grafana-ml…`, and the bundled database tier renamed the same way — including its **volume set**. Running `helm upgrade` over an install created before this change **DELETES the old volume set** — `cpln helm upgrade` names it in its cleanup phase and it is gone seconds later, with no reachable final snapshot. **Back up before you upgrade.**
-
-  A measured 1.0.1 → 1.0.2 upgrade of the database tier did not lose data, but only by a race worth understanding: Helm creates the new workload before deleting the old one, and the bundled etcd's volume set was NOT renamed, so the cluster still had its DCS and the new members cloned from the still-running old primary. That old primary kept serving for **86 s** after Helm reported it deleted, and a 7.5 MB database cloned in **12 s**. A database that cannot be base-backed-up inside that window has no fallback, because the volume holding it is already destroyed. The large-database case is inferred, not observed — do not rely on the race.
-
-  **Your connection strings also break permanently:** `{release}-postgres-ml-proxy` is deleted and never returns, so every application pointing at it must move to `{release}-postgres-proxy`.
-
-  The safe path is unchanged: back up the database, uninstall, reinstall, restore.
+- **There is no upgrade path from 1.x.** 1.x created its own GVC; 2.0.0 deploys into an existing one, and a `helm upgrade` across that boundary deletes the old GVC and everything in it — the database volume sets included. The chart refuses to render on the 1.x `global.gvc` key, but the guard cannot see an upgrade run with no values at all. Follow [Migrating from 1.x](#migrating-from-1x): new release, restore the database, uninstall the old one.
 - **Create the admin password, encryption key and database credentials secrets before installing.** The chart does not create them; without them the deployment waits forever on secrets that do not exist.
-- **The GVC in `global.gvc.name` must not already exist.** Helm adopts an existing one and deletes it on uninstall, taking every unrelated workload with it.
+- **Every location in `global.locations` must already exist in the GVC you install into.** The platform accepts one that does not, stores it, and runs nothing there with no failed deployment to see. Both Grafana tiers log `[grafana] WARNING: locations declared in global.locations are not in GVC ...` at boot — `cpln logs '{gvc="YOUR_GVC", workload="RELEASE-grafana"}' | grep '\[grafana\]'` is the check.
+- **A missing `alerting.location` is the one mismatch with no visible symptom.** In dedicated-evaluator mode the `{release}-grafana-alerting` workload then holds zero replicas everywhere and not one alert rule is ever evaluated, while every dashboard looks healthy. The boot warning names it explicitly.
 - **Never rotate or delete the encryption key.** It encrypts datasource passwords at rest in the shared database — it protects nothing in transit, which is TLS's job via the datasource URL. Rotating it makes every stored credential unreadable in every location, and each alert rule that queries them fails silently.
 - **Any `helm upgrade` interrupts service in every location.** Database writes fail for about
   **117 s**, but the Grafana tier is unavailable for longer than that because reads fail too —
   measured recovery took about **4 minutes**, with one location down for **5-6 minutes**. The bundled database members do not restart one at a time — the platform does not retain the field that would limit the rollout — so all of them go down together (**~117 s** measured on an upgrade that changed nothing). Both Grafana tiers return errors for that window. Treat every upgrade as a planned outage, not a rolling one.
 - **Alert evaluation stops if you lose `alerting.location`, and the UI will not show it.** Repoint the knob and upgrade; that restarts only the evaluator. Set `alerting.highAvailability.enabled: true` to remove that failure — read the cost in [Alerting](#alerting) first, because it multiplies data-source query load by the instance count.
-- **The alerting-HA Redis tier is unauthenticated by default**, reachable only from inside this
-  chart's GVC. If you deploy anything else into that GVC, authenticate it — write access to it is
-  enough to suppress alert notifications. See
+- **The alerting-HA Redis tier is unauthenticated by default**, reachable only from inside the GVC
+  you install into — which since 2.0.0 is a GVC you own and may share with other workloads.
+  Authenticate it unless you control everything in that GVC: write access to it is enough to suppress
+  alert notifications. See
   [Authenticating the Redis tier](#authenticating-the-redis-tier).
 - **If you do set `redisML.*.passwordSecretName`, a wrong name stops the Grafana UI too**, because
   Grafana reads the same secret — and `helm install` still reports success. If a tier sits at 0
@@ -545,7 +636,7 @@ time; with HA on, `alerting.location` and `alerting.resources` are ignored.
 - **Scaling `replicas` has no alerting-related restriction** — it applies to the UI tier only, in every location including `alerting.location`. Watch the connection budget instead.
 - **On a cold start some instances restart once.** Grafana takes a non-blocking database lock to run migrations and exits if another instance holds it; the platform restarts it and the next attempt succeeds. A single `Failed to lock database` line during a fresh install or a tier restart is expected.
 - **Grafana Live has no HA engine here**, so a live-streamed message reaches only the browsers connected to the same instance. Interval-refreshing dashboards, queries, alerting, provisioning, login and the API are unaffected.
-- **Never suspend a location.** Suspending and resuming one permanently withdraws its endpoints from the other locations' service discovery while every status surface still reads healthy. To remove a location, remove it from `global.gvc.locations`.
+- **Never suspend a location.** Suspending and resuming one permanently withdraws its endpoints from the other locations' service discovery while every status surface still reads healthy. To remove a location, remove it from `global.locations` and from the GVC.
 - **Allow up to about four minutes after changing an access knob** before believing it did not work, and about two minutes after a cold install before believing a location is unreachable.
 
 - **With `publicAccess.enabled: false`, links in alert notifications point at the internal GVC address** (`…cpln.local:3000`) and will not open from a browser outside the GVC. Give the UI tier a public endpoint, or expect notification links to be unusable off-network.

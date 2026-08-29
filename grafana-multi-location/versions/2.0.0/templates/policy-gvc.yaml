@@ -1,0 +1,31 @@
+{{- include "grafana-ml.validate" . -}}
+{{- /*
+Both Grafana tiers read their own GVC at boot to confirm it really has every
+location this release declares. The platform validates neither direction: a
+localOptions entry naming a location the GVC does NOT have is accepted, stored
+verbatim and simply inert, so nothing runs there and no deployment reports a
+failure. For the UI tier that is a location quietly missing from the georouted
+endpoint; for the dedicated evaluator the workload holds zero replicas
+everywhere and not one alert rule is ever evaluated, with nothing in the UI to
+show it. Helm cannot see a live GVC at render time, so the container asks.
+
+Scoped to the ONE install GVC; never `target: all`, which would grant view on
+every GVC in the org. The shared identity is the only principal — both Grafana
+workloads use it (see identity.yaml), so one binding covers both.
+
+The vendored subcharts render their OWN equivalent policies for their own
+identities; this one grants nothing to them.
+*/}}
+kind: policy
+name: {{ include "grafana-ml.policy.gvc.name" . }}
+description: Grafana multi-location GVC read policy
+tags:
+  {{- include "grafana-ml.tags" . | nindent 2 }}
+bindings:
+  - permissions:
+      - view
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "grafana-ml.identity.name" . }}
+targetKind: gvc
+targetLinks:
+  - //gvc/{{ .Values.global.cpln.gvc }}

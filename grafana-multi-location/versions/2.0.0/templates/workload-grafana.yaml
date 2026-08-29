@@ -8,7 +8,7 @@ what makes exactly one of them send the notification.
 kind: workload
 name: {{ include "grafana-ml.name" . }}
 description: Grafana OSS UI/API tier, present in every location, HTTP :3000
-gvc: {{ .Values.global.gvc.name }}
+gvc: {{ .Values.global.cpln.gvc }}
 tags:
   {{- include "grafana-ml.tags" . | nindent 2 }}
 spec:
@@ -16,7 +16,7 @@ spec:
   # rules, alert state, sessions) lives in the stretched Postgres cluster — no
   # volumeset, no sticky sessions, nothing to hand over between locations.
   type: standard
-  identityLink: //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "grafana-ml.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "grafana-ml.identity.name" . }}
   containers:
     - name: grafana
       image: {{ .Values.image }}
@@ -34,7 +34,7 @@ spec:
           {{- else }}
           # No public endpoint to advertise; same-GVC internal DNS is a stable,
           # documented form and is safe to build from parts.
-          export GF_SERVER_ROOT_URL="http://{{ include "grafana-ml.name" . }}.{{ .Values.global.gvc.name }}.cpln.local:3000/"
+          export GF_SERVER_ROOT_URL="http://{{ include "grafana-ml.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:3000/"
           {{- end }}
           {{- if .Values.alerting.highAvailability.enabled }}
           # Peer identity in the Redis-coordinated alerting cluster. It needs
@@ -45,6 +45,7 @@ spec:
           # be had here, so do not try to derive one.
           export GF_UNIFIED_ALERTING_HA_REDIS_PEER_NAME="$(hostname)"
           {{- end }}
+          {{- include "grafana-ml.gvcCheck" (dict "root" . "tier" "ui") | nindent 10 }}
           {{- include "grafana-ml.dbGate" . | nindent 10 }}
             {{- include "grafana-ml.migrationStagger" . | nindent 10 }}
           exec /run.sh
@@ -102,12 +103,20 @@ spec:
   defaultOptions:
     autoscaling:
       maxConcurrency: 0
-      maxScale: {{ .Values.replicas | int }}
-      # Fixed counts are a correctness requirement here, not a preference:
-      # demand-driven scaling and capacityAI would both resize this tier
-      # underneath the connection budget.
+      {{- /*
+      minScale/maxScale are 0 so a GVC location this release did not ask for runs
+      NOTHING — the deployment there reads `This workload location is deactivated
+      because maxScale is set to 0`. localOptions below supplies the real count
+      for every declared location. This chart no longer creates the GVC, so it
+      cannot assume the GVC's location list matches its own; without this an
+      extra GVC location silently starts Grafana instances outside the database
+      connection budget the chart validated at render time.
+      Fixed counts (metric: disabled, capacityAI: false) are a correctness
+      requirement here rather than a preference, for the same reason.
+      */}}
+      maxScale: 0
       metric: disabled
-      minScale: {{ .Values.replicas | int }}
+      minScale: 0
       scaleToZeroDelay: 300
       target: 100
     capacityAI: false
@@ -118,7 +127,7 @@ spec:
     # Written in FULL for every location: a minimal localOptions entry makes the
     # API backfill its OWN defaults, which would leave a location eligible to
     # scale on concurrency and boot Grafana instances nobody asked for.
-    {{- range $location := .Values.global.gvc.locations }}
+    {{- range $location := .Values.global.locations }}
     - location: //location/{{ $location.name }}
       autoscaling:
         maxConcurrency: 0
@@ -165,10 +174,12 @@ spec:
       outboundAllowPort: []
       outboundBlockedCIDR: []
     internal:
-      inboundAllowType: {{ .Values.internalAccess.type }}
-      {{- if and (eq .Values.internalAccess.type "workload-list") .Values.internalAccess.workloads }}
-      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
-      {{- end }}
+      {{- /*
+      One helper, one `inboundAllowWorkload` key. See grafana-ml.ownWorkloadLinks:
+      this release's own workloads are added automatically, so a workload-list
+      naming only clients cannot cut the release off from itself.
+      */}}
+      {{- include "grafana-ml.internalFirewall" . | nindent 6 }}
   loadBalancer:
     # Grafana is HTTP, so the canonical *.cpln.app endpoint is the public path;
     # direct ports exist for non-HTTP exposure only. No peer traffic to address

@@ -22,7 +22,7 @@ correct public URL into a wrong one.
 kind: workload
 name: {{ include "grafana-ml.alerting.name" . }}
 description: Grafana alert-rule evaluator — exactly one replica, in one location, never public
-gvc: {{ .Values.global.gvc.name }}
+gvc: {{ .Values.global.cpln.gvc }}
 tags:
   {{- include "grafana-ml.tags" . | nindent 2 }}
 spec:
@@ -30,7 +30,7 @@ spec:
   # URL. Stateless: all alert state lives in the shared database, so this needs
   # no volume and no handover.
   type: standard
-  identityLink: //gvc/{{ .Values.global.gvc.name }}/identity/{{ include "grafana-ml.identity.name" . }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "grafana-ml.identity.name" . }}
   containers:
     - name: grafana
       image: {{ .Values.image }}
@@ -58,15 +58,16 @@ spec:
               ;;
             *)
               echo "could not derive the UI tier endpoint from '${CPLN_GLOBAL_ENDPOINT}'; alert links will use the internal address"
-              export GF_SERVER_ROOT_URL="http://{{ include "grafana-ml.name" . }}.{{ .Values.global.gvc.name }}.cpln.local:3000/"
+              export GF_SERVER_ROOT_URL="http://{{ include "grafana-ml.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:3000/"
               ;;
           esac
           {{- else }}
           # Public access is off, so there is no public endpoint to advertise;
           # alert links point at the UI tier's internal address.
-          export GF_SERVER_ROOT_URL="http://{{ include "grafana-ml.name" . }}.{{ .Values.global.gvc.name }}.cpln.local:3000/"
+          export GF_SERVER_ROOT_URL="http://{{ include "grafana-ml.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:3000/"
           {{- end }}
           echo "alert links will point at ${GF_SERVER_ROOT_URL}"
+          {{- include "grafana-ml.gvcCheck" (dict "root" . "tier" "evaluator") | nindent 10 }}
           {{- include "grafana-ml.dbGate" . | nindent 10 }}
           exec /run.sh
       inheritEnv: false
@@ -139,7 +140,7 @@ spec:
     # service discovery and only workload deletion fixes it. Scale-to-zero was
     # verified on a live workload — accepted, stored verbatim, and yielding 0
     # replicas in the zero-scaled locations and 1 in the selected one.
-    {{- range $location := .Values.global.gvc.locations }}
+    {{- range $location := .Values.global.locations }}
     {{- $isEvaluator := eq $location.name $.Values.alerting.location }}
     - location: //location/{{ $location.name }}
       autoscaling:
@@ -183,11 +184,9 @@ spec:
     internal:
       # Honoured deliberately: in-GVC reachability at
       # {release}-grafana-alerting.{gvc}.cpln.local:3000 is what makes the
-      # silence workaround an exact instruction (see the README).
-      inboundAllowType: {{ .Values.internalAccess.type }}
-      {{- if and (eq .Values.internalAccess.type "workload-list") .Values.internalAccess.workloads }}
-      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
-      {{- end }}
+      # silence workaround an exact instruction (see the README) — and it is why
+      # grafana-ml.ownWorkloadLinks puts both tiers in the workload-list.
+      {{- include "grafana-ml.internalFirewall" . | nindent 6 }}
   loadBalancer:
     direct:
       enabled: false

@@ -649,8 +649,9 @@ time; with HA on, `alerting.location` and `alerting.resources` are ignored.
 - **An upgrade that adds a new secret reference can pause the rollout for about 9-10 minutes while
   Helm reports success.** Affected locations log `The identity … is not allowed to reveal the secret …`
   even though the policy grant is already in place and visible in `cpln secret access-report`. It
-  **self-heals with no action** (measured 9 m 0 s - 9 m 30 s); do not re-run the upgrade or start
-  editing policies. This is platform-side propagation, not a chart setting.
+  **self-heals with no action** (measured 9 m 0 s - 10 m 15 s across three rounds); do not re-run the
+  upgrade or start editing policies. This is platform-side propagation, not a chart setting, and the
+  spread is wide enough that you should keep polling rather than time-boxing it.
 
 - **`replicas: 2` or higher lengthens the cold install.** A single-replica 3-location install reaches
   ready in about 5 minutes; at `replicas: 2` expect roughly 7 minutes for every location to report

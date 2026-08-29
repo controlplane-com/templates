@@ -107,9 +107,17 @@ tiers. Emitting exactly ONE `inboundAllowWorkload` key is the point: tidb
 shipped a duplicate key on all three of its tiers and the trailing `[]` silently
 discarded the user's entire list.
 
-The key is emitted ONLY under `workload-list`, which is the shape 1.1.1's drift
-gate ran clean against on the `same-gvc` default — the API does not backfill it
-there, so declaring it would be unverified churn (the seaweedfs/minio ruling).
+The key is ALWAYS emitted, including as `[]` on the non-list types. Sending a
+PARTIAL `internal` block makes the API complete it: on the `same-gvc` default both
+Grafana workloads drifted from their own manifest from creation (measured
+2026-08-29). The three subchart tiers already ship it unconditionally and never
+drifted, which is what isolated it.
+
+An earlier version of this comment justified omitting it by citing 1.1.1's clean
+drift gate. That reasoning was wrong, and instructively so: a `helm upgrade` gate
+CANNOT see this class — upgrade #2 reported `Unchanged` for these same two
+workloads while the difference was present the whole time. Only comparing the
+render against the stored spec finds it.
 */}}
 {{- define "grafana-ml.internalFirewall" -}}
 inboundAllowType: {{ .Values.internalAccess.type }}
@@ -122,6 +130,8 @@ inboundAllowWorkload:
   - {{ . }}
   {{- end }}
   {{- end }}
+{{- else }}
+inboundAllowWorkload: []
 {{- end }}
 {{- end -}}
 

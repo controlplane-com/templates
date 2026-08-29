@@ -140,7 +140,7 @@ Backups do **not** use the proxy — both jobs connect directly to `replica-0` i
 ```yaml
 backup:
   enabled: false
-  mode: logical  # the only supported mode; see Important Notes
+  mode: logical  # the only supported mode (physical was removed in 2.0.0)
 
   schedule: "0 2 * * *" # daily at 2am UTC
 
@@ -156,7 +156,6 @@ backup:
       cpu: 100m
       memory: 128Mi
 
-  # Physical backup (Percona Backup for MongoDB)
   aws:
     bucket: my-backup-bucket
     region: us-east-1

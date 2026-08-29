@@ -36,10 +36,6 @@
 {{- printf "%s-mongo-proxy-startup" .Release.Name }}
 {{- end }}
 
-{{- define "mongo-cluster.secretPbmStartup.name" -}}
-{{- printf "%s-mongo-pbm-startup" .Release.Name }}
-{{- end }}
-
 
 {{/* Topology */}}
 
@@ -293,6 +289,16 @@ two unrelated things. It is an explicit knob from 2.0.0.
 {{- end -}}
 
 {{- define "mongo-cluster.validateBackupConfig" -}}
+{{- /*
+  The physical-mode refusal sits OUTSIDE the backup.enabled gate deliberately.
+  A 1.x values file carrying `mode: physical` with backups currently OFF would
+  otherwise render clean and give no signal until the day someone enables
+  backups -- which is exactly the silent-until-it-matters shape the removal
+  exists to end.
+*/ -}}
+{{- if eq .Values.backup.mode "physical" -}}
+{{- fail "mongodb-cluster: backup.mode 'physical' was REMOVED in 2.0.0. Percona Backup for MongoDB's physical restore must execute mongod, and the pbm-agent image does not contain it (`check mongod binary: run: exec: \"mongod\": executable file not found in $PATH`) -- so the mode wrote real-looking snapshots that could never be restored, and failed silently while doing it. Use backup.mode: logical, whose restore is verified end to end in the README." -}}
+{{- end -}}
 {{- if .Values.backup.enabled -}}
   {{- $mode := .Values.backup.mode -}}
   {{- if eq $mode "physical" -}}

@@ -71,38 +71,6 @@ spec:
         - path: /etc/mongo-keyfile/keyfile
           recoveryPolicy: retain
           uri: 'cpln://secret/{{ .Values.mongodb.keyfileSecretName }}'
-    # PBM agent sidecar for physical backups
-    {{- if and .Values.backup.enabled (eq .Values.backup.mode "physical") }}
-    - name: pbm-agent
-      image: {{ .Values.backup.physical.image }}
-      command: /bin/sh
-      args:
-        - /pbm/startup.sh
-      inheritEnv: false
-      cpu: {{ .Values.backup.physical.resources.cpu | quote }}
-      memory: {{ .Values.backup.physical.resources.memory | quote }}
-      env:
-        - name: MONGO_INITDB_ROOT_USERNAME
-          value: 'cpln://secret/{{ .Values.mongodb.credentialsSecretName }}.username'
-        - name: MONGO_INITDB_ROOT_PASSWORD
-          value: 'cpln://secret/{{ .Values.mongodb.credentialsSecretName }}.password'
-        {{- /* Bucket and region are not secrets — they come straight from values. */}}
-        - name: PBM_BUCKET
-          value: {{ (eq .Values.backup.provider "aws") | ternary .Values.backup.aws.bucket .Values.backup.gcp.bucket | quote }}
-        - name: PBM_PREFIX
-          value: {{ (eq .Values.backup.provider "aws") | ternary .Values.backup.aws.prefix .Values.backup.gcp.prefix | quote }}
-        {{- if eq .Values.backup.provider "aws" }}
-        - name: AWS_REGION
-          value: {{ .Values.backup.aws.region | quote }}
-        {{- end }}
-      volumes:
-        - path: /data/db
-          recoveryPolicy: retain
-          uri: 'cpln://volumeset/{{ include "mongo-cluster.volume.name" . }}'
-        - path: /pbm/startup.sh
-          recoveryPolicy: retain
-          uri: 'cpln://secret/{{ include "mongo-cluster.secretPbmStartup.name" . }}'
-    {{- end }}
   defaultOptions:
     {{- /*
     minScale/maxScale are 0 so a GVC location this release did not ask for runs
@@ -161,15 +129,6 @@ spec:
     external:
       inboundAllowCIDR: []
       inboundBlockedCIDR: []
-      {{- if and .Values.backup.enabled (eq .Values.backup.mode "physical") }}
-      {{- /* The pbm-agent sidecar uploads to object storage from this workload. */}}
-      outboundAllowCIDR:
-        - 0.0.0.0/0
-      {{- else }}
-      {{- /* mongod needs no egress: replication is internal GVC traffic, and the
-             boot-time GVC read goes to $CPLN_ENDPOINT over the internal path. */}}
-      outboundAllowCIDR: []
-      {{- end }}
       outboundAllowHostname: []
       outboundAllowPort: []
       outboundBlockedCIDR: []

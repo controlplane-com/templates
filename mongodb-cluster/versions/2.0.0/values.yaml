@@ -75,7 +75,10 @@ proxy:
 
 backup:
   enabled: false
-  mode: logical # options: logical, physical
+  # `logical` is the only supported mode. Physical (Percona Backup for MongoDB)
+  # was removed in 2.0.0: its restore must execute mongod, which the pbm-agent
+  # image does not contain, so it wrote backups that could never be restored.
+  mode: logical
 
   schedule: "0 2 * * *" # daily at 2am UTC
 
@@ -92,17 +95,6 @@ backup:
     resources:
       cpu: 100m
       memory: 128Mi
-
-  # Physical backup (Percona Backup for MongoDB)
-  physical:
-    image: percona/percona-backup-mongodb:2.14.0
-    resources:
-      cpu: 100m
-      memory: 128Mi
-    cron:
-      resources:
-        cpu: 50m
-        memory: 64Mi
 
   aws:
     bucket: my-backup-bucket

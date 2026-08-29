@@ -7,8 +7,7 @@ A MongoDB replica set built on Percona Server for MongoDB, with automatic primar
 - **Stateful MongoDB workload** — the replica set members, one per replica in each configured location, with keyfile authentication and automatic replica-set registration at boot.
 - **Volume set** — per-member `/data/db` storage, with optional capacity autoscaling and daily snapshots.
 - **HAProxy workload** *(optional, on by default)* — one stable address that TCP-health-checks every member and routes to whichever one is primary.
-- **Backup workload** *(optional)* — a cron job running either a logical `mongodump` or a Percona Backup for MongoDB (PBM) physical backup to object storage.
-- **PBM agent sidecar** *(optional)* — added to each member when `backup.mode: physical`.
+- **Backup workload** *(optional)* — a cron job running a logical `mongodump` to object storage.
 - **Secrets** — the MongoDB startup script, the HAProxy startup script, and the PBM agent script.
 - **Identity** — the workloads' identity, bound to your cloud account when backups are enabled.
 - **Policy** — `reveal` on this release's secrets and on your two prerequisite secrets.
@@ -141,7 +140,7 @@ Backups do **not** use the proxy — both jobs connect directly to `replica-0` i
 ```yaml
 backup:
   enabled: false
-  mode: logical # options: logical, physical
+  mode: logical  # the only supported mode; see Important Notes
 
   schedule: "0 2 * * *" # daily at 2am UTC
 
@@ -158,16 +157,6 @@ backup:
       memory: 128Mi
 
   # Physical backup (Percona Backup for MongoDB)
-  physical:
-    image: percona/percona-backup-mongodb:2.14.0
-    resources:
-      cpu: 100m
-      memory: 128Mi
-    cron:
-      resources:
-        cpu: 50m
-        memory: 64Mi
-
   aws:
     bucket: my-backup-bucket
     region: us-east-1
@@ -276,13 +265,8 @@ mongorestore --uri="mongodb://USERNAME:PASSWORD@localhost:27017/?authSource=admi
 
 ### Physical (PBM)
 
-**A PBM physical restore has not been verified on Control Plane, and there is a known conflict with how this template runs mongod.** PBM's documented physical restore has `pbm-agent` stop mongod on every node, replace the data directory, and leave the database down until an operator restarts it — and it requires that nothing restarts mongod on its own in the meantime. In this template mongod is PID 1 of the container, so the platform restarts the container as soon as PBM stops it. Whether a physical restore can complete under that behaviour is untested.
+**Physical (PBM) backups were removed in 2.0.0, and a values file that still sets `backup.mode: physical` fails at render.** The restore could never work: PBM's physical restore must execute `mongod` itself, and the `pbm-agent` image does not contain it — `check mongod binary: run: exec: "mongod": executable file not found in $PATH`. It failed silently, with `pbm status` reporting nothing running while the agent heartbeated into the bucket indefinitely, so the mode wrote real-looking snapshots that could never be restored. `backup.mode: logical` is the supported path and its restore is verified end to end below.
 
-Until it is proven, choose `backup.mode: logical` if you need a restore path you can rely on. To list the physical backups that exist:
-
-```bash
-cpln workload exec RELEASE-mongo --gvc GVC --container pbm-agent -- /bin/sh -c 'pbm list --mongodb-uri="mongodb://$MONGO_INITDB_ROOT_USERNAME:$MONGO_INITDB_ROOT_PASSWORD@localhost:27017/admin?replicaSet=rs0&authSource=admin"'
-```
 
 ## Migrating from 1.x
 

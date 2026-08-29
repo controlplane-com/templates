@@ -40,10 +40,6 @@
 {{- printf "%s-mongo-pbm-startup" .Release.Name }}
 {{- end }}
 
-{{- define "mongo-cluster.physicalBackup.name" -}}
-{{- printf "%s-mongo-physical-backup" .Release.Name }}
-{{- end }}
-
 
 {{/* Topology */}}
 
@@ -91,9 +87,6 @@ does not exist.
 {{- end }}
 {{- if and .Values.backup.enabled (eq .Values.backup.mode "logical") }}
 - //gvc/{{ $gvc }}/workload/{{ include "mongo-cluster.backup.name" . }}
-{{- end }}
-{{- if and .Values.backup.enabled (eq .Values.backup.mode "physical") }}
-- //gvc/{{ $gvc }}/workload/{{ include "mongo-cluster.physicalBackup.name" . }}
 {{- end }}
 {{- end -}}
 
@@ -302,8 +295,11 @@ two unrelated things. It is an explicit knob from 2.0.0.
 {{- define "mongo-cluster.validateBackupConfig" -}}
 {{- if .Values.backup.enabled -}}
   {{- $mode := .Values.backup.mode -}}
-  {{- if not (or (eq $mode "logical") (eq $mode "physical")) -}}
-    {{- fail "backup.mode must be 'logical' or 'physical'" -}}
+  {{- if eq $mode "physical" -}}
+    {{- fail "mongodb-cluster: backup.mode 'physical' was REMOVED in 2.0.0. Percona Backup for MongoDB's physical restore must execute mongod, and the pbm-agent image does not contain it (`check mongod binary: run: exec: \"mongod\": executable file not found in $PATH`) -- so the mode wrote real-looking snapshots that could never be restored, and failed silently while doing it. Use backup.mode: logical, whose restore is verified end to end in the README." -}}
+  {{- end -}}
+  {{- if not (eq $mode "logical") -}}
+    {{- fail "backup.mode must be 'logical'" -}}
   {{- end -}}
   {{- $provider := .Values.backup.provider -}}
   {{- if not (or (eq $provider "aws") (eq $provider "gcp")) -}}

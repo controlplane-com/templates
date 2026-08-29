@@ -1,0 +1,22 @@
+{{- include "cpln-advisor.validate" . }}
+---
+kind: gvc
+name: {{ .Values.global.cpln.gvc }}
+description: CPLN Advisor
+tags: {{- include "cpln-advisor.tags" . | nindent 4 }}
+spec:
+  endpointNamingFormat: org
+  # EXACTLY ONE LOCATION, and the chart refuses to render with more.
+  #
+  # A workload runs in EVERY location of its GVC, and minScale/maxScale are
+  # per-location — so a second location silently doubles the API, the worker and
+  # the scheduler, no matter that each is pinned to one replica. That means a
+  # second scheduler firing every cron twice, and a second writer on the
+  # database. The bundled Postgres is a single stateful workload on a
+  # read-write-once volume, so a second location would give it a second,
+  # INDEPENDENT database rather than a replica.
+  staticPlacement:
+    locationLinks:
+    {{- range .Values.gvc.locations }}
+      - //location/{{ .name }}
+    {{- end }}

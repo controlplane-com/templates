@@ -1,0 +1,20 @@
+---
+kind: policy
+name: {{ include "cpln-advisor.policy.name" . }}
+description: CPLN Advisor policy
+tags: {{- include "cpln-advisor.tags" . | nindent 4 }}
+bindings:
+  # `reveal`, NOT `view` — view exposes metadata only, and the cpln://secret/…
+  # reference then resolves to an empty string. The containers start happily and
+  # behave as though nothing were configured, so this failure is silent.
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "cpln-advisor.identity.name" . }}
+targetKind: secret
+targetLinks:
+  # Exactly the one advisor credentials secret you created — never `target: all`,
+  # which would grant reveal on every secret in the org. The bundled postgres
+  # subchart brings its own policy for its own credentials secret, so this
+  # identity never gets reveal on the database's.
+  - //secret/{{ .Values.auth.secretName }}

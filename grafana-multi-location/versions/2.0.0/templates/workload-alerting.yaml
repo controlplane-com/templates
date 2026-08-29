@@ -1,0 +1,196 @@
+{{- include "grafana-ml.validate" . -}}
+{{/*
+THE DEDICATED ALERT EVALUATOR — the default shape. Exactly-once evaluation is a
+property of this workload's TOPOLOGY — one workload, exactly one replica, exactly
+one location — not something the containers negotiate. There is nothing to elect,
+nothing to derive from a hostname (a standard workload's HOSTNAME carries a
+random suffix, not an index), and no value of `.Values.replicas` can create a
+second evaluator because that knob belongs to a different workload.
+alerting.enabled: false renders NOTHING here: alert rules can still be created
+and viewed, they are simply never evaluated.
+
+NOT RENDERED AT ALL when alerting.highAvailability.enabled is true. There, every
+UI instance evaluates and Redis coordinates the send, so a dedicated evaluator
+would not merely be redundant — it would be a second class of instance behaving
+differently for no reason, one more peer, and one more database connection.
+Nothing in its body is copied to the UI tier; in particular the
+CPLN_GLOBAL_ENDPOINT rewrite below exists ONLY because this workload has no
+inbound access of its own, and applying it to a UI instance would rewrite a
+correct public URL into a wrong one.
+*/}}
+{{- if include "grafana-ml.evaluatorRenders" . }}
+kind: workload
+name: {{ include "grafana-ml.alerting.name" . }}
+description: Grafana alert-rule evaluator — exactly one replica, in one location, never public
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "grafana-ml.tags" . | nindent 2 }}
+spec:
+  # Same image, same env as the UI tier apart from EXECUTE_ALERTS and the root
+  # URL. Stateless: all alert state lives in the shared database, so this needs
+  # no volume and no handover.
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "grafana-ml.identity.name" . }}
+  containers:
+    - name: grafana
+      image: {{ .Values.image }}
+      command: /bin/bash
+      args:
+        - -c
+        - |-
+          {{- if .Values.publicAccess.enabled }}
+          # CPLN_GLOBAL_ENDPOINT is PER-WORKLOAD, and this workload has no
+          # inbound access — using it raw would put a dead link in every alert
+          # email and webhook payload, since the evaluator is the instance that
+          # renders notifications. Rewrite ONLY the workload-name prefix of our
+          # own endpoint: the hostname's shape is not stable across GVCs
+          # ({workload}-{gvcAlias}.cpln.app in one, {workload}-{gvcAlias}.{orgAlias}.cpln.app
+          # in another) and there is no CPLN_ORG_ALIAS, so never rebuild it from
+          # parts. If the prefix does not match, fall back to the internal URL
+          # rather than emitting a hostname we invented.
+          _ui="{{ include "grafana-ml.name" . }}"
+          _self="{{ include "grafana-ml.alerting.name" . }}"
+          _scheme="${CPLN_GLOBAL_ENDPOINT%%://*}"
+          _host="${CPLN_GLOBAL_ENDPOINT#*://}"
+          case "$_host" in
+            "$_self"-*)
+              export GF_SERVER_ROOT_URL="${_scheme}://${_ui}-${_host#$_self-}"
+              ;;
+            *)
+              echo "could not derive the UI tier endpoint from '${CPLN_GLOBAL_ENDPOINT}'; alert links will use the internal address"
+              export GF_SERVER_ROOT_URL="http://{{ include "grafana-ml.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:3000/"
+              ;;
+          esac
+          {{- else }}
+          # Public access is off, so there is no public endpoint to advertise;
+          # alert links point at the UI tier's internal address.
+          export GF_SERVER_ROOT_URL="http://{{ include "grafana-ml.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:3000/"
+          {{- end }}
+          echo "alert links will point at ${GF_SERVER_ROOT_URL}"
+          {{- include "grafana-ml.gvcCheck" (dict "root" . "tier" "evaluator") | nindent 10 }}
+          {{- include "grafana-ml.dbGate" . | nindent 10 }}
+          exec /run.sh
+      inheritEnv: false
+      minCpu: {{ .Values.alerting.resources.minCpu | quote }}
+      minMemory: {{ .Values.alerting.resources.minMemory | quote }}
+      cpu: {{ .Values.alerting.resources.maxCpu | quote }}
+      memory: {{ .Values.alerting.resources.maxMemory | quote }}
+      env:
+        {{- include "grafana-ml.env" (dict "root" . "executeAlerts" "true") | nindent 8 }}
+      ports:
+        - number: 3000
+          protocol: http
+      {{- if .Values.datasources.definitions }}
+      volumes:
+        - path: /etc/grafana/provisioning/datasources/cpln-datasources.yaml
+          # Declared because the API backfills it on secret volumes.
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "grafana-ml.secretDatasources.name" . }}.payload
+      {{- end }}
+      readinessProbe:
+        httpGet:
+          path: /api/health
+          port: 3000
+          # explicit server default — prevents cosmetic drift vs the live workload
+          scheme: HTTP
+        # Declared because the API backfills it.
+        initialDelaySeconds: 10
+        # 20 × 10 s = 200 s, deliberately SHORTER than the 300 s database gate so
+        # a boot still waiting on the database reads as not-ready (see the UI
+        # tier). 20 is the platform MAXIMUM for failureThreshold — raise
+        # periodSeconds.
+        periodSeconds: 10
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 3
+      livenessProbe:
+        httpGet:
+          path: /api/health
+          port: 3000
+          scheme: HTTP
+        # Declared because the API backfills it. 360 s > the 300 s database gate,
+        # with headroom for migrations waiting behind another instance's lock.
+        # Coupled to grafana-ml.dbGate — raise one and you must raise the other.
+        initialDelaySeconds: 360
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      # ZERO by default, ONE only in alerting.location below. The fail-safe
+      # direction is deliberate: if a localOptions entry were ever missing, that
+      # location runs NOTHING rather than a second evaluator. Duplicate
+      # notifications are the failure this whole design exists to prevent.
+      maxScale: 0
+      metric: disabled
+      minScale: 0
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  localOptions:
+    # Written in FULL for every location, for the same reason as the UI tier, and
+    # load-bearing twice over here.
+    # Zero-scaling a location is NOT `suspend`: localOptions[].suspend
+    # permanently withdraws that location's endpoints from the other locations'
+    # service discovery and only workload deletion fixes it. Scale-to-zero was
+    # verified on a live workload — accepted, stored verbatim, and yielding 0
+    # replicas in the zero-scaled locations and 1 in the selected one.
+    {{- range $location := .Values.global.locations }}
+    {{- $isEvaluator := eq $location.name $.Values.alerting.location }}
+    - location: //location/{{ $location.name }}
+      autoscaling:
+        maxConcurrency: 0
+        maxScale: {{ if $isEvaluator }}1{{ else }}0{{ end }}
+        metric: disabled
+        minScale: {{ if $isEvaluator }}1{{ else }}0{{ end }}
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      suspend: false
+      timeoutSeconds: 30
+    {{- end }}
+  rolloutOptions:
+    {{- /*
+    Surge is 0% here, unlike the UI tier: a surged second evaluator, however
+    briefly, is a duplicate notification. A few seconds without evaluation is
+    strictly preferable. maxUnavailableReplicas is deliberately not set (see the
+    UI tier); terminationGracePeriodSeconds is declared because the API backfills 90.
+    */}}
+    maxSurgeReplicas: 0%
+    minReadySeconds: 30
+    scalingPolicy: Parallel
+    terminationGracePeriodSeconds: 90
+  firewallConfig:
+    external:
+      # NEVER public, with no dependence on publicAccess.enabled. It serves no
+      # users; exposing it would only put a second admin-capable login form on
+      # the internet guarding the same database.
+      inboundAllowCIDR: []
+      # Must reach the user's datasources during rule evaluation, plus the SMTP
+      # server and every webhook contact point.
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      # Declared empty because the API backfills these.
+      inboundBlockedCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      # Honoured deliberately: in-GVC reachability at
+      # {release}-grafana-alerting.{gvc}.cpln.local:3000 is what makes the
+      # silence workaround an exact instruction (see the README) — and it is why
+      # grafana-ml.ownWorkloadLinks puts both tiers in the workload-list.
+      {{- include "grafana-ml.internalFirewall" . | nindent 6 }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false
+{{- end }}

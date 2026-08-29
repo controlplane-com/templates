@@ -1,0 +1,16 @@
+{{- include "grafana-ml.validate" . -}}
+{{/*
+ONE identity, shared by the UI tier and the alert evaluator: they mount exactly
+the same secrets, so a second identity would only be a second thing to keep in
+step. Precedent: postgres-multi-location shares one identity across its Patroni
+and HAProxy workloads.
+No cloud account and no aws/gcp bindings — this chart touches no object storage.
+When the subchart's backups are enabled, the SUBCHART's identity gains the
+bucket-scoped binding; this one does not.
+*/}}
+kind: identity
+name: {{ include "grafana-ml.identity.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: Grafana multi-location identity
+tags:
+  {{- include "grafana-ml.tags" . | nindent 2 }}

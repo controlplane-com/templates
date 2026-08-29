@@ -41,6 +41,7 @@ spec:
         timeoutSeconds: 3
       volumes:
         - path: /var/lib/postgresql/data
+          recoveryPolicy: retain   # API backfill, declared so rendered == stored
           uri: 'cpln://volumeset/{{ include "airflow.postgresVolume.name" . }}'
   {{- /*
     One replica, in the one configured location. Before 2.0.0 this workload

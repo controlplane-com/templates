@@ -1,0 +1,186 @@
+{{- include "airflow.validate" . -}}
+kind: workload
+name: {{ include "airflow.webserver.name" . }}
+description: Airflow webserver
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "airflow.tags" . | nindent 2 }}
+spec:
+  type: stateful
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "airflow.identity.name" . }}
+  containers:
+    - name: airflow
+      command: /bin/bash
+      args:
+        - /scripts/webserver-startup.sh
+      cpu: {{ .Values.airflow.webserver.resources.cpu | quote }}
+      memory: {{ .Values.airflow.webserver.resources.memory | quote }}
+      image: {{ .Values.airflow.webserver.image }}
+      inheritEnv: false
+      lifecycle:
+        preStop:
+          exec:
+            command:
+              - bash
+              - '-c'
+              - sleep 0
+      env:
+        - name: AIRFLOW_HOME
+          value: /opt/airflow
+        - name: AIRFLOW__API_AUTH__JWT_EXPIRATION_TIME
+          value: {{ .Values.airflow.auth.jwtExpirationTime | quote }}
+        - name: POSTGRES_USERNAME
+          value: cpln://secret/{{ include "airflow.secret.name" . }}.username
+        - name: POSTGRES_PASSWORD
+          value: cpln://secret/{{ include "airflow.secret.name" . }}.password
+        - name: AIRFLOW__API_AUTH__JWT_SECRET
+          value: cpln://secret/{{ .Values.airflow.auth.secretName }}.jwtSecret
+        - name: AIRFLOW__CORE__FERNET_KEY
+          value: cpln://secret/{{ .Values.airflow.auth.secretName }}.fernetKey
+        - name: AIRFLOW__API__BASE_URL
+          value: http://{{ include "airflow.webserver.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:{{ .Values.airflow.webPort }}
+        - name: AIRFLOW__CELERY__BROKER_URL
+          value: redis://{{ include "airflow.redis.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local
+        - name: AIRFLOW__CELERY__RESULT_BACKEND
+          value: db+postgresql://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ include "airflow.postgres.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:5432/{{ .Values.postgres.config.database }}
+        {{- if .Values.gitSync.enabled }}
+        - name: AIRFLOW__CORE__DAGS_FOLDER
+          value: /opt/airflow/dags-sync/current{{ if .Values.gitSync.subPath }}/{{ .Values.gitSync.subPath }}{{ end }}
+        {{- else }}
+        - name: AIRFLOW__CORE__DAGS_FOLDER
+          value: /opt/airflow/dags
+        {{- end }}
+        - name: AIRFLOW__CORE__EXECUTOR
+          value: CeleryExecutor
+        - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+          value: postgresql+psycopg2://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ include "airflow.postgres.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:5432/{{ .Values.postgres.config.database }}
+        - name: AIRFLOW__LOGGING__REMOTE_LOGGING
+          value: 'False'
+        - name: AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL
+          value: "{{ .Values.airflow.scheduler.dagDirListInterval }}"
+        - name: AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL
+          value: "{{ .Values.airflow.scheduler.minFileProcessInterval }}"
+        - name: AIRFLOW_ADMIN_USERNAME
+          value: {{ .Values.airflow.admin.username | quote }}
+        - name: AIRFLOW_ADMIN_PASSWORD
+          value: cpln://secret/{{ .Values.airflow.auth.secretName }}.adminPassword
+        - name: AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS
+          value: {{ printf "%s:ADMIN" .Values.airflow.admin.username | quote }}
+        - name: AIRFLOW__API__HOST
+          value: 0.0.0.0
+        - name: AIRFLOW__API__PORT
+          value: "{{ .Values.airflow.webPort }}"
+      ports:
+        - number: {{ .Values.airflow.webPort }}
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /api/v2/monitor/health
+          port: {{ .Values.airflow.webPort }}
+          scheme: HTTP
+        failureThreshold: 5
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+      volumes:
+        - path: /opt/airflow
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "airflow.volume.name" . }}
+        - path: /scripts/webserver-startup.sh
+          recoveryPolicy: retain   # API backfill, declared so rendered == stored
+          uri: cpln://secret/{{ include "airflow.webserverScript.name" . }}.payload
+    {{- if .Values.gitSync.enabled }}
+    - name: git-sync
+      image: registry.k8s.io/git-sync/git-sync:v4.4.0
+      cpu: 100m
+      memory: 128Mi
+      inheritEnv: false
+      env:
+        - name: GITSYNC_REPO
+          value: {{ .Values.gitSync.repo | quote }}
+        - name: GITSYNC_BRANCH
+          value: {{ .Values.gitSync.branch | quote }}
+        - name: GITSYNC_ROOT
+          value: /opt/airflow/dags-sync
+        - name: GITSYNC_LINK
+          value: current
+        - name: GITSYNC_PERIOD
+          value: {{ .Values.gitSync.period | quote }}
+        {{- if .Values.gitSync.auth.secretName }}
+        - name: GITSYNC_USERNAME
+          value: git
+        - name: GITSYNC_PASSWORD
+          value: cpln://secret/{{ .Values.gitSync.auth.secretName }}
+        {{- end }}
+      volumes:
+        - path: /opt/airflow
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "airflow.volume.name" . }}
+    {{- end }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 0   # a GVC location this release did not ask for runs NOTHING
+      metric: disabled
+      minScale: 0   # localOptions below supplies the real count for the one configured location
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  {{- /*
+    Exactly ONE replica, in the ONE configured location. This container runs the
+    scheduler, the dag-processor AND the triggerer alongside the API server, so a
+    second replica is a second scheduler and a second triggerer -- and before
+    2.0.0 this workload declared no options at all, which left it on the platform
+    defaults and eligible to scale out on concurrency.
+
+    Every field defaultOptions carries is REPEATED here. A localOptions entry is
+    not a patch onto defaultOptions: the API completes a partial entry from its
+    OWN platform defaults, so an omitted field falls through to a platform value
+    rather than to the 0/0 shape above.
+  */}}
+  localOptions:
+    - autoscaling:
+        maxConcurrency: 0
+        maxScale: 1
+        metric: disabled
+        minScale: 1
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      location: //location/{{ .Values.location }}
+      suspend: false
+      timeoutSeconds: 5
+  firewallConfig:
+    external:
+      {{- if .Values.firewallConfig.inboundAllowCIDR }}
+      inboundAllowCIDR:
+        {{- toYaml .Values.firewallConfig.inboundAllowCIDR | nindent 8 }}
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      {{- include "airflow.internalFirewall" (dict "root" . "keda" false) | nindent 6 }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  rolloutOptions:
+    maxSurgeReplicas: 25%
+    minReadySeconds: 0
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 1
+  securityOptions:
+    filesystemGroupId: 50000
+  supportDynamicTags: false

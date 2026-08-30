@@ -1,0 +1,23 @@
+{{- /*
+Each mongod member reads its own GVC at boot to confirm the GVC really has every
+location this release declares. The platform does not validate localOptions
+locations at all: an entry naming a location the GVC lacks is accepted, stored
+and inert, so the members declared there never start — the replica set is
+quietly smaller than the quorum arithmetic the operator sized it on.
+
+Scoped to the ONE install GVC; never `target: all`, which would grant view on
+every GVC in the org.
+*/}}
+---
+kind: policy
+name: {{ include "mongo-cluster.policy.gvc.name" . }}
+description: MongoDB GVC read policy
+tags: {{- include "mongo-cluster.tags" . | nindent 2 }}
+bindings:
+  - permissions:
+      - view
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "mongo-cluster.identity.name" . }}
+targetKind: gvc
+targetLinks:
+  - //gvc/{{ .Values.global.cpln.gvc }}

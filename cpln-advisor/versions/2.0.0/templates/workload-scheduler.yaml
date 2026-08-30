@@ -1,0 +1,76 @@
+---
+kind: workload
+name: {{ include "cpln-advisor.scheduler.name" . }}
+description: CPLN Advisor cron scheduler (fires scheduled scans and retention)
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "cpln-advisor.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "cpln-advisor.identity.name" . }}
+  containers:
+    - name: scheduler
+      image: {{ .Values.images.backend }}
+      inheritEnv: false
+      minCpu: {{ .Values.scheduler.resources.minCpu | quote }}
+      minMemory: {{ .Values.scheduler.resources.minMemory | quote }}
+      cpu: {{ .Values.scheduler.resources.maxCpu | quote }}
+      memory: {{ .Values.scheduler.resources.maxMemory | quote }}
+      # `workers.worker:scheduler`, NOT `:broker`. TaskIQ's scheduler CLI needs
+      # a TaskiqScheduler instance; pointed at the broker it exits immediately
+      # with "Imported scheduler is not a subclass of TaskiqScheduler".
+      #
+      # This process is NOT optional. The worker runs tasks; the scheduler fires
+      # the cron that CREATES them. Without it nothing is scanned on a schedule,
+      # retention never prunes and autopilot never runs — and everything still
+      # looks healthy.
+      command: taskiq
+      args:
+        - scheduler
+        - workers.worker:scheduler
+      env:
+        # Nothing here may be named CPLN_* — see the note on the API workload.
+        - name: LOG_LEVEL
+          value: {{ .Values.logLevel | quote }}
+        - name: REDIS_URL
+          value: {{ include "cpln-advisor.redis.url" . | quote }}
+        # The SAME database the API and worker use.
+        # Postgres, from the bundled `postgres` subchart. The URL carries the
+        # password, so it is a key in YOUR credentials secret rather than a value
+        # here. Its username/password/database must match the database's own
+        # prerequisite secret — nothing cross-checks the two.
+        - name: DATABASE_URL
+          value: cpln://secret/{{ .Values.auth.secretName }}.DATABASE_URL
+        # Present for parity with the other two; the scheduler only enqueues
+        # into Redis.
+        - name: ADVISOR_API_TOKEN
+          value: cpln://secret/{{ .Values.auth.secretName }}.ADVISOR_API_TOKEN
+        - name: ADVISOR_SECRET_KEY
+          value: cpln://secret/{{ .Values.auth.secretName }}.ADVISOR_SECRET_KEY
+  defaultOptions:
+    capacityAI: true # the scheduler only enqueues; let it be sized down
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1 # two schedulers would fire every cron twice
+  # Non-root. `filesystemGroupId` is gone with the shared volume it existed for.
+  # (Never 1337: that is the mesh proxy's UID, and a container running as it
+  # bypasses the Envoy redirect.)
+  securityOptions:
+    runAsUser: 10001
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: [] # it only enqueues into Redis
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: none
+      inboundAllowWorkload: []
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

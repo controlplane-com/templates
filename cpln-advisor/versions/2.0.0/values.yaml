@@ -1,0 +1,237 @@
+# ─── GVC ──────────────────────────────────────────────────────────────────────
+# This chart CREATES this GVC. It must NOT already exist: Helm adopts one that
+# does, and `helm uninstall` would then delete it and everything in it.
+#
+# The name lives under `global` so every resource is tagged with it and any
+# subchart would inherit it — the catalog's convention for a chart that owns
+# its own GVC.
+global:
+  cpln:
+    gvc: advisor
+
+gvc:
+  # EXACTLY ONE location, and the chart refuses to render with more. A workload
+  # runs in EVERY location of its GVC and minScale/maxScale are per-location, so
+  # a second location silently gives you a second scheduler firing every cron
+  # twice. The bundled Postgres is a single stateful workload on a
+  # read-write-once volume, so a second location would also give it a second,
+  # independent database rather than a replica.
+  locations:
+    - name: aws-us-east-1
+
+# ─── Images ───────────────────────────────────────────────────────────────────
+# The API, worker and scheduler all run the SAME backend image — same code,
+# different command. A scan is executed by the worker and served by the API, so
+# they must never drift apart. Both packages are public on GHCR, so Control Plane
+# pulls them anonymously and the GVC needs no pull secret.
+#
+# `:latest` tracks the project's main branch, and is resolved when the workload
+# is DEPLOYED — a later push to the tag is NOT picked up until the next deploy,
+# because these workloads set `supportDynamicTags: false`. Two consequences:
+#
+#   * Two installs a week apart can be running different code.
+#   * There is nothing to roll back TO. Every build also publishes a
+#     `:sha-<commit>` tag — pin one before you depend on going back.
+images:
+  backend: ghcr.io/controlplane-com/cpln-advisor/advisor-backend:latest
+  web: ghcr.io/controlplane-com/cpln-advisor/advisor-web:latest
+
+# ─── Credentials (PREREQUISITE SECRET) ────────────────────────────────────────
+# This chart creates NO secret and takes NO credential as a value, so nothing
+# sensitive passes through Helm or lands in the release. It reads everything out
+# of one `dictionary` secret that must EXIST BEFORE YOU INSTALL — the workloads
+# wedge waiting on it otherwise.
+#
+# Create it with the six keys below (see README Prerequisites for the commands):
+#
+#   ADVISOR_API_TOKEN       shared dashboard <-> API token; the API fails closed without it
+#   ADVISOR_SECRET_KEY      encrypts the AI and Slack credentials stored in the database
+#   ADVISOR_SESSION_SECRET  signs the dashboard session cookie
+#   ADVISOR_USERNAME        the web-UI login name, e.g. admin
+#   ADVISOR_PASSWORD        the web-UI login password
+#   DATABASE_URL            postgresql+asyncpg://USER:PASS@RELEASE-postgres.GVC.cpln.local:5432/DB
+#
+# The key names are the app's own environment variable names, so a secret built
+# for a hand-applied deployment works here unchanged.
+#
+# DATABASE_URL must carry the SAME username/password/database as the database's
+# own secret (postgres.config.credentialsSecretName below). NOTHING CROSS-CHECKS
+# THE TWO — a mismatch is an authentication failure at runtime, not a render
+# error. The host is `{release}-postgres.{gvc}.cpln.local:5432`.
+auth:
+  secretName: advisor-config # MUST EXIST BEFORE INSTALL
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+# The dashboard is PUBLIC, and that is not configurable. It is the only way in —
+# nothing inside the GVC calls it, so an internal-only dashboard would be
+# unreachable by the people it exists for.
+#
+# What stands between the internet and your fleet is the login: the session
+# cookie is HMAC-signed, the API fails closed without its token, and both
+# credentials come from a secret you create. There is no shipped default
+# password to find.
+#
+# The API, worker, scheduler, Redis and the database are never public, and their
+# internal firewalls admit only their real callers.
+#
+# To narrow the dashboard to an office or VPN range, edit `inboundAllowCIDR` on
+# the `{release}-web` workload after installing.
+
+# OPTIONAL override for the dashboard's public URL, used for the Slack "View in
+# Advisor" links and the CORS allowlist.
+#
+# Leave it empty: the app derives `https://{web workload}-{gvc alias}.cpln.app`
+# from Control Plane's built-in env vars, and the chart tells it this release's
+# web workload name. Set this only for a CUSTOM DOMAIN, which cannot be derived.
+# Never "*".
+appUrl: ""
+
+# ─── Sessions ─────────────────────────────────────────────────────────────────
+# Idle windows: how long WITHOUT activity before you must sign in again. Both
+# slide forward while you work, under a hard ceiling enforced by the app.
+session:
+  hours: 12
+  rememberDays: 30
+
+# INFO logs one line per scan plus notable events. DEBUG adds per-query detail
+# for every Control Plane call and is very noisy.
+logLevel: INFO
+
+# ─── Workloads ────────────────────────────────────────────────────────────────
+# `maxCpu`/`maxMemory` are the container LIMITS, and every workload has them.
+# `minCpu`/`minMemory` are the floor Capacity AI scales from; where they are not
+# set, Control Plane supplies its own default floor.
+#
+# Where a min IS set, max:min must stay under 4:1 on cpu (Control Plane rejects
+# the workload otherwise) and at or under 4:1 on memory. The chart checks both at
+# render time — the rule is in no JSON schema and would otherwise surface as a
+# 400 partway through an install.
+
+# The dashboard (Next.js). The only workload that can be made public.
+web:
+  replicas:
+    min: 1 # set 0 to scale to zero when idle, at the cost of a cold start
+    max: 3
+  resources: # Capacity AI ON
+    minCpu: 75m
+    maxCpu: 250m
+    minMemory: 128Mi
+    maxMemory: 512Mi
+
+# The API (FastAPI). Internal only — the browser never talks to it directly, the
+# dashboard proxies server-side and attaches the token. Runs the database
+# migration at startup, which is one reason it is pinned to a single replica.
+api:
+  resources: # Capacity AI ON
+    # minCpu is 75m, not the 50m the upstream .cpln manifest carries: 256m/50m is
+    # a 5.12:1 spread and Control Plane rejects it. 75m keeps the same ceiling at
+    # 3.41:1.
+    minCpu: 75m
+    maxCpu: 256m
+    minMemory: 128Mi
+    maxMemory: 512Mi
+
+# Runs the scans, applies autopilot changes and sends the Slack digest.
+worker:
+  resources: # Capacity AI off — a long scan should not be resized underneath itself
+    maxCpu: 100m
+    maxMemory: 256Mi
+
+# Fires the crons that CREATE the scans. Without it nothing is ever scanned on a
+# schedule, retention never prunes and autopilot never runs — while everything
+# still looks healthy.
+scheduler:
+  resources: # Capacity AI ON
+    minCpu: 25m
+    maxCpu: 50m
+    minMemory: 64Mi
+    maxMemory: 128Mi
+
+# Task broker and cache. NOT persistent: everything in it is derived or
+# transient, so a restart at worst skips one scan and repeats one digest.
+redis:
+  image: redis:7-alpine
+  resources: # Capacity AI off — a broker should not be resized under load
+    maxCpu: 50m
+    maxMemory: 128Mi
+  # Cap the cache so a runaway key cannot get the container OOM-killed mid-scan.
+  # Below maxMemory on purpose (100 MB vs 128 MiB).
+  maxmemory: 100mb
+
+# ─── Database (subchart: postgres 3.4.1) ──────────────────────────────────────
+# Bundled, so one install brings up everything. Values here are passed to the
+# catalog's `postgres` chart, which creates the workload, its volume set, its own
+# identity and a policy granting `reveal` on the credentials secret below.
+#
+# Three workloads write this database concurrently — the API serves the
+# dashboard, the worker records scan results and Autopilot changes, and the
+# scheduler writes cron state. That needs a database server, and one that is
+# backed up.
+postgres:
+  image: postgres:18 # 17+ is required for the backup feature below
+
+  config:
+    # SECOND PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. A `dictionary`
+    # secret with exactly three keys: `username`, `password`, `database`. From
+    # 3.4.0 the template reads them from here instead of taking them inline,
+    # which is what keeps every credential out of this file.
+    #
+    # If it does not exist at install time the deployment WEDGES SILENTLY —
+    # `cpln logs` returns nothing at all to tell you why.
+    #
+    # Its three values must match DATABASE_URL in the advisor secret above.
+    # Nothing cross-checks them.
+    credentialsSecretName: advisor-db-credentials
+
+  # The advisor's database is small — scores, suggestions and activity, not
+  # telemetry. Deliberately above the template's defaults on memory: a fleet scan
+  # writes in bursts. Postgres is `stateful`, which respects minCpu/minMemory
+  # whether or not Capacity AI is on. 3.4:1 and 2:1.
+  resources:
+    minCpu: 150m
+    minMemory: 256Mi
+    maxCpu: 512m
+    maxMemory: 512Mi
+
+  volumeset:
+    capacity: 10 # GiB — 10 is the minimum
+    # One-way (volumes never shrink), so maxCapacity is the real cost ceiling.
+    autoscaling:
+      enabled: true
+      maxCapacity: 50
+      minFreePercentage: 20
+      scalingFactor: 1.5
+
+  # `same-gvc` rather than a workload list: this chart creates a dedicated GVC,
+  # so same-gvc already means "the advisor and nothing else". A subchart's values
+  # cannot be templated, so a workload list would have to hardcode
+  # release-prefixed names. Narrow it by hand if you add anything to this GVC.
+  internalAccess:
+    type: same-gvc
+
+  # Connection pooling. Off because this app holds few connections — three
+  # workloads, one replica each. Turn it on if you ever raise those counts.
+  pgbouncer:
+    enabled: false
+
+  # OFF because it needs a bucket and a cloud account you create first. TURN IT
+  # ON: a volume is not a backup, and the reason this template runs Postgres at
+  # all is that a database was lost.
+  #
+  # `backup.image` IS COUPLED TO `image` ABOVE — tag 18.1.0 backs up Postgres 18,
+  # 17.1.0 backs up Postgres 17. Change one and change the other, or pg_dump
+  # meets a server it cannot read.
+  #
+  # `provider: minio` needs its OWN prerequisite dictionary secret holding
+  # `accessKey` and `secretKey`, named in backup.minio.credentialsSecretName.
+  backup:
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
+    schedule: "0 2 * * *" # daily, 02:00 UTC
+    provider: aws # options: aws, gcp, minio
+    aws:
+      bucket: my-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-backup-cloudaccount
+      policyName: my-backup-policy
+      prefix: advisor/backups

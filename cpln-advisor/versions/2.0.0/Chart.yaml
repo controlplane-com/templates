@@ -1,0 +1,28 @@
+apiVersion: v2
+name: cpln-advisor
+description: AI advisor that right-sizes your workloads from their own metrics, logs and billed cost
+
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+
+annotations:
+  created: "2026-08-17"
+  lastModified: "2026-08-17"
+  category: "observability"
+  createsGvc: true
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+  # The advisor's database. Bundled so a single install brings up everything:
+  # the chart arrives with a readiness probe, a private firewall, its own
+  # identity and policy, and scheduled backups behind a switch.
+  #
+  # 3.4.1, NOT 3.3.0: from 3.4.0 the template reads its username/password/database
+  # from a prerequisite secret instead of taking them inline, which is what lets
+  # this chart bundle a database and still keep every credential out of values.
+  - name: postgres
+    version: 3.4.1
+    repository: "oci://ghcr.io/controlplane-com/templates"

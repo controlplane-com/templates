@@ -48,8 +48,6 @@ spec:
         initialDelaySeconds: 5
         periodSeconds: 10
         failureThreshold: 3
-        timeoutSeconds: 1 # API backfill, declared so rendered == stored
-        successThreshold: 1 # API backfill, declared so rendered == stored
   {{- /*
     ONE broker, in the one configured location. Two brokers means the task queue
     is split between them: the scheduler enqueues into one and the worker polls

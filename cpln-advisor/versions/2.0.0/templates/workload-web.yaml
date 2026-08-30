@@ -49,8 +49,6 @@ spec:
         initialDelaySeconds: 5
         periodSeconds: 10
         failureThreshold: 3
-        timeoutSeconds: 1 # API backfill, declared so rendered == stored
-        successThreshold: 1 # API backfill, declared so rendered == stored
   {{- /*
     The dashboard is the ONE tier whose command this chart does not own: the
     image's entrypoint is the Node one and its command is `node server.js`, so

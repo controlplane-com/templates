@@ -89,7 +89,6 @@ spec:
         httpGet:
           path: /health # the only unauthenticated route, and it leaks nothing
           port: 8000
-          scheme: HTTP # API backfill, declared so rendered == stored
         initialDelaySeconds: 5
         periodSeconds: 10
         failureThreshold: 3
@@ -97,7 +96,6 @@ spec:
         httpGet:
           path: /health
           port: 8000
-          scheme: HTTP # API backfill, declared so rendered == stored
         initialDelaySeconds: 20
         periodSeconds: 30
         # 5, not 3: the boot script's GVC read is bounded at 22s worst case (3
@@ -107,7 +105,6 @@ spec:
         # 80s after start, which a slow migration plus an unreachable control
         # plane can exceed. 5 gives 170s. The platform cap is 20.
         failureThreshold: 5
-        successThreshold: 1 # API backfill, declared so rendered == stored
   {{- /*
     ONE replica, in the one configured location. Two would race on the same
     startup migration. That is now the only reason — Postgres handles concurrent

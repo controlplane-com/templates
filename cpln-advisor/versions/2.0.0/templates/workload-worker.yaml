@@ -13,8 +13,8 @@ spec:
       # same build: a scan is executed here and served there.
       image: {{ .Values.images.backend }}
       inheritEnv: false
-      cpu: {{ .Values.worker.resources.cpu | quote }}
-      memory: {{ .Values.worker.resources.memory | quote }}
+      cpu: {{ .Values.worker.resources.maxCpu | quote }}
+      memory: {{ .Values.worker.resources.maxMemory | quote }}
       # Wrapped in a shell so Guard A runs first. Module paths are relative to
       # the app directory inside the image: `workers.worker:broker`, never
       # `backend.workers.worker:broker`. `exec` matters: without it the shell

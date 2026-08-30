@@ -45,7 +45,6 @@ spec:
         httpGet:
           path: /login # the one page that renders without a session
           port: 3000
-          scheme: HTTP # API backfill, declared so rendered == stored
         initialDelaySeconds: 5
         periodSeconds: 10
         failureThreshold: 3

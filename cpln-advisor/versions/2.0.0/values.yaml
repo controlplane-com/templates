@@ -104,7 +104,6 @@ logLevel: INFO
 # ─── Workloads ────────────────────────────────────────────────────────────────
 # A block that exposes BOTH a reservation and a limit names them
 # `minCpu`/`maxCpu` and `minMemory`/`maxMemory`. A block that exposes only the
-# limit uses the API's own field names, bare `cpu`/`memory` — there is nothing to
 # disambiguate against. (2.0.0 renamed `worker` and `redis` accordingly; the
 # version bump is the migration path, there is no fallback.)
 #
@@ -143,8 +142,8 @@ api:
 # Runs the scans, applies autopilot changes and sends the Slack digest.
 worker:
   resources: # Capacity AI off — a long scan should not be resized underneath itself
-    cpu: 100m
-    memory: 256Mi
+    maxCpu: 100m
+    maxMemory: 256Mi
 
 # Fires the crons that CREATE the scans. Without it nothing is ever scanned on a
 # schedule, retention never prunes and autopilot never runs — while everything
@@ -161,8 +160,8 @@ scheduler:
 redis:
   image: redis:7-alpine
   resources: # Capacity AI off — a broker should not be resized under load
-    cpu: 50m
-    memory: 128Mi
+    maxCpu: 50m
+    maxMemory: 128Mi
   # Cap the cache so a runaway key cannot get the container OOM-killed mid-scan.
   # Below `memory` on purpose (100 MB vs 128 MiB).
   maxmemory: 100mb

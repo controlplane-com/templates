@@ -10,8 +10,8 @@ spec:
     - name: redis
       image: {{ .Values.redis.image }}
       inheritEnv: false
-      cpu: {{ .Values.redis.resources.cpu | quote }}
-      memory: {{ .Values.redis.resources.memory | quote }}
+      cpu: {{ .Values.redis.resources.maxCpu | quote }}
+      memory: {{ .Values.redis.resources.maxMemory | quote }}
       ports:
         - number: 6379
           protocol: tcp

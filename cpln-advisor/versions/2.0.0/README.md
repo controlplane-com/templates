@@ -268,9 +268,11 @@ postgres:
 
 Each run writes **one gzipped `pg_dumpall` plain-SQL file**, `postgres-<UTC-timestamp>.sql.gz`, under `<bucket>/<prefix>/` (read out of the pinned backup image's `/usr/local/bin/backup.sh`). `pg_dumpall` is a whole-cluster script including `CREATE ROLE` and `CREATE DATABASE`, so it restores into an empty server; it is not a merge into a running one.
 
-The shape of a restore is: download the object with your own cloud tooling (the Postgres container has no `aws` or `gsutil`), reach the database with `cpln port-forward {release}-postgres 5432:5432 --gvc <gvc>`, and pipe it in with `gunzip -c postgres-….sql.gz | psql -h 127.0.0.1 -p 5432 -U <username> -d postgres`. Stop the API, worker and scheduler first, or they will be writing while you restore.
+The shape of a restore is: download the object with your own cloud tooling (the Postgres container has no `aws` or `gsutil`), reach the database with `cpln port-forward {release}-postgres 5432:5432 --gvc <gvc>`, and pipe it in with `gunzip -c postgres-….sql.gz | psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5432 -U <username> -d postgres`. Stop the API, worker and scheduler first, or they will be writing while you restore.
 
-> **This restore has not been executed against this template.** The artifact format above was read from the backup image; the steps follow from what `pg_dumpall` produces and what the chart configures, but nothing here verifies them end to end. Rehearse it against a scratch release before you need it.
+**Use a `psql` of version 18 or newer, and keep `-v ON_ERROR_STOP=1`.** The dump is produced by `postgres:18`, whose `pg_dumpall` emits `\restrict` / `\unrestrict` directives that older clients do not understand. Without `ON_ERROR_STOP` an older `psql` prints `invalid command \restrict` for each one and still **exits 0** — measured here, where the restore happened to succeed anyway because the unrecognised lines were not load-bearing. That is luck, not a guarantee: the same silent-error path would hide a real failure just as completely.
+
+> **This restore was executed end to end against this template** (2026-08-30): a backup was taken and verified real (10,377 B gzipped → 90,072 B, 8 tables with actual scan rows), the database was dropped, the dump restored, and the application confirmed working on the restored data. Rehearse it against a scratch release anyway before you need it.
 
 ### Scaling past one replica
 

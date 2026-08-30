@@ -93,6 +93,8 @@ spec:
         initialDelaySeconds: 5
         periodSeconds: 10
         failureThreshold: 3
+        timeoutSeconds: 1 # API backfill, declared so rendered == stored
+        successThreshold: 1 # API backfill, declared so rendered == stored
       livenessProbe:
         httpGet:
           path: /health
@@ -108,6 +110,7 @@ spec:
         # plane can exceed. 5 gives 170s. The platform cap is 20.
         failureThreshold: 5
         successThreshold: 1 # API backfill, declared so rendered == stored
+        timeoutSeconds: 1 # API backfill, declared so rendered == stored
   {{- /*
     ONE replica, in the one configured location. Two would race on the same
     startup migration. That is now the only reason — Postgres handles concurrent

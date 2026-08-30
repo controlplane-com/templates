@@ -483,15 +483,17 @@ a replica, the primary demotes as it would have before.
 three move together: raising `ttl` on its own leaves `retry_timeout` clamped, and raising `retry_timeout`
 on its own does nothing at all.
 
-**1.1.0 widens the tolerance.** Versions through 1.0.x shipped `ttl: 45`, `loop_wait: 10`,
-`retry_timeout: 15`. That is a valid combination and Patroni honoured it as written, so existing clusters
-are not misconfigured. The change is one of margin: 15 seconds is thin for a cluster whose etcd quorum
-spans regions, where a blip between locations can plausibly outlast it and demote a healthy primary. The
-new values widen that margin, at the cost of taking worst-case failover from 45 to 60 seconds.
+**This template ships `ttl: 45`, `loop_wait: 10`, `retry_timeout: 15`, and always has** — 1.0.x, 1.1.0 and
+2.0.0 are identical. That is a valid combination and Patroni honours it as written.
 
-**Upgrading does not change a cluster that already exists** — its configuration was written to etcd when it
-was created, and 45 / 10 / 15 keeps working. Run the `edit-config` command above only if you want the wider
-tolerance.
+15 seconds is arguably thin for a cluster whose etcd quorum spans regions, where a blip between locations
+can outlast it and demote a healthy primary. Widening it is a deliberate trade — a wider margin costs a
+longer worst-case failover — so it is left to you rather than changed underneath a running cluster. The
+`edit-config` command above sets the shipped values; raise `ttl` and `retry_timeout` together if you want
+more tolerance, keeping Patroni's constraint `loop_wait + 2 * retry_timeout <= ttl`.
+
+**Changing it does not affect a cluster that already exists** unless you run that command — its
+configuration was written to etcd when it was created.
 
 
 ## Operating the cluster

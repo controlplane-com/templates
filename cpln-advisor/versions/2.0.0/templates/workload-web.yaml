@@ -1,0 +1,104 @@
+{{- include "cpln-advisor.validate" . -}}
+kind: workload
+name: {{ include "cpln-advisor.web.name" . }}
+description: CPLN Advisor dashboard
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "cpln-advisor.tags" . | nindent 4 }}
+spec:
+  # Serverless suits an internal dashboard nobody looks at overnight. Set
+  # web.replicas.min to 0 to scale to zero, at the cost of a cold start on the
+  # first request of the day.
+  type: serverless
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "cpln-advisor.identity.name" . }}
+  containers:
+    - name: web
+      image: {{ .Values.images.web }}
+      inheritEnv: false
+      minCpu: {{ .Values.web.resources.minCpu | quote }}
+      minMemory: {{ .Values.web.resources.minMemory | quote }}
+      cpu: {{ .Values.web.resources.maxCpu | quote }}
+      memory: {{ .Values.web.resources.maxMemory | quote }}
+      ports:
+        - number: 3000
+          protocol: http
+      env:
+        # The API on its CONTAINER port (8000), not 443. Plain http is correct —
+        # the sidecar adds mTLS. The browser never sees this address; it calls
+        # this workload same-origin and the Next.js server forwards.
+        - name: ADVISOR_API_URL
+          value: {{ include "cpln-advisor.api.url" . | quote }}
+        # Attached to every forwarded request, so the browser never holds a
+        # token. Server-only on purpose: a NEXT_PUBLIC_* name would be inlined
+        # into the client bundle and shipped to every visitor.
+        - name: ADVISOR_API_TOKEN
+          value: cpln://secret/{{ .Values.auth.secretName }}.ADVISOR_API_TOKEN
+        # Signs the session cookie (HMAC-SHA256). Unset ⇒ nobody can log in,
+        # because an unsigned cookie would be forgeable. Rotating it is safe and
+        # simply signs everyone out.
+        - name: ADVISOR_SESSION_SECRET
+          value: cpln://secret/{{ .Values.auth.secretName }}.ADVISOR_SESSION_SECRET
+        - name: ADVISOR_SESSION_HOURS
+          value: {{ .Values.session.hours | quote }}
+        - name: ADVISOR_SESSION_REMEMBER_DAYS
+          value: {{ .Values.session.rememberDays | quote }}
+      readinessProbe:
+        httpGet:
+          path: /login # the one page that renders without a session
+          port: 3000
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        failureThreshold: 3
+  {{- /*
+    The dashboard is the ONE tier whose command this chart does not own: the
+    image's entrypoint is the Node one and its command is `node server.js`, so
+    adding a boot guard would mean replacing an entrypoint we have never
+    replaced, on the only workload a user can reach. It carries no guard.
+    Nothing is lost that matters: it is stateless, and a stray replica in an
+    undeclared location would simply serve the same dashboard. minScale/maxScale
+    0 below is what actually prevents one.
+  */}}
+  defaultOptions:
+    autoscaling:
+      {{- include "cpln-advisor.autoscaling" (dict "scale" (dict "min" 0 "max" 0) "metric" "concurrency" "target" 20) | nindent 6 }}
+    capacityAI: true
+    debug: false
+    suspend: false
+    timeoutSeconds: 120 # the proxy waits on the API, and a scan is not quick
+  localOptions:
+    - autoscaling:
+        {{- include "cpln-advisor.autoscaling" (dict "scale" (dict "min" .Values.web.replicas.min "max" .Values.web.replicas.max) "metric" "concurrency" "target" 20) | nindent 8 }}
+      capacityAI: true
+      debug: false
+      location: //location/{{ .Values.location }}
+      suspend: false
+      timeoutSeconds: 120
+  firewallConfig:
+    external:
+      # PUBLIC, deliberately and unconditionally: the dashboard is the only way
+      # into this app, and nothing inside the GVC calls it, so an internal-only
+      # dashboard would be unreachable by the people it exists for.
+      #
+      # The login is the boundary — an HMAC-signed session cookie, an API that
+      # fails closed without its token, and credentials that come from a secret
+      # you create, so there is no shipped default password to find.
+      #
+      # Narrow this to an office or VPN range after installing if you want to.
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      # Nothing internal calls the dashboard. It is the browser's entry point and
+      # it talks OUT to the API, never the other way round.
+      inboundAllowType: none
+      inboundAllowWorkload: [] # API backfill, declared so rendered == stored
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

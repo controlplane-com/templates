@@ -1,0 +1,93 @@
+{{- include "cpln-advisor.validate" . -}}
+kind: workload
+name: {{ include "cpln-advisor.redis.name" . }}
+description: Task broker and cache for the advisor
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "cpln-advisor.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: redis
+      image: {{ .Values.redis.image }}
+      inheritEnv: false
+      cpu: {{ .Values.redis.resources.maxCpu | quote }}
+      memory: {{ .Values.redis.resources.maxMemory | quote }}
+      ports:
+        - number: 6379
+          protocol: tcp
+      # Run through a shell so Guard A runs first and so the empty `--save ''`
+      # stays INSIDE one argument. Passed as its own array element it is
+      # rejected outright: "args[2] is not allowed to be empty".
+      #
+      # `--save ''` disables RDB snapshots, which are pointless here — there is
+      # no volume, so a snapshot would be written to ephemeral storage and lost
+      # anyway while still paying the fork pause. `maxmemory` keeps a runaway
+      # cache from being OOM-killed mid-scan, and allkeys-lru evicts rather than
+      # refusing writes.
+      #
+      # `exec` matters: without it the shell stays PID 1 and swallows SIGTERM,
+      # so the container is killed on the timeout instead of shutting down.
+      #
+      # This container has NO identityLink, so the guard is rendered inline
+      # rather than mounted from the startup-script secret — a workload with no
+      # identity cannot reveal a secret at all. It is the same helper the other
+      # tiers use, and it is POSIX sh so busybox ash runs it unchanged.
+      command: /bin/sh
+      args:
+        - -c
+        - |
+          set -eu
+          {{- include "cpln-advisor.locationGuard" . | nindent 10 }}
+          exec redis-server --save '' --maxmemory {{ .Values.redis.maxmemory }} --maxmemory-policy allkeys-lru
+      readinessProbe:
+        exec:
+          command:
+            - sh
+            - -c
+            - redis-cli ping | grep -q PONG
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        failureThreshold: 3
+  {{- /*
+    ONE broker, in the one configured location. Two brokers means the task queue
+    is split between them: the scheduler enqueues into one and the worker polls
+    the other, so scans are created and never run, with every workload healthy.
+  */}}
+  defaultOptions:
+    autoscaling:
+      {{- include "cpln-advisor.autoscaling" (dict "scale" (dict "min" 0 "max" 0)) | nindent 6 }}
+    capacityAI: false # a broker should not be resized under load
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  localOptions:
+    - autoscaling:
+        {{- include "cpln-advisor.autoscaling" (dict "scale" (dict "min" 1 "max" 1)) | nindent 8 }}
+      capacityAI: false
+      debug: false
+      location: //location/{{ .Values.location }}
+      suspend: false
+      timeoutSeconds: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR: [] # no inbound from the internet
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: [] # and it calls nothing
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      # Exactly the three workloads that use it, and nothing else. Redis is not
+      # authenticated, so this list is the whole access control — and from 2.0.0
+      # the GVC may hold unrelated workloads, which is why it is a list and not
+      # `same-gvc`. Rendered from the roster helper so no workload link is
+      # hand-written anywhere in this chart.
+      inboundAllowType: workload-list
+      inboundAllowWorkload:
+        {{- include "cpln-advisor.redis.callers" . | nindent 8 }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

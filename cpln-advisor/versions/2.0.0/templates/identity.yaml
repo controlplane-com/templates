@@ -1,0 +1,7 @@
+{{- include "cpln-advisor.validate" . -}}
+kind: identity
+gvc: {{ .Values.global.cpln.gvc }}
+name: {{ include "cpln-advisor.identity.name" . }}
+description: CPLN Advisor identity
+tags:
+  {{- include "cpln-advisor.tags" . | nindent 4 }}

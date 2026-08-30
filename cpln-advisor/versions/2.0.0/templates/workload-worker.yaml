@@ -1,0 +1,110 @@
+{{- include "cpln-advisor.validate" . -}}
+kind: workload
+name: {{ include "cpln-advisor.worker.name" . }}
+description: CPLN Advisor background worker
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "cpln-advisor.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "cpln-advisor.identity.name" . }}
+  containers:
+    - name: worker
+      # The SAME image as the API, with a different command. It must be the
+      # same build: a scan is executed here and served there.
+      image: {{ .Values.images.backend }}
+      inheritEnv: false
+      cpu: {{ .Values.worker.resources.maxCpu | quote }}
+      memory: {{ .Values.worker.resources.maxMemory | quote }}
+      # Wrapped in a shell so Guard A runs first. Module paths are relative to
+      # the app directory inside the image: `workers.worker:broker`, never
+      # `backend.workers.worker:broker`. `exec` matters: without it the shell
+      # stays PID 1 and swallows SIGTERM, so the container is killed on the
+      # timeout instead of shutting down.
+      command: /bin/sh
+      args:
+        - -c
+        - |
+          set -eu
+          {{- include "cpln-advisor.locationGuard" . | nindent 10 }}
+          exec taskiq worker workers.worker:broker
+      env:
+        # Nothing here may be named CPLN_* — see the note on the API workload.
+        - name: LOG_LEVEL
+          value: {{ .Values.logLevel | quote }}
+        - name: REDIS_URL
+          value: {{ include "cpln-advisor.redis.url" . | quote }}
+        # Postgres, from the bundled `postgres` subchart. The URL carries the
+        # password, so it is a key in YOUR credentials secret rather than a value
+        # here. Its username/password/database must match the database's own
+        # prerequisite secret — nothing cross-checks the two.
+        - name: DATABASE_URL
+          value: cpln://secret/{{ .Values.auth.secretName }}.DATABASE_URL
+        # The app derives the dashboard's public URL — the Slack "View in Advisor"
+        # links and the CORS origin — from Control Plane's built-in env vars, as
+        # `https://{ADVISOR_WEB_WORKLOAD}-{gvc alias}.cpln.app`. It defaults to
+        # the literal "web", so it MUST be told this chart's actual dashboard
+        # workload name or every derived link points at a workload that does not
+        # exist. It is NOT built from CPLN_GLOBAL_ENDPOINT, which is the host of
+        # whichever workload reads it — internal here, and not where a browser goes.
+        - name: ADVISOR_WEB_WORKLOAD
+          value: {{ include "cpln-advisor.web.name" . | quote }}
+        {{- if .Values.appUrl }}
+        # Explicit override for a custom domain. Set it here as well as on the
+        # API — separate containers sharing nothing but the GVC.
+        - name: APP_URL
+          value: {{ .Values.appUrl | quote }}
+        {{- end }}
+        # Present for parity with the API; the worker reaches the database and
+        # Control Plane directly rather than through the API.
+        - name: ADVISOR_API_TOKEN
+          value: cpln://secret/{{ .Values.auth.secretName }}.ADVISOR_API_TOKEN
+        # Decrypts the AI and Slack credentials in the database — the worker
+        # needs it to call the LLM and to post the scan digest.
+        - name: ADVISOR_SECRET_KEY
+          value: cpln://secret/{{ .Values.auth.secretName }}.ADVISOR_SECRET_KEY
+  {{- /*
+    ONE worker, in the one configured location. Postgres would take the
+    concurrent writes, so this is no longer a database limit — it is that a
+    fleet scan's Control Plane and LLM calls are rate-limited upstream, and a
+    second worker mostly buys more 429s. Raise it deliberately, not by default.
+  */}}
+  defaultOptions:
+    autoscaling:
+      {{- include "cpln-advisor.autoscaling" (dict "scale" (dict "min" 0 "max" 0)) | nindent 6 }}
+    capacityAI: false # a long scan should not be resized underneath itself
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  localOptions:
+    - autoscaling:
+        {{- include "cpln-advisor.autoscaling" (dict "scale" (dict "min" 1 "max" 1)) | nindent 8 }}
+      capacityAI: false
+      debug: false
+      location: //location/{{ .Values.location }}
+      suspend: false
+      timeoutSeconds: 5
+  # Non-root. `filesystemGroupId` is gone with the shared volume it existed for.
+  # (Never 1337: that is the mesh proxy's UID, and a container running as it
+  # bypasses the Envoy redirect.)
+  securityOptions:
+    runAsUser: 10001
+  firewallConfig:
+    external:
+      inboundAllowCIDR: [] # no inbound at all
+      inboundBlockedCIDR: []
+      # Control Plane's API, MCP and billing services, the LLM provider, Slack.
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      # Nothing calls the worker; it pulls its work from Redis.
+      inboundAllowType: none
+      inboundAllowWorkload: [] # API backfill, declared so rendered == stored
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

@@ -1,4 +1,4 @@
----
+{{- include "cpln-advisor.validate" . -}}
 kind: workload
 name: {{ include "cpln-advisor.api.name" . }}
 description: CPLN Advisor API
@@ -18,19 +18,27 @@ spec:
       ports:
         - number: 8000
           protocol: http
-      # Migrations run here, before the server starts, so a deploy that adds a
-      # column cannot serve traffic against the old schema.
+      # The boot script runs Guard A and the GVC reconciliation, then
+      # `alembic upgrade head` and uvicorn — migrations before the server, so a
+      # deploy that adds a column cannot serve traffic against the old schema.
+      # The API is the tier that carries the GVC check: it is always on, its
+      # image is the only one with an HTTP client (python3 — probed 2026-08-30:
+      # no curl, no wget), and it is the only tier with `outboundAllowCIDR`
+      # open, which the call to $CPLN_ENDPOINT needs.
       command: /bin/sh
       args:
-        - -c
-        - alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000
+        - /scripts/advisor-startup.sh
+      volumes:
+        - path: /scripts/advisor-startup.sh
+          recoveryPolicy: retain # API backfill, declared so rendered == stored
+          uri: cpln://secret/{{ include "cpln-advisor.startupScript.name" . }}.payload
       env:
         # Nothing here may be named CPLN_* — that prefix is RESERVED and a
         # workload setting one is rejected. The platform injects CPLN_ORG,
         # CPLN_GVC, CPLN_TOKEN and friends itself, which is where the app reads
-        # its org from. The Control Plane API token cannot be injected for the
-        # same reason: set it once on the Configuration page, where it is stored
-        # encrypted in the database.
+        # its org from — and what the boot script's GVC read uses. The Control
+        # Plane API token cannot be injected for the same reason: set it once on
+        # the Configuration page, where it is stored encrypted in the database.
         - name: LOG_LEVEL
           value: {{ .Values.logLevel | quote }}
         - name: REDIS_URL
@@ -81,6 +89,7 @@ spec:
         httpGet:
           path: /health # the only unauthenticated route, and it leaks nothing
           port: 8000
+          scheme: HTTP # API backfill, declared so rendered == stored
         initialDelaySeconds: 5
         periodSeconds: 10
         failureThreshold: 3
@@ -88,21 +97,41 @@ spec:
         httpGet:
           path: /health
           port: 8000
+          scheme: HTTP # API backfill, declared so rendered == stored
         initialDelaySeconds: 20
         periodSeconds: 30
-        failureThreshold: 3
+        # 5, not 3: the boot script's GVC read is bounded at 22s worst case (3
+        # attempts x 6s socket timeout + 2 x 2s backoff, measured in this image
+        # against a blackholed address and an accept-never-respond server), and
+        # `alembic upgrade head` runs after it. At 3 the container is restarted
+        # 80s after start, which a slow migration plus an unreachable control
+        # plane can exceed. 5 gives 170s. The platform cap is 20.
+        failureThreshold: 5
+        successThreshold: 1 # API backfill, declared so rendered == stored
+  {{- /*
+    ONE replica, in the one configured location. Two would race on the same
+    startup migration. That is now the only reason — Postgres handles concurrent
+    writers fine — so raising it is a question of moving `alembic upgrade head`
+    out of the container start command, not of the database.
+  */}}
   defaultOptions:
-    capacityAI: true
-    timeoutSeconds: 120 # a scan's Control Plane and LLM calls can take a while
     autoscaling:
-      metric: disabled
-      minScale: 1
-      # ONE replica, because two would race on the same startup migration. That
-      # is now the only reason — Postgres handles concurrent writers fine — so
-      # raising this is a question of moving `alembic upgrade head` out of the
-      # container start command, not of the database.
-      maxScale: 1
-  # Non-root. `filesystemGroupId` is gone with the shared volume it existed for.
+      {{- include "cpln-advisor.autoscaling" (dict "scale" (dict "min" 0 "max" 0)) | nindent 6 }}
+    capacityAI: true
+    debug: false
+    suspend: false
+    timeoutSeconds: 120 # a scan's Control Plane and LLM calls can take a while
+  localOptions:
+    - autoscaling:
+        {{- include "cpln-advisor.autoscaling" (dict "scale" (dict "min" 1 "max" 1)) | nindent 8 }}
+      capacityAI: true
+      debug: false
+      location: //location/{{ .Values.location }}
+      suspend: false
+      timeoutSeconds: 120
+  # Non-root. `filesystemGroupId` is gone with the shared volume it existed for,
+  # and the startup script does not need it: a cpln://secret FILE mount lands
+  # world-readable (`-rwxr--r-- root root`), which uid 10001 can read.
   # (Never 1337: that is the mesh proxy's UID, and a container running as it
   # bypasses the Envoy redirect.)
   securityOptions:
@@ -112,17 +141,19 @@ spec:
       inboundAllowCIDR: [] # never exposed publicly
       inboundBlockedCIDR: []
       # The advisor reads Control Plane's API, MCP and billing services, and
-      # calls out to the configured LLM provider and Slack.
+      # calls out to the configured LLM provider and Slack. The boot script's
+      # GVC read goes to $CPLN_ENDPOINT over this path too.
       outboundAllowCIDR:
         - 0.0.0.0/0
       outboundAllowHostname: []
       outboundAllowPort: []
       outboundBlockedCIDR: []
     internal:
-      # Only the dashboard calls the API.
+      # Only the dashboard calls the API. Rendered from the roster helper so no
+      # workload link is hand-written anywhere in this chart.
       inboundAllowType: workload-list
       inboundAllowWorkload:
-        - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "cpln-advisor.web.name" . }}
+        {{- include "cpln-advisor.api.callers" . | nindent 8 }}
   loadBalancer:
     direct:
       enabled: false

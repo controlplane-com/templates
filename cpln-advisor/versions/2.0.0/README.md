@@ -4,20 +4,24 @@ CPLN Advisor watches the workloads in your org, tracks CPU, memory, replica coun
 
 It reports on the org it runs in. Control Plane injects `CPLN_ORG` into every workload, so the advisor knows where it lives without being told.
 
+> **Upgrading from 1.0.0? Do not `helm upgrade`.** 1.0.0 created a GVC, and it named that GVC after the one you installed into — so Helm **adopted your GVC** and has owned it ever since. This version stops declaring it, and Helm deletes what a chart no longer declares. See [Migrating from 1.0.0](#migrating-from-100).
+
 ## Architecture
 
-One install brings up everything. The chart creates its own GVC and bundles the database, and **creates no secret and takes no credential as a value** — it reads two secrets you create first.
+One install brings up everything. The chart deploys into **an existing GVC**, bundles the database, and **creates no credential secret and takes no credential as a value** — it reads two secrets you create first.
 
 | Resource | Type | Purpose |
 |---|---|---|
-| `advisor` | GVC | Created by this chart, in **exactly one** location. Everything below lives in it. |
 | `{release}-web` | serverless | The Next.js dashboard, **public**. The only workload exposed to the internet, and the only one holding a session key. Scales 1–3. |
-| `{release}-api` | standard | FastAPI backend on port 8000. Runs `alembic upgrade head` at startup. Internal; reachable only by the dashboard. **1 replica.** |
+| `{release}-api` | standard | FastAPI backend on port 8000. Runs the boot guards, then `alembic upgrade head`. Internal; reachable only by the dashboard. **1 replica.** |
 | `{release}-worker` | standard | Runs scans, applies Autopilot changes, posts the Slack digest. **1 replica.** |
 | `{release}-scheduler` | standard | Fires the crons that *create* the scans. **1 replica.** |
 | `{release}-redis` | standard | Task broker and cache. Not persistent, and unauthenticated — the firewall is its whole access control. |
 | `{release}-postgres` + `-pg-vs`, `-pg-identity`, `-pg-policy` | subchart | The database, from the catalog's `postgres` chart **3.4.1**: a stateful workload on its own volume set, with a `pg_isready` probe and scheduled backups behind a switch. It creates no secret — it reads your database credentials secret. |
-| `{release}-identity` + `-policy` | | The policy grants the identity `reveal` on **exactly one** secret: the advisor credentials you created. It never gets reveal on the database's. |
+| `{release}-startup` | secret | The API's boot script (no credential in it). |
+| `{release}-identity`, `-policy`, `-gvc-policy` | | `reveal` on **exactly two** secrets — the advisor credentials you created and the boot script — plus `view` on **exactly one** GVC, the one you installed into. |
+
+Every workload is pinned to the single `location` you configure: `defaultOptions.minScale/maxScale` are `0` and a `localOptions` entry carries the real replica counts, so a GVC location this release did not ask for starts nothing. The one exception is the bundled Postgres — see [Database](#database).
 
 **The scheduler is not optional.** The worker runs tasks; the scheduler fires the cron that creates them. Without it nothing is ever scanned on a schedule, retention never prunes and Autopilot never runs — while every workload still reports healthy. This has been mistaken for a broken worker more than once.
 
@@ -29,9 +33,10 @@ It comes from the catalog's `postgres` template rather than being hand-written h
 
 ## Prerequisites
 
-**Two `dictionary` secrets must exist BEFORE you install.** Neither the chart nor its values ever hold a credential — `helm template` succeeds with no values at all, which is the check that this stays true.
+- **An existing GVC with exactly one location.** This chart does not create one. Extra locations are not merely unused here — see [Database](#database).
+- **Two `dictionary` secrets, created BEFORE you install.** Neither the chart nor its values ever hold a credential — `helm template` succeeds with no values at all, which is the check that this stays true.
 
-If either secret is missing the deployment **wedges silently**: the workloads never start and `cpln logs` returns nothing to say why.
+If either secret is missing the deployment **wedges silently**: the workloads never start and `cpln logs` returns nothing to say why. The one place the cause is named is `status.versions[].message` in `cpln workload get-deployments <workload> --gvc <gvc> -o yaml`.
 
 ### 1. The advisor's credentials
 
@@ -44,7 +49,7 @@ cpln secret create-dictionary --name advisor-config --org YOUR_ORG \
   --entry ADVISOR_SESSION_SECRET="$(openssl rand -hex 32)" \
   --entry ADVISOR_USERNAME=admin \
   --entry ADVISOR_PASSWORD='YOUR-STRONG-PASSPHRASE' \
-  --entry DATABASE_URL="postgresql+asyncpg://advisor:$DB_PASS@advisor-postgres.advisor.cpln.local:5432/advisor"
+  --entry DATABASE_URL="postgresql+asyncpg://advisor:$DB_PASS@RELEASE-postgres.YOUR_GVC.cpln.local:5432/advisor"
 ```
 
 | Key | What it is |
@@ -53,7 +58,7 @@ cpln secret create-dictionary --name advisor-config --org YOUR_ORG \
 | `ADVISOR_SECRET_KEY` | Encrypts the AI and Slack credentials stored in the database. **Losing or changing it loses those credentials** — unrecoverable, and the app reports them as "not set" rather than erroring. |
 | `ADVISOR_SESSION_SECRET` | Signs the dashboard's session cookie. Rotating it is safe; it signs everyone out. |
 | `ADVISOR_USERNAME` / `ADVISOR_PASSWORD` | The web-UI login. A human types the password, so prefer a long passphrase. |
-| `DATABASE_URL` | `postgresql+asyncpg://` — **not** `postgres://`: SQLAlchemy needs the driver named. Host is `{release}-postgres.{gvc}.cpln.local:5432`. |
+| `DATABASE_URL` | `postgresql+asyncpg://` — **not** `postgres://`: SQLAlchemy needs the driver named. Host is `{release}-postgres.{gvc}.cpln.local:5432`, always fully qualified. |
 
 ### 2. The database's credentials
 
@@ -70,14 +75,7 @@ cpln secret create-dictionary --name advisor-db-credentials --org YOUR_ORG \
 
 > **These three values must match `DATABASE_URL` above, and nothing cross-checks them.** A mismatch is not a render error — it is an authentication failure at runtime, after everything appears to install cleanly. Set `DB_PASS` once and use it in both commands, as shown.
 
-Then install. The only values either secret name appears in are names:
-
-```bash
-cpln helm install advisor ./cpln-advisor/versions/1.0.0 \
-  --org YOUR_ORG --dependency-update --wait --timeout 600
-```
-
-A secret needs three things and two fail silently: the identity linked to the workload, a policy granting **`reveal`** (not `view`), and the `cpln://secret/NAME.KEY` reference. The chart wires all three — the advisor's identity gets `reveal` on `advisor-config` only, and the database's own identity on `advisor-db-credentials` only, so neither can read the other's.
+A secret needs three things and two fail silently: the identity linked to the workload, a policy granting **`reveal`** (not `view`), and the `cpln://secret/NAME.KEY` reference. The chart wires all three — the advisor's identity gets `reveal` on `advisor-config` and its own boot script, and the database's own identity on `advisor-db-credentials`, so neither can read the other's.
 
 ### A Control Plane service-account token — *after* install, not before
 
@@ -96,21 +94,17 @@ Create a service account whose token can, at minimum:
 
 ## Configuration
 
-### GVC
+### Location
 
 ```yaml
-global:
-  cpln:
-    gvc: advisor              # this chart CREATES this GVC
-
-gvc:
-  locations:
-    - name: aws-us-east-1     # exactly one; see Prerequisites
+location: aws-us-east-1     # ONE location of the GVC you install into
 ```
 
-The name lives under `global` so every resource is tagged with it and the bundled `postgres` subchart lands in the same GVC — the catalog's convention for a chart that owns its GVC.
+`global.cpln.gvc` is injected by the platform at install time and is never declared in values. There is no `gvc` key — the chart refuses to render if it finds one.
 
-The GVC **must not already exist**: Helm adopts one that does, and `helm uninstall` would then delete it and everything in it. Workload names are prefixed with the Helm release name, so two releases can coexist only if you also give each its own `global.cpln.gvc`.
+The advisor runs in **exactly one location**, and this names it. Every workload gets `defaultOptions.minScale/maxScale: 0` plus a `localOptions` entry for this location, so an undeclared GVC location starts nothing and its deployment reads `This workload location is deactivated because maxScale is set to 0`. The API, worker, scheduler and Redis also refuse to start outside it, which is the last line if that ever fails.
+
+Nothing validates the other direction — a `location` the GVC does *not* have is accepted and stored, and simply runs nothing anywhere — so the API reads the GVC at boot and says so in its log. That check only warns; it never stops the dashboard from being served.
 
 ### Images
 
@@ -120,20 +114,12 @@ images:
   web: ghcr.io/controlplane-com/cpln-advisor/advisor-web:latest
 ```
 
-The API, worker and scheduler all run the **same** backend image with different commands — a scan is executed by the worker and served by the API, so they must never drift. Both packages are public, so Control Plane pulls them with no credential and the GVC needs no `pullSecretLinks`.
+The API, worker and scheduler all run the **same** backend image with different commands — a scan is executed by the worker and served by the API, so they must never drift. Both packages are public, so Control Plane pulls them with no credential.
 
-`:latest` follows the project's main branch. It is resolved when the workload is **deployed**, not continuously: these workloads set `supportDynamicTags: false`, so a later push to the tag is not picked up until something triggers a redeploy. (Control Plane can watch a tag and redeploy within five minutes if you set that field to `true` — the chart leaves it off, because auto-redeploying the API and worker mid-scan is not a thing you want happening unattended.)
-
-Two consequences worth knowing before you rely on this:
+`:latest` follows the project's main branch. It is resolved when the workload is **deployed**, not continuously: these workloads set `supportDynamicTags: false`, so a later push to the tag is not picked up until something triggers a redeploy. Two consequences worth knowing before you rely on this:
 
 - **Two installs a week apart can be running different code**, with nothing in the release to say so.
-- **There is nothing to roll back to.** Every build also publishes a `:sha-<commit>` tag, so pin one on both images before you depend on being able to go back:
-
-  ```yaml
-  images:
-    backend: ghcr.io/controlplane-com/cpln-advisor/advisor-backend:sha-441e70b6a899f0b7045b25825d28770c9650ab70
-    web: ghcr.io/controlplane-com/cpln-advisor/advisor-web:sha-441e70b6a899f0b7045b25825d28770c9650ab70
-  ```
+- **There is nothing to roll back to.** Every build also publishes a `:sha-<commit>` tag; pin the same one on both images with `--set images.backend=…:sha-<commit> --set images.web=…:sha-<commit>` before you depend on being able to go back.
 
 ### Login
 
@@ -148,7 +134,7 @@ The login is verified by the **API**, never by the dashboard, so one workload ho
 
 ### Access
 
-There is nothing to configure. **The dashboard is public**, and the other six workloads never are.
+There is nothing to configure. **The dashboard is public**, and the other five workloads never are.
 
 That is not a toggle because it is not really a choice: the dashboard is the only way into this app, and nothing inside the GVC calls it, so an internal-only dashboard would be unreachable by the people it exists for.
 
@@ -166,9 +152,9 @@ Everything else is closed to the internet, and internal traffic is admitted only
 | `{release}-api` | no | the dashboard only |
 | `{release}-redis` | no | the API, worker and scheduler only |
 | `{release}-worker`, `-scheduler` | no | nothing |
-| `{release}-postgres` | no | same GVC |
+| `{release}-postgres` | no | anything in the GVC (`same-gvc`) — see [Database](#database) |
 
-To narrow the dashboard to an office or VPN range, edit `inboundAllowCIDR` on the `{release}-web` workload after installing.
+To narrow the dashboard to an office or VPN range, edit `inboundAllowCIDR` on the `{release}-web` workload after installing. A firewall change takes roughly 30 seconds to several minutes to take effect.
 
 ### Public URL
 
@@ -192,6 +178,12 @@ session:
 
 Both are *idle* windows and slide forward while you work, under a hard ceiling the app enforces, so an abandoned tab cannot stay authenticated forever.
 
+### Logging
+
+```yaml
+logLevel: INFO      # DEBUG adds per-query detail for every Control Plane call, and is very noisy
+```
+
 ### Resources
 
 ```yaml
@@ -200,19 +192,19 @@ web:                                  # Capacity AI ON
   resources: { minCpu: 75m, maxCpu: 250m, minMemory: 128Mi, maxMemory: 512Mi }
 api:                                  # Capacity AI ON
   resources: { minCpu: 75m, maxCpu: 256m, minMemory: 128Mi, maxMemory: 512Mi }
-worker:    { resources: { maxCpu: 100m, maxMemory: 256Mi } }   # Capacity AI off
+worker:    { resources: { cpu: 100m, memory: 256Mi } }   # Capacity AI off
 scheduler: { resources: { minCpu: 25m, maxCpu: 50m, minMemory: 64Mi, maxMemory: 128Mi } }  # Capacity AI ON
 redis:
   image: redis:7-alpine
-  resources: { maxCpu: 50m, maxMemory: 128Mi }                 # Capacity AI off
-  maxmemory: 100mb                    # Redis' own cache cap, below maxMemory on purpose
+  resources: { cpu: 50m, memory: 128Mi }                 # Capacity AI off
+  maxmemory: 100mb                    # Redis' own cache cap, below `memory` on purpose
 ```
 
-`maxCpu`/`maxMemory` are the container limits, and every workload has them.
+A block that exposes both a floor and a limit names them `minCpu`/`maxCpu` and `minMemory`/`maxMemory`. A block that exposes only the limit uses the API's own field names, bare `cpu`/`memory`. **2.0.0 renamed `worker.resources` and `redis.resources` accordingly** — they were `maxCpu`/`maxMemory` in 1.0.0, with no floor to contrast against.
 
 `minCpu`/`minMemory` are the floor [Capacity AI](https://docs.controlplane.com/reference/workload/capacity) scales up from, and the three workloads that enable it — the dashboard, the API and the scheduler — each set one. The worker and Redis run with Capacity AI **off** (a long scan should not be resized underneath itself, and a broker should not be resized under load), so a floor there would be inert and is not set. The bundled Postgres is `stateful`, which respects its floor either way.
 
-Two limits the chart checks at render time, because Control Plane enforces both but publishes neither in a JSON schema — so each would otherwise surface as a 400 *partway through an install*, after the GVC and secrets already exist:
+Two limits the chart checks at render time, because Control Plane enforces both but publishes neither in a JSON schema — so each would otherwise surface as a 400 *partway through an install*:
 
 - **`maxCpu`/`minCpu` must be strictly under 4:1** (`The ratio between cpu and minCpu must be less than 4:1`). Memory is bounded the same way, at 4:1 inclusive.
 - **Unit typos.** `cpu` and `memory` are typed as bare strings with no numeric bound, so `512Gi` written for `512Mi` is *accepted* and the workload then never schedules.
@@ -235,12 +227,23 @@ postgres:
   pgbouncer:
     enabled: false            # few connections: three workloads, one replica each
   backup:
-    enabled: false
+    enabled: false            # turn this on — see below
 ```
 
 Passed straight through to the bundled [`postgres`](https://github.com/controlplane-com/templates/tree/main/postgres) chart, pinned at **3.4.1**. Memory is deliberately above that chart's defaults — a fleet scan writes in bursts.
 
-`internalAccess.type` is `same-gvc` rather than a workload list because this chart creates a **dedicated** GVC, so `same-gvc` already means "the advisor and nothing else". A subchart's values cannot be templated, so a workload list would have to hardcode release-prefixed names.
+**The database is the one tier this chart cannot pin to a location.** `postgres` 3.4.1 has no `location` knob and renders no `localOptions`, and a subchart's values cannot be templated, so the parent has nothing to hand it. In a GVC with more than one location it runs **one independent, empty database per location**, each on its own volume — billed, and answering the same `{release}-postgres.{gvc}` service DNS name this release connects to. **Install the advisor into a single-location GVC.** The API warns about extra locations in its startup log; it cannot prevent them.
+
+**`same-gvc` is wider than it was in 1.0.0.** That version created a dedicated GVC, so `same-gvc` meant "the advisor and nothing else". The GVC is now yours and may hold unrelated workloads, any of which can open port 5432. If that GVC is shared, narrow it at install time with the real names:
+
+```bash
+--set postgres.internalAccess.type=workload-list \
+--set postgres.internalAccess.workloads[0]=//gvc/YOUR_GVC/workload/RELEASE-api \
+--set postgres.internalAccess.workloads[1]=//gvc/YOUR_GVC/workload/RELEASE-worker \
+--set postgres.internalAccess.workloads[2]=//gvc/YOUR_GVC/workload/RELEASE-scheduler
+```
+
+Add `RELEASE-postgres-backup` to that list if you turn backups on.
 
 **Turn backups on.** They are off only because they need a bucket and a cloud account you create first. A volume is not a backup — losing it loses every scan, score and Autopilot record:
 
@@ -259,7 +262,15 @@ postgres:
       prefix: advisor/backups
 ```
 
-`backup.image` is **coupled to `image`** — tag `18.1.0` backs up Postgres 18, `17.1.0` backs up Postgres 17. Change one and change the other, or `pg_dump` meets a server it cannot read. `provider: minio` needs its own prerequisite dictionary secret holding `accessKey` and `secretKey`.
+`backup.image` is **coupled to `image`** — tag `18.1.0` backs up Postgres 18, `17.1.0` backs up Postgres 17. Change one and change the other, or `pg_dump` meets a server it cannot read. `provider: minio` needs its own prerequisite dictionary secret holding `accessKey` and `secretKey`. The bucket, cloud account and IAM policy steps are the `postgres` template's — see its **Storage setup** section, which this chart passes through unchanged.
+
+#### Restoring
+
+Each run writes **one gzipped `pg_dumpall` plain-SQL file**, `postgres-<UTC-timestamp>.sql.gz`, under `<bucket>/<prefix>/` (read out of the pinned backup image's `/usr/local/bin/backup.sh`). `pg_dumpall` is a whole-cluster script including `CREATE ROLE` and `CREATE DATABASE`, so it restores into an empty server; it is not a merge into a running one.
+
+The shape of a restore is: download the object with your own cloud tooling (the Postgres container has no `aws` or `gsutil`), reach the database with `cpln port-forward {release}-postgres 5432:5432 --gvc <gvc>`, and pipe it in with `gunzip -c postgres-….sql.gz | psql -h 127.0.0.1 -p 5432 -U <username> -d postgres`. Stop the API, worker and scheduler first, or they will be writing while you restore.
+
+> **This restore has not been executed against this template.** The artifact format above was read from the backup image; the steps follow from what `pg_dumpall` produces and what the chart configures, but nothing here verifies them end to end. Rehearse it against a scratch release before you need it.
 
 ### Scaling past one replica
 
@@ -269,13 +280,15 @@ The API, worker and scheduler are each pinned to one replica, and Postgres is no
 - **Worker** — a fleet scan's Control Plane and LLM calls are rate-limited upstream, so a second worker mostly buys more 429s. Raise it deliberately.
 - **Scheduler** — two would fire every cron twice. This one is a hard no.
 
+Note these are *per-location* counts on top of a single configured location. Adding a second location is not how you get a second replica; it is how you get a second, unaware copy of everything.
+
 ## Connecting
 
 | Path | Address | Notes |
 |---|---|---|
 | Dashboard | `https://<canonical-endpoint>` | Always public. Read it from `status.canonicalEndpoint` in `cpln workload get <release>-web -o yaml` — never hand-build it. |
 | API | `http://<release>-api.<gvc>.cpln.local:8000` | Internal, and reachable only from the dashboard. Plain `http` is correct — the sidecar adds mTLS. |
-| Database | `<release>-postgres.<gvc>.cpln.local:5432` | Internal, same GVC. Credentials are in your database secret. |
+| Database | `<release>-postgres.<gvc>.cpln.local:5432` | Internal. Credentials are in your database secret. |
 
 ## After the first deploy
 
@@ -283,26 +296,44 @@ The API, worker and scheduler are each pinned to one replica, and Postgres is no
 2. Go to **Configuration → Control Plane**, paste the service-account token, and press **Test connection**.
 3. Add an Anthropic or OpenAI key on the same page, and a Slack bot token if you want digests. These are stored encrypted in the database using `ADVISOR_SECRET_KEY` — which is why losing that key loses them.
 4. Enable **Scan** on the workloads you want watched, then **Scan now**.
-5. Confirm the scheduler is alive — `cpln workload logs <release>-scheduler` should show it firing `run_scan`.
+5. Check the API's log for `GVC location check OK`, and the scheduler's for it firing `run_scan`.
+
+## Migrating from 1.0.0
+
+**1.0.0 created a GVC named after the one you installed into.** Helm therefore *adopted* your GVC and has owned it since the first install. 2.0.0 does not declare a GVC at all, and Helm deletes what a chart no longer declares — so an in-place upgrade destroys that GVC and **every workload, volumeset and identity inside it**, including anything unrelated you keep there, while printing `upgraded successfully`. This is not hypothetical: the same adoption path deleted a shared GVC in testing, despite a `helm.sh/resource-policy: keep` annotation on it.
+
+The chart refuses to render when it sees the old `gvc` values key, so an upgrade that passes your 1.0.0 values file fails safely. **An upgrade run with no values at all sees only 2.0.0's defaults, and cannot be caught** — which is why this section exists.
+
+Migrate to a **new release** instead:
+
+1. Back up the database. If `postgres.backup` is off, turn it on and let one run complete, or take a manual `pg_dumpall` — see [Restoring](#restoring).
+2. Install 2.0.0 as a **new release** into an existing single-location GVC, with a new `DATABASE_URL` in a new credentials secret pointing at the new release's Postgres. Both prerequisite secrets are not release-managed, so you can reuse the advisor credentials secret if you also point `DATABASE_URL` at the new host.
+3. Load the dump into the new database, then sign in and confirm the scan history and stored credentials are there. `ADVISOR_SECRET_KEY` must be the **same value** as the old release used, or the AI and Slack credentials in the restored rows cannot be decrypted and will read as "not set".
+4. Only then `cpln helm uninstall` the old release. Be aware that this deletes the GVC it adopted.
+
+Also changed in 2.0.0, and both are clean breaks with no fallback:
+
+- `gvc.locations` (a list) became the top-level `location` (a single name).
+- `worker.resources.maxCpu`/`maxMemory` and `redis.resources.maxCpu`/`maxMemory` became bare `cpu`/`memory`.
 
 ## Important Notes
 
-- **Create both secrets before installing.** A missing one wedges the deployment silently — the workloads never start and `cpln logs` returns nothing to say why.
-- **No credential passes through this chart.** It creates no secret and takes none as a value, so nothing sensitive reaches the Helm release. `helm template` succeeds with no values at all — that is the check that this stays true.
+- **Never `helm upgrade` a 1.0.0 release onto 2.0.0.** It deletes the GVC 1.0.0 adopted and everything in it. See [Migrating from 1.0.0](#migrating-from-100).
+- **Install into a single-location GVC.** Every advisor workload is pinned to `location`, but the bundled Postgres cannot be, and a second GVC location gives it a second independent database on the same service DNS name.
+- **Create both secrets before installing.** A missing one wedges the deployment silently; the only place it is named is `status.versions[].message` from `cpln workload get-deployments`.
+- **No credential passes through this chart.** It creates no credential secret and takes none as a value, so nothing sensitive reaches the Helm release. `helm template` succeeds with no values at all — that is the check that this stays true.
 - **`DATABASE_URL` and the database credentials secret must agree, and nothing cross-checks them.** A mismatch installs cleanly and then fails to authenticate at runtime.
-- **A secret needs three things, and two of them fail silently.** An identity linked to the workload, a policy granting **`reveal`** (not `view`, which exposes metadata only), and the `cpln://secret/NAME.KEY` reference. The chart wires all three, but if you point it at a secret in another org or misname a key, the container starts happily with an empty string and behaves as though nothing were configured. If the app reports a credential missing, check the policy before you check the app.
 - **Losing `ADVISOR_SECRET_KEY` loses every credential entered in the UI.** They are unrecoverable and must be re-entered. Keep it somewhere durable before you deploy.
 - **The dashboard is public and there is no values knob to close it.** The login is the boundary — a signed session cookie, an API that fails closed, and no shipped default password. Narrow `inboundAllowCIDR` on the `{release}-web` workload after installing if you want it tighter.
-- **The GVC must have exactly one location**, and the chart enforces it. A workload runs in every location and scale bounds are per-location, so a second location means a second scheduler firing every cron twice. The bundled Postgres would also get a second, independent database rather than a replica.
-- **The GVC must not already exist.** Helm adopts one that does, and `helm uninstall` would then delete it and everything in it.
-- **Backups are OFF by default and you should turn them on.** They need a bucket and a cloud account you create first. A volume is not a backup — see [Database](#database).
+- **The bundled database admits any workload in your GVC.** If the GVC is shared, narrow `postgres.internalAccess` — see [Database](#database).
+- **Backups are OFF by default and you should turn them on.** A volume is not a backup, and the restore path is documented but unrehearsed — see [Restoring](#restoring).
 - **A Postgres password is first-boot only.** It is read when the data directory initializes. Rotating it in the secret afterwards does not change the running server — you must also change it in Postgres itself, and update `DATABASE_URL` to match.
-- **Rotating a credential means updating the secret and redeploying.** The workloads read `cpln://secret/…` references at start, so a changed secret reaches them on the next deployment, not immediately.
+- **Rotating any secret requires a forced redeployment.** `cpln://secret/…` references resolve when a replica starts and are never re-resolved while it lives, so a rotated secret keeps the old value indefinitely with everything reporting healthy. Run `cpln workload force-redeployment <workload> --gvc <gvc>` for each affected workload.
 - **Redis is not persistent and not authenticated.** Everything in it is derived or transient, so a restart at worst skips one scan and repeats one digest. Its firewall admits exactly the three workloads that use it, and that is the whole access control — do not widen it.
-- **Both images track `:latest`, so an install is not reproducible.** The tag resolves at deploy time, and there is no earlier build to fall back to. Pin `:sha-<commit>` on both images before this matters to you — see [Images](#images).
-- **Autopilot redeploys your workloads.** Each applied suggestion patches a live workload and restarts it. It is per-workload and off until you enable it, every change is recorded in Activity, and every change has a one-click revert — but the redeploy itself is real.
+- **Both images track `:latest`, so an install is not reproducible.** The tag resolves at deploy time, and there is no earlier build to fall back to. Pin `:sha-<commit>` on both images before this matters to you.
+- **Autopilot redeploys your workloads.** Each applied suggestion patches a live workload and restarts it. It is per-workload and off until you enable it, every change is recorded in Activity with a one-click revert — but the redeploy itself is real.
 - **The advisor's token is as powerful as you make it.** Grant `workload: edit` only if you want Autopilot and one-click apply; without it the advisor runs read-only.
-- **`uninstall` deletes the GVC, the database volume set and the secret**, taking the scan history and every stored credential with it.
+- **`uninstall` deletes the database volume set and the scan history with it.** It does **not** delete the GVC — 2.0.0 never owned it — and it does not delete your two prerequisite secrets.
 
 ## Links
 
@@ -310,3 +341,4 @@ The API, worker and scheduler are each pinned to one replica, and Postgres is no
 - [Creating a service account](https://docs.controlplane.com/guides/create-service-account)
 - [Volume sets](https://docs.controlplane.com/reference/volumeset)
 - [Workload firewall](https://docs.controlplane.com/reference/workload/firewall)
+- [Capacity AI](https://docs.controlplane.com/reference/workload/capacity)

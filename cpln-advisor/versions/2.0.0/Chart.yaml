@@ -3,14 +3,17 @@ name: cpln-advisor
 description: AI advisor that right-sizes your workloads from their own metrics, logs and billed cost
 
 type: application
-version: 1.0.0
+version: 2.0.0
 appVersion: "1.0.0"
 
 annotations:
   created: "2026-08-17"
-  lastModified: "2026-08-17"
+  lastModified: "2026-08-30"
   category: "observability"
-  createsGvc: true
+  # 2.0.0 stopped creating a GVC. 1.0.0 named the GVC it created after the one
+  # you installed into, so Helm ADOPTED your GVC — never `helm upgrade` a 1.0.0
+  # release onto this version; see `Migrating from 1.0.0` in the README.
+  createsGvc: false
 
 dependencies:
   - name: cpln-common
@@ -23,6 +26,10 @@ dependencies:
   # 3.4.1, NOT 3.3.0: from 3.4.0 the template reads its username/password/database
   # from a prerequisite secret instead of taking them inline, which is what lets
   # this chart bundle a database and still keep every credential out of values.
+  #
+  # 3.4.1 does NOT create a GVC, so this pin needed no bump for the conversion.
+  # It also has no `location` knob, which is why it is the one tier this chart
+  # cannot pin — see `Database` in the README and the values note below it.
   - name: postgres
     version: 3.4.1
     repository: "oci://ghcr.io/controlplane-com/templates"

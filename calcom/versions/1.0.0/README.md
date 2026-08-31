@@ -184,8 +184,14 @@ Backups are off by default and need no cloud account. To turn them on, set `<sto
 {
   "Version": "2012-10-17",
   "Statement": [
-    { "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": "arn:aws:s3:::my-calcom-bucket" },
-    { "Effect": "Allow", "Action": ["s3:PutObject","s3:GetObject","s3:DeleteObject"], "Resource": "arn:aws:s3:::my-calcom-bucket/*" }
+    { "Effect": "Allow",
+      "Action": ["s3:ListBucket", "s3:GetBucketLocation", "s3:ListBucketMultipartUploads"],
+      "Resource": "arn:aws:s3:::my-calcom-bucket" },
+    { "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject",
+                 "s3:GetObjectVersion", "s3:DeleteObjectVersion",
+                 "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"],
+      "Resource": "arn:aws:s3:::my-calcom-bucket/*" }
   ]
 }
 ```

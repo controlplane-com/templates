@@ -1,4 +1,4 @@
----
+{{- include "cpln-advisor.validate" . -}}
 kind: workload
 name: {{ include "cpln-advisor.scheduler.name" . }}
 description: CPLN Advisor cron scheduler (fires scheduled scans and retention)
@@ -15,6 +15,10 @@ spec:
       minMemory: {{ .Values.scheduler.resources.minMemory | quote }}
       cpu: {{ .Values.scheduler.resources.maxCpu | quote }}
       memory: {{ .Values.scheduler.resources.maxMemory | quote }}
+      # Wrapped in a shell so Guard A runs first — this is the tier where a
+      # replica in a second location does the most damage, because two
+      # schedulers fire every cron twice.
+      #
       # `workers.worker:scheduler`, NOT `:broker`. TaskIQ's scheduler CLI needs
       # a TaskiqScheduler instance; pointed at the broker it exits immediately
       # with "Imported scheduler is not a subclass of TaskiqScheduler".
@@ -23,10 +27,13 @@ spec:
       # the cron that CREATES them. Without it nothing is scanned on a schedule,
       # retention never prunes and autopilot never runs — and everything still
       # looks healthy.
-      command: taskiq
+      command: /bin/sh
       args:
-        - scheduler
-        - workers.worker:scheduler
+        - -c
+        - |
+          set -eu
+          {{- include "cpln-advisor.locationGuard" . | nindent 10 }}
+          exec taskiq scheduler workers.worker:scheduler
       env:
         # Nothing here may be named CPLN_* — see the note on the API workload.
         - name: LOG_LEVEL
@@ -46,12 +53,22 @@ spec:
           value: cpln://secret/{{ .Values.auth.secretName }}.ADVISOR_API_TOKEN
         - name: ADVISOR_SECRET_KEY
           value: cpln://secret/{{ .Values.auth.secretName }}.ADVISOR_SECRET_KEY
+  {{- /* ONE scheduler, in the one configured location — two fire every cron twice. */}}
   defaultOptions:
-    capacityAI: true # the scheduler only enqueues; let it be sized down
     autoscaling:
-      metric: disabled
-      minScale: 1
-      maxScale: 1 # two schedulers would fire every cron twice
+      {{- include "cpln-advisor.autoscaling" (dict "scale" (dict "min" 0 "max" 0)) | nindent 6 }}
+    capacityAI: true # the scheduler only enqueues; let it be sized down
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  localOptions:
+    - autoscaling:
+        {{- include "cpln-advisor.autoscaling" (dict "scale" (dict "min" 1 "max" 1)) | nindent 8 }}
+      capacityAI: true
+      debug: false
+      location: //location/{{ .Values.location }}
+      suspend: false
+      timeoutSeconds: 5
   # Non-root. `filesystemGroupId` is gone with the shared volume it existed for.
   # (Never 1337: that is the mesh proxy's UID, and a container running as it
   # bypasses the Envoy redirect.)
@@ -67,7 +84,7 @@ spec:
       outboundBlockedCIDR: []
     internal:
       inboundAllowType: none
-      inboundAllowWorkload: []
+      inboundAllowWorkload: [] # API backfill, declared so rendered == stored
   loadBalancer:
     direct:
       enabled: false

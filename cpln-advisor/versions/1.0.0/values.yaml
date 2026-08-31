@@ -1,23 +1,27 @@
-# ─── GVC ──────────────────────────────────────────────────────────────────────
-# This chart CREATES this GVC. It must NOT already exist: Helm adopts one that
-# does, and `helm uninstall` would then delete it and everything in it.
+# ─── Location ─────────────────────────────────────────────────────────────────
+# This chart deploys into the GVC you install into — it does NOT create one, and
+# there is no `gvc` key any more. `global.cpln.gvc` is injected by the platform
+# at install time, so it is never declared here.
 #
-# The name lives under `global` so every resource is tagged with it and any
-# subchart would inherit it — the catalog's convention for a chart that owns
-# its own GVC.
-global:
-  cpln:
-    gvc: advisor
-
-gvc:
-  # EXACTLY ONE location, and the chart refuses to render with more. A workload
-  # runs in EVERY location of its GVC and minScale/maxScale are per-location, so
-  # a second location silently gives you a second scheduler firing every cron
-  # twice. The bundled Postgres is a single stateful workload on a
-  # read-write-once volume, so a second location would also give it a second,
-  # independent database rather than a replica.
-  locations:
-    - name: aws-us-east-1
+# IF YOU INSTALLED THE EARLIER 1.0.0, DO NOT `helm upgrade` onto this one. That
+# version created a GVC named after the one you installed into, so Helm ADOPTED
+# your GVC; this one stops declaring it, and Helm deletes what a chart no longer
+# declares — the GVC and everything in it. The chart refuses to render if the old
+# `gvc` key is present, but a values-less upgrade sees only these defaults and
+# cannot be caught. See `If you installed the earlier 1.0.0` in the README.
+#
+# The advisor runs in EXACTLY ONE location, and this names it. It must already
+# be a location of that GVC — the API reads the GVC at boot and warns loudly if
+# it is not.
+#
+# One location is not a simplification. Scale bounds are per-location, so a
+# second location means a second scheduler firing every cron twice, a second
+# Redis splitting the task queue, and a second API running the same startup
+# migration. Every workload in this chart is pinned here by
+# defaultOptions.minScale/maxScale 0 plus a localOptions entry — but see the
+# Database section: the bundled `postgres` subchart is the one tier that cannot
+# be pinned, so install the advisor into a SINGLE-LOCATION GVC.
+location: aws-us-east-1
 
 # ─── Images ───────────────────────────────────────────────────────────────────
 # The API, worker and scheduler all run the SAME backend image — same code,
@@ -37,10 +41,10 @@ images:
   web: ghcr.io/controlplane-com/cpln-advisor/advisor-web:latest
 
 # ─── Credentials (PREREQUISITE SECRET) ────────────────────────────────────────
-# This chart creates NO secret and takes NO credential as a value, so nothing
-# sensitive passes through Helm or lands in the release. It reads everything out
-# of one `dictionary` secret that must EXIST BEFORE YOU INSTALL — the workloads
-# wedge waiting on it otherwise.
+# This chart creates NO credential secret and takes NO credential as a value, so
+# nothing sensitive passes through Helm or lands in the release. It reads
+# everything out of one `dictionary` secret that must EXIST BEFORE YOU INSTALL —
+# the workloads wedge waiting on it otherwise.
 #
 # Create it with the six keys below (see README Prerequisites for the commands):
 #
@@ -98,7 +102,11 @@ session:
 logLevel: INFO
 
 # ─── Workloads ────────────────────────────────────────────────────────────────
-# `maxCpu`/`maxMemory` are the container LIMITS, and every workload has them.
+# A block that exposes BOTH a reservation and a limit names them
+# `minCpu`/`maxCpu` and `minMemory`/`maxMemory`. A block that exposes only the
+# disambiguate against. `worker` and `redis` still use `maxCpu`/`maxMemory`;
+# renaming them is proposed separately, since it would break existing values.
+#
 # `minCpu`/`minMemory` are the floor Capacity AI scales from; where they are not
 # set, Control Plane supplies its own default floor.
 #
@@ -155,7 +163,7 @@ redis:
     maxCpu: 50m
     maxMemory: 128Mi
   # Cap the cache so a runaway key cannot get the container OOM-killed mid-scan.
-  # Below maxMemory on purpose (100 MB vs 128 MiB).
+  # Below `memory` on purpose (100 MB vs 128 MiB).
   maxmemory: 100mb
 
 # ─── Database (subchart: postgres 3.4.1) ──────────────────────────────────────
@@ -167,6 +175,15 @@ redis:
 # dashboard, the worker records scan results and Autopilot changes, and the
 # scheduler writes cron state. That needs a database server, and one that is
 # backed up.
+#
+# THE ONE TIER THIS CHART CANNOT PIN TO A LOCATION. postgres 3.4.1 has no
+# `location` knob and renders no `localOptions`, and a subchart's values cannot
+# be templated, so the parent cannot supply one. In a GVC with more than one
+# location it therefore runs ONE INDEPENDENT, EMPTY DATABASE PER LOCATION, each
+# on its own volume — billed, and answering the same `{release}-postgres.{gvc}`
+# service DNS name this release connects to. INSTALL THE ADVISOR INTO A
+# SINGLE-LOCATION GVC. The API warns about extra locations at boot; it cannot
+# prevent them.
 postgres:
   image: postgres:18 # 17+ is required for the backup feature below
 
@@ -202,10 +219,20 @@ postgres:
       minFreePercentage: 20
       scalingFactor: 1.5
 
-  # `same-gvc` rather than a workload list: this chart creates a dedicated GVC,
-  # so same-gvc already means "the advisor and nothing else". A subchart's values
-  # cannot be templated, so a workload list would have to hardcode
-  # release-prefixed names. Narrow it by hand if you add anything to this GVC.
+  # `same-gvc`, because a subchart's values cannot be templated and a workload
+  # list would have to hardcode release-prefixed names.
+  #
+  # The GVC is YOURS and may hold unrelated workloads, so `same-gvc`
+  # now means "anything in your GVC may open port 5432" rather than "the advisor
+  # and nothing else". If that GVC is shared, narrow it at install time with the
+  # real names, e.g.:
+  #
+  #   --set postgres.internalAccess.type=workload-list \
+  #   --set postgres.internalAccess.workloads[0]=//gvc/YOUR_GVC/workload/RELEASE-api \
+  #   --set postgres.internalAccess.workloads[1]=//gvc/YOUR_GVC/workload/RELEASE-worker \
+  #   --set postgres.internalAccess.workloads[2]=//gvc/YOUR_GVC/workload/RELEASE-scheduler
+  #
+  # Add the backup workload too if you turn backups on.
   internalAccess:
     type: same-gvc
 

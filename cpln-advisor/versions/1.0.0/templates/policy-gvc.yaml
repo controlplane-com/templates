@@ -1,6 +1,6 @@
 {{- include "cpln-advisor.validate" . -}}
 {{- /*
-  New in 2.0.0. The API reads its own GVC at boot to confirm the GVC really has
+  The API reads its own GVC at boot to confirm the GVC really has
   the location this release is pinned to, and to report any EXTRA locations —
   which matter here more than in most converted templates, because the bundled
   `postgres` subchart cannot be pinned and runs one independent database in each

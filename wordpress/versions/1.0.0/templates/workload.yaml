@@ -160,4 +160,15 @@ spec:
         - {{ . }}
         {{- end }}
         {{- end }}
+      {{- else }}
+      {{- /*
+        Emitted as [] on the non-list types too. Sending a PARTIAL `internal`
+        block makes the API complete it: grafana-multi-location 2.0.0 emitted
+        this key only under `workload-list`, and both its workloads drifted from
+        their own manifest from creation on the DEFAULT type. A `helm upgrade`
+        drift gate CANNOT see that class -- it reported `Unchanged` throughout,
+        because the field is backfilled once at creation and then never churns.
+        Only render-vs-stored finds it.
+      */}}
+      inboundAllowWorkload: []
       {{- end }}

@@ -1,0 +1,80 @@
+{{- include "plane.validate" . -}}
+{{- if eq .Values.storage.type "minio" }}
+{{- /*
+  Bundled single-node MinIO — attachments, avatars and page assets.
+
+  Not the `minio` template: that one is distributed-mode only (replicas: 6, a
+  documented minimum of 4, at minCpu 1 / minMemory 2Gi each) — a 12 vCPU / 24
+  GiB floor to store a project tracker's avatars. Set storage.type: s3 to point
+  at real object storage instead, including your own minio or seaweedfs release.
+
+  TWO TRAPS, both handled here:
+    * upstream's compose uses `--console-address ":9090"`, and 9090 is a
+      RESERVED container port on this platform — the apply would be rejected.
+      We use :9001 (matching the `minio` template) and never declare it, so the
+      console is unreachable; MinIO is administered by Plane, not by humans.
+    * the API signs presigned asset URLs against the PUBLIC host, so the browser
+      fetches https://{public}/{bucket}/... and the proxy forwards it here.
+      Caddy passes the Host header through unchanged, which is what makes the
+      SigV4 signature validate. Verified locally end to end against this tag.
+
+  The image runs as root (verified: `id` -> uid=0 on this tag), so the
+  root-owned volumeset mount needs no securityOptions.filesystemGroupId.
+*/}}
+kind: workload
+name: {{ include "plane.minio.name" . }}
+description: Plane MinIO — bundled attachment and asset storage
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "plane.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "plane.identity.name" . }}
+  containers:
+    - name: minio
+      image: {{ .Values.storage.minio.image }}
+      inheritEnv: false
+      cpu: {{ .Values.storage.minio.resources.cpu | quote }}
+      memory: {{ .Values.storage.minio.resources.memory | quote }}
+      args:
+        - server
+        - /export
+        - --console-address
+        - ":9001"
+      env:
+        - name: MINIO_ROOT_USER
+          value: cpln://secret/{{ include "plane.secret.creds.name" . }}.minioAccessKey
+        - name: MINIO_ROOT_PASSWORD
+          value: cpln://secret/{{ include "plane.secret.creds.name" . }}.minioSecretKey
+      ports:
+        - number: 9000
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /minio/health/live
+          port: 9000
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      volumes:
+        - path: /export
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "plane.minio.volumeset.name" . }}
+  defaultOptions:
+    {{- include "plane.defaultOptions" (dict "timeout" 30) | nindent 4 }}
+  localOptions:
+    {{- include "plane.localOptions" (dict "root" . "replicas" 1 "timeout" 30) | nindent 4 }}
+  firewallConfig:
+    external:
+      {{- include "plane.externalFirewall" (dict "root" . "public" false) | nindent 6 }}
+    internal:
+      {{- include "plane.internalFirewall" . | nindent 6 }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false
+{{- end }}

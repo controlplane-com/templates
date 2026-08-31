@@ -145,7 +145,19 @@ spec:
     internal:
       inboundAllowType: {{ .Values.internalAccess.type }}
       {{- if eq .Values.internalAccess.type "workload-list" }}
+      {{- /*
+        This release's own workloads are merged in unconditionally: a
+        workload-list naming only the user's clients would otherwise deny the
+        release its own internal paths. A link the user also listed is emitted
+        ONCE — a duplicate array entry is a drift candidate. Same shape as
+        calcom.internalFirewall and documenso's workload.
+      */}}
+      {{- $own := splitList "\n" (trim (include "wordpress.ownWorkloadLinks" .)) }}
       inboundAllowWorkload:
-        {{- .Values.internalAccess.workloads | toYaml | nindent 8 }}
         {{- include "wordpress.ownWorkloadLinks" . | nindent 8 }}
+        {{- range .Values.internalAccess.workloads }}
+        {{- if not (has (printf "- %s" .) $own) }}
+        - {{ . }}
+        {{- end }}
+        {{- end }}
       {{- end }}

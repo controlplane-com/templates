@@ -99,7 +99,7 @@ volumeset:
 
 ```yaml
 # ─── Access ───────────────────────────────────────────────────────────────────
-# A firewall change takes ~30 s to a few minutes to propagate.
+# A firewall change takes ~30 s to ~10 min to propagate.
 publicAccess:
   enabled: true # HTTPS site on the auto-assigned *.cpln.app endpoint
 internalAccess:
@@ -200,7 +200,7 @@ WordPress's own "lost password" email cannot help here — see the note on outbo
 - **Install into a single-location GVC.** A fresh install refuses a multi-location GVC; an already-running site only warns, so the check can never take a live site down.
 - **`wordpress.siteTitle` and `wordpress.tablePrefix` apply on first boot only.** Change the title later in Settings → General; the table prefix cannot be changed after install.
 - **Give each release its own `mariadb.credentialsSecretName` and `mariadb.rootPasswordSecretName`.** Secret names are org-wide, and a second release left on the defaults is refused at install.
-- **A firewall change takes ~30 seconds to several minutes to propagate.** After flipping `publicAccess.enabled` or `internalAccess.type`, keep re-polling rather than concluding the knob is broken.
+- **A firewall change takes ~30 s to ~10 min to propagate.** After flipping `publicAccess.enabled` or `internalAccess.type`, keep re-polling rather than concluding the knob is broken.
 
 ## Links
 

@@ -39,7 +39,7 @@ volumeset:
   capacity: 10 # initial capacity in GiB (minimum is 10)
 
 # ─── Access ───────────────────────────────────────────────────────────────────
-# A firewall change takes ~30 s to a few minutes to propagate.
+# A firewall change takes ~30 s to ~10 min to propagate.
 publicAccess:
   enabled: true # HTTPS site on the auto-assigned *.cpln.app endpoint
 internalAccess:

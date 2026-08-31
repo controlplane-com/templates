@@ -63,7 +63,7 @@ alerting:
   highAvailability:
     enabled: false
   # Dedicated-evaluator mode ONLY — where the one evaluator runs. Must be one of
-  # global.gvc.locations. IGNORED when highAvailability.enabled is true.
+  # global.locations. IGNORED when highAvailability.enabled is true.
   location: aws-us-east-1
   # Dedicated-evaluator mode ONLY — in HA mode the UI tier's `resources` apply.
   resources:

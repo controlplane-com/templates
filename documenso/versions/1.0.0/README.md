@@ -57,9 +57,15 @@ cpln secret create-dictionary --name my-documenso-secrets \
 `signingPassphrase` must be the password you gave the `.p12` above. `encryptionKey` cannot be rotated
 without orphaning every 2FA secret and API token it protects.
 
-Optional, only for the features that use them: an S3 bucket plus a Control Plane
-[cloud account](https://docs.controlplane.com/guides/create-cloud-account) (see **Storage setup**),
-and an SMTP relay.
+Optional, only for the features that use them:
+
+- **S3 document storage** — an S3 bucket plus a Control Plane
+  [cloud account](https://docs.controlplane.com/guides/create-cloud-account), or an S3-compatible
+  server and a static-key secret. See **Storage setup**.
+- **Database backups** — a bucket plus a cloud account (AWS or GCP), or an S3-compatible endpoint
+  and a static-key secret. This is a second, independent bucket decision: backups are off by
+  default and are unrelated to where documents are stored. See **Backing up the database**.
+- **Outbound email** — an SMTP relay.
 
 ## Configuration
 
@@ -75,8 +81,10 @@ documenso:
   # 2+ keeps the UI serving through a rolling restart.
   replicas: 1
   # Browser-facing origin — signing links in email, OAuth redirects, session
-  # cookie domain. Empty = derived from the platform canonical endpoint. Set it
-  # WITH the scheme only for a custom domain: https://sign.example.com
+  # cookie domain. Empty = the platform canonical endpoint when publicAccess is
+  # on, and http://localhost:3000 when it is off (the `cpln port-forward` origin
+  # a browser is actually on). Set it WITH the scheme only for a custom domain:
+  # https://sign.example.com
   publicUrl: ""
   resources:
     minCpu: 500m
@@ -316,8 +324,64 @@ With `storage.type: database` the PDFs are rows in this database, so the dump is
 With `storage.type: s3` you must also protect the bucket (versioning or a lifecycle copy) — the dump
 holds only the object keys.
 
-For the bucket, cloud account and IAM policy setup per provider, follow the Storage setup section of
-the [`postgres` template README](../../../postgres).
+### Backup storage setup
+
+Complete these before installing with `postgres.backup.enabled: true`. All keys below are under
+`postgres.backup` (or `postgresHA.backup` in HA mode).
+
+**AWS S3** — create the bucket and set `aws.bucket` and `aws.region`. Create a Control Plane
+[cloud account](https://docs.controlplane.com/guides/create-cloud-account) for the AWS account that
+holds it and set `aws.cloudAccountName`. Then create an IAM policy scoped to exactly that bucket
+(replace `YOUR_BUCKET_NAME`) and set `aws.policyName` to its name:
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:ListBucket",
+                "s3:GetObjectVersion",
+                "s3:DeleteObjectVersion",
+                "s3:GetBucketLocation",
+                "s3:AbortMultipartUpload",
+                "s3:ListBucketMultipartUploads",
+                "s3:ListMultipartUploadParts"
+            ],
+            "Resource": [
+                "arn:aws:s3:::YOUR_BUCKET_NAME",
+                "arn:aws:s3:::YOUR_BUCKET_NAME/*"
+            ]
+        }
+    ]
+}
+```
+
+The multipart actions are not optional — a dump large enough to be uploaded in parts fails without
+them, and only once your database has grown.
+
+**Google Cloud Storage** — create the bucket and set `gcp.bucket`. Create a cloud account for the
+GCP project holding it, set `gcp.cloudAccountName`, and grant that cloud account's service account
+**Storage Admin** (`roles/storage.admin`) on the project. The subchart additionally binds its own
+identity to **Storage Object Admin** (`roles/storage.objectAdmin`) on exactly the bucket you named.
+
+**MinIO / any S3-compatible server** — no cloud account is involved; the keys are a prerequisite
+`dictionary` secret. Create the bucket, set `minio.bucket`, and set `minio.endpoint` to the S3 API
+address including the port — for the `minio` template in the same GVC that is
+`http://{release}-minio.{gvc}.cpln.local:9000`. Then create the secret and set
+`minio.credentialsSecretName` to its name:
+
+```bash
+cpln secret create-dictionary --name my-documenso-minio-credentials \
+  --entry accessKey=MINIO_ACCESS_KEY \
+  --entry secretKey=MINIO_SECRET_KEY
+```
+
+For the `minio` template those two values are its `admin.username` and `admin.password`.
 
 ## Connecting
 

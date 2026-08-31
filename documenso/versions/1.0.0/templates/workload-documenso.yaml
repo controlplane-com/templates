@@ -71,6 +71,15 @@ spec:
         # is no org-alias variable, so it is derived at runtime from this
         # workload's own CPLN_GLOBAL_ENDPOINT (already a full URL — never
         # prepend a scheme) rather than assembled here.
+        #
+        # The private branch is http://localhost:3000, matching calcom's
+        # calcom.appUrl helper, which hit the identical fork. With public access
+        # off the only route to the UI is `cpln port-forward`, so the browser's
+        # real origin IS http://localhost:3000. The internal service-DNS name is
+        # a hostname no browser ever visits, and pointing the session-cookie
+        # domain at an origin the browser is not on is how a login silently
+        # fails to stick. (An https:// name would be worse still: NextAuth then
+        # sets `Secure` cookies that a browser on plain http refuses to store.)
         {{- if .Values.documenso.publicUrl }}
         - name: NEXT_PUBLIC_WEBAPP_URL
           value: {{ .Values.documenso.publicUrl | quote }}
@@ -79,7 +88,7 @@ spec:
           value: "$(CPLN_GLOBAL_ENDPOINT)"
         {{- else }}
         - name: NEXT_PUBLIC_WEBAPP_URL
-          value: http://{{ include "documenso.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:3000
+          value: http://localhost:3000
         {{- end }}
         # ── Background jobs: the container calls ITSELF ──
         # packages/lib/jobs/client/local.ts POSTs every enqueued job to

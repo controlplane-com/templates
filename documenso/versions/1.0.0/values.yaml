@@ -8,8 +8,10 @@ documenso:
   # 2+ keeps the UI serving through a rolling restart.
   replicas: 1
   # Browser-facing origin — signing links in email, OAuth redirects, session
-  # cookie domain. Empty = derived from the platform canonical endpoint. Set it
-  # WITH the scheme only for a custom domain: https://sign.example.com
+  # cookie domain. Empty = the platform canonical endpoint when publicAccess is
+  # on, and http://localhost:3000 when it is off (the `cpln port-forward` origin
+  # a browser is actually on). Set it WITH the scheme only for a custom domain:
+  # https://sign.example.com
   publicUrl: ""
   resources:
     minCpu: 500m

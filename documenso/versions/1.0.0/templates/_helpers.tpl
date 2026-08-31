@@ -124,6 +124,28 @@ true
 {{- if not (has .Values.internalAccess.type (list "none" "same-gvc" "same-org" "workload-list")) -}}
 {{- fail (printf "documenso: internalAccess.type must be 'none', 'same-gvc', 'same-org', or 'workload-list', got '%s'" .Values.internalAccess.type) -}}
 {{- end -}}
+
+{{- /*
+  The app reaches PostgreSQL over the GVC's internal network, and the bundled
+  `postgres` subchart has its own internalAccess knob that this chart cannot
+  inject into — a parent cannot template a subchart value. If the user narrows
+  the database to a workload list that omits this Documenso workload, the app
+  cannot reach its own database, and it fails as a boot hang rather than an
+  error. Catch it at render instead. (postgres-highly-available exposes no
+  internalAccess knob, so there is nothing to guard on that path.)
+*/ -}}
+{{- if and .Values.postgres.enabled .Values.postgres.internalAccess -}}
+{{- $pgAccess := .Values.postgres.internalAccess -}}
+{{- $self := printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "documenso.name" .) -}}
+{{- if eq ($pgAccess.type | default "") "none" -}}
+{{- fail "documenso: postgres.internalAccess.type must not be 'none' — Documenso reaches the bundled database over the GVC internal network. Use 'same-gvc' (default) or 'workload-list' including this release's Documenso workload" -}}
+{{- end -}}
+{{- if eq ($pgAccess.type | default "") "workload-list" -}}
+{{- if not (has $self ($pgAccess.workloads | default list)) -}}
+{{- fail (printf "documenso: postgres.internalAccess.type is 'workload-list' but the list does not include this release's Documenso workload — add '%s', or the app cannot reach its own database" $self) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if and .Values.postgres.enabled .Values.postgresHA.enabled -}}
 {{- fail "documenso: enable exactly one database — set either postgres.enabled or postgresHA.enabled to true, not both" -}}
 {{- end -}}

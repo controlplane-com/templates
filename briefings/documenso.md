@@ -43,7 +43,7 @@
 | Knob | Default | Notes |
 |---|---|---|
 | `documenso.image` / `.replicas` | `documenso/documenso:v2.17.0` / `1` | tag keeps the `v`; `2+` = continuity through restarts |
-| `documenso.publicUrl` | `""` | empty derives from `$(CPLN_GLOBAL_ENDPOINT)`; set with the scheme for a custom domain |
+| `documenso.publicUrl` | `""` | empty derives from `$(CPLN_GLOBAL_ENDPOINT)` when public access is on, `http://localhost:3000` (the port-forward origin) when it is off; set with the scheme for a custom domain |
 | `secrets.name` | `my-documenso-secrets` | **required prerequisite** `dictionary`: `nextAuthSecret`, `encryptionKey`, `encryptionSecondaryKey`, `signingPassphrase` |
 | `signing.certificateSecretName` | `my-documenso-signing-cert` | **required prerequisite** `opaque`, `encoding: plain`, payload = base64 text of the `.p12` |
 | `storage.type` / `.documentSizeLimitMb` | `database` / `5` | `s3` for volume; `database` puts PDFs in Postgres |
@@ -89,6 +89,11 @@
   means `internalAccess.type: none` does not silently stop the app from emailing anyone. Loopback
   reachability was confirmed inside the running image. If mail stops, look at SMTP and the
   `BackgroundJob` rows, not at the firewall.
+- **Narrowing the bundled Postgres to a `workload-list` that omits the app is a boot hang, not an
+  error.** `postgres.internalAccess` is the subchart's own knob and a parent cannot inject into it,
+  so the chart hard-fails at render instead, naming the exact link to add. `postgres.internalAccess.type:
+  none` is refused outright. `postgres-highly-available` exposes no such knob, so the HA path is
+  unaffected.
 - **Rotating a secret does NOT redeploy the workload.** The old certificate or key keeps working
   indefinitely with `ready: true` throughout — run `cpln workload force-redeployment` after any
   rotation, or the "rotation" changed nothing.

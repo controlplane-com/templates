@@ -41,8 +41,11 @@ base64 < certificate.p12 | tr -d '\n' | \
 ```
 
 Piping through stdin keeps the key material out of your shell history and out of `ps` output.
-Upstream's own docs add `-legacy` to the `pkcs12` command; at image tag `v2.17.0` both forms parse,
-so the default (stronger) encryption above is used here.
+
+**Do not add `-legacy` to the `pkcs12` command, despite upstream's docs.** At image tag `v2.17.0`
+Documenso cannot load a `-legacy` (RC2 / 3DES) `.p12`: the secret is accepted, every health surface
+stays green, and every attempt to seal a document fails. Use the default AES-256-CBC form shown
+above, which is what these commands produce.
 
 **2. The application keys** (`dictionary`, exactly four entries):
 
@@ -405,15 +408,30 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint`
 - **Close sign-up as soon as you have an account.** Registration is open by default because there is
   no admin bootstrap and the first account must be creatable; the endpoint is public by default
   because external signers have to reach it.
-- **A missing *or wrong-passphrase* certificate leaves every health surface green.** The certificate
-  check only asks whether the value is set — it never decodes the base64 or opens the PKCS#12 — so a
-  wrong passphrase gives `/api/health` `status: ok` and `/api/certificate-status`
-  `{"isAvailable":true}` while every attempt to complete a document fails with
-  *"Integrity for the PKCS#12 data is broken!"* in the workload log. Verify by actually signing
-  something, not by reading a health check.
-- **Rotating a secret does NOT redeploy the workload.** The old key or certificate keeps working
-  indefinitely with `ready: true` throughout. Always follow a rotation with a forced redeployment
-  (`cpln workload force-redeployment {release}-documenso --gvc {gvc}`).
+- **A missing, `-legacy`, or wrong-passphrase certificate leaves every health surface green.** The
+  certificate check only asks whether the value is set — it never decodes the base64 or opens the
+  PKCS#12 — so `/api/health` reports `status: ok` and `/api/certificate-status`
+  `{"isAvailable":true}` while documents sit at `PENDING` forever. Verify by actually signing
+  something, not by reading a health check. When signing silently fails, the sealing job is the only
+  surface that reports it — not the health endpoints and not `cpln logs`. A `FAILED` row means the
+  certificate could not be used:
+
+  ```bash
+  cpln workload exec {release}-postgres --gvc {gvc} --container postgres -- \
+    psql -U documenso -d documenso \
+    -c "SELECT name, status, retried FROM \"BackgroundJob\" WHERE name = 'Seal Document';"
+  ```
+
+- **The boot line `⚠️ Certificate not found or not readable` is expected and harmless.** Upstream's
+  `start.sh` probes for a certificate *file*, while this chart supplies the certificate as base64
+  contents in an environment variable — so the probe always misses even though signing works. It is
+  the first thing you see in the log and it says the opposite of the truth; ignore it.
+- **Rotating a secret does NOT redeploy the workload — you must force one.** A `cpln://` reference is
+  resolved when a replica starts and is never re-resolved while that replica lives: measured at 8.5
+  minutes with the old value still in the container and `ready: true` throughout. So replacing a
+  *compromised* signing certificate or key changes nothing on its own — the app keeps using the old
+  one indefinitely, with a fully green deployment and no error anywhere. Always follow a rotation
+  with `cpln workload force-redeployment {release}-documenso --gvc {gvc}`.
 - **Without SMTP, Documenso cannot notify anyone.** Recipients get no signature-request mail, so the
   sender must copy each signing link out of the UI by hand.
 - **`storage.type: database` puts PDFs in PostgreSQL**, so the volumeset fills faster than expected —

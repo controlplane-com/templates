@@ -66,14 +66,28 @@
   unset**. Measured: with the variable absent and no certificate at all, `/api/health` reports
   `certificate: ok` and `/api/certificate-status` reports `isAvailable: true`. With it set, the same
   container correctly reports `warning` / `false`. The chart sets it explicitly; do not remove it.
-- **A missing *or wrong-passphrase* certificate leaves every health surface green.** Measured on the
-  real image: a valid `.p12` with a deliberately wrong passphrase gives `status: ok` and
-  `isAvailable: true`, because the check never decodes the base64 or opens the PKCS#12. The failure
-  appears only at signing time, as `Integrity for the PKCS#12 data is broken!`.
-- **`-legacy` is NOT required at v2.17.0.** Upstream's docs still say to use it (issue #1087), but a
-  probe inside the image parsed `-legacy`, OpenSSL-3-default and password-less `.p12` files all
-  successfully through `P12Signer.create`. The README therefore ships the plain (stronger-encryption)
-  `openssl pkcs12 -export` form.
+- **A missing, `-legacy`, or wrong-passphrase certificate leaves every health surface green.**
+  Measured on the real image: the check never decodes the base64 or opens the PKCS#12, so all three
+  defects give `status: ok` and `isAvailable: true` while documents sit at `PENDING`.
+- **The only diagnostic for a bad certificate is the `BackgroundJob` table** —
+  `SELECT name, status, retried FROM "BackgroundJob" WHERE name = 'Seal Document'`. A `FAILED` row
+  with `retried: 3` is the failure. Neither `/api/health`, `/api/certificate-status`, nor `cpln logs`
+  reports it: a server-side `|=` filtered log search for passphrase/PKCS12 surfaced nothing. Named in
+  the README's Important Notes.
+- **`-legacy` is BROKEN at v2.17.0 — do not use it, despite upstream's docs (issue #1087).**
+  Corrected by live test 2026-08-31, reversing a build-time probe that had concluded both forms
+  parse. Controlled experiment on one release, changing only `signing.certificateSecretName` (same
+  key, same certificate, same passphrase, same database): the `-legacy` file
+  (`pbeWithSHA1And40BitRC2-CBC` / 3DES / MAC sha1) left `Seal Document` **FAILED, retried 3** and the
+  document `PENDING` for 180 s; the OpenSSL-3 default file (`PBES2 / PBKDF2 / AES-256-CBC`)
+  **COMPLETED, retried 0** in 20 s. The README ships the plain `openssl pkcs12 -export` form and now
+  says explicitly not to add `-legacy` — following upstream's instruction produces a silently
+  unusable install.
+- **`⚠️ Certificate not found or not readable` prints at EVERY boot and is harmless.** Upstream's
+  `start.sh` probes for a certificate *file* at `/opt/documenso/cert.p12`; this chart supplies the
+  certificate as base64 contents in an env var instead (deliberately — no mount, no uid-1001
+  permission problem). Signing works regardless. It is the first line a user sees and it says the
+  opposite of the truth, so the README defuses it.
 - **The image sets no `NODE_ENV`.** Confirmed by `docker inspect`. Four behaviours key off it, so the
   chart sets `NODE_ENV: production`: without it the session cookie loses its `__Secure-` prefix on an
   HTTPS endpoint, the language cookie loses `secure`, embedding presign tokens accept `expiresIn: 0`,
@@ -94,9 +108,14 @@
   so the chart hard-fails at render instead, naming the exact link to add. `postgres.internalAccess.type:
   none` is refused outright. `postgres-highly-available` exposes no such knob, so the HA path is
   unaffected.
-- **Rotating a secret does NOT redeploy the workload.** The old certificate or key keeps working
-  indefinitely with `ready: true` throughout — run `cpln workload force-redeployment` after any
-  rotation, or the "rotation" changed nothing.
+- **Rotating a secret does NOT redeploy the workload.** Measured 2026-08-31 with a source-side
+  control (`cpln secret reveal` confirmed `version: 1 → 2`): 22 consecutive polls over **8.5 minutes**
+  read the OLD value in the container, `ready: true` and the workload version unmoved throughout;
+  `force-redeployment` picked up the new value in 21 s. A `cpln://` reference resolves at replica
+  start and is never re-resolved while the replica lives — an independent reproduction of CLAUDE.md's
+  2026-08-25 correction. The dangerous case is a *compromised* signing certificate: rotating it
+  changes nothing on its own and the deployment stays fully green. The README says so and names the
+  command.
 - **A missing prerequisite secret wedges the deployment nearly silently.** `cpln logs` returns *zero*
   lines; the only place the missing secret is named is `status.versions[].message` from
   `cpln workload get-deployments`. Recovery takes ~5–10 minutes, or force a redeployment.

@@ -1,3 +1,22 @@
+# ─── Location ─────────────────────────────────────────────────────────────────
+# This chart deploys into the GVC you install into — it does NOT create one.
+# Documenso runs in exactly ONE location, and this names it.
+#
+# A workload runs in EVERY location its GVC has. Without this pin, installing
+# into a multi-location GVC starts one Documenso per location, each bound by
+# service DNS to its own local Postgres — separate databases that cannot see
+# each other, with every status surface green.
+#
+# It MUST already be a location of your GVC. The platform accepts a location
+# the GVC does not have without any error, and the release then runs NOTHING,
+# anywhere, with no failed deployment to observe. List them first:
+#   cpln gvc get <gvc> -o yaml   # spec.staticPlacement.locationLinks
+#
+# The bundled `postgres` SUBCHART is NOT pinned by this — a parent cannot
+# template a subchart's placement — so an extra GVC location still starts a
+# second, empty Postgres there. Prefer a single-location GVC.
+location: aws-us-east-1
+
 # ─── Documenso server ─────────────────────────────────────────────────────────
 documenso:
   # UI + REST API + background-job runner in one image on :3000. Runs

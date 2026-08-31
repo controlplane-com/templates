@@ -19,6 +19,8 @@ behind one flag.
   and hands to whichever PostgreSQL is enabled.
 - **No volumeset in this chart.** The app tier is stateless; all durable state is in PostgreSQL or
   your S3 bucket.
+- **Everything this chart owns is pinned to one location** — the `location` value. The bundled
+  PostgreSQL is **not**; see **Location** below.
 
 ## Prerequisites
 
@@ -71,6 +73,29 @@ Optional, only for the features that use them:
 - **Outbound email** — an SMTP relay.
 
 ## Configuration
+
+### Location
+
+A workload runs in **every** location its GVC has. Documenso is one app tier over one database, so
+this chart pins its workload to exactly one location — otherwise a multi-location GVC would start one
+Documenso per location, each bound to its own local PostgreSQL: separate databases that cannot see
+each other, with every status surface green.
+
+```yaml
+location: aws-us-east-1     # must already be a location of the GVC you install into
+```
+
+List your GVC's locations before you install:
+
+```bash
+cpln gvc get {gvc} -o yaml    # spec.staticPlacement.locationLinks
+```
+
+**The bundled PostgreSQL is not covered by this pin.** It is a subchart, and a parent chart cannot
+template a subchart's placement, so in a GVC with more than one location the database workload still
+starts in every one of them — each with its own empty volume. Only the Documenso tier is confined.
+**Install into a single-location GVC** if you want the whole release in one place; there is no knob
+here that fixes the database side.
 
 ### Documenso server
 
@@ -436,6 +461,16 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint`
   sender must copy each signing link out of the UI by hand.
 - **`storage.type: database` puts PDFs in PostgreSQL**, so the volumeset fills faster than expected —
   raise `postgres.volumeset.capacity` or switch to `s3` before document volume grows.
+- **A `location` your GVC does not have makes the release run nothing, anywhere — with no error.**
+  The platform accepts the placement, stores it, and leaves it inert; there is no failed deployment
+  to observe. The signature is that every location of the GVC reports *"This workload location is
+  deactivated because maxScale is set to 0"* and no replica ever appears. Check the spelling against
+  `cpln gvc get {gvc} -o yaml` (`spec.staticPlacement.locationLinks`), then upgrade with the right
+  value.
+- **In a multi-location GVC the bundled PostgreSQL still starts everywhere.** Only the Documenso
+  workload is pinned — a parent chart cannot place a subchart's workload. Each extra location gets an
+  idle database on its own empty volume, which costs a volumeset and nothing else (the app never
+  connects to it). Prefer a single-location GVC.
 - **A firewall change takes ~30 s to ~10 min to propagate**, so re-poll before concluding that
   `publicAccess` or `internalAccess` is broken.
 - **Switching an existing release from keyless S3 to static keys leaves the old AWS binding on the

@@ -30,6 +30,11 @@
 
 - **No volumeset in this chart** — the app tier is genuinely stateless, which is what makes
   `documenso.replicas` real. All durable state is in Postgres or the S3 bucket.
+- **The Documenso workload is confined to ONE location** — `defaultOptions.minScale/maxScale: 0`
+  everywhere, with a single `localOptions` entry carrying the real count for `location`. That is the
+  CLAUDE.md structural confinement, and it is by construction: an undeclared GVC location gets
+  `desiredScale: 0` and reports `This workload location is deactivated because maxScale is set to 0`.
+  **The bundled `postgres` subchart is NOT confined** — see the trap below.
 - **`standard`, not `stateful`**, deliberately: nothing needs replica identity, and the
   `cpu:minCpu ≤ 4:1` cap and the dropping of `rolloutOptions.maxUnavailableReplicas` are both
   `stateful`-only. Consequence respected everywhere: bare short DNS names are NXDOMAIN on a standard
@@ -42,6 +47,7 @@
 
 | Knob | Default | Notes |
 |---|---|---|
+| `location` | `aws-us-east-1` | the ONE GVC location the app tier runs in; must already exist in the GVC |
 | `documenso.image` / `.replicas` | `documenso/documenso:v2.17.0` / `1` | tag keeps the `v`; `2+` = continuity through restarts |
 | `documenso.publicUrl` | `""` | empty derives from `$(CPLN_GLOBAL_ENDPOINT)` when public access is on, `http://localhost:3000` (the port-forward origin) when it is off; set with the scheme for a custom domain |
 | `secrets.name` | `my-documenso-secrets` | **required prerequisite** `dictionary`: `nextAuthSecret`, `encryptionKey`, `encryptionSecondaryKey`, `signingPassphrase` |
@@ -130,3 +136,38 @@
   (the API merges cloud bindings and never removes them). Test provider variants with fresh installs.
 - **Every replica runs `prisma migrate deploy` at boot**; Prisma's advisory lock serializes them, so
   concurrent starts are safe but the second replica waits.
+- **A multi-location GVC is only HALF fixed, and the honest statement is that the database is not.**
+  1.0.0 shipped a bare `minScale: {{ replicas }}` with no placement, so a default install into a
+  3-location GVC would have started three Documenso replicas, each bound by service DNS to its own
+  local Postgres — three independent databases, every status surface green. Exactly that was measured
+  on `calcom` (a table created in one location was absent from the other two); documenso's own test
+  round ran in single-location `test-gvc-3` and could not have seen it. The app tier is now pinned.
+  **The bundled `postgres`/`postgres-highly-available` subchart is not, and cannot be** — neither
+  chart exposes a placement knob and a parent cannot template a subchart's workload spec — so an
+  extra GVC location still starts an idle database there on its own empty volume. It costs a
+  volumeset; the app never connects to it. The README says so plainly and recommends a
+  single-location GVC. Same gap as `plane`, `docmost` and `metabase`.
+- **The opposite direction is NOT guarded, deliberately: a `location` the GVC does not have is
+  accepted silently and the release runs nothing, anywhere.** No failed deployment, no error — the
+  only signature is every GVC location reporting `This workload location is deactivated because
+  maxScale is set to 0` with no replicas. Helm cannot see the live GVC, so this is only catchable by
+  a boot-time GVC read (`GET $CPLN_ENDPOINT/org/$CPLN_ORG/gvc/$CPLN_GVC`), and that was **considered
+  and rejected for 1.0.0**:
+  - Documenso runs the image's own entrypoint unmodified (`sh start.sh`, which also runs
+    `prisma migrate deploy`). The check would require a chart-authored `command`/`args` wrapper in
+    front of every boot, and this round could not deploy — so it would ship having never executed,
+    gating 100% of boots to warn about one misconfiguration. `plane` and `calcom` could afford the
+    same check because both already replace their entrypoints for independent reasons; documenso does
+    not, so the cost is not comparable.
+  - It is best-effort regardless — wordpress measured its equivalent guard failing open on **1 boot
+    in 5** — so it could never be presented as a guarantee, and the README has to document the
+    symptom either way. The documentation is the mitigation that always works.
+  - It also needs a second policy (`targetKind: gvc` + `targetLinks` to the one GVC; never
+    `target: all`) granting the identity `view`, widening its reach for a warning.
+  Instead: `location` is hard-required at render (empty, non-string, and a plural `locations` key all
+  `fail` with the fix in the message), the values comment tells the user to list the GVC's locations
+  first, and the README's Important Notes names the exact symptom and diagnostic. **Revisit if a
+  later version needs an entrypoint wrapper anyway, or a test round can exercise it** — and note any
+  in-container HTTP to `$CPLN_ENDPOINT` must be **HTTP/1.1**: the endpoint is behind istio-envoy,
+  which answers HTTP/1.0 with `426 Upgrade Required`, which is what made `redis-multi-location`'s
+  check never run at all.

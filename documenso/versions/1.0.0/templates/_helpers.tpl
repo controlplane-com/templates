@@ -71,6 +71,52 @@ true
 {{- end }}
 
 
+{{/* Placement */}}
+
+{{/*
+`autoscaling` for one options entry. `scale` is the replica count to pin to — 0
+for `defaultOptions`, the real count for the one `localOptions` entry.
+
+A workload runs in EVERY location its GVC has, so `defaultOptions` at 0/0 is
+what confines this release to one location BY CONSTRUCTION: a GVC location this
+release did not ask for gets `desiredScale: 0` and starts nothing, its
+deployment message reading `This workload location is deactivated because
+maxScale is set to 0`. Without it, a default install into a multi-location GVC
+starts one Documenso per location, each bound to its own local Postgres —
+separate databases, invisible to each other, every status surface green.
+(The identical shape was measured on `calcom` in a 3-location GVC: a table
+created in one location was absent from the other two.)
+
+Every field is REPEATED in the localOptions entry. A localOptions entry is not a
+patch onto defaultOptions: the API completes a partial entry from its OWN
+platform defaults, so an omitted field falls through to a platform value rather
+than to the 0/0 shape above.
+*/}}
+{{- define "documenso.autoscaling" -}}
+maxConcurrency: 0
+maxScale: {{ .scale }}
+metric: disabled
+minScale: {{ .scale }}
+scaleToZeroDelay: 300
+target: 100
+{{- end -}}
+
+{{/*
+The single `localOptions` entry: the real replica count, in the one configured
+location. `timeoutSeconds` matches defaultOptions — headroom for large PDF
+uploads and signing.
+*/}}
+{{- define "documenso.localOptions" -}}
+- autoscaling:
+    {{- include "documenso.autoscaling" (dict "scale" .scale) | nindent 4 }}
+  capacityAI: false
+  debug: false
+  location: //location/{{ .root.Values.location }}
+  suspend: false
+  timeoutSeconds: 300
+{{- end -}}
+
+
 {{/* Labeling */}}
 
 {{- define "documenso.tags" -}}
@@ -84,6 +130,7 @@ true
 {{- if hasKey .Values "gvc" -}}
 {{- fail "documenso: a `gvc` values key is not supported — this chart deploys into the GVC you install it into (global.cpln.gvc) and never creates one" -}}
 {{- end -}}
+{{- include "documenso.validateLocation" . -}}
 {{- if not .Values.secrets.name -}}
 {{- fail "documenso: secrets.name is required — it names the prerequisite `dictionary` secret holding nextAuthSecret, encryptionKey, encryptionSecondaryKey and signingPassphrase. Create it BEFORE installing; see Prerequisites in the README." -}}
 {{- end -}}
@@ -189,5 +236,28 @@ at render instead, with the fix in the message.
 {{- end -}}
 {{- if and .Values.postgresHA.enabled (ne (dig "config" "credentialsSecretName" "" .Values.postgresHA) .Values.database.credentialsSecretName) -}}
 {{- fail (printf "documenso: postgresHA.config.credentialsSecretName ('%s') must match database.credentialsSecretName ('%s') — the bundled database reads the secret this chart creates" (dig "config" "credentialsSecretName" "" .Values.postgresHA) .Values.database.credentialsSecretName) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+`location` names the ONE GVC location Documenso runs in. It is required and
+singular: a workload runs in every location its GVC has, and this chart pins its
+workload to exactly one so that a multi-location GVC cannot silently start a
+second Documenso against a second database.
+
+Helm cannot see the live GVC at render time, so the opposite direction — a
+`location` the GVC does NOT have — is not checkable here. That case is accepted
+by the platform without any error and the release runs nothing, anywhere; the
+README names the symptom and the diagnostic.
+*/}}
+{{- define "documenso.validateLocation" -}}
+{{- if not .Values.location -}}
+{{- fail "documenso: `location` is required — it names the ONE location of your GVC that Documenso runs in, e.g. `location: aws-us-east-1`. A workload runs in EVERY location its GVC has, so without this pin a multi-location GVC would start one Documenso per location, each against its own separate database. List your GVC's locations with `cpln gvc get <gvc> -o yaml` (spec.staticPlacement.locationLinks)." -}}
+{{- end -}}
+{{- if not (kindIs "string" .Values.location) -}}
+{{- fail "documenso: `location` must be a single location NAME, e.g. `location: aws-us-east-1`. Documenso runs in exactly one location — the app tier shares one database, so a second location would be a second, independent Documenso." -}}
+{{- end -}}
+{{- if hasKey .Values "locations" -}}
+{{- fail "documenso: `locations` (plural) is not a key of this chart. Documenso runs in exactly ONE location — use the singular `location`, e.g. `location: aws-us-east-1`." -}}
 {{- end -}}
 {{- end }}

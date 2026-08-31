@@ -63,13 +63,11 @@ spec:
                PgBouncer in this path by default. */}}
         - name: DATABASE_DIRECT_URL
           value: postgresql://$(DB_USER):$(DB_PASSWORD)@{{ include "calcom.db.host" . }}:5432/{{ include "calcom.db.database" . }}
-        {{- /* host:port, consumed by start.sh's wait-for-it.sh before migrations.
-               Left empty it prints "you need to provide a host and port to test"
-               and — because start.sh has `set -x` but not `set -e` — the boot
-               continues without the wait, turning a clear message into a
-               confusing Prisma error. Verified in the pinned image. */}}
-        - name: DATABASE_HOST
-          value: {{ printf "%s:5432" (include "calcom.db.host" .) | quote }}
+        {{- /* DATABASE_HOST is deliberately NOT set. Its only consumer in the
+               whole image is `scripts/start.sh` (verified by grepping the pinned
+               image: one hit, that file), and this workload replaces start.sh —
+               see the startup-script secret. Setting it would advertise a wait
+               that no longer runs. */}}
         - name: NEXT_PUBLIC_WEBAPP_URL
           value: {{ include "calcom.appUrl" . | quote }}
         - name: NEXTAUTH_URL
@@ -111,20 +109,53 @@ spec:
           value: 'cpln://secret/{{ .Values.email.auth.secretName }}.EMAIL_SERVER_PASSWORD'
         {{- end }}
         {{- end }}
+      {{- /* The image's entrypoint is REPLACED. `start.sh` gates the boot on
+             `wait-for-it.sh`, a bare TCP connect that the mesh sidecar answers
+             for anything, and it runs without `set -e` — so a failed
+             `prisma migrate deploy` did not stop the boot and Cal.com served
+             HTTP against an EMPTY database with every surface reading green.
+             The replacement waits by exchanging real Postgres protocol bytes
+             and hard-fails the migration. Full rationale, and the negative
+             controls, are in secret-startup.yaml.
+
+             `/bin/bash` explicitly: `/bin/sh` in this image is dash, and the
+             script's readiness probe uses bash's `/dev/tcp` (both verified in
+             the pinned tag). Mounted under /cpln rather than into
+             /calcom/scripts so nothing in the image's own directory is
+             shadowed — the pattern postgres-multi-location uses for
+             /patroni/start.sh. */}}
+      command: /bin/bash
+      args:
+        - /cpln/start.sh
+      volumes:
+        - path: /cpln/start.sh
+          recoveryPolicy: retain   # API backfill, declared so rendered == stored
+          uri: cpln://secret/{{ include "calcom.secret.startup.name" . }}.payload
       ports:
         - number: 3000
           protocol: http
       {{- /* /api/version is unauthenticated, touches no database, and returns
              {"version":"6.2.0"} — so the probe body doubles as proof the running
-             image is the tag the chart claims. There is NO /api/health route at
-             this tag; do not copy one from another template.
+             image is the tag the chart claims.
 
-             start.sh only reaches `yarn start` after the asset rewrite, the
-             database wait, `prisma migrate deploy` and the app-store seed, so
-             "HTTP is listening" already implies "migrations completed".
+             It CANNOT detect a missing schema, and there is no endpoint at this
+             tag that can: the v6.2.0 tree carries no /api/health, /api/ready or
+             equivalent under apps/web (checked against the full tag tree), and
+             /auth/setup answers 307 against an empty database. So the schema
+             invariant is enforced at BOOT instead — the startup script only
+             reaches `yarn start` after `prisma migrate deploy` has exited 0
+             under `set -e`, which makes "HTTP is listening" imply "migrations
+             applied" for the process that is serving. That claim was FALSE
+             before this fix and is what the empty-database failure turned on;
+             it is now true by construction rather than by assumption.
 
              The long first boot is absorbed with periodSeconds, never by raising
-             failureThreshold past the platform cap of 20. */}}
+             failureThreshold past the platform cap of 20. Readiness exhausting
+             its threshold during a slow database wait is benign — it keeps
+             probing and the replica joins when it comes up. Liveness is the one
+             that restarts, so its initialDelaySeconds sits ABOVE the startup
+             script's 600 s database-wait budget: otherwise a slow first install
+             is killed mid-wait and the script's own diagnostic never prints. */}}
       readinessProbe:
         httpGet:
           path: /api/version
@@ -140,23 +171,32 @@ spec:
           path: /api/version
           port: 3000
           scheme: HTTP
-        initialDelaySeconds: 300
+        initialDelaySeconds: 780
         periodSeconds: 30
         failureThreshold: 10
         successThreshold: 1
         timeoutSeconds: 5
+  {{- /* A workload runs in EVERY location its GVC has. Before this was pinned,
+         a default install into a 3-location GVC produced three app replicas,
+         each bound by service DNS to its own local Postgres — three separate
+         databases sharing one NEXTAUTH_SECRET, so a session minted in one
+         location validated against a database that did not contain the user.
+         Measured: a table created in aws-us-east-1 did not exist in the other
+         two, and every status surface read green throughout.
+
+         0/0 here means a GVC location this release did not ask for starts
+         NOTHING, by construction — its deployment message reads "This workload
+         location is deactivated because maxScale is set to 0". localOptions
+         below supplies the real count for the one configured location. */}}
   defaultOptions:
     autoscaling:
-      maxConcurrency: 0
-      maxScale: {{ .Values.calcom.replicas }}
-      metric: disabled
-      minScale: {{ .Values.calcom.replicas }}
-      scaleToZeroDelay: 300
-      target: 100
+      {{- include "calcom.autoscaling" (dict "scale" 0) | nindent 6 }}
     capacityAI: false
     debug: false
     suspend: false
     timeoutSeconds: 30
+  localOptions:
+    {{- include "calcom.localOptions" (dict "root" . "scale" .Values.calcom.replicas) | nindent 4 }}
   firewallConfig:
     {{- /* Fully declared, including the empty lists the API backfills: a partial
            block is completed on apply and shows as drift from creation. */}}

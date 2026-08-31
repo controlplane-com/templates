@@ -15,6 +15,7 @@ targetLinks:
          `target: all`. */}}
   - //secret/{{ .Values.calcom.auth.secretName }}
   - //secret/{{ include "calcom.db.secretName" . }}
+  - //secret/{{ include "calcom.secret.startup.name" . }}
   {{- if and .Values.email.enabled .Values.email.auth.secretName }}
   - //secret/{{ .Values.email.auth.secretName }}
   {{- end }}

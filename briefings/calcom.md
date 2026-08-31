@@ -26,17 +26,21 @@
 | subchart `postgres` 3.4.1 (default) / `postgres-highly-available` 2.7.0 (flag) | All state. Nothing else is persisted |
 | secret (dictionary, **user-created**) `my-calcom-auth` | `nextAuthSecret`, `encryptionKey`, `cronSecret`, `cronApiKey` |
 | secret (dictionary, chart-created) `my-calcom-db-credentials` | Bundled DB `username`/`password`/`database` |
-| identity + policy | One identity for both workloads; `reveal` on exactly those secrets (plus the SMTP secret when configured) |
+| secret (opaque, chart-created) `{release}-calcom-startup` | The app's boot script, mounted at `/cpln/start.sh` and run with `/bin/bash`. REPLACES the image entrypoint |
+| identity + 2 policies | One identity for both workloads; `reveal` on exactly those secrets (plus the SMTP secret when configured), and `view` on the ONE install GVC for the boot-time location report |
 
 - **No volumeset on the app** — it is genuinely stateless (upstream's compose mounts no volume;
   avatars live in Postgres), which is what makes `replicas: 2+` work.
 - **Private by default.** First run is: install → `cpln port-forward` → `/auth/setup` →
   `helm upgrade --set publicAccess.enabled=true`.
+- **Pinned to ONE location.** `defaultOptions.minScale/maxScale: 0` on both workloads, with a
+  single `localOptions` entry for `location`. An unasked-for GVC location starts nothing.
 
 ## Key knobs
 
 | Knob | Default | Note |
 |---|---|---|
+| `location` | `aws-us-east-1` | The ONE GVC location Cal.com runs in. Must exist in the GVC or NOTHING starts |
 | `calcom.image` | `calcom/cal.com:v6.2.0` | Official image |
 | `calcom.replicas` | `1` | `2+` for zero-downtime rolling restarts; no clustering to form |
 | `calcom.appUrl` | `""` | Empty = derived; set only for a custom domain, **with** the scheme |
@@ -48,6 +52,44 @@
 
 ## Troubleshooting / considerations
 
+- **The image's own `scripts/start.sh` CANNOT be used, and this is the defect that nearly shipped.**
+  It gates the boot on `scripts/wait-for-it.sh`, which at v6.2.0 is the eficode POSIX-sh variant
+  testing readiness with `nc -w 1 -z` — and the Control Plane mesh sidecar completes the TCP
+  handshake for anything. Proven in-container with three controls that all had to fail and did
+  not: a dead port (9999), a nonexistent hostname, and the real port, all "up" in ~0 s. `start.sh`
+  also runs `set -x` without `set -e`, so the `prisma migrate deploy` that then failed did not stop
+  the boot: Cal.com served HTTP against a schema-less database with `ready: true`, `200` on
+  `/api/version` and **0 tables**. It is a race, and a fresh volumeset — the first-install case —
+  is the one that loses it. The template now mounts its own `/cpln/start.sh`, which waits by
+  sending a **Postgres SSLRequest** (`\x00\x00\x00\x08\x04\xd2\x16\x2f`) and requiring the
+  one-byte `S`/`N` reply, three times consecutively, for up to 600 s, and runs under `set -e` so a
+  failed migration crash-loops instead of serving. Verified against the pinned image: live
+  Postgres → ready; dead port, nonexistent host and an accepts-but-never-replies server (the
+  sidecar's shape) → not ready, and the gate exits 1 with a named FATAL; a bad-credentials
+  migration exits 1 before `yarn start`. Do not "simplify" this back to the image entrypoint.
+  No probe can catch this instead: v6.2.0 has no `/api/health` or equivalent under `apps/web` and
+  `/auth/setup` answers 307 against an empty database, so "HTTP listening implies migrations
+  applied" is now true by construction rather than by assumption — it was false before.
+- **Multi-location GVCs silently split Cal.com — half-fixed, and the half that is not is the
+  database.** A workload runs in EVERY location its GVC has, so before pinning, a default install
+  into a 3-location GVC produced three app replicas, each bound by service DNS to its own local
+  Postgres: three separate databases sharing one `NEXTAUTH_SECRET`, so a session validated against
+  a database that did not contain the user. Measured — a table created in `aws-us-east-1` did not
+  exist in the other two, and every status surface read green. The app and cron caller are now
+  pinned via `defaultOptions` 0/0 + `localOptions`. **The bundled `postgres` /
+  `postgres-highly-available` subcharts are NOT pinned**: a parent cannot template a subchart's
+  values and neither exposes a location knob (same gap as `plane`, `docmost`, `metabase`). So in a
+  multi-location GVC an empty database still starts in every location with its own volumeset —
+  idle, never read, and billed. The app reads its own GVC at boot and logs a warning naming them;
+  that warning is the only signal a user gets. **The honest statement is: data-splitting is fixed,
+  cost sprawl is not.**
+- **`location` naming a location the GVC lacks starts NOTHING, with no failed deployment.** The
+  platform stores such a `localOptions` entry verbatim and it is simply inert. It cannot be caught
+  at boot either — no container runs to complain. README Prerequisites tells the user to check
+  `cpln gvc get` first; that is all the defence there is.
+- **Liveness `initialDelaySeconds` is 780, deliberately above the 600 s database-wait budget.**
+  Lower it and a slow first install is killed mid-wait, and the script's own FATAL diagnostic never
+  prints — the operator sees an unexplained restart loop instead.
 - **A missing `my-calcom-auth` secret wedges the install almost invisibly.** `cpln logs` returns
   *zero* lines. The only place the missing secret is named is
   `cpln workload get-deployments {workload} --gvc {gvc} -o yaml` → `status.versions[].message`.
@@ -90,12 +132,12 @@
   plus a 200 on `127.0.0.1:3000/api/version`. The variable is a no-op today and one upstream line
   away from being essential, and the whole private-first story depends on loopback. The API accepts
   and stores it verbatim (probed 2026-08-31; only `CPLN_`-prefixed names are reserved).
-- **First boot is slow by design** — the container rewrites built assets when the public URL
-  differs from the baked one, waits for the database, runs `prisma migrate deploy`, and seeds the
-  app store, all before the HTTP server starts. Probes are budgeted to ~330 s to ready; do not read
-  a slow first boot as a fault before that. The private default is the *fast* path: the baked
-  `BUILT_NEXT_PUBLIC_WEBAPP_URL` is `http://localhost:3000` (read out of the pinned image), so
-  `replace-placeholder.sh` prints "Nothing to replace" and skips the rewrite entirely.
+- **First boot is slow by design** — the container waits for the database, rewrites built assets
+  when the public URL differs from the baked one, runs `prisma migrate deploy`, and seeds the app
+  store, all before the HTTP server starts. Readiness can exhaust its threshold during a slow
+  database wait; that is benign, it keeps probing. The private default is the *fast* path: the
+  baked `BUILT_NEXT_PUBLIC_WEBAPP_URL` is `http://localhost:3000` (read out of the pinned image),
+  so `replace-placeholder.sh` prints "Nothing to replace" and skips the rewrite entirely.
 - **Enterprise-gated / not shipped**: organizations, SAML/SSO and the v2 API. The first two are
   build-ARG-only in the official prebuilt image or licence-gated; the v2 API is a separate image
   with its own Redis dependency. Core scheduling, teams, workflows and booking pages are not gated.

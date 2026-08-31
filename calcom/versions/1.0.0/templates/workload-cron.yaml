@@ -90,18 +90,21 @@ spec:
           value: 'cpln://secret/{{ .Values.calcom.auth.secretName }}.cronApiKey'
       {{- /* No probes: there is no port and no endpoint to probe. A dead loop
              shows up as a gap in the app's own access log for /api/tasks/cron. */}}
+  {{- /* Pinned to the one configured location, for the same reason the app is:
+         a workload runs in EVERY location its GVC has, and a caller in another
+         location would drive that location's Cal.com — which, before the app
+         was pinned, was a different Cal.com over a different database. 0/0 on
+         defaultOptions means an unasked-for location starts NOTHING; the single
+         localOptions entry supplies the one replica. */}}
   defaultOptions:
     autoscaling:
-      maxConcurrency: 0
-      maxScale: 1
-      metric: disabled
-      minScale: 1
-      scaleToZeroDelay: 300
-      target: 100
+      {{- include "calcom.autoscaling" (dict "scale" 0) | nindent 6 }}
     capacityAI: false
     debug: false
     suspend: false
     timeoutSeconds: 30
+  localOptions:
+    {{- include "calcom.localOptions" (dict "root" . "scale" 1) | nindent 4 }}
   firewallConfig:
     external:
       {{- /* Outbound to the internet is not needed — every call this workload

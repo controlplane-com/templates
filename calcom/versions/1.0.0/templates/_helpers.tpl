@@ -30,6 +30,22 @@ Cal.com policy name
 {{- printf "%s-calcom-policy" .Release.Name }}
 {{- end }}
 
+{{/*
+GVC read policy name — grants the identity `view` on the ONE install GVC so the
+app can read its own location list at boot.
+*/}}
+{{- define "calcom.gvcPolicy.name" -}}
+{{- printf "%s-calcom-gvc-policy" .Release.Name }}
+{{- end }}
+
+{{/*
+Startup-script secret name. The script replaces the image's own
+`scripts/start.sh`; see secret-startup.yaml for why.
+*/}}
+{{- define "calcom.secret.startup.name" -}}
+{{- printf "%s-calcom-startup" .Release.Name }}
+{{- end }}
+
 
 {{/* Mode-aware Database Helpers */}}
 
@@ -185,6 +201,30 @@ inboundAllowWorkload: []
 {{/* Validation */}}
 
 {{- define "calcom.validate" -}}
+{{- /*
+  Cal.com runs in exactly ONE location, and `location` names it.
+
+  A workload runs in EVERY location its GVC has. Before this was pinned, a
+  default install into a 3-location GVC produced three app replicas, each bound
+  by service DNS to its own local Postgres — three separate databases, with a
+  shared NEXTAUTH_SECRET, so a session minted in one location validated against
+  a database that did not contain the user. Every status surface read green.
+  (Measured on a 3-location test GVC: a table created in aws-us-east-1 did not
+  exist in the other two.)
+
+  The confinement is `defaultOptions.minScale/maxScale: 0` plus a `localOptions`
+  entry for this one location — so a GVC location this release did not ask for
+  starts NOTHING, by construction.
+*/ -}}
+{{- if not .Values.location -}}
+{{- fail "calcom: `location` is required — it names the ONE location of your GVC that Cal.com runs in. Cal.com is a single-instance app over a single database; a second location would be a second, independent Cal.com with its own database." -}}
+{{- end -}}
+{{- if not (kindIs "string" .Values.location) -}}
+{{- fail "calcom: `location` must be a single location NAME, e.g. `location: aws-us-east-1`. Cal.com runs in exactly one location." -}}
+{{- end -}}
+{{- if hasKey .Values "locations" -}}
+{{- fail "calcom: `locations` (plural) is not a key of this chart. Cal.com runs in exactly ONE location — use the singular `location`, e.g. `location: aws-us-east-1`." -}}
+{{- end -}}
 {{- $replicas := int .Values.calcom.replicas -}}
 {{- if lt $replicas 1 -}}
 {{- fail "calcom: calcom.replicas must be at least 1" -}}
@@ -244,6 +284,42 @@ inboundAllowWorkload: []
 {{- end -}}
 {{- end -}}
 {{- end }}
+
+
+{{/* Placement */}}
+
+{{/*
+`autoscaling` for one options entry. `scale` is the replica count to pin to — 0
+for defaultOptions (so a GVC location this release did not ask for runs NOTHING)
+and the real count for the one configured location.
+
+Every field defaultOptions carries is REPEATED in the localOptions entry. A
+localOptions entry is not a patch onto defaultOptions: the API completes a
+partial entry from its OWN platform defaults, so an omitted field falls through
+to a platform value rather than to the 0/0 shape above.
+*/}}
+{{- define "calcom.autoscaling" -}}
+maxConcurrency: 0
+maxScale: {{ .scale }}
+metric: disabled
+minScale: {{ .scale }}
+scaleToZeroDelay: 300
+target: 100
+{{- end -}}
+
+{{/*
+The single `localOptions` entry: the real replica count, in the one configured
+location.
+*/}}
+{{- define "calcom.localOptions" -}}
+- autoscaling:
+    {{- include "calcom.autoscaling" (dict "scale" .scale) | nindent 4 }}
+  capacityAI: false
+  debug: false
+  location: //location/{{ .root.Values.location }}
+  suspend: false
+  timeoutSeconds: 30
+{{- end -}}
 
 
 {{/* Labeling */}}

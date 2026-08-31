@@ -1,3 +1,18 @@
+# ─── Location ─────────────────────────────────────────────────────────────────
+# This chart deploys into the GVC you install into — it does NOT create one.
+# Cal.com runs in exactly ONE location, and this names it. It MUST already be a
+# location of that GVC: a workload runs in every location its GVC has, and an
+# unpinned Cal.com in a multi-location GVC becomes N independent instances, each
+# on its own database, sharing one session secret.
+#
+# If this names a location the GVC does NOT have, the install succeeds and
+# NOTHING starts — there is no failed deployment to see. Check with
+# `cpln gvc get {gvc} -o yaml` before installing.
+#
+# NOTE: this pins Cal.com and its cron caller only. The bundled PostgreSQL
+# subchart cannot be pinned by this chart — see the `postgres` section below.
+location: aws-us-east-1
+
 # ─── Cal.com application ──────────────────────────────────────────────────────
 calcom:
   image: calcom/cal.com:v6.2.0
@@ -81,6 +96,13 @@ internalAccess:
 # set postgresHA.enabled: true (and postgres.enabled: false) for near-zero-downtime
 # failover. Every knob of the `postgres` template is available under this key,
 # including scheduled backups — see "Backup setup" in the README.
+#
+# NOT PINNED TO `location`. A parent chart cannot template a subchart's values,
+# and neither postgres nor postgres-highly-available exposes a location knob, so
+# in a multi-location GVC an empty copy of the database starts in EVERY location
+# with its own volumeset. Cal.com itself only ever uses the one in `location`;
+# the others hold no data and are never read, but they are billed. The app logs
+# a warning naming them at boot. Prefer a single-location GVC.
 postgres:
   enabled: true
   image: postgres:18

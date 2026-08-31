@@ -4,14 +4,17 @@ This app deploys [Cal.com](https://cal.com/) — self-hosted scheduling and book
 
 ## Architecture
 
-- **Cal.com app**: Stateless `standard` workload on port 3000 — UI, booking pages and the whole `/api/*` surface. Applies its Prisma migrations at boot, before it starts serving. `replicas: 1` by default; `≥2` is an always-on scaled tier for zero-downtime rolling restarts (replicas share only the database and the auth secret — there is no clustering).
+- **Cal.com app**: Stateless `standard` workload on port 3000 — UI, booking pages and the whole `/api/*` surface. Waits for PostgreSQL and applies its Prisma migrations at boot, before it starts serving; a failed migration crash-loops the container rather than serving an empty database. `replicas: 1` by default; `≥2` is an always-on scaled tier for zero-downtime rolling restarts (replicas share only the database and the auth secret — there is no clustering).
 - **Scheduled-job caller**: A second `standard` workload, 1 replica, running the same image with the entrypoint replaced by a bounded `wget` loop that drives the seven cron paths Cal.com's own cloud runs. Optional (`cron.enabled`), on by default.
 - **PostgreSQL (single-instance, default)**: The `postgres` template — every piece of Cal.com's state, including avatars.
 - **PostgreSQL (HA, optional)**: The `postgres-highly-available` template instead — 3 Patroni replicas with automatic failover behind an HAProxy leader endpoint.
 - **Database credentials secret**: A `dictionary` secret holding the bundled database's `username`, `password` and `database`, built by this template from `postgres.database` and `postgres.credentials.*` and handed to the store by name. Nothing for you to create.
-- **Identity and policy**: One identity for both workloads, and a least-privilege policy granting `reveal` on exactly the secrets they mount — your auth secret, the database credentials, and the SMTP secret only if you configure one.
+- **Startup-script secret**: An `opaque` secret holding the app's boot script, which replaces the image's own. It waits for PostgreSQL by speaking the Postgres protocol, hard-fails a failed migration, and reports the GVC's other locations. Nothing for you to create.
+- **Identity and policies**: One identity for both workloads; a least-privilege policy granting `reveal` on exactly the secrets they mount — your auth secret, the database credentials, the startup script, and the SMTP secret only if you configure one — plus a second policy granting `view` on the one GVC you install into, so the app can read its own location list at boot.
 
 No volume is attached to the app: upstream's own compose file mounts none, and all state is in Postgres.
+
+**Cal.com runs in exactly one location** — the one named by `location`. It is a single-instance app over a single database, so both workloads are pinned there and a GVC location this release did not ask for starts nothing. See **Location** below; the bundled database is the one piece this chart cannot pin.
 
 ## Prerequisites
 
@@ -34,11 +37,31 @@ cpln secret create-dictionary --name my-calcom-auth \
 | `cronSecret` | Guards the scheduled-job endpoints. Not optional — see Important Notes |
 | `cronApiKey` | The raw-header form Cal.com's legacy cron routes accept |
 
+**`location` must be a location your GVC already has.** Check with `cpln gvc get {gvc} -o yaml`. If it names a location the GVC does not have, the install succeeds and nothing starts — there is no failed deployment to look at.
+
 Nothing else is required for a default install. **The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.database` and `postgres.credentials.*`.
 
 Optional: a `dictionary` secret with `EMAIL_SERVER_USER` and `EMAIL_SERVER_PASSWORD` if your SMTP relay needs authentication; a cloud account + bucket (AWS/GCP) or a MinIO credentials secret if you turn backups on (see **Backup setup**).
 
 ## Configuration
+
+### Location
+
+```yaml
+# This chart deploys into the GVC you install into — it does NOT create one.
+# Cal.com runs in exactly ONE location, and this names it. It MUST already be a
+# location of that GVC: a workload runs in every location its GVC has, and an
+# unpinned Cal.com in a multi-location GVC becomes N independent instances, each
+# on its own database, sharing one session secret.
+#
+# If this names a location the GVC does NOT have, the install succeeds and
+# NOTHING starts — there is no failed deployment to see. Check with
+# `cpln gvc get {gvc} -o yaml` before installing.
+#
+# NOTE: this pins Cal.com and its cron caller only. The bundled PostgreSQL
+# subchart cannot be pinned by this chart — see the `postgres` section below.
+location: aws-us-east-1
+```
 
 ### Application
 
@@ -102,6 +125,8 @@ internalAccess:
 ### Backing store
 
 Exactly one of the two stores must be enabled (the chart enforces this at render). Set `postgresHA.enabled: true` for near-zero-downtime failover.
+
+**The database is not pinned to `location`.** A parent chart cannot template a subchart's values, and neither backing store exposes a location knob, so in a multi-location GVC an empty copy of the database starts in every location, each with its own volumeset. Cal.com only ever uses the one in `location`; the others hold no data and are never read, but they are billed. The app logs a warning naming them at boot. Prefer a single-location GVC — see Important Notes.
 
 ```yaml
 postgres:            # default: single-instance PostgreSQL
@@ -212,6 +237,9 @@ Then set `provider: minio`, `minio.{endpoint,bucket}` and `minio.credentialsSecr
 
 ## Important Notes
 
+- **Install into a single-location GVC, or accept idle database copies.** Cal.com and its cron caller run only in `location`, but the bundled PostgreSQL cannot be pinned by this template — in a multi-location GVC an empty database starts in every location, each with its own volumeset, never read and still billed. The app names them in its log at boot (`GVC ... also has locations this release does not use`). Choose the GVC before you install — changing a GVC's locations affects every release in it, not just this one.
+- **If `location` is not a location of your GVC, nothing starts and nothing reports it.** The install succeeds, the workloads exist, and `cpln workload get-deployments {release}-calcom --gvc {gvc}` shows no running location. Verify the name against `cpln gvc get {gvc} -o yaml` first.
+- **A database that never becomes reachable crash-loops the app on purpose.** The app waits up to 600 s for PostgreSQL to answer the Postgres protocol, then exits with `[calcom] FATAL: PostgreSQL at ... did not answer`; a failed `prisma migrate deploy` exits too. That is deliberate — the alternative, which this template shipped before, is Cal.com serving 200s against an empty database with every health surface green. Read `cpln logs '{gvc="{gvc}", workload="{release}-calcom"}' --limit 50` and fix the backing store; the app recovers by itself once the database serves.
 - **A missing `calcom.auth.secretName` secret wedges the install almost invisibly.** `cpln logs` returns *zero* lines, because the container never starts. The only place the missing secret is named is `cpln workload get-deployments {release}-calcom --gvc {gvc} -o yaml` → `status.versions[].message`. Create the secret and it recovers on its own in roughly 6–10 minutes, or immediately with `cpln workload force-redeployment {release}-calcom --gvc {gvc}`.
 - **`encryptionKey` is write-once.** It encrypts every stored calendar and app credential, so changing it orphans all of them. Rotating any key in that secret also requires a forced redeployment — a `cpln://` reference is resolved when the replica starts and nothing re-resolves it while the replica lives, so the old value keeps working with no error until you redeploy.
 - **Do not remove the cron workload unless you drive its endpoints yourself.** Cal.com has no in-process scheduler: with nothing calling `/api/tasks/cron` and friends, the task queue (which carries queued outbound email), calendar-subscription sync and credential refresh never run — and every health surface still reads green. `cron.enabled` also requires `internalAccess.type` other than `none`; the chart refuses that combination.

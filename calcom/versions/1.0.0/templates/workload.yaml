@@ -1,0 +1,196 @@
+{{- include "calcom.validate" . }}
+kind: workload
+name: {{ include "calcom.name" . }}
+description: Cal.com scheduling application
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "calcom.tags" . | nindent 4 }}
+spec:
+  {{- /* `standard`, not `stateful`: the app writes nothing to disk (upstream's
+         own compose file mounts no volume on this service and avatars live in
+         Postgres), needs no stable replica index, and a standard tier both
+         RETAINS rolloutOptions.maxUnavailableReplicas and escapes the 4:1
+         cpu:minCpu cap that applies to stateful workloads. */}}
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "calcom.identity.name" . }}
+  containers:
+    - name: calcom
+      image: {{ .Values.calcom.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.calcom.resources.minCpu | quote }}
+      minMemory: {{ .Values.calcom.resources.minMemory | quote }}
+      cpu: {{ .Values.calcom.resources.maxCpu | quote }}
+      memory: {{ .Values.calcom.resources.maxMemory | quote }}
+      env:
+        {{- /* DO NOT REMOVE AS REDUNDANT.
+
+               A Next.js STANDALONE server binds `process.env.HOSTNAME ||
+               "0.0.0.0"`, and Control Plane sets HOSTNAME to the replica name —
+               which makes the app listen on the pod IP only and returns
+               `502 Unable to connect to upstream workload` through
+               `cpln port-forward` (measured on langfuse).
+
+               At calcom/cal.com:v6.2.0 that trap does NOT fire: scripts/start.sh
+               ends with `yarn start` -> `next start`, and next 16.1.5's
+               packages/next/src/cli/next-start.ts never reads process.env.HOSTNAME.
+               Confirmed by running the pinned image with HOSTNAME set to a
+               replica-shaped name: it logged `Local: http://localhost:3000` and
+               served 200 on 127.0.0.1:3000/api/version.
+
+               But the image DOES build a standalone bundle
+               (/calcom/apps/web/.next/standalone exists at this tag), so upstream
+               is one line away from arming it — and this template's whole first-run
+               story is `publicAccess: false` + port-forward, which depends on
+               loopback. The variable is a no-op under `next start` and costs
+               nothing. The API accepts and stores it verbatim (probed 2026-08-31;
+               only CPLN_-prefixed names are reserved). */}}
+        - name: HOSTNAME
+          value: "0.0.0.0"
+        {{- /* The username and password land in their OWN env vars so the
+               platform resolves the cpln:// reference; DATABASE_URL is then
+               composed with $(VAR), the platform's own interpolation, which is
+               applied after the references resolve. A cpln:// reference placed
+               directly inside a Helm-assembled string is literal text — the
+               nocodb/polaris defect — so the host and database NAME, which are
+               not secret, are interpolated at render time instead. */}}
+        - name: DB_USER
+          value: 'cpln://secret/{{ include "calcom.db.secretName" . }}.username'
+        - name: DB_PASSWORD
+          value: 'cpln://secret/{{ include "calcom.db.secretName" . }}.password'
+        - name: DATABASE_URL
+          value: postgresql://$(DB_USER):$(DB_PASSWORD)@{{ include "calcom.db.host" . }}:5432/{{ include "calcom.db.database" . }}
+        {{- /* Prisma uses the DIRECT url for migrations (it must bypass a
+               connection pooler). Same target here — neither backing store puts
+               PgBouncer in this path by default. */}}
+        - name: DATABASE_DIRECT_URL
+          value: postgresql://$(DB_USER):$(DB_PASSWORD)@{{ include "calcom.db.host" . }}:5432/{{ include "calcom.db.database" . }}
+        {{- /* host:port, consumed by start.sh's wait-for-it.sh before migrations.
+               Left empty it prints "you need to provide a host and port to test"
+               and — because start.sh has `set -x` but not `set -e` — the boot
+               continues without the wait, turning a clear message into a
+               confusing Prisma error. Verified in the pinned image. */}}
+        - name: DATABASE_HOST
+          value: {{ printf "%s:5432" (include "calcom.db.host" .) | quote }}
+        - name: NEXT_PUBLIC_WEBAPP_URL
+          value: {{ include "calcom.appUrl" . | quote }}
+        - name: NEXTAUTH_URL
+          value: {{ include "calcom.appUrl" . | quote }}
+        - name: NEXTAUTH_SECRET
+          value: 'cpln://secret/{{ .Values.calcom.auth.secretName }}.nextAuthSecret'
+        - name: CALENDSO_ENCRYPTION_KEY
+          value: 'cpln://secret/{{ .Values.calcom.auth.secretName }}.encryptionKey'
+        {{- /* NOT optional. At v6.2.0, with CRON_SECRET unset the endpoints
+               compare the Authorization header against the literal string
+               "Bearer undefined", so any unauthenticated caller sending exactly
+               that header can trigger tasker cleanup and queue processing
+               (upstream issue #29565, unfixed at this tag). Measured on the
+               pinned image: no header -> 401, `Bearer undefined` -> 400, i.e. it
+               got past the auth check. There is no valid unset path. */}}
+        - name: CRON_SECRET
+          value: 'cpln://secret/{{ .Values.calcom.auth.secretName }}.cronSecret'
+        - name: CRON_API_KEY
+          value: 'cpln://secret/{{ .Values.calcom.auth.secretName }}.cronApiKey'
+        {{- /* Read at runtime by packages/lib/telemetry.ts in the shipped image
+               ("1" drops the jitsu driver that posts to t.calendso.com). It is a
+               plain server-side read, not a NEXT_PUBLIC_* value, so unlike most
+               of Cal.com's build ARGs it genuinely takes effect at run time. */}}
+        - name: CALCOM_TELEMETRY_DISABLED
+          value: "1"
+        {{- if .Values.email.enabled }}
+        - name: EMAIL_FROM
+          value: {{ .Values.email.fromAddress | quote }}
+        - name: EMAIL_FROM_NAME
+          value: {{ .Values.email.fromName | quote }}
+        - name: EMAIL_SERVER_HOST
+          value: {{ .Values.email.host | quote }}
+        - name: EMAIL_SERVER_PORT
+          value: {{ .Values.email.port | quote }}
+        {{- if .Values.email.auth.secretName }}
+        - name: EMAIL_SERVER_USER
+          value: 'cpln://secret/{{ .Values.email.auth.secretName }}.EMAIL_SERVER_USER'
+        - name: EMAIL_SERVER_PASSWORD
+          value: 'cpln://secret/{{ .Values.email.auth.secretName }}.EMAIL_SERVER_PASSWORD'
+        {{- end }}
+        {{- end }}
+      ports:
+        - number: 3000
+          protocol: http
+      {{- /* /api/version is unauthenticated, touches no database, and returns
+             {"version":"6.2.0"} — so the probe body doubles as proof the running
+             image is the tag the chart claims. There is NO /api/health route at
+             this tag; do not copy one from another template.
+
+             start.sh only reaches `yarn start` after the asset rewrite, the
+             database wait, `prisma migrate deploy` and the app-store seed, so
+             "HTTP is listening" already implies "migrations completed".
+
+             The long first boot is absorbed with periodSeconds, never by raising
+             failureThreshold past the platform cap of 20. */}}
+      readinessProbe:
+        httpGet:
+          path: /api/version
+          port: 3000
+          scheme: HTTP
+        initialDelaySeconds: 30
+        periodSeconds: 15
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /api/version
+          port: 3000
+          scheme: HTTP
+        initialDelaySeconds: 300
+        periodSeconds: 30
+        failureThreshold: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.calcom.replicas }}
+      metric: disabled
+      minScale: {{ .Values.calcom.replicas }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    {{- /* Fully declared, including the empty lists the API backfills: a partial
+           block is completed on apply and shows as drift from creation. */}}
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      {{- include "calcom.internalFirewall" . | nindent 6 }}
+  {{- /* No loadBalancer.direct block is needed: the only protocol is HTTP and
+         the platform's canonical endpoint serves it. Declared explicitly so the
+         rendered manifest matches what the API stores. */}}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false
+  rolloutOptions:
+    {{- /* maxUnavailableReplicas is RETAINED on a standard workload (the API
+           drops it silently on stateful ones), so it genuinely serializes the
+           rollout. terminationGracePeriodSeconds is declared because the API
+           backfills 90. */}}
+    maxSurgeReplicas: 0%
+    maxUnavailableReplicas: "1"
+    minReadySeconds: 10
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90

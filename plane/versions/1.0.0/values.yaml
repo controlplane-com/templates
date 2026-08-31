@@ -3,7 +3,10 @@
 # Plane runs in exactly ONE location, and this names it. It MUST already be a
 # location of that GVC; the beat workload reads the GVC at boot and refuses a
 # FRESH install if it is not (see Important Notes in the README).
-# Extra locations in the GVC are fine: nothing Plane-related runs in them.
+# Every workload this chart OWNS is pinned here. The bundled `postgres` SUBCHART
+# is NOT — a parent cannot template a subchart's placement — so an extra GVC
+# location starts a second Postgres there, with its own empty volume. Prefer a
+# single-location GVC.
 #
 # One location is not a simplification. Redis, RabbitMQ and MinIO are each a
 # single volume bound to a single replica; a second location would get its own
@@ -24,7 +27,8 @@ plane:
 
   # Public base URL used in notification emails, webhook payloads and CORS.
   # Empty = derive from the platform canonical endpoint (correct in almost all
-  # cases). Set WITH https:// only for a custom domain.
+  # cases). A custom domain MUST carry the scheme — the chart refuses to render
+  # without one, since this value is also a CORS *and* CSRF trusted origin.
   appUrl: ""
 
   # Max upload size in bytes — enforced by BOTH the proxy and the API (5 MiB).

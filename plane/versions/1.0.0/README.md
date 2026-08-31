@@ -76,7 +76,9 @@ the knob is broken.
 ```yaml
 # The ONE location of your GVC that Plane runs in. It must already be a location
 # of that GVC; the scheduler reads the GVC at boot and refuses a FRESH install if
-# it is not. Extra GVC locations are fine — nothing Plane-related runs in them.
+# it is not. Every workload this chart OWNS is pinned here — the bundled `postgres`
+# subchart is NOT, so an extra GVC location starts a second Postgres there with its
+# own empty volume. Prefer a single-location GVC.
 location: aws-us-east-1
 ```
 
@@ -364,10 +366,25 @@ Take dumps with `pg_dump`, which ships in the `postgres:16` image:
 cpln workload exec RELEASE-postgres --gvc GVC_NAME --container postgresql -- \
   sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > plane.dump
 
-# Restore into the running database (stop the api, worker and beat workloads first)
+# Restore into the running database
 cpln workload exec RELEASE-postgres --gvc GVC_NAME --container postgresql -- \
   sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists' < plane.dump
+
+# Then redeploy the backend workloads so they reconnect against the restored data
+cpln workload force-redeployment RELEASE-plane RELEASE-plane-worker RELEASE-plane-beat --gvc GVC_NAME
 ```
+
+**This procedure has not yet been verified through `cpln workload exec`.** The dump/restore
+round-trip itself was exercised against a `postgres:16` container holding a Plane-migrated
+database, but piping binary `pg_dump` output *out of* `cpln workload exec`, and a local file
+*into* its stdin, is not a transport any template in this catalog has proven. Take a dump on
+your own release and check it — `pg_restore -l plane.dump` should list the archive — before
+relying on this as your backup.
+
+Plane keeps serving during a restore, and there is no supported way to stop it first
+(`worker.replicas: 0` is refused at render, and the scheduler has no replicas knob). Expect
+errors in the api and worker logs while `--clean --if-exists` drops and recreates objects;
+the forced redeployments above clear them.
 
 Attachments live in the object store, not the database — back up the bucket separately (or
 snapshot the MinIO volumeset).
@@ -381,6 +398,16 @@ snapshot the MinIO volumeset).
   redeployment to skip the wait.
 - **Whoever opens `/god-mode` first becomes the instance administrator.** Claim it over a
   port-forward before turning `publicAccess` on — see **First run**.
+- **The first `helm upgrade` after an install may re-apply the bundled datastores** — and the
+  upgrade that turns public access on, in **First run**, is exactly that upgrade for most
+  installs. Postgres, Redis, RabbitMQ and MinIO are single-replica, so expect Plane to be
+  briefly unreachable (a couple of minutes) while one of them restarts. Later upgrades do not
+  do this.
+- **`plane.appUrl` must include the scheme** (`https://your.domain`) — the chart refuses to
+  render without one. It is trusted for CORS *and* CSRF (Plane sets `CSRF_TRUSTED_ORIGINS` to
+  the same list), and Django rejects a scheme-less trusted origin, so a bare hostname makes
+  every POST fail. It also decides whether attachment URLs are signed for https, and it is the
+  base URL in invite and notification mail.
 - **"Waiting for migrations" forever means the `beat` workload is not running.** Migrations
   run only there; the api and worker block on them with no timeout and no other error.
 - **Rotating a secret does not redeploy anything.** `cpln://` references resolve once, at

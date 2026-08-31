@@ -318,6 +318,7 @@ defaultOptions'.
 {{- include "plane.validateLocation" . -}}
 {{- include "plane.validateSecrets" . -}}
 {{- include "plane.validateReplicas" . -}}
+{{- include "plane.validateAppUrl" . -}}
 {{- include "plane.validateStorage" . -}}
 {{- include "plane.validateInternalAccess" . -}}
 {{- end }}
@@ -376,8 +377,28 @@ refuses to start at all without LIVE_SERVER_SECRET_KEY.
 {{- if hasKey .Values.beat "replicas" -}}
 {{- fail "plane: beat.replicas is not a key of this chart. The Celery scheduler is ALWAYS exactly one replica — two schedulers run every periodic task twice. This workload also applies the database migrations." -}}
 {{- end -}}
-{{- if not (int .Values.plane.api.gunicornWorkers) -}}
-{{- fail "plane: plane.api.gunicornWorkers must be at least 1 — gunicorn refuses to start with no workers." -}}
+{{- if lt (int .Values.plane.api.gunicornWorkers) 1 -}}
+{{- fail (printf "plane: plane.api.gunicornWorkers must be at least 1, got '%v' — gunicorn refuses to start with no workers." .Values.plane.api.gunicornWorkers) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+`plane.appUrl` is TRIPLE load-bearing, and all three consumers fail SILENTLY on a
+value with no scheme:
+  * `plane.https` matches on an `https://` prefix, so MINIO_ENDPOINT_SSL falls to
+    "0" and the browser blocks presigned attachment URLs as mixed content;
+  * CORS_ALLOWED_ORIGINS -- which IS CSRF_TRUSTED_ORIGINS (common.py) -- gets an
+    origin Django will not accept as trusted, so EVERY POST fails the CSRF check;
+  * WEB_URL in invite and notification mail becomes a broken link.
+None of that produces an error the user can trace back to the value, so require
+the scheme at render time rather than documenting it.
+*/}}
+{{- define "plane.validateAppUrl" -}}
+{{- $url := .Values.plane.appUrl | toString -}}
+{{- if $url -}}
+{{- if not (or (hasPrefix "https://" $url) (hasPrefix "http://" $url)) -}}
+{{- fail (printf "plane: plane.appUrl must start with https:// or http://, got '%s'. It is used as a CORS *and* CSRF trusted origin (Django rejects a scheme-less trusted origin, so every POST fails), it decides whether attachment URLs are signed for https, and it is the base URL in invite mail. Use 'https://%s'." $url $url) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 

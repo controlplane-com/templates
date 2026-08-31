@@ -1,0 +1,158 @@
+# ─── Documenso server ─────────────────────────────────────────────────────────
+documenso:
+  # UI + REST API + background-job runner in one image on :3000. Runs
+  # `prisma migrate deploy` on every boot. Published tags carry the leading
+  # `v` — there is no bare `2.17.0` tag. Pin a release; never `latest`.
+  image: documenso/documenso:v2.17.0
+  # Stateless tier: every replica shares PostgreSQL. 1 is the tested default;
+  # 2+ keeps the UI serving through a rolling restart.
+  replicas: 1
+  # Browser-facing origin — signing links in email, OAuth redirects, session
+  # cookie domain. Empty = derived from the platform canonical endpoint. Set it
+  # WITH the scheme only for a custom domain: https://sign.example.com
+  publicUrl: ""
+  resources:
+    minCpu: 500m
+    maxCpu: 2000m
+    minMemory: 1Gi
+    maxMemory: 2Gi   # headroom for boot migrations and PDF rendering
+
+# ─── Prerequisite secret: application keys (MUST EXIST BEFORE INSTALL) ────────
+# A `dictionary` secret with exactly four keys. If it does not exist the
+# deployment WEDGES silently — `cpln logs` returns nothing; the missing secret
+# is named only in `status.versions[].message`. See README Prerequisites.
+#   nextAuthSecret         — session signing (openssl rand -base64 32)
+#   encryptionKey          — 32+ chars; encrypts 2FA secrets and API tokens.
+#                            CANNOT be rotated without orphaning that data.
+#   encryptionSecondaryKey — 32+ chars, a DIFFERENT value
+#   signingPassphrase      — the password of the .p12 named below; never empty
+secrets:
+  name: my-documenso-secrets
+
+# ─── Prerequisite secret: signing certificate (MUST EXIST BEFORE INSTALL) ─────
+# An `opaque` secret with `encoding: plain` whose payload is the BASE64 TEXT of
+# your .p12 (Documenso decodes it itself — do not store raw binary):
+#   base64 < certificate.p12 | tr -d '\n' | \
+#     cpln secret create-opaque --name my-documenso-signing-cert \
+#       --encoding plain -f -
+# Its password is the `signingPassphrase` key of `secrets.name` above.
+# Without a valid certificate Documenso starts and reports HEALTHY but cannot
+# complete a single document.
+signing:
+  certificateSecretName: my-documenso-signing-cert
+
+# ─── Sign-up policy ───────────────────────────────────────────────────────────
+# Documenso has NO admin bootstrap: the first account is created through the
+# sign-up form, then promoted with one SQL statement (see README first run).
+# Create your account first, then close or restrict sign-up here.
+signup:
+  disabled: false        # true = nobody new can register
+  allowedDomains: ""     # comma-separated, e.g. "example.com,acme.org"; empty = any
+
+# ─── Document storage ─────────────────────────────────────────────────────────
+storage:
+  type: database              # database | s3  (database stores PDFs as rows)
+  documentSizeLimitMb: 5      # max single upload
+  s3:
+    bucket: my-documenso-bucket
+    region: us-east-1
+    endpoint: ""              # S3-compatible servers only (e.g. http://my-minio.GVC.cpln.local:9000)
+    forcePathStyle: false     # true for most S3-compatible servers (MinIO)
+    # Keyless auth (AWS, preferred): a Control Plane cloud account plus your
+    # pre-created IAM policy scoped to the bucket (full JSON in the README).
+    # Used only when auth.secretName is empty.
+    cloudAccountName: my-s3-cloud-account
+    policyName: my-documenso-s3-policy
+    auth:
+      # Static-key dictionary secret (`accessKeyId` + `secretAccessKey`) — ONLY
+      # for S3-compatible servers, and only with `endpoint` set. AWS S3 is
+      # always keyless. Empty = keyless. e.g. my-documenso-s3-keys
+      secretName: ""
+
+# ─── SMTP / email ─────────────────────────────────────────────────────────────
+# Off by default. With email off, new users cannot verify their address through
+# the product (see README first run) and recipients get no signature-request
+# mail — you must copy each signing link out of the UI by hand.
+smtp:
+  enabled: false
+  host: smtp.example.com
+  port: 587
+  secure: false               # false = STARTTLS/plain (587); true = implicit TLS (465)
+  fromAddress: documenso@example.com
+  fromName: Documenso
+  auth:
+    # OPTIONAL prerequisite dictionary secret with `username` + `password`.
+    # Empty = unauthenticated relay / mail catcher. e.g. my-documenso-smtp
+    secretName: ""
+
+# ─── Telemetry ────────────────────────────────────────────────────────────────
+# The published v2.17.0 image ships live PostHog credentials baked in, so
+# upstream's default is ON: a startup event plus an hourly heartbeat carrying
+# app version, installation ID and node ID. Off here — turn it on deliberately.
+telemetry:
+  enabled: false
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+# Public by default: Documenso's signers are external by definition — you email
+# documents to people outside your org and those links must resolve. Sign-up is
+# OPEN out of the box and there is no admin bootstrap, so create your account
+# and then set signup.disabled (or signup.allowedDomains) right away.
+# A firewall change takes ~30 s to ~10 min to propagate.
+publicAccess:
+  enabled: true
+internalAccess:
+  type: same-gvc              # none | same-gvc | same-org | workload-list
+  workloads: []               # used only with workload-list; this release's own
+                              # workloads are always added for you
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Database credentials (bundled plumbing — nothing to pre-create) ──────────
+# Internal plumbing no human types elsewhere, so this chart CREATES the
+# dictionary secret named below out of these three values and hands its name to
+# whichever PostgreSQL is enabled. Secret names are org-wide: give each release
+# its own name. Avoid @ : / ? # [ ] % in the password — it is embedded in a
+# connection URL (the render fails with a clear message if you use one).
+database:
+  credentialsSecretName: my-documenso-db-credentials
+  name: documenso                       # the database, and the `database` key of that secret
+  username: documenso
+  password: change-me-documenso-db
+
+# ─── PostgreSQL: single instance (default) ────────────────────────────────────
+# Stores users, envelopes, fields, audit logs, background jobs — and document
+# blobs when storage.type is `database`. Every knob of the `postgres` template
+# is available here, including scheduled backups:
+#   postgres.backup.enabled: true
+#   postgres.backup.provider: aws | gcp | minio
+# See "Backing up the database" in the README.
+# Set postgresHA.enabled: true (and this to false) for near-zero-downtime
+# upgrades and automatic failover.
+postgres:
+  enabled: true
+  image: postgres:18
+  config:
+    credentialsSecretName: my-documenso-db-credentials   # must match database.credentialsSecretName
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 1Gi
+  volumeset:
+    capacity: 10              # GiB (minimum 10); raise it for `database` storage
+
+# ─── PostgreSQL: highly available (opt-in) ────────────────────────────────────
+# 3 Patroni replicas + 3 etcd + an HAProxy leader endpoint. Enable exactly one
+# of postgres / postgresHA — the render fails if both or neither are on.
+postgresHA:
+  enabled: false
+  config:
+    credentialsSecretName: my-documenso-db-credentials   # must match database.credentialsSecretName
+  replicas: 3
+  resources:
+    minCpu: 500m
+    maxCpu: 1000m
+    minMemory: 1Gi
+    maxMemory: 2Gi
+  volumeset:
+    capacity: 10              # GiB per replica (minimum 10)

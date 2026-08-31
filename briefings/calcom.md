@@ -67,6 +67,11 @@
   image is *built*, so setting it at runtime does nothing. The working path is the database-backed
   feature flag `disable-signup` in Settings → Admin → Features, after the admin account exists.
   This is why public access defaults to off.
+- **Narrowing the bundled Postgres to a `workload-list` that omits the app is a boot hang, not an
+  error.** `postgres.internalAccess` is the subchart's own knob and a parent cannot inject into it,
+  so the chart hard-fails at render instead, naming the exact link to add;
+  `postgres.internalAccess.type: none` is refused outright. `postgres-highly-available` exposes no
+  such knob, so the HA path is unaffected.
 - **Whoever reaches `/auth/setup` first becomes the instance admin**, and there is no way to
   pre-create the owner from a secret (unlike keycloak or langfuse). Publishing the endpoint before
   finishing the wizard hands out admin.

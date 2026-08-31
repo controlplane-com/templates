@@ -207,6 +207,29 @@ inboundAllowWorkload: []
 {{- if and .Values.cron.enabled (eq .Values.internalAccess.type "none") -}}
 {{- fail "calcom: cron.enabled requires internalAccess.type other than `none` — the cron caller's requests arrive on the app's internal inbound and would be dropped, so every scheduled job would silently never run while the app still reported healthy. Set internalAccess.type (same-gvc is the default) or set cron.enabled: false and drive the endpoints yourself" -}}
 {{- end -}}
+{{- /*
+  Cal.com reaches PostgreSQL over the GVC's internal network, and the bundled
+  `postgres` subchart carries its OWN internalAccess knob that this chart cannot
+  inject into — a parent cannot template a subchart value. A workload-list that
+  omits this release's app workload cuts Cal.com off from its own database, and
+  it fails as a boot hang rather than an error: Prisma's migrate step blocks and
+  no surface names the firewall. A render-time fail is the only tool available,
+  so name the exact link the user has to add. Mirrors wordpress's mariadb guard.
+  (postgres-highly-available exposes no internalAccess knob, so the HA path has
+  nothing to guard.)
+*/ -}}
+{{- if and .Values.postgres.enabled .Values.postgres.internalAccess -}}
+{{- $pg := .Values.postgres.internalAccess -}}
+{{- $self := printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "calcom.name" .) -}}
+{{- if eq ($pg.type | default "") "none" -}}
+{{- fail "calcom: postgres.internalAccess.type must not be 'none' — Cal.com reaches the bundled database over the GVC internal network. Use 'same-gvc' (default) or 'workload-list' including this release's Cal.com workload" -}}
+{{- end -}}
+{{- if eq ($pg.type | default "") "workload-list" -}}
+{{- if not (has $self ($pg.workloads | default list)) -}}
+{{- fail (printf "calcom: postgres.internalAccess.type is 'workload-list' but the list does not include this release's Cal.com workload — add '%s', or the app cannot reach its own database" $self) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if .Values.email.enabled -}}
 {{- if not .Values.email.host -}}
 {{- fail "calcom: email.host is required when email.enabled is true" -}}

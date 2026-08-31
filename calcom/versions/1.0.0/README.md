@@ -153,10 +153,10 @@ A fresh Cal.com database has no owner, and `/auth/setup` grants instance-admin t
    cpln port-forward {release}-calcom 3000:3000 --gvc {gvc}
    ```
 3. Visit `http://localhost:3000/auth/setup` and create your admin user. Use `http://localhost:3000`, not an https name: the install advertises exactly that origin while private, so session cookies work.
-4. Only then publish, if you want public booking pages:
-   ```bash
-   cpln helm upgrade {release} ./calcom/versions/1.0.0 --gvc {gvc} --set publicAccess.enabled=true
-   ```
+4. Only then publish, if you want public booking pages: set `publicAccess.enabled: true` and upgrade
+   the release. From the marketplace UI, edit the release's values and redeploy. From the CLI, run
+   `cpln helm upgrade` against the same chart you installed from, adding `--dependency-update` and
+   `--set publicAccess.enabled=true`.
 
 A firewall change takes anywhere from ~30 s to ~10 minutes to propagate — re-poll the public URL rather than trusting the first response.
 

@@ -118,10 +118,20 @@ spec:
   defaultOptions:
     # Sent as a COMPLETE block: the API backfills PARTIAL blocks from its own
     # platform defaults, not from this workload's settings.
+    #
+    # minScale/maxScale 0 is the STRUCTURAL half of the single-location rule, and
+    # it is the half that holds by construction. A workload runs in EVERY location
+    # its GVC has, so without this an extra GVC location starts a second, complete,
+    # independent WordPress on its own volume -- measured on 2026-08-31, where a
+    # second location seeded its own docroot, ran its own installer and created its
+    # own admin user while every status surface stayed green. `localOptions` below
+    # supplies the real count for the ONE configured location; any other location
+    # gets desiredScale 0 and reports `This workload location is deactivated
+    # because maxScale is set to 0`.
     autoscaling:
       metric: disabled
-      minScale: {{ .Values.wordpress.replicas | int }}
-      maxScale: {{ .Values.wordpress.replicas | int }}
+      minScale: 0
+      maxScale: 0
       maxConcurrency: 0
       target: 95
       scaleToZeroDelay: 300
@@ -129,19 +139,50 @@ spec:
     debug: false
     suspend: false
     timeoutSeconds: 30
+  localOptions:
+    # A localOptions entry is a FULL override, not a patch: every field
+    # defaultOptions carries is repeated here, because the API backfills its OWN
+    # platform defaults for anything left out -- not this workload's defaults.
+    - autoscaling:
+        metric: disabled
+        minScale: {{ .Values.wordpress.replicas | int }}
+        maxScale: {{ .Values.wordpress.replicas | int }}
+        maxConcurrency: 0
+        target: 95
+        scaleToZeroDelay: 300
+      capacityAI: false
+      debug: false
+      location: //location/{{ .Values.location }}
+      suspend: false
+      timeoutSeconds: 30
   # rolloutOptions is omitted ENTIRELY rather than partially: the API backfills a
   # partial block, and maxUnavailableReplicas is silently dropped on some
   # workload types, which would imply a rollout limit that is not in force.
   firewallConfig:
     external:
-      outboundAllowCIDR:
-        - 0.0.0.0/0
       {{- if .Values.publicAccess.enabled }}
       inboundAllowCIDR:
         - 0.0.0.0/0
       {{- else }}
       inboundAllowCIDR: []
       {{- end }}
+      {{- /*
+        The three empty lists below are NOT decoration. The API COMPLETES a
+        PARTIAL block from its own defaults -- send the whole block or none of
+        it. Sending only inbound/outboundAllowCIDR made the API backfill
+        inboundBlockedCIDR, outboundBlockedCIDR and outboundAllowHostname, so
+        the stored spec disagreed with the rendered manifest from creation
+        (measured 2026-08-31 on release test-wp). A `helm upgrade` drift gate
+        CANNOT see this class -- it was fully green -- because the fields are
+        written once at creation and then never churn. `outboundAllowPort` is
+        deliberately absent: the API did NOT backfill it, and declaring a field
+        the API does not store would create the drift this block removes.
+      */}}
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
     internal:
       inboundAllowType: {{ .Values.internalAccess.type }}
       {{- if eq .Values.internalAccess.type "workload-list" }}
@@ -172,3 +213,6 @@ spec:
       */}}
       inboundAllowWorkload: []
       {{- end }}
+  # Declared rather than left to the API, which stores `false` either way: an
+  # undeclared field is a permanent rendered-vs-stored difference.
+  supportDynamicTags: false

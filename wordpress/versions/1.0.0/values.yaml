@@ -1,3 +1,12 @@
+# ─── Location ─────────────────────────────────────────────────────────────────
+# The ONE location of your GVC that WordPress runs in. Every replica is pinned
+# here, and no other location of the GVC starts one: an undeclared location gets
+# maxScale 0 and starts nothing. Without that pin an extra GVC location silently
+# runs a SECOND, complete, independent WordPress on its own volume.
+# It must be a location your GVC actually has — the platform accepts one the GVC
+# lacks without any error and then runs nothing, with no failed deployment to see.
+location: aws-us-east-1
+
 # ─── WordPress ────────────────────────────────────────────────────────────────
 wordpress:
   # Official image (library/wordpress); the tag pins WordPress AND PHP.

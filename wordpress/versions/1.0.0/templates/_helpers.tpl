@@ -126,6 +126,27 @@ because a hand-maintained list is exactly what drifts when that changes.
 {{- fail "wordpress: mariadb.credentialsSecretName and mariadb.rootPasswordSecretName must be DIFFERENT secrets — the application credential is deliberately separate from root, so sharing the first does not hand out the second" -}}
 {{- end -}}
 
+{{- /*
+  Location — the ONE GVC location this release runs in. It is what CONFINES the
+  WordPress workload: `defaultOptions` scales to 0 everywhere and `localOptions`
+  supplies the real count here. The platform does NOT validate this direction —
+  a localOptions entry naming a location the GVC lacks is accepted, stored, and
+  simply inert — so the render-time checks below catch the shapes we can see and
+  the boot-time GVC read in start.sh catches the rest, best-effort.
+*/ -}}
+{{- if hasKey .Values "locations" -}}
+{{- fail "wordpress: `locations` (plural) is not a key of this chart. WordPress runs in exactly ONE location — one docroot volume and one bundled database — so use the singular `location`, e.g. `location: aws-us-east-1`" -}}
+{{- end -}}
+{{- if not .Values.location -}}
+{{- fail "wordpress: `location` is required — it names the ONE location of your GVC that WordPress runs in, e.g. `location: aws-us-east-1`. Every replica is pinned there and no other location of the GVC starts one" -}}
+{{- end -}}
+{{- if not (kindIs "string" .Values.location) -}}
+{{- fail "wordpress: `location` must be a single location NAME, e.g. `location: aws-us-east-1`. WordPress runs in exactly one location: the docroot is one volume and the bundled database is one instance" -}}
+{{- end -}}
+{{- if or (hasPrefix "/" .Values.location) (contains "/" .Values.location) -}}
+{{- fail (printf "wordpress: `location` must be a bare location NAME, not a link — use `aws-us-east-1`, not '%s'" .Values.location) -}}
+{{- end -}}
+
 {{- /* Replicas. */ -}}
 {{- if lt (int .Values.wordpress.replicas) 1 -}}
 {{- fail (printf "wordpress: wordpress.replicas must be at least 1, got '%v'" .Values.wordpress.replicas) -}}

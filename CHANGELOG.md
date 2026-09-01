@@ -2,6 +2,9 @@
 
 High-level, user-facing catalog changes by month: new templates and notable version updates, one line each. Feeds the marketplace "What's New" section. Maintained by the template pipeline at ship time (entry added when a template or version merges); internal tooling changes are not listed.
 
+## 2026-09
+- **hermes-agent 1.2.0** — the dashboard can now be the public endpoint: `publicAccess.expose: api | dashboard` chooses which surface the canonical HTTPS endpoint fronts (the other stays internal). Recommended over `cpln port-forward` for browser use — the tunnel never releases connections when a browser disconnects, which eventually wedges the browser into endless spinners while the server stays healthy. Also bumps the image to v2026.8.31, picking up two months of upstream fixes including the dashboard login bug this template previously patched at boot
+
 ## 2026-08
 
 - **Every template now deploys into a GVC you already have.** Eleven templates used to create their own; none do. This closes a data-loss path: a chart that creates a GVC and later stops declaring it makes `helm upgrade` prune it — and deleting a GVC takes **every workload, volumeset and identity inside**, in about six seconds, while printing `upgraded successfully`. Each converted template now refuses that upgrade at render time. **If you run any 1.x/2.x release listed below, do not `helm upgrade` onto the new major** — install it as a new release against an existing GVC, move your data across, then remove the old release. Each README carries the migration steps

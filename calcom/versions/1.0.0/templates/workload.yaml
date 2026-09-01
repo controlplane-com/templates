@@ -215,7 +215,9 @@ spec:
 
          0/0 here means a GVC location this release did not ask for starts
          NOTHING, by construction — its deployment message reads "This workload
-         location is deactivated because maxScale is set to 0". localOptions
+         location is deactivated because maxScale is set to 0." (the platform's
+         message ends with a period; gate on the text, since `desiredScale` is
+         ABSENT on a deactivated location rather than present-and-0). localOptions
          below supplies the real count for the one configured location. */}}
   defaultOptions:
     autoscaling:

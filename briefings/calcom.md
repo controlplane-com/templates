@@ -82,7 +82,8 @@
   multi-location GVC an empty database still starts in every location with its own volumeset —
   idle, never read, and billed. The app reads its own GVC at boot and logs a warning naming them;
   that warning is the only signal a user gets. **The honest statement is: data-splitting is fixed,
-  cost sprawl is not.**
+  cost sprawl is not.** Measured on a 3-location GVC: each extra location runs a live idle
+  PostgreSQL (`ready: true`, `minCpu 250m`, `minMemory 512Mi`) with a bound 10 GiB EBS volume.
 - **`location` naming a location the GVC lacks starts NOTHING, with no failed deployment.** The
   platform stores such a `localOptions` entry verbatim and it is simply inert. It cannot be caught
   at boot either — no container runs to complain. README Prerequisites tells the user to check

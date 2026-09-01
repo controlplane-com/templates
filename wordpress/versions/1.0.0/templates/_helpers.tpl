@@ -143,8 +143,8 @@ because a hand-maintained list is exactly what drifts when that changes.
 {{- if not (kindIs "string" .Values.location) -}}
 {{- fail "wordpress: `location` must be a single location NAME, e.g. `location: aws-us-east-1`. WordPress runs in exactly one location: the docroot is one volume and the bundled database is one instance" -}}
 {{- end -}}
-{{- if or (hasPrefix "/" .Values.location) (contains "/" .Values.location) -}}
-{{- fail (printf "wordpress: `location` must be a bare location NAME, not a link — use `aws-us-east-1`, not '%s'" .Values.location) -}}
+{{- if not (regexMatch "^[a-z0-9]+(-[a-z0-9]+)*$" .Values.location) -}}
+{{- fail (printf "wordpress: `location` must be a bare location NAME like `aws-us-east-1`, got '%s'. A link form (`//location/x`, which is what `spec.staticPlacement.locationLinks` contains) or a comma-separated list is accepted by Helm AND by the API, and stores a placement that matches no real location — so WordPress starts NOWHERE, every location reports `deactivated because maxScale is set to 0`, and the logs are silent." .Values.location) -}}
 {{- end -}}
 
 {{- /* Replicas. */ -}}

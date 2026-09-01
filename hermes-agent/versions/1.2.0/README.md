@@ -32,6 +32,15 @@ Single replica is by design: memory is a single-writer SQLite database and upstr
   `openssl rand -hex 32`. If the key is too short the gateway still starts but the API never
   serves, and the workload will not become ready.
 
+  Create it in one command (the name `my-hermes-secret` matches the chart's default `secret.name`):
+
+  ```bash
+  cpln secret create-dictionary --name my-hermes-secret \
+    --entry "api-key=YOUR-LLM-API-KEY" \
+    --entry "api-server-key=$(openssl rand -hex 32)" \
+    --entry "dashboard-password=YOUR-STRONG-PASSWORD"
+  ```
+
   Pass its name as `secret.name` at install (and override `secret.keys` if your key names differ).
 
 ## Configuration

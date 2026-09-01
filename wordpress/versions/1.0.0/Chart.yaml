@@ -1,0 +1,20 @@
+apiVersion: v2
+name: wordpress
+description: WordPress content management system with bundled MariaDB and persistent media storage
+type: application
+version: 1.0.0
+appVersion: "7.1.0"
+
+annotations:
+  created: "2026-08-31"
+  lastModified: "2026-08-31"
+  category: "cms"
+  createsGvc: false
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+  - name: mariadb
+    version: 1.4.1
+    repository: "oci://ghcr.io/controlplane-com/templates"

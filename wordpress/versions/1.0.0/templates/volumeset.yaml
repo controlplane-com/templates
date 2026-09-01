@@ -1,0 +1,23 @@
+{{- /*
+  READ-WRITE-MANY on purpose. A block volumeset (ext4/xfs) gives every replica its
+  OWN volume, so two WordPress replicas would mean two media libraries, two plugin
+  sets and two wp-config.php files with two different sets of auth salts — every
+  user logged out on every request that landed on the "other" replica. A `shared`
+  volumeset is one volume per location, mounted by every replica.
+
+  `performanceClass: shared` is declared explicitly: omitting it makes the API
+  backfill exactly that value, which is permanent drift from creation.
+
+  No `snapshots` block. The API accepts one, but shared volumes are expand-only
+  with no restore path we have verified — see "Backups" in the README rather than
+  a recovery procedure we cannot stand behind.
+*/}}
+kind: volumeset
+name: {{ include "wordpress.volume.name" . }}
+description: WordPress docroot — core, plugins, themes, uploads and wp-config.php
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "wordpress.tags" . | nindent 4 }}
+spec:
+  fileSystemType: shared
+  initialCapacity: {{ .Values.volumeset.capacity }}
+  performanceClass: shared

@@ -1,0 +1,299 @@
+---
+kind: workload
+name: {{ include "documenso.name" . }}
+description: Documenso — e-signature UI, REST API and background-job runner, HTTP :3000
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "documenso.tags" . | nindent 4 }}
+spec:
+  {{- /*
+    `standard`, not `stateful`. Nothing here needs persistent replica identity
+    or a volumeset (all state is in PostgreSQL or the S3 bucket), and two
+    platform limits are workload-type-dependent in this tier's favour: the
+    cpu:minCpu <= 4:1 cap applies to `stateful` only, and
+    rolloutOptions.maxUnavailableReplicas is silently DROPPED on `stateful`
+    while it is retained on `standard` (CLAUDE.md, 2026-08-11).
+    Consequence respected throughout: the bare short DNS name is NXDOMAIN on a
+    standard workload, so every hostname this chart emits is fully qualified.
+  */}}
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "documenso.identity.name" . }}
+  containers:
+    - name: documenso
+      image: {{ .Values.documenso.image }}
+      # docker/start.sh runs `prisma migrate deploy` on EVERY boot, then starts
+      # the React Router (Remix) server. Prisma takes an advisory lock, so
+      # concurrent replica boots serialize rather than corrupt.
+      inheritEnv: false
+      minCpu: {{ .Values.documenso.resources.minCpu | quote }}
+      cpu: {{ .Values.documenso.resources.maxCpu | quote }}
+      minMemory: {{ .Values.documenso.resources.minMemory | quote }}
+      memory: {{ .Values.documenso.resources.maxMemory | quote }}
+      env:
+        # ── Runtime mode ──
+        # The published v2.17.0 image sets NO NODE_ENV (verified with
+        # `docker inspect documenso/documenso:v2.17.0`), and four behaviours key
+        # off it. Without this the session cookie loses its `__Secure-` prefix
+        # on an HTTPS endpoint (packages/lib/constants/auth.ts: useSecureCookies
+        # = NODE_ENV === 'production' && url starts https), the language cookie
+        # loses `secure`, embedding presign tokens accept expiresIn: 0, and the
+        # logger emits pretty text instead of JSON.
+        - name: NODE_ENV
+          value: production
+        # ── Bind address ──
+        # Control Plane sets HOSTNAME to the replica name; a server that honours
+        # it as a bind address then listens on the pod IP only and never on
+        # loopback, which breaks `cpln port-forward` with `502 Unable to connect
+        # to upstream workload` (measured on langfuse). The image's own
+        # docker/start.sh forces `HOSTNAME=0.0.0.0` at v2.17.0, so this is a
+        # second layer that survives an entrypoint change — and loopback is also
+        # the operator's only route in when publicAccess is turned off.
+        - name: HOSTNAME
+          value: "0.0.0.0"
+        # ── Database ──
+        # DB_USER/DB_PASSWORD are injected from the secret and expanded by the
+        # platform via $(VAR). The database NAME is interpolated by Helm at
+        # render time and therefore must stay a plain value: a cpln:// string
+        # assembled by Helm arrives at the app as literal text (nocodb/polaris).
+        - name: DB_USER
+          value: cpln://secret/{{ include "documenso.secret.db.name" . }}.username
+        - name: DB_PASSWORD
+          value: cpln://secret/{{ include "documenso.secret.db.name" . }}.password
+        - name: NEXT_PRIVATE_DATABASE_URL
+          value: postgresql://$(DB_USER):$(DB_PASSWORD)@{{ include "documenso.postgres.host" . }}:5432/{{ .Values.database.name }}
+        # packages/prisma/schema.prisma declares `directUrl = env(...)`, which
+        # Prisma resolves on every `migrate deploy` — so this is required always,
+        # not only when pooling. Same value, exactly as upstream's .env.example.
+        - name: NEXT_PRIVATE_DIRECT_DATABASE_URL
+          value: postgresql://$(DB_USER):$(DB_PASSWORD)@{{ include "documenso.postgres.host" . }}:5432/{{ .Values.database.name }}
+        # ── Browser-facing origin ──
+        # Signing links, OAuth redirects and the session-cookie domain are all
+        # built from this. The canonical hostname shape is not stable and there
+        # is no org-alias variable, so it is derived at runtime from this
+        # workload's own CPLN_GLOBAL_ENDPOINT (already a full URL — never
+        # prepend a scheme) rather than assembled here.
+        #
+        # The private branch is http://localhost:3000, matching calcom's
+        # calcom.appUrl helper, which hit the identical fork. With public access
+        # off the only route to the UI is `cpln port-forward`, so the browser's
+        # real origin IS http://localhost:3000. The internal service-DNS name is
+        # a hostname no browser ever visits, and pointing the session-cookie
+        # domain at an origin the browser is not on is how a login silently
+        # fails to stick. (An https:// name would be worse still: NextAuth then
+        # sets `Secure` cookies that a browser on plain http refuses to store.)
+        {{- if .Values.documenso.publicUrl }}
+        - name: NEXT_PUBLIC_WEBAPP_URL
+          value: {{ .Values.documenso.publicUrl | quote }}
+        {{- else if .Values.publicAccess.enabled }}
+        - name: NEXT_PUBLIC_WEBAPP_URL
+          value: "$(CPLN_GLOBAL_ENDPOINT)"
+        {{- else }}
+        - name: NEXT_PUBLIC_WEBAPP_URL
+          value: http://localhost:3000
+        {{- end }}
+        # ── Background jobs: the container calls ITSELF ──
+        # packages/lib/jobs/client/local.ts POSTs every enqueued job to
+        # ${NEXT_PRIVATE_INTERNAL_WEBAPP_URL}/api/jobs/{def}/{id} and races the
+        # fetch against a 150 ms timeout. Loopback is sub-millisecond, and it
+        # keeps every outgoing email independent of internalAccess: with service
+        # DNS, `internalAccess.type: none` would stop the app calling itself and
+        # every confirmation and signature-request mail would vanish silently.
+        - name: NEXT_PRIVATE_INTERNAL_WEBAPP_URL
+          value: http://127.0.0.1:3000
+        - name: NEXT_PRIVATE_JOBS_PROVIDER
+          value: local
+        # ── Application keys (user prerequisite dictionary secret) ──
+        - name: NEXTAUTH_SECRET
+          value: cpln://secret/{{ .Values.secrets.name }}.nextAuthSecret
+        - name: NEXT_PRIVATE_ENCRYPTION_KEY
+          value: cpln://secret/{{ .Values.secrets.name }}.encryptionKey
+        - name: NEXT_PRIVATE_ENCRYPTION_SECONDARY_KEY
+          value: cpln://secret/{{ .Values.secrets.name }}.encryptionSecondaryKey
+        # ── Signing certificate ──
+        # NEXT_PRIVATE_SIGNING_TRANSPORT is declared rather than left to its
+        # default because cert-status.ts short-circuits to
+        # `{isAvailable: true}` for ANY value that is not exactly `local` —
+        # including unset. Leaving it out makes /api/certificate-status report
+        # a certificate that is not there.
+        - name: NEXT_PRIVATE_SIGNING_TRANSPORT
+          value: local
+        # packages/signing/transports/local.ts does Buffer.from(contents,
+        # 'base64') and CONTENTS takes precedence over the file path — so the
+        # secret carries ASCII only and there is no file, no mount, and no
+        # uid-1001 permission question.
+        - name: NEXT_PRIVATE_SIGNING_LOCAL_FILE_CONTENTS
+          value: cpln://secret/{{ .Values.signing.certificateSecretName }}.payload
+        - name: NEXT_PRIVATE_SIGNING_PASSPHRASE
+          value: cpln://secret/{{ .Values.secrets.name }}.signingPassphrase
+        # ── Document storage ──
+        - name: NEXT_PUBLIC_UPLOAD_TRANSPORT
+          value: {{ .Values.storage.type | quote }}
+        - name: NEXT_PUBLIC_DOCUMENT_SIZE_UPLOAD_LIMIT
+          value: {{ .Values.storage.documentSizeLimitMb | quote }}
+        {{- if eq .Values.storage.type "s3" }}
+        - name: NEXT_PRIVATE_UPLOAD_BUCKET
+          value: {{ .Values.storage.s3.bucket | quote }}
+        - name: NEXT_PRIVATE_UPLOAD_REGION
+          value: {{ .Values.storage.s3.region | quote }}
+        {{- if .Values.storage.s3.endpoint }}
+        - name: NEXT_PRIVATE_UPLOAD_ENDPOINT
+          value: {{ .Values.storage.s3.endpoint | quote }}
+        {{- end }}
+        - name: NEXT_PRIVATE_UPLOAD_FORCE_PATH_STYLE
+          value: {{ .Values.storage.s3.forcePathStyle | quote }}
+        {{- if .Values.storage.s3.auth.secretName }}
+        # Static keys (S3-compatible servers only). With these unset the AWS SDK
+        # falls back to its default provider chain, which is how the keyless
+        # cloud-account identity supplies credentials
+        # (s3-provider.ts: credentials = hasCredentials ? {...} : undefined).
+        - name: NEXT_PRIVATE_UPLOAD_ACCESS_KEY_ID
+          value: cpln://secret/{{ .Values.storage.s3.auth.secretName }}.accessKeyId
+        - name: NEXT_PRIVATE_UPLOAD_SECRET_ACCESS_KEY
+          value: cpln://secret/{{ .Values.storage.s3.auth.secretName }}.secretAccessKey
+        {{- end }}
+        {{- end }}
+        # ── Sign-up policy ──
+        - name: NEXT_PUBLIC_DISABLE_SIGNUP
+          value: {{ .Values.signup.disabled | quote }}
+        {{- if .Values.signup.allowedDomains }}
+        - name: NEXT_PRIVATE_ALLOWED_SIGNUP_DOMAINS
+          value: {{ .Values.signup.allowedDomains | quote }}
+        {{- end }}
+        # ── Email ──
+        # FROM_ADDRESS/FROM_NAME are emitted unconditionally: upstream lists both
+        # as required regardless of whether a transport is configured.
+        - name: NEXT_PRIVATE_SMTP_FROM_ADDRESS
+          value: {{ .Values.smtp.fromAddress | quote }}
+        - name: NEXT_PRIVATE_SMTP_FROM_NAME
+          value: {{ .Values.smtp.fromName | quote }}
+        {{- if .Values.smtp.enabled }}
+        - name: NEXT_PRIVATE_SMTP_TRANSPORT
+          value: smtp-auth
+        - name: NEXT_PRIVATE_SMTP_HOST
+          value: {{ .Values.smtp.host | quote }}
+        - name: NEXT_PRIVATE_SMTP_PORT
+          value: {{ .Values.smtp.port | quote }}
+        - name: NEXT_PRIVATE_SMTP_SECURE
+          value: {{ .Values.smtp.secure | quote }}
+        {{- if .Values.smtp.auth.secretName }}
+        - name: NEXT_PRIVATE_SMTP_USERNAME
+          value: cpln://secret/{{ .Values.smtp.auth.secretName }}.username
+        - name: NEXT_PRIVATE_SMTP_PASSWORD
+          value: cpln://secret/{{ .Values.smtp.auth.secretName }}.password
+        {{- end }}
+        {{- end }}
+        {{- if not .Values.telemetry.enabled }}
+        # ── Telemetry ──
+        # The published image bakes in live PostHog credentials, so telemetry is
+        # ON unless this is set. telemetry-client.ts reads it as
+        # `!!process.env.DOCUMENSO_DISABLE_TELEMETRY`, so ANY non-empty value
+        # disables it — the variable is omitted entirely to enable.
+        - name: DOCUMENSO_DISABLE_TELEMETRY
+          value: "true"
+        {{- end }}
+      ports:
+        - number: 3000
+          protocol: http
+      readinessProbe:
+        # /api/health runs `SELECT 1` through Prisma, so a replica never takes
+        # traffic before its database is reachable. 10 + 20x10 = 210 s of boot
+        # budget, which covers first-boot schema creation. failureThreshold is
+        # at the platform maximum of 20 — a longer boot must buy time with
+        # periodSeconds, never a higher threshold.
+        httpGet:
+          path: /api/health
+          port: 3000
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        # Deliberately NOT /api/health: that endpoint returns 500 when Postgres
+        # is unreachable, so using it here would restart a perfectly healthy app
+        # every time the database blipped. /api/certificate-status touches no
+        # database and its getCertificateStatus() swallows errors, so it is a
+        # pure "is this process still serving HTTP" signal.
+        httpGet:
+          path: /api/certificate-status
+          port: 3000
+          scheme: HTTP
+        initialDelaySeconds: 60
+        periodSeconds: 30
+        failureThreshold: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+  {{- /*
+    Scale 0 EVERYWHERE by default, with the real replica count supplied for the
+    one configured location only. A workload runs in every location its GVC has,
+    so this is what keeps a multi-location GVC from starting a second Documenso
+    against a second, independent database. A location this release did not ask
+    for reports `This workload location is deactivated because maxScale is set
+    to 0` and starts nothing. See `documenso.autoscaling` in _helpers.tpl.
+  */}}
+  defaultOptions:
+    autoscaling:
+      {{- include "documenso.autoscaling" (dict "scale" 0) | nindent 6 }}
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 300   # headroom for large PDF uploads and signing
+  localOptions:
+    {{- include "documenso.localOptions" (dict "root" . "scale" .Values.documenso.replicas) | nindent 4 }}
+  rolloutOptions:
+    {{- /*
+      maxUnavailableReplicas IS sent here: CLAUDE.md's 2026-08-11 narrowing
+      measured it RETAINED on a `standard` workload (it is dropped on
+      `stateful`). Verify it survived in the stored spec on first install — if
+      the API dropped it, remove the field rather than shipping a rollout
+      guarantee that is not in force.
+      terminationGracePeriodSeconds is declared because the API backfills 90.
+    */}}
+    minReadySeconds: 0
+    maxUnavailableReplicas: "25%"
+    maxSurgeReplicas: "25%"
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
+  firewallConfig:
+    {{- /* Every field is declared: the API backfills the empty lists, so
+    omitting them makes a default install drift from the moment it is created. */}}
+    external:
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      {{- /*
+        This release's own workloads are merged in unconditionally. A
+        workload-list naming only the user's clients would otherwise deny the
+        release its own internal paths — the defect measured across cockroach,
+        etcd-multi-location, clickhouse and pgedge in the 2026-08-27 batch.
+        A name the user also listed is not emitted twice.
+      */}}
+      {{- $own := splitList "\n" (trim (include "documenso.ownWorkloadLinks" .)) }}
+      inboundAllowWorkload:
+        {{- include "documenso.ownWorkloadLinks" . | nindent 8 }}
+        {{- range .Values.internalAccess.workloads }}
+        {{- if not (has (printf "- %s" .) $own) }}
+        - {{ . }}
+        {{- end }}
+        {{- end }}
+      {{- else }}
+      inboundAllowWorkload: []
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

@@ -32,9 +32,13 @@
   `documenso.replicas` real. All durable state is in Postgres or the S3 bucket.
 - **The Documenso workload is confined to ONE location** — `defaultOptions.minScale/maxScale: 0`
   everywhere, with a single `localOptions` entry carrying the real count for `location`. That is the
-  CLAUDE.md structural confinement, and it is by construction: an undeclared GVC location gets
-  `desiredScale: 0` and reports `This workload location is deactivated because maxScale is set to 0`.
-  **The bundled `postgres` subchart is NOT confined** — see the trap below.
+  CLAUDE.md structural confinement, and it is by construction: an undeclared GVC location reports
+  `This workload location is deactivated because maxScale is set to 0`. Gate on that MESSAGE — the
+  `desiredScale` key is **absent** on a deactivated location, not present-and-`0` (measured
+  2026-08-31; an earlier draft of this line claimed `desiredScale: 0`).
+  **The bundled `postgres` subchart is NOT confined** — see the trap below. Each extra location
+  therefore runs a live idle Postgres (`minCpu 250m` / `minMemory 512Mi` / 10 GiB volume each),
+  not merely an orphaned volumeset.
 - **`standard`, not `stateful`**, deliberately: nothing needs replica identity, and the
   `cpu:minCpu ≤ 4:1` cap and the dropping of `rolloutOptions.maxUnavailableReplicas` are both
   `stateful`-only. Consequence respected everywhere: bare short DNS names are NXDOMAIN on a standard

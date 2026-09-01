@@ -469,8 +469,9 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint`
   value.
 - **In a multi-location GVC the bundled PostgreSQL still starts everywhere.** Only the Documenso
   workload is pinned — a parent chart cannot place a subchart's workload. Each extra location gets an
-  idle database on its own empty volume, which costs a volumeset and nothing else (the app never
-  connects to it). Prefer a single-location GVC.
+  **running** database on its own empty volume — measured `ready: true`, `replicas 1/1`, holding
+  `minCpu 250m` / `minMemory 512Mi` and a 10 GiB volume in EVERY extra location. The app never
+  connects to it, so it is pure waste, not a risk. Prefer a single-location GVC.
 - **A firewall change takes ~30 s to ~10 min to propagate**, so re-poll before concluding that
   `publicAccess` or `internalAccess` is broken.
 - **Switching an existing release from keyless S3 to static keys leaves the old AWS binding on the

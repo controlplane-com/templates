@@ -257,6 +257,9 @@ README names the symptom and the diagnostic.
 {{- if not (kindIs "string" .Values.location) -}}
 {{- fail "documenso: `location` must be a single location NAME, e.g. `location: aws-us-east-1`. Documenso runs in exactly one location — the app tier shares one database, so a second location would be a second, independent Documenso." -}}
 {{- end -}}
+{{- if not (regexMatch "^[a-z0-9]+(-[a-z0-9]+)*$" .Values.location) -}}
+{{- fail (printf "documenso: `location` must be a bare location NAME like `aws-us-east-1`, got '%s'. A link form (`//location/x`, which is what `spec.staticPlacement.locationLinks` contains) or a comma-separated list is accepted by Helm AND by the API, and stores a placement that matches no real location — so Documenso starts NOWHERE, every location reports `deactivated because maxScale is set to 0`, and the logs are silent." .Values.location) -}}
+{{- end -}}
 {{- if hasKey .Values "locations" -}}
 {{- fail "documenso: `locations` (plural) is not a key of this chart. Documenso runs in exactly ONE location — use the singular `location`, e.g. `location: aws-us-east-1`." -}}
 {{- end -}}

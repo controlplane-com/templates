@@ -1,0 +1,17 @@
+apiVersion: v2
+name: hermes-agent
+description: Nous Research Hermes Agent — self-hosted, model-agnostic AI agent with persistent memory and browser automation
+type: application
+version: 1.1.0
+appVersion: "2026.7.7.2"
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+
+annotations:
+  created: "2026-07-15"
+  lastModified: "2026-08-23"
+  category: "ai"
+  createsGvc: false

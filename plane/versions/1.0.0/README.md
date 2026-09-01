@@ -22,7 +22,9 @@ Redis, RabbitMQ and object storage.
   entirely when `storage.type: s3`.*
 - **`{release}-postgres`** — the `postgres` template as a subchart, pinned to PostgreSQL 16.
 - **identity + two policies** — `reveal` on this release's secrets, and `view` on **this one
-  GVC** so the scheduler can confirm at boot that the GVC really has the configured location.
+  GVC**, which the scheduler reads at boot to reconcile its location against the GVC's (it
+  reports any GVC locations this release does not use, and warns if the GVC is reshaped under
+  a running release).
 
 A default install is **7 workloads, ~1.05 vCPU and ~3.2 GiB reserved**. Plane genuinely needs
 a database, a cache, a broker, an object store and six HTTP services; this is the smallest
@@ -74,11 +76,11 @@ the knob is broken.
 ### Location
 
 ```yaml
-# The ONE location of your GVC that Plane runs in. It must already be a location
-# of that GVC; the scheduler reads the GVC at boot and refuses a FRESH install if
-# it is not. Every workload this chart OWNS is pinned here — the bundled `postgres`
-# subchart is NOT, so an extra GVC location starts a second Postgres there with its
-# own empty volume. Prefer a single-location GVC.
+# The ONE location of your GVC that Plane runs in. It MUST already be a location
+# of that GVC — nothing validates this and nothing fails; see Important Notes for
+# what a wrong value looks like. Every workload this chart OWNS is pinned here —
+# the bundled `postgres` subchart is NOT, so an extra GVC location starts a second
+# Postgres there with its own empty volume. Prefer a single-location GVC.
 location: aws-us-east-1
 ```
 
@@ -89,7 +91,7 @@ plane:
   imageTag: v1.4.2       # ONE tag for all six Plane images — never mix versions
   replicas: 1            # whole HTTP tier; >=2 gives a rolling restart with no downtime
   appUrl: ""             # empty = derive from the platform canonical endpoint; set WITH https:// for a custom domain
-  fileSizeLimit: 5242880 # max upload in bytes, enforced by the proxy AND the API (5 MiB)
+  fileSizeLimit: 5242880 # max upload in bytes (5 MiB); enforced by the proxy and the object store, not the API
   api:
     gunicornWorkers: 1   # each extra worker is ~1 CPU and ~300Mi
   resources:
@@ -120,11 +122,12 @@ plane:
 ```yaml
 worker:
   replicas: 1            # Celery workers; scale up for heavy imports/exports
+  concurrency: 4         # prefork children PER replica — pinned, see below
   resources:
     minCpu: 200m
     maxCpu: 1000m
     minMemory: 384Mi
-    maxMemory: 1Gi
+    maxMemory: 2Gi       # sized for `concurrency` children plus the parent
 
 # The scheduler is ALWAYS one replica (two would run every periodic task twice),
 # so there is no replicas knob. It also applies the database migrations.
@@ -135,6 +138,14 @@ beat:
     minMemory: 192Mi
     maxMemory: 512Mi
 ```
+
+`worker.concurrency` is pinned rather than left to Celery, and it is not the same knob as
+`worker.replicas`. Celery's own default is inferred from the **host's** CPU count rather than
+this container's `cpu` limit, so an unpinned worker forks 16 Django children into whatever
+memory limit you set and is OOM-killed on any reasonable one. `worker.replicas` does not help:
+replicas multiply pools, they do not narrow one. Raise `concurrency` for more parallelism
+within a replica and `maxMemory` with it (measured ~150Mi per child at idle, before task payloads);
+raise `replicas` for more throughput and fault tolerance.
 
 ### Prerequisite secret
 
@@ -359,27 +370,53 @@ postgres:
 
 The `postgres` template's scheduled-backup feature needs PostgreSQL 17 or newer, and Plane
 supports 15.7/16.x only — so it is **not usable here** and this chart does not surface it.
-Take dumps with `pg_dump`, which ships in the `postgres:16` image:
+Take dumps with `pg_dump`, which ships in the `postgres:16` image. **Dump to a file inside
+the container and move it out base64-encoded** — `cpln workload exec` decodes the container's
+stdout as UTF-8 and replaces every invalid byte with U+FFFD, which silently corrupts a `-Fc`
+archive (a 661,277-byte dump arrived as 692,603 bytes, and `pg_restore -l` segfaulted on it).
+Base64 is ASCII, so it survives intact.
 
 ```bash
-# Dump (writes plane.dump on your machine)
+# ── Back up ───────────────────────────────────────────────────────────────────
+# 1. Dump inside the container.
 cpln workload exec RELEASE-postgres --gvc GVC_NAME --container postgresql -- \
-  sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > plane.dump
+  sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc -f /tmp/plane.dump'
 
-# Restore into the running database
+# 2. Stream it out base64-encoded and decode it locally.
+cpln workload exec RELEASE-postgres --gvc GVC_NAME --container postgresql --quiet -- \
+  sh -c 'base64 -w0 /tmp/plane.dump' | tr -d '\r\n' | base64 -d > plane.dump
+
+# 3. Check the archive before you rely on it — this lists its contents.
+#    Your LOCAL pg_restore must be at least as new as the server (16), or it
+#    fails with "unsupported version (1.15) in file header". If yours is older,
+#    list it in the container instead, which always has a matching client:
 cpln workload exec RELEASE-postgres --gvc GVC_NAME --container postgresql -- \
-  sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists' < plane.dump
+  pg_restore -l /tmp/plane.dump | head
 
-# Then redeploy the backend workloads so they reconnect against the restored data
-cpln workload force-redeployment RELEASE-plane RELEASE-plane-worker RELEASE-plane-beat --gvc GVC_NAME
+cpln workload exec RELEASE-postgres --gvc GVC_NAME --container postgresql -- rm -f /tmp/plane.dump
 ```
 
-**This procedure has not yet been verified through `cpln workload exec`.** The dump/restore
-round-trip itself was exercised against a `postgres:16` container holding a Plane-migrated
-database, but piping binary `pg_dump` output *out of* `cpln workload exec`, and a local file
-*into* its stdin, is not a transport any template in this catalog has proven. Take a dump on
-your own release and check it — `pg_restore -l plane.dump` should list the archive — before
-relying on this as your backup.
+```bash
+# ── Restore ───────────────────────────────────────────────────────────────────
+# 1. Copy the dump back in. --stdin is REQUIRED: it defaults to false, and
+#    without it your input is discarded silently and the file arrives 0 bytes.
+cpln workload exec RELEASE-postgres --gvc GVC_NAME --container postgresql --stdin -- \
+  sh -c 'cat > /tmp/plane.dump' < plane.dump
+
+# 2. Restore from the file inside the container.
+cpln workload exec RELEASE-postgres --gvc GVC_NAME --container postgresql -- \
+  sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists /tmp/plane.dump'
+
+cpln workload exec RELEASE-postgres --gvc GVC_NAME --container postgresql -- rm -f /tmp/plane.dump
+
+# 3. Redeploy the backend workloads so they reconnect against the restored data.
+cpln workload force-redeployment RELEASE-plane --gvc GVC_NAME
+cpln workload force-redeployment RELEASE-plane-worker --gvc GVC_NAME
+cpln workload force-redeployment RELEASE-plane-beat --gvc GVC_NAME
+```
+
+Both directions were run end to end, verbatim, against a live release: a table was dropped
+after the dump and came back with its rows intact after the restore.
 
 Plane keeps serving during a restore, and there is no supported way to stop it first
 (`worker.replicas: 0` is refused at render, and the scheduler has no replicas knob). Expect
@@ -396,6 +433,15 @@ snapshot the MinIO volumeset).
   `cpln workload get-deployments RELEASE-plane --gvc GVC_NAME -o yaml`, under
   `status.versions[].message`. Recovery takes ~6-10 minutes once the secret exists, or force a
   redeployment to skip the wait.
+- **A `location` your GVC does not have makes the release run nothing, anywhere — and
+  nothing reports an error.** The platform accepts the value, Helm prints success, and every
+  Plane workload then sits at `ready: false` with the message *"This workload location is
+  deactivated because maxScale is set to 0."* while `cpln logs` returns **zero lines** for all
+  of them. (The bundled PostgreSQL is not location-pinned, so it starts normally and looks
+  healthy, which makes the install look half-working rather than misconfigured.) That message
+  is the diagnostic — read it under `status.versions[].message` with
+  `get-deployments`. No boot-time check can catch this: the scheduler that would run one is
+  pinned to the same missing location, so it never starts.
 - **Whoever opens `/god-mode` first becomes the instance administrator.** Claim it over a
   port-forward before turning `publicAccess` on — see **First run**.
 - **The first `helm upgrade` after an install may re-apply the bundled datastores** — and the

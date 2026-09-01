@@ -374,6 +374,9 @@ refuses to start at all without LIVE_SERVER_SECRET_KEY.
 {{- if lt (int .Values.worker.replicas) 1 -}}
 {{- fail (printf "plane: worker.replicas must be at least 1, got '%v' — at 0 no Celery worker runs and notifications, exports, imports and invites queue forever while the UI reports success." .Values.worker.replicas) -}}
 {{- end -}}
+{{- if lt (int .Values.worker.concurrency) 1 -}}
+{{- fail (printf "plane: worker.concurrency must be at least 1, got '%v' — it is the Celery prefork pool width per replica, and celery refuses to start with no children." .Values.worker.concurrency) -}}
+{{- end -}}
 {{- if hasKey .Values.beat "replicas" -}}
 {{- fail "plane: beat.replicas is not a key of this chart. The Celery scheduler is ALWAYS exactly one replica — two schedulers run every periodic task twice. This workload also applies the database migrations." -}}
 {{- end -}}
@@ -523,7 +526,13 @@ would break these URLs. The values comments say so.
   value: cpln://secret/{{ include "plane.secret.creds.name" . }}.mqPassword
 - name: AMQP_URL
   value: amqp://$(RABBITMQ_USER):$(RABBITMQ_PASSWORD)@{{ include "plane.mq.host" . }}:5672/{{ .Values.rabbitmq.vhost }}
-# ── Uploads: enforced by the API as well as by the proxy ──
+# ── Uploads ──
+{{- /*
+  The API embeds this as the presigned upload's `content-length-range`
+  condition, which the OBJECT STORE enforces. It does not reject an
+  over-limit presign REQUEST — that rejection is Caddy's `request_body
+  max_size`, set from the same value.
+*/}}
 - name: FILE_SIZE_LIMIT
   value: {{ .Values.plane.fileSizeLimit | int64 | quote }}
 # ── Object storage ──

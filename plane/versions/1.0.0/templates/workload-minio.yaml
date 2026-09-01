@@ -13,10 +13,32 @@
       RESERVED container port on this platform — the apply would be rejected.
       We use :9001 (matching the `minio` template) and never declare it, so the
       console is unreachable; MinIO is administered by Plane, not by humans.
-    * the API signs presigned asset URLs against the PUBLIC host, so the browser
-      fetches https://{public}/{bucket}/... and the proxy forwards it here.
-      Caddy passes the Host header through unchanged, which is what makes the
-      SigV4 signature validate. Verified locally end to end against this tag.
+    * the API signs presigned asset URLs against the PUBLIC host (storage.py
+      builds the boto3 endpoint from `request.get_host()` under USE_MINIO=1), so
+      the browser fetches https://{public}/{bucket}/... and Caddy forwards it
+      here with that Host intact — which is what makes the SigV4 signature
+      validate. PORT PROTOCOL is what allows that, see below.
+
+  PORT PROTOCOL — `tcp`, NOT `http`, and this is load-bearing for every
+  attachment. On an `http` port the mesh routes outbound by the Host/`:authority`
+  header. Caddy forwards the BROWSER's Host (it must — the SigV4 signature covers
+  it), the sidecar has no cluster for that name, and every /{bucket} request dies
+  as a mesh 503 with nothing logged by MinIO or by Plane. That is what made
+  storage.type: minio — the DEFAULT — unable to upload or serve a single
+  attachment, measured on the public canonical hostname and not just through a
+  port-forward, so it is not a tunnel artefact.
+
+  On a `tcp` port the sidecar does L4 passthrough to the destination address and
+  never inspects Host, so any Host reaches MinIO unchanged and the signature
+  validates. Measured 2026-08-31 on port 9000 with both controls: an arbitrary
+  Host returned 200 on a tcp port and 503 on an http port, and `internalAccess`
+  still REFUSED a non-listed workload on the tcp port, so the firewall is
+  unaffected. The httpGet readiness probe still works too; probes do not traverse
+  the mesh.
+
+  Do NOT "fix" this with `header_up Host {upstream_hostport}` in the Caddyfile:
+  that repairs uploads (a presigned POST signs the policy, not the Host) and
+  breaks every presigned GET, which does sign the Host.
 
   The image runs as root (verified: `id` -> uid=0 on this tag), so the
   root-owned volumeset mount needs no securityOptions.filesystemGroupId.
@@ -46,8 +68,9 @@ spec:
         - name: MINIO_ROOT_PASSWORD
           value: cpln://secret/{{ include "plane.secret.creds.name" . }}.minioSecretKey
       ports:
+        # `tcp`, NOT `http` — see PORT PROTOCOL above. Load-bearing.
         - number: 9000
-          protocol: http
+          protocol: tcp
       readinessProbe:
         httpGet:
           path: /minio/health/live

@@ -1,8 +1,12 @@
 # ─── Location ─────────────────────────────────────────────────────────────────
 # This chart deploys into the GVC you install into — it does NOT create one.
 # Plane runs in exactly ONE location, and this names it. It MUST already be a
-# location of that GVC; the beat workload reads the GVC at boot and refuses a
-# FRESH install if it is not (see Important Notes in the README).
+# location of that GVC, and NOTHING WILL TELL YOU IF IT IS NOT: the platform
+# accepts a location the GVC does not have without any error, Helm reports
+# success, and the release then runs NOTHING, anywhere. Every workload reports
+# `ready: false` with the message `This workload location is deactivated
+# because maxScale is set to 0.` and `cpln logs` returns zero lines — that
+# message is the only diagnostic (see Important Notes in the README).
 # Every workload this chart OWNS is pinned here. The bundled `postgres` SUBCHART
 # is NOT — a parent cannot template a subchart's placement — so an extra GVC
 # location starts a second Postgres there, with its own empty volume. Prefer a
@@ -31,7 +35,10 @@ plane:
   # without one, since this value is also a CORS *and* CSRF trusted origin.
   appUrl: ""
 
-  # Max upload size in bytes — enforced by BOTH the proxy and the API (5 MiB).
+  # Max upload size in bytes (5 MiB). Enforced by the proxy (Caddy's
+  # `request_body max_size`) and by the `content-length-range` condition in the
+  # presigned upload, which the object store checks — NOT by the API, which
+  # still mints a presign for a larger file.
   fileSizeLimit: 5242880
 
   api:
@@ -62,11 +69,25 @@ plane:
 # ─── Background processing ────────────────────────────────────────────────────
 worker:
   replicas: 1  # Celery workers; >=1. Scale up for heavy imports/exports
+
+  # Prefork CHILD PROCESSES PER REPLICA. Pinned on purpose: Celery's own default
+  # is inferred from the HOST's CPU count, not from this container's `cpu` — and
+  # on this platform that started 16 Django children and OOM-killed the worker
+  # 65 times in 5.5 hours, with no error anywhere (an OOM kill is invisible from
+  # inside the container, and this tier has no probe). `worker.replicas` does
+  # NOT substitute: replicas multiply pools, they do not narrow one. Each child
+  # is a full Django process, so raise maxMemory alongside this.
+  concurrency: 4
+
   resources:
     minCpu: 200m
     maxCpu: 1000m
     minMemory: 384Mi
-    maxMemory: 1Gi
+    # Sized for `concurrency` children plus the parent: measured 767Mi of summed
+    # process RSS (376Mi by cgroup accounting) at idle with 4 children, so this
+    # leaves headroom for task payloads. 1Gi with an unpinned 16-wide pool is
+    # what crash-looped.
+    maxMemory: 2Gi
 
 # The Celery scheduler. ALWAYS exactly one replica — two schedulers run every
 # periodic task twice — so there is deliberately no replicas knob. This workload

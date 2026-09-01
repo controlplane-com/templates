@@ -149,20 +149,42 @@ spec:
              before this fix and is what the empty-database failure turned on;
              it is now true by construction rather than by assumption.
 
-             The long first boot is absorbed with periodSeconds, never by raising
-             failureThreshold past the platform cap of 20. Readiness exhausting
-             its threshold during a slow database wait is benign — it keeps
-             probing and the replica joins when it comes up. Liveness is the one
-             that restarts, and its first restart must fall AFTER the startup
-             script's 600 s database-wait budget, or a slow first install is
-             killed mid-wait and the script's own diagnostic never prints.
+             READINESS IS WHAT RESTARTS A CONTAINER THAT NEVER BECOMES READY,
+             NOT LIVENESS. An earlier version of this comment claimed the
+             opposite — that readiness exhausting its threshold during a slow
+             database wait is benign because it keeps probing — and the whole
+             wait budget was sized against liveness on that assumption. It is
+             false on this platform. Measured 2026-08-31 on four throwaway
+             workloads with an unsatisfiable readiness probe and NO liveness
+             probe at all: the platform restarts the container some minutes
+             AFTER readiness's own deadline (initialDelaySeconds +
+             failureThreshold * periodSeconds), and the restart time tracks that
+             deadline — 5 s deadline -> 238 s, 330 s deadline -> 563 s, 660 s
+             deadline -> 1044 s. The control with no readiness probe was never
+             restarted (and reported ready with nothing listening), which is
+             what pins the cause on readiness rather than on a platform-wide
+             "must become ready" timer. The extra grace was 233 s at both the
+             5 s and 330 s deadlines and 384 s at 660 s, so it is NOT a clean
+             constant — treat the DEADLINE as the number to design against,
+             since it is the floor the kill can never precede.
 
-             initialDelaySeconds is capped at 600 by the platform (a cpln apply
-             400, invisible to helm template — measured 2026-08-31, when 780 made
-             the chart uninstallable). The deadline does not need it: the first
-             restart cannot occur before initialDelay + failureThreshold *
-             periodSeconds = 600 + 10 * 30 = 900 s, which already clears the
-             budget. */}}
+             So these numbers are a CEILING ON BOOT TIME, not just a rotation
+             policy: 30 + 20 * 15 = 330 s here, and the container is terminated
+             ~515 s in (measured on this chart) with `Health Check Failed` and a
+             signal — no mention of the database, and the startup script's own
+             FATAL never prints. The startup script's wait budget is therefore
+             sized to fire INSIDE this, at 240 s; see secret-startup.yaml. Do
+             not lengthen that budget without moving these numbers first.
+
+             Readiness is left tight on purpose rather than widened to cover a
+             long wait: failureThreshold * periodSeconds is also how long a sick
+             replica stays in rotation, and buying boot time here would be paid
+             for on every day the app is healthy.
+
+             Liveness cannot fire first (600 + 10 * 30 = 900 s) and is not the
+             load-bearing bound. initialDelaySeconds is capped at 600 by the
+             platform (a cpln apply 400, invisible to helm template — measured
+             2026-08-31, when 780 made the chart uninstallable). */}}
       readinessProbe:
         httpGet:
           path: /api/version

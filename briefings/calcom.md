@@ -62,7 +62,7 @@
   `/api/version` and **0 tables**. It is a race, and a fresh volumeset — the first-install case —
   is the one that loses it. The template now mounts its own `/cpln/start.sh`, which waits by
   sending a **Postgres SSLRequest** (`\x00\x00\x00\x08\x04\xd2\x16\x2f`) and requiring the
-  one-byte `S`/`N` reply, three times consecutively, for up to 600 s, and runs under `set -e` so a
+  one-byte `S`/`N` reply, three times consecutively, for up to 240 s, and runs under `set -e` so a
   failed migration crash-loops instead of serving. Verified against the pinned image: live
   Postgres → ready; dead port, nonexistent host and an accepts-but-never-replies server (the
   sidecar's shape) → not ready, and the gate exits 1 with a named FATAL; a bad-credentials
@@ -87,9 +87,46 @@
   platform stores such a `localOptions` entry verbatim and it is simply inert. It cannot be caught
   at boot either — no container runs to complain. README Prerequisites tells the user to check
   `cpln gvc get` first; that is all the defence there is.
-- **Liveness `initialDelaySeconds` is 780, deliberately above the 600 s database-wait budget.**
-  Lower it and a slow first install is killed mid-wait, and the script's own FATAL diagnostic never
-  prints — the operator sees an unexplained restart loop instead.
+- **READINESS, NOT LIVENESS, IS WHAT KILLS A CONTAINER THAT NEVER BECOMES READY — and the number
+  it kills at is a hard ceiling on boot time.** This cost the template two rounds. The chart
+  originally sized its 600 s database wait against *liveness* on the stated assumption that
+  "readiness exhausting its threshold during a slow database wait is benign — it keeps probing".
+  That assumption is false here, and it made the script's FATAL diagnostic unreachable: with a
+  600 s budget the platform terminated the container at **~515 s**, having reached attempt
+  **104/120**, with `exitCode: 143` and `Health Check Failed: check events for details.` —
+  `|= "FATAL"` returned **0 lines**. The operator saw a probe failure where the chart had written
+  a sentence naming the database.
+  **Measured directly, 2026-08-31, on four throwaway busybox workloads in `test-gvc` with an
+  unsatisfiable readiness probe (port declared, nothing listening) and NO liveness probe at all:**
+
+  | readiness `initialDelay` / `period` / `failureThreshold` | deadline | container start → restart | grace over deadline |
+  |---|---|---|---|
+  | 0 / 5 / 1 | 5 s | 237.6 s, 240.0 s, 243.4 s (four cycles) | ~233–238 s |
+  | 30 / 15 / 20 (calcom's own numbers) | 330 s | 563.2 s | 233.2 s |
+  | 60 / 30 / 20 | 660 s | 1043.7 s | 383.7 s |
+  | *no probes at all* — control | — | **never restarted** (and `ready: true` with nothing listening) | — |
+
+  **What is settled:** the terminator is the READINESS probe. The no-probe control was never
+  restarted, which rules out a platform-wide "must become ready within N" timer, and none of the
+  four had a liveness probe at all. The kill always lands *after* readiness's own deadline
+  (`initialDelaySeconds + failureThreshold × periodSeconds`) and moves with it — 5 s → 238 s,
+  330 s → 563 s, 660 s → 1044 s.
+  **What is not settled:** the size of the grace on top. It was 233 s at both the 5 s and the 330 s
+  deadline (so 1:1 with the deadline across that range, slope 1.00 over a 325 s change) and 384 s at
+  660 s, so it is not a constant and the relationship is not linear across the whole range. calcom
+  itself showed ~185 s at the same 330 s deadline where busybox showed 233 s, which suggests part of
+  it is shutdown behaviour (busybox `sh` ignores the signal as PID 1 and is force-killed; calcom
+  exits on it). **Design against the DEADLINE, not the observed kill** — the deadline is the floor
+  the kill can never precede, and it is the only number under our control.
+  **Consequence for any template with a long boot gate:** the gate's own timeout must fire inside
+  `initialDelaySeconds + failureThreshold × periodSeconds`, or its diagnostic is dead code. calcom's
+  readiness deadline is 330 s and its wait budget is now **240 s** (48 × 5 s), which clears it with
+  ~65 s to spare even after the GVC read's worst-case ~25 s. Liveness (600 / 30 / 10 → 900 s) is not
+  the load-bearing bound and never was.
+- **Shortening the wait did not shorten how long a slow database can take.** The gate re-runs in
+  full on every restart, so a database that needs 20 minutes is still waited out — across cycles,
+  each one printing `[calcom] FATAL: PostgreSQL at ... did not answer` instead of dying silently.
+  The only thing that changed is that the operator is now told which component to look at.
 - **A missing `my-calcom-auth` secret wedges the install almost invisibly.** `cpln logs` returns
   *zero* lines. The only place the missing secret is named is
   `cpln workload get-deployments {workload} --gvc {gvc} -o yaml` → `status.versions[].message`.
@@ -134,8 +171,9 @@
   and stores it verbatim (probed 2026-08-31; only `CPLN_`-prefixed names are reserved).
 - **First boot is slow by design** — the container waits for the database, rewrites built assets
   when the public URL differs from the baked one, runs `prisma migrate deploy`, and seeds the app
-  store, all before the HTTP server starts. Readiness can exhaust its threshold during a slow
-  database wait; that is benign, it keeps probing. The private default is the *fast* path: the
+  store, all before the HTTP server starts. Readiness exhausting its threshold during that wait is
+  **not** benign — see the readiness bullet above; it is what terminates the container, and the
+  240 s wait budget is sized to stay inside it. The private default is the *fast* path: the
   baked `BUILT_NEXT_PUBLIC_WEBAPP_URL` is `http://localhost:3000` (read out of the pinned image),
   so `replace-placeholder.sh` prints "Nothing to replace" and skips the rewrite entirely.
 - **Enterprise-gated / not shipped**: organizations, SAML/SSO and the v2 API. The first two are

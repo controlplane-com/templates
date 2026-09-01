@@ -222,6 +222,9 @@ inboundAllowWorkload: []
 {{- if not (kindIs "string" .Values.location) -}}
 {{- fail "calcom: `location` must be a single location NAME, e.g. `location: aws-us-east-1`. Cal.com runs in exactly one location." -}}
 {{- end -}}
+{{- if not (regexMatch "^[a-z0-9]+(-[a-z0-9]+)*$" .Values.location) -}}
+{{- fail (printf "calcom: `location` must be a bare location NAME like `aws-us-east-1`, got '%s'. A link form (`//location/x`, which is what `spec.staticPlacement.locationLinks` contains) or a comma-separated list is accepted by Helm AND by the API, and stores a placement that matches no real location — so Cal.com starts NOWHERE, every location reports `deactivated because maxScale is set to 0`, and the logs are silent." .Values.location) -}}
+{{- end -}}
 {{- if hasKey .Values "locations" -}}
 {{- fail "calcom: `locations` (plural) is not a key of this chart. Cal.com runs in exactly ONE location — use the singular `location`, e.g. `location: aws-us-east-1`." -}}
 {{- end -}}

@@ -1,9 +1,9 @@
-image: nousresearch/hermes-agent:v2026.7.7.2
+image: nousresearch/hermes-agent:v2026.8.31
 
 # ─── LLM provider ─────────────────────────────────────────────────────────────
 model:
   provider: anthropic # anthropic | openai | custom (any other OpenAI-compatible endpoint, e.g. OpenRouter)
-  name: "" # model override (e.g. claude-opus-4.6, gpt-5); empty = provider default
+  name: "" # model override — use the provider's exact model ID (e.g. claude-opus-4-6, gpt-5; Anthropic IDs are hyphenated, never dotted). Bare name only — the chart adds the anthropic/ prefix itself. Empty = provider default
   baseUrl: "" # OpenAI-compatible endpoint; required when provider is "custom"
   reasoningEffort: medium # none | low | medium | high — use "none" for non-reasoning models (e.g. gpt-4o)
 
@@ -40,7 +40,8 @@ volumeset:
 
 # ─── Access ───────────────────────────────────────────────────────────────────
 publicAccess:
-  enabled: false # expose the gateway API (8642) on the public canonical HTTPS endpoint — read the README security note first
+  enabled: false # expose the workload on the public canonical HTTPS endpoint — read the README security note first
+  expose: api # api | dashboard — which surface the ONE canonical endpoint fronts. "api" = gateway API (8642) public, dashboard stays internal. "dashboard" = web dashboard (9119) public behind its basic-auth login (use a strong password!), and the API is then internal-only
 
 internalAccess:
   type: same-gvc # none | same-gvc | same-org | workload-list

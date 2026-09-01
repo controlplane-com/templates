@@ -10,7 +10,7 @@ This app deploys [Hermes Agent](https://github.com/NousResearch/hermes-agent) by
 
 ## Architecture
 
-- **Hermes Agent**: Stateful workload (single replica) running the supervised gateway. Exposes the OpenAI-compatible API on port 8642 (public, bearer-auth) and the web dashboard on 9119 (internal-only). Headless Chromium for browser automation is baked into the image and launched on demand.
+- **Hermes Agent**: Stateful workload (single replica) running the supervised gateway. Exposes the OpenAI-compatible API on port 8642 (bearer-auth) and the web dashboard on 9119 (basic-auth). With public access enabled, the single canonical HTTPS endpoint fronts one of the two — `publicAccess.expose` picks which (API by default). Browser automation uses headless Chromium, which is NOT in the image — Hermes downloads it via Playwright on first browser use (needs outbound internet; the first browser task is slow while it fetches).
 - **Volumeset**: 10 GiB persistent storage at `/opt/data` — the SQLite memory database, sessions, learned skills, and agent config survive restarts and redeploys.
 - **Identity + policy**: Least-privilege — the workload identity may `reveal` exactly the one prerequisite secret, nothing else.
 
@@ -39,7 +39,7 @@ Single replica is by design: memory is a single-writer SQLite database and upstr
 ### Image
 
 ```yaml
-image: nousresearch/hermes-agent:v2026.7.7.2   # pin the Hermes Agent image tag
+image: nousresearch/hermes-agent:v2026.8.31   # pin the Hermes Agent image tag
 ```
 
 ### Model
@@ -47,7 +47,7 @@ image: nousresearch/hermes-agent:v2026.7.7.2   # pin the Hermes Agent image tag
 ```yaml
 model:
   provider: anthropic     # anthropic | openai | custom
-  name: ""                # model override (e.g. claude-opus-4.6, gpt-5); empty = provider default. Recommended for non-anthropic providers.
+  name: ""                # model override — use the provider's exact model ID (e.g. claude-opus-4-6, gpt-5; Anthropic IDs are hyphenated, never dotted). Bare name only — the chart adds the anthropic/ prefix itself. Empty = provider default. Recommended for non-anthropic providers.
   baseUrl: ""             # OpenAI-compatible endpoint; required when provider is "custom"
   reasoningEffort: medium # none | low | medium | high — use "none" for non-reasoning models
 ```
@@ -61,7 +61,7 @@ model:
   name: anthropic/claude-sonnet-4-5
 ```
 
-**Reasoning effort:** Hermes sends a reasoning effort with every request, and models that do not support reasoning reject it with a `400: Unsupported parameter: 'reasoning.effort'`. Set `reasoningEffort: none` for those (e.g. `gpt-4o`); leave the default for reasoning-capable models (e.g. `gpt-5`, `claude-opus-4.6`).
+**Reasoning effort:** Hermes sends a reasoning effort with every request, and models that do not support reasoning reject it with a `400: Unsupported parameter: 'reasoning.effort'`. Set `reasoningEffort: none` for those (e.g. `gpt-4o`); leave the default for reasoning-capable models (e.g. `gpt-5`, `claude-opus-4-6`).
 
 ### Secret
 
@@ -110,19 +110,29 @@ volumeset:
 
 ```yaml
 publicAccess:
-  enabled: false        # expose the gateway API (8642) on the public canonical HTTPS endpoint
+  enabled: false        # expose the workload on the public canonical HTTPS endpoint
+  expose: api           # api | dashboard — which surface the one canonical endpoint fronts (see below)
 
 internalAccess:
   type: same-gvc        # none | same-gvc | same-org | workload-list
   workloads: []         # used with workload-list, e.g. //gvc/GVC/workload/NAME
 ```
 
+**Choosing the public surface (`publicAccess.expose`):** a workload gets **one** canonical HTTPS endpoint, and it fronts a single port — you choose which surface that is. Only meaningful with `publicAccess.enabled: true`.
+
+| `expose` | Canonical endpoint serves | The other surface |
+|---|---|---|
+| `api` (default) | Gateway API (8642), bearer-auth | Dashboard stays internal — reach it via `cpln port-forward` |
+| `dashboard` | Web dashboard (9119) behind its basic-auth login | API loses its public endpoint; still reachable internally at `RELEASE-hermes-agent.GVC.cpln.local:8642` |
+
+`expose: dashboard` puts a **basic-auth login form on the internet** — the dashboard password in your secret must be strong (`openssl rand -hex 32`), because whoever logs in operates a terminal-capable agent.
+
 ## Connecting
 
 | Interface | Where | Auth |
 |---|---|---|
-| Gateway API (OpenAI-compatible) | From another workload by default (see below). With `publicAccess.enabled: true`, also on the canonical HTTPS endpoint on 8642 — find it in `status.canonicalEndpoint` (`cpln workload get RELEASE-hermes-agent -o yaml`) | Bearer `API_SERVER_KEY` |
-| Web dashboard | Internal only — `cpln workload port-forward RELEASE-hermes-agent --gvc GVC -p 9119:9119`, then `http://localhost:9119` | Basic auth (`dashboard.username` + the dashboard password from your secret) |
+| Gateway API (OpenAI-compatible) | From another workload by default (see below). With `publicAccess.enabled: true` and `expose: api` (the default), also on the canonical HTTPS endpoint — find it in `status.canonicalEndpoint` (`cpln workload get RELEASE-hermes-agent -o yaml`) | Bearer `API_SERVER_KEY` |
+| Web dashboard | Internal by default — `cpln port-forward RELEASE-hermes-agent 9119:9119 --gvc GVC`, then `http://localhost:9119`. On the canonical HTTPS endpoint instead with `publicAccess.enabled: true` and `expose: dashboard` | Basic auth (`dashboard.username` + the dashboard password from your secret) |
 | From another workload | `RELEASE-hermes-agent.GVC.cpln.local:8642` | Bearer `API_SERVER_KEY` |
 
 Example request against the gateway API:
@@ -148,7 +158,8 @@ Follow the prompts for your platform; the configuration is stored on the data vo
 
 - **`publicAccess.enabled: true` publishes a terminal-capable agent to the internet**, guarded only by your bearer token. The agent's terminal backend runs unsandboxed as the container user with full file access, so anyone holding the key can execute work inside the workload. It is off by default — before enabling it, use a long random `api-server-key` (`openssl rand -hex 32`) and prefer restricting reach via `internalAccess`.
 - **The API server key must be at least 16 characters** — Hermes rejects anything shorter, and the workload will not become ready.
-- **The dashboard is internal-only** — it is never on the public endpoint; reach it via `port-forward`.
+- **The dashboard is internal by default** — reach it via `cpln port-forward` (see Connecting). With the default `expose: api`, the public endpoint serves the **API only**, so browsing to it returns 404 at `/` by design — `GET /health` returning 200 is how to confirm the workload is up. Putting the dashboard on the internet instead is an explicit choice: `publicAccess.expose: dashboard`, which drops the API's public endpoint and demands a strong dashboard password.
+- **A dashboard login that hangs (spinner, request pending forever) is almost always stale BROWSER state, not the server.** Port-forward tunnels that die mid-session leave wedged connections in the browser's profile; later logins then stall while every server surface is healthy. Fix: fully QUIT the browser and reopen (closing the tab is not enough) — a private window also works, which is the tell. Confirm the server side in seconds: `curl http://localhost:9119/login` through the tunnel; a fast 200 means the workload is fine. Pages that mount blank in a long-lived session are the same class — reload.
 - **Single replica by design** — memory is single-writer SQLite; do not scale up. State persists on the volume across restarts.
 - **The model is external** — cost and rate limits are governed by your LLM provider, not this workload.
 - **Failed model calls return HTTP 200** with the error inside the body (`"finish_reason": "error"`, `"hermes": {"failed": true}`). A client that checks only the HTTP status will read a provider failure as success — inspect the body, or the agent log at `/opt/data/logs/agent.log`.

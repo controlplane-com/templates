@@ -133,6 +133,12 @@ hermes config set agent.reasoning_effort {{ .Values.model.reasoningEffort | quot
 {{- if not (has .Values.internalAccess.type (list "none" "same-gvc" "same-org" "workload-list")) -}}
 {{- fail (printf "hermes-agent: internalAccess.type must be none, same-gvc, same-org, or workload-list — got '%s'" .Values.internalAccess.type) -}}
 {{- end -}}
+{{- if not (has .Values.publicAccess.expose (list "api" "dashboard")) -}}
+{{- fail (printf "hermes-agent: publicAccess.expose must be api or dashboard — got '%s'. The workload has ONE canonical endpoint; this picks which surface it fronts." .Values.publicAccess.expose) -}}
+{{- end -}}
+{{- if and (eq .Values.publicAccess.expose "dashboard") (not .Values.dashboard.enabled) -}}
+{{- fail "hermes-agent: publicAccess.expose 'dashboard' requires dashboard.enabled: true — there is no dashboard to front." -}}
+{{- end -}}
 {{- end }}
 
 

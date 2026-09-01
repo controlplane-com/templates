@@ -24,7 +24,7 @@ dashboard:
 
 # ─── Resources ────────────────────────────────────────────────────────────────
 resources:
-  minCpu: 500m # idle floor — cpu:minCpu ratio must stay under 4:1
+  minCpu: 500m # idle floor — maxCpu:minCpu ratio must stay under 4:1
   minMemory: 1Gi
   maxCpu: 2000m # burst ceiling (headroom for on-demand browser automation)
   maxMemory: 4Gi

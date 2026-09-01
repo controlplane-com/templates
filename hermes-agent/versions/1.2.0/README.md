@@ -32,6 +32,15 @@ Single replica is by design: memory is a single-writer SQLite database and upstr
   `openssl rand -hex 32`. If the key is too short the gateway still starts but the API never
   serves, and the workload will not become ready.
 
+  Create it in one command (the name `my-hermes-secret` matches the chart's default `secret.name`):
+
+  ```bash
+  cpln secret create-dictionary --name my-hermes-secret \
+    --entry "api-key=YOUR-LLM-API-KEY" \
+    --entry "api-server-key=$(openssl rand -hex 32)" \
+    --entry "dashboard-password=YOUR-STRONG-PASSWORD"
+  ```
+
   Pass its name as `secret.name` at install (and override `secret.keys` if your key names differ).
 
 ## Configuration
@@ -163,7 +172,7 @@ Follow the prompts for your platform; the configuration is stored on the data vo
 - **Single replica by design** — memory is single-writer SQLite; do not scale up. State persists on the volume across restarts.
 - **The model is external** — cost and rate limits are governed by your LLM provider, not this workload.
 - **Failed model calls return HTTP 200** with the error inside the body (`"finish_reason": "error"`, `"hermes": {"failed": true}`). A client that checks only the HTTP status will read a provider failure as success — inspect the body, or the agent log at `/opt/data/logs/agent.log`.
-- **Keep `cpu` under 4× `minCpu`** — the platform rejects a wider ratio; raise `minCpu` if you raise `cpu`.
+- **Keep `maxCpu` under 4× `minCpu`** — the platform rejects a wider ratio; raise `minCpu` if you raise `maxCpu`.
 - **Rotating a value in your prerequisite secret does NOT reach a running workload** — `cpln://` references resolve at replica start and are never re-resolved, so the old credential keeps working silently. After any rotation, run `cpln workload force-redeployment RELEASE-hermes-agent --gvc GVC`.
 - **Reset** requires `cpln helm uninstall` (deletes the volumeset) — changing the secret and redeploying does not wipe existing memory/config on the volume.
 

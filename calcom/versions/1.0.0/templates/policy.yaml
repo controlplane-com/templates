@@ -1,0 +1,21 @@
+kind: policy
+name: {{ include "calcom.policy.name" . }}
+description: Cal.com policy
+tags: {{- include "calcom.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "calcom.identity.name" . }}
+targetKind: secret
+targetLinks:
+  {{- /* Exactly the secrets this release's workloads mount — the user's auth
+         secret, the chart-created database credentials, and the SMTP secret only
+         when that optional feature names one. No cloud-account link, no
+         `target: all`. */}}
+  - //secret/{{ .Values.calcom.auth.secretName }}
+  - //secret/{{ include "calcom.db.secretName" . }}
+  - //secret/{{ include "calcom.secret.startup.name" . }}
+  {{- if and .Values.email.enabled .Values.email.auth.secretName }}
+  - //secret/{{ .Values.email.auth.secretName }}
+  {{- end }}

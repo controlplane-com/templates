@@ -250,7 +250,7 @@ statements against the bundled database.
    left alone):
 
 ```bash
-cpln workload exec {release}-postgres --gvc {gvc} --container postgres -- \
+cpln workload exec {release}-postgres --gvc {gvc} --container postgresql -- \
   psql -U documenso -d documenso \
   -c "UPDATE \"User\" SET \"emailVerified\" = NOW() WHERE email = 'you@example.com';" \
   -c "UPDATE \"User\" SET roles = '{ADMIN}' WHERE email = 'you@example.com';"
@@ -442,7 +442,7 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint`
   certificate could not be used:
 
   ```bash
-  cpln workload exec {release}-postgres --gvc {gvc} --container postgres -- \
+  cpln workload exec {release}-postgres --gvc {gvc} --container postgresql -- \
     psql -U documenso -d documenso \
     -c "SELECT name, status, retried FROM \"BackgroundJob\" WHERE name = 'Seal Document';"
   ```

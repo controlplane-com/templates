@@ -1,4 +1,4 @@
----
+{{- include "cpln-advisor.validate" . -}}
 kind: workload
 name: {{ include "cpln-advisor.redis.name" . }}
 description: Task broker and cache for the advisor
@@ -40,12 +40,18 @@ spec:
         initialDelaySeconds: 5
         periodSeconds: 10
         failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 2
   defaultOptions:
     capacityAI: false # a broker should not be resized under load
+    timeoutSeconds: 5
     autoscaling:
+      maxConcurrency: 0
       metric: disabled
       minScale: 1
       maxScale: 1 # ONE replica: two brokers means tasks split between them
+      scaleToZeroDelay: 300
+      target: 95
   firewallConfig:
     external:
       inboundAllowCIDR: [] # no inbound from the internet

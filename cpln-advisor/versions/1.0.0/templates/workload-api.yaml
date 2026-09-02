@@ -1,4 +1,4 @@
----
+{{- include "cpln-advisor.validate" . -}}
 kind: workload
 name: {{ include "cpln-advisor.api.name" . }}
 description: CPLN Advisor API
@@ -25,29 +25,12 @@ spec:
         - -c
         - alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000
       env:
-        # Nothing here may be named CPLN_* — that prefix is RESERVED and a
-        # workload setting one is rejected. The platform injects CPLN_ORG,
-        # CPLN_GVC, CPLN_TOKEN and friends itself, which is where the app reads
-        # its org from. The Control Plane API token cannot be injected for the
-        # same reason: set it once on the Configuration page, where it is stored
-        # encrypted in the database.
         - name: LOG_LEVEL
           value: {{ .Values.logLevel | quote }}
         - name: REDIS_URL
           value: {{ include "cpln-advisor.redis.url" . | quote }}
-        # Postgres, from the bundled `postgres` subchart. The URL carries the
-        # password, so it is a key in YOUR credentials secret rather than a value
-        # here. Its username/password/database must match the database's own
-        # prerequisite secret — nothing cross-checks the two.
         - name: DATABASE_URL
           value: cpln://secret/{{ .Values.auth.secretName }}.DATABASE_URL
-        # The app derives the dashboard's public URL — the Slack "View in Advisor"
-        # links and the CORS origin — from Control Plane's built-in env vars, as
-        # `https://{ADVISOR_WEB_WORKLOAD}-{gvc alias}.cpln.app`. It defaults to
-        # the literal "web", so it MUST be told this chart's actual dashboard
-        # workload name or every derived link points at a workload that does not
-        # exist. It is NOT built from CPLN_GLOBAL_ENDPOINT, which is the host of
-        # whichever workload reads it — internal here, and not where a browser goes.
         - name: ADVISOR_WEB_WORKLOAD
           value: {{ include "cpln-advisor.web.name" . | quote }}
         {{- if .Values.appUrl }}
@@ -81,20 +64,27 @@ spec:
         httpGet:
           path: /health # the only unauthenticated route, and it leaks nothing
           port: 8000
+          scheme: HTTP
         initialDelaySeconds: 5
         periodSeconds: 10
         failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 2
       livenessProbe:
         httpGet:
           path: /health
           port: 8000
+          scheme: HTTP
         initialDelaySeconds: 20
         periodSeconds: 30
         failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 2
   defaultOptions:
     capacityAI: true
     timeoutSeconds: 120 # a scan's Control Plane and LLM calls can take a while
     autoscaling:
+      maxConcurrency: 0
       metric: disabled
       minScale: 1
       # ONE replica, because two would race on the same startup migration. That
@@ -102,9 +92,8 @@ spec:
       # raising this is a question of moving `alembic upgrade head` out of the
       # container start command, not of the database.
       maxScale: 1
-  # Non-root. `filesystemGroupId` is gone with the shared volume it existed for.
-  # (Never 1337: that is the mesh proxy's UID, and a container running as it
-  # bypasses the Envoy redirect.)
+      scaleToZeroDelay: 300
+      target: 95
   securityOptions:
     runAsUser: 10001
   firewallConfig:

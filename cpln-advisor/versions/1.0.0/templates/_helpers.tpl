@@ -50,16 +50,8 @@ Advisor Policy Name
 {{- end }}
 
 {{/*
-Bundled Postgres workload name. The `postgres` subchart names it
-`{{ .Release.Name }}-postgres`, and as a subchart that Release.Name is OURS — so
-this must track the subchart's own helper. A rename there breaks this silently.
-*/}}
-{{- define "cpln-advisor.postgres.name" -}}
-{{- printf "%s-postgres" .Release.Name }}
-{{- end }}
-
-{{/*
-Internal address of Redis. Plain redis:// is correct — the sidecar adds mTLS.
+Internal address of Redis, in the GVC this release is installed into. Plain
+redis:// is correct — the sidecar adds mTLS.
 */}}
 {{- define "cpln-advisor.redis.url" -}}
 {{- printf "redis://%s.%s.cpln.local:6379" (include "cpln-advisor.redis.name" .) .Values.global.cpln.gvc }}
@@ -70,15 +62,6 @@ Internal address of the API, on the CONTAINER port (8000), not 443.
 */}}
 {{- define "cpln-advisor.api.url" -}}
 {{- printf "http://%s.%s.cpln.local:8000" (include "cpln-advisor.api.name" .) .Values.global.cpln.gvc }}
-{{- end }}
-
-{{/*
-Every credential the advisor reads, by key, out of the ONE prerequisite dictionary
-secret. Nothing sensitive passes through values, so nothing sensitive lands in the
-Helm release. Key names match the app's own environment variable names.
-*/}}
-{{- define "cpln-advisor.secretRef" -}}
-{{- printf "cpln://secret/%s.%s" .name .key }}
 {{- end }}
 
 {{/* Resource ratio guard */}}
@@ -170,18 +153,10 @@ Call with (dict "who" "api" "r" .Values.api.resources).
 
 {{- define "cpln-advisor.validate" -}}
 {{- if not .Values.global.cpln.gvc -}}
-{{- fail "cpln-advisor: global.cpln.gvc is required — the name of the GVC this chart creates, e.g. 'advisor'. It lives under `global` so cpln-common tags every resource with it, and so a subchart would inherit it." -}}
+{{- fail "cpln-advisor: global.cpln.gvc is empty. This chart installs into an EXISTING GVC and does not create one — the install tooling supplies this from the GVC you select (`cpln helm install ... --gvc YOUR_GVC`), so an empty value usually means no GVC was selected. It is read here to build internal service addresses and to tag every resource, and the bundled postgres subchart inherits it." -}}
 {{- end -}}
-{{- if not .Values.gvc.locations -}}
-{{- fail "cpln-advisor: gvc.locations must contain exactly one location, e.g. `locations:` / `  - name: aws-us-east-1`. Run `cpln location get` to list the ones available to your org." -}}
-{{- end -}}
-{{- if ne (len .Values.gvc.locations) 1 -}}
-{{- fail (printf "cpln-advisor: gvc.locations must contain EXACTLY ONE location, got %d. A workload runs in every location of its GVC and minScale/maxScale are per-location, so a second location silently doubles the API, worker and scheduler — a second scheduler would fire every cron twice. The bundled Postgres is a single stateful workload on a read-write-once volume, so a second location would also give it a second, independent database rather than a replica." (len .Values.gvc.locations)) -}}
-{{- end -}}
-{{- range .Values.gvc.locations -}}
-{{- if not .name -}}
-{{- fail "cpln-advisor: every entry in gvc.locations needs a `name`, e.g. `- name: aws-us-east-1`" -}}
-{{- end -}}
+{{- if .Values.gvc -}}
+{{- fail "cpln-advisor: the `gvc` values key is no longer used and has been ignored. This chart installs into an EXISTING GVC selected at install time (`--gvc YOUR_GVC`) rather than creating one, so `gvc.locations` no longer controls anything — it is a prerequisite instead: the GVC you install into must already exist and must have exactly ONE location. Remove the `gvc` block from your values file. See README > GVC." -}}
 {{- end -}}
 {{- if not .Values.auth.secretName -}}
 {{- fail "cpln-advisor: auth.secretName is required — the name of a `dictionary` secret that MUST EXIST BEFORE INSTALL, holding the keys ADVISOR_API_TOKEN, ADVISOR_SECRET_KEY, ADVISOR_SESSION_SECRET, ADVISOR_USERNAME, ADVISOR_PASSWORD and DATABASE_URL. This chart creates no secret and accepts no credential as a value. See README Prerequisites." -}}
@@ -201,20 +176,9 @@ Call with (dict "who" "api" "r" .Values.api.resources).
 {{/* Labeling */}}
 
 {{/*
-Create chart name and version as used by the chart label.
-*/}}
-{{- define "cpln-advisor.chart" -}}
-{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
-{{- end }}
-
-{{/*
 Common labels
 */}}
 {{- define "cpln-advisor.tags" -}}
 {{- include "cpln-common.tags" . }}
 {{- end }}
 
-{{- define "cpln-advisor.selectorLabels" -}}
-app.cpln.io/name: {{ .Release.Name }}
-app.cpln.io/instance: {{ .Release.Name }}
-{{- end }}

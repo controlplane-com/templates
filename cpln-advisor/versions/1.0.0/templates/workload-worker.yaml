@@ -1,4 +1,4 @@
----
+{{- include "cpln-advisor.validate" . -}}
 kind: workload
 name: {{ include "cpln-advisor.worker.name" . }}
 description: CPLN Advisor background worker
@@ -58,6 +58,7 @@ spec:
           value: cpln://secret/{{ .Values.auth.secretName }}.ADVISOR_SECRET_KEY
   defaultOptions:
     capacityAI: false # a long scan should not be resized underneath itself
+    timeoutSeconds: 5
     autoscaling:
       metric: disabled
       minScale: 1
@@ -66,9 +67,9 @@ spec:
       # LLM calls are rate-limited upstream, and a second worker mostly buys
       # more 429s. Raise it deliberately, not by default.
       maxScale: 1
-  # Non-root. `filesystemGroupId` is gone with the shared volume it existed for.
-  # (Never 1337: that is the mesh proxy's UID, and a container running as it
-  # bypasses the Envoy redirect.)
+      maxConcurrency: 0
+      scaleToZeroDelay: 300
+      target: 95
   securityOptions:
     runAsUser: 10001
   firewallConfig:

@@ -1,0 +1,48 @@
+image: nousresearch/hermes-agent:v2026.8.31
+
+# ─── LLM provider ─────────────────────────────────────────────────────────────
+model:
+  provider: anthropic # anthropic | openai | custom (any other OpenAI-compatible endpoint, e.g. OpenRouter)
+  name: "" # model override — use the provider's exact model ID (e.g. claude-opus-4-6, gpt-5; Anthropic IDs are hyphenated, never dotted). Bare name only — the chart adds the anthropic/ prefix itself. Empty = provider default
+  baseUrl: "" # OpenAI-compatible endpoint; required when provider is "custom"
+  reasoningEffort: medium # none | low | medium | high — use "none" for non-reasoning models (e.g. gpt-4o)
+
+# ─── Prerequisite secret ──────────────────────────────────────────────────────
+# A dictionary secret you create before installing (see README → Prerequisites).
+# Point each field below at the key in YOUR secret that holds that value.
+secret:
+  name: my-hermes-secret # name of your existing dictionary secret
+  keys:
+    apiKey: api-key # key holding the LLM API key for your provider
+    apiServerKey: api-server-key # key holding the bearer token clients present to the gateway API
+    dashboardPassword: dashboard-password # key holding the dashboard password (used when dashboard.enabled)
+
+# ─── Dashboard ────────────────────────────────────────────────────────────────
+dashboard:
+  enabled: true # internal-only web UI on port 9119
+  username: admin # basic-auth username (password comes from the secret)
+
+# ─── Resources ────────────────────────────────────────────────────────────────
+resources:
+  minCpu: 500m # idle floor — maxCpu:minCpu ratio must stay under 4:1
+  minMemory: 1Gi
+  maxCpu: 2000m # burst ceiling (headroom for on-demand browser automation)
+  maxMemory: 4Gi
+
+# ─── Storage ──────────────────────────────────────────────────────────────────
+volumeset:
+  capacity: 10 # Initial capacity in GiB (minimum is 10)
+  autoscaling:
+    enabled: false # Set to true to enable autoscaling
+    maxCapacity: 100 # Maximum capacity in GiB when autoscaling is enabled
+    minFreePercentage: 10 # Minimum free percentage to trigger scaling when autoscaling is enabled
+    scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: false # expose the workload on the public canonical HTTPS endpoint — read the README security note first
+  expose: api # api | dashboard — which surface the ONE canonical endpoint fronts. "api" = gateway API (8642) public, dashboard stays internal. "dashboard" = web dashboard (9119) public behind its basic-auth login (use a strong password!), and the API is then internal-only
+
+internalAccess:
+  type: same-gvc # none | same-gvc | same-org | workload-list
+  workloads: [] # used with workload-list, e.g. //gvc/GVC/workload/NAME

@@ -105,6 +105,13 @@ hermes config set model.base_url {{ include "hermes-agent.baseUrl" . | quote }}
 hermes config set model.default {{ include "hermes-agent.modelDefault" . | quote }}
 {{- end }}
 hermes config set agent.reasoning_effort {{ .Values.model.reasoningEffort | quote }}
+{{- if .Values.browser.enabled }}
+{{- /* Point the agent's browser backend at the loopback CDP sidecar. Containers
+       in one workload share a network namespace, so the sidecar's CDP (forced to
+       127.0.0.1 by Chromium's M113 loopback remap) is reachable here. Dotted path
+       for the same reason the model keys are — a scalar set corrupts the map. */}}
+hermes config set browser.cdp_url {{ printf "http://127.0.0.1:%v" (.Values.browser.cdpPort | toString) | quote }}
+{{- end }}
 {{- end }}
 
 
@@ -133,11 +140,17 @@ hermes config set agent.reasoning_effort {{ .Values.model.reasoningEffort | quot
 {{- if not (has .Values.internalAccess.type (list "none" "same-gvc" "same-org" "workload-list")) -}}
 {{- fail (printf "hermes-agent: internalAccess.type must be none, same-gvc, same-org, or workload-list — got '%s'" .Values.internalAccess.type) -}}
 {{- end -}}
-{{- if not (has .Values.publicAccess.expose (list "api" "dashboard")) -}}
-{{- fail (printf "hermes-agent: publicAccess.expose must be api or dashboard — got '%s'. The workload has ONE canonical endpoint; this picks which surface it fronts." .Values.publicAccess.expose) -}}
+{{- if not (has .Values.publicAccess.expose (list "api" "dashboard" "webhooks")) -}}
+{{- fail (printf "hermes-agent: publicAccess.expose must be api, dashboard, or webhooks — got '%s'. The workload has ONE canonical endpoint; this picks which surface it fronts." .Values.publicAccess.expose) -}}
 {{- end -}}
 {{- if and (eq .Values.publicAccess.expose "dashboard") (not .Values.dashboard.enabled) -}}
 {{- fail "hermes-agent: publicAccess.expose 'dashboard' requires dashboard.enabled: true — there is no dashboard to front." -}}
+{{- end -}}
+{{- if and (eq .Values.publicAccess.expose "webhooks") (not .Values.webhooks.enabled) -}}
+{{- fail "hermes-agent: publicAccess.expose 'webhooks' requires webhooks.enabled: true — there is no webhook listener to front." -}}
+{{- end -}}
+{{- if and .Values.webhooks.directLoadBalancer.enabled (not .Values.webhooks.enabled) -}}
+{{- fail "hermes-agent: webhooks.directLoadBalancer.enabled requires webhooks.enabled: true — there is no listener to publish." -}}
 {{- end -}}
 {{- end }}
 

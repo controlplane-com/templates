@@ -60,7 +60,7 @@ spec:
         - name: API_SERVER_KEY
           value: 'cpln://secret/{{ .Values.secret.name }}.{{ .Values.secret.keys.apiServerKey }}'
         {{- if .Values.dashboard.enabled }}
-        # ── Web dashboard (internal-only, basic auth) ──
+        # ── Web dashboard (basic auth) ──
         - name: HERMES_DASHBOARD
           value: '1'
         - name: HERMES_DASHBOARD_HOST
@@ -71,17 +71,37 @@ spec:
           value: {{ .Values.dashboard.username | quote }}
         - name: HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
           value: 'cpln://secret/{{ .Values.secret.name }}.{{ .Values.secret.keys.dashboardPassword }}'
-        {{- if and .Values.publicAccess.enabled (eq .Values.publicAccess.expose "dashboard") }}
-        {{- /* The platform terminates TLS at the edge, so the dashboard sees
-               itself as http:// and registers a CLEARTEXT OAuth callback for
-               MCP servers -- which auth providers refuse ("cleartext http
-               redirect_uris are only allowed for loopback hosts", measured
-               live 2026-09-01 against auth.cpln.io). The operator knob is the
-               dashboard's public URL; CPLN_GLOBAL_ENDPOINT is the full https
-               canonical URL, injected per-workload and expanded from $(VAR)
-               at container start (the langfuse/plane pattern). Only set when
-               the dashboard IS the canonical endpoint. */}}
+        {{- /* The platform terminates TLS at the edge, so without a public URL the
+               dashboard sees itself as http:// and registers CLEARTEXT OAuth
+               callbacks for MCP servers, which auth providers refuse ("cleartext
+               http redirect_uris are only allowed for loopback hosts", measured
+               2026-09-01 against auth.cpln.io). dashboard.publicUrl overrides it
+               (custom domains); otherwise the canonical endpoint is used when the
+               dashboard fronts it. CPLN_GLOBAL_ENDPOINT is the full https URL,
+               injected per-workload and expanded from $(VAR) at container start. */}}
+        {{- if .Values.dashboard.publicUrl }}
         - name: HERMES_DASHBOARD_PUBLIC_URL
+          value: {{ .Values.dashboard.publicUrl | quote }}
+        {{- else if and .Values.publicAccess.enabled (eq .Values.publicAccess.expose "dashboard") }}
+        - name: HERMES_DASHBOARD_PUBLIC_URL
+          value: $(CPLN_GLOBAL_ENDPOINT)
+        {{- end }}
+        {{- end }}
+        {{- if .Values.webhooks.enabled }}
+        # ── External webhook listener (HMAC-signed events on 8644) ──
+        # The signing secret rides the same prerequisite secret as everything else,
+        # so least privilege is unchanged (still exactly one secret target).
+        - name: WEBHOOK_ENABLED
+          value: 'true'
+        - name: WEBHOOK_PORT
+          value: '8644'
+        - name: WEBHOOK_SECRET
+          value: 'cpln://secret/{{ .Values.secret.name }}.{{ .Values.secret.keys.webhookSecret }}'
+        {{- if .Values.webhooks.publicUrl }}
+        - name: WEBHOOK_URL
+          value: {{ .Values.webhooks.publicUrl | quote }}
+        {{- else if eq .Values.publicAccess.expose "webhooks" }}
+        - name: WEBHOOK_URL
           value: $(CPLN_GLOBAL_ENDPOINT)
         {{- end }}
         {{- end }}
@@ -95,6 +115,19 @@ spec:
           protocol: http
         - number: 8642
           protocol: http
+        {{- if .Values.webhooks.enabled }}
+        - number: 8644
+          protocol: http
+        {{- end }}
+        {{- else if eq .Values.publicAccess.expose "webhooks" }}
+        - number: 8644
+          protocol: http
+        - number: 8642
+          protocol: http
+        {{- if .Values.dashboard.enabled }}
+        - number: 9119
+          protocol: http
+        {{- end }}
         {{- else }}
         - number: 8642
           protocol: http
@@ -102,12 +135,16 @@ spec:
         - number: 9119
           protocol: http
         {{- end }}
+        {{- if .Values.webhooks.enabled }}
+        - number: 8644
+          protocol: http
+        {{- end }}
         {{- end }}
       volumes:
         - path: /opt/data
           recoveryPolicy: retain
           uri: cpln://volumeset/{{ include "hermes-agent.volume.name" . }}
-        # Shared memory for headless Chromium (default 64 MB /dev/shm crashes it).
+        # Shared memory for the app's own tooling (default 64 MB /dev/shm is small).
         - path: /dev/shm
           uri: scratch://dev-shm
       # /health is unauthenticated and only 200s once the API server is actually
@@ -130,6 +167,44 @@ spec:
         periodSeconds: 30
         failureThreshold: 5
         timeoutSeconds: 5
+    {{- if .Values.browser.enabled }}
+    # ── Headless-Chromium CDP sidecar (loopback only) ──
+    # Browser tools are non-functional on the Nous image alone; this container is
+    # the Chrome the agent attaches to over CDP (browser.cdp_url, seeded in the
+    # config). Community image per the community-image ruling — Nous ships no
+    # CDP-capable browser. We drive the binary directly instead of inheriting the
+    # image's run.sh entrypoint, so behaviour is pinned to flags we control.
+    - name: chromium
+      image: {{ .Values.browser.image | quote }}
+      command: /headless-shell/headless-shell
+      args:
+        - --no-sandbox
+        - --use-gl=angle
+        - --use-angle=swiftshader
+        # Chromium forcibly remaps this to 127.0.0.1 since M113; the sidecar is
+        # reachable only over the shared workload netns, which is what we want.
+        - --remote-debugging-address=0.0.0.0
+        - --remote-debugging-port={{ .Values.browser.cdpPort }}
+        # CDP websocket clients (browser-use) are refused without an Origin allow.
+        - --remote-allow-origins=*
+        # Ephemeral profile on the container layer — no browser state persists.
+        - --user-data-dir=/tmp/chrome
+      inheritEnv: false
+      minCpu: {{ .Values.browser.resources.minCpu | quote }}
+      minMemory: {{ .Values.browser.resources.minMemory | quote }}
+      cpu: {{ .Values.browser.resources.maxCpu | quote }}
+      memory: {{ .Values.browser.resources.maxMemory | quote }}
+      # No `ports` and no probes on purpose: CDP binds 127.0.0.1 (M113 remap), which
+      # the platform probe (outside the container netns) cannot reach — a probe on
+      # the CDP port would fail-loop a healthy sidecar. A crash exits the container
+      # and the platform restarts it; a hung-but-alive Chrome surfaces to the agent
+      # as a CDP error and degrades gracefully to web_extract.
+      volumes:
+        # Chromium needs a large /dev/shm (the default 64 MB crashes it). Its own
+        # scratch mount, isolated from the app container's.
+        - path: /dev/shm
+          uri: scratch://chrome-shm
+    {{- end }}
   defaultOptions:
     autoscaling:
       maxConcurrency: 0
@@ -160,3 +235,15 @@ spec:
         - {{ . }}
         {{- end }}
       {{- end }}
+  {{- if and .Values.webhooks.enabled .Values.webhooks.directLoadBalancer.enabled }}
+  # Dedicated L4 load balancer publishing the webhook listener on 8644. Billed
+  # whether or not events arrive, and plain-HTTP (no TLS at this layer).
+  loadBalancer:
+    direct:
+      enabled: true
+      ports:
+        - containerPort: 8644
+          externalPort: 8644
+          protocol: TCP
+          scheme: tcp
+  {{- end }}

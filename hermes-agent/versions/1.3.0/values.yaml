@@ -14,13 +14,36 @@ secret:
   name: my-hermes-secret # name of your existing dictionary secret
   keys:
     apiKey: api-key # key holding the LLM API key for your provider
-    apiServerKey: api-server-key # key holding the bearer token clients present to the gateway API
+    apiServerKey: api-server-key # key holding the bearer token clients present to the gateway API (>= 16 chars)
     dashboardPassword: dashboard-password # key holding the dashboard password (used when dashboard.enabled)
+    webhookSecret: webhook-secret # key holding the webhook signing secret (used only when webhooks.enabled)
 
 # ─── Dashboard ────────────────────────────────────────────────────────────────
 dashboard:
-  enabled: true # internal-only web UI on port 9119
+  enabled: true # web UI on port 9119
   username: admin # basic-auth username (password comes from the secret)
+  publicUrl: "" # custom-domain base URL for MCP OAuth callbacks + asset URLs. Empty = canonical endpoint (auto-set under expose: dashboard). Set only if you front the workload with your own domain
+
+# ─── Browser automation (optional headless-Chromium CDP sidecar) ──────────────
+# Browser tools are NON-functional on this image without a Chrome to attach to.
+# Enabling this adds a second container running headless Chromium and points the
+# agent at it over loopback CDP. It is a real cost (CPU/memory), so it is off by default.
+browser:
+  enabled: false
+  image: chromedp/headless-shell:151.0.7922.109 # community headless-shell (pin exact tag; confirm current stable at build)
+  cdpPort: 9222 # loopback CDP port; the app reaches the sidecar at http://127.0.0.1:<cdpPort>
+  resources:
+    minCpu: 250m
+    minMemory: 512Mi
+    maxCpu: 1000m # keep maxCpu <= 4x minCpu (stateful workload)
+    maxMemory: 1Gi
+
+# ─── Webhooks (optional external event ingestion) ─────────────────────────────
+webhooks:
+  enabled: false # turn on the webhook listener on port 8644 (WEBHOOK_ENABLED/PORT/SECRET/URL); signing secret rides the prerequisite secret (secret.keys.webhookSecret)
+  publicUrl: "" # advertised base URL shown in the UI. Empty + expose: webhooks = canonical endpoint. Set to your direct-LB or custom-domain address otherwise
+  directLoadBalancer:
+    enabled: false # publish 8644 via a DEDICATED load balancer. BILLED whether or not events arrive; L4 (no TLS) — some providers (e.g. Stripe) refuse plain-HTTP endpoints. Prefer publicAccess.expose: webhooks for HTTPS
 
 # ─── Resources ────────────────────────────────────────────────────────────────
 resources:
@@ -41,7 +64,7 @@ volumeset:
 # ─── Access ───────────────────────────────────────────────────────────────────
 publicAccess:
   enabled: false # expose the workload on the public canonical HTTPS endpoint — read the README security note first
-  expose: api # api | dashboard — which surface the ONE canonical endpoint fronts. "api" = gateway API (8642) public, dashboard stays internal. "dashboard" = web dashboard (9119) public behind its basic-auth login (use a strong password!), and the API is then internal-only
+  expose: dashboard # api | dashboard | webhooks — which surface the ONE canonical endpoint fronts. "dashboard" (default) = web UI (9119) public behind basic auth (use a strong password!); API stays internal. "api" = gateway API (8642) public. "webhooks" = webhook listener (8644) public over HTTPS
 
 internalAccess:
   type: same-gvc # none | same-gvc | same-org | workload-list

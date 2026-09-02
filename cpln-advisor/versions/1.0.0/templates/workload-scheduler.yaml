@@ -1,4 +1,4 @@
----
+{{- include "cpln-advisor.validate" . -}}
 kind: workload
 name: {{ include "cpln-advisor.scheduler.name" . }}
 description: CPLN Advisor cron scheduler (fires scheduled scans and retention)
@@ -48,13 +48,14 @@ spec:
           value: cpln://secret/{{ .Values.auth.secretName }}.ADVISOR_SECRET_KEY
   defaultOptions:
     capacityAI: true # the scheduler only enqueues; let it be sized down
+    timeoutSeconds: 5
     autoscaling:
+      maxConcurrency: 0
+      scaleToZeroDelay: 300
+      target: 95
       metric: disabled
       minScale: 1
       maxScale: 1 # two schedulers would fire every cron twice
-  # Non-root. `filesystemGroupId` is gone with the shared volume it existed for.
-  # (Never 1337: that is the mesh proxy's UID, and a container running as it
-  # bypasses the Envoy redirect.)
   securityOptions:
     runAsUser: 10001
   firewallConfig:

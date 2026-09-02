@@ -1,12 +1,9 @@
----
+{{- include "cpln-advisor.validate" . -}}
 kind: policy
 name: {{ include "cpln-advisor.policy.name" . }}
 description: CPLN Advisor policy
 tags: {{- include "cpln-advisor.tags" . | nindent 4 }}
 bindings:
-  # `reveal`, NOT `view` — view exposes metadata only, and the cpln://secret/…
-  # reference then resolves to an empty string. The containers start happily and
-  # behave as though nothing were configured, so this failure is silent.
   - permissions:
       - reveal
     principalLinks:

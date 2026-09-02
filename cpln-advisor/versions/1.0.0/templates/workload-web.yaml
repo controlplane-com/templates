@@ -1,4 +1,4 @@
----
+{{- include "cpln-advisor.validate" . -}}
 kind: workload
 name: {{ include "cpln-advisor.web.name" . }}
 description: CPLN Advisor dashboard
@@ -45,9 +45,12 @@ spec:
         httpGet:
           path: /login # the one page that renders without a session
           port: 3000
+          scheme: HTTP
         initialDelaySeconds: 5
         periodSeconds: 10
         failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 2
   defaultOptions:
     capacityAI: true
     timeoutSeconds: 120 # the proxy waits on the API, and a scan is not quick
@@ -57,6 +60,7 @@ spec:
       minScale: {{ .Values.web.replicas.min }}
       maxScale: {{ .Values.web.replicas.max }}
       scaleToZeroDelay: 300
+      maxConcurrency: 0
   firewallConfig:
     external:
       # PUBLIC, deliberately and unconditionally: the dashboard is the only way

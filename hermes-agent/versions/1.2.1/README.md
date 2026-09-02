@@ -1,16 +1,10 @@
 # Hermes Agent
 
-> **Upgrading from 1.0.0:** resource blocks that expose both a floor and a ceiling now name the
-> ceiling `maxCpu`/`maxMemory` instead of `cpu`/`memory`, so it is no longer ambiguous which number
-> is the limit. Rename those two keys in your values; an upgrade that still carries the old names is
-> refused at render. Blocks that expose only a limit keep the bare `cpu`/`memory` names.
-
-
-This app deploys [Hermes Agent](https://github.com/NousResearch/hermes-agent) by Nous Research — a self-hosted, model-agnostic AI agent that wraps any LLM with persistent memory, browser automation, an OpenAI-compatible gateway API, and a web dashboard. You bring the model (an external API key); the agent brings the memory, tools, and interfaces around it.
+This app deploys [Hermes Agent](https://github.com/NousResearch/hermes-agent) by Nous Research — a self-hosted, model-agnostic AI agent that wraps any LLM with persistent memory, an OpenAI-compatible gateway API, a web dashboard, and browser automation (not functional in this image by default — see Browser automation below). You bring the model (an external API key); the agent brings the memory, tools, and interfaces around it.
 
 ## Architecture
 
-- **Hermes Agent**: Stateful workload (single replica) running the supervised gateway. Exposes the OpenAI-compatible API on port 8642 (bearer-auth) and the web dashboard on 9119 (basic-auth). With public access enabled, the single canonical HTTPS endpoint fronts one of the two — `publicAccess.expose` picks which (API by default). **Browser automation is NOT functional in this image (v2026.8.31)** — the agent's browser backend requires binaries the image does not ship (the `browser-use` CLI and a launchable Chrome stack), and installing them by hand still leaves the backend demanding a running Chrome to attach to. Browser requests degrade silently: the agent answers via `web_extract` with a note that the browser was unavailable. **The one verified path is attaching a running Chrome over CDP**: launch a headless Chromium reachable from the container and set `hermes config set browser.cdp_url http://<host>:<port>` — measured working end to end (the agent resolves the CDP websocket and drives real page navigation). A future template version may run that Chrome as a bundled sidecar container; until then this is a manual, non-persistent setup. Text-level page fetching (`web_extract`) works normally without any of this.
+- **Hermes Agent**: Stateful workload (single replica) running the supervised gateway. OpenAI-compatible API on 8642 (bearer-auth), web dashboard on 9119 (basic-auth); with public access enabled the single canonical HTTPS endpoint fronts one of the two — `publicAccess.expose` picks which (API by default).
 - **Volumeset**: 10 GiB persistent storage at `/opt/data` — the SQLite memory database, sessions, learned skills, and agent config survive restarts and redeploys.
 - **Identity + policy**: Least-privilege — the workload identity may `reveal` exactly the one prerequisite secret, nothing else.
 
@@ -95,7 +89,7 @@ dashboard:
 
 ```yaml
 # The min→max spread is the elasticity: idle floor at min, burst toward the
-# ceiling only while the agent's on-demand browser (headless Chromium) runs.
+# burst ceiling for heavy agent turns and tool work.
 resources:
   minCpu: 500m
   minMemory: 1Gi
@@ -162,6 +156,12 @@ cpln workload exec RELEASE-hermes-agent --gvc GVC --container hermes -- hermes g
 ```
 
 Follow the prompts for your platform; the configuration is stored on the data volume. See the [Hermes documentation](https://github.com/NousResearch/hermes-agent) for each platform's requirements, such as bot tokens.
+
+## Browser automation
+
+**Not functional in this image (v2026.8.31) by default.** The agent's browser backend requires binaries the image does not ship (the `browser-use` CLI and a launchable Chrome stack), and installing them by hand still leaves the backend demanding a running Chrome to attach to. The failure is silent: browser requests are answered via `web_extract` with a note that the browser was unavailable — read replies carefully rather than assuming the tool ran.
+
+**The one verified path** is attaching a running Chrome over CDP: launch a headless Chromium reachable from the container and run `hermes config set browser.cdp_url http://<host>:<port>` (measured working end to end — the agent resolves the CDP websocket and drives real page navigation). A future template version may bundle that Chrome as a sidecar container; until then this is a manual, non-persistent setup. Text-level page fetching (`web_extract`) works normally without any of this.
 
 ## Connecting MCP servers that need OAuth
 

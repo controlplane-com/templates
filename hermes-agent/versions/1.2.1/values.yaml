@@ -26,7 +26,7 @@ dashboard:
 resources:
   minCpu: 500m # idle floor — maxCpu:minCpu ratio must stay under 4:1
   minMemory: 1Gi
-  maxCpu: 2000m # burst ceiling (headroom for on-demand browser automation)
+  maxCpu: 2000m # burst ceiling for heavy agent turns and tool work
   maxMemory: 4Gi
 
 # ─── Storage ──────────────────────────────────────────────────────────────────

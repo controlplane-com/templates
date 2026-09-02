@@ -193,7 +193,7 @@ The agent's browser tools cannot run on the Nous image alone — it ships no lau
 
 ## Webhooks
 
-Set **`webhooks.enabled: true`** to turn on the listener on 8644 (the chart also enables the `hermes webhook subscribe` CLI for you). **Each subscription carries its OWN HMAC signing secret**: `hermes webhook subscribe` auto-generates one and prints it at creation, or you can pass `--secret "$WEBHOOK_SECRET"` to reuse the shared secret from `secret.keys.webhookSecret` (exposed to the container as `$WEBHOOK_SECRET`). Add the `webhookSecret` key to your prerequisite secret before enabling webhooks. Sign each event as HMAC-SHA256 of the body in the `X-Webhook-Signature` header (the gateway recommends the timestamped `X-Webhook-Signature-V2` form for replay protection). There are two ways to expose the listener externally:
+Set **`webhooks.enabled: true`** to turn on the listener on 8644 (the chart also enables the `hermes webhook subscribe` CLI for you). **Each subscription carries its OWN HMAC signing secret**: `hermes webhook subscribe` auto-generates one and prints it at creation, or you can pass `--secret "$WEBHOOK_SECRET"` to reuse the shared secret from `secret.keys.webhookSecret` (exposed to the container as `$WEBHOOK_SECRET`). Add the `webhookSecret` key to your prerequisite secret before enabling webhooks. Sign each event as HMAC-SHA256 of the body in the `X-Webhook-Signature` header (the gateway recommends the timestamped `X-Webhook-Signature-V2` form for replay protection). There are three ways to expose the listener externally:
 
 | Path | How | Trade-offs |
 |---|---|---|

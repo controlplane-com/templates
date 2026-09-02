@@ -97,13 +97,6 @@ spec:
           value: '8644'
         - name: WEBHOOK_SECRET
           value: 'cpln://secret/{{ .Values.secret.name }}.{{ .Values.secret.keys.webhookSecret }}'
-        {{- if .Values.webhooks.publicUrl }}
-        - name: WEBHOOK_URL
-          value: {{ .Values.webhooks.publicUrl | quote }}
-        {{- else if eq .Values.publicAccess.expose "webhooks" }}
-        - name: WEBHOOK_URL
-          value: $(CPLN_GLOBAL_ENDPOINT)
-        {{- end }}
         {{- end }}
       ports:
         # The FIRST declared port is the one the public canonical HTTPS endpoint

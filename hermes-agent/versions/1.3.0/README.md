@@ -113,12 +113,11 @@ Browser tools are **non-functional on the Nous image alone** — it ships no bro
 ```yaml
 webhooks:
   enabled: false        # turn on the webhook listener on port 8644
-  publicUrl: ""         # advertised base URL shown in the UI. Empty + expose: webhooks = canonical endpoint. Set to your direct-LB or custom-domain address otherwise
   directLoadBalancer:
     enabled: false      # publish 8644 via a DEDICATED load balancer (billed; L4, no TLS)
 ```
 
-Turning webhooks on wires the listener's env (`WEBHOOK_ENABLED/PORT/SECRET/URL`); the signing secret comes from `secret.keys.webhookSecret`. See **Webhooks** below for the two ways to expose it.
+Turning webhooks on wires the listener's env (`WEBHOOK_ENABLED/PORT/SECRET`); the signing secret comes from `secret.keys.webhookSecret`. See **Webhooks** below for the three ways to expose it.
 
 ### Resources
 
@@ -172,7 +171,7 @@ internalAccess:
 |---|---|---|
 | Web dashboard | Public on the canonical HTTPS endpoint with `publicAccess.enabled: true` (default `expose: dashboard`) — find it in `status.canonicalEndpoint` (`cpln workload get RELEASE-hermes-agent -o yaml`). Otherwise private: `cpln port-forward RELEASE-hermes-agent 9119:9119 --gvc GVC`, then `http://localhost:9119` | Basic auth (`dashboard.username` + the dashboard password from your secret) |
 | Gateway API (OpenAI-compatible) | From another workload by default. Public on the canonical endpoint with `publicAccess.enabled: true` and `expose: api` | Bearer `API_SERVER_KEY` |
-| Webhook listener | From another workload at `RELEASE-hermes-agent.GVC.cpln.local:8644`. Public via `expose: webhooks` (HTTPS) or `webhooks.directLoadBalancer` (plain HTTP) | HMAC signature (webhook secret) |
+| Webhook listener | From another workload at `RELEASE-hermes-agent.GVC.cpln.local:8644`. Public via `expose: webhooks` (HTTPS, takes the canonical), a **custom domain** routing `443 → :8644` (HTTPS, coexists with a public dashboard/API — recommended), or `webhooks.directLoadBalancer` (plain HTTP) | HMAC signature (webhook secret) |
 | From another workload | `RELEASE-hermes-agent.GVC.cpln.local:8642` | Bearer `API_SERVER_KEY` |
 
 Example request against the gateway API:
@@ -198,10 +197,45 @@ Set **`webhooks.enabled: true`** to turn on the listener on 8644 (the chart also
 
 | Path | How | Trade-offs |
 |---|---|---|
-| **`publicAccess.expose: webhooks`** (recommended) | The canonical HTTPS endpoint fronts 8644, TLS-terminated at the edge, no extra load balancer | Consumes the single canonical endpoint, so the dashboard/API cannot also be public at the same time |
+| **`publicAccess.expose: webhooks`** | The canonical HTTPS endpoint fronts 8644, TLS-terminated at the edge, no extra load balancer | Consumes the single canonical endpoint, so the dashboard/API cannot also be public at the same time |
+| **Custom domain** (recommended for coexistence) | A Control Plane `domain` resource routing `443 → :8644`, as a **prerequisite** you create (the chart can't own your DNS, same as a cloud account). This is an independent public front, so the dashboard/API stay on the canonical endpoint AND webhooks are reachable over real TLS — both public at the same time. Webhooks land at `https://<your-domain>/webhooks/<name>` | You own the DNS records and the domain resource. Verified working with a real Let's Encrypt certificate |
 | **`webhooks.directLoadBalancer.enabled: true`** | A dedicated L4 `loadBalancer.direct` port on 8644 | **Enables a dedicated load balancer that is billed whether or not events ever arrive.** It is **plain HTTP / L4 (no TLS)**, so providers that require HTTPS (e.g. Stripe) will reject it. **Measured: enabling it changes the workload's canonical endpoint to the TCP direct-LB address**, so it does NOT coexist with a public HTTPS dashboard or API on the canonical endpoint — use it when webhooks are the only public surface, or keep the dashboard/API private |
 
-Most providers refuse plain-HTTP webhook endpoints, so prefer `expose: webhooks` unless you specifically need the dashboard public at the same time.
+Most providers refuse plain-HTTP webhook endpoints, so prefer `expose: webhooks` (webhooks are then the only public surface) or a **custom domain** (dashboard/API stay public too).
+
+### Webhooks on a custom domain (dashboard + external webhooks together)
+
+This is the only way to have the dashboard (or API) public on the canonical endpoint AND accept external HTTPS webhooks at the same time. Create a `cpln domain` — this is a prerequisite you own, not something the chart provisions:
+
+```yaml
+kind: domain
+name: webhooks.example.com            # your subdomain
+description: webhooks.example.com
+spec:
+  dnsMode: cname                      # subdomain mode
+  certChallengeType: http01           # Let's Encrypt HTTP-01
+  acceptAllHosts: false
+  ports:
+    - number: 443
+      protocol: http2
+      routes:
+        - prefix: /
+          port: 8644                  # route to the webhook listener
+          workloadLink: //gvc/GVC/workload/RELEASE-hermes-agent
+      tls:
+        minProtocolVersion: TLSV1_2
+```
+
+Apply it with `cpln apply -f domain.yaml`, then add the two DNS records it asks for:
+
+| Record | Name | Value |
+|---|---|---|
+| Ownership (TXT) | `_cpln-webhooks` (i.e. `_cpln-<label>`) | your Control Plane org name |
+| Routing (CNAME) | `webhooks` (the `<label>`) | `<gvcAlias>.cpln.app` (the GVC alias, from `cpln gvc get GVC`) |
+
+Once the domain goes live, external events reach `https://webhooks.example.com/webhooks/<name>` over a real Let's Encrypt certificate while the dashboard/API remain on the canonical endpoint. Verified live.
+
+**The dashboard and CLI always display the webhook URL as `http://localhost:8644/...`, no matter how you expose it.** This is an upstream cosmetic bug: the app ignores any public-URL setting, and the one host field it exposes doubles as the listener's bind address (setting it to a public hostname breaks the bind), so there is no safe way to override the displayed value. Ignore the displayed URL — the REAL external URL is `https://<your-domain-or-canonical-endpoint>/webhooks/<name>`.
 
 ## Messaging platforms (optional)
 

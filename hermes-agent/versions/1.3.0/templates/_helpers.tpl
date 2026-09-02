@@ -105,6 +105,13 @@ hermes config set model.base_url {{ include "hermes-agent.baseUrl" . | quote }}
 hermes config set model.default {{ include "hermes-agent.modelDefault" . | quote }}
 {{- end }}
 hermes config set agent.reasoning_effort {{ .Values.model.reasoningEffort | quote }}
+{{- if .Values.webhooks.enabled }}
+{{- /* The listener starts from the WEBHOOK_ENABLED env, but `hermes webhook
+       subscribe` (which the README tells users to run) reads this CONFIG key,
+       not the env — seed it so the documented CLI works without a manual
+       `hermes config set` (measured 2026-09-02). */}}
+hermes config set platforms.webhook.enabled true
+{{- end }}
 {{- if .Values.browser.enabled }}
 {{- /* Point the agent's browser backend at the loopback CDP sidecar. Containers
        in one workload share a network namespace, so the sidecar's CDP (forced to

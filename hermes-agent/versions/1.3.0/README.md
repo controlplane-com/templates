@@ -194,12 +194,12 @@ The agent's browser tools cannot run on the Nous image alone — it ships no lau
 
 ## Webhooks
 
-Set **`webhooks.enabled: true`** to turn on the listener on 8644. It validates an HMAC signature against `secret.keys.webhookSecret`, so add that key to your prerequisite secret first. Register per-route subscriptions after install with `hermes webhook subscribe` (see the Hermes docs). There are two ways to expose it externally:
+Set **`webhooks.enabled: true`** to turn on the listener on 8644 (the chart also enables the `hermes webhook subscribe` CLI for you). **Each subscription carries its OWN HMAC signing secret**: `hermes webhook subscribe` auto-generates one and prints it at creation, or you can pass `--secret "$WEBHOOK_SECRET"` to reuse the shared secret from `secret.keys.webhookSecret` (exposed to the container as `$WEBHOOK_SECRET`). Add the `webhookSecret` key to your prerequisite secret before enabling webhooks. Sign each event as HMAC-SHA256 of the body in the `X-Webhook-Signature` header (the gateway recommends the timestamped `X-Webhook-Signature-V2` form for replay protection). There are two ways to expose the listener externally:
 
 | Path | How | Trade-offs |
 |---|---|---|
 | **`publicAccess.expose: webhooks`** (recommended) | The canonical HTTPS endpoint fronts 8644, TLS-terminated at the edge, no extra load balancer | Consumes the single canonical endpoint, so the dashboard/API cannot also be public at the same time |
-| **`webhooks.directLoadBalancer.enabled: true`** | A dedicated L4 `loadBalancer.direct` port on 8644, coexisting with whatever `expose` fronts | **Enables a dedicated load balancer that is billed whether or not events ever arrive.** It is **plain HTTP / L4 (no TLS)**, so providers that require HTTPS webhook endpoints (e.g. Stripe) will reject it — use it only for providers that accept plain HTTP or when you terminate TLS yourself |
+| **`webhooks.directLoadBalancer.enabled: true`** | A dedicated L4 `loadBalancer.direct` port on 8644 | **Enables a dedicated load balancer that is billed whether or not events ever arrive.** It is **plain HTTP / L4 (no TLS)**, so providers that require HTTPS (e.g. Stripe) will reject it. **Measured: enabling it changes the workload's canonical endpoint to the TCP direct-LB address**, so it does NOT coexist with a public HTTPS dashboard or API on the canonical endpoint — use it when webhooks are the only public surface, or keep the dashboard/API private |
 
 Most providers refuse plain-HTTP webhook endpoints, so prefer `expose: webhooks` unless you specifically need the dashboard public at the same time.
 

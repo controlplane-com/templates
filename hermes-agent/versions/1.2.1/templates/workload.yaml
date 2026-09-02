@@ -71,6 +71,19 @@ spec:
           value: {{ .Values.dashboard.username | quote }}
         - name: HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
           value: 'cpln://secret/{{ .Values.secret.name }}.{{ .Values.secret.keys.dashboardPassword }}'
+        {{- if and .Values.publicAccess.enabled (eq .Values.publicAccess.expose "dashboard") }}
+        {{- /* The platform terminates TLS at the edge, so the dashboard sees
+               itself as http:// and registers a CLEARTEXT OAuth callback for
+               MCP servers -- which auth providers refuse ("cleartext http
+               redirect_uris are only allowed for loopback hosts", measured
+               live 2026-09-01 against auth.cpln.io). The operator knob is the
+               dashboard's public URL; CPLN_GLOBAL_ENDPOINT is the full https
+               canonical URL, injected per-workload and expanded from $(VAR)
+               at container start (the langfuse/plane pattern). Only set when
+               the dashboard IS the canonical endpoint. */}}
+        - name: HERMES_DASHBOARD_PUBLIC_URL
+          value: $(CPLN_GLOBAL_ENDPOINT)
+        {{- end }}
         {{- end }}
       ports:
         # The FIRST declared port is the one the public canonical HTTPS endpoint

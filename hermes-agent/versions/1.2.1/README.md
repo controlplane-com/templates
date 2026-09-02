@@ -18,7 +18,7 @@ Single replica is by design: memory is a single-writer SQLite database and upstr
 
 ## Prerequisites
 
-- **An LLM API key** from your provider — Anthropic, OpenAI, or any OpenAI-compatible endpoint (OpenRouter, Ollama, vLLM, …) via `provider: custom`.
+- **An LLM API key** from your provider — Anthropic, OpenAI, or any OpenAI-compatible endpoint (OpenRouter, Ollama, vLLM, …) via `provider: custom`. **Anthropic keys must be WORKSPACE-SCOPED** (created inside a workspace in the Anthropic console) — a default/identity-linked key fails every request with `HTTP 400: anthropic-workspace-id is required…`; recreate the key inside a workspace if you see that.
 - **A dictionary secret** you create *before* installing (secrets are never passed through values). It holds three values; **name the keys however you like** and map them under `secret.keys` at install — an existing secret works unchanged.
 
   | Value | Required | Maps to |
@@ -163,10 +163,20 @@ cpln workload exec RELEASE-hermes-agent --gvc GVC --container hermes -- hermes g
 
 Follow the prompts for your platform; the configuration is stored on the data volume. See the [Hermes documentation](https://github.com/NousResearch/hermes-agent) for each platform's requirements, such as bot tokens.
 
+## Connecting MCP servers that need OAuth
+
+Many MCP servers (including Control Plane's own, `https://mcp.cpln.io/mcp`) authenticate with OAuth. Add the server on the dashboard's MCP page with **Authentication: OAuth**, then:
+
+- **With `publicAccess.expose: dashboard`** (recommended for dashboard use): click **Authenticate** — your browser goes to the provider, you sign in, and it redirects straight back to the dashboard. This works because the chart sets the dashboard's public URL automatically; tokens persist on the volume across restarts and redeploys.
+- **With `expose: api`** the dashboard has no public URL for OAuth callbacks, so use the one-time CLI flow instead: `cpln workload connect {release}-hermes-agent --gvc {gvc} --container hermes`, then `hermes mcp login <name>` — open the printed URL in your browser, and when it lands on a `127.0.0.1:27890/callback` connection error (expected), paste that full URL back into the shell.
+
+If Authenticate fails with `registration failed … cleartext http redirect_uris are only allowed for loopback hosts`, the dashboard does not know its public https URL — on this chart that means you are on 1.2.0 or overrode the setting; set `dashboard.public_url` to the canonical endpoint via `hermes config set`.
+
 ## Important Notes
 
 - **`publicAccess.enabled: true` publishes a terminal-capable agent to the internet**, guarded only by your bearer token. The agent's terminal backend runs unsandboxed as the container user with full file access, so anyone holding the key can execute work inside the workload. It is off by default — before enabling it, use a long random `api-server-key` (`openssl rand -hex 32`) and prefer restricting reach via `internalAccess`.
 - **The API server key must be at least 16 characters** — Hermes rejects anything shorter, and the workload will not become ready.
+- **An OAuth-connected MCP server acts AS THE PERSON WHO AUTHENTICATED IT.** Chat requests can then invoke those tools with that person's permissions — for Control Plane's MCP that includes creating and deleting real infrastructure. Connect write-capable MCP servers deliberately, and treat the dashboard password accordingly.
 - **The dashboard is internal by default** — reach it via `cpln port-forward` (see Connecting). With the default `expose: api`, the public endpoint serves the **API only**, so browsing to it returns 404 at `/` by design — `GET /health` returning 200 is how to confirm the workload is up. Putting the dashboard on the internet instead is an explicit choice: `publicAccess.expose: dashboard`, which drops the API's public endpoint and demands a strong dashboard password.
 - **A dashboard login that hangs (spinner, request pending forever) is almost always stale BROWSER state, not the server.** Port-forward tunnels that die mid-session leave wedged connections in the browser's profile; later logins then stall while every server surface is healthy. Fix: fully QUIT the browser and reopen (closing the tab is not enough) — a private window also works, which is the tell. Confirm the server side in seconds: `curl http://localhost:9119/login` through the tunnel; a fast 200 means the workload is fine. Pages that mount blank in a long-lived session are the same class — reload.
 - **Single replica by design** — memory is single-writer SQLite; do not scale up. State persists on the volume across restarts.

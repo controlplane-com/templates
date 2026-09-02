@@ -106,7 +106,7 @@ browser:
     maxMemory: 1Gi
 ```
 
-Browser tools are **non-functional on the Nous image alone** — it ships no browser to drive. Set `browser.enabled: true` and the chart adds a headless-Chromium container to the workload and points the agent at it (verified end to end: the agent resolves the CDP websocket and drives real page navigation). Text-level page fetching (`web_extract`) works without it. See **Browser automation** below.
+Browser tools are **non-functional on the Nous image alone** — it ships no browser to drive. Set `browser.enabled: true` and the chart adds a headless-Chromium container to the workload and points the agent at it — verified on this platform: the agent resolves the CDP websocket to the sidecar and drives a real page navigation (confirmed in `/opt/data/logs/agent.log`) rather than silently falling back to `web_extract`. Text-level page fetching (`web_extract`) works without it. See **Browser automation** below.
 
 ### Webhooks
 

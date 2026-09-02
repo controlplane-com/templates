@@ -143,10 +143,10 @@ hermes config set browser.cdp_url {{ printf "http://127.0.0.1:%v" (.Values.brows
 {{- if not (has .Values.publicAccess.expose (list "api" "dashboard" "webhooks")) -}}
 {{- fail (printf "hermes-agent: publicAccess.expose must be api, dashboard, or webhooks — got '%s'. The workload has ONE canonical endpoint; this picks which surface it fronts." .Values.publicAccess.expose) -}}
 {{- end -}}
-{{- if and (eq .Values.publicAccess.expose "dashboard") (not .Values.dashboard.enabled) -}}
+{{- if and .Values.publicAccess.enabled (eq .Values.publicAccess.expose "dashboard") (not .Values.dashboard.enabled) -}}
 {{- fail "hermes-agent: publicAccess.expose 'dashboard' requires dashboard.enabled: true — there is no dashboard to front." -}}
 {{- end -}}
-{{- if and (eq .Values.publicAccess.expose "webhooks") (not .Values.webhooks.enabled) -}}
+{{- if and .Values.publicAccess.enabled (eq .Values.publicAccess.expose "webhooks") (not .Values.webhooks.enabled) -}}
 {{- fail "hermes-agent: publicAccess.expose 'webhooks' requires webhooks.enabled: true — there is no webhook listener to front." -}}
 {{- end -}}
 {{- if and .Values.webhooks.directLoadBalancer.enabled (not .Values.webhooks.enabled) -}}

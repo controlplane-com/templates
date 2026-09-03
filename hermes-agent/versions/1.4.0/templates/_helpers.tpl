@@ -125,11 +125,14 @@ hermes config set browser.cdp_url {{ printf "http://127.0.0.1:%v" (.Values.brows
        interactive `hermes mcp add` — that command connects, and on an
        unauthenticated OAuth server it prompts "Save config anyway? [y/N]" which,
        under the non-TTY boot, defaults to No and saves nothing (measured against
-       the pinned image). `mcp add` writes exactly these two keys, and config set
-       is idempotent, so this is safe on every boot. The user completes OAuth in
-       the dashboard; tokens live on the volume and survive redeploys. */}}
+       the pinned image). config set is idempotent, so this is safe on every boot.
+       The `auth: oauth` key is what makes the dashboard offer an Authenticate
+       button (read at mcp_config.py:770 as cfg.get("auth")); without it the
+       server shows as enabled but with no way to sign in. The user completes
+       OAuth in the dashboard; tokens live on the volume and survive redeploys. */}}
 hermes config set mcp_servers.cpln.url "https://mcp.cpln.io/mcp?toolsets=full"
 hermes config set mcp_servers.cpln.enabled true
+hermes config set mcp_servers.cpln.auth oauth
 {{- end }}
 {{- end }}
 

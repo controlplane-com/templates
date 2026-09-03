@@ -39,8 +39,7 @@ browser:
     maxMemory: 1Gi
 
 # ─── Webhooks (optional external event ingestion) ─────────────────────────────
-# See the README "Webhooks" section for the three ways to expose the listener
-# (canonical HTTPS, a custom domain, or a direct load balancer).
+# Expose externally 3 ways — canonical HTTPS, a custom domain (keeps the dashboard public too), or a direct LB. See README "Webhooks".
 webhooks:
   enabled: false # turn on the webhook listener on port 8644 (WEBHOOK_ENABLED/PORT/SECRET); signing secret rides the prerequisite secret (secret.keys.webhookSecret)
   directLoadBalancer:

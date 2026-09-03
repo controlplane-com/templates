@@ -205,7 +205,11 @@ Most providers refuse plain-HTTP webhook endpoints, so prefer `expose: webhooks`
 
 ### Webhooks on a custom domain (dashboard + external webhooks together)
 
-This is the only way to have the dashboard (or API) public on the canonical endpoint AND accept external HTTPS webhooks at the same time. Create a `cpln domain` — this is a prerequisite you own, not something the chart provisions:
+This is the only way to have the dashboard (or API) public on the canonical endpoint AND accept external HTTPS webhooks at the same time. The domain is a **prerequisite you own** — the chart never creates it (a `domain` is an org-level resource, so a chart that owned it would delete it on `helm uninstall`, and only you can add DNS records). Steps:
+
+**1. Enable the listener** — install/upgrade with `webhooks.enabled: true` and a `webhook-secret` key in your prerequisite secret. The dashboard stays on the canonical endpoint (default `publicAccess.expose: dashboard`); the listener runs internally on 8644.
+
+**2. Create the domain resource** routing 443 → the webhook port 8644 (`cpln apply -f domain.yaml`):
 
 ```yaml
 kind: domain
@@ -226,14 +230,28 @@ spec:
         minProtocolVersion: TLSV1_2
 ```
 
-Apply it with `cpln apply -f domain.yaml`, then add the two DNS records it asks for:
+**3. Add the two DNS records** it asks for (read them back from `cpln domain get webhooks.example.com -o yaml` under `status.dnsConfig`; the CNAME target is the GVC alias, verified live):
 
 | Record | Name | Value |
 |---|---|---|
 | Ownership (TXT) | `_cpln-webhooks` (i.e. `_cpln-<label>`) | your Control Plane org name |
 | Routing (CNAME) | `webhooks` (the `<label>`) | `<gvcAlias>.cpln.app` (the GVC alias, from `cpln gvc get GVC`) |
 
-Once the domain goes live, external events reach `https://webhooks.example.com/webhooks/<name>` over a real Let's Encrypt certificate while the dashboard/API remain on the canonical endpoint. Verified live.
+**4. Wait for the domain to reach `ready`** (`cpln domain get webhooks.example.com` — it passes through `pendingDnsConfig` → `pendingCertificate` → `ready` as Let's Encrypt issues over HTTP-01; a minute or two once DNS resolves).
+
+**5. Register a subscription** — on the dashboard **Webhooks** page (or `hermes webhook subscribe <name> --events "*"`). Each subscription has its own HMAC secret; copy it, or pass `--secret "$WEBHOOK_SECRET"` to reuse the shared one.
+
+**6. Send a signed event** to `https://webhooks.example.com/webhooks/<name>` — the body's HMAC-SHA256 in `X-Webhook-Signature`:
+
+```bash
+SECRET='<the route secret>'
+BODY='{"type":"ping"}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')
+curl -i -X POST https://webhooks.example.com/webhooks/<name> \
+  -H 'Content-Type: application/json' -H "X-Webhook-Signature: $SIG" -d "$BODY"
+```
+
+A correct signature returns `200`/`202`; a wrong one returns `401`. External events now reach the listener over a real Let's Encrypt certificate while the dashboard/API remain on the canonical endpoint — both public at once. Verified live.
 
 **The dashboard and CLI always display the webhook URL as `http://localhost:8644/...`, no matter how you expose it.** This is an upstream cosmetic bug: the app ignores any public-URL setting, and the one host field it exposes doubles as the listener's bind address (setting it to a public hostname breaks the bind), so there is no safe way to override the displayed value. Ignore the displayed URL — the REAL external URL is `https://<your-domain-or-canonical-endpoint>/webhooks/<name>`.
 

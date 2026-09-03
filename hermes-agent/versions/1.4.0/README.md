@@ -7,6 +7,7 @@ This app deploys [Hermes Agent](https://github.com/NousResearch/hermes-agent) by
 - **Hermes Agent**: Stateful workload (single replica) running the supervised gateway. OpenAI-compatible API on 8642 (bearer-auth), web dashboard on 9119 (basic-auth), and an optional webhook listener on 8644 (HMAC-signed). With public access enabled, the single canonical HTTPS endpoint fronts one surface — `publicAccess.expose` picks which (the dashboard by default).
 - **Chromium sidecar** (optional, `browser.enabled`): a second container running headless Chromium, exposing the Chrome DevTools Protocol on loopback. The agent attaches to it so browser automation actually works — off by default because it is a real CPU/memory cost.
 - **Volumeset**: 10 GiB persistent storage at `/opt/data` — the SQLite memory database, sessions, learned skills, agent config, and MCP OAuth tokens survive restarts and redeploys.
+- **Control Plane MCP** (pre-registered, `cplnMcp.enabled`, on by default): the Control Plane MCP server is registered in the agent's config so it can manage resources in your cpln org — inert until you authenticate it once via OAuth in the dashboard.
 - **Identity + policy**: Least-privilege — the workload identity may `reveal` exactly the one prerequisite secret, nothing else.
 
 Single replica is by design: memory is a single-writer SQLite database and upstream forbids two gateways sharing one data directory. On restart, state persists on the volume and the agent resumes; only in-flight work and brief downtime are lost.
@@ -110,6 +111,15 @@ browser:
 
 Browser tools are **non-functional on the Nous image alone** — it ships no browser to drive. Set `browser.enabled: true` and the chart adds a headless-Chromium container to the workload and points the agent at it — verified on this platform: the agent resolves the CDP websocket to the sidecar and drives a real page navigation (confirmed in `/opt/data/logs/agent.log`) rather than silently falling back to `web_extract`. Text-level page fetching (`web_extract`) works without it. See **Browser automation** below.
 
+### Control Plane MCP
+
+```yaml
+cplnMcp:
+  enabled: true         # pre-register the Control Plane MCP server (https://mcp.cpln.io)
+```
+
+The Control Plane MCP server is registered by default, so it shows up on the dashboard's MCP page ready to authenticate. It is **inert until you click Authenticate** (OAuth) — nothing reaches your cpln org before that. Once authenticated, the agent can manage resources in your org, and the OAuth session acts as you; tokens persist on the volume across restarts. See **Connecting MCP servers that need OAuth** below. Set `cplnMcp.enabled: false` to skip registering it.
+
 ### Webhooks
 
 ```yaml
@@ -118,6 +128,15 @@ webhooks:
 ```
 
 Turning webhooks on wires the listener's env (`WEBHOOK_ENABLED/PORT/SECRET`); the signing secret comes from `secret.keys.webhookSecret`. See **Webhooks** below for the two ways to expose it.
+
+### WhatsApp
+
+```yaml
+whatsapp:
+  enabled: false        # enable the personal WhatsApp bridge (pair via a QR after install)
+```
+
+Set `whatsapp.enabled: true` to link the agent to a **personal** WhatsApp account via the image's built-in Baileys bridge. On first pairing the gateway installs the bridge's Node dependencies to the volume (~6 s, one-time, needs egress to `registry.npmjs.org` — covered by the default open outbound) and stores the WhatsApp session on the volume, so pairing survives restarts. Pair by scanning a QR — see **Messaging platforms** below. Off by default.
 
 ### Resources
 
@@ -272,12 +291,12 @@ Follow the prompts for your platform; the configuration is stored on the data vo
 
 - **Telegram** works out of the box — a bot token from `@BotFather` is all it needs.
 - **Slack** requires an app manifest. Two gotchas: Slack caps an app at **25 slash commands** but Hermes's generated manifest emits ~50 — **trim it to 25 or fewer** before creating the app, or Slack rejects the manifest. And Slack's user allowlist **fails closed when empty** — an empty allowlist silently rejects *everyone*, so you must set the allowed users explicitly.
-- **WhatsApp is not supported on this image** — neither the personal (Baileys) bridge nor the WhatsApp Cloud API. The bridge ships without its dependencies and writes session state off-volume (pairing does not survive a restart), and the Cloud API needs inbound webhooks upstream does not wire here. There is nothing to enable; skip the WhatsApp option in `hermes gateway setup`.
+- **WhatsApp** (personal account) works via the built-in Baileys bridge when you set `whatsapp.enabled: true`. Pair it after install: open the dashboard's WhatsApp setup and scan the QR with WhatsApp on your phone (Settings → Linked devices → Link a device), or run `cpln workload exec RELEASE-hermes-agent --gvc GVC --container hermes -- hermes whatsapp` for a terminal QR. First pairing installs the bridge's dependencies to the volume (a few seconds, one-time) and stores the session there, so it survives restarts. Choose the response mode and any allowlist during setup — the default self-chat mode is scoped to your own linked account; bot mode (answering other people) should be given an allowlist. The WhatsApp Cloud (business) API is a separate integration this template does not wire.
 - **An OAuth-connected MCP server, and a connected chat platform, act AS THE PERSON WHO AUTHENTICATED / paired it.** Chat requests can then invoke those tools with that person's permissions.
 
 ## Connecting MCP servers that need OAuth
 
-Many MCP servers (including Control Plane's own, `https://mcp.cpln.io/mcp`) authenticate with OAuth. Add the server on the dashboard's MCP page with **Authentication: OAuth**, then:
+Many MCP servers authenticate with OAuth. **Control Plane's own MCP server (`https://mcp.cpln.io/mcp`) is pre-registered for you** (`cplnMcp.enabled: true`) — it appears on the dashboard's MCP page ready to authenticate, so you skip the "add server" step and go straight to **Authenticate**. For any other OAuth MCP server, add it on the MCP page with **Authentication: OAuth** first. Then:
 
 - **With `publicAccess.expose: dashboard`** (the default): click **Authenticate** — your browser goes to the provider, you sign in, and it redirects straight back to the dashboard. This works because the chart sets the dashboard's public URL automatically; tokens persist on the volume across restarts and redeploys.
 - **With a custom domain**, set `dashboard.publicUrl` to your domain's base URL so callbacks and asset URLs use it instead of the canonical endpoint.
@@ -290,7 +309,7 @@ MCP auth state is not badged in the dashboard — the **Test** button (or `herme
 - **`publicAccess.enabled: true` publishes a terminal-capable agent to the internet.** With the default `expose: dashboard` that is a basic-auth login form; with `expose: api` it is a bearer-guarded API. Either way, whoever gets in operates the agent with full file access as the container user, so use a long random password/key (`openssl rand -hex 32`) and prefer restricting reach via `internalAccess`. It is off by default.
 - **The API server key must be at least 16 characters** — Hermes rejects anything shorter, and the workload will not become ready.
 - **`browser.enabled` adds a second container with its own resource floor** — a real, ongoing cost. Leave it off unless the agent needs to drive a real browser.
-- **WhatsApp is not supported on this image.** The personal (Baileys) bridge ships without its `node_modules` and stores session state off-volume under the gateway's scrubbed environment, so pairing does not survive restarts; the WhatsApp Cloud (business) API needs inbound webhooks that upstream does not wire here. There is nothing to enable — do not expect the WhatsApp option in `hermes gateway setup` to work.
+- **WhatsApp (personal) is opt-in** (`whatsapp.enabled: true`) and pairs via a QR after install — the bridge's dependencies install to the volume on first pairing and the session persists there, so pairing survives restarts. It links your own WhatsApp account; the default self-chat mode is owner-scoped, and bot mode should be given an allowlist during setup. The WhatsApp Cloud (business) API is not wired by this template.
 - **An OAuth-connected MCP server acts AS THE PERSON WHO AUTHENTICATED IT.** Chat requests can then invoke those tools with that person's permissions — for Control Plane's MCP that includes creating and deleting real infrastructure. Connect write-capable MCP servers deliberately.
 - **Single replica by design** — memory is single-writer SQLite; do not scale up. State persists on the volume across restarts, but a restart or upgrade is a brief outage on a single replica.
 - **Failed model calls return HTTP 200** with the error inside the body (`"finish_reason": "error"`, `"hermes": {"failed": true}`). A client that checks only the HTTP status will read a provider failure as success — inspect the body, or the agent log at `/opt/data/logs/agent.log`.

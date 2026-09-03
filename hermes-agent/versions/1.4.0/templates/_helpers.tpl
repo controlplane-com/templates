@@ -119,6 +119,18 @@ hermes config set platforms.webhook.enabled true
        for the same reason the model keys are — a scalar set corrupts the map. */}}
 hermes config set browser.cdp_url {{ printf "http://127.0.0.1:%v" (.Values.browser.cdpPort | toString) | quote }}
 {{- end }}
+{{- if .Values.cplnMcp.enabled }}
+{{- /* Pre-register the Control Plane MCP server so it appears in the dashboard
+       ready to authenticate. Seeded via dotted config-set paths, NOT the
+       interactive `hermes mcp add` — that command connects, and on an
+       unauthenticated OAuth server it prompts "Save config anyway? [y/N]" which,
+       under the non-TTY boot, defaults to No and saves nothing (measured against
+       the pinned image). `mcp add` writes exactly these two keys, and config set
+       is idempotent, so this is safe on every boot. The user completes OAuth in
+       the dashboard; tokens live on the volume and survive redeploys. */}}
+hermes config set mcp_servers.cpln.url "https://mcp.cpln.io/mcp?toolsets=full"
+hermes config set mcp_servers.cpln.enabled true
+{{- end }}
 {{- end }}
 
 

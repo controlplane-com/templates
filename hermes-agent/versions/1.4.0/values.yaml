@@ -38,10 +38,27 @@ browser:
     maxCpu: 1000m # keep maxCpu <= 4x minCpu (stateful workload)
     maxMemory: 1Gi
 
+# ─── Control Plane MCP (agent tools for your cpln org) ────────────────────────
+# Pre-registers the Control Plane MCP server so the agent can manage your cpln
+# resources. It shows up in the dashboard ready to authenticate — you click
+# Authenticate (OAuth) once and nothing reaches cpln until you do. Tokens persist
+# on the volume across restarts. The dashboard must be reachable to authenticate.
+cplnMcp:
+  enabled: true # register https://mcp.cpln.io as an MCP server; authenticate via OAuth in the dashboard
+
 # ─── Webhooks (optional external event ingestion) ─────────────────────────────
 # Expose externally 2 ways — canonical HTTPS (`publicAccess.expose: webhooks`) or a custom domain (keeps the dashboard public too). See README.
 webhooks:
   enabled: false # turn on the webhook listener on port 8644 (WEBHOOK_ENABLED/PORT/SECRET); signing secret rides the prerequisite secret (secret.keys.webhookSecret)
+
+# ─── WhatsApp (optional personal WhatsApp bridge) ─────────────────────────────
+# Links the agent to a personal WhatsApp account via the image's built-in Baileys
+# bridge. Off by default. When on, the gateway installs the bridge's Node deps to
+# the volume on first pairing (~6s, needs egress to registry.npmjs.org) and you
+# pair by scanning a QR from the dashboard (or `hermes whatsapp`). Session state
+# persists on the volume. Set an allowlist after pairing — see the README.
+whatsapp:
+  enabled: false # enable the WhatsApp platform (WHATSAPP_ENABLED); pair via the dashboard QR after installing
 
 # ─── Resources ────────────────────────────────────────────────────────────────
 resources:

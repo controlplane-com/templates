@@ -98,6 +98,16 @@ spec:
         - name: WEBHOOK_SECRET
           value: 'cpln://secret/{{ .Values.secret.name }}.{{ .Values.secret.keys.webhookSecret }}'
         {{- end }}
+        {{- if .Values.whatsapp.enabled }}
+        # ── WhatsApp personal bridge (Baileys) ──
+        # Enables the WhatsApp platform. The gateway runs as a non-root user, for
+        # which the image's install tree is read-only, so on first pairing it
+        # mirrors the Node bridge to HERMES_HOME (=/opt/data, the volume) and
+        # `npm install`s there — deps and session state persist on the volume.
+        # Pair by scanning the QR from the dashboard (or `hermes whatsapp`).
+        - name: WHATSAPP_ENABLED
+          value: 'true'
+        {{- end }}
       ports:
         # The FIRST declared port is the one the public canonical HTTPS endpoint
         # fronts — publicAccess.expose picks which surface that is. Probes and

@@ -39,11 +39,9 @@ browser:
     maxMemory: 1Gi
 
 # ─── Webhooks (optional external event ingestion) ─────────────────────────────
+# Expose externally 2 ways — canonical HTTPS (`publicAccess.expose: webhooks`) or a custom domain (keeps the dashboard public too). See README.
 webhooks:
-  enabled: false # turn on the webhook listener on port 8644 (WEBHOOK_ENABLED/PORT/SECRET/URL); signing secret rides the prerequisite secret (secret.keys.webhookSecret)
-  publicUrl: "" # advertised base URL shown in the UI. Empty + expose: webhooks = canonical endpoint. Set to your direct-LB or custom-domain address otherwise
-  directLoadBalancer:
-    enabled: false # publish 8644 via a DEDICATED load balancer. BILLED whether or not events arrive; L4 (no TLS) — some providers (e.g. Stripe) refuse plain-HTTP endpoints. Prefer publicAccess.expose: webhooks for HTTPS
+  enabled: false # turn on the webhook listener on port 8644 (WEBHOOK_ENABLED/PORT/SECRET); signing secret rides the prerequisite secret (secret.keys.webhookSecret)
 
 # ─── Resources ────────────────────────────────────────────────────────────────
 resources:

@@ -156,9 +156,6 @@ hermes config set browser.cdp_url {{ printf "http://127.0.0.1:%v" (.Values.brows
 {{- if and .Values.publicAccess.enabled (eq .Values.publicAccess.expose "webhooks") (not .Values.webhooks.enabled) -}}
 {{- fail "hermes-agent: publicAccess.expose 'webhooks' requires webhooks.enabled: true — there is no webhook listener to front." -}}
 {{- end -}}
-{{- if and .Values.webhooks.directLoadBalancer.enabled (not .Values.webhooks.enabled) -}}
-{{- fail "hermes-agent: webhooks.directLoadBalancer.enabled requires webhooks.enabled: true — there is no listener to publish." -}}
-{{- end -}}
 {{- end }}
 
 

@@ -97,13 +97,6 @@ spec:
           value: '8644'
         - name: WEBHOOK_SECRET
           value: 'cpln://secret/{{ .Values.secret.name }}.{{ .Values.secret.keys.webhookSecret }}'
-        {{- if .Values.webhooks.publicUrl }}
-        - name: WEBHOOK_URL
-          value: {{ .Values.webhooks.publicUrl | quote }}
-        {{- else if eq .Values.publicAccess.expose "webhooks" }}
-        - name: WEBHOOK_URL
-          value: $(CPLN_GLOBAL_ENDPOINT)
-        {{- end }}
         {{- end }}
       ports:
         # The FIRST declared port is the one the public canonical HTTPS endpoint
@@ -235,15 +228,3 @@ spec:
         - {{ . }}
         {{- end }}
       {{- end }}
-  {{- if and .Values.webhooks.enabled .Values.webhooks.directLoadBalancer.enabled }}
-  # Dedicated L4 load balancer publishing the webhook listener on 8644. Billed
-  # whether or not events arrive, and plain-HTTP (no TLS at this layer).
-  loadBalancer:
-    direct:
-      enabled: true
-      ports:
-        - containerPort: 8644
-          externalPort: 8644
-          protocol: TCP
-          scheme: tcp
-  {{- end }}

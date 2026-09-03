@@ -34,13 +34,15 @@ Single replica is by design: memory is a single-writer SQLite database and upstr
   cpln secret create-dictionary --name my-hermes-secret \
     --entry "api-key=YOUR-LLM-API-KEY" \
     --entry "api-server-key=$(openssl rand -hex 32)" \
-    --entry "dashboard-password=YOUR-STRONG-PASSWORD"
+    --entry "dashboard-password=YOUR-STRONG-PASSWORD" \
+    --entry "webhook-secret=$(openssl rand -hex 32)"   # only needed if you enable webhooks
   ```
 
-  If you plan to enable webhooks, add `--entry "webhook-secret=$(openssl rand -hex 32)"` too.
   Pass the secret's name as `secret.name` at install (and override `secret.keys` if your key names differ).
 
   **A missing prerequisite secret wedges the deployment silently** — `cpln logs` returns nothing because the container never starts. If the workload never becomes ready, check `cpln workload get-deployments RELEASE-hermes-agent --gvc GVC -o yaml` and read `status.versions[].message`; it names the missing secret. Recovery is automatic once the secret exists (up to ~6 minutes), or force it with `cpln workload force-redeployment`.
+
+- **A Control Plane `domain`** — only if you want external webhooks reachable by outside services over a custom hostname. You create the domain and point it at the workload's webhook port; see **Webhooks** below for the full steps. (Not needed for the canonical-endpoint webhook path, `publicAccess.expose: webhooks`.)
 
 ## Configuration
 
@@ -113,12 +115,9 @@ Browser tools are **non-functional on the Nous image alone** — it ships no bro
 ```yaml
 webhooks:
   enabled: false        # turn on the webhook listener on port 8644
-  publicUrl: ""         # advertised base URL shown in the UI. Empty + expose: webhooks = canonical endpoint. Set to your direct-LB or custom-domain address otherwise
-  directLoadBalancer:
-    enabled: false      # publish 8644 via a DEDICATED load balancer (billed; L4, no TLS)
 ```
 
-Turning webhooks on wires the listener's env (`WEBHOOK_ENABLED/PORT/SECRET/URL`); the signing secret comes from `secret.keys.webhookSecret`. See **Webhooks** below for the two ways to expose it.
+Turning webhooks on wires the listener's env (`WEBHOOK_ENABLED/PORT/SECRET`); the signing secret comes from `secret.keys.webhookSecret`. See **Webhooks** below for the two ways to expose it.
 
 ### Resources
 
@@ -160,19 +159,21 @@ internalAccess:
 
 | `expose` | Canonical endpoint serves | The other surfaces |
 |---|---|---|
-| `dashboard` (default) | Web dashboard (9119) behind its basic-auth login | API internal at `RELEASE-hermes-agent.GVC.cpln.local:8642`; webhooks (if on) internal or on the direct LB |
-| `api` | Gateway API (8642), bearer-auth | Dashboard internal — reach it via `cpln port-forward` |
+| `dashboard` (default) | Web dashboard (9119) behind its basic-auth login | API internal at `RELEASE-hermes-agent.GVC.cpln.local:8642`; webhooks (if on) internal |
+| `api` | Gateway API (8642), bearer-auth | Dashboard internal |
 | `webhooks` | Webhook listener (8644) over HTTPS | API and dashboard internal |
 
-**Security note — the default `expose: dashboard` puts a basic-auth login form on the internet when you enable public access.** Whoever logs in operates a terminal-capable agent, so the dashboard password in your secret must be strong (`openssl rand -hex 32`). Public access is off by default; the dashboard is reachable privately via `cpln port-forward` (below) with no exposure at all.
+**Keeping the API internal is a valid, safer posture for event-driven deployments.** The gateway API is a terminal-capable agent behind a single bearer token, so `publicAccess.expose: webhooks` — exposing only the HMAC-signed webhook listener while the API stays on the private internal endpoint — is a deliberate hardening choice, not a limitation.
+
+**Security note — the default `expose: dashboard` puts a basic-auth login form on the internet when you enable public access.** Whoever logs in operates a terminal-capable agent, so the dashboard password in your secret must be strong (`openssl rand -hex 32`). Public access is off by default; with it off the dashboard is internal-only.
 
 ## Connecting
 
 | Interface | Where | Auth |
 |---|---|---|
-| Web dashboard | Public on the canonical HTTPS endpoint with `publicAccess.enabled: true` (default `expose: dashboard`) — find it in `status.canonicalEndpoint` (`cpln workload get RELEASE-hermes-agent -o yaml`). Otherwise private: `cpln port-forward RELEASE-hermes-agent 9119:9119 --gvc GVC`, then `http://localhost:9119` | Basic auth (`dashboard.username` + the dashboard password from your secret) |
+| Web dashboard | Public on the canonical HTTPS endpoint with `publicAccess.enabled: true` (default `expose: dashboard`) — find it in `status.canonicalEndpoint` (`cpln workload get RELEASE-hermes-agent -o yaml`). Otherwise internal-only | Basic auth (`dashboard.username` + the dashboard password from your secret) |
 | Gateway API (OpenAI-compatible) | From another workload by default. Public on the canonical endpoint with `publicAccess.enabled: true` and `expose: api` | Bearer `API_SERVER_KEY` |
-| Webhook listener | From another workload at `RELEASE-hermes-agent.GVC.cpln.local:8644`. Public via `expose: webhooks` (HTTPS) or `webhooks.directLoadBalancer` (plain HTTP) | HMAC signature (webhook secret) |
+| Webhook listener | From another workload at `RELEASE-hermes-agent.GVC.cpln.local:8644`. Public via `expose: webhooks` (HTTPS, takes the canonical) or a **custom domain** routing `443 → :8644` (HTTPS, coexists with a public dashboard/API — recommended) | HMAC signature (webhook secret) |
 | From another workload | `RELEASE-hermes-agent.GVC.cpln.local:8642` | Bearer `API_SERVER_KEY` |
 
 Example request against the gateway API:
@@ -198,10 +199,66 @@ Set **`webhooks.enabled: true`** to turn on the listener on 8644 (the chart also
 
 | Path | How | Trade-offs |
 |---|---|---|
-| **`publicAccess.expose: webhooks`** (recommended) | The canonical HTTPS endpoint fronts 8644, TLS-terminated at the edge, no extra load balancer | Consumes the single canonical endpoint, so the dashboard/API cannot also be public at the same time |
-| **`webhooks.directLoadBalancer.enabled: true`** | A dedicated L4 `loadBalancer.direct` port on 8644 | **Enables a dedicated load balancer that is billed whether or not events ever arrive.** It is **plain HTTP / L4 (no TLS)**, so providers that require HTTPS (e.g. Stripe) will reject it. **Measured: enabling it changes the workload's canonical endpoint to the TCP direct-LB address**, so it does NOT coexist with a public HTTPS dashboard or API on the canonical endpoint — use it when webhooks are the only public surface, or keep the dashboard/API private |
+| **`publicAccess.expose: webhooks`** | The canonical HTTPS endpoint fronts 8644, TLS-terminated at the edge, no extra load balancer | Consumes the single canonical endpoint, so the dashboard/API cannot also be public at the same time |
+| **Custom domain** (recommended for coexistence) | A Control Plane `domain` resource routing `443 → :8644`, as a **prerequisite** you create (the chart can't own your DNS, same as a cloud account). This is an independent public front, so the dashboard/API stay on the canonical endpoint AND webhooks are reachable over real TLS — both public at the same time. Webhooks land at `https://<your-domain>/webhooks/<name>` | You own the DNS records and the domain resource. Verified working with a real Let's Encrypt certificate |
 
-Most providers refuse plain-HTTP webhook endpoints, so prefer `expose: webhooks` unless you specifically need the dashboard public at the same time.
+Both paths are HTTPS. Use `expose: webhooks` when webhooks are the only public surface, or a **custom domain** to keep the dashboard/API public too.
+
+### Webhooks on a custom domain (dashboard + external webhooks together)
+
+This is the only way to have the dashboard (or API) public on the canonical endpoint AND accept external HTTPS webhooks at the same time. The domain is a **prerequisite you own** — the chart never creates it (a `domain` is an org-level resource, so a chart that owned it would delete it on `helm uninstall`, and only you can add DNS records).
+
+**`GET /` on the webhook domain returns `404` by design** — the domain routes to the webhook listener (8644), which only serves `/webhooks/<name>`, not a root page (same as the API port). A 404 at the root means the domain is wired correctly, not that anything is broken.
+
+Steps:
+
+**1. Enable the listener** — install/upgrade with `webhooks.enabled: true` and a `webhook-secret` key in your prerequisite secret. The dashboard stays on the canonical endpoint (default `publicAccess.expose: dashboard`); the listener runs internally on 8644.
+
+**2. Create the domain resource** routing 443 → the webhook port 8644 (`cpln apply -f domain.yaml`):
+
+```yaml
+kind: domain
+name: webhooks.example.com            # your subdomain
+description: webhooks.example.com
+spec:
+  dnsMode: cname                      # subdomain mode
+  certChallengeType: http01           # Let's Encrypt HTTP-01
+  acceptAllHosts: false
+  ports:
+    - number: 443
+      protocol: http2
+      routes:
+        - prefix: /
+          port: 8644                  # route to the webhook listener
+          workloadLink: //gvc/GVC/workload/RELEASE-hermes-agent
+      tls:
+        minProtocolVersion: TLSV1_2
+```
+
+**3. Add the two DNS records** it asks for (read them back from `cpln domain get webhooks.example.com -o yaml` under `status.dnsConfig`; the CNAME target is the GVC alias, verified live):
+
+| Record | Name | Value |
+|---|---|---|
+| Ownership (TXT) | `_cpln-webhooks` (i.e. `_cpln-<label>`) | your Control Plane org name |
+| Routing (CNAME) | `webhooks` (the `<label>`) | `<gvcAlias>.cpln.app` (the GVC alias, from `cpln gvc get GVC`) |
+
+**4. Wait for the domain to reach `ready`** (`cpln domain get webhooks.example.com` — it passes through `pendingDnsConfig` → `pendingCertificate` → `ready` as Let's Encrypt issues over HTTP-01; a minute or two once DNS resolves).
+
+**5. Register a subscription** — on the dashboard **Webhooks** page (or `hermes webhook subscribe <name> --events "*"`). Each subscription has its own HMAC secret; copy it, or pass `--secret "$WEBHOOK_SECRET"` to reuse the shared one.
+
+**6. Send a signed event** to `https://webhooks.example.com/webhooks/<name>` — the body's HMAC-SHA256 in `X-Webhook-Signature`:
+
+```bash
+SECRET='<the route secret>'
+BODY='{"type":"ping"}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')
+curl -i -X POST https://webhooks.example.com/webhooks/<name> \
+  -H 'Content-Type: application/json' -H "X-Webhook-Signature: $SIG" -d "$BODY"
+```
+
+A correct signature returns `200`/`202`; a wrong one returns `401`. External events now reach the listener over a real Let's Encrypt certificate while the dashboard/API remain on the canonical endpoint — both public at once. Verified live.
+
+**The dashboard and CLI always display the webhook URL as `http://localhost:8644/...`, no matter how you expose it.** This is an upstream cosmetic bug: the app ignores any public-URL setting, and the one host field it exposes doubles as the listener's bind address (setting it to a public hostname breaks the bind), so there is no safe way to override the displayed value. Ignore the displayed host — only the **path** matters. The **same subscription is fully reachable and behaves identically** when called at your real external base: take the `/webhooks/<name>` path from the dialog and prepend your domain or canonical endpoint, dropping `localhost:8644`. So `http://localhost:8644/webhooks/myhook` shown in the UI is served at `https://<your-domain>/webhooks/myhook` — give external callers THAT. (Verified: a subscription displayed as `localhost` returned 202 to a correctly-signed POST at the custom-domain URL, 401 to a bad signature.)
 
 ## Messaging platforms (optional)
 
@@ -215,6 +272,7 @@ Follow the prompts for your platform; the configuration is stored on the data vo
 
 - **Telegram** works out of the box — a bot token from `@BotFather` is all it needs.
 - **Slack** requires an app manifest. Two gotchas: Slack caps an app at **25 slash commands** but Hermes's generated manifest emits ~50 — **trim it to 25 or fewer** before creating the app, or Slack rejects the manifest. And Slack's user allowlist **fails closed when empty** — an empty allowlist silently rejects *everyone*, so you must set the allowed users explicitly.
+- **WhatsApp is not supported on this image** — neither the personal (Baileys) bridge nor the WhatsApp Cloud API. The bridge ships without its dependencies and writes session state off-volume (pairing does not survive a restart), and the Cloud API needs inbound webhooks upstream does not wire here. There is nothing to enable; skip the WhatsApp option in `hermes gateway setup`.
 - **An OAuth-connected MCP server, and a connected chat platform, act AS THE PERSON WHO AUTHENTICATED / paired it.** Chat requests can then invoke those tools with that person's permissions.
 
 ## Connecting MCP servers that need OAuth
@@ -232,10 +290,8 @@ MCP auth state is not badged in the dashboard — the **Test** button (or `herme
 - **`publicAccess.enabled: true` publishes a terminal-capable agent to the internet.** With the default `expose: dashboard` that is a basic-auth login form; with `expose: api` it is a bearer-guarded API. Either way, whoever gets in operates the agent with full file access as the container user, so use a long random password/key (`openssl rand -hex 32`) and prefer restricting reach via `internalAccess`. It is off by default.
 - **The API server key must be at least 16 characters** — Hermes rejects anything shorter, and the workload will not become ready.
 - **`browser.enabled` adds a second container with its own resource floor** — a real, ongoing cost. Leave it off unless the agent needs to drive a real browser.
-- **`webhooks.directLoadBalancer.enabled` provisions a dedicated load balancer that is billed continuously**, whether or not events arrive, and it is plain-HTTP. Prefer `publicAccess.expose: webhooks` for a free, TLS-terminated endpoint.
 - **WhatsApp is not supported on this image.** The personal (Baileys) bridge ships without its `node_modules` and stores session state off-volume under the gateway's scrubbed environment, so pairing does not survive restarts; the WhatsApp Cloud (business) API needs inbound webhooks that upstream does not wire here. There is nothing to enable — do not expect the WhatsApp option in `hermes gateway setup` to work.
 - **An OAuth-connected MCP server acts AS THE PERSON WHO AUTHENTICATED IT.** Chat requests can then invoke those tools with that person's permissions — for Control Plane's MCP that includes creating and deleting real infrastructure. Connect write-capable MCP servers deliberately.
-- **A dashboard login that hangs (spinner, request pending forever) is almost always stale BROWSER state, not the server.** Port-forward tunnels that die mid-session leave wedged connections in the browser's profile; later logins then stall while every server surface is healthy. Fix: fully QUIT the browser and reopen (closing the tab is not enough) — a private window also works, which is the tell.
 - **Single replica by design** — memory is single-writer SQLite; do not scale up. State persists on the volume across restarts, but a restart or upgrade is a brief outage on a single replica.
 - **Failed model calls return HTTP 200** with the error inside the body (`"finish_reason": "error"`, `"hermes": {"failed": true}`). A client that checks only the HTTP status will read a provider failure as success — inspect the body, or the agent log at `/opt/data/logs/agent.log`.
 - **Keep `maxCpu` under 4× `minCpu`** (both the app and browser blocks) — the platform rejects a wider ratio on a stateful workload.

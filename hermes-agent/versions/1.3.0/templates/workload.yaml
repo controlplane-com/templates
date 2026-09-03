@@ -228,15 +228,3 @@ spec:
         - {{ . }}
         {{- end }}
       {{- end }}
-  {{- if and .Values.webhooks.enabled .Values.webhooks.directLoadBalancer.enabled }}
-  # Dedicated L4 load balancer publishing the webhook listener on 8644. Billed
-  # whether or not events arrive, and plain-HTTP (no TLS at this layer).
-  loadBalancer:
-    direct:
-      enabled: true
-      ports:
-        - containerPort: 8644
-          externalPort: 8644
-          protocol: TCP
-          scheme: tcp
-  {{- end }}

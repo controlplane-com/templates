@@ -28,6 +28,19 @@ spec:
           # writes to /opt/data/.hermes/config.yaml, which the gateway never reads.
           export HERMES_HOME=/opt/data
           {{- include "hermes-agent.configSeed" . | nindent 10 }}
+          {{- if .Values.cplnMcp.enabled }}
+          # The gateway CLEARS mcp_servers.cpln.auth on its first startup: it
+          # connects to the still-unauthenticated server, gets 401, and parks it —
+          # dropping the oauth marker the seed just wrote, so the dashboard would
+          # show the server with no Authenticate button (measured on the pinned
+          # image: seed sets auth, ~14s later "parking ... Authentication required",
+          # marker gone). Re-assert it a few times after startup; a set AFTER the
+          # park persists (the server stays parked until a reconnect is requested,
+          # i.e. until the user clicks Authenticate). Once authenticated, tokens are
+          # cached on the volume and the marker survives normally. Backgrounded so
+          # it never delays the gateway; harmless if the seed's marker already held.
+          ( for _ in 1 2 3 4; do sleep 30; HERMES_HOME=/opt/data hermes config set mcp_servers.cpln.auth oauth >/dev/null 2>&1 || true; done ) &
+          {{- end }}
           exec hermes gateway run
       inheritEnv: false
       minCpu: {{ .Values.resources.minCpu | quote }}

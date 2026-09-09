@@ -1,0 +1,267 @@
+{{- include "calcom.validate" . }}
+kind: workload
+name: {{ include "calcom.name" . }}
+description: Cal.com scheduling application
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "calcom.tags" . | nindent 4 }}
+spec:
+  {{- /* `standard`, not `stateful`: the app writes nothing to disk (upstream's
+         own compose file mounts no volume on this service and avatars live in
+         Postgres), needs no stable replica index, and a standard tier both
+         RETAINS rolloutOptions.maxUnavailableReplicas and escapes the 4:1
+         cpu:minCpu cap that applies to stateful workloads. */}}
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "calcom.identity.name" . }}
+  containers:
+    - name: calcom
+      image: {{ .Values.calcom.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.calcom.resources.minCpu | quote }}
+      minMemory: {{ .Values.calcom.resources.minMemory | quote }}
+      cpu: {{ .Values.calcom.resources.maxCpu | quote }}
+      memory: {{ .Values.calcom.resources.maxMemory | quote }}
+      env:
+        {{- /* DO NOT REMOVE AS REDUNDANT.
+
+               A Next.js STANDALONE server binds `process.env.HOSTNAME ||
+               "0.0.0.0"`, and Control Plane sets HOSTNAME to the replica name —
+               which makes the app listen on the pod IP only and returns
+               `502 Unable to connect to upstream workload` through
+               `cpln port-forward` (measured on langfuse).
+
+               At calcom/cal.com:v6.2.0 that trap does NOT fire: scripts/start.sh
+               ends with `yarn start` -> `next start`, and next 16.1.5's
+               packages/next/src/cli/next-start.ts never reads process.env.HOSTNAME.
+               Confirmed by running the pinned image with HOSTNAME set to a
+               replica-shaped name: it logged `Local: http://localhost:3000` and
+               served 200 on 127.0.0.1:3000/api/version.
+
+               But the image DOES build a standalone bundle
+               (/calcom/apps/web/.next/standalone exists at this tag), so upstream
+               is one line away from arming it — and this template's whole first-run
+               story is `publicAccess: false` + port-forward, which depends on
+               loopback. The variable is a no-op under `next start` and costs
+               nothing. The API accepts and stores it verbatim (probed 2026-08-31;
+               only CPLN_-prefixed names are reserved). */}}
+        - name: HOSTNAME
+          value: "0.0.0.0"
+        {{- /* The username and password land in their OWN env vars so the
+               platform resolves the cpln:// reference; DATABASE_URL is then
+               composed with $(VAR), the platform's own interpolation, which is
+               applied after the references resolve. A cpln:// reference placed
+               directly inside a Helm-assembled string is literal text — the
+               nocodb/polaris defect — so the host and database NAME, which are
+               not secret, are interpolated at render time instead. */}}
+        - name: DB_USER
+          value: 'cpln://secret/{{ include "calcom.db.secretName" . }}.username'
+        - name: DB_PASSWORD
+          value: 'cpln://secret/{{ include "calcom.db.secretName" . }}.password'
+        - name: DATABASE_URL
+          value: postgresql://$(DB_USER):$(DB_PASSWORD)@{{ include "calcom.db.host" . }}:5432/{{ include "calcom.db.database" . }}
+        {{- /* Prisma uses the DIRECT url for migrations (it must bypass a
+               connection pooler). Same target here — neither backing store puts
+               PgBouncer in this path by default. */}}
+        - name: DATABASE_DIRECT_URL
+          value: postgresql://$(DB_USER):$(DB_PASSWORD)@{{ include "calcom.db.host" . }}:5432/{{ include "calcom.db.database" . }}
+        {{- /* DATABASE_HOST is deliberately NOT set. Its only consumer in the
+               whole image is `scripts/start.sh` (verified by grepping the pinned
+               image: one hit, that file), and this workload replaces start.sh —
+               see the startup-script secret. Setting it would advertise a wait
+               that no longer runs. */}}
+        - name: NEXT_PUBLIC_WEBAPP_URL
+          value: {{ include "calcom.appUrl" . | quote }}
+        - name: NEXTAUTH_URL
+          value: {{ include "calcom.appUrl" . | quote }}
+        - name: NEXTAUTH_SECRET
+          value: 'cpln://secret/{{ .Values.calcom.auth.secretName }}.nextAuthSecret'
+        - name: CALENDSO_ENCRYPTION_KEY
+          value: 'cpln://secret/{{ .Values.calcom.auth.secretName }}.encryptionKey'
+        {{- /* NOT optional. At v6.2.0, with CRON_SECRET unset the endpoints
+               compare the Authorization header against the literal string
+               "Bearer undefined", so any unauthenticated caller sending exactly
+               that header can trigger tasker cleanup and queue processing
+               (upstream issue #29565, unfixed at this tag). Measured on the
+               pinned image: no header -> 401, `Bearer undefined` -> 400, i.e. it
+               got past the auth check. There is no valid unset path. */}}
+        - name: CRON_SECRET
+          value: 'cpln://secret/{{ .Values.calcom.auth.secretName }}.cronSecret'
+        - name: CRON_API_KEY
+          value: 'cpln://secret/{{ .Values.calcom.auth.secretName }}.cronApiKey'
+        {{- /* Read at runtime by packages/lib/telemetry.ts in the shipped image
+               ("1" drops the jitsu driver that posts to t.calendso.com). It is a
+               plain server-side read, not a NEXT_PUBLIC_* value, so unlike most
+               of Cal.com's build ARGs it genuinely takes effect at run time. */}}
+        - name: CALCOM_TELEMETRY_DISABLED
+          value: "1"
+        {{- if .Values.email.enabled }}
+        - name: EMAIL_FROM
+          value: {{ .Values.email.fromAddress | quote }}
+        - name: EMAIL_FROM_NAME
+          value: {{ .Values.email.fromName | quote }}
+        - name: EMAIL_SERVER_HOST
+          value: {{ .Values.email.host | quote }}
+        - name: EMAIL_SERVER_PORT
+          value: {{ .Values.email.port | quote }}
+        {{- if .Values.email.auth.secretName }}
+        - name: EMAIL_SERVER_USER
+          value: 'cpln://secret/{{ .Values.email.auth.secretName }}.EMAIL_SERVER_USER'
+        - name: EMAIL_SERVER_PASSWORD
+          value: 'cpln://secret/{{ .Values.email.auth.secretName }}.EMAIL_SERVER_PASSWORD'
+        {{- end }}
+        {{- end }}
+      {{- /* The image's entrypoint is REPLACED. `start.sh` gates the boot on
+             `wait-for-it.sh`, a bare TCP connect that the mesh sidecar answers
+             for anything, and it runs without `set -e` — so a failed
+             `prisma migrate deploy` did not stop the boot and Cal.com served
+             HTTP against an EMPTY database with every surface reading green.
+             The replacement waits by exchanging real Postgres protocol bytes
+             and hard-fails the migration. Full rationale, and the negative
+             controls, are in secret-startup.yaml.
+
+             `/bin/bash` explicitly: `/bin/sh` in this image is dash, and the
+             script's readiness probe uses bash's `/dev/tcp` (both verified in
+             the pinned tag). Mounted under /cpln rather than into
+             /calcom/scripts so nothing in the image's own directory is
+             shadowed — the pattern postgres-multi-location uses for
+             /patroni/start.sh. */}}
+      command: /bin/bash
+      args:
+        - /cpln/start.sh
+      volumes:
+        - path: /cpln/start.sh
+          recoveryPolicy: retain   # API backfill, declared so rendered == stored
+          uri: cpln://secret/{{ include "calcom.secret.startup.name" . }}.payload
+      ports:
+        - number: 3000
+          protocol: http
+      {{- /* /api/version is unauthenticated, touches no database, and returns
+             {"version":"6.2.0"} — so the probe body doubles as proof the running
+             image is the tag the chart claims.
+
+             It CANNOT detect a missing schema, and there is no endpoint at this
+             tag that can: the v6.2.0 tree carries no /api/health, /api/ready or
+             equivalent under apps/web (checked against the full tag tree), and
+             /auth/setup answers 307 against an empty database. So the schema
+             invariant is enforced at BOOT instead — the startup script only
+             reaches `yarn start` after `prisma migrate deploy` has exited 0
+             under `set -e`, which makes "HTTP is listening" imply "migrations
+             applied" for the process that is serving. That claim was FALSE
+             before this fix and is what the empty-database failure turned on;
+             it is now true by construction rather than by assumption.
+
+             READINESS IS WHAT RESTARTS A CONTAINER THAT NEVER BECOMES READY,
+             NOT LIVENESS. An earlier version of this comment claimed the
+             opposite — that readiness exhausting its threshold during a slow
+             database wait is benign because it keeps probing — and the whole
+             wait budget was sized against liveness on that assumption. It is
+             false on this platform. Measured 2026-08-31 on four throwaway
+             workloads with an unsatisfiable readiness probe and NO liveness
+             probe at all: the platform restarts the container some minutes
+             AFTER readiness's own deadline (initialDelaySeconds +
+             failureThreshold * periodSeconds), and the restart time tracks that
+             deadline — 5 s deadline -> 238 s, 330 s deadline -> 563 s, 660 s
+             deadline -> 1044 s. The control with no readiness probe was never
+             restarted (and reported ready with nothing listening), which is
+             what pins the cause on readiness rather than on a platform-wide
+             "must become ready" timer. The extra grace was 233 s at both the
+             5 s and 330 s deadlines and 384 s at 660 s, so it is NOT a clean
+             constant — treat the DEADLINE as the number to design against,
+             since it is the floor the kill can never precede.
+
+             So these numbers are a CEILING ON BOOT TIME, not just a rotation
+             policy: 30 + 20 * 15 = 330 s here, and the container is terminated
+             ~515 s in (measured on this chart) with `Health Check Failed` and a
+             signal — no mention of the database, and the startup script's own
+             FATAL never prints. The startup script's wait budget is therefore
+             sized to fire INSIDE this, at 240 s; see secret-startup.yaml. Do
+             not lengthen that budget without moving these numbers first.
+
+             Readiness is left tight on purpose rather than widened to cover a
+             long wait: failureThreshold * periodSeconds is also how long a sick
+             replica stays in rotation, and buying boot time here would be paid
+             for on every day the app is healthy.
+
+             Liveness cannot fire first (600 + 10 * 30 = 900 s) and is not the
+             load-bearing bound. initialDelaySeconds is capped at 600 by the
+             platform (a cpln apply 400, invisible to helm template — measured
+             2026-08-31, when 780 made the chart uninstallable). */}}
+      readinessProbe:
+        httpGet:
+          path: /api/version
+          port: 3000
+          scheme: HTTP
+        initialDelaySeconds: 30
+        periodSeconds: 15
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /api/version
+          port: 3000
+          scheme: HTTP
+        initialDelaySeconds: 600
+        periodSeconds: 30
+        failureThreshold: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+  {{- /* A workload runs in EVERY location its GVC has. Before this was pinned,
+         a default install into a 3-location GVC produced three app replicas,
+         each bound by service DNS to its own local Postgres — three separate
+         databases sharing one NEXTAUTH_SECRET, so a session minted in one
+         location validated against a database that did not contain the user.
+         Measured: a table created in aws-us-east-1 did not exist in the other
+         two, and every status surface read green throughout.
+
+         0/0 here means a GVC location this release did not ask for starts
+         NOTHING, by construction — its deployment message reads "This workload
+         location is deactivated because maxScale is set to 0." (the platform's
+         message ends with a period; gate on the text, since `desiredScale` is
+         ABSENT on a deactivated location rather than present-and-0). localOptions
+         below supplies the real count for the one configured location. */}}
+  defaultOptions:
+    autoscaling:
+      {{- include "calcom.autoscaling" (dict "scale" 0) | nindent 6 }}
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  localOptions:
+    {{- include "calcom.localOptions" (dict "root" . "scale" .Values.calcom.replicas) | nindent 4 }}
+  firewallConfig:
+    {{- /* Fully declared, including the empty lists the API backfills: a partial
+           block is completed on apply and shows as drift from creation. */}}
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      {{- include "calcom.internalFirewall" . | nindent 6 }}
+  {{- /* No loadBalancer.direct block is needed: the only protocol is HTTP and
+         the platform's canonical endpoint serves it. Declared explicitly so the
+         rendered manifest matches what the API stores. */}}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false
+  rolloutOptions:
+    {{- /* maxUnavailableReplicas is RETAINED on a standard workload (the API
+           drops it silently on stateful ones), so it genuinely serializes the
+           rollout. terminationGracePeriodSeconds is declared because the API
+           backfills 90. */}}
+    maxSurgeReplicas: 0%
+    maxUnavailableReplicas: "1"
+    minReadySeconds: 10
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90

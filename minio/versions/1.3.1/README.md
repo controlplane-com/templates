@@ -54,7 +54,7 @@ password are a secret you create yourself.
 ### Server and sizing
 
 ```yaml
-image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z # quay.io: MinIO withdrew minio/minio from Docker Hub (2025); quay is its public registry. Same release tag.
 
 replicas: 6 # Must be at least 4 and an even number
 

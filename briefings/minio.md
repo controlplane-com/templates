@@ -31,7 +31,7 @@ No probes, and no cloud bindings on the identity — there is no `aws::ReadOnlyA
 
 | Knob | Default | Meaning |
 |---|---|---|
-| `image` | `minio/minio:RELEASE.2025-09-07T16-13-09Z` | |
+| `image` | `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z` | Quay, **not** Docker Hub — see the registry trap below |
 | `replicas` | `6` | Must be **even and ≥ 4**; above the default org replica quota |
 | `admin.credentialsSecretName` | `my-minio-credentials` | **REQUIRED prerequisite `dictionary` secret** with `username`, `password` |
 | `resources.minCpu`/`maxCpu` | `1` / `2` | Block exposes both, so min/max naming is correct here |
@@ -59,6 +59,14 @@ No probes, and no cloud bindings on the identity — there is no `aws::ReadOnlyA
 - **`helm uninstall` deletes the volume sets** — objects do not survive a reinstall. The credentials
   secret is the user's and is left alone. Rotating it needs a restart to apply, and is fleet-wide:
   every client and every template holding those keys must be updated in the same window.
+- **The image is pinned to `quay.io`, NOT Docker Hub — do not "fix" it back.** MinIO withdrew
+  `minio/minio` (and `mc`) from Docker Hub in 2025: `docker.io/minio/minio` now returns
+  `insufficient_scope` / "repository does not exist", and the repo is gone from the `minio` Docker Hub
+  namespace (operator/warp/mint remain). The identical release tag stays **public on
+  `quay.io/minio/minio`** (still hotfixed into 2026 — e.g. `…Z.hotfix.7aa24e772`, Apr 2026). 1.3.0
+  shipped the now-dead Docker Hub ref, so every fresh install `ErrImagePull`ed; 1.3.1 repoints to quay,
+  same tag, verified pulling on-platform. MinIO is visibly deprioritizing the community edition, so a
+  catalog replacement (SeaweedFS is already in-catalog as an S3-compatible option) is under review.
 - **~8 templates' READMEs still say "for the MinIO template these are its `admin.username` and
   `admin.password`"** (postgres 3.4.x, postgres-multi-location, postgres-highly-available, docmost,
   twenty, sftpgo). Those value names no longer exist. Sweeping them is a follow-up, not this change.
@@ -70,5 +78,12 @@ No probes, and no cloud bindings on the identity — there is no `aws::ReadOnlyA
 that did not override it) became a user-created prerequisite `dictionary` secret named by
 `admin.credentialsSecretName`; the chart-created `{release}-minio-admin` secret is gone; `fail`
 guards name the replacement; the README was rewritten to the seven-section structure; and drift
-fields were declared. Hard break, no shim. **Not yet deployed** — the drift gate, the wedge timings
+fields were declared. Hard break, no shim. The drift gate, the wedge timings
 and rotation-by-restart are inherited from sibling templates, not measured on MinIO.
+
+**1.3.1 (2026-09-12):** repoint `image` to `quay.io/minio/minio` (same release tag) after MinIO pulled
+`minio/minio` from Docker Hub — a values default change, so shipped as a new version, not in place. This
+was also the first on-platform deploy of the 1.3.0 shape: `replicas=4` + a prerequisite credentials
+secret pulled the quay image with no `ErrImagePull`, the 4-node erasure pool formed, and the workload
+reached `ready: true` (inter-replica grid 503s during formation are normal startup churn). Only the
+image registry changed; everything else is 1.3.0 verbatim.

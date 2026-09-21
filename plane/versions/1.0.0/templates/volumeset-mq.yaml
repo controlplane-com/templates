@@ -1,0 +1,10 @@
+{{- include "plane.validate" . -}}
+kind: volumeset
+name: {{ include "plane.mq.volumeset.name" . }}
+description: Plane RabbitMQ volume set
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "plane.tags" . | nindent 4 }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.rabbitmq.volumeset.capacity }}
+  performanceClass: general-purpose-ssd

@@ -1,0 +1,58 @@
+{{- include "plane.validate" . -}}
+{{- /*
+  The Celery scheduler — AND the database migration runner.
+
+  ALWAYS exactly one replica. Two schedulers run every periodic task twice, so
+  there is deliberately no `beat.replicas` knob (values validation rejects one).
+  That guaranteed-singleton property is exactly what a migration runner needs,
+  which is why `migrate` lives here rather than in a cron or an init workload —
+  see the beat startup secret for the full reasoning.
+
+  THE COUPLING TO KNOW ABOUT: if this workload cannot start, nothing migrates,
+  and `api` and `worker` sit in `wait_for_migrations` forever with no error
+  anywhere else. "Waiting for migrations" in the api logs means "look at beat".
+
+  NO PROBES, for the same reason as the worker: `ready: true` here means the
+  process is running, not that it is scheduling.
+*/}}
+kind: workload
+name: {{ include "plane.beat.name" . }}
+description: Plane Celery scheduler and database migration runner
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "plane.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "plane.identity.name" . }}
+  containers:
+    - name: beat
+      image: makeplane/plane-backend:{{ .Values.plane.imageTag }}
+      # Invoked as `bash <path>` because a secret-mounted file is not executable.
+      command: /bin/bash
+      args:
+        - /cpln/start.sh
+      inheritEnv: false
+      minCpu: {{ .Values.beat.resources.minCpu | quote }}
+      cpu: {{ .Values.beat.resources.maxCpu | quote }}
+      minMemory: {{ .Values.beat.resources.minMemory | quote }}
+      memory: {{ .Values.beat.resources.maxMemory | quote }}
+      env:
+        {{- include "plane.backendEnv" . | nindent 8 }}
+      volumes:
+        - path: /cpln/start.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "plane.secret.beatStart.name" . }}.payload
+  defaultOptions:
+    {{- include "plane.defaultOptions" (dict "timeout" 300) | nindent 4 }}
+  localOptions:
+    {{- include "plane.localOptions" (dict "root" . "replicas" 1 "timeout" 300) | nindent 4 }}
+  firewallConfig:
+    external:
+      {{- include "plane.externalFirewall" (dict "root" . "public" false) | nindent 6 }}
+    internal:
+      {{- include "plane.internalFirewall" . | nindent 6 }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

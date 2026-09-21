@@ -1,0 +1,76 @@
+{{- include "plane.validate" . -}}
+{{- /*
+  Valkey — two jobs, both required:
+    * Django's cache backend (CACHES -> django_redis, LOCATION: REDIS_URL);
+    * the live collaborative editor's cross-replica channel. The live server
+      does NOT merely degrade without Redis — it throws `Redis client not
+      initialized` and exits (measured against makeplane/plane-live:v1.4.2).
+
+  Bundled single-node rather than the `redis` template: that template is a
+  3-replica Redis + 3-replica Sentinel cluster, and Plane takes a single
+  REDIS_URL with no Sentinel support, so five of its six workloads would be dead
+  weight. Same reasoning as docmost, langfuse, chatwoot and airflow.
+
+  `$(REDIS_PASSWORD)` in ARGS: the platform interpolates a cpln:// env var in
+  container args as well as in env values, so the password never appears as a
+  render-time literal.
+*/}}
+kind: workload
+name: {{ include "plane.redis.name" . }}
+description: Plane Redis (Valkey) — Django cache and live-editor sync
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "plane.tags" . | nindent 4 }}
+spec:
+  # stateful: it mounts an ext4 volumeset, which only stateful or vm workloads may.
+  type: stateful
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "plane.identity.name" . }}
+  containers:
+    - name: redis
+      image: {{ .Values.redis.image }}
+      inheritEnv: false
+      cpu: {{ .Values.redis.resources.cpu | quote }}
+      memory: {{ .Values.redis.resources.memory | quote }}
+      command: valkey-server
+      args:
+        - --requirepass
+        - $(REDIS_PASSWORD)
+        - --appendonly
+        - "yes"
+        - --dir
+        - /data
+      env:
+        - name: REDIS_PASSWORD
+          value: cpln://secret/{{ include "plane.secret.creds.name" . }}.redisPassword
+      ports:
+        - number: 6379
+          protocol: tcp
+      readinessProbe:
+        exec:
+          command:
+            - sh
+            - -c
+            - valkey-cli -a "$REDIS_PASSWORD" ping | grep -q PONG
+        initialDelaySeconds: 10
+        periodSeconds: 5
+        failureThreshold: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+      volumes:
+        - path: /data
+          recoveryPolicy: retain   # API backfill, declared so rendered == stored
+          uri: cpln://volumeset/{{ include "plane.redis.volumeset.name" . }}
+  defaultOptions:
+    {{- include "plane.defaultOptions" (dict "timeout" 5) | nindent 4 }}
+  localOptions:
+    {{- include "plane.localOptions" (dict "root" . "replicas" 1 "timeout" 5) | nindent 4 }}
+  firewallConfig:
+    external:
+      {{- include "plane.externalFirewall" (dict "root" . "public" false) | nindent 6 }}
+    internal:
+      {{- include "plane.internalFirewall" . | nindent 6 }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

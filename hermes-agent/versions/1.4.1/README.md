@@ -50,7 +50,7 @@ Single replica is by design: memory is a single-writer SQLite database and upstr
 ### Image
 
 ```yaml
-image: nousresearch/hermes-agent:v2026.8.31   # pin the Hermes Agent image tag
+image: nousresearch/hermes-agent:v2026.9.21   # pin the Hermes Agent image tag
 ```
 
 ### Model

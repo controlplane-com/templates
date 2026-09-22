@@ -27,6 +27,20 @@ spec:
           # this easy to mis-verify). Without it, `hermes config set` silently
           # writes to /opt/data/.hermes/config.yaml, which the gateway never reads.
           export HERMES_HOME=/opt/data
+          # Per-turn platform/gateway agent execution (Telegram, Slack, WhatsApp,
+          # webhook activation) resolves model credentials from HERMES_HOME/.env — NOT
+          # from the process env. And under s6 this boot script's own env is sanitized
+          # to PATH, so the injected API-key env var is invisible both to us here and
+          # to those turns: every messaging channel replies "couldn't connect to the AI
+          # model" while the dashboard/CLI (exec keeps the full env) work fine. The
+          # declared key IS present in s6's container-environment store, so mirror it
+          # from there into .env once. (measured 2026-09-22: without this, every
+          # channel is dead on a default install.)
+          hermes_key_name={{ include "hermes-agent.apiKeyEnv" . }}
+          hermes_key_file="/run/s6/container_environment/$hermes_key_name"
+          if [ -s "$hermes_key_file" ] && ! grep -q "^$hermes_key_name=" /opt/data/.env 2>/dev/null; then
+            printf '%s=%s\n' "$hermes_key_name" "$(cat "$hermes_key_file")" >> /opt/data/.env
+          fi
           {{- include "hermes-agent.configSeed" . | nindent 10 }}
           {{- if .Values.cplnMcp.enabled }}
           # The gateway CLEARS mcp_servers.cpln.auth on its first startup: it

@@ -1,0 +1,22 @@
+---
+kind: policy
+name: {{ include "twenty.policy.name" . }}
+description: Twenty CRM secret access
+tags: {{- include "twenty.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "twenty.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "twenty.secret.creds.name" . }}
+  - //secret/{{ include "twenty.secret.workerStart.name" . }}
+  - //secret/{{ include "twenty.postgres.secret.name" . }}
+  - //secret/{{ .Values.secrets.name }}
+  {{- if .Values.secrets.fallbackName }}
+  - //secret/{{ .Values.secrets.fallbackName }}
+  {{- end }}
+  {{- if and (eq .Values.storage.type "s3") .Values.storage.s3.auth.secretName }}
+  - //secret/{{ .Values.storage.s3.auth.secretName }}
+  {{- end }}

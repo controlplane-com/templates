@@ -104,7 +104,7 @@ Submit from the master container or any client workload in the GVC. **A driver m
 
 ```bash
 cpln workload exec RELEASE-spark-master --gvc GVC --container spark-master -- bash -c '
-  export SPARK_LOCAL_IP=$(hostname -i)
+  export SPARK_LOCAL_IP=$(hostname -i | awk "{print \$1}")
   /opt/spark/bin/spark-submit \
     --master spark://RELEASE-spark-master.GVC.cpln.local:7077 \
     --conf spark.driver.host=$SPARK_LOCAL_IP \

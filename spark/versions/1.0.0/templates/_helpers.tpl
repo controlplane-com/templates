@@ -80,6 +80,21 @@ Validation of required fields / enum checks.
 {{- end -}}
 
 {{/*
+Explicit classpath of the boot-prelude connector jars (matches the filenames the
+prelude downloads). Used for spark.{driver,executor}.extraClassPath so a
+spark-submit run in a fresh exec shell can load the S3A/GCS classes. Explicit
+paths (not a dir/* glob) avoid extraClassPath glob-expansion ambiguity.
+*/}}
+{{- define "spark.extraJarsCp" -}}
+{{- $d := "/opt/spark/work-dir/extra-jars" -}}
+{{- if eq .Values.storage.provider "aws" -}}
+{{- printf "%s/hadoop-aws-3.4.1.jar:%s/aws-sdk-bundle-2.24.6.jar" $d $d -}}
+{{- else if eq .Values.storage.provider "gcp" -}}
+{{- printf "%s/gcs-connector-hadoop3-2.2.29-shaded.jar" $d -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Boot prelude: emitted into every workload's launch script. Downloads the S3A/GCS
 connector jars into a uid-185-writable dir and appends them to SPARK_DIST_CLASSPATH
 (honored by spark-class for all daemons AND drivers). Only rendered when the History

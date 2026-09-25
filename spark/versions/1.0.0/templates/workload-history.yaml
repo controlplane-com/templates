@@ -42,18 +42,30 @@ spec:
           LOGDIR="gs://{{ .Values.storage.bucket }}/{{ .Values.storage.prefix }}"
           {{- end }}
           # `mkdir -p` creates the directory marker (getFileStatus then reports it as a
-          # directory, which is all the History Server needs). On a FRESH create FsShell
-          # returns a nonzero exit from a post-write verify race even though the marker IS
-          # written, so we tolerate its rc (`|| true`) and instead VERIFY with `-test -d`
-          # (a pure read: rc 0 = exists, rc 1 = absent) — failing loudly only if the
-          # directory is genuinely missing. mkdir is idempotent across restarts, and the
-          # marker persists (nothing deletes it) until the first real event log lands.
+          # directory, which is all the History Server needs); we then VERIFY with the
+          # pure read `-test -d` (rc 0 = exists, rc 1 = absent). Two quirks make a plain
+          # mkdir+check insufficient, so we RETRY in a loop:
+          #   1. On S3A a fresh mkdir returns a nonzero exit from a post-write verify race
+          #      even though the marker IS written — so mkdir's rc is not trustworthy and
+          #      the -test -d read is the real gate.
+          #   2. Keyless cloud creds (IMDS for AWS, ADC for GCP) are NOT ready the instant
+          #      the container starts — the identity's cloud binding takes up to a few
+          #      minutes to materialize on a FRESH install, and until it does every FS call
+          #      fails to load credentials. A single attempt would FATAL and crash-loop
+          #      (re-downloading the connector jars each time) until creds arrived.
+          # The loop tolerates both: it retries the seed for ~3 min (inside the readiness
+          # deadline) and only fails the boot if the directory is still unreachable after.
           fsshell() { /opt/spark/bin/spark-class org.apache.hadoop.fs.FsShell $FS_D "$@"; }
-          fsshell -mkdir -p "$LOGDIR" || true
-          if ! fsshell -test -d "$LOGDIR"; then
-            echo "[spark-prelude] FATAL: could not create log directory $LOGDIR"; exit 1
-          fi
-          echo "[spark-prelude] log directory ready: $LOGDIR"
+          seeded=0
+          for i in $(seq 1 12); do
+            fsshell -mkdir -p "$LOGDIR" 2>/dev/null || true
+            if fsshell -test -d "$LOGDIR" 2>/dev/null; then
+              seeded=1; echo "[spark-prelude] log directory ready: $LOGDIR"; break
+            fi
+            echo "[spark-prelude] log dir not ready (attempt $i) — cloud creds may still be materializing; retry in 15s"
+            sleep 15
+          done
+          [ "$seeded" = 1 ] || { echo "[spark-prelude] FATAL: could not create log directory $LOGDIR after retries"; exit 1; }
           exec /opt/spark/bin/spark-class org.apache.spark.deploy.history.HistoryServer
       minCpu: {{ .Values.historyServer.minCpu | quote }}
       minMemory: {{ .Values.historyServer.minMemory | quote }}

@@ -21,11 +21,20 @@ spec:
           # executors on the workers can reach it (spark.driver.host), bind gRPC
           # and the driver to 0.0.0.0 for mesh + port-forward reachability.
           POD_IP="$(hostname -i | awk '{print $1}')"
+          {{- if .Values.publicAccess.enabled }}
+          # The Connect server is a Spark app with its own UI (:4040) proxied behind
+          # the master; point its cross-links at the master's public endpoint (derived
+          # from this workload's own per-workload endpoint) so they resolve in a browser.
+          MASTER_PUBLIC=$(printf '%s' "${CPLN_GLOBAL_ENDPOINT%/}" | sed 's#{{ include "spark.connect.name" . }}#{{ include "spark.master.name" . }}#')
+          {{- end }}
           {{- include "spark.jarPrelude" . | nindent 10 }}
           exec /opt/spark/bin/spark-submit \
             --master {{ include "spark.master.url" . }} \
             --class org.apache.spark.sql.connect.service.SparkConnectServer \
             --name "Spark Connect Server" \
+            {{- if .Values.publicAccess.enabled }}
+            --conf spark.ui.reverseProxyUrl="$MASTER_PUBLIC" \
+            {{- end }}
             --conf spark.driver.host="$POD_IP" \
             --conf spark.driver.bindAddress=0.0.0.0 \
             --conf spark.connect.grpc.binding.address=0.0.0.0 \

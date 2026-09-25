@@ -20,6 +20,14 @@ spec:
           # so the Web UI binds 0.0.0.0 (reachable via the master reverse proxy).
           POD_IP="$(hostname -i | awk '{print $1}')"
           export SPARK_PUBLIC_DNS="$POD_IP"
+          {{- if .Values.publicAccess.enabled }}
+          # The worker generates its own page's links (incl. "Back to Master"), so it
+          # needs the SAME external base as the master. Derive the master's public URL
+          # from this worker's own per-workload endpoint by swapping the workload-name
+          # prefix (form-agnostic — works whether or not the host carries an org alias).
+          MASTER_PUBLIC=$(printf '%s' "${CPLN_GLOBAL_ENDPOINT%/}" | sed 's#{{ include "spark.worker.name" . }}#{{ include "spark.master.name" . }}#')
+          export SPARK_DAEMON_JAVA_OPTS="${SPARK_DAEMON_JAVA_OPTS:-} -Dspark.ui.reverseProxyUrl=${MASTER_PUBLIC}"
+          {{- end }}
           {{- include "spark.jarPrelude" . | nindent 10 }}
           exec /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker \
             {{ include "spark.master.url" . }} \

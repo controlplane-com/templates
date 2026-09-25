@@ -21,6 +21,15 @@ spec:
           # over both the mesh (pod IP) and cpln port-forward (loopback).
           POD_IP="$(hostname -i | awk '{print $1}')"
           export SPARK_PUBLIC_DNS="{{ include "spark.master.fqdn" . }}"
+          {{- if .Values.publicAccess.enabled }}
+          # Under reverse proxy, Spark builds cross-node UI links (e.g. a worker's
+          # "Back to Master") as ABSOLUTE URLs from the master's webUiUrl — which is
+          # the internal *.cpln.local host and does not resolve in a browser. Point
+          # reverseProxyUrl at the master's public canonical endpoint so every such
+          # link resolves. (spark-class injects SPARK_DAEMON_JAVA_OPTS into the daemon
+          # JVM, where SparkConf picks up the -Dspark.* system property.)
+          export SPARK_DAEMON_JAVA_OPTS="${SPARK_DAEMON_JAVA_OPTS:-} -Dspark.ui.reverseProxyUrl=${CPLN_GLOBAL_ENDPOINT%/}"
+          {{- end }}
           {{- include "spark.jarPrelude" . | nindent 10 }}
           exec /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master \
             --host "$POD_IP" --port 7077 --webui-port 8080

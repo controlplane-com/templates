@@ -31,6 +31,35 @@ spec:
             sleep 3
           done
           ./listmonk --upgrade --yes --config ''
+
+          # app.root_url is a DB-ONLY setting (not env/config-overridable). --install
+          # seeds it to http://localhost:9000, which breaks every public link
+          # (subscribe / unsubscribe / archive / open+click tracking) and the links in
+          # sent email. Set it BEFORE serving — listmonk caches settings at start. psql
+          # isn't in the image, so add it; tolerate an apk hiccup rather than bricking
+          # boot (root_url then stays default and is fixable in Admin -> Settings).
+          {{- if or .Values.rootUrl .Values.publicAccess.enabled }}
+          if apk add --no-cache postgresql-client >/dev/null 2>&1; then
+            export PGPASSWORD="$LISTMONK_db__password" PGSSLMODE=disable
+            {{- if .Values.rootUrl }}
+            ROOT_URL='{{ .Values.rootUrl }}'
+            if psql -h "$LISTMONK_db__host" -p "$LISTMONK_db__port" -U "$LISTMONK_db__user" -d "$LISTMONK_db__database" -v ON_ERROR_STOP=1 \
+                 -c "UPDATE settings SET value = to_jsonb('${ROOT_URL}'::text), updated_at = now() WHERE key = 'app.root_url';"; then
+              echo "listmonk: set app.root_url = ${ROOT_URL}"
+            else echo "listmonk: WARN could not set app.root_url; set it in Admin -> Settings" >&2; fi
+            {{- else }}
+            # Derive from the platform canonical endpoint (already a full https:// URL);
+            # only rewrite the UNTOUCHED default so a later UI/custom-domain edit is kept.
+            ROOT_URL="${CPLN_GLOBAL_ENDPOINT%/}"
+            if psql -h "$LISTMONK_db__host" -p "$LISTMONK_db__port" -U "$LISTMONK_db__user" -d "$LISTMONK_db__database" -v ON_ERROR_STOP=1 \
+                 -c "UPDATE settings SET value = to_jsonb('${ROOT_URL}'::text), updated_at = now() WHERE key = 'app.root_url' AND value = '\"http://localhost:9000\"'::jsonb;"; then
+              echo "listmonk: derived app.root_url = ${ROOT_URL}"
+            else echo "listmonk: WARN could not set app.root_url; set it in Admin -> Settings" >&2; fi
+            {{- end }}
+          else
+            echo "listmonk: WARN postgresql-client install failed; app.root_url left as default (set it in Admin -> Settings)" >&2
+          fi
+          {{- end }}
           exec ./listmonk --config ''
       inheritEnv: false
       minCpu: {{ .Values.resources.minCpu | quote }}

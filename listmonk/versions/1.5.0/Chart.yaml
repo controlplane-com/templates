@@ -2,7 +2,7 @@ apiVersion: v2
 name: listmonk
 description: Listmonk newsletter and mailing list manager with campaigns and subscriber lists, backed by PostgreSQL
 type: application
-version: 1.4.0
+version: 1.5.0
 appVersion: "6.2.0"
 
 dependencies:
@@ -21,6 +21,6 @@ dependencies:
 
 annotations:
   created: "2026-07-31"
-  lastModified: "2026-08-23"
+  lastModified: "2026-09-25"
   category: "email"
   createsGvc: false

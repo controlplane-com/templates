@@ -24,6 +24,11 @@ admin:
 
 timezone: Etc/UTC # container TZ — governs campaign scheduling times
 
+# Public base URL for all subscriber-facing links and email (subscribe, unsubscribe,
+# archive, open/click tracking). Empty = auto-derive the canonical *.cpln.app endpoint
+# when publicAccess is on. Set this to your custom domain once attached.
+rootUrl: ""
+
 # ─── Access ───────────────────────────────────────────────────────────────────
 publicAccess:
   enabled: true # HTTPS admin UI + public subscription/tracking pages via the canonical *.cpln.app endpoint

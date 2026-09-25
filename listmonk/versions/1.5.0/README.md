@@ -178,7 +178,7 @@ The Super Admin credentials moved out of `values.yaml` into the prerequisite dic
 Mail delivery and media storage are database-stored settings managed in the admin UI, not template values:
 
 1. **SMTP (required to send any mail)**: **Admin → Settings → SMTP** — add your provider (SES, Sendgrid, Mailgun, any SMTP relay). No campaigns or transactional mail send until this is configured.
-2. **Root URL**: **Admin → Settings → General** — set the root URL to your canonical endpoint (or custom domain) so links in emails point to the right host.
+2. **Root URL**: set automatically at boot to the canonical `*.cpln.app` endpoint (or the `rootUrl` value if you set one) so subscribe/unsubscribe/archive/tracking links and email links resolve. Set `rootUrl` to your custom domain once attached; you can also change it in **Admin → Settings → General** (a UI change sticks — the derived default is only applied while the root URL is still the untouched `http://localhost:9000`).
 3. **Media store (optional)**: filesystem storage on the bundled volumeset works out of the box; to use S3-compatible object storage instead, switch the provider in **Admin → Settings → Media**.
 
 ## Storage setup (only if you enable backups)

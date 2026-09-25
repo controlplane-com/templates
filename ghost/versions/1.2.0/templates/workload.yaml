@@ -54,6 +54,14 @@ spec:
         - name: mail__from
           value: {{ .Values.mail.from | quote }}
         {{- end }}
+        # ── Staff device verification (Ghost 6 admin 2FA) ──
+        # Ghost 6 emails a 6-digit code to staff on every admin sign-in from a new
+        # device; with no SMTP that send fails and admin login (/ghost) is
+        # unreachable. Default off so admin works out of the box; set
+        # staffDeviceVerification: true once mail is configured. Ghost's nconf
+        # parses the quoted "true"/"false" string to a boolean.
+        - name: security__staffDeviceVerification
+          value: {{ .Values.staffDeviceVerification | quote }}
       ports:
         - number: 2368
           protocol: http

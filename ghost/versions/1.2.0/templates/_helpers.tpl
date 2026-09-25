@@ -70,6 +70,9 @@ Must match the subchart's own `mysql.name` helper.
 {{- fail "ghost: mail.from must be set when mail.secretName is provided" -}}
 {{- end -}}
 {{- end -}}
+{{- if and .Values.staffDeviceVerification (not .Values.mail.secretName) -}}
+{{- fail "ghost: staffDeviceVerification requires SMTP — set mail.secretName (Ghost emails the 2FA code) or leave staffDeviceVerification: false" -}}
+{{- end -}}
 {{- end }}
 
 

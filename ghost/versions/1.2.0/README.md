@@ -53,6 +53,10 @@ mail:
   port: 587      # 465 = SSL, 587 = STARTTLS
   secure: false  # true for port 465
   from: ""       # e.g. "Ghost <noreply@example.com>"
+
+staffDeviceVerification: false # Ghost 6 emails staff a 2FA code on every new-device
+                               # admin login (needs SMTP). Off by default so /ghost is
+                               # reachable without mail; set true once mail is configured.
 ```
 
 Create the prerequisite secret before install:
@@ -142,6 +146,7 @@ Then set `mysql.backup.provider: aws` and `mysql.backup.aws.{bucket,region,cloud
 - **Create the owner first.** After deploy, visit `/ghost` to create the owner account; until then the site shows the default theme with no admin.
 - **Change the DB passwords** before installing; they seed the database on first boot and cannot be changed by editing values afterward (uninstall drops the volumeset for a clean reset).
 - **SMTP is a prerequisite secret**, not a value — create the dictionary secret (`user`, `password`) and set `mail.secretName`/`host`/`from`; leaving `mail.secretName` empty keeps email fully off.
+- **Admin is at `/ghost`; staff 2FA is off by default.** Ghost 6 emails a verification code on every new-device admin login, which needs SMTP — so the default (mail-off) install ships with `staffDeviceVerification: false` to keep `/ghost` reachable. Set it `true` after configuring mail to re-enable the check.
 - **Set `publicUrl` for a custom domain** so links and emails point at the right host; empty derives the canonical `*.cpln.app` endpoint.
 
 ## Links

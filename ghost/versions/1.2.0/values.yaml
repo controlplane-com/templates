@@ -26,6 +26,11 @@ mail:
   secure: false  # true for port 465
   from: ""       # e.g. "Ghost <noreply@example.com>"
 
+# Ghost 6 emails a 2FA code to staff on every new-device admin login, which needs
+# SMTP. Default off so /ghost admin is reachable without mail; set true only after
+# configuring mail above (enabling it without SMTP wedges admin login).
+staffDeviceVerification: false
+
 # ─── Access ───────────────────────────────────────────────────────────────────
 publicAccess:
   enabled: true # HTTPS site via the canonical *.cpln.app endpoint

@@ -16,11 +16,14 @@ spec:
         - "-c"
         - |
           set -euo pipefail
-          export SPARK_LOCAL_IP="$(hostname -i | awk '{print $1}')"
+          # Advertise the pod IP for RPC (via --host, used literally); leave
+          # SPARK_LOCAL_IP UNSET so the Web UI binds 0.0.0.0 and is reachable
+          # over both the mesh (pod IP) and cpln port-forward (loopback).
+          POD_IP="$(hostname -i | awk '{print $1}')"
           export SPARK_PUBLIC_DNS="{{ include "spark.master.fqdn" . }}"
           {{- include "spark.jarPrelude" . | nindent 10 }}
           exec /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master \
-            --host "$SPARK_LOCAL_IP" --port 7077 --webui-port 8080
+            --host "$POD_IP" --port 7077 --webui-port 8080
       minCpu: {{ .Values.master.minCpu | quote }}
       minMemory: {{ .Values.master.minMemory | quote }}
       cpu: {{ .Values.master.maxCpu | quote }}

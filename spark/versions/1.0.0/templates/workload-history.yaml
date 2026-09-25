@@ -17,7 +17,8 @@ spec:
         - "-c"
         - |
           set -euo pipefail
-          export SPARK_LOCAL_IP="$(hostname -i | awk '{print $1}')"
+          # Leave SPARK_LOCAL_IP unset so the History Server Web UI binds 0.0.0.0
+          # and is reachable over both the mesh and cpln port-forward (loopback).
           {{- if eq .Values.storage.provider "aws" }}
           export SPARK_HISTORY_OPTS="-Dspark.history.fs.logDirectory=s3a://{{ .Values.storage.bucket }}/{{ .Values.storage.prefix }}"
           {{- end }}

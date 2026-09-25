@@ -17,13 +17,17 @@ spec:
         - "-c"
         - |
           set -euo pipefail
-          export SPARK_LOCAL_IP="$(hostname -i | awk '{print $1}')"
-          export SPARK_PUBLIC_DNS="$SPARK_LOCAL_IP"
+          # The Connect server is itself a Spark driver: advertise the pod IP so
+          # executors on the workers can reach it (spark.driver.host), bind gRPC
+          # and the driver to 0.0.0.0 for mesh + port-forward reachability.
+          POD_IP="$(hostname -i | awk '{print $1}')"
           {{- include "spark.jarPrelude" . | nindent 10 }}
           exec /opt/spark/bin/spark-submit \
             --master {{ include "spark.master.url" . }} \
             --class org.apache.spark.sql.connect.service.SparkConnectServer \
             --name "Spark Connect Server" \
+            --conf spark.driver.host="$POD_IP" \
+            --conf spark.driver.bindAddress=0.0.0.0 \
             --conf spark.connect.grpc.binding.address=0.0.0.0 \
             --conf spark.connect.grpc.binding.port=15002 \
             spark-internal

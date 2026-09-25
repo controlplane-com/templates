@@ -14,6 +14,12 @@ spec:
     - name: twenty
       image: {{ .Values.twenty.image }}
       inheritEnv: false
+      # Gate on a live Postgres before the image entrypoint runs migrations — the
+      # image has no working boot-wait, so `database:migrate:prod` otherwise races
+      # PG on a fresh install and the container exits non-zero. See secret-server-start.
+      command: /bin/sh
+      args:
+        - /cpln/start.sh
       minCpu: {{ .Values.twenty.resources.minCpu | quote }}
       cpu: {{ .Values.twenty.resources.maxCpu | quote }}
       minMemory: {{ .Values.twenty.resources.minMemory | quote }}
@@ -69,12 +75,15 @@ spec:
         failureThreshold: 10
         successThreshold: 1
         timeoutSeconds: 5
-      {{- if eq .Values.storage.type "local" }}
       volumes:
+        - path: /cpln/start.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "twenty.secret.serverStart.name" . }}.payload
+        {{- if eq .Values.storage.type "local" }}
         - path: /app/packages/twenty-server/.local-storage
           recoveryPolicy: retain
           uri: cpln://volumeset/{{ include "twenty.storage.volumeset.name" . }}
-      {{- end }}
+        {{- end }}
   securityOptions:
     # the image runs as uid/gid 1000; without this the volumeset mounts
     # root-owned and every attachment upload fails with EACCES

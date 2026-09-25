@@ -28,6 +28,42 @@
 {{- printf "%s-twenty-worker-start" .Release.Name }}
 {{- end }}
 
+{{- define "twenty.secret.serverStart.name" -}}
+{{- printf "%s-twenty-server-start" .Release.Name }}
+{{- end }}
+
+{{/*
+Postgres readiness gate. The twenty image is Alpine (no bash → no /dev/tcp) but
+always ships node, and a bare TCP connect is a no-op on this platform (the mesh
+sidecar completes the handshake even when nothing listens). So send a Postgres
+SSLRequest and require the one-byte 'S'/'N' reply only a live backend gives,
+before the image entrypoint runs `database:migrate:prod`. Without this the
+migration races a not-yet-ready Postgres and the container exits non-zero (the
+observed first-boot "exit 2"), restart-looping until PG happens to be up. Capped
+well inside the readiness deadline so the diagnostic prints instead of a probe kill.
+*/}}
+{{- define "twenty.dbGate" -}}
+PGHOST="{{ include "twenty.postgres.host" . }}"
+echo "twenty: waiting for Postgres at ${PGHOST}:5432"
+i=0
+until node -e '
+  const net=require("net");
+  const s=net.connect(5432, process.argv[1]);
+  s.setTimeout(5000);
+  s.on("connect", () => s.write(Buffer.from([0,0,0,8,4,210,22,47])));
+  s.on("data", d => { const c=String.fromCharCode(d[0]); process.exit((c==="S"||c==="N")?0:1); });
+  s.on("timeout", () => process.exit(1));
+  s.on("error",   () => process.exit(1));
+  s.on("end",     () => process.exit(1));
+' "$PGHOST" 2>/dev/null; do
+  i=$((i+1))
+  [ "$i" -ge 50 ] && { echo "twenty: Postgres not ready after 250s; exiting for restart" >&2; exit 1; }
+  echo "twenty: waiting for Postgres... (attempt ${i})"
+  sleep 5
+done
+echo "twenty: Postgres is ready"
+{{- end }}
+
 {{- define "twenty.identity.name" -}}
 {{- printf "%s-twenty-identity" .Release.Name }}
 {{- end }}

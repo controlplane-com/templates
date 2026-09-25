@@ -1,0 +1,87 @@
+{{- if .Values.connect.enabled }}
+{{- include "spark.validate" . -}}
+kind: workload
+name: {{ include "spark.connect.name" . }}
+description: Apache Spark Connect server (gRPC :15002)
+tags:
+  {{- include "spark.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "spark.identity.name" . }}
+  containers:
+    - name: spark-connect
+      image: {{ .Values.image }}
+      inheritEnv: false
+      command: "/bin/bash"
+      args:
+        - "-c"
+        - |
+          set -euo pipefail
+          export SPARK_LOCAL_IP="$(hostname -i | awk '{print $1}')"
+          export SPARK_PUBLIC_DNS="$SPARK_LOCAL_IP"
+          {{- include "spark.jarPrelude" . | nindent 10 }}
+          exec /opt/spark/bin/spark-submit \
+            --master {{ include "spark.master.url" . }} \
+            --class org.apache.spark.sql.connect.service.SparkConnectServer \
+            --name "Spark Connect Server" \
+            --conf spark.connect.grpc.binding.address=0.0.0.0 \
+            --conf spark.connect.grpc.binding.port=15002 \
+            spark-internal
+      minCpu: {{ .Values.connect.minCpu | quote }}
+      minMemory: {{ .Values.connect.minMemory | quote }}
+      cpu: {{ .Values.connect.maxCpu | quote }}
+      memory: {{ .Values.connect.maxMemory | quote }}
+      ports:
+        - number: 15002
+          protocol: grpc
+        - number: 7071
+          protocol: tcp
+        - number: 7072
+          protocol: tcp
+        - number: 4040
+          protocol: tcp
+      volumes:
+        - path: /opt/spark/conf/spark-defaults.conf
+          uri: cpln://secret/{{ include "spark.secret.conf.name" . }}.payload
+      readinessProbe:
+        tcpSocket:
+          port: 15002
+        initialDelaySeconds: 20
+        periodSeconds: {{ if .Values.historyServer.enabled }}15{{ else }}10{{ end }}
+        timeoutSeconds: 3
+        failureThreshold: {{ if .Values.historyServer.enabled }}20{{ else }}12{{ end }}
+      livenessProbe:
+        tcpSocket:
+          port: 15002
+        initialDelaySeconds: 40
+        periodSeconds: 15
+        timeoutSeconds: 5
+        failureThreshold: 6
+  defaultOptions:
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundBlockedCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  supportDynamicTags: false
+{{- end }}

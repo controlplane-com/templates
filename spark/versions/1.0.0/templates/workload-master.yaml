@@ -1,0 +1,89 @@
+{{- include "spark.validate" . -}}
+kind: workload
+name: {{ include "spark.master.name" . }}
+description: Apache Spark master (cluster manager + Web UI :8080)
+tags:
+  {{- include "spark.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "spark.identity.name" . }}
+  containers:
+    - name: spark-master
+      image: {{ .Values.image }}
+      inheritEnv: false
+      command: "/bin/bash"
+      args:
+        - "-c"
+        - |
+          set -euo pipefail
+          export SPARK_LOCAL_IP="$(hostname -i | awk '{print $1}')"
+          export SPARK_PUBLIC_DNS="{{ include "spark.master.fqdn" . }}"
+          {{- include "spark.jarPrelude" . | nindent 10 }}
+          exec /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master \
+            --host "$SPARK_LOCAL_IP" --port 7077 --webui-port 8080
+      minCpu: {{ .Values.master.minCpu | quote }}
+      minMemory: {{ .Values.master.minMemory | quote }}
+      cpu: {{ .Values.master.maxCpu | quote }}
+      memory: {{ .Values.master.maxMemory | quote }}
+      ports:
+        - number: 8080
+          protocol: http
+        - number: 7077
+          protocol: tcp
+        - number: 7071
+          protocol: tcp
+        - number: 7072
+          protocol: tcp
+        - number: 4040
+          protocol: tcp
+      volumes:
+        - path: /opt/spark/conf/spark-defaults.conf
+          uri: cpln://secret/{{ include "spark.secret.conf.name" . }}.payload
+      readinessProbe:
+        httpGet:
+          path: /
+          port: 8080
+        initialDelaySeconds: 15
+        periodSeconds: {{ if .Values.historyServer.enabled }}15{{ else }}10{{ end }}
+        timeoutSeconds: 3
+        failureThreshold: {{ if .Values.historyServer.enabled }}20{{ else }}6{{ end }}
+      livenessProbe:
+        httpGet:
+          path: /
+          port: 8080
+        initialDelaySeconds: 30
+        periodSeconds: 15
+        timeoutSeconds: 5
+        failureThreshold: 6
+  defaultOptions:
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+  firewallConfig:
+    external:
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundBlockedCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  supportDynamicTags: false

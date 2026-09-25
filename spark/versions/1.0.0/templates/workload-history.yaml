@@ -26,6 +26,34 @@ spec:
           export SPARK_HISTORY_OPTS="-Dspark.history.fs.logDirectory=gs://{{ .Values.storage.bucket }}/{{ .Values.storage.prefix }}"
           {{- end }}
           {{- include "spark.jarPrelude" . | nindent 10 }}
+          # The History Server refuses to start unless its log directory exists, but on
+          # object storage a prefix does not exist until an object lives under it — so a
+          # fresh install would crash-loop until the first job writes a log. Seed the
+          # directory. Notes: FsShell needs a Hadoop conf dir (the Spark image ships none
+          # → "core-site.xml not found") and reads Hadoop config, not spark-defaults.conf,
+          # so we hand it an empty core-site + the fs settings via -D.
+          mkdir -p /tmp/hconf && printf '<configuration/>' > /tmp/hconf/core-site.xml
+          export HADOOP_CONF_DIR=/tmp/hconf
+          {{- if eq .Values.storage.provider "aws" }}
+          FS_D="-Dfs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem -Dfs.s3a.endpoint.region={{ .Values.storage.region }} -Dfs.s3a.aws.credentials.provider=org.apache.hadoop.fs.s3a.auth.IAMInstanceCredentialsProvider"
+          LOGDIR="s3a://{{ .Values.storage.bucket }}/{{ .Values.storage.prefix }}"
+          {{- else if eq .Values.storage.provider "gcp" }}
+          FS_D="-Dfs.gs.impl=com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem -Dfs.gs.auth.type=APPLICATION_DEFAULT"
+          LOGDIR="gs://{{ .Values.storage.bucket }}/{{ .Values.storage.prefix }}"
+          {{- end }}
+          # `mkdir -p` creates the directory marker (getFileStatus then reports it as a
+          # directory, which is all the History Server needs). On a FRESH create FsShell
+          # returns a nonzero exit from a post-write verify race even though the marker IS
+          # written, so we tolerate its rc (`|| true`) and instead VERIFY with `-test -d`
+          # (a pure read: rc 0 = exists, rc 1 = absent) — failing loudly only if the
+          # directory is genuinely missing. mkdir is idempotent across restarts, and the
+          # marker persists (nothing deletes it) until the first real event log lands.
+          fsshell() { /opt/spark/bin/spark-class org.apache.hadoop.fs.FsShell $FS_D "$@"; }
+          fsshell -mkdir -p "$LOGDIR" || true
+          if ! fsshell -test -d "$LOGDIR"; then
+            echo "[spark-prelude] FATAL: could not create log directory $LOGDIR"; exit 1
+          fi
+          echo "[spark-prelude] log directory ready: $LOGDIR"
           exec /opt/spark/bin/spark-class org.apache.spark.deploy.history.HistoryServer
       minCpu: {{ .Values.historyServer.minCpu | quote }}
       minMemory: {{ .Values.historyServer.minMemory | quote }}

@@ -29,6 +29,7 @@
 | `image` | `ghost:6.54.1-alpine` | Ghost 6 (GA); Ghost 5 final (`5.130.6-alpine`) also works — same MySQL-8/config/content requirements |
 | `publicUrl` | `""` | custom domain URL; empty = derive canonical endpoint |
 | `mail.secretName` + `mail.host/port/secure/from` | `""` (off) | SMTP for member/newsletter email |
+| `staffDeviceVerification` | `false` | Ghost 6 admin-login 2FA; off by default (needs SMTP), guarded against being enabled without mail |
 | `publicAccess.enabled` / `internalAccess.type` | `true` / `same-gvc` | exposure |
 | `mysql.config.*` | `ghost` / change-me | DB name, user, passwords |
 | `mysql.backup.*` | `enabled: false` | scheduled DB dumps to S3/GCS (mysql template's native backup; tested dump AND restore) |
@@ -41,6 +42,7 @@
 - **MySQL 8 only.** Ghost does NOT support MySQL 9 or MariaDB — the subchart image is pinned `mysql:8`. Do not "upgrade" it to 9; Ghost will refuse an unsupported DB.
 - **DB backups require mysql subchart ≥ 1.4.3 + backup image 1.0.0 (current).** Earlier chart/image pairs dumped a placeholder database instead of the app DB — Ghost ships pinned to the fixed pair, and the e2e test proved dump + restore of real Ghost content. Backups need the README's cloud setup (bucket, cloud account, scoped policy).
 - **First-run owner account:** there is no non-interactive admin bootstrap. After deploy the user visits `/ghost` to create the owner. If they never do, the site shows the default theme but has no admin.
+- **Ghost 6 staff device verification bricks admin login when SMTP is off (fixed 1.2.0).** Since Ghost 5.118 the admin emails a 6-digit code on every new-device sign-in; with no SMTP that send 500s and `/ghost` is unreachable — the default install could not reach its own admin. 1.2.0 ships `staffDeviceVerification: false` (rendered as `security__staffDeviceVerification` env), and a validate guard rejects enabling it without `mail.secretName`. Set it `true` only after configuring SMTP.
 - **`url` must be correct** or links/emails point at the wrong host. The startup script sets it from `CPLN_GLOBAL_ENDPOINT` (already `https://…` — never double-schemed); set `publicUrl` when using a custom domain. The readiness probe sends `X-Forwarded-Proto: https` so Ghost (which insists on its configured HTTPS origin) accepts probe traffic.
 - **Startup ordering:** Ghost does not wait for MySQL and will restart a few times on first install until the DB is ready — early "connection refused" log lines during first boot are expected, not a fault.
 - **Media lives on the volumeset, not object storage.** Uploaded images persist across restarts, but are single-replica-local. An S3/MinIO content adapter (CDN-friendly) is a possible follow-up.

@@ -1,0 +1,15 @@
+apiVersion: v2
+name: spark
+description: Apache Spark standalone cluster — master, scalable workers, and Web UIs
+type: application
+version: 1.0.0
+appVersion: "4.0.4-scala2.13-java17-python3-ubuntu"
+annotations:
+  created: "2026-09-25"
+  lastModified: "2026-09-25"
+  category: "analytics"
+  createsGvc: false
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

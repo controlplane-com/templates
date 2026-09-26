@@ -1,0 +1,100 @@
+{{- if .Values.connect.enabled }}
+{{- include "spark.validate" . -}}
+kind: workload
+name: {{ include "spark.connect.name" . }}
+description: Apache Spark Connect server (gRPC :15002)
+tags:
+  {{- include "spark.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "spark.identity.name" . }}
+  containers:
+    - name: spark-connect
+      image: {{ .Values.image }}
+      inheritEnv: false
+      command: "/bin/bash"
+      args:
+        - "-c"
+        - |
+          set -euo pipefail
+          # The Connect server is itself a Spark driver: advertise the pod IP so
+          # executors on the workers can reach it (spark.driver.host), bind gRPC
+          # and the driver to 0.0.0.0 for mesh + port-forward reachability.
+          POD_IP="$(hostname -i | awk '{print $1}')"
+          {{- if .Values.publicAccess.enabled }}
+          # The Connect server is a Spark app with its own UI (:4040) proxied behind
+          # the master; point its cross-links at the master's public endpoint (derived
+          # from this workload's own per-workload endpoint) so they resolve in a browser.
+          MASTER_PUBLIC=$(printf '%s' "${CPLN_GLOBAL_ENDPOINT%/}" | sed 's#{{ include "spark.connect.name" . }}#{{ include "spark.master.name" . }}#')
+          {{- end }}
+          {{- include "spark.jarPrelude" . | nindent 10 }}
+          exec /opt/spark/bin/spark-submit \
+            --master {{ include "spark.master.url" . }} \
+            --class org.apache.spark.sql.connect.service.SparkConnectServer \
+            --name "Spark Connect Server" \
+            {{- if .Values.publicAccess.enabled }}
+            --conf spark.ui.reverseProxyUrl="$MASTER_PUBLIC" \
+            {{- end }}
+            --conf spark.driver.host="$POD_IP" \
+            --conf spark.driver.bindAddress=0.0.0.0 \
+            --conf spark.connect.grpc.binding.address=0.0.0.0 \
+            --conf spark.connect.grpc.binding.port=15002 \
+            spark-internal
+      minCpu: {{ .Values.connect.minCpu | quote }}
+      minMemory: {{ .Values.connect.minMemory | quote }}
+      cpu: {{ .Values.connect.maxCpu | quote }}
+      memory: {{ .Values.connect.maxMemory | quote }}
+      ports:
+        - number: 15002
+          protocol: grpc
+        - number: 7071
+          protocol: tcp
+        - number: 7072
+          protocol: tcp
+        - number: 4040
+          protocol: tcp
+      volumes:
+        - path: /opt/spark/conf/spark-defaults.conf
+          uri: cpln://secret/{{ include "spark.secret.conf.name" . }}.payload
+      readinessProbe:
+        tcpSocket:
+          port: 15002
+        initialDelaySeconds: 20
+        periodSeconds: {{ if .Values.historyServer.enabled }}15{{ else }}10{{ end }}
+        timeoutSeconds: 3
+        failureThreshold: {{ if .Values.historyServer.enabled }}20{{ else }}12{{ end }}
+      livenessProbe:
+        tcpSocket:
+          port: 15002
+        initialDelaySeconds: 40
+        periodSeconds: 15
+        timeoutSeconds: 5
+        failureThreshold: 6
+  defaultOptions:
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundBlockedCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  supportDynamicTags: false
+{{- end }}

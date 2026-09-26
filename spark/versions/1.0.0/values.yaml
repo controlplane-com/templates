@@ -1,0 +1,59 @@
+# ─── Image ───────────────────────────────────────────────────────
+image: apache/spark:4.0.4-scala2.13-java17-python3-ubuntu
+
+# ─── Master (cluster manager + Web UI :8080) ─────────────────────
+master:
+  minCpu: 250m
+  maxCpu: 1
+  minMemory: 512Mi
+  maxMemory: 1Gi
+
+# ─── Workers (executor host tier) ────────────────────────────────
+workers:
+  replicas: 1        # 1 = proven single shape; >1 forms a multi-worker cluster (see README)
+  cores: 2           # SPARK_WORKER_CORES — cores this worker offers to the cluster
+  memory: 2g         # SPARK_WORKER_MEMORY — memory offered to executors (keep < maxMemory)
+  minCpu: 500m
+  maxCpu: 2
+  minMemory: 1Gi
+  maxMemory: 4Gi
+
+# ─── Spark Connect (optional remote submission, gRPC :15002) ─────
+connect:
+  enabled: false
+  minCpu: 250m
+  maxCpu: 1
+  minMemory: 512Mi
+  maxMemory: 1Gi
+
+# ─── History Server (persistent completed-app dashboard, :18080) ──
+# Requires object storage (bucket + cloud account) — see README "Storage setup".
+historyServer:
+  enabled: false
+  minCpu: 250m
+  maxCpu: 1
+  minMemory: 512Mi
+  maxMemory: 1Gi
+
+# ─── Object storage (required when historyServer.enabled) ────────
+# Keyless (UCI): create a cpln cloud account + a bucket-scoped IAM policy; no keys in values.
+storage:
+  provider: aws              # aws | gcp
+  bucket: my-spark-events    # bucket you created for event logs
+  prefix: spark/events       # folder within the bucket
+  region: us-east-1          # aws only
+  cloudAccountName: my-spark-cloud-account   # cpln cloud account linked to your provider
+  policyName: my-spark-events-policy         # aws only: bucket-scoped IAM policy name
+
+# ─── Extra Spark configuration (merged into spark-defaults.conf) ──
+sparkDefaults: {}
+  # spark.sql.shuffle.partitions: "200"
+
+# ─── Access ──────────────────────────────────────────────────────
+internalAccess:
+  type: same-gvc      # same-gvc (recommended) | same-org | workload-list
+  # workloads:        # only when type is workload-list
+  #   - //gvc/GVC/workload/WORKLOAD
+
+publicAccess:
+  enabled: false      # true exposes the Master + History Web UIs publicly — NO AUTH; see README

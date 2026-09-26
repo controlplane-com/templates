@@ -59,6 +59,10 @@ enabled; key: password). Must match the redis chart's redis.secretPassword.name.
 {{- printf "%s-redis-auth-password" .Release.Name }}
 {{- end }}
 
+{{- define "tooljet.secret.startup.name" -}}
+{{- printf "%s-tooljet-startup" .Release.Name }}
+{{- end }}
+
 {{/*
 Whether Redis auth (data-node password) is enabled — true only when redis is on
 AND redis.redis.auth.password.enabled is true.

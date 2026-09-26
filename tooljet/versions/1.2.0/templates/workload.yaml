@@ -10,13 +10,15 @@ spec:
   containers:
     - name: tooljet
       image: {{ .Values.tooljet.image }}
-      # Image entrypoint starts the in-container PostgREST (:3001, localhost-only),
-      # waits for Postgres, auto-creates both databases and runs migrations, then
-      # execs the args — verbatim what upstream's compose and k8s manifest pass.
+      # Gate on a live Postgres before the image entrypoint runs migrations — the
+      # image's wait-for-it.sh is a no-op here (the mesh completes bare TCP
+      # handshakes), so migrations otherwise race PG and the container exits 1 on
+      # first boot. The startup script waits (real SSLRequest bytes), then execs
+      # /app/server/entrypoint.sh npm run start:prod — the image entrypoint still
+      # boots PostgREST, creates both databases and runs migrations, then execs args.
+      command: /bin/bash
       args:
-        - "npm"
-        - "run"
-        - "start:prod"
+        - /cpln/start.sh
       inheritEnv: false
       minCpu: {{ .Values.tooljet.resources.minCpu | quote }}
       cpu: {{ .Values.tooljet.resources.maxCpu | quote }}
@@ -118,6 +120,10 @@ spec:
         failureThreshold: 10
         successThreshold: 1
         timeoutSeconds: 5
+      volumes:
+        - path: /cpln/start.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "tooljet.secret.startup.name" . }}.payload
   defaultOptions:
     autoscaling:
       metric: disabled

@@ -12,6 +12,11 @@ nocodb:
   # links and the auth cookie secure flag. Empty = derive from the platform
   # canonical endpoint. Set WITH https:// only for a custom domain.
   siteUrl: ""
+  # Allow webhooks to target private-network / same-GVC addresses (e.g. an internal
+  # n8n or service at *.cpln.local). OFF by default: NocoDB's SSRF guard refuses
+  # private IPs, so an in-GVC webhook target fails with "set NC_ALLOW_LOCAL_HOOKS=true".
+  # Enable only if you intend to fire webhooks at other workloads inside your GVC.
+  allowLocalWebhooks: false
   resources:
     # Upstream recommends 4 vCPU / 8 GB for a busy multi-team instance; these are
     # small-production defaults. Raise maxCpu/maxMemory together for large imports.

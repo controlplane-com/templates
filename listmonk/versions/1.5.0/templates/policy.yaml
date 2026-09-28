@@ -1,0 +1,14 @@
+kind: policy
+name: {{ include "listmonk.policy.name" . }}
+description: Listmonk policy
+tags: {{- include "listmonk.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "listmonk.identity.name" . }}
+targetKind: secret
+targetLinks:
+  # The user-created Super Admin credentials — reveal on exactly that one secret.
+  - //secret/{{ .Values.admin.secretName }}
+  - //secret/{{ include "listmonk.db.secretName" . }}

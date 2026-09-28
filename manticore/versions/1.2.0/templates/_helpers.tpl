@@ -245,15 +245,7 @@ Create chart name and version as used by the chart label.
 Common labels
 */}}
 {{- define "manticore.tags" -}}
-helm.sh/chart: {{ include "manticore.chart" . }}
-{{ include "manticore.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.cpln.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.cpln.io/managed-by: {{ .Release.Service }}
-cpln/marketplace: "true"
-cpln/marketplace-template: manticore
-cpln/marketplace-template-version: {{ .Chart.Version }}
+{{- include "cpln-common.tags" . }}
 {{- end }}
 
 {{/*

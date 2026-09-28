@@ -1,6 +1,6 @@
 apiVersion: v2
 name: thanos
-description: Thanos Query global PromQL fan-out over Prometheus sidecars and Store APIs, with optional long-term object storage.
+description: Thanos Query global PromQL fan-out over Prometheus sidecars and Store APIs, with long-term storage.
 type: application
 version: 1.0.0
 appVersion: "0.42.2"

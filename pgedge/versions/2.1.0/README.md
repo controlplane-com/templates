@@ -207,7 +207,7 @@ pgcat runs in the same locations as pgEdge, `minReplicas` to `maxReplicas` in ea
 
 Both modes gate the pooled endpoint on backend health: pgcat's readiness probe (`pg_isready` against its write target) makes a location whose backend is down report **not-ready**, and the platform then routes `RELEASE_NAME-pgcat.GVC_NAME.cpln.local` callers to a healthy location's pgcat automatically.
 
-> **Upgrading from 2.0.x:** the default changed to `routing: local`. A 2.0.x install routed all writes to the first location (single-writer); after this upgrade each region writes locally. If your app depends on a single write target to avoid conflicts, set `pgcat.routing: single-writer` before upgrading. The change is pgcat-only — the pgEdge nodes and their data are untouched.
+> **Upgrading from 2.0.x:** the default changed to `routing: local`. A 2.0.x install routed all writes to the first location (single-writer); after this upgrade each region writes locally. If your app depends on a single write target to avoid conflicts, set `pgcat.routing: single-writer` before upgrading. **Your data is preserved** (each node's persistent volume is retained), but the upgrade **rolls every pgEdge node** — 2.1.0 changes the node boot script (a location-check with retry backoff), so the nodes restart as part of the upgrade. Across locations they roll one at a time and the others keep serving; a **single-location** install has a brief write interruption while its one node restarts. Plan the upgrade accordingly.
 
 **Pool modes:**
 - `transaction` — connection held only for the duration of a transaction. Best for most web and API workloads. Not compatible with session-level features like `SET` variables, temporary tables, or advisory locks.

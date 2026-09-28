@@ -1,3 +1,6 @@
+{{- if not (has .Values.pgcat.routing (list "local" "single-writer")) }}
+{{- fail "pgcat.routing must be 'local' (per-location, active/active) or 'single-writer' (one global write target)" }}
+{{- end }}
 ---
 kind: workload
 name: {{ include "pgedge.pgcat.name" . }}
@@ -31,6 +34,28 @@ spec:
         - path: /etc/pgcat/start.sh
           recoveryPolicy: retain
           uri: cpln://secret/{{ include "pgedge.secretPgcatConfig.name" . }}.payload
+      # Backend-aware readiness: pgcat listens on 5432 regardless of its backends, so a
+      # bare TCP/port check is a FALSE-READY here (the mesh completes the handshake too).
+      # pg_isready speaks the real Postgres protocol against this pool's WRITE TARGET, with
+      # -t bounding it so the exec can never hang (a hung readiness probe never surfaces).
+      # When the target is down this pgcat goes not-ready and the platform's local-first
+      # internal routing sends RELEASE-pgcat.GVC.cpln.local callers to a healthy location's
+      # pgcat instead. local routing → this location's node-0; single-writer → location[0]'s.
+      readinessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            {{- if eq .Values.pgcat.routing "local" }}
+            - exec pg_isready -q -t 3 -p 5432 -h "replica-0.{{ include "pgedge.name" . }}.$(basename "${CPLN_LOCATION}").{{ .Values.global.cpln.gvc }}.cpln.local"
+            {{- else }}
+            - exec pg_isready -q -t 3 -p 5432 -h "replica-0.{{ include "pgedge.name" . }}.{{ (first .Values.locations).name }}.{{ .Values.global.cpln.gvc }}.cpln.local"
+            {{- end }}
+        initialDelaySeconds: 20
+        periodSeconds: 15
+        failureThreshold: 20   # ~5 min first-ready budget while pgEdge nodes boot (max is 20)
+        timeoutSeconds: 5
+        successThreshold: 1
   identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pgedge.identity.name" . }}
   defaultOptions:
     autoscaling:

@@ -41,6 +41,17 @@ pgcat:
   image: ghcr.io/postgresml/pgcat:v1.2.0 # pinned: `latest` makes installs non-reproducible
   poolMode: transaction  # options: session, transaction, statement
   defaultPoolSize: 25    # Real Postgres connections pgcat maintains per pool
+  # How each pgcat pools the cluster's pgEdge nodes:
+  #   local         (default) — each location's pgcat pools ONLY that location's nodes,
+  #                 with the local node as the write target. Every region serves reads AND
+  #                 writes locally — true active/active, which is what pgEdge is for — and
+  #                 losing one location does not stop writes in the others.
+  #   single-writer — every pgcat (in all locations) pools the WHOLE cluster with ONE write
+  #                 target (the first location's first node). Avoids last-update-wins
+  #                 conflicts by funneling writes to one node, but writes STOP if that
+  #                 location is down and reads are served cross-region. Choose this only if
+  #                 your app cannot tolerate multi-master conflict resolution.
+  routing: local         # local | single-writer
   resources:
     cpu: 500m
     memory: 256Mi

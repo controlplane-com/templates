@@ -1,13 +1,13 @@
 apiVersion: v2
 name: etcd-multi-location
-description: A stretched etcd cluster with one member per location, for cross-region coordination and as the consensus store behind postgres-multi-location
+description: Stretched etcd cluster with one member per location for cross-region coordination and consensus.
 type: application
 version: 1.0.0
 appVersion: "3.6.5"
 
 annotations:
   created: "2026-08-10"
-  lastModified: "2026-08-11"
+  lastModified: "2026-09-28"
   category: "key-value store"
   createsGvc: true
 

@@ -38,9 +38,14 @@ spec:
       # bare TCP/port check is a FALSE-READY here (the mesh completes the handshake too).
       # pg_isready speaks the real Postgres protocol against this pool's WRITE TARGET, with
       # -t bounding it so the exec can never hang (a hung readiness probe never surfaces).
-      # When the target is down this pgcat goes not-ready and the platform's local-first
-      # internal routing sends RELEASE-pgcat.GVC.cpln.local callers to a healthy location's
-      # pgcat instead. local routing → this location's node-0; single-writer → location[0]'s.
+      # This reports THIS location's pgcat not-ready when its node is down (probe target:
+      # local routing → this location's node-0; single-writer → location[0]'s). It does NOT,
+      # however, produce cross-location client failover: the internal service DNS is
+      # location-pinned, so a caller in the failed location is NOT redirected to a healthy
+      # location's pgcat — it errors until its own location recovers (measured on a 2-location
+      # cluster, 12+ min, no reroute). The probe's value is limited to health reporting and to
+      # removing a genuinely-broken pgcat replica from its OWN location's pool; the loss of a
+      # location is contained (other locations keep serving) but NOT auto-failed-over.
       readinessProbe:
         exec:
           command:

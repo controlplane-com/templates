@@ -88,12 +88,28 @@ reads near users, and active-active deployments that must survive the loss of a 
   in `local` (default) each location's pgcat marks ITS OWN node-0 the primary and pools only its local
   nodes; in `single-writer` every pgcat marks the first location's node-0 the primary and pools the whole
   cluster. Spock is multi-master either way — `local` is what actually uses that.
-- **pgcat is backend-aware via a readiness probe (2.1.0).** `workload-pgcat.yaml` runs `pg_isready`
-  (real Postgres protocol, `-t 3` so it can never hang — a bare TCP/port check would be a false-ready
-  since the mesh completes the handshake and pgcat listens regardless of backends) against the pool's
-  write target. When it is down that location's pgcat goes not-ready and the mesh routes
-  `-pgcat.GVC.cpln.local` callers to a healthy location. Before 2.1.0 pgcat had NO probe, so it reported
-  ready with a dead primary and the mesh never failed over — the pooled endpoint was a write SPOF.
+- **pgcat has a backend-aware readiness probe (2.1.0), but it does NOT deliver cross-location failover
+  — DO NOT claim it does (measured 2026-09-28 on a live 2-location cluster).** `workload-pgcat.yaml` runs
+  `pg_isready` (real Postgres protocol, `-t 3` so it can never hang — a bare TCP/port check would be a
+  false-ready since the mesh completes the handshake and pgcat listens regardless of backends) against
+  the pool's write target, and it DOES mark a location's pgcat not-ready when its node is down. **What it
+  does NOT do — despite what earlier docs/comments claimed — is fail callers over to another location.**
+  The internal service DNS `RELEASE-pgcat.GVC.cpln.local` is **location-pinned**: a caller in the failed
+  location keeps resolving to its own (now-not-ready) pgcat and errors (`AllServersDown`, then connection
+  refused) until its location recovers; it is never redirected to a healthy location. Measured directly:
+  west node scaled to 0, west client via the service DNS **never** reached the east pgcat across **12+
+  minutes**, while a control proved east was reachable from west the whole time. Two consequences worth
+  repeating to anyone (incl. the ticket that prompted this): (1) the loss of a location is **contained**
+  (other locations keep serving their own clients and writing) but **not auto-failed-over** — apps that
+  must survive their own location's loss need to connect to multiple location endpoints and retry
+  themselves; (2) even the not-ready signal is **slow** — `failureThreshold: 20 × periodSeconds: 15 ≈
+  300s` before it flips, so during a real outage the pooled endpoint returns errors for ~5 min before
+  even reporting not-ready. The probe's real value is narrower than advertised: health reporting + pulling
+  a genuinely-broken pgcat replica from its OWN location's pool. **Open design question for the maintainer:
+  whether to keep the probe, and how (if at all) to offer real client failover — likely app-side.**
+  (Pre-2.1.0 pgcat had NO probe and a single global write target, so `single-writer` remains a write SPOF;
+  `local` routing removes that SPOF for writes, which is the genuine 2.1.0 win — the failover story was the
+  overclaim.)
 - **`helm upgrade` restarts every pgEdge replica at once** — the API drops
   `rolloutOptions.maxUnavailableReplicas` on a `stateful` workload, so nothing serialises the rollout.
   Treat an upgrade as a planned write interruption (~2 min measured).

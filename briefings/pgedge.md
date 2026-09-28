@@ -31,6 +31,7 @@ reads near users, and active-active deployments that must survive the loss of a 
 | `postgres.credentialsSecretName` | `my-pgedge-credentials` | **prerequisite** `dictionary` secret (1.1.0+): `username`, `password`, `database` |
 | `pgcat.image` | `ghcr.io/postgresml/pgcat:v1.2.0` | pinned in 1.1.0; was `:latest` |
 | `pgcat.poolMode` / `minReplicas` / `maxReplicas` | `transaction` / 2 / 4 | min/max are per location |
+| `pgcat.routing` | `local` | **2.1.0.** `local` = each location's pgcat pools ONLY its own nodes (active/active per region, no write SPOF); `single-writer` = whole-cluster pool with one write target (location[0]/node-0), the pre-2.1.0 behavior. **Default flipped from single-writer → local in 2.1.0** — an upgrade changes an existing install's write model |
 | `pgcat.defaultPoolSize` | 25 | the only connection knob pgcat honours. `pgcat.maxClientConn` existed through 1.1.1 and did nothing — pgcat v1.2.0 has no such setting (absent from `SHOW CONFIG`, absent from the binary), and it was removed in 2.0.0 |
 | `resources` | `500m`/`1Gi` → `2`/`4Gi` | `2` / `500m` is exactly 4:1, the stateful ceiling — raising `maxCpu` alone is rejected at apply |
 | `multiZone` | `false` | |
@@ -83,8 +84,16 @@ reads near users, and active-active deployments that must survive the loss of a 
 - **Both tiers derive the topology from ONE render site** (`pgedge.locationEnv` → `PGEDGE_LOCATIONS`,
   `PGEDGE_REPLICAS`, `PGEDGE_WORKLOAD`). pgcat needs `PGEDGE_WORKLOAD` because its own `CPLN_WORKLOAD` names
   pgcat. The prefix is not `CPLN_` because env names starting `CPLN_` are rejected at apply, invisibly to
-  `helm template`. The first replica of the first location is pgcat's `primary`; everything else is a
-  `replica`, even though Spock is multi-master.
+  `helm template`. Which node is pgcat's `primary` (write target) depends on `pgcat.routing` (2.1.0):
+  in `local` (default) each location's pgcat marks ITS OWN node-0 the primary and pools only its local
+  nodes; in `single-writer` every pgcat marks the first location's node-0 the primary and pools the whole
+  cluster. Spock is multi-master either way — `local` is what actually uses that.
+- **pgcat is backend-aware via a readiness probe (2.1.0).** `workload-pgcat.yaml` runs `pg_isready`
+  (real Postgres protocol, `-t 3` so it can never hang — a bare TCP/port check would be a false-ready
+  since the mesh completes the handshake and pgcat listens regardless of backends) against the pool's
+  write target. When it is down that location's pgcat goes not-ready and the mesh routes
+  `-pgcat.GVC.cpln.local` callers to a healthy location. Before 2.1.0 pgcat had NO probe, so it reported
+  ready with a dead primary and the mesh never failed over — the pooled endpoint was a write SPOF.
 - **`helm upgrade` restarts every pgEdge replica at once** — the API drops
   `rolloutOptions.maxUnavailableReplicas` on a `stateful` workload, so nothing serialises the rollout.
   Treat an upgrade as a planned write interruption (~2 min measured).

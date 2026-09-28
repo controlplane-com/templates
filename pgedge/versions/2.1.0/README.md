@@ -5,7 +5,7 @@ This template deploys a pgEdge active-active distributed PostgreSQL cluster usin
 ## Architecture
 
 - **pgEdge**: Stateful workload running PostgreSQL 17 with the Spock extension. All nodes are active writers connected in a full-mesh replication ring. Each replica gets its own persistent volume.
-- **pgcat**: Connection pooler providing a single virtual endpoint for applications. Routes writes to the designated primary and distributes reads across all nodes.
+- **pgcat**: Connection pooler providing a single virtual endpoint for applications. Routes reads and writes to each location's own nodes by default (active/active per region), or to one global write target in `single-writer` mode; a `pg_isready` readiness probe fails a location over when its backend is down (see pgcat Settings → Read/write routing).
 - **Spock**: Multi-master logical replication extension included in the pgEdge image. Handles cross-node replication with last-update-wins conflict resolution.
 - **Volume set**: One `ext4` volume per pgEdge replica, with daily snapshots retained for 7 days.
 - **Identity + two policies**: `reveal` on this release's secrets and your credentials secret, plus `view` on the one GVC you install into so each node can confirm at boot that the GVC really has every location you listed.
@@ -143,8 +143,8 @@ postgres:
 multiZone: false  # Set to true to spread replicas across availability zones within each location
 ```
 
-The first entry of `locations` is special: its `replica-0` is pgcat's write target, and it is the
-only location the backup cron runs in.
+The first entry of `locations` is special: it is the only location the backup cron runs in, and in
+`pgcat.routing: single-writer` its `replica-0` is the cluster's single write target (see pgcat Settings).
 
 **Replica counts:**
 
@@ -190,6 +190,7 @@ pgcat:
   image: ghcr.io/postgresml/pgcat:v1.2.0 # pinned: `latest` makes installs non-reproducible
   poolMode: transaction  # options: session, transaction, statement
   defaultPoolSize: 25    # Real Postgres connections pgcat maintains per pool
+  routing: local         # local | single-writer (see below)
   resources:
     cpu: 500m
     memory: 256Mi
@@ -199,7 +200,14 @@ pgcat:
 
 pgcat runs in the same locations as pgEdge, `minReplicas` to `maxReplicas` in each.
 
-**Read/write routing.** pgcat parses each query and sends writes to `replica-0` of your first location and reads to the other nodes. A cluster of exactly one node has no other node, so reads are served by that node too — otherwise every `SELECT` would fail with `AllServersDown`. This switches on node count alone and needs no configuration.
+**Read/write routing (`routing`).** pgcat parses each query and splits reads from writes; the two modes differ in WHERE each pgcat sends them:
+
+- **`local` (default)** — each location's pgcat pools **only that location's nodes**: the local `replica-0` is the write target, other local replicas serve reads. Every region reads *and* writes locally, so this is true active/active and **losing one location does not stop writes in the others**. This is what pgEdge (multi-master) is for. With one node in a location, that node serves reads too (there is no other local node to read from).
+- **`single-writer`** — every pgcat, in every location, pools the **whole cluster** with a single write target (`replica-0` of your first location); reads go to the other nodes. Use this only if your app cannot tolerate multi-master last-update-wins conflict resolution and needs one write target. Trade-offs: **writes stop if the first location is down** (the write target is there), and reads are served **cross-region** (extra latency + egress). A misclassified write (`WITH x AS (INSERT …) SELECT`) lands on a replica and, on multi-master, replicates anyway — so single-writer is a routing convention, not an enforced guarantee.
+
+Both modes gate the pooled endpoint on backend health: pgcat's readiness probe (`pg_isready` against its write target) makes a location whose backend is down report **not-ready**, and the platform then routes `RELEASE_NAME-pgcat.GVC_NAME.cpln.local` callers to a healthy location's pgcat automatically.
+
+> **Upgrading from 2.0.x:** the default changed to `routing: local`. A 2.0.x install routed all writes to the first location (single-writer); after this upgrade each region writes locally. If your app depends on a single write target to avoid conflicts, set `pgcat.routing: single-writer` before upgrading. The change is pgcat-only — the pgEdge nodes and their data are untouched.
 
 **Pool modes:**
 - `transaction` — connection held only for the duration of a transaction. Best for most web and API workloads. Not compatible with session-level features like `SET` variables, temporary tables, or advisory locks.

@@ -1,0 +1,4 @@
+# cpln-common is a Helm LIBRARY chart: it ships only named templates (the shared
+# labeling/tags helpers) for other charts to import, and is never installed on its
+# own. It exposes no user-configurable values — this file exists so the chart has the
+# standard structure the marketplace validator expects.

@@ -1,6 +1,6 @@
 apiVersion: v2
 name: supabase
-description: PostgreSQL backend-as-a-service with built-in auth, REST API, realtime subscriptions, file storage, and a web dashboard
+description: PostgreSQL backend-as-a-service with auth, REST API, realtime subscriptions, file storage, and a dashboard.
 
 type: application
 version: 1.0.0
@@ -13,6 +13,6 @@ dependencies:
 
 annotations:
   created: "2026-06-11"
-  lastModified: "2026-08-04"
+  lastModified: "2026-09-28"
   category: "database"
   createsGvc: false

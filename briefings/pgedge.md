@@ -94,11 +94,17 @@ reads near users, and active-active deployments that must survive the loss of a 
   false-ready since the mesh completes the handshake and pgcat listens regardless of backends) against
   the pool's write target, and it DOES mark a location's pgcat not-ready when its node is down. **What it
   does NOT do — despite what earlier docs/comments claimed — is fail callers over to another location.**
-  The internal service DNS `RELEASE-pgcat.GVC.cpln.local` is **location-pinned**: a caller in the failed
-  location keeps resolving to its own (now-not-ready) pgcat and errors (`AllServersDown`, then connection
-  refused) until its location recovers; it is never redirected to a healthy location. Measured directly:
-  west node scaled to 0, west client via the service DNS **never** reached the east pgcat across **12+
-  minutes**, while a control proved east was reachable from west the whole time. Two consequences worth
+  The internal service DNS `RELEASE-pgcat.GVC.cpln.local` is **STATICALLY location-pinned**: it resolves
+  to a fixed per-location VIP (west client → the west VIP, east client → the east VIP), and the mesh
+  **never re-resolves a client to another location's VIP** — proven two ways: (a) west NODE scaled to 0
+  (west pgcat present-but-not-ready): west client via the service DNS never reached east across **12+
+  min**; (b) west PGCAT replica scaled to 0 — **entirely gone**, i.e. the real location-loss shape — and
+  the west client STILL resolved the service name to the **same west VIP** and got `server closed the
+  connection unexpectedly` (no backend), never the east VIP, across **8+ min**. In BOTH a control proved
+  east was reachable from the west client directly the whole time, so it is specifically the service DNS
+  refusing to spill cross-location, not a connectivity problem. (This is Envoy locality LB without
+  failover: a location's clients get its local VIP even when that location has ZERO healthy/present
+  endpoints.) Two consequences worth
   repeating to anyone (incl. the ticket that prompted this): (1) the loss of a location is **contained**
   (other locations keep serving their own clients and writing) but **not auto-failed-over** — apps that
   must survive their own location's loss need to connect to multiple location endpoints and retry

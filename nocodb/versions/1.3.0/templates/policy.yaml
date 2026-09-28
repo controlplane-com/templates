@@ -1,0 +1,24 @@
+---
+kind: policy
+name: {{ include "nocodb.policy.name" . }}
+description: NocoDB secret access
+tags: {{- include "nocodb.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "nocodb.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "nocodb.secret.creds.name" . }}
+  - //secret/{{ include "nocodb.postgres.secret.name" . }}
+  - //secret/{{ .Values.secrets.name }}
+  {{- if .Values.admin.secretName }}
+  - //secret/{{ .Values.admin.secretName }}
+  {{- end }}
+  {{- if and (eq .Values.storage.type "s3") .Values.storage.s3.auth.secretName }}
+  - //secret/{{ .Values.storage.s3.auth.secretName }}
+  {{- end }}
+  {{- if and .Values.smtp.enabled .Values.smtp.auth.secretName }}
+  - //secret/{{ .Values.smtp.auth.secretName }}
+  {{- end }}

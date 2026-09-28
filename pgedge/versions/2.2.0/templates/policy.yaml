@@ -14,6 +14,9 @@ targetLinks:
   - //secret/{{ include "pgedge.secretPgcatConfig.name" . }}
   {{- /* the user's prerequisite credentials secret */}}
   - //secret/{{ .Values.postgres.credentialsSecretName }}
+  {{- if .Values.proxy.enabled }}
+  - //secret/{{ include "pgedge.secretProxyStartup.name" . }}
+  {{- end }}
   {{- if .Values.backup.enabled }}
   - //secret/{{ include "pgedge.secretConfig.name" . }}
   {{- end }}

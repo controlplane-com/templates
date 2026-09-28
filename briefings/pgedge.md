@@ -12,7 +12,9 @@ reads near users, and active-active deployments that must survive the loss of a 
 | Resource | Notes |
 |---|---|
 | workload `-pgedge` (stateful) | `replicas` per location, `replicaDirect` so each node is addressable |
-| workload `-pgcat` (standard) | connection pooler, `minReplicas`..`maxReplicas` **per location** (2.0.0 gave it `localOptions`; before that it ran in every GVC location) |
+| workload `-pgcat` (standard) | connection pooler, `minReplicas`..`maxReplicas` **per location** (2.0.0 gave it `localOptions`; before that it ran in every GVC location). **2.2.0: with `proxy.enabled` (default) pgcat pools a SINGLE backend — the local HAProxy — instead of the nodes directly** |
+| workload `-pgedge-proxy` (standard) | **new in 2.2.0, on by default** — per-location HAProxy failover tier, modeled on `postgres-multi-location`'s proxy. Local node-0 active, other local nodes then remote nodes as ordered `backup`s; `option pgsql-check`; startup gate (SSLRequest via perl) against garbage-pinned DNS. Gated on `proxy.enabled` |
+| secret `-pgedge-proxy-startup` | **new in 2.2.0** — HAProxy `start.sh`; gated on `proxy.enabled` |
 | volumeset | per-replica storage, `ext4`, 7-day snapshots |
 | secret `-startup` | pgEdge/Spock start script; topology comes from `PGEDGE_*` env, not from Helm loops (2.0.0) |
 | secret `-pgcat-config` | **a startup script** from 1.1.0, not a TOML file; from 2.0.0 it also builds the `servers` list itself, in POSIX `sh`, from the same `PGEDGE_*` env |
@@ -29,6 +31,8 @@ reads near users, and active-active deployments that must survive the loss of a 
 | `locations[]` | 3 locations × 3 replicas | was `gvc.locations[]`. **Every entry must exist in the GVC you install into; extra GVC locations are fine** |
 | `image` | `ghcr.io/pgedge/pgedge-postgres:17-spock5-standard` | |
 | `postgres.credentialsSecretName` | `my-pgedge-credentials` | **prerequisite** `dictionary` secret (1.1.0+): `username`, `password`, `database` |
+| `proxy.enabled` | `true` | **2.2.0.** Per-location HAProxy failover tier ON by default (pgEdge's value prop is availability). `false` = exact 2.1.0 shape (render byte-identical bar the version label — verified) |
+| `proxy.image` | `haproxy:3.0.28` | **2.2.0.** Pinned exact, Debian variant (the startup gate needs `perl`). `minReplicas`/`maxReplicas` default 2/2 per location; `100m`/`128Mi` |
 | `pgcat.image` | `ghcr.io/postgresml/pgcat:v1.2.0` | pinned in 1.1.0; was `:latest` |
 | `pgcat.poolMode` / `minReplicas` / `maxReplicas` | `transaction` / 2 / 4 | min/max are per location |
 | `pgcat.routing` | `local` | **2.1.0.** `local` = each location's pgcat pools ONLY its own nodes (active/active per region, no write SPOF); `single-writer` = whole-cluster pool with one write target (location[0]/node-0), the pre-2.1.0 behavior. **Default flipped from single-writer → local in 2.1.0** — an upgrade changes an existing install's write model |
@@ -111,11 +115,26 @@ reads near users, and active-active deployments that must survive the loss of a 
   themselves; (2) even the not-ready signal is **slow** — `failureThreshold: 20 × periodSeconds: 15 ≈
   300s` before it flips, so during a real outage the pooled endpoint returns errors for ~5 min before
   even reporting not-ready. The probe's real value is narrower than advertised: health reporting + pulling
-  a genuinely-broken pgcat replica from its OWN location's pool. **Open design question for the maintainer:
-  whether to keep the probe, and how (if at all) to offer real client failover — likely app-side.**
+  a genuinely-broken pgcat replica from its OWN location's pool. this was an **open design question — RESOLVED in 2.2.0 for the node-death case** by the HAProxy tier below.
   (Pre-2.1.0 pgcat had NO probe and a single global write target, so `single-writer` remains a write SPOF;
   `local` routing removes that SPOF for writes, which is the genuine 2.1.0 win — the failover story was the
   overclaim.)
+- **2.2.0 HAProxy failover tier — the concrete node-death fix (`proxy.enabled: true` default).** Modeled
+  on `postgres-multi-location`'s proven proxy: per-location `standard` workload, backends built from
+  `PGEDGE_*` env as location-qualified per-replica DNS
+  (`replica-{i}.{workload}.{location}.{gvc}.cpln.local`), a **startup gate** (HAProxy resolves once at start
+  and the mesh never NXDOMAINs, so an unresolved name pins to a garbage IP forever — gate until every node
+  answers a Postgres **SSLRequest**, 900s for ~114s cross-region convergence), `option pgsql-check user
+  <credentials.username>`, `inter 3s fall 2 rise 1 on-marked-down shutdown-sessions`. **Pin-to-one-local
+  layout (maintainer decision):** local node-0 is the ONLY active server; other local nodes then remote
+  nodes are ordered `backup`s (no `allbackups` → first healthy backup). Preserves read-your-writes locally
+  (all local traffic → node-0) at the cost of NOT spreading local reads — the deliberate trade vs.
+  load-balancing across local nodes. pgcat pools a single backend (the local HAProxy) and `pgcat.routing`
+  is ignored when the tier is on. **`proxy.enabled: false` renders byte-identical to 2.1.0** (verified, bar
+  the version label). **To confirm in the test round (named rows):** pgsql-check vs SCRAM (tcp-check/SSLRequest
+  fallback if it mis-reads), SIGSTOP-not-kill failover detection + timing (a kill races the platform restart →
+  false pass), first-healthy-backup ordering, `perl` present in `haproxy:3.0.28`, single-backend pgcat pooling
+  + shutdown-sessions recovery, and a no-op-upgrade drift gate on the new workload.
 - **`helm upgrade` restarts every pgEdge replica at once** — the API drops
   `rolloutOptions.maxUnavailableReplicas` on a `stateful` workload, so nothing serialises the rollout.
   Treat an upgrade as a planned write interruption (~2 min measured).

@@ -85,6 +85,14 @@ spec:
       {{- if .Values.backup.enabled }}
       {{- $own = append $own (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.backup.name" .)) }}
       {{- end }}
+      {{- /*
+        With the failover tier on, the per-location HAProxy connects to every
+        node (its own location's node-0 active, the rest as backups), so it must
+        be allowed inbound too — a clients-only list would silently break routing.
+      */}}
+      {{- if .Values.proxy.enabled }}
+      {{- $own = append $own (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.proxy.name" .)) }}
+      {{- end }}
       inboundAllowWorkload:
         {{- range $own }}
         - {{ . }}

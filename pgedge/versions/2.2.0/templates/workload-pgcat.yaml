@@ -47,7 +47,13 @@ spec:
           command:
             - /bin/sh
             - -c
-            {{- if eq .Values.pgcat.routing "local" }}
+            {{- if .Values.proxy.enabled }}
+            # Failover tier on: pgcat's only backend is this location's HAProxy, so
+            # readiness checks the proxy — pgcat reports ready iff HAProxy has a
+            # reachable node ANYWHERE, which is what keeps pgcat ready through a
+            # local node death (the improvement over 2.1.0's single-node check).
+            - exec pg_isready -q -t 3 -p 5432 -h "{{ include "pgedge.proxy.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local"
+            {{- else if eq .Values.pgcat.routing "local" }}
             - exec pg_isready -q -t 3 -p 5432 -h "replica-0.{{ include "pgedge.name" . }}.$(basename "${CPLN_LOCATION}").{{ .Values.global.cpln.gvc }}.cpln.local"
             {{- else }}
             - exec pg_isready -q -t 3 -p 5432 -h "replica-0.{{ include "pgedge.name" . }}.{{ (first .Values.locations).name }}.{{ .Values.global.cpln.gvc }}.cpln.local"

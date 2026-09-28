@@ -15,10 +15,24 @@ pgEdge pgcat Workload Name
 {{- end }}
 
 {{/*
+pgEdge HAProxy failover-tier Workload Name
+*/}}
+{{- define "pgedge.proxy.name" -}}
+{{- printf "%s-pgedge-proxy" .Release.Name }}
+{{- end }}
+
+{{/*
 pgEdge Secret Startup Name
 */}}
 {{- define "pgedge.secretStartup.name" -}}
 {{- printf "%s-pgedge-startup" .Release.Name }}
+{{- end }}
+
+{{/*
+pgEdge HAProxy Startup Secret Name
+*/}}
+{{- define "pgedge.secretProxyStartup.name" -}}
+{{- printf "%s-pgedge-proxy-startup" .Release.Name }}
 {{- end }}
 
 {{/*

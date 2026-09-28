@@ -5,7 +5,8 @@ This template deploys a pgEdge active-active distributed PostgreSQL cluster usin
 ## Architecture
 
 - **pgEdge**: Stateful workload running PostgreSQL 17 with the Spock extension. All nodes are active writers connected in a full-mesh replication ring. Each replica gets its own persistent volume.
-- **pgcat**: Connection pooler providing a per-location virtual endpoint for applications. Routes reads and writes to each location's own nodes by default (active/active per region), or to one global write target in `single-writer` mode (see pgcat Settings → Read/write routing). Note the endpoint is location-pinned — it does **not** fail clients over to another location if their local node dies (see the routing section).
+- **HAProxy failover tier** (per location, optional — on by default): sits in front of the nodes and gives each location's pgcat a single stable target. It routes to the local node and, when the local nodes are unhealthy, fails over — first to another local node, then to a remote location — so a **local node death no longer errors the client**. Disable with `proxy.enabled: false` for the leaner 2.1.0 single-tier shape. See [Failover behaviour](#failover-behaviour).
+- **pgcat**: Connection pooler providing a per-location virtual endpoint for applications. With the failover tier on (default) it pools the local HAProxy and node selection is HAProxy's job; with it off it pools the pgEdge nodes directly (active/active per region, or one global write target in `single-writer` mode — see pgcat Settings → Read/write routing).
 - **Spock**: Multi-master logical replication extension included in the pgEdge image. Handles cross-node replication with last-update-wins conflict resolution.
 - **Volume set**: One `ext4` volume per pgEdge replica, with daily snapshots retained for 7 days.
 - **Identity + two policies**: `reveal` on this release's secrets and your credentials secret, plus `view` on the one GVC you install into so each node can confirm at boot that the GVC really has every location you listed.
@@ -181,6 +182,23 @@ internal_access:
   pgEdge nodes replicate to each other with Spock and pgcat connects to every node, so the chart
   always adds this release's own workloads to the list.
 
+### HAProxy Failover Tier
+
+One HAProxy runs per location, in front of the pgEdge nodes. Each location's HAProxy sends traffic to **its own** location's `replica-0` (active) and falls back — in order — to the other local nodes, then to a remote location's nodes, only when the closer ones fail their health check. This is what lets a client survive its **local node** dying: pgcat alone (`routing: local`) pools only the local node and returns `AllServersDown` when it goes down.
+
+```yaml
+proxy:
+  enabled: true          # set false for the leaner 2.1.0 single-tier shape (pgcat straight to nodes)
+  image: haproxy:3.0.28  # pinned exact; Debian variant (perl needed by the startup gate)
+  resources:
+    cpu: 100m
+    memory: 128Mi
+  minReplicas: 2         # per location
+  maxReplicas: 2         # per location
+```
+
+On by default because pgEdge exists for availability; with it off, the default install keeps the local-node-death gap. The client endpoint is unchanged either way. See [Failover behaviour](#failover-behaviour) for exactly what is and is not covered.
+
 ### pgcat Settings
 
 pgcat multiplexes application connections into a smaller pool of real database connections, reducing overhead and protecting Postgres from connection exhaustion under high concurrency.
@@ -190,7 +208,7 @@ pgcat:
   image: ghcr.io/postgresml/pgcat:v1.2.0 # pinned: `latest` makes installs non-reproducible
   poolMode: transaction  # options: session, transaction, statement
   defaultPoolSize: 25    # Real Postgres connections pgcat maintains per pool
-  routing: local         # local | single-writer (see below)
+  routing: local         # local | single-writer — IGNORED when proxy.enabled (the default)
   resources:
     cpu: 500m
     memory: 256Mi
@@ -200,14 +218,25 @@ pgcat:
 
 pgcat runs in the same locations as pgEdge, `minReplicas` to `maxReplicas` in each.
 
-**Read/write routing (`routing`).** pgcat parses each query and splits reads from writes; the two modes differ in WHERE each pgcat sends them:
+**With the failover tier on (the default), `routing` does not apply** — pgcat pools a single backend (the local HAProxy) and all node selection is HAProxy's. The two modes below only take effect with `proxy.enabled: false`.
+
+**Read/write routing (`routing`, `proxy.enabled: false` only).** pgcat parses each query and splits reads from writes; the two modes differ in WHERE each pgcat sends them:
 
 - **`local` (default)** — each location's pgcat pools **only that location's nodes**: the local `replica-0` is the write target, other local replicas serve reads. Every region reads *and* writes locally, so this is true active/active and **losing one location does not stop writes in the others**. This is what pgEdge (multi-master) is for. With one node in a location, that node serves reads too (there is no other local node to read from).
 - **`single-writer`** — every pgcat, in every location, pools the **whole cluster** with a single write target (`replica-0` of your first location); reads go to the other nodes. Use this only if your app cannot tolerate multi-master last-update-wins conflict resolution and needs one write target. Trade-offs: **writes stop if the first location is down** (the write target is there), and reads are served **cross-region** (extra latency + egress). A misclassified write (`WITH x AS (INSERT …) SELECT`) lands on a replica and, on multi-master, replicates anyway — so single-writer is a routing convention, not an enforced guarantee.
 
-**A location's loss is contained but NOT auto-failed-over.** The endpoint `RELEASE_NAME-pgcat.GVC_NAME.cpln.local` is location-pinned — a client in a failed location keeps hitting its own (dead) pgcat and errors until that location recovers, rather than being redirected to a healthy location. Other locations are unaffected and keep serving and writing. An app that must survive the loss of *its own* location must connect to another location's endpoint itself.
+### Failover behaviour
 
-> **Upgrading from 2.0.x:** the default changed to `routing: local`. A 2.0.x install routed all writes to the first location (single-writer); after this upgrade each region writes locally. If your app depends on a single write target to avoid conflicts, set `pgcat.routing: single-writer` before upgrading. **Your data is preserved** (each node's persistent volume is retained), but the upgrade **rolls every pgEdge node** — 2.1.0 changes the node boot script (a location-check with retry backoff), so the nodes restart as part of the upgrade. Across locations they roll one at a time and the others keep serving; a **single-location** install has a brief write interruption while its one node restarts. Plan the upgrade accordingly.
+What the failover tier (`proxy.enabled: true`, default) covers, and what it does not:
+
+- **Local node death — HANDLED.** If a client's local `replica-0` dies, HAProxy fails over to another local node (then, if every local node is down, to a remote location). The client keeps committing and reading; no `AllServersDown`. This is the concrete gap 2.1.0 shipped. Detection is ~6s (`fall 2 × inter 3s`); measured timings are in the template's briefing.
+- **Whole-location loss — NOT auto-failed-over.** The endpoint `RELEASE_NAME-pgcat.GVC_NAME.cpln.local` is location-pinned. If a client's **own** location is lost entirely — its pgcat and HAProxy die with it — the mesh does not redirect the client to another location, so it errors until its location recovers. Other locations keep serving and writing throughout. An app that must survive the loss of *its own* location must connect to another location's endpoint itself.
+- **Consistency trade.** All of a location's client traffic lands on that location's `replica-0` (reads and writes), so you get read-your-writes locally; local reads are not spread across the other local nodes. With `proxy.enabled: false`, pgcat's `routing` (below) restores the 2.1.0 behaviour.
+- **Failover order** follows the `locations` list — put your preferred DR location earlier.
+
+> **Upgrading from 2.1.0:** the default now inserts a per-location HAProxy tier and rewires pgcat to pool it. **The client endpoint is unchanged** and **your data is preserved** (node volumes retained). The upgrade adds the proxy workload and rolls pgcat (a brief pool re-establishment), on top of the existing "an upgrade rolls every pgEdge node" interruption. To keep the exact 2.1.0 shape, set `proxy.enabled: false`. A firewall change (e.g. flipping `proxy.enabled`) can take up to ~10 minutes to propagate.
+
+> **Upgrading from 2.0.x:** the default also changed to `routing: local` in 2.1.0. A 2.0.x install routed all writes to the first location (single-writer). If your app depends on a single write target to avoid conflicts, that is now moot under the failover tier (each location writes to its own node) — set `proxy.enabled: false` **and** `pgcat.routing: single-writer` to keep the old single-writer behaviour.
 
 **Pool modes:**
 - `transaction` — connection held only for the duration of a transaction. Best for most web and API workloads. Not compatible with session-level features like `SET` variables, temporary tables, or advisory locks.
@@ -216,7 +245,7 @@ pgcat runs in the same locations as pgEdge, `minReplicas` to `maxReplicas` in ea
 
 ## Connecting
 
-Connect through pgcat for all application traffic. Nothing in this template is exposed publicly.
+Connect through pgcat for all application traffic. Nothing in this template is exposed publicly. With the failover tier on (default), a per-location HAProxy behind pgcat handles node failover — the endpoint below is unchanged.
 
 | | |
 |---|---|
@@ -431,7 +460,8 @@ unset PGPASSWORD
 - **The GVC must contain every location you list**, and may contain more. A missing one is not caught at install: the pgEdge container exits with `FATAL: locations declared in values are not in GVC …`. An already-initialised node logs a `WARNING` instead and keeps serving, so this can never stop a running cluster
 - **Shrinking the GVC's location list under a running cluster** leaves every node logging that warning on each restart — shrink `locations` in your values at the same time
 - **Minimum replicas**: Use at least 3 replicas per location for production to survive a node loss within a location
-- **A location's loss is contained but NOT auto-failed-over.** The endpoint is location-pinned: a client in a failed location errors until that location recovers rather than being redirected to a healthy one. Other locations keep serving; an app that must survive its own location's loss must connect to another location's endpoint itself. See [pgcat Settings](#pgcat-settings)
+- **Local node death is handled; whole-location loss is not.** With the failover tier on (default), HAProxy fails a client over from a dead local node to another local node (then a remote one). But the endpoint is location-pinned, so if a client's *own* location is lost entirely it errors until that location recovers. Other locations keep serving. See [Failover behaviour](#failover-behaviour)
+- **Flipping `proxy.enabled` changes the firewall** and can take up to ~10 minutes to propagate; the pool is briefly re-established while pgcat rewires to/from the HAProxy tier
 - **Release names must be unique per organization**: secrets are organization-wide, so two releases with the same name collide even in different GVCs
 - **Conflict resolution**: Concurrent writes to the same row from different nodes are resolved by last-update-wins based on commit timestamp. For workloads requiring stronger consistency, route writes for a given entity to a single node using application-level logic
 - **multiZone**: Verify your selected location supports multiple availability zones before enabling

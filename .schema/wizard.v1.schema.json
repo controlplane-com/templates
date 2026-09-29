@@ -1,0 +1,1999 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schemas.controlplane.com/template-wizard/v1.json",
+  "title": "Control Plane template wizard descriptor (wizard.yaml)",
+  "markdownDescription": "A `wizard.yaml` descriptor (`template-wizard.controlplane.com/v1`): labels, types, grouping, visibility and rules on top of the template's `values.yaml`. The runtime validator of `@controlplane/template-wizard` is the source of truth; this schema is for editors and CI.",
+  "type": "object",
+  "required": ["apiVersion", "kind", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "template-wizard.controlplane.com/v1",
+      "markdownDescription": "Exactly `template-wizard.controlplane.com/v1`."
+    },
+    "kind": {
+      "const": "TemplateWizard",
+      "markdownDescription": "Exactly `TemplateWizard`."
+    },
+    "title": {
+      "type": "string",
+      "markdownDescription": "Wizard title; defaults to the chart name."
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/definitions/step"
+      },
+      "markdownDescription": "The wizard's steps, in order."
+    },
+    "rules": {
+      "$ref": "#/definitions/rules",
+      "markdownDescription": "Root rules, checked by the full `validate()` (e.g. blocking an in-place upgrade)."
+    },
+    "migrations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/migration"
+      },
+      "markdownDescription": "How values of older versions carry over (`SPEC.md` §12)."
+    },
+    "yamlOnly": {
+      "type": "array",
+      "markdownDescription": "Values subtrees deliberately left to YAML mode; they count as covered (`SPEC.md` §13).",
+      "items": {
+        "type": "object",
+        "required": ["path", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "$ref": "#/definitions/path"
+          },
+          "reason": {
+            "type": "string",
+            "pattern": "\\S",
+            "markdownDescription": "Why the subtree is not in the wizard."
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "cel": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "markdownDescription": "A CEL expression. Variables: `self`, `oldSelf`, `context`, `ui` (and `item`, `index` in list items)."
+    },
+    "path": {
+      "type": "string",
+      "pattern": "^(?:[A-Za-z_][A-Za-z0-9_-]*|\\[\"(?:[^\"\\\\]|\\\\.)+\"\\])(?:\\.[A-Za-z_][A-Za-z0-9_-]*|\\[\"(?:[^\"\\\\]|\\\\.)+\"\\])*$",
+      "markdownDescription": "Values path: `a.b.c`; keys with dots or other characters as `[\"log.retention.hours\"]`."
+    },
+    "docs": {
+      "type": "string",
+      "pattern": "^\\s*(?:#\\S+|/(?:[^/\\s]\\S*)?)\\s*$",
+      "markdownDescription": "`/path#anchor` or `#anchor`; never an absolute URL."
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "step": {
+      "type": "object",
+      "markdownDescription": "A wizard step: `sections`, or `fields` for one untitled section.",
+      "required": ["id", "title"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/id",
+          "markdownDescription": "Step id (`^[a-z][a-z0-9-]*$`), unique."
+        },
+        "title": {
+          "type": "string",
+          "markdownDescription": "Step title."
+        },
+        "description": {
+          "type": "string",
+          "markdownDescription": "Plain text; inline `code` allowed."
+        },
+        "docs": {
+          "$ref": "#/definitions/docs"
+        },
+        "when": {
+          "$ref": "#/definitions/cel",
+          "markdownDescription": "CEL bool: the step is shown while true (and while it has a visible field)."
+        },
+        "sections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/section"
+          }
+        },
+        "fields": {
+          "$ref": "#/definitions/items"
+        },
+        "rules": {
+          "$ref": "#/definitions/rules"
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["sections"],
+          "type": "object"
+        },
+        {
+          "required": ["fields"],
+          "type": "object"
+        }
+      ],
+      "defaultSnippets": [
+        {
+          "label": "step",
+          "description": "A step with one section",
+          "body": {
+            "id": "$1",
+            "title": "$2",
+            "fields": [
+              {
+                "path": "$3",
+                "type": "string",
+                "label": "$4"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "section": {
+      "type": "object",
+      "required": ["fields"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/id"
+        },
+        "title": {
+          "type": "string",
+          "markdownDescription": "Section title."
+        },
+        "description": {
+          "type": "string",
+          "markdownDescription": "Plain text; inline `code` allowed."
+        },
+        "docs": {
+          "$ref": "#/definitions/docs"
+        },
+        "when": {
+          "$ref": "#/definitions/cel",
+          "markdownDescription": "CEL bool: the section is shown while true."
+        },
+        "advanced": {
+          "type": "boolean",
+          "markdownDescription": "Collapsed under Advanced."
+        },
+        "collapsible": {
+          "type": "boolean",
+          "markdownDescription": "Collapsible."
+        },
+        "fields": {
+          "$ref": "#/definitions/items"
+        },
+        "rules": {
+          "$ref": "#/definitions/rules"
+        }
+      }
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/definitions/note"
+          },
+          {
+            "$ref": "#/definitions/field"
+          }
+        ]
+      }
+    },
+    "note": {
+      "type": "object",
+      "markdownDescription": "Display-only text; `severity` is visual and never blocks.",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "note"
+        },
+        "severity": {
+          "enum": ["info", "warning"]
+        },
+        "text": {
+          "type": "string",
+          "markdownDescription": "Markdown-lite text."
+        },
+        "textExpression": {
+          "$ref": "#/definitions/cel",
+          "markdownDescription": "CEL string: computed text."
+        },
+        "when": {
+          "$ref": "#/definitions/cel",
+          "markdownDescription": "CEL bool."
+        }
+      },
+      "anyOf": [
+        {
+          "required": ["text"],
+          "type": "object"
+        },
+        {
+          "required": ["textExpression"],
+          "type": "object"
+        }
+      ],
+      "defaultSnippets": [
+        {
+          "label": "note",
+          "description": "A callout",
+          "body": {
+            "type": "note",
+            "severity": "${1:info}",
+            "text": "$2"
+          }
+        }
+      ]
+    },
+    "field": {
+      "type": "object",
+      "markdownDescription": "A field (`SPEC.md` §3–§4).",
+      "required": ["type", "label"],
+      "properties": {
+        "path": {
+          "$ref": "#/definitions/path",
+          "markdownDescription": "Values path, e.g. `backup.aws.bucket` or `config[\"log.retention.hours\"]`. Relative inside object fields."
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^\\S*$",
+          "markdownDescription": "Field id; defaults to the path. Required for virtual fields (read as `ui.<id>`)."
+        },
+        "type": {
+          "enum": [
+            "string",
+            "integer",
+            "number",
+            "boolean",
+            "enum",
+            "quantity",
+            "resources",
+            "ref",
+            "list",
+            "object",
+            "map",
+            "yaml"
+          ],
+          "markdownDescription": "Semantic type (`SPEC.md` §4)."
+        },
+        "label": {
+          "type": "string",
+          "markdownDescription": "Sentence case, at most 60 characters."
+        },
+        "description": {
+          "type": "string",
+          "markdownDescription": "Short text under the input; inline `code` allowed."
+        },
+        "help": {
+          "type": "string",
+          "markdownDescription": "Longer markdown-lite help. Link docs with relative paths (`/reference/…`)."
+        },
+        "docs": {
+          "$ref": "#/definitions/docs",
+          "markdownDescription": "Relative docs link: `/path#anchor` or `#anchor` (the template's page)."
+        },
+        "placeholder": {
+          "type": "string",
+          "markdownDescription": "Placeholder text."
+        },
+        "widget": {
+          "enum": [
+            "input",
+            "textarea",
+            "password",
+            "switch",
+            "checkbox",
+            "select",
+            "radio",
+            "segmented",
+            "cards",
+            "stepper",
+            "slider",
+            "tags",
+            "table",
+            "kv",
+            "code",
+            "cron"
+          ],
+          "markdownDescription": "Rendering hint (`SPEC.md` §6)."
+        },
+        "when": {
+          "$ref": "#/definitions/cel",
+          "markdownDescription": "CEL bool: the field is visible while true."
+        },
+        "required": {
+          "type": "boolean",
+          "markdownDescription": "Required while visible."
+        },
+        "readOnly": {
+          "type": "boolean",
+          "markdownDescription": "Always read-only in the wizard (editable in YAML)."
+        },
+        "immutable": {
+          "type": ["boolean", "string"],
+          "markdownDescription": "Read-only on upgrade and pinned by carry-over. A string is the reason shown next to the control."
+        },
+        "absent": {
+          "type": "boolean",
+          "markdownDescription": "The path is not in values.yaml; the key is created when set and removed when cleared."
+        },
+        "default": {
+          "markdownDescription": "Default of an `absent` field (present paths take their default from values.yaml)."
+        },
+        "example": {
+          "type": "boolean",
+          "markdownDescription": "The values.yaml value is a placeholder: unchanged, it is a blocking warning (`EXAMPLE_VALUE`)."
+        },
+        "sensitive": {
+          "type": "boolean",
+          "markdownDescription": "Masked input (`string`)."
+        },
+        "advanced": {
+          "type": "boolean",
+          "markdownDescription": "Grouped under Advanced."
+        },
+        "rules": {
+          "$ref": "#/definitions/rules",
+          "markdownDescription": "CEL rules; issues default to this field."
+        },
+        "virtual": {
+          "type": "boolean",
+          "markdownDescription": "Session-only field (`ui.<id>`), never written to YAML; needs `id` and `init`."
+        },
+        "init": {
+          "$ref": "#/definitions/cel",
+          "markdownDescription": "CEL computing the virtual field's value from the values."
+        },
+        "minLength": {
+          "type": "integer",
+          "minimum": 0,
+          "markdownDescription": "Minimum length (`string`)."
+        },
+        "maxLength": {
+          "type": "integer",
+          "minimum": 0,
+          "markdownDescription": "Maximum length (`string`)."
+        },
+        "pattern": {
+          "type": "string",
+          "markdownDescription": "JavaScript regular expression the value must match; anchor it yourself (`^…$`)."
+        },
+        "format": {
+          "enum": ["image", "url", "hostname", "email", "cron", "cidr", "duration"],
+          "markdownDescription": "String format: `image`, `url`, `hostname`, `email`, `cron`, `cidr` or `duration` (`7d`, `30s`)."
+        },
+        "multiline": {
+          "type": "boolean",
+          "markdownDescription": "Multi-line text (textarea); written as a YAML block literal."
+        },
+        "min": {
+          "markdownDescription": "Minimum: a number for `integer`/`number`, a quantity (`200m`, `128Mi`) for `quantity`."
+        },
+        "max": {
+          "markdownDescription": "Maximum: a number for `integer`/`number`, a quantity (`2`, `4Gi`) for `quantity`."
+        },
+        "step": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "markdownDescription": "Step of the input (`integer`, `number`)."
+        },
+        "unit": {
+          "type": "string",
+          "markdownDescription": "Unit shown next to the input, e.g. `GiB`, `%`, `seconds`."
+        },
+        "options": {
+          "$ref": "#/definitions/options",
+          "markdownDescription": "Static options (`enum`): a value, or `{value, label, description}`."
+        },
+        "optionsFrom": {
+          "$ref": "#/definitions/cel",
+          "markdownDescription": "CEL returning `list<string>` or `list<{value, label, description}>` (`enum`)."
+        },
+        "allowCustom": {
+          "type": "boolean",
+          "markdownDescription": "Allow a value outside the options (combobox)."
+        },
+        "quantity": {
+          "enum": ["cpu", "memory"],
+          "markdownDescription": "`cpu` (`200m`, `0.5`) or `memory` (`128Mi`, `2Gi`)."
+        },
+        "ref": {
+          "$ref": "#/definitions/ref",
+          "markdownDescription": "What the value refers to (`SPEC.md` §9)."
+        },
+        "yamlType": {
+          "enum": ["map", "list", "any"],
+          "markdownDescription": "Expected shape of a `yaml` field."
+        },
+        "cpu": {
+          "$ref": "#/definitions/bounds",
+          "markdownDescription": "CPU bounds of a `resources` field."
+        },
+        "memory": {
+          "$ref": "#/definitions/bounds",
+          "markdownDescription": "Memory bounds of a `resources` field."
+        },
+        "maxRatio": {
+          "type": "number",
+          "minimum": 1,
+          "markdownDescription": "Largest allowed maxCpu:minCpu ratio (4 on stateful workloads)."
+        },
+        "item": {
+          "$ref": "#/definitions/listItem",
+          "markdownDescription": "Schema of the list items (no `path`): a scalar, `ref` or `object`."
+        },
+        "minItems": {
+          "type": "integer",
+          "minimum": 0,
+          "markdownDescription": "Minimum number of items."
+        },
+        "maxItems": {
+          "type": "integer",
+          "minimum": 0,
+          "markdownDescription": "Maximum number of items."
+        },
+        "unique": {
+          "type": "boolean",
+          "markdownDescription": "Items must be unique (scalar lists)."
+        },
+        "uniqueBy": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Item keys that must be unique (object lists)."
+        },
+        "newItem": {
+          "markdownDescription": "Value `addItem` inserts."
+        },
+        "itemLabel": {
+          "$ref": "#/definitions/cel",
+          "markdownDescription": "CEL string label per item (`item`, `index`)."
+        },
+        "serialize": {
+          "const": "csv",
+          "markdownDescription": "The YAML value is one comma-separated string (scalar lists)."
+        },
+        "fields": {
+          "$ref": "#/definitions/nestedFields",
+          "markdownDescription": "Child fields with relative paths (`object`)."
+        },
+        "optional": {
+          "type": "boolean",
+          "markdownDescription": "An optional object block (switch); required for `type: object`."
+        },
+        "newValue": {
+          "type": "object",
+          "markdownDescription": "Value written when the optional block is turned on."
+        },
+        "keys": {
+          "$ref": "#/definitions/mapKeys",
+          "markdownDescription": "Key constraints of a `map`."
+        },
+        "values": {
+          "$ref": "#/definitions/mapValues",
+          "markdownDescription": "Schema of the map values: `string`, `integer`, `number`, `boolean`, `yaml` or `{type: object, fields}`."
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "virtual": {
+                "const": true
+              }
+            },
+            "required": ["virtual"],
+            "type": "object"
+          },
+          "then": {
+            "required": ["id", "init"],
+            "properties": {
+              "id": {
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                "type": "string"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": ["path"],
+                  "type": "object"
+                },
+                {
+                  "required": ["absent"],
+                  "type": "object"
+                },
+                {
+                  "required": ["default"],
+                  "type": "object"
+                },
+                {
+                  "required": ["immutable"],
+                  "type": "object"
+                },
+                {
+                  "required": ["example"],
+                  "type": "object"
+                }
+              ]
+            },
+            "type": "object"
+          },
+          "else": {
+            "required": ["path"],
+            "not": {
+              "required": ["init"],
+              "type": "object"
+            },
+            "properties": {
+              "options": {
+                "items": {
+                  "not": {
+                    "type": "object",
+                    "required": ["set"]
+                  }
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "required": ["default"],
+            "type": "object"
+          },
+          "then": {
+            "required": ["absent"],
+            "properties": {
+              "absent": {
+                "const": true
+              }
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "enum"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "anyOf": [
+              {
+                "required": ["options"],
+                "type": "object"
+              },
+              {
+                "required": ["optionsFrom"],
+                "type": "object"
+              }
+            ],
+            "not": {
+              "required": ["options", "optionsFrom"],
+              "type": "object"
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "quantity"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "required": ["quantity"],
+            "properties": {
+              "min": {
+                "type": ["string", "number"]
+              },
+              "max": {
+                "type": ["string", "number"]
+              }
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "ref"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "required": ["ref"],
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "integer"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "properties": {
+              "min": {
+                "type": "integer"
+              },
+              "max": {
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "number"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "properties": {
+              "min": {
+                "type": "number"
+              },
+              "max": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "list"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "required": ["item"],
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "map"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "required": ["values"],
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "object"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "required": ["fields", "optional"],
+            "properties": {
+              "optional": {
+                "const": true
+              }
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "serialize": {
+                "const": "csv"
+              }
+            },
+            "required": ["serialize"],
+            "type": "object"
+          },
+          "then": {
+            "properties": {
+              "item": {
+                "properties": {
+                  "type": {
+                    "not": {
+                      "const": "object"
+                    }
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "unique": {
+                "const": true
+              }
+            },
+            "required": ["unique"],
+            "type": "object"
+          },
+          "then": {
+            "properties": {
+              "item": {
+                "properties": {
+                  "type": {
+                    "not": {
+                      "const": "object"
+                    }
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "required": ["uniqueBy"],
+            "type": "object"
+          },
+          "then": {
+            "properties": {
+              "item": {
+                "properties": {
+                  "type": {
+                    "const": "object"
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "type": "object"
+          }
+        }
+      ],
+      "defaultSnippets": [
+        {
+          "label": "string field",
+          "description": "A text field bound to a values path",
+          "body": {
+            "path": "$1",
+            "type": "string",
+            "label": "$2"
+          }
+        },
+        {
+          "label": "integer field",
+          "description": "A number field with a unit",
+          "body": {
+            "path": "$1",
+            "type": "integer",
+            "label": "$2",
+            "min": 1,
+            "unit": "$3"
+          }
+        },
+        {
+          "label": "boolean field",
+          "description": "A switch",
+          "body": {
+            "path": "$1",
+            "type": "boolean",
+            "label": "$2"
+          }
+        },
+        {
+          "label": "enum field",
+          "description": "A choice between options",
+          "body": {
+            "path": "$1",
+            "type": "enum",
+            "label": "$2",
+            "options": ["$3"]
+          }
+        },
+        {
+          "label": "secret reference",
+          "description": "A dictionary secret picked by name",
+          "body": {
+            "path": "$1",
+            "type": "ref",
+            "label": "$2",
+            "required": true,
+            "ref": {
+              "kind": "secret",
+              "format": "name",
+              "filter": {
+                "secretType": ["dictionary"]
+              },
+              "mustExist": "error"
+            }
+          }
+        },
+        {
+          "label": "resources",
+          "description": "minCpu/maxCpu/minMemory/maxMemory",
+          "body": {
+            "path": "${1:resources}",
+            "type": "resources",
+            "label": "${2:Resources}"
+          }
+        },
+        {
+          "label": "list of objects",
+          "description": "A table of items",
+          "body": {
+            "path": "$1",
+            "type": "list",
+            "label": "$2",
+            "item": {
+              "type": "object",
+              "fields": [
+                {
+                  "path": "$3",
+                  "type": "string",
+                  "label": "$4"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nestedField": {
+      "markdownDescription": "A field inside an object (relative `path`; no `virtual`/`init`).",
+      "allOf": [
+        {
+          "$ref": "#/definitions/field"
+        },
+        {
+          "not": {
+            "anyOf": [
+              {
+                "required": ["virtual"],
+                "type": "object"
+              },
+              {
+                "required": ["init"],
+                "type": "object"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "nestedFields": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/nestedField"
+      }
+    },
+    "listItem": {
+      "type": "object",
+      "markdownDescription": "List item schema (a field schema without `path`).",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "enum": ["string", "integer", "number", "boolean", "enum", "quantity", "ref", "object"],
+          "markdownDescription": "List item type."
+        },
+        "label": {
+          "type": "string",
+          "markdownDescription": "Sentence case, at most 60 characters."
+        },
+        "description": {
+          "type": "string",
+          "markdownDescription": "Short text under the input; inline `code` allowed."
+        },
+        "help": {
+          "type": "string",
+          "markdownDescription": "Longer markdown-lite help. Link docs with relative paths (`/reference/…`)."
+        },
+        "placeholder": {
+          "type": "string",
+          "markdownDescription": "Placeholder text."
+        },
+        "widget": {
+          "enum": [
+            "input",
+            "textarea",
+            "password",
+            "switch",
+            "checkbox",
+            "select",
+            "radio",
+            "segmented",
+            "cards",
+            "stepper",
+            "slider",
+            "tags",
+            "table",
+            "kv",
+            "code",
+            "cron"
+          ],
+          "markdownDescription": "Rendering hint (`SPEC.md` §6)."
+        },
+        "minLength": {
+          "type": "integer",
+          "minimum": 0,
+          "markdownDescription": "Minimum length (`string`)."
+        },
+        "maxLength": {
+          "type": "integer",
+          "minimum": 0,
+          "markdownDescription": "Maximum length (`string`)."
+        },
+        "pattern": {
+          "type": "string",
+          "markdownDescription": "JavaScript regular expression the value must match; anchor it yourself (`^…$`)."
+        },
+        "format": {
+          "enum": ["image", "url", "hostname", "email", "cron", "cidr", "duration"],
+          "markdownDescription": "String format: `image`, `url`, `hostname`, `email`, `cron`, `cidr` or `duration` (`7d`, `30s`)."
+        },
+        "multiline": {
+          "type": "boolean",
+          "markdownDescription": "Multi-line text (textarea); written as a YAML block literal."
+        },
+        "min": {
+          "markdownDescription": "Minimum: a number for `integer`/`number`, a quantity (`200m`, `128Mi`) for `quantity`."
+        },
+        "max": {
+          "markdownDescription": "Maximum: a number for `integer`/`number`, a quantity (`2`, `4Gi`) for `quantity`."
+        },
+        "step": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "markdownDescription": "Step of the input (`integer`, `number`)."
+        },
+        "unit": {
+          "type": "string",
+          "markdownDescription": "Unit shown next to the input, e.g. `GiB`, `%`, `seconds`."
+        },
+        "options": {
+          "$ref": "#/definitions/options",
+          "markdownDescription": "Static options (`enum`): a value, or `{value, label, description}`."
+        },
+        "optionsFrom": {
+          "$ref": "#/definitions/cel",
+          "markdownDescription": "CEL returning `list<string>` or `list<{value, label, description}>` (`enum`)."
+        },
+        "allowCustom": {
+          "type": "boolean",
+          "markdownDescription": "Allow a value outside the options (combobox)."
+        },
+        "quantity": {
+          "enum": ["cpu", "memory"],
+          "markdownDescription": "`cpu` (`200m`, `0.5`) or `memory` (`128Mi`, `2Gi`)."
+        },
+        "ref": {
+          "$ref": "#/definitions/ref",
+          "markdownDescription": "What the value refers to (`SPEC.md` §9)."
+        },
+        "fields": {
+          "$ref": "#/definitions/nestedFields",
+          "markdownDescription": "Child fields with relative paths (`object`)."
+        },
+        "rules": {
+          "$ref": "#/definitions/rules",
+          "markdownDescription": "Item rules, evaluated per item (`item`, `index`)."
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "string"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "propertyNames": {
+              "enum": [
+                "type",
+                "label",
+                "description",
+                "help",
+                "placeholder",
+                "widget",
+                "minLength",
+                "maxLength",
+                "pattern",
+                "format",
+                "multiline"
+              ]
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "integer"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "propertyNames": {
+              "enum": ["type", "label", "description", "help", "placeholder", "widget", "min", "max", "step", "unit"]
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "number"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "propertyNames": {
+              "enum": ["type", "label", "description", "help", "placeholder", "widget", "min", "max", "step", "unit"]
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "boolean"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "propertyNames": {
+              "enum": ["type", "label", "description", "help", "placeholder", "widget"]
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "enum"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "propertyNames": {
+              "enum": [
+                "type",
+                "label",
+                "description",
+                "help",
+                "placeholder",
+                "widget",
+                "options",
+                "optionsFrom",
+                "allowCustom"
+              ]
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "quantity"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "propertyNames": {
+              "enum": ["type", "label", "description", "help", "placeholder", "widget", "quantity", "min", "max"]
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "ref"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "propertyNames": {
+              "enum": ["type", "label", "description", "help", "placeholder", "widget", "ref"]
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "object"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "propertyNames": {
+              "enum": ["type", "label", "description", "help", "placeholder", "widget", "fields", "rules"]
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "enum"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "anyOf": [
+              {
+                "required": ["options"],
+                "type": "object"
+              },
+              {
+                "required": ["optionsFrom"],
+                "type": "object"
+              }
+            ],
+            "not": {
+              "required": ["options", "optionsFrom"],
+              "type": "object"
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "quantity"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "required": ["quantity"],
+            "properties": {
+              "min": {
+                "type": ["string", "number"]
+              },
+              "max": {
+                "type": ["string", "number"]
+              }
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "ref"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "required": ["ref"],
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "integer"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "properties": {
+              "min": {
+                "type": "integer"
+              },
+              "max": {
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "number"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "properties": {
+              "min": {
+                "type": "number"
+              },
+              "max": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "object"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "required": ["fields"],
+            "type": "object"
+          }
+        },
+        {
+          "properties": {
+            "options": {
+              "items": {
+                "not": {
+                  "type": "object",
+                  "required": ["set"]
+                }
+              },
+              "type": "array"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "mapValues": {
+      "type": "object",
+      "markdownDescription": "Map value schema (a field schema without `path`).",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "enum": ["string", "integer", "number", "boolean", "yaml", "object"],
+          "markdownDescription": "Map value type."
+        },
+        "label": {
+          "type": "string",
+          "markdownDescription": "Sentence case, at most 60 characters."
+        },
+        "description": {
+          "type": "string",
+          "markdownDescription": "Short text under the input; inline `code` allowed."
+        },
+        "help": {
+          "type": "string",
+          "markdownDescription": "Longer markdown-lite help. Link docs with relative paths (`/reference/…`)."
+        },
+        "placeholder": {
+          "type": "string",
+          "markdownDescription": "Placeholder text."
+        },
+        "widget": {
+          "enum": [
+            "input",
+            "textarea",
+            "password",
+            "switch",
+            "checkbox",
+            "select",
+            "radio",
+            "segmented",
+            "cards",
+            "stepper",
+            "slider",
+            "tags",
+            "table",
+            "kv",
+            "code",
+            "cron"
+          ],
+          "markdownDescription": "Rendering hint (`SPEC.md` §6)."
+        },
+        "minLength": {
+          "type": "integer",
+          "minimum": 0,
+          "markdownDescription": "Minimum length (`string`)."
+        },
+        "maxLength": {
+          "type": "integer",
+          "minimum": 0,
+          "markdownDescription": "Maximum length (`string`)."
+        },
+        "pattern": {
+          "type": "string",
+          "markdownDescription": "JavaScript regular expression the value must match; anchor it yourself (`^…$`)."
+        },
+        "format": {
+          "enum": ["image", "url", "hostname", "email", "cron", "cidr", "duration"],
+          "markdownDescription": "String format: `image`, `url`, `hostname`, `email`, `cron`, `cidr` or `duration` (`7d`, `30s`)."
+        },
+        "multiline": {
+          "type": "boolean",
+          "markdownDescription": "Multi-line text (textarea); written as a YAML block literal."
+        },
+        "min": {
+          "markdownDescription": "Minimum: a number for `integer`/`number`, a quantity (`200m`, `128Mi`) for `quantity`."
+        },
+        "max": {
+          "markdownDescription": "Maximum: a number for `integer`/`number`, a quantity (`2`, `4Gi`) for `quantity`."
+        },
+        "step": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "markdownDescription": "Step of the input (`integer`, `number`)."
+        },
+        "unit": {
+          "type": "string",
+          "markdownDescription": "Unit shown next to the input, e.g. `GiB`, `%`, `seconds`."
+        },
+        "yamlType": {
+          "enum": ["map", "list", "any"],
+          "markdownDescription": "Expected shape of a `yaml` field."
+        },
+        "fields": {
+          "$ref": "#/definitions/nestedFields",
+          "markdownDescription": "Child fields with relative paths (`object`)."
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "string"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "propertyNames": {
+              "enum": [
+                "type",
+                "label",
+                "description",
+                "help",
+                "placeholder",
+                "widget",
+                "minLength",
+                "maxLength",
+                "pattern",
+                "format",
+                "multiline"
+              ]
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "integer"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "propertyNames": {
+              "enum": ["type", "label", "description", "help", "placeholder", "widget", "min", "max", "step", "unit"]
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "number"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "propertyNames": {
+              "enum": ["type", "label", "description", "help", "placeholder", "widget", "min", "max", "step", "unit"]
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "boolean"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "propertyNames": {
+              "enum": ["type", "label", "description", "help", "placeholder", "widget"]
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "yaml"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "propertyNames": {
+              "enum": ["type", "label", "description", "help", "placeholder", "widget", "yamlType"]
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "object"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "propertyNames": {
+              "enum": ["type", "label", "description", "help", "placeholder", "widget", "fields"]
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "integer"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "properties": {
+              "min": {
+                "type": "integer"
+              },
+              "max": {
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "number"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "properties": {
+              "min": {
+                "type": "number"
+              },
+              "max": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "object"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "required": ["fields"],
+            "type": "object"
+          }
+        },
+        {
+          "properties": {
+            "options": {
+              "items": {
+                "not": {
+                  "type": "object",
+                  "required": ["set"]
+                }
+              },
+              "type": "array"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "mapKeys": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "markdownDescription": "Regular expression keys must match."
+        },
+        "label": {
+          "type": "string",
+          "markdownDescription": "Label of the key column."
+        },
+        "options": {
+          "$ref": "#/definitions/options",
+          "markdownDescription": "Allowed keys."
+        }
+      }
+    },
+    "options": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/definitions/option"
+      }
+    },
+    "option": {
+      "oneOf": [
+        {
+          "type": ["string", "number", "boolean"]
+        },
+        {
+          "type": "object",
+          "required": ["value"],
+          "additionalProperties": false,
+          "properties": {
+            "value": {
+              "type": ["string", "number", "boolean"]
+            },
+            "label": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "set": {
+              "type": "object",
+              "propertyNames": {
+                "$ref": "#/definitions/path"
+              },
+              "markdownDescription": "Virtual fields only: values written when the option is chosen."
+            }
+          }
+        }
+      ]
+    },
+    "bounds": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "min": {
+          "type": ["string", "number"]
+        },
+        "max": {
+          "type": ["string", "number"]
+        }
+      }
+    },
+    "ref": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "secret",
+            "cloudaccount",
+            "location",
+            "workload",
+            "domain",
+            "volumeset",
+            "gvc",
+            "identity",
+            "policy",
+            "ipset",
+            "agent",
+            "serviceaccount",
+            "group"
+          ]
+        },
+        "format": {
+          "enum": ["name", "link", "relativeLink"],
+          "markdownDescription": "`name` (default), `link` (`/org/…`) or `relativeLink` (`//gvc/…`)."
+        },
+        "gvc": {
+          "enum": ["target", "any"],
+          "markdownDescription": "gvc-scoped kinds: the target GVC (default) or any GVC."
+        },
+        "scope": {
+          "enum": ["org", "gvc"],
+          "markdownDescription": "`kind: location`: all org locations (default) or the target GVC's."
+        },
+        "filter": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "secretType": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "provider": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "tags": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "mustExist": {
+          "enum": ["error", "warning", "off"],
+          "markdownDescription": "Severity when the object does not exist (default `warning`)."
+        },
+        "create": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "secretType": {
+              "type": "string"
+            },
+            "keys": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "encoding": {
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            },
+            "suggestName": {
+              "$ref": "#/definitions/cel",
+              "markdownDescription": "CEL string: the suggested name."
+            },
+            "hint": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "gvc": {
+                "const": "any"
+              },
+              "kind": {
+                "enum": ["workload", "identity", "volumeset"]
+              }
+            },
+            "required": ["gvc", "kind"],
+            "type": "object"
+          },
+          "then": {
+            "required": ["format"],
+            "properties": {
+              "format": {
+                "not": {
+                  "const": "name"
+                }
+              }
+            },
+            "type": "object"
+          }
+        }
+      ]
+    },
+    "rules": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/rule"
+      }
+    },
+    "rule": {
+      "type": "object",
+      "required": ["rule"],
+      "additionalProperties": false,
+      "properties": {
+        "rule": {
+          "$ref": "#/definitions/cel",
+          "markdownDescription": "CEL bool: true means valid."
+        },
+        "message": {
+          "type": "string",
+          "markdownDescription": "Shown when the rule fails."
+        },
+        "messageExpression": {
+          "$ref": "#/definitions/cel",
+          "markdownDescription": "CEL string; falls back to `message`."
+        },
+        "severity": {
+          "enum": ["error", "warning", "info"],
+          "markdownDescription": "`error` (default) and `warning` block; `info` never does."
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/path"
+          },
+          "markdownDescription": "Where the issue shows."
+        },
+        "when": {
+          "$ref": "#/definitions/cel",
+          "markdownDescription": "CEL bool gate."
+        },
+        "mirrors": {
+          "type": "string",
+          "markdownDescription": "The `_helpers.tpl` define this rule mirrors (lint coverage)."
+        }
+      },
+      "anyOf": [
+        {
+          "required": ["message"],
+          "type": "object"
+        },
+        {
+          "required": ["messageExpression"],
+          "type": "object"
+        }
+      ],
+      "defaultSnippets": [
+        {
+          "label": "rule",
+          "description": "A CEL rule",
+          "body": {
+            "rule": "$1",
+            "message": "$2"
+          }
+        }
+      ]
+    },
+    "migration": {
+      "type": "object",
+      "markdownDescription": "drop (`from`), rename (`from`, `to`), remap (`from`, `values`), computed (`to`, `valueExpr`) or `assume`.",
+      "additionalProperties": false,
+      "properties": {
+        "fromVersions": {
+          "type": "string",
+          "markdownDescription": "Semver range of the old release version (`<3.4.0`, `>=1.0.0 <2.0.0 || >=3.0.0`); omitted = any."
+        },
+        "from": {
+          "$ref": "#/definitions/path",
+          "markdownDescription": "Path in the old values."
+        },
+        "to": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/path"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "markdownDescription": "New path; omitted or null drops the value."
+        },
+        "values": {
+          "type": "object",
+          "markdownDescription": "Value remap: old value → new value."
+        },
+        "valueExpr": {
+          "$ref": "#/definitions/cel",
+          "markdownDescription": "CEL over the old values (`self`); the result is written at `to`."
+        },
+        "note": {
+          "type": "string",
+          "markdownDescription": "Shown in the carry-over report."
+        },
+        "assume": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/definitions/path"
+          },
+          "markdownDescription": "Implicit old values for `oldSelf` and immutable pinning."
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["assume"],
+          "not": {
+            "anyOf": [
+              {
+                "required": ["from"],
+                "type": "object"
+              },
+              {
+                "required": ["to"],
+                "type": "object"
+              },
+              {
+                "required": ["values"],
+                "type": "object"
+              },
+              {
+                "required": ["valueExpr"],
+                "type": "object"
+              }
+            ]
+          },
+          "type": "object"
+        },
+        {
+          "required": ["to", "valueExpr"],
+          "properties": {
+            "to": {
+              "type": "string"
+            }
+          },
+          "not": {
+            "anyOf": [
+              {
+                "required": ["from"],
+                "type": "object"
+              },
+              {
+                "required": ["assume"],
+                "type": "object"
+              }
+            ]
+          },
+          "type": "object"
+        },
+        {
+          "required": ["from"],
+          "not": {
+            "anyOf": [
+              {
+                "required": ["valueExpr"],
+                "type": "object"
+              },
+              {
+                "required": ["assume"],
+                "type": "object"
+              }
+            ]
+          },
+          "type": "object"
+        }
+      ],
+      "defaultSnippets": [
+        {
+          "label": "drop",
+          "description": "A removed key, with a note",
+          "body": {
+            "fromVersions": "<$1",
+            "from": "$2",
+            "note": "$3"
+          }
+        },
+        {
+          "label": "rename",
+          "description": "A moved key",
+          "body": {
+            "fromVersions": "<$1",
+            "from": "$2",
+            "to": "$3"
+          }
+        }
+      ]
+    }
+  }
+}

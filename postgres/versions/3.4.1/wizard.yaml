@@ -1,0 +1,440 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: PostgreSQL
+
+steps:
+  - id: server
+    title: Server
+    description: The Postgres image and the compute of its single stateful replica.
+    fields:
+      - type: note
+        severity: warning
+        when: context.mode == 'upgrade'
+        text: >-
+          Every upgrade restarts the server. Nothing limits the rollout of a stateful workload,
+          so plan a short write outage.
+      - path: image
+        type: string
+        format: image
+        label: Postgres image
+        required: true
+        description: Backups need `postgres:17` or later.
+        help: >-
+          For example `postgres:18` or `postgres:17`. The data directory is specific to a
+          major version: a different major on an existing volume does not start.
+        docs: "#server-and-credentials"
+      - path: resources
+        type: resources
+        label: Resources
+        required: true
+        description: >-
+          A single replica. On a stateful workload the maximum CPU can be at most 4 times the
+          minimum.
+        maxRatio: 4
+        cpu: { min: 50m }
+        memory: { min: 64Mi }
+    rules:
+      - rule: >-
+          oldSelf == null || imageMajor(self.image) < 0 || imageMajor(oldSelf.image) < 0 ||
+          imageMajor(self.image) == imageMajor(oldSelf.image)
+        severity: warning
+        paths: [image]
+        message: >-
+          The data directory belongs to the installed Postgres major version; a different major
+          version does not start on it. Upgrade with a dump and restore instead.
+
+  - id: credentials
+    title: Credentials
+    description: The prerequisite secret with the database user, password and name.
+    docs: "#prerequisites"
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          The credentials secret must exist **before** you install. If it is missing, the
+          deployment waits and `cpln logs` shows nothing at all.
+      - path: config.credentialsSecretName
+        type: ref
+        label: Database credentials secret
+        required: true
+        example: true
+        description: A dictionary secret with the keys `username`, `password` and `database`.
+        help: >-
+          Postgres reads these values only when its data directory is first initialized. To
+          rotate the password later, run `ALTER ROLE ... PASSWORD` and then update the secret.
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          create:
+            secretType: dictionary
+            keys: [username, password, database]
+            suggestName: "context.releaseName + '-postgres-credentials'"
+    rules:
+      - rule: "!has(self.config.username) && !has(self.config.password) && !has(self.config.database)"
+        mirrors: pg.validateCredentials
+        paths: [config.credentialsSecretName]
+        message: >-
+          config.username, config.password and config.database were removed in 3.4.0. Put them
+          in a dictionary secret and remove them from the values.
+      - rule: oldSelf == null || self.config.credentialsSecretName == oldSelf.config.credentialsSecretName
+        severity: info
+        paths: [config.credentialsSecretName]
+        message: >-
+          Postgres reads the credentials only when the data directory is first initialized;
+          pointing at another secret does not change the existing user or password.
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds the data directory.
+    docs: /reference/volumeset
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            help: >-
+              Uninstalling the release deletes the volume set, so the data does not survive a
+              reinstall.
+            docs: "/reference/volumeset#capacity-and-billing"
+          - path: volumeset.autoscaling.enabled
+            type: boolean
+            label: Grow storage automatically
+            docs: "/reference/volumeset#autoscaling"
+      - title: Autoscaling
+        when: self.volumeset.autoscaling.enabled
+        fields:
+          - path: volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            required: true
+          - path: volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            widget: slider
+            required: true
+          - path: volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+        rules:
+          - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
+            paths: [volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+    rules:
+      - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+
+  - id: network
+    title: Network and pooling
+    description: Who can connect, and an optional connection pooler.
+    sections:
+      - title: Network access
+        docs: /reference/workload/firewall
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: Firewall changes take 30 to 150 seconds to take effect.
+            options:
+              - value: none
+                label: Nobody
+                description: No workload can connect, including PgBouncer and the backup job.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            description: Extra workloads allowed to connect, for example from another GVC.
+            when: self.internalAccess.type in ['same-gvc', 'workload-list']
+            widget: tags
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+      - title: Connection pooling
+        docs: "#pgbouncer-connection-pooler"
+        fields:
+          - path: pgbouncer.enabled
+            type: boolean
+            label: Connection pooler (PgBouncer)
+            description: When on, PgBouncer becomes the endpoint your applications connect to.
+      - when: self.pgbouncer.enabled
+        fields:
+          - type: note
+            text: >-
+              PgBouncer uses the same credentials secret and identity as Postgres, and the same
+              "Who can connect" setting for its own firewall.
+          - path: pgbouncer.poolMode
+            type: enum
+            label: Pool mode
+            widget: segmented
+            required: true
+            help: >-
+              **transaction** holds a connection for one transaction: best for most web and API
+              workloads, but not compatible with `SET` variables, temporary tables or advisory
+              locks. **session** holds it for the whole client session: compatible with
+              everything, less reuse. **statement** returns it after every statement:
+              transactions are not supported.
+            options: [session, transaction, statement]
+          - path: pgbouncer.defaultPoolSize
+            type: integer
+            label: Server connections per pool
+            min: 1
+            required: true
+          - path: pgbouncer.maxClientConn
+            type: integer
+            label: Max client connections
+            min: 1
+            required: true
+          - path: pgbouncer.replicas
+            type: integer
+            label: Replicas
+            min: 1
+            widget: stepper
+            required: true
+        rules:
+          - rule: self.pgbouncer.defaultPoolSize <= self.pgbouncer.maxClientConn
+            severity: info
+            paths: [pgbouncer.defaultPoolSize]
+            message: The pool is larger than the number of client connections PgBouncer accepts.
+    rules:
+      - rule: "!(self.internalAccess.type == 'none' && (self.pgbouncer.enabled || self.backup.enabled))"
+        severity: warning
+        paths: [internalAccess.type]
+        message: >-
+          "Nobody" also blocks PgBouncer and the backup job, which connect to Postgres like any
+          other workload.
+      - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+        severity: warning
+        paths: [internalAccess.workloads]
+        message: With "Specific workloads" and an empty list, no client can connect.
+      - when: self.internalAccess.type == 'workload-list' && context.gvc != null
+        rule: >-
+          (!self.pgbouncer.enabled ||
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgbouncer') in self.internalAccess.workloads) &&
+          (!self.backup.enabled ||
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-backup') in self.internalAccess.workloads)
+        severity: warning
+        paths: [internalAccess.workloads]
+        messageExpression: >-
+          'The chart does not add its own workloads to the list. Add ' +
+          (self.pgbouncer.enabled ? '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgbouncer' : '') +
+          (self.pgbouncer.enabled && self.backup.enabled ? ' and ' : '') +
+          (self.backup.enabled ? '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-backup' : '') +
+          ', or they cannot connect.'
+        message: >-
+          The chart does not add its own workloads to the list; add the PgBouncer and backup
+          workloads, or they cannot connect.
+
+  - id: backup
+    title: Backups
+    description: Scheduled logical backups to object storage.
+    docs: "#backups"
+    sections:
+      - fields:
+          - path: backup.enabled
+            type: boolean
+            label: Scheduled backups
+            description: Needs Postgres 17 or later.
+      - when: self.backup.enabled
+        fields:
+          - path: backup.provider
+            type: enum
+            label: Destination
+            widget: cards
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+              - { value: minio, label: MinIO or S3-compatible }
+          - path: backup.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+      - title: AWS S3
+        when: self.backup.enabled && self.backup.provider == 'aws'
+        docs: "#aws-s3"
+        fields:
+          - path: backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+              create: { provider: aws }
+          - path: backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            docs: "#aws-s3"
+          - path: backup.aws.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            description: Without a leading `/`.
+      - title: Google Cloud Storage
+        when: self.backup.enabled && self.backup.provider == 'gcp'
+        docs: "#google-cloud-storage"
+        fields:
+          - path: backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the
+              Storage Admin role on the bucket.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+              create: { provider: gcp }
+          - path: backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            description: Without a leading `/`.
+      - title: MinIO or S3-compatible
+        when: self.backup.enabled && self.backup.provider == 'minio'
+        docs: "#minio--s3-compatible"
+        fields:
+          - path: backup.minio.endpoint
+            type: string
+            format: url
+            label: S3 endpoint
+            required: true
+            placeholder: http://my-minio-workload:9000
+            description: The URL including the port.
+          - path: backup.minio.bucket
+            type: string
+            label: Bucket
+            required: true
+          - path: backup.minio.credentialsSecretName
+            type: ref
+            label: MinIO credentials secret
+            required: true
+            description: A dictionary secret with the keys `accessKey` and `secretKey`.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              create: { secretType: dictionary, keys: [accessKey, secretKey] }
+          - path: backup.minio.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            description: Without a leading `/`.
+        rules:
+          - rule: "!has(self.backup.minio.accessKey) && !has(self.backup.minio.secretKey)"
+            mirrors: pg.validateBackupConfig
+            paths: [backup.minio.credentialsSecretName]
+            message: >-
+              backup.minio.accessKey and backup.minio.secretKey were removed in 3.4.0. Put them in
+              a dictionary secret and remove them from the values.
+    rules:
+      - rule: "!self.backup.enabled || imageMajor(self.image) < 0 || imageMajor(self.image) >= 17"
+        severity: warning
+        paths: [backup.enabled]
+        message: Backups need Postgres 17 or later; the selected image is older.
+
+  - id: advanced
+    title: Advanced
+    description: Images and resources of the pooler and the backup job.
+    sections:
+      - title: PgBouncer
+        when: self.pgbouncer.enabled
+        fields:
+          - path: pgbouncer.image
+            type: string
+            format: image
+            label: PgBouncer image
+            required: true
+          - path: pgbouncer.resources
+            type: resources
+            label: PgBouncer resources
+            required: true
+      - title: Backup job
+        when: self.backup.enabled
+        fields:
+          - path: backup.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            description: Tag 18.x.x for Postgres 18, 17.x.x for Postgres 17.
+          - path: backup.resources
+            type: resources
+            label: Backup job resources
+            required: true
+        rules:
+          - rule: >-
+              imageMajor(self.image) < 0 || imageMajor(self.backup.image) < 0 ||
+              imageMajor(self.backup.image) >= imageMajor(self.image)
+            severity: warning
+            paths: [backup.image]
+            message: >-
+              The backup image's major version must be at least the Postgres major version; an
+              older pg_dump cannot dump a newer server.
+
+migrations:
+  - fromVersions: "<3.4.0"
+    from: config.username
+    note: Credentials moved to a dictionary secret with the keys username, password and database; choose it under Credentials.
+  - fromVersions: "<3.4.0"
+    from: config.password
+    note: Credentials moved to a dictionary secret with the keys username, password and database; choose it under Credentials.
+  - fromVersions: "<3.4.0"
+    from: config.database
+    note: Credentials moved to a dictionary secret with the keys username, password and database; choose it under Credentials.
+  - fromVersions: "<3.4.0"
+    from: backup.minio.accessKey
+    note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey, named by backup.minio.credentialsSecretName.
+  - fromVersions: "<3.4.0"
+    from: backup.minio.secretKey
+    note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey, named by backup.minio.credentialsSecretName.

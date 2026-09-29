@@ -22,6 +22,37 @@ spec:
       env:
         - name: LOCATIONS
           value: {{ include "tidb.locationNames" . | quote }}
+        {{- /*
+          The whole PD roster in bootstrap order, rendered once (same helper the
+          TiKV/server endpoint lists use), so a member can find its own global
+          ordinal and join the cluster ONE AT A TIME. Without serialized joins,
+          members 2..N race to join a still-bootstrapping cluster and the
+          bootstrap PD FATAL-crashes on `ErrEtcdMemberList` (reproduced 2/4
+          cold starts on 2.0.0).
+        */}}
+        - name: PD_MEMBERS
+          value: {{ include "tidb.pdEndpointList" . | quote }}
+      readinessProbe:
+        {{- /*
+          2.0.0 shipped NO PD readiness probe, so `ready: true` never reflected
+          quorum. This one is self-scoped on purpose: it passes when THIS PD is
+          up and the cluster has an elected leader — it does NOT require every
+          peer healthy, so a peer going down never restarts a surviving PD (the
+          readiness deadline restarts the container on this platform). The
+          serialized bootstrap fits inside the deadline (failureThreshold ≤ 20).
+        */}}
+        exec:
+          command:
+            - /bin/sh
+            - '-c'
+            - >-
+              curl -sf --max-time 4 http://localhost:2379/pd/api/v1/leader
+              | grep -q '"member_id"'
+        failureThreshold: 20
+        initialDelaySeconds: 15
+        periodSeconds: 15
+        successThreshold: 1
+        timeoutSeconds: 5
       volumes:
         - path: /data
           recoveryPolicy: retain

@@ -318,6 +318,7 @@ steps:
             type: ref
             label: Cloud account
             required: true
+            example: true
             help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
             ref:
               kind: cloudaccount
@@ -329,6 +330,7 @@ steps:
             type: string
             label: IAM policy name
             required: true
+            example: true
             description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
           - path: backup.aws.prefix
             type: string
@@ -348,6 +350,7 @@ steps:
             type: ref
             label: Cloud account
             required: true
+            example: true
             help: >-
               A GCP [cloud account](/guides/create-cloud-account) whose service account has the
               Storage Admin role on the bucket.
@@ -398,6 +401,15 @@ steps:
             format: image
             label: MongoDB image
             required: true
+        rules:
+          - rule: oldSelf == null || self.image == oldSelf.image
+            severity: info
+            paths: [image]
+            message: >-
+              Changing the MongoDB image restarts every member. MongoDB upgrades one major version at a
+              time (for example 7.0 to 8.0), raising featureCompatibilityVersion after each step, and a
+              raised featureCompatibilityVersion must be lowered before you can go back; take a backup
+              first.
       - title: HAProxy
         when: self.proxy.enabled
         fields:

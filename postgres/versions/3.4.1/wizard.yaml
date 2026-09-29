@@ -29,11 +29,11 @@ steps:
         label: Resources
         required: true
         description: >-
-          A single replica. On a stateful workload the maximum CPU can be at most 4 times the
-          minimum.
+          A single replica. On a stateful workload the maximum CPU and the maximum memory can each
+          be at most 4 times their minimum.
         maxRatio: 4
-        cpu: { min: 50m }
-        memory: { min: 64Mi }
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
     rules:
       - rule: >-
           oldSelf == null || imageMajor(self.image) < 0 || imageMajor(oldSelf.image) < 0 ||
@@ -294,6 +294,7 @@ steps:
             type: ref
             label: Cloud account
             required: true
+            example: true
             help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
             ref:
               kind: cloudaccount
@@ -305,6 +306,7 @@ steps:
             type: string
             label: IAM policy name
             required: true
+            example: true
             description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
             docs: "#aws-s3"
           - path: backup.aws.prefix
@@ -325,6 +327,7 @@ steps:
             type: ref
             label: Cloud account
             required: true
+            example: true
             help: >-
               A GCP [cloud account](/guides/create-cloud-account) whose service account has the
               Storage Admin role on the bucket.
@@ -348,16 +351,19 @@ steps:
             format: url
             label: S3 endpoint
             required: true
+            example: true
             placeholder: http://my-minio-workload:9000
             description: The URL including the port.
           - path: backup.minio.bucket
             type: string
             label: Bucket
             required: true
+            example: true
           - path: backup.minio.credentialsSecretName
             type: ref
             label: MinIO credentials secret
             required: true
+            example: true
             description: A dictionary secret with the keys `accessKey` and `secretKey`.
             ref:
               kind: secret

@@ -119,6 +119,12 @@ steps:
         message: >-
           The Postgres password is read only when the data directory is first initialized; pointing at
           another secret does not change the existing password.
+      - rule: oldSelf == null || self.jwt.secretName == oldSelf.jwt.secretName
+        severity: info
+        paths: [jwt.secretName]
+        message: >-
+          Another JWT secret means new signing keys: your clients need its `anonKey`, and the database
+          keeps the JWT settings it was initialized with (README, Rotating a credential).
 
   - id: database
     title: Database
@@ -131,10 +137,11 @@ steps:
             label: Postgres resources
             required: true
             description: >-
-              A single stateful replica. The maximum CPU can be at most 4 times the minimum.
+              A single stateful replica. The maximum CPU and the maximum memory can each be at most 4
+              times their minimum.
             maxRatio: 4
-            cpu: { min: 50m }
-            memory: { min: 64Mi }
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
           - path: postgres.volumeset.capacity
             type: integer
             label: Initial capacity
@@ -196,22 +203,51 @@ steps:
                 description: Any workload in this org.
               - value: workload-list
                 label: Specific workloads
-                description: Only the workloads listed below; the services are not added for you.
+                description: Only the workloads listed below; list the Supabase services too.
             rules:
-              - rule: self.postgres.internalAccess.type in ['same-gvc', 'same-org']
+              - rule: self.postgres.internalAccess.type != 'none'
                 severity: warning
                 message: >-
-                  Every Supabase service connects to Postgres directly and is not added to a workload
-                  list, so "Nobody" and "Specific workloads" cut them off. Use Same GVC or Same org.
+                  "Nobody" cuts off every Supabase service: Auth, PostgREST, Realtime, Storage, Studio's
+                  pg_meta, PgBouncer and the backup job all connect to Postgres directly. Use Same GVC or
+                  Same org.
           - path: postgres.internalAccess.workloads
             type: list
             label: Allowed workloads
-            description: Extra workloads allowed to connect, for example from another GVC.
+            description: >-
+              With Same GVC, extra workloads from other GVCs. With Specific workloads, every workload
+              that connects, the Supabase services included: the chart does not add them.
             when: self.postgres.internalAccess.type in ['same-gvc', 'workload-list']
             widget: tags
             item:
               type: ref
               ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+        rules:
+          - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+            rule: >-
+              (['auth', 'postgrest'] + (self.realtime.enabled ? ['realtime'] : []) +
+              (self.storage.enabled ? ['storage'] : []) + (self.studio.enabled ? ['studio'] : []) +
+              (self.pgbouncer.enabled ? ['pgbouncer'] : []) +
+              (self.backup.enabled && self.backup.mode == 'logical' ? ['backup'] : [])).all(n,
+              ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-' + n) in
+              self.postgres.internalAccess.workloads)
+            severity: warning
+            paths: [postgres.internalAccess.workloads]
+            messageExpression: >-
+              'The chart does not add its own workloads to the list, and each of them connects to
+              Postgres directly. Add ' +
+              (['auth', 'postgrest'] + (self.realtime.enabled ? ['realtime'] : []) +
+              (self.storage.enabled ? ['storage'] : []) + (self.studio.enabled ? ['studio'] : []) +
+              (self.pgbouncer.enabled ? ['pgbouncer'] : []) +
+              (self.backup.enabled && self.backup.mode == 'logical' ? ['backup'] : [])).filter(n,
+              !(('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-' + n) in
+              self.postgres.internalAccess.workloads)).map(n,
+              '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-' + n).join(', ') +
+              ', or they cannot connect.'
+            message: >-
+              The chart does not add its own workloads to the list, and each of them connects to
+              Postgres directly: add Auth, PostgREST and every enabled service (Realtime, Storage,
+              Studio, PgBouncer, the logical backup job), or they cannot connect.
       - title: Connection pooling
         when: self.pgbouncer.enabled
         docs: "#pgbouncer-optional"
@@ -303,6 +339,7 @@ steps:
             format: hostname
             label: SMTP host
             required: true
+            example: true
           - path: auth.smtp.port
             type: integer
             label: SMTP port
@@ -314,6 +351,7 @@ steps:
             type: string
             label: SMTP user
             required: true
+            example: true
           - path: auth.smtp.passwordSecretName
             type: ref
             label: SMTP password secret
@@ -336,6 +374,7 @@ steps:
             format: email
             label: Sender email
             required: true
+            example: true
       - title: OAuth providers
         docs: "#oauth-providers"
         fields:
@@ -376,6 +415,18 @@ steps:
                 message: >-
                   OAuth needs the public API endpoint: providers do not redirect to internal
                   hostnames.
+              - rule: self.auth.providers.all(k, !('clientSecret' in self.auth.providers[k]))
+                messageExpression: >-
+                  'A plaintext clientSecret is still set on ' +
+                  self.auth.providers.filter(k, 'clientSecret' in self.auth.providers[k]).join(', ') +
+                  ' (the 1.0.0 key). This version ignores it, but it stays in the release values in
+                  plain text and the provider editor does not show it: remove it in YAML mode. The
+                  client secret is read only from the secret named by clientSecretName.'
+                message: >-
+                  A plaintext clientSecret (the 1.0.0 key) is still set on a provider. This version
+                  ignores it, but it stays in the release values in plain text and the provider editor
+                  does not show it: remove it in YAML mode. The client secret is read only from the
+                  secret named by clientSecretName.
       - title: Dashboard access
         when: self.studio.enabled
         docs: "#studio-web-dashboard"
@@ -405,11 +456,15 @@ steps:
             label: Internal dashboard access
             widget: cards
             required: true
-            description: Kong is always allowed. Reaching Studio directly bypasses the Kong login.
+            description: >-
+              Kong serves the dashboard behind its login, so every option except None lets Kong in.
+              Reaching Studio directly bypasses the Kong login.
             options:
               - value: none
                 label: None
-                description: Blocks internal access to the Studio workload.
+                description: >-
+                  Blocks every internal caller, Kong included: the dashboard is not served through
+                  Kong, only to the direct-access CIDRs.
               - value: same-gvc
                 label: Same GVC
                 description: Any workload in this GVC, without a password.
@@ -425,10 +480,17 @@ steps:
                 message: >-
                   Studio holds the service role key and has no login of its own: with this setting any
                   workload in the scope opens the dashboard unauthenticated.
+              - rule: self.studio.internalAccess.type != 'none'
+                severity: info
+                message: >-
+                  None blocks Kong as well, so the dashboard is not served at Kong's URL; only the
+                  direct-access CIDRs reach Studio.
           - path: studio.internalAccess.workloads
             type: list
             label: Extra dashboard callers
-            description: Kong is added automatically; list extra callers only.
+            description: >-
+              Kong is added automatically; list extra callers only. With Same GVC, callers from other
+              GVCs.
             when: self.studio.internalAccess.type in ['same-gvc', 'workload-list']
             widget: tags
             item:
@@ -461,7 +523,7 @@ steps:
             when: self.storage.backend == 'local'
             text: >-
               A local backend makes Storage a stateful workload with one replica: the replica settings
-              are ignored, and the maximum CPU can be at most 4 times the minimum.
+              are ignored, and the maximum CPU and memory can each be at most 4 times their minimum.
       - title: S3
         when: self.storage.enabled && self.storage.backend == 's3'
         docs: "#aws-s3-storage-backend-and-backups"
@@ -472,7 +534,7 @@ steps:
             label: S3 provider
             widget: segmented
             required: true
-            init: "self.storage.s3.endpoint == '' ? 'aws' : 'compatible'"
+            init: "self.storage.s3.endpoint == null || self.storage.s3.endpoint == '' ? 'aws' : 'compatible'"
             options:
               - value: aws
                 label: AWS S3
@@ -495,6 +557,7 @@ steps:
             type: ref
             label: Cloud account
             required: true
+            example: true
             when: ui.s3Flavour == 'aws'
             help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
             ref:
@@ -507,6 +570,7 @@ steps:
             type: string
             label: IAM policy name
             required: true
+            example: true
             when: ui.s3Flavour == 'aws'
             description: >-
               An AWS IAM policy granting GetObject, PutObject and DeleteObject on the bucket (an AWS
@@ -543,17 +607,19 @@ steps:
                 keys: [accessKeyId, secretAccessKey]
                 suggestName: "context.releaseName + '-s3-credentials'"
         rules:
-          - when: self.storage.s3.endpoint != ''
-            rule: self.storage.s3.credentialsSecretName != ''
+          - when: self.storage.s3.endpoint != null && self.storage.s3.endpoint != ''
+            rule: self.storage.s3.credentialsSecretName != null && self.storage.s3.credentialsSecretName != ''
             mirrors: supabase.validate
             paths: [storage.s3.credentialsSecretName]
             message: >-
               An S3-compatible endpoint needs an access key secret: keyless cloud identity is AWS-only.
-          - when: self.storage.s3.endpoint == ''
-            rule: self.storage.s3.cloudAccountName != '' && self.storage.s3.policyName != ''
+          - when: self.storage.s3.endpoint == null || self.storage.s3.endpoint == ''
+            rule: >-
+              self.storage.s3.cloudAccountName != null && self.storage.s3.cloudAccountName != '' &&
+              self.storage.s3.policyName != null && self.storage.s3.policyName != ''
             mirrors: supabase.validate
             paths: [storage.s3.cloudAccountName]
-            message: AWS S3 (an empty endpoint) needs a cloud account and an IAM policy name.
+            message: AWS S3 (no endpoint set) needs a cloud account and an IAM policy name.
       - title: Google Cloud Storage
         when: self.storage.enabled && self.storage.backend == 'gcs'
         docs: "#google-cloud-storage--storage-backend"
@@ -630,7 +696,8 @@ steps:
         paths: [storage.volumeset.capacity]
         message: A volume set cannot shrink. Keep the capacity at or above the installed size.
       - when: >-
-          self.storage.enabled && self.storage.backend == 's3' && self.storage.s3.endpoint == '' &&
+          self.storage.enabled && self.storage.backend == 's3' &&
+          (self.storage.s3.endpoint == null || self.storage.s3.endpoint == '') &&
           self.backup.enabled && self.backup.provider == 'aws'
         rule: self.backup.aws.cloudAccountName == self.storage.s3.cloudAccountName
         severity: warning
@@ -724,6 +791,7 @@ steps:
             type: ref
             label: Cloud account
             required: true
+            example: true
             help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
             ref:
               kind: cloudaccount
@@ -735,6 +803,7 @@ steps:
             type: string
             label: IAM policy name
             required: true
+            example: true
             description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
           - path: backup.aws.prefix
             type: string
@@ -754,6 +823,7 @@ steps:
             type: ref
             label: Cloud account
             required: true
+            example: true
             help: >-
               A GCP [cloud account](/guides/create-cloud-account) whose service account has the Storage
               Admin role.
@@ -777,6 +847,15 @@ steps:
         message: >-
           Switching the backup mode restarts Postgres: logical and WAL-G need different archive
           settings.
+      - rule: >-
+          oldSelf == null || !self.backup.enabled || !oldSelf.backup.enabled ||
+          self.backup.provider == oldSelf.backup.provider
+        severity: info
+        paths: [backup.provider]
+        message: >-
+          The existing backups stay with the previous destination. The platform merges identity
+          updates, so the previous provider's cloud binding stays on the workload identity until you
+          edit the identity or reinstall the release.
 
   - id: advanced
     title: Advanced
@@ -902,6 +981,12 @@ steps:
                 message: >-
                   With a local backend Storage is stateful, where the maximum CPU can be at most 4 times
                   the minimum.
+              - rule: >-
+                  self.storage.backend != 'local' ||
+                  memoryBytes(self.storage.resources.maxMemory) <= 4 * memoryBytes(self.storage.resources.minMemory)
+                message: >-
+                  With a local backend Storage is stateful, where the maximum memory can be at most 4
+                  times the minimum.
           - path: storage.minReplicas
             type: integer
             label: Storage minimum replicas

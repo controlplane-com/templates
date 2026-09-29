@@ -184,6 +184,8 @@ internal_access:
 
 ### HAProxy Failover Tier
 
+**Request flow:** `app → pgcat (pooler) → HAProxy (failover) → pgEdge node`. pgcat pools connections; HAProxy picks the node. Both run one set per location, and the client endpoint stays the pgcat one.
+
 One HAProxy runs per location, in front of the pgEdge nodes. Each location's HAProxy sends traffic to **its own** location's `replica-0` (active) and falls back — in order — to the other local nodes, then to a remote location's nodes, only when the closer ones fail their health check. This is what lets a client survive its **local node** dying: pgcat alone (`routing: local`) pools only the local node and returns `AllServersDown` when it goes down.
 
 ```yaml

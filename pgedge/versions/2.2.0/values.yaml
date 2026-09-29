@@ -37,20 +37,14 @@ volumeset:
     minFreePercentage: 10  # Minimum free percentage to trigger scaling
     scalingFactor: 1.2  # How much to scale up when triggered
 
-# ─── HAProxy failover tier (in front of the pgEdge nodes) ──────────────────────
-# One HAProxy per location. Each location's HAProxy sends client traffic to ITS OWN
-# location's node-0 (active) and falls back — in order — to the other local nodes,
-# then to a remote location's nodes, only when the closer ones are unhealthy. This
-# is what lets a client survive the death of its LOCAL node: pgcat alone empties its
-# pool and returns AllServersDown when the local node dies.
-#
-# NOTE: this does NOT fail a client over when its WHOLE location is lost (that
-# location's pgcat and HAProxy die too, and the mesh service DNS is location-pinned).
-# See "Failover behaviour" in the README.
-#
-# Enabled by default because pgEdge's value proposition IS availability. Set
-# proxy.enabled: false for the exact 2.1.0 shape (pgcat straight to the nodes) —
-# appropriate for a single-location or dev install.
+# ─── Request flow:  app → pgcat (pooler) → HAProxy (failover) → pgEdge node ─────
+# pgcat pools connections; HAProxy picks the node. Both run one set per location.
+
+# HAProxy failover tier. Each location's HAProxy serves its own node, and fails
+# over to another local node (then a remote location) when the local ones are
+# unhealthy — so a local node death no longer errors the client. On by default.
+# proxy.enabled: false = the 2.1.0 shape (pgcat talks to the nodes directly).
+# Covers node loss, NOT whole-location loss — see "Failover behaviour" in the README.
 proxy:
   enabled: true
   image: haproxy:3.0.28  # pinned exact; Debian variant (perl needed by the startup gate)
@@ -60,24 +54,15 @@ proxy:
   minReplicas: 2         # per location
   maxReplicas: 2         # per location
 
+# Connection pooler. With the failover tier on (default) pgcat pools ONE backend,
+# the local HAProxy, so `routing` below is ignored. With proxy.enabled: false pgcat
+# pools the pgEdge nodes directly and `routing` chooses how (see pgcat Settings in
+# the README): local = pool this location's nodes; single-writer = one global writer.
 pgcat:
   image: ghcr.io/postgresml/pgcat:v1.2.0 # pinned: `latest` makes installs non-reproducible
   poolMode: transaction  # options: session, transaction, statement
   defaultPoolSize: 25    # Real Postgres connections pgcat maintains per pool
-  # `routing` ONLY applies when proxy.enabled is false. With the failover tier on
-  # (the default), pgcat pools a single backend — the local HAProxy — and all node
-  # selection / local-preference is done by HAProxy, so `routing` is ignored.
-  # How each pgcat pools the cluster's pgEdge nodes (proxy.enabled: false only):
-  #   local         (default) — each location's pgcat pools ONLY that location's nodes,
-  #                 with the local node as the write target. Every region serves reads AND
-  #                 writes locally — true active/active, which is what pgEdge is for — and
-  #                 losing one location does not stop writes in the others.
-  #   single-writer — every pgcat (in all locations) pools the WHOLE cluster with ONE write
-  #                 target (the first location's first node). Avoids last-update-wins
-  #                 conflicts by funneling writes to one node, but writes STOP if that
-  #                 location is down and reads are served cross-region. Choose this only if
-  #                 your app cannot tolerate multi-master conflict resolution.
-  routing: local         # local | single-writer  (ignored when proxy.enabled)
+  routing: local         # local | single-writer — ignored when proxy.enabled (default)
   resources:
     cpu: 500m
     memory: 256Mi

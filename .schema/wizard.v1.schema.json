@@ -435,7 +435,7 @@
         "maxRatio": {
           "type": "number",
           "minimum": 1,
-          "markdownDescription": "Largest allowed maxCpu:minCpu ratio (4 on stateful workloads)."
+          "markdownDescription": "Largest allowed max:min ratio, checked separately for cpu (maxCpu:minCpu) and for memory (maxMemory:minMemory); exactly the ratio passes. 4 on stateful workloads. Applies to `{minCpu, maxCpu, minMemory, maxMemory}` resources only."
         },
         "item": {
           "$ref": "#/definitions/listItem",

@@ -40,11 +40,10 @@ volumeset:
 # ─── Request flow:  app → pgcat (pooler) → HAProxy (failover) → pgEdge node ─────
 # pgcat pools connections; HAProxy picks the node. Both run one set per location.
 
-# HAProxy failover tier. Each location's HAProxy serves its own node, and fails
-# over to another local node (then a remote location) when the local ones are
-# unhealthy — so a local node death no longer errors the client. On by default.
-# proxy.enabled: false = the 2.1.0 shape (pgcat talks to the nodes directly).
-# Covers node loss, NOT whole-location loss — see "Failover behaviour" in the README.
+# HAProxy failover tier. Each location's HAProxy serves its own node and fails
+# over to another local node (then a remote location) if the local ones are
+# unhealthy, so a client keeps serving through a node failure. On by default;
+# proxy.enabled: false has pgcat connect to the pgEdge nodes directly.
 proxy:
   enabled: true
   image: haproxy:3.0.28  # pinned exact; Debian variant (perl needed by the startup gate)

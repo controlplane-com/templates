@@ -131,10 +131,20 @@ reads near users, and active-active deployments that must survive the loss of a 
   (all local traffic → node-0) at the cost of NOT spreading local reads — the deliberate trade vs.
   load-balancing across local nodes. pgcat pools a single backend (the local HAProxy) and `pgcat.routing`
   is ignored when the tier is on. **`proxy.enabled: false` renders byte-identical to 2.1.0** (verified, bar
-  the version label). **To confirm in the test round (named rows):** pgsql-check vs SCRAM (tcp-check/SSLRequest
-  fallback if it mis-reads), SIGSTOP-not-kill failover detection + timing (a kill races the platform restart →
-  false pass), first-healthy-backup ordering, `perl` present in `haproxy:3.0.28`, single-backend pgcat pooling
-  + shutdown-sessions recovery, and a no-op-upgrade drift gate on the new workload.
+  the version label). **Tested end-to-end 2026-09-28** on a cross-region 2-location × 2-replica cluster
+  (test-gvc-2: aws-us-east-1 + aws-us-west-2), 13/13 rows PASS: `option pgsql-check` marks nodes UP with
+  `L7OK` against SCRAM auth (no tcp-check fallback needed); local node-0 death → **local node-1 in ~5.7s**;
+  all-local-down → **remote node in ~6s**; `rise 1` recovery returns new connections to local; `perl 5.040001`
+  present in `haproxy:3.0.28`; single-backend pgcat pooling + `shutdown-sessions` (drops one pooled conn per
+  node-down); firewall self-inclusion with a clients-only `workload-list`; no-op-upgrade drift gate clean.
+  **Failover-test method note:** the postmaster is PID 1 (`exec postgres`) and SIGSTOP to namespace PID 1 is
+  ignored from within, so failover was induced with a reversible `pg_hba.conf` reject + `kill -HUP 1` — same
+  failover path, no restart race (the equivalent of the SIGSTOP the CLAUDE.md failover guidance calls for).
+- **Recovery is gradual for pooled clients (operational, not a defect).** HAProxy's `on-marked-down
+  shutdown-sessions` closes sessions only on mark-DOWN, never on `rise`. So after a failed local node
+  recovers, pgcat's already-pooled connections keep using the failover target until the pool recycles them —
+  traffic returns to `replica-0` over the next pool-recycle window, not instantly. Documented in the README
+  Failover-behaviour section; a shorter `server_lifetime` on pgcat would tighten it if a user cares.
 - **`helm upgrade` restarts every pgEdge replica at once** — the API drops
   `rolloutOptions.maxUnavailableReplicas` on a `stateful` workload, so nothing serialises the rollout.
   Treat an upgrade as a planned write interruption (~2 min measured).

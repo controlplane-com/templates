@@ -268,6 +268,17 @@ steps:
             required: true
             suggestions: [1, 2, 3, 5]
             description: In each configured location, HAProxy scales between the two by requests per second.
+          - path: proxy.image
+            type: string
+            format: image
+            label: HAProxy image
+            required: true
+            advanced: true
+          - path: proxy.resources
+            type: resources
+            label: HAProxy resources
+            required: true
+            advanced: true
         rules:
           - rule: self.proxy.minReplicas <= self.proxy.maxReplicas
             paths: [proxy.minReplicas]
@@ -304,8 +315,27 @@ steps:
             type: enum
             label: Run the backup job in
             required: true
-            optionsFrom: self.locations.map(l, l.name)
+            optionsFrom: self.locations.filter(l, l.name != '').map(l, l.name)
             description: The one location the job runs in; the other locations run no backup.
+          - path: backup.mode
+            type: enum
+            label: Backup mode
+            readOnly: true
+            advanced: true
+            description: Physical backups were removed in 2.0.0.
+            options:
+              - { value: logical, label: Logical (mongodump) }
+          - path: backup.logical.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+          - path: backup.logical.resources
+            type: resources
+            label: Backup job resources
+            required: true
+            advanced: true
         rules:
           - rule: self.backup.location in self.locations.map(l, l.name)
             mirrors: mongo-cluster.validateBackupLocation
@@ -385,7 +415,7 @@ steps:
 
   - id: advanced
     title: Advanced
-    description: Images and resources.
+    description: The MongoDB image.
     sections:
       - fields:
           - path: image
@@ -402,37 +432,6 @@ steps:
               time (for example 7.0 to 8.0), raising featureCompatibilityVersion after each step, and a
               raised featureCompatibilityVersion must be lowered before you can go back; take a backup
               first.
-      - title: HAProxy
-        when: self.proxy.enabled
-        fields:
-          - path: proxy.image
-            type: string
-            format: image
-            label: HAProxy image
-            required: true
-          - path: proxy.resources
-            type: resources
-            label: HAProxy resources
-            required: true
-      - title: Backup job
-        when: self.backup.enabled
-        fields:
-          - path: backup.mode
-            type: enum
-            label: Backup mode
-            readOnly: true
-            description: Physical backups were removed in 2.0.0.
-            options:
-              - { value: logical, label: Logical (mongodump) }
-          - path: backup.logical.image
-            type: string
-            format: image
-            label: Backup image
-            required: true
-          - path: backup.logical.resources
-            type: resources
-            label: Backup job resources
-            required: true
 
 rules:
   - rule: context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '2.0.0') >= 0

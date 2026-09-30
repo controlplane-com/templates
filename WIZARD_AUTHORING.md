@@ -120,7 +120,7 @@ tw render --descriptor <dir>/wizard.yaml --values <dir>/values.yaml --answers an
 | Sections | Untitled sections are a plain column; titled ones a box with the title, description and docs link. A toggle section has its switch as the box's header title; while it is off, the box shows only its description | sections, `toggle` (§5.3) |
 | Fields | One control per field type and widget. A switch sits right next to its label. A field with `suggestions` is a text input with a dropdown of the suggested values beside free typing, the unit written next to it (§15). A secret reference with required keys gets a "Check keys" button (§13.3). "Create" appears next to a reference only with `allowCreate: true` (§13.2) | field properties |
 | YAML mode | The whole values document in an editor; the Wizard mode is disabled while the text does not parse | none |
-| Review | Outstanding issues and advice above two tabs. **Visual**: every visible setting with its formatted value (option labels, On/Off, reference names, masked sensitive values), grouped by step and section, each step with an "Edit" link; on upgrade, changed rows are tagged "Changed" and a "Changes since last applied" list follows, each tagged "Edited" or "New default". **YAML**: the values document; on upgrade, also a diff against the installed values. Install has no "changes from the chart defaults" list | labels, option labels, `sensitive` |
+| Review | Outstanding issues and advice above two tabs, each as "<label>: <message>" (§10.1). **Visual**: every visible setting with its formatted value (option labels, On/Off, reference names, masked sensitive values), grouped by step and section, each step with an "Edit" link; on upgrade, changed rows are tagged "Changed" and a "Changes since last applied" list follows, each tagged "Edited" or "New default". **YAML**: the values document; on upgrade, also a diff against the installed values. Install has no "changes from the chart defaults" list | labels, option labels, `sensitive` |
 | Install / Upgrade | Enabled only while no error or warning remains | severities |
 
 Behaviour that shapes descriptors:
@@ -128,7 +128,8 @@ Behaviour that shapes descriptors:
 - **Next** runs the step's sync validation and its async reference checks. Errors and warnings block; `info` is shown and never blocks.
 - **Upgrade mode** opens every step for free navigation (any step can be clicked at any time), but Upgrade is still only on Review, and it validates every step first.
 - **References start empty** (`clearRefDefaults`, §12.1): on install, every reference that still holds its chart default; on upgrade, only references new in the target version. Installed references are never cleared.
-- **Imported steps** (§16) carry their origin (the child template, version and docs page). The console's rendering of imports is a later stage (§16.13).
+- **Imported steps** (§16) sit in the rail among the parent's steps, each opening with "From the <import title> template <version> · Docs", and the review names the import in its headings (§16.13).
+- **Field messages do not name the field** ("Required.", "Must be at least 1 %."): under a field its label is right above. Where issues are listed away from their fields (the review's issues and advice, a step's footer), each leads with the field's label ("Scale up below this free space: Must be at least 1 %.") (§10.1).
 
 ### 1.3 What the descriptor never does
 
@@ -764,7 +765,7 @@ When: any text, including images, URLs, hostnames, cron schedules, CIDRs and dur
 |---|---|
 | `format` | `image` (Docker references with a lowercase repository, and Control Plane `//image/name:tag`), `url` (http or https with a host), `hostname` (RFC 1123), `email`, `cron` (five fields or an `@daily`-style macro), `cidr` (IPv4 or IPv6, prefix optional), `duration` (`30s`, `12h`, `7d`, `1h30m`). A failure is `FORMAT` with a message that shows an example. |
 | `pattern` | A JavaScript regular expression (not RE2), anchored by you (`^…$`), in single quotes. A failure is `PATTERN`. |
-| `patternMessage` | What the `PATTERN` issue says instead of the regex: `Folder prefix: Leave out the leading /.` Write it as an instruction, in sentence case with a full stop. |
+| `patternMessage` | What the `PATTERN` issue says instead of the regex, as written: `Leave out the leading /.` Write it as an instruction, in sentence case with a full stop, without the field's label (it shows under the field, and lists add the label). |
 | `minLength`, `maxLength` | Length bounds (`MIN_LENGTH`, `MAX_LENGTH`). |
 | `multiline` | A textarea; written as a YAML block literal (`|`). |
 | `sensitive` + `widget: password` | Masked input (§6.17). |
@@ -786,7 +787,7 @@ Formats, patterns and length checks skip empty values; combine them with `requir
 
 Pitfalls:
 
-- **Without `patternMessage`, the `PATTERN` message quotes the regex** ("Folder prefix does not match the expected pattern ^(?!/)"). That is fine for shapes the placeholder already shows (a region, a bucket name). When the regex itself would be the only explanation, add a `patternMessage`:
+- **Without `patternMessage`, the `PATTERN` message quotes the regex** ("Does not match the expected pattern ^(?!/)."). That is fine for shapes the placeholder already shows (a region, a bucket name). When the regex itself would be the only explanation, add a `patternMessage`:
 
   ```yaml
   # postgres 3.4.1 (and the other pilots' backup prefixes)
@@ -830,7 +831,7 @@ When: counts, sizes in fixed units, ports, timeouts (`integer`); ratios and fact
 
 | Property | Meaning |
 |---|---|
-| `min`, `max` | Bounds; integers for `integer` (the schema enforces it). Failures are `MIN` / `MAX` with messages like "Initial capacity must be at least 10 GiB." |
+| `min`, `max` | Bounds; integers for `integer` (the schema enforces it). Failures are `MIN` / `MAX` with messages like "Must be at least 10 GiB." (the `unit` is added). |
 | `step` | The input's step. |
 | `unit` | Free text shown next to the input: `GiB`, `%`, `seconds`, `days`. Lower case except for unit symbols. |
 | `widget` | `input` (default), `stepper` (small counts, 1 to 7 members), `slider` (a bounded range with no suggestions). |
@@ -1637,6 +1638,7 @@ Two more sources of truth:
 
 - `message` is required unless `messageExpression` is given; give both when the expression can fail. The fallback must say the same thing in general terms.
 - The message says what is wrong and how to fix it, in one or two sentences, in the user's terms. It may state the limit: rule messages are where validation text belongs (and descriptions are not, §10.2).
+- A rule's message is shown as written, also in lists away from the field (rule issues carry no label, §10.1), so name the setting it is about ("The maximum capacity must be at least the initial capacity.").
 - `messageExpression` names concrete values: the missing workload links, the actual total.
 
 ```yaml
@@ -1916,8 +1918,9 @@ Every text in a descriptor is read by someone installing a template for the firs
 - **Sentence case**: "Initial capacity", "Who can connect", "Connection pooler (PgBouncer)". Product names keep their capitals (PostgreSQL, PgBouncer, HAProxy, AWS S3, Google Cloud Storage).
 - At most 60 characters; aim for under 30.
 - A label names the setting ("Scale up below this free space"), never its constraint or its mechanics ("Free percentage 1–100").
-- Field checks build their messages from the label ("Initial capacity must be at least 10 GiB."), so prefer noun phrases.
-- Within one section, labels are distinct. In different sections the section title tells two "Allowed workloads" apart (redis's Redis and Sentinel sections), but issue lists show the label alone, so for the main settings of two tiers name the tier ("Redis resources", "Sentinel resources").
+- **Labels are free to be phrases.** Field check messages do not contain the label: they are sentences of their own ("Required.", "Must be at least 1 %.", "Enter a cron schedule with 5 fields, such as "0 2 * * *"."), because they show right under the field and its label. So "Scale up below this free space" is a good label; never bend a label so that a message reads well.
+- **Lists of issues add the label.** Each issue carries its field's label (`Issue.label`); where issues are listed away from their fields (the review's issues and advice, a step's footer and its rail marker, the CLI), the line is "<label>: <message>". A field inside a list item, a map value, an optional block or a resources field has its parents' labels first, joined with " › ": "Locations › Members: Must be at least 1." (mongodb-cluster), "OAuth providers › Client ID: Required." (supabase), "Resources › Minimum CPU: Must be at least 25m." (postgres); the review's list also puts the import's title first for an imported field ("Bundled PostgreSQL › Resources › Minimum CPU: …"). Rule issues have no label: a rule's message stands alone (§8.4).
+- Within one section, labels are distinct. In different sections the section title tells two "Allowed workloads" apart (redis's Redis and Sentinel sections), but issue lists show the label without the section, so for the main settings of two tiers name the tier ("Redis resources", "Sentinel resources").
 - A switch label says what "on" means.
 
 ### 10.2 Descriptions give context, never a restated validation
@@ -2077,7 +2080,7 @@ For a string that is a placeholder (a bucket, an IAM policy name, a hostname, an
   pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
 ```
 
-- While the field is visible and still equals the chart default, it is `EXAMPLE_VALUE`: a **warning, which blocks**, with the message "Bucket still has the example value "my-postgres-bucket"; replace it with your own."
+- While the field is visible and still equals the chart default, it is `EXAMPLE_VALUE`: a **warning, which blocks**, with the message "Still has the example value "my-postgres-bucket"; replace it with your own."
 - On upgrade it is skipped when the value equals the installed one, and on a locked immutable field.
 - Use it only when the default cannot work as is. A default that works but may collide (gitea's database secret name `my-gitea-db-credentials`, which only a second release would clash with) is an `info` rule instead:
 
@@ -2648,7 +2651,15 @@ It lints with 0 diagnostics and 60/60 leaves covered, `check-docs` finds its 9 l
 
 ### 16.13 Imports in the console
 
-The console's support for imports (loading each child's descriptor and values, the sessions, and the imported steps with their "From the … template" caption and docs link) is a later console stage than the core's; see `PROGRESS.md`. Until it lands, check descriptors with imports with `tw lint`, `tw render` and `tw carry`.
+The console resolves each import when it loads a version: the child's values from the marketplace (the same source the installer renders from) and the child's `wizard.yaml` (the marketplace's, else the dev endpoint's, §17.7). What the user sees:
+
+- **Rail order.** The imported steps are ordinary steps in the rail, where the composition puts them: after the `after:` step (or before the `before:` step), else after the parent's last step; in the child's order unless `steps` reorders them; several imports at one step in `imports` order. The rail shows the step title alone (the `steps` title, else the child's), with no import prefix, so rename child steps to read as part of the parent (§16.6).
+- **Caption.** An imported step's content opens with "From the <import title> template <version> · Docs": the import's `title` (else the child's `title`, else `template`), the child version, and a link to the child's docs page (`/template-catalog/templates/<child>`, accessible name "<import title> template docs"), next to the step's own Docs link. The step's description stays in the panel header and the rail, so it need not name the import.
+- **`#anchor` links** in the child's steps, sections, fields and notes open the child's docs page (`#backup` → `/template-catalog/templates/postgres#backup`). An override's text is on the imported field too, which is why it cannot use `#anchor` (`IMPORT_OVERRIDE_ANCHOR`, §16.2).
+- **Review.** The Visual tab heads an imported step's group "<import title> › <step title>" ("Bundled PostgreSQL › Database server") and keeps its rows' own labels. The changes since the last apply label an imported field's change "<import title> › <label>", and the outstanding issues and advice put the import's title before an imported field's label ("Bundled PostgreSQL › Resources › Minimum CPU: Must be at least 25m.", §10.1).
+- **YAML mode.** A note above the editor, one line per import: "Keys under `postgres:` that you don't set keep the defaults of the Bundled PostgreSQL template (postgres 3.4.1), which aren't shown here." The document is the parent's `values.yaml`; the child's defaults are layered under it (§16.3).
+- **Upgrade.** The installed child version comes from the release revision's `chart.metadata.dependencies` (the entry whose `alias ?? name` is the values key and whose name is the import's template), else from the installed version's own descriptor `imports`, else it is unknown: the carry-over report lists `IMPORT_FROM_UNKNOWN` and the child's migrations are skipped (§16.9). Entries of an imported template in the carry-over report lead with "<import title>: ".
+- **Problems with a child** stop the wizard with a link to the classic screen: a child template the marketplace cannot return (the API's message), or a child version that is not published, has no descriptor, has chart `files` or has errors (`IMPORT_UNRESOLVED`, `IMPORT_NO_DESCRIPTOR`, `IMPORT_CHART_FILES`, `IMPORT_INVALID` with the child's own diagnostics). So publish the child version with its descriptor first.
 
 ### 16.14 Import codes
 
@@ -2761,7 +2772,7 @@ tw render --descriptor <dir>/wizard.yaml --values <dir>/values.yaml --answers an
 - Keys are field ids or values paths; toggles by their path; virtual fields by id, **before** the fields they reveal (`"redisAuth": "secret"` before `"redis.auth.fromSecret.name"`). Answers apply in JSON order through `session.set()`.
 - A plain map of answers (without `context`) works too. The context defaults to `org: headless`, `gvc: null`, `releaseName: release`, `mode: install`, `renderer: headless`, with `templateName` and `version` from the path. `--context` merges a JSON file over it: set `"gvcLocations": ["aws-us-east-2"]` or `"gvcSpec": {…}` to exercise location and load balancer rules, or `"mode": "upgrade"`.
 - An unknown key is exit 2 unless `--allow-raw` writes it as a raw values path.
-- The YAML goes to stdout; issues go to stderr (`error FORMAT image: Postgres image: Enter an image reference such as postgres:17 …`). Exit 1 when an error **or a warning** remains (both block an install), 0 otherwise. Without a data source every reference is an `info` `REF_CHECK_FAILED`, so references never fail a render.
+- The YAML goes to stdout; issues go to stderr as `<severity> <code> <path> (<label>): <message>` (`error FORMAT image (Postgres image): Enter an image reference such as postgres:17 …`, `error MIN locations[0].replicas (Locations › Members): Must be at least 1.`). Exit 1 when an error **or a warning** remains (both block an install), 0 otherwise. Without a data source every reference is an `info` `REF_CHECK_FAILED`, so references never fail a render.
 - `render` does not clear references (§12.1): answer every `example: true` string, or the render exits 1 with `EXAMPLE_VALUE`.
 - Imports are read from the templates root like `lint`'s. Answers for imported fields use their full paths (`"postgres.backup.enabled": true`); see `../template-wizard/test/fixtures/answers/gitea-backup.json`.
 - `"mode": "upgrade"` with `"gvcLocations"` in the context shows `GVC_LOCATIONS` as the upgrade `info`.
@@ -2828,7 +2839,7 @@ open "http://localhost:4026/console/org/<org>/marketplace/template/<template>/in
 ```
 
 - The dev endpoint serves only `wizard.yaml`. The template's versions and `values.yaml` come from the marketplace the dev server talks to, so the version must be published there, and local changes to `values.yaml` are not previewed.
-- Descriptors with `imports` need the console's imports stage (§16.13); until it lands, check them with `tw lint`, `tw render` and `tw carry`.
+- Descriptors with `imports` preview too: the dev endpoint serves each child's `wizard.yaml` from this checkout (`/__template-wizard/postgres/3.4.1/wizard.yaml`), while the child's values come from the marketplace, so the child version must be published there as well. Walk the imported steps as in §16.13.
 - After saving `wizard.yaml`, reload the page (descriptors are cached per template and version until a reload or an HMR update).
 - `?ui=classic` opens the classic screen; `?version=` picks the version.
 - A descriptor with parse errors shows them verbatim with a link to the classic screen.
@@ -3295,6 +3306,8 @@ Override keys (`importOverride`; each replaces the child's value whole): `label`
 | `SECRET_KEYS_UNCHECKED` | info | the keys could not be checked (no permission to reveal) |
 
 Only errors and warnings block Next and Install; `info` never blocks. Issues in hidden steps, sections and fields are never produced.
+
+Field check messages never contain the field's label ("Required.", "Must be at least 10 GiB.", "Does not match the expected pattern ^[a-z]+$.", "Still has the example value …"); a `patternMessage` is the message as written. Every issue about one field (the field checks above, `REF_NOT_FOUND`, `REF_CHECK_FAILED`, `SECRET_KEYS_*`, and the field's own `WHEN_EVAL_ERROR`, `OPTIONS_EVAL_ERROR` and `EXPRESSION_EVAL_ERROR`) carries `Issue.label`: the field's label after its parents' ("Locations › Members"; a list's or map's own label for its items and values). Lists away from the field show "<label>: <message>" (§10.1). `RULE` and `RULE_EVAL_ERROR` carry no label.
 
 ### B.2 `set()` results (API, not issues)
 

@@ -79,7 +79,7 @@ tw() { node ../template-wizard/dist/cli.cjs "$@"; }          # zsh does not word
     curl -si http://localhost:4026/__template-wizard/<template>/<version>/wizard.yaml | head -3   # 200, x-template-wizard: dev
     # open http://localhost:4026/console/org/<org>/marketplace/template/<template>/install?version=<version>
     ```
-    Reload after each save. Stop the dev server when done. Descriptors with `imports` need the console's imports stage (guide §16.13); until then, rely on steps 6 to 9.
+    Reload after each save. Stop the dev server when done. With `imports`, the dev endpoint serves the child's `wizard.yaml` too, but the child version must be published in the marketplace (its values come from there); walk the imported steps: their place in the rail, the "From the <title> template <version> · Docs" caption, the child's `#anchor` links, the review's "<title> › <step>" headings and the YAML note (guide §16.13).
 11. **Walk the review checklist** (§18), every item.
 12. **Commit** the descriptor only, by explicit path, with one lowercase line and no body and no attribution; never push:
     ```sh
@@ -105,6 +105,7 @@ A descriptor is done only when all of these hold:
 - A feature's switch is the `toggle` of the section with its settings; other dependent sections repeat the flag in `when` (§5.3).
 - Descriptions give context; they never restate a validation (no ratios, bounds, patterns, allowed values) (§10.2).
 - A `pattern` whose regex would be the only explanation gets a `patternMessage` ("Leave out the leading /.") (§6.2).
+- Field check messages never contain the label ("Required.", "Must be at least 1 %."), so a label may be a phrase ("Scale up below this free space"); lists away from the field add it as "<label>: <message>" (`Issue.label`, parents first: "Locations › Members"). A `patternMessage` and a rule message are shown as written: no label in the first, the setting named in the second (§10.1, §8.4).
 - No text mentions an optional component as always on (§10.5); every claim is backed by this chart version (§10.3).
 - Docs links are relative and their anchors exist on the docs site; run `check-docs` (§11).
 - References start empty on install, and on upgrade when they are new in the target version: never `example: true` on a ref (lint: `EXAMPLE_ON_REF`); `required: true` when the chart needs it; rules hold for `''` (§12).

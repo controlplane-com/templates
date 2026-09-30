@@ -312,6 +312,7 @@ steps:
             type: string
             label: Folder prefix
             pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
       - title: Google Cloud Storage
         when: self.backup.enabled && self.backup.provider == 'gcp'
         docs: "#gcs"
@@ -337,6 +338,7 @@ steps:
             type: string
             label: Folder prefix
             pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
       - title: MinIO or S3-compatible
         when: self.backup.enabled && self.backup.provider == 'minio'
         docs: "#minio"
@@ -371,6 +373,7 @@ steps:
             type: string
             label: Folder prefix
             pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
         rules:
           - rule: "!has(self.backup.minio.accessKey) && !has(self.backup.minio.secretKey)"
             mirrors: pg.validateBackupConfig

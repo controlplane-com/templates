@@ -103,6 +103,7 @@ A descriptor is done only when all of these hold:
 
 - A feature's switch is the `toggle` of the section with its settings; other dependent sections repeat the flag in `when` (§5.3).
 - Descriptions give context; they never restate a validation (no ratios, bounds, patterns, allowed values) (§10.2).
+- A `pattern` whose regex would be the only explanation gets a `patternMessage` ("Leave out the leading /.") (§6.2).
 - No text mentions an optional component as always on (§10.5); every claim is backed by this chart version (§10.3).
 - Docs links are relative and their anchors exist on the docs site; run `check-docs` (§11).
 - References start empty on install: never `example: true` on a ref; `required: true` when the chart needs it; rules hold for `''` (§12).

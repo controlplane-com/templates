@@ -799,6 +799,7 @@ steps:
             type: string
             label: Folder prefix
             pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
       - title: Google Cloud Storage
         when: self.backup.enabled && self.backup.provider == 'gcp'
         docs: "#gcs"
@@ -824,6 +825,7 @@ steps:
             type: string
             label: Folder prefix
             pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
     rules:
       - rule: >-
           oldSelf == null || !self.backup.enabled || !oldSelf.backup.enabled ||

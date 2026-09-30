@@ -759,6 +759,7 @@ When: any text, including images, URLs, hostnames, cron schedules, CIDRs and dur
 |---|---|
 | `format` | `image` (Docker references with a lowercase repository, and Control Plane `//image/name:tag`), `url` (http or https with a host), `hostname` (RFC 1123), `email`, `cron` (five fields or an `@daily`-style macro), `cidr` (IPv4 or IPv6, prefix optional), `duration` (`30s`, `12h`, `7d`, `1h30m`). A failure is `FORMAT` with a message that shows an example. |
 | `pattern` | A JavaScript regular expression (not RE2), anchored by you (`^…$`), in single quotes. A failure is `PATTERN`. |
+| `patternMessage` | What the `PATTERN` issue says instead of the regex: `Folder prefix: Leave out the leading /.` Write it as an instruction, in sentence case with a full stop. |
 | `minLength`, `maxLength` | Length bounds (`MIN_LENGTH`, `MAX_LENGTH`). |
 | `multiline` | A textarea; written as a YAML block literal (`|`). |
 | `sensitive` + `widget: password` | Masked input (§6.17). |
@@ -780,16 +781,15 @@ Formats, patterns and length checks skip empty values; combine them with `requir
 
 Pitfalls:
 
-- **The `PATTERN` message quotes the regex** ("Folder prefix does not match the expected pattern ^(?!/)"). That is fine for shapes the placeholder already shows (a region, a bucket name). When the regex itself would be the only explanation, write a field rule with a readable message instead, and leave the pattern out (both on one field would be suppressed to one message anyway, §8.7):
+- **Without `patternMessage`, the `PATTERN` message quotes the regex** ("Folder prefix does not match the expected pattern ^(?!/)"). That is fine for shapes the placeholder already shows (a region, a bucket name). When the regex itself would be the only explanation, add a `patternMessage`:
 
   ```yaml
-  # not in a pilot
+  # postgres 3.4.1 (and the other pilots' backup prefixes)
   - path: backup.aws.prefix
     type: string
     label: Folder prefix
-    rules:
-      - rule: self.backup.aws.prefix == null || !self.backup.aws.prefix.startsWith('/')
-        message: Write the prefix without a leading slash, for example postgres/daily.
+    pattern: "^(?!/)"
+    patternMessage: Leave out the leading /.
   ```
 
   Never compensate with a description such as "Without a leading `/`." (§10.2).
@@ -2343,7 +2343,7 @@ imports:
 | `after`, `before` | A parent step id (`IMPORT_ANCHOR_UNKNOWN` otherwise). Several imports anchored to one step keep `imports` order. |
 | `steps` | Reorders and renames child steps (`title`, `description`); unlisted steps follow in child order. An unknown id is `IMPORT_STEP_UNKNOWN`. |
 | `exclude` | The only way to drop child content: the field and everything below the path. A child section left without fields is dropped with its notes and rules, and so is a child step. A child rule is dropped when its owner field is excluded or all its `paths` are; otherwise excluded entries leave its `paths`. An entry that matches nothing is `IMPORT_EXCLUDE_UNKNOWN`. |
-| `override` | Allowed keys: `label`, `description`, `help`, `docs`, `placeholder`, `widget`, `advanced`, `required`, `example`, `sensitive`, `immutable`, `readOnly`, `min`, `max`, `minLength`, `maxLength`, `pattern`, `minItems`, `maxItems`, `unit`, `cpu`, `memory`, `maxRatio`, `suggestions`. Not allowed (`IMPORT_OVERRIDE_NOT_ALLOWED`): `type`, `path`, `id`, `virtual`, `init`, `options`, `optionsFrom`, `ref`, `rules`, `when`, `fields`, `item`, `values`, `absent`, `default`, `serialize`, `quantity`; those are the child's contract with its chart. The merged field is validated like any field. Loosening a bound or `required` is `IMPORT_OVERRIDE_LOOSENS` (warning). |
+| `override` | Allowed keys: `label`, `description`, `help`, `docs`, `placeholder`, `widget`, `advanced`, `required`, `example`, `sensitive`, `immutable`, `readOnly`, `min`, `max`, `minLength`, `maxLength`, `pattern`, `patternMessage`, `minItems`, `maxItems`, `unit`, `cpu`, `memory`, `maxRatio`, `suggestions`. Not allowed (`IMPORT_OVERRIDE_NOT_ALLOWED`): `type`, `path`, `id`, `virtual`, `init`, `options`, `optionsFrom`, `ref`, `rules`, `when`, `fields`, `item`, `values`, `absent`, `default`, `serialize`, `quantity`; those are the child's contract with its chart. The merged field is validated like any field. Loosening a bound or `required` is `IMPORT_OVERRIDE_LOOSENS` (warning). |
 
 A child descriptor that has `imports` of its own is `IMPORT_NESTED` (§16.10).
 
@@ -3114,7 +3114,7 @@ Every finding from the Round 1 reviews and the Round 2 owner testing, generalise
 | 34 | A drop migration without a note | general | The user loses a value and does not know where it went | Every drop says where the value went (§9.2) |
 | 35 | A plaintext value "renamed" into a secret name | general | The value is not a name | A drop with a note (§9.2) |
 | 36 | Unguarded `context.gvcLocations` / `gvcSpec` | general | Errors until the renderer knows them | `context.x == null \|\| …` (§7.2) |
-| 37 | A `pattern` whose regex is the only explanation | general | The `PATTERN` message quotes the regex | A rule with a readable message (§6.2) |
+| 37 | A `pattern` whose regex is the only explanation | general | The `PATTERN` message quotes the regex | A `patternMessage` (§6.2) |
 | 38 | Suggestions outside `min`/`max`, or with a slider | general | Lint error; the slider is replaced | Valid suggestions, no slider (§15) |
 
 ---
@@ -3209,6 +3209,7 @@ Not allowed on a virtual field: `path`, `absent`, `default`, `immutable`, `examp
 |---|---|---|---|
 | `minLength`, `maxLength` | string | integer | length bounds |
 | `pattern` | string | JS regex | anchored by the author |
+| `patternMessage` | string | string | the `PATTERN` message instead of the regex |
 | `format` | string | enum | `image`, `url`, `hostname`, `email`, `cron`, `cidr`, `duration` |
 | `multiline` | string | bool | textarea; block literal |
 | `min`, `max` | integer, number, quantity | number (integer for `integer`) or quantity string | bounds |
@@ -3240,11 +3241,11 @@ A property of another type (`min` on a string) is a `NOT_APPLICABLE` warning.
 
 ### A.7 List item schema (`item`)
 
-No `path` or `id`. Types: `string`, `integer`, `number`, `boolean`, `enum`, `quantity`, `ref`, `object`. Keys: `type` (required), `label`, `description`, `help`, `placeholder`, `widget`, and for the type: `minLength`, `maxLength`, `pattern`, `format`, `multiline`, `suggestions`, `min`, `max`, `step`, `unit`, `options`, `optionsFrom`, `allowCustom`, `quantity`, `ref`, `fields` (objects; relative paths), `rules` (objects; with `item` and `index`).
+No `path` or `id`. Types: `string`, `integer`, `number`, `boolean`, `enum`, `quantity`, `ref`, `object`. Keys: `type` (required), `label`, `description`, `help`, `placeholder`, `widget`, and for the type: `minLength`, `maxLength`, `pattern`, `patternMessage`, `format`, `multiline`, `suggestions`, `min`, `max`, `step`, `unit`, `options`, `optionsFrom`, `allowCustom`, `quantity`, `ref`, `fields` (objects; relative paths), `rules` (objects; with `item` and `index`).
 
 ### A.8 Map value schema (`values`)
 
-No `path` or `id`. Types: `string`, `integer`, `number`, `boolean`, `yaml`, `object`. Keys: `type` (required), `label`, `description`, `help`, `placeholder`, `widget`, `minLength`, `maxLength`, `pattern`, `format`, `multiline`, `suggestions`, `min`, `max`, `step`, `unit`, `yamlType`, `fields` (objects).
+No `path` or `id`. Types: `string`, `integer`, `number`, `boolean`, `yaml`, `object`. Keys: `type` (required), `label`, `description`, `help`, `placeholder`, `widget`, `minLength`, `maxLength`, `pattern`, `patternMessage`, `format`, `multiline`, `suggestions`, `min`, `max`, `step`, `unit`, `yamlType`, `fields` (objects).
 
 ### A.9 `ref`
 

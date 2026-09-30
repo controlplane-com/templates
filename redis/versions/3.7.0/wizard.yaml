@@ -703,6 +703,7 @@ steps:
             type: string
             label: Folder prefix
             pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
       - title: Google Cloud Storage
         when: self.backup.enabled && self.backup.provider == 'gcp'
         docs: "#gcs"
@@ -728,6 +729,7 @@ steps:
             type: string
             label: Folder prefix
             pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
       - id: metrics
         title: Metrics exporter
         toggle: redis.exporter.enabled

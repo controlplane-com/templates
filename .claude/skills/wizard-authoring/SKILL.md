@@ -59,7 +59,7 @@ tw() { node ../template-wizard/dist/cli.cjs "$@"; }          # zsh does not word
    ```sh
    tw check-docs $D
    ```
-   Required result: `ok … links on … pages`. Anchors come from the docs site, never from README headings.
+   Required result: `ok … links on … pages`. Anchors come from the docs site, never from README headings, and only heading ids (`<h1>`–`<h6>`) count; links in rule messages are checked too.
 8. **Render** the defaults, every provider branch and every optional feature, then render the chart with each output:
    ```sh
    tw render --descriptor $D/wizard.yaml --values $D/values.yaml --answers answers.json > /tmp/out.yaml   # exit 0 required
@@ -72,14 +72,14 @@ tw() { node ../template-wizard/dist/cli.cjs "$@"; }          # zsh does not word
    tw carry --old-defaults <template>/versions/<old>/values.yaml --old-values release-values.yaml \
      --new-defaults $D/values.yaml --from <old> --to <version> --descriptor $D/wizard.yaml > /tmp/carried.yaml
    ```
-   Read every `dropped` note as the user will. With imports, the installed child versions come from the old version's `Chart.yaml`, or `--old-import <prefix>=<version>`.
+   Read every `dropped` note as the user will. Carry a release that kept the old defaults too (`--old-values` = the old `values.yaml`), from every earlier version whose defaults differ: a rename moves changed values only, so a renamed key whose default changed needs a computed migration to keep the value the release runs with (guide §9.2, gitea 1.0.0's database password). With imports, the installed child versions come from the old version's `Chart.yaml`, or `--old-import <prefix>=<version>`.
 10. **Preview in the console** (§17.7), light and dark:
     ```sh
     cd ../console-template-wizard && TEMPLATE_WIZARD_DIR=../templates node_modules/.bin/vite --port 4026 --mode development
     curl -si http://localhost:4026/__template-wizard/<template>/<version>/wizard.yaml | head -3   # 200, x-template-wizard: dev
     # open http://localhost:4026/console/org/<org>/marketplace/template/<template>/install?version=<version>
     ```
-    Reload after each save. Stop the dev server when done. With `imports`, the dev endpoint serves the child's `wizard.yaml` too, but the child version must be published in the marketplace (its values come from there); walk the imported steps: their place in the rail, the "From the <title> template <version> · Docs" caption, the child's `#anchor` links, the review's "<title> › <step>" headings and the YAML note (guide §16.13).
+    Reload after each save. Open each toggle section's collapsed "Advanced" group, check the review's section headings (toggles are folded into them: "Scheduled backups: Off"), and on an upgrade the rail's waiting (unvisited) steps. Stop the dev server when done. With `imports`, the dev endpoint serves the child's `wizard.yaml` too, but the child version must be published in the marketplace (its values come from there); walk the imported steps: their place in the rail, the "From the <title> template <version> · Docs" caption, the child's `#anchor` links, the review's "<title> › <step>" headings and the YAML note (guide §16.13).
 11. **Walk the review checklist** (§18), every item.
 12. **Commit** the descriptor only, by explicit path, with one lowercase line and no body and no attribution; never push:
     ```sh
@@ -102,21 +102,26 @@ A descriptor is done only when all of these hold:
 
 ## The rules most often broken
 
-- A feature's switch is the `toggle` of the section with its settings; other dependent sections repeat the flag in `when` (§5.3).
+- A feature's switch is the `toggle` of the section with its settings; other dependent sections repeat the flag in `when`; advice on whether to turn it on goes in the section `description`, not a note inside it (§5.3).
+- An optional component's image, resources and other expert settings are `advanced: true` fields of its toggle section (the console folds them into a collapsed "Advanced" group); never a separate Advanced step or an Advanced step section gated by the flag. Toggles gate exactly what the chart's `if` gates; an Advanced step is only for always-on components, last, and removed when empty (§5.5).
 - Descriptions give context; they never restate a validation (no ratios, bounds, patterns, allowed values) (§10.2).
 - A `pattern` whose regex would be the only explanation gets a `patternMessage` ("Leave out the leading /.") (§6.2).
 - Field check messages never contain the label ("Required.", "Must be at least 1 %."), so a label may be a phrase ("Scale up below this free space"); lists away from the field add it as "<label>: <message>" (`Issue.label`, parents first: "Locations › Members"). A `patternMessage` and a rule message are shown as written: no label in the first, the setting named in the second (§10.1, §8.4).
 - No text mentions an optional component as always on (§10.5); every claim is backed by this chart version (§10.3).
 - Docs links are relative and their anchors exist on the docs site; run `check-docs` (§11).
-- References start empty on install, and on upgrade when they are new in the target version: never `example: true` on a ref (lint: `EXAMPLE_ON_REF`); `required: true` when the chart needs it; rules hold for `''` (§12).
+- References start empty on install; on upgrade when they are new in the target version, or sit in a branch hidden at load and still hold the old version's placeholder (the console passes `oldDefaultsText`): never `example: true` on a ref (lint: `EXAMPLE_ON_REF`); `required: true` when the chart needs it; rules hold for `''`; an `optionsFrom` over names that may be empty filters them (`filter(l, l.name != '')`) (§12, §6.5).
 - `allowCreate: true` only on prerequisite secrets, never on workload lists (§13.2); with it, the form's type and keys come from `filter.secretType` and `requiredKeys`, so `create` is only for `suggestName`, `encoding`, `hint` or an ambiguous type; `requiredKeys` only the keys the chart reads (§13.3).
-- `gvc: { minLocations: 1, maxLocations: 1 }` for stateful charts without location handling; `GVC_LOCATIONS` blocks installs and is only info on upgrades (§14).
+- `gvc: { minLocations: 1, maxLocations: 1 }` for stateful charts without location handling; `GVC_LOCATIONS` blocks installs and is only info on upgrades, where it states the location count only (§14).
+- `min`/`max` from the chart or the platform docs, not the protocol (a direct load balancer port is 22 to 32768).
 - Suggestions within `min`/`max`, never with `widget: slider` or `widget: stepper` (lint: `SUGGESTIONS_WIDGET`) (§15).
 - Severity: error and warning block, `info` never does; advisory findings are `info` (§8.2).
 - Every `fail` define has a rule with `mirrors`; removed keys get a `!has()` rule and a drop migration with a note (§8.6, §9.2).
+- A rename carries changed values only: when a renamed key's default changed, add a computed migration (`to` + `valueExpr` from the old key) for the versions with the other default, or pin with `immutable` if the value can never change (§9.2).
+- An `info` rule about a shared default is gated on the value, not on `context.mode`, when upgrades can receive the same default (§12.2).
 - `oldSelf == null ||` on every upgrade rule; `context.gvcLocations == null ||` on every location rule (§7).
 - No step id `release` (reserved: `RESERVED_STEP_ID`) (§2.4).
 - Imports: exclude child refs to secrets the parent creates and bind parent `string` fields; `when` is exactly `self.<condition>`; overrides replace a key's whole value and never use `#anchor` links; parent migrations for keys moved under the child's key (§16).
+- Imports: give a renamed step its own `description` when the child's names an excluded part, with no `#anchor` in it (`IMPORT_OVERRIDE_ANCHOR`); restate as a parent rule every chart check an exclusion dropped (the child's mirrored rule on an excluded path); excluding a virtual field uncovers the leaves its options `set` (§16.2, §16.4).
 - Never edit `.schema/wizard.v1.schema.json` by hand; it is copied byte for byte from the core.
 
 ## Owner's local test setup

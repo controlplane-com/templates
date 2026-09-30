@@ -2,7 +2,7 @@
 
 > **Keep this guide in sync.** Update this guide and `.claude/skills/wizard-authoring/SKILL.md` in the same commit as any change to the wizard spec, the core engine behaviour or the console rendering.
 
-This guide is the complete manual for writing and reviewing a `wizard.yaml` descriptor for any template version in this repo. A person or an agent should be able to create, copy forward, review or fix a descriptor from this document alone. It covers descriptor spec v1 (`apiVersion: template-wizard.controlplane.com/v1`) as of Round 2 (2026-09-30).
+This guide is the complete manual for writing and reviewing a `wizard.yaml` descriptor for any template version in this repo. A person or an agent should be able to create, copy forward, review or fix a descriptor from this document alone. It covers descriptor spec v1 (`apiVersion: template-wizard.controlplane.com/v1`) as of Round 2 and the Round 2 review (2026-09-30).
 
 Every excerpt marked with a pilot name is copied from that pilot's descriptor on the branch `template-wizard`:
 
@@ -117,17 +117,17 @@ tw render --descriptor <dir>/wizard.yaml --values <dir>/values.yaml --answers an
 | Header | Template name, icon, category, app version, and an always-visible "Template docs" link to `/template-catalog/templates/<template>`, on every step of install and upgrade | none (automatic) |
 | Release step (install) | Release name, target GVC and template version. The GVC picker shows each GVC's location count and disables the GVCs that do not fit, with the reason ("Has 3 locations; this template needs exactly 1"). "Create GVC" opens an embedded create limited the same way (a single-choice location list when the maximum is 1; it cannot be created with fewer than the minimum). Versions without a descriptor are marked "YAML only" | `gvc` limits (§14) |
 | Config steps | One per visible descriptor step, in order, on a rail | `steps` |
-| Sections | Untitled sections are a plain column; titled ones a box with the title, description and docs link. A toggle section has its switch as the box's header title; while it is off, the box shows only its description | sections, `toggle` (§5.3) |
-| Fields | One control per field type and widget. A switch sits right next to its label. A field with `suggestions` is a text input with a dropdown of the suggested values beside free typing, the unit written next to it (§15). A secret reference with required keys gets a "Check keys" button (§13.3). "Create" appears next to a reference only with `allowCreate: true` (§13.2) | field properties |
+| Sections | Untitled sections are a plain column; titled ones a box with the title, description and docs link. A toggle section has its switch as the box's header title; while it is off, the box shows only its description. The toggle's own `help` (an import override) is the switch's "?", and its own `description` follows the section's under the header. Fields marked `advanced` are collected into a collapsed "Advanced" group at the end of their section | sections, `toggle` (§5.3), `advanced` (§5.5) |
+| Fields | One control per field type and widget. A switch sits right next to its label. A field with `suggestions` is a text input with a dropdown of the suggested values beside free typing, the unit written next to it (§15). A secret reference with required keys gets a "Check keys" button (§13.3). "Create" appears next to a reference only with `allowCreate: true` (§13.2). In a table (a list of objects), the message line under a row leads each message with its column's header ("Location: Required.") | field properties |
 | YAML mode | The whole values document in an editor; the Wizard mode is disabled while the text does not parse | none |
-| Review | Outstanding issues and advice above two tabs, each as "<label>: <message>" (§10.1). **Visual**: every visible setting with its formatted value (option labels, On/Off, reference names, masked sensitive values), grouped by step and section, each step with an "Edit" link; on upgrade, changed rows are tagged "Changed" and a "Changes since last applied" list follows, each tagged "Edited" or "New default". **YAML**: the values document; on upgrade, also a diff against the installed values. Install has no "changes from the chart defaults" list | labels, option labels, `sensitive` |
-| Install / Upgrade | Enabled only while no error or warning remains | severities |
+| Review | Outstanding issues and advice above two tabs, each as "<label>: <message>" (§10.1). **Visual**: every visible setting with its formatted value (option labels, On/Off, reference names, masked sensitive values), grouped by step and section, each step with an "Edit" link. A titled section's toggle is folded into the section's heading ("Scheduled backups: Off") and not repeated as a row, and a section switched off shows only that heading; on upgrade, changed rows are tagged "Changed" and a "Changes since last applied" list follows, each tagged "Edited" or "New default". **YAML**: the values document; on upgrade, also a diff against the installed values. Install has no "changes from the chart defaults" list | labels, option labels, `sensitive` |
+| Install / Upgrade | Enabled only while no error or warning remains. A failed install, upgrade or preview shows the API's message verbatim above the review, line breaks kept, after the console's one-line summary when that says more | severities |
 
 Behaviour that shapes descriptors:
 
 - **Next** runs the step's sync validation and its async reference checks. Errors and warnings block; `info` is shown and never blocks.
-- **Upgrade mode** opens every step for free navigation (any step can be clicked at any time), but Upgrade is still only on Review, and it validates every step first.
-- **References start empty** (`clearRefDefaults`, §12.1): on install, every reference that still holds its chart default; on upgrade, only references new in the target version. Installed references are never cleared.
+- **Upgrade mode** opens every step for free navigation (any step can be clicked at any time), but Upgrade is still only on Review, and it validates every step first. A step not opened yet shows as waiting in the rail, with no finished or failed marker, until it is visited.
+- **References start empty** (`clearRefDefaults`, §12.1): on install, every reference that still holds its chart default; on upgrade, references new in the target version, and references in a branch hidden at load that still hold the old version's placeholder. References the running release uses are never cleared.
 - **Imported steps** (§16) sit in the rail among the parent's steps, each opening with "From the <import title> template <version> · Docs", and the review names the import in its headings (§16.13).
 - **Field messages do not name the field** ("Required.", "Must be at least 1 %."): under a field its label is right above. Where issues are listed away from their fields (the review's issues and advice, a step's footer), each leads with the field's label ("Scale up below this free space: Must be at least 1 %.") (§10.1).
 
@@ -211,7 +211,7 @@ The pilots order them: modeline, `apiVersion`, `kind`, `title`, `gvc`, `steps`, 
 - Options and small objects use flow maps on one line: `- { value: aws, label: AWS S3 }`.
 - Regular expressions go in **single quotes**: `pattern: '^[a-z]{2}(-[a-z]+)+-\d$'`. In double quotes YAML processes backslash escapes, so `"\d"` is a YAML error.
 - CEL is plain or `>-`, and must be quoted (or `>-`) when it starts with `!`, `[`, `{`, `'` or `"`, or contains `: ` or ` #` (§7.8).
-- Key order inside a field, as the pilots write it: `path` (or `id` + `virtual`), `type`, `format` / `quantity`, `label`, `widget`, `required`, `immutable`, `readOnly`, `absent`, `example`, `sensitive`, `when`, `description`, `help`, `docs`, `placeholder`, `unit`, `min`, `max`, `step`, `suggestions`, `options`, `ref`, `item` / `fields` / `keys` / `values`, `rules`. It is not enforced; it makes descriptors diffable.
+- Key order inside a field, as the pilots write it: `path` (or `id` + `virtual`), `type`, `format` / `quantity`, `label`, `widget`, `required`, `immutable`, `readOnly`, `absent`, `example`, `sensitive`, `advanced`, `when`, `description`, `help`, `docs`, `placeholder`, `unit`, `min`, `max`, `step`, `suggestions`, `options`, `ref`, `item` / `fields` / `keys` / `values`, `rules`. It is not enforced; it makes descriptors diffable.
 - Comments in `wizard.yaml` are fine for reviewers (`# Gitea creates this secret`), but anything the user needs goes into `description`, `help` or a note.
 
 ---
@@ -237,7 +237,7 @@ Use this when no earlier version of the template has a descriptor either. When o
    steps: []
    ```
 
-4. **Plan the steps and sections** (§5): prerequisites early, the main workload, storage, network, optional features as toggle sections, Advanced last.
+4. **Plan the steps and sections** (§5): prerequisites early, the main workload, storage, network, optional features as toggle sections (each with its own image and resources as `advanced` fields), and an Advanced step last only for the always-on components' expert settings.
 5. **Write the fields** step by step with the cookbook (§6). Follow `values.yaml` order within a concern unless a dependency says otherwise (§5.6).
 6. **Mirror every chart `fail`** (§8.6), then add hazard rules the chart does not check (§8.2).
 7. **References** (§13): kind, format, filters, `mustExist`, `allowCreate` only on prerequisite secrets, `requiredKeys` on dictionary secrets. **Placeholders** (§12): `example: true` on plain-string placeholders only.
@@ -305,7 +305,7 @@ Most version bumps change keys (61% of consecutive version pairs change the key 
       --descriptor <t>/versions/<new>/wizard.yaml > /tmp/carried.yaml
     ```
 
-    The report on stderr lists `carried`, `renamed`, `dropped` (with the notes), `pinned`, `conflicts`, `unverified` and `defaultChanged` (§17.4). Read every note as the user will.
+    The report on stderr lists `carried`, `renamed`, `dropped` (with the notes), `pinned`, `conflicts`, `unverified` and `defaultChanged` (§17.4). Read every note as the user will. Also carry a release that kept the old defaults: a rename moves changed values only, so a renamed key whose default changed needs a computed migration when the release must keep its old value (§9.2).
 13. **Gate:** `tw lint`, `tw check-docs`, `tw render`, preview, checklist. Commit the new file only.
 
 ### 3.3 An old version
@@ -425,7 +425,7 @@ grep -rn 'if .Values\|eq .Values\|ne .Values\|hasKey\|default \|required ' <dir>
 
 | Chart pattern | Descriptor pattern |
 |---|---|
-| a whole resource inside `{{- if .Values.pgbouncer.enabled }}` | a toggle section `toggle: pgbouncer.enabled` holding its settings (§5.3); its images and resources in an Advanced section with `when: self.pgbouncer.enabled` |
+| a whole resource inside `{{- if .Values.pgbouncer.enabled }}` | a toggle section `toggle: pgbouncer.enabled` holding its settings (§5.3), its image and resources included as `advanced: true` fields (§5.5) |
 | `{{- if eq .Values.backup.provider "aws" }}` branches | an `enum` selector, then one section per branch with `when: self.backup.enabled && self.backup.provider == 'aws'` (§5.4) |
 | `hasKey`, or `if .Values.x` on a key values.yaml does not have | an `absent: true` field (§6.15); `{}` is falsy in Helm templates, so an empty map means "off" |
 | a block used only when present (`autoscaling:` with no `enabled`) | an optional object block (§6.10) |
@@ -482,14 +482,15 @@ Then list the cross-field hazards, the prerequisites, the own workload names, th
 
 ### 5.1 Steps
 
-- **Order** the steps by what the user decides first: prerequisites, the main workload, storage, network, optional features, and Advanced last. The pilots:
+- **Order** the steps by what the user decides first: prerequisites, the main workload, storage, network, optional features, and an Advanced step last when the always-on components have expert settings (§5.5). The pilots:
 
   | Pilot | Steps |
   |---|---|
-  | postgres 3.4.1 | Server → Credentials → Storage → Network and pooling → Backups → Advanced |
-  | mongodb-cluster 2.0.0 | Locations → Credentials → Resources and storage → Access and proxy → Backups → Advanced |
-  | redis 3.7.0 | Engine and topology → Authentication → Resources and persistence → Network → Backup and monitoring → Advanced |
-  | supabase 1.1.1 | Credentials → Database → API and auth → Storage → Backups → Advanced |
+  | postgres 3.4.1 | Server → Credentials → Storage → Network and pooling → Backups |
+  | mongodb-cluster 2.0.0 | Locations → Credentials → Resources and storage → Access and proxy → Backups → Advanced (the MongoDB image) |
+  | redis 3.7.0 | Engine and topology → Authentication → Resources and persistence → Network → Backup and monitoring → Advanced (images, timeouts, replication tuning, probes, extra workload settings) |
+  | supabase 1.1.1 | Credentials → Database → API and auth → Storage → Backups → Advanced (Postgres, Kong, PostgREST and Auth) |
+  | gitea 1.2.0 | Gitea → Storage → Access → Database → Database server → Database storage → Database network → Database backups (the last four imported from postgres 3.4.1) |
 
 - **Four to seven steps.** One purpose per step. A step with one field usually belongs in another step.
 - **Title:** one to four words, sentence case ("Network and pooling", not "Network & Pooling").
@@ -574,7 +575,7 @@ Round 2 (postgres 3.4.1):
       min: 1
       required: true
       suggestions: [10, 25, 50, 100]
-    # … pgbouncer.maxClientConn and pgbouncer.replicas
+    # … pgbouncer.maxClientConn and pgbouncer.replicas, then its image and resources as advanced fields (§5.5)
   rules:
     - rule: self.pgbouncer.defaultPoolSize <= self.pgbouncer.maxClientConn
       severity: info
@@ -588,7 +589,23 @@ How a toggle behaves:
 - While it is off, the section shows its header and description only: its fields and notes are hidden (their `when`s are not evaluated) and its rules are skipped. The values stay in the document.
 - It is set, reset, reviewed, answered (`answers.json` key = the path) and covered like any field.
 - In the console the switch is the box's header title, so the title is not repeated next to it; while it is off, the box shows only the description. Write the description so it reads well on its own.
-- An import can override a child toggle's `help` or `description` by the toggle's path (§16.2).
+- **Advice on whether to turn the feature on belongs in the section `description`**, which shows while the toggle is off. A note inside the section shows only once the toggle is on, when the advice comes too late. gitea 1.2.0 (Round 2 review: the advice was a note inside the section):
+
+  ```yaml
+  # gitea 1.2.0
+  - id: ssh
+    title: Git over SSH
+    toggle: ssh.enabled
+    description: >-
+      Public SSH takes over the workload's only public endpoint, so the web UI and Git over HTTPS are no
+      longer served there. Turn it on only if you serve the web UI through a custom domain, or only need
+      Git over SSH.
+    docs: "#the-ssh-and-https-endpoint-trade-off"
+    fields: [...]
+  ```
+
+- The review's Visual tab folds the toggle into the section's heading ("Scheduled backups: Off"; the core marks the row with `SummaryRow.toggle`), and a section that is off shows only that heading.
+- An import can override a child toggle's `help` or `description` by the toggle's path (§16.2). The console shows the toggle's `help` as the switch's "?" (gitea's help on postgres's backups switch), and its `description` after the section's description under the header.
 - The section's own `when` must not read its toggle (`TOGGLE_WHEN_DUPLICATE`): that would hide the switch while it is off. A section `when` on something else is fine; supabase shows the local-volume autoscaling toggle only for the local backend:
 
   ```yaml
@@ -601,8 +618,8 @@ How a toggle behaves:
     fields: [...]
   ```
 
-- A toggle with no settings is fine (`fields: []`); supabase's Realtime section is only a switch and a description.
-- A toggle only gates its own section. **Other sections that depend on the feature repeat the flag in their `when`**: the provider sections after the backups toggle use `when: self.backup.enabled && self.backup.provider == 'aws'`, and the Advanced step's PgBouncer section uses `when: self.pgbouncer.enabled`. Rules elsewhere that involve the feature check the flag too (`!self.backup.enabled || …`).
+- A toggle with no settings is fine (`fields: []`). supabase's Realtime section has only Realtime's image and resources, both `advanced: true`: while it is on, it shows the switch, the description and a collapsed "Advanced" group.
+- A toggle only gates its own section. **Other sections that depend on the feature repeat the flag in their `when`**: the provider sections after the backups toggle use `when: self.backup.enabled && self.backup.provider == 'aws'`. Rules elsewhere that involve the feature check the flag too (`!self.backup.enabled || …`). The component's own image and resources need no second gate: they are fields of its toggle section (§5.5).
 - The description says what the feature does or costs. It does not restate the switch ("Turn on to enable backups").
 
 When not to use a toggle:
@@ -653,28 +670,61 @@ Switching the provider hides one branch and shows another; the hidden branch kee
 
 | Tool | Behaviour | Use for |
 |---|---|---|
-| an `advanced` step (last) | an ordinary step titled "Advanced" | images, resources of secondary components, tuning, probes, extra env and tags, retry policies, volume details |
+| field `advanced: true` | collected into a collapsed "Advanced" group at the end of its section | **an optional component's image, resources and other expert settings, in that component's toggle section**; one or two expert fields next to their feature |
+| an `advanced` step (last) | an ordinary step titled "Advanced" | images, resources, tuning, probes, extra env and tags and retry policies of the components that always run |
 | section `advanced: true` | starts collapsed | an expert group inside a normal step |
-| field `advanced: true` | collected into a collapsed "Advanced" group at the end of its section | one or two expert fields next to their feature |
 | section `collapsible: true` | can be folded, starts open | long groups |
 
-Sections of the Advanced step that belong to an optional component carry that component's flag (`when: self.pgbouncer.enabled`), and the step description names optional components as optional:
+**Optional components keep their settings in their toggle section (owner decision, Round 2 review).** The image and resources of a component behind a switch (a pooler, a proxy, a backup job, a metrics exporter, an optional service), and its other expert settings (a persistent volume's file system, snapshots and encryption), are `advanced: true` fields of the component's toggle section. The console collects them into a collapsed "Advanced" group at the end of the section, so they sit with the switch that turns the component on and disappear with it. There is no separate Advanced step, or Advanced step section gated by the flag, for them:
 
 ```yaml
-# postgres 3.4.1
-- id: advanced
-  title: Advanced
-  description: Images and resources of the optional connection pooler and backup job.
-  sections:
-    - title: PgBouncer
-      when: self.pgbouncer.enabled
-      fields: [...]
-    - title: Backup job
-      when: self.backup.enabled
-      fields: [...]
+# postgres 3.4.1, step backup
+- id: backup
+  title: Scheduled backups
+  toggle: backup.enabled
+  fields:
+    - path: backup.provider
+      ...
+    - path: backup.schedule
+      ...
+    - path: backup.image
+      type: string
+      format: image
+      label: Backup image
+      required: true
+      advanced: true
+      description: Tag 18.x.x for Postgres 18, 17.x.x for Postgres 17.
+    - path: backup.resources
+      type: resources
+      label: Backup job resources
+      required: true
+      advanced: true
+  rules:
+    - rule: >-
+        imageMajor(self.image) < 0 || imageMajor(self.backup.image) < 0 ||
+        imageMajor(self.backup.image) >= imageMajor(self.image)
+      severity: warning
+      paths: [backup.image]
+      message: >-
+        The backup image's major version must be at least the Postgres major version; an
+        older pg_dump cannot dump a newer server.
 ```
 
-When every section of the Advanced step is gated and all are off, the step disappears.
+- Put the advanced fields at the end of the section's `fields`, after the component's ordinary settings; the console moves them into the group anyway.
+- Rules about them go into the toggle section's `rules`, which are skipped while the toggle is off (the backup image rule above used to need a `when: self.backup.enabled` section of its own).
+- **Toggles gate exactly what the chart gates.** Move a field into a toggle section only when every template that reads it sits inside that flag's `if` (§4.3). postgres's `backup.image` and `backup.resources` are read only in `workload-backup.yaml`, inside `{{- if .Values.backup.enabled }}`; supabase's `backup.resources` is read by the logical job and by the WAL-G sidecar, both only with `backup.enabled`, so it belongs in the backups section too. A setting the chart uses with the switch off stays outside the section. A check the chart runs with the switch off stays a rule outside it: mongodb-cluster's read-only `backup.mode` is an advanced field of the backups section, and the chart's refusal of `physical` even with backups off is the step rule with `when: "!self.backup.enabled"` (§4.2).
+- Keep the component's name in the labels ("PgBouncer image", "Backup job resources"): issue lists and the review show the label without the section.
+- **Always-on components' images and resources may stay in an Advanced step**, which comes last. Remove the step when nothing is left in it.
+
+The pilots after the Round 2 review:
+
+| Pilot | In toggle sections as `advanced` fields | Advanced step |
+|---|---|---|
+| postgres 3.4.1 | PgBouncer image and resources; backup image and resources (and the backup image rule) | none |
+| mongodb-cluster 2.0.0 | HAProxy image and resources; the read-only backup mode, backup image and resources | the MongoDB image |
+| redis 3.7.0 | each persistent volume's file system, snapshots and encryption; exporter image and resources; backup image and resources | images, timeouts, replication tuning, health probes, extra Redis and Sentinel workload settings |
+| supabase 1.1.1 | PgBouncer; Realtime; Studio and pg_meta; Storage (with its replica counts); backup image and resources | Postgres, Kong, PostgREST and Auth |
+| gitea 1.2.0 | none of its own; postgres's backup image and resources come with the imported backups section | none |
 
 ### 5.6 Order by real dependency
 
@@ -741,7 +791,7 @@ Each entry says when to use the type or property, how it is written, a pilot exa
 | `absent`, `default` | For keys `values.yaml` does not have (§6.15). |
 | `example` | The chart default is a placeholder the user must replace (§12). Plain strings only in practice. |
 | `sensitive` | `string` only: masked input and masked review (§6.17). |
-| `advanced` | Collected into a collapsed "Advanced" group at the end of the section (§5.5). |
+| `advanced` | Collected into a collapsed "Advanced" group at the end of the section. An optional component's image and resources are `advanced` fields of its toggle section (§5.5). |
 | `rules` | CEL rules owned by this field; their issues show on it by default (§8). |
 | `virtual`, `init` | Session-only fields (§6.14). |
 
@@ -907,9 +957,11 @@ Computed options (mongodb-cluster 2.0.0):
   type: enum
   label: Run the backup job in
   required: true
-  optionsFrom: self.locations.map(l, l.name)
+  optionsFrom: self.locations.filter(l, l.name != '').map(l, l.name)
   description: The one location the job runs in; the other locations run no backup.
 ```
+
+Filter out empty names: a location row whose reference is still empty (install sessions clear the chart's example location, §12.1) would otherwise be a blank option.
 
 An `optionsFrom` enum whose chart default is not among its options and whose expression reads a reference that install sessions clear starts empty too (§12.1).
 
@@ -920,6 +972,7 @@ A value that cannot change but should be visible is a read-only enum with one op
   type: enum
   label: Backup mode
   readOnly: true
+  advanced: true
   description: Physical backups were removed in 2.0.0.
   options:
     - { value: logical, label: Logical (mongodump) }
@@ -1128,7 +1181,8 @@ A list of references with a `null` default (postgres 3.4.1; `workloads:` has onl
 
 Pitfalls:
 
-- **Item rules must tolerate an empty reference.** Install sessions clear references to chart placeholders (§12.1), so `locations[].name` starts as `""`; the item rule above has `item.name == '' ||` so the user sees `REQUIRED`, not a false "not enabled on the target GVC".
+- **Item rules must tolerate an empty reference.** Install sessions clear references to chart placeholders (§12.1), so `locations[].name` starts as `""`; the item rule above has `item.name == '' ||` so the user sees `REQUIRED`, not a false "not enabled on the target GVC". An `optionsFrom` over the item names filters the empty ones (§6.5).
+- In a table the core's messages do not name their field, so the console leads each line of a row's message with the column's header ("Location: Required.", "Members: Must be at least 1."). Give item fields short labels that work as column headers.
 - Item rule `paths` are relative to the item (`[name]`).
 - The console names the "Add" button and empty text after the item: from the item's `label`, the reference kind, the string format, or else the singular of the list's label. Give lists plural labels whose singular reads well ("Locations", "Extra environment variables"), or an item `label`.
 - A default list of example items (mongodb-cluster's `aws-us-east-1 × 3`) keeps its other keys when the reference is cleared; only the name starts empty.
@@ -1761,9 +1815,9 @@ The chart renders with its defaults, so every error-severity rule must hold on t
 - **Same-version edit:** the release's values are re-hydrated onto the template's `values.yaml` (`carryOver` from the version to itself), which restores the template's comments. Nothing is dropped.
 - **Cross-version upgrade:** `carryOver` takes the old defaults, the release values, the new defaults, both versions and both descriptors. Only leaves the release changed from their old default are carried; everything else takes the new default. Lists, maps, `yaml` fields and optional blocks are carried whole. The target descriptor's `migrations` explain removed and renamed keys. The result is the upgrade session's document, and `oldSelf` is the installed effective values after migrations and `assume`.
 - **The report** (shown on the first step and on Review) lists `dropped` (with migration notes), `renamed`, `pinned` (immutable values kept), `conflicts` (the user changed a value whose default changed too), `unverified` (user-added keys the new version does not know, carried as they are) and counts of `carried` and `defaultChanged`.
-- **The install page's version switch** uses the same carry-over in install mode: nothing is pinned and `assume` is skipped.
-- **References new in the target version start empty** in the upgrade session, and installed references are kept (§12.1). A GVC outside the `gvc` limits is only `info` on upgrade, since the release cannot move (§14.1).
-- **Upgrade mode** in the console opens every step for free navigation; the Review's Visual tab tags changed rows and lists the changes since the last apply, each as "Edited" or "New default".
+- **The install page's version switch** uses the same carry-over in install mode: nothing is pinned and `assume` is skipped. The previous session's emptied references are not carried: a reference the user left empty where the old chart had a placeholder gets the new version's placeholder, which the new session empties again (§12.1).
+- **References new in the target version start empty** in the upgrade session, and so do references in a branch hidden at load that still hold the old version's placeholder; references the running release uses are kept (§12.1). A GVC outside the `gvc` limits is only `info` on upgrade, since the release cannot move (§14.1).
+- **Upgrade mode** in the console opens every step for free navigation (a step not opened yet shows as waiting); the Review's Visual tab tags changed rows and lists the changes since the last apply, each as "Edited" or "New default". A subtree the installed values lack is listed per setting (postgres 3.3.0 → 3.4.1 lists `config.credentialsSecretName`), not as one changed block.
 
 ### 9.2 Migrations
 
@@ -1816,6 +1870,24 @@ Rules:
 - `valueExpr` sees the old values: use the old paths (`self.gvc.locations[0].name`). A failing expression is a `MIGRATION_EVAL_ERROR` warning in the carry-over report and computes nothing; lint reports it as an error when the migration applies to the previous version.
 - `assume` cannot be combined with `from`, `to` or `valueExpr` (`CONFLICT`).
 - Migration paths have no wildcards. A map declared as a field is atomic and carried whole; surface a change inside it with a same-path note migration, and let the map's value schema require the new key (supabase's `clientSecretName` shows an error until the user picks the secret).
+
+**A rename moves changed values only.** A leaf the release left at its old default takes the new default at `to`. That is right for most settings, but not when the old default is a value the running release depends on and the default changed between the versions. gitea 1.0.0's database password default was `change-me-db-pass`; 1.1.0 changed it to `change-me-gitea-db`. A 1.0.0 release that kept the default runs PostgreSQL initialized with `change-me-db-pass`, and the rename alone would hand it `change-me-gitea-db`, so Gitea would lose its database connection. Add a computed migration for the versions with the other default, which carries the value whatever it is:
+
+```yaml
+# gitea 1.2.0
+migrations:
+  - { fromVersions: "<1.2.0", from: postgres.config.password, to: postgres.credentials.password }
+  # A rename moves changed values only, and 1.1.0 changed the default password (change-me-db-pass became
+  # change-me-gitea-db): carry a 1.0.0 release's password even when it is the old default.
+  - fromVersions: "<1.1.0"
+    to: postgres.credentials.password
+    valueExpr: self.postgres.config.password
+    note: PostgreSQL keeps the password it was initialized with, so the installed one is kept.
+```
+
+- The computed value replaces the rename's change at `to` and is reported under `carried` with the note: `postgres.credentials.password = "change-me-db-pass" — PostgreSQL keeps the password it was initialized with, so the installed one is kept.` From 1.1.0 (same default) the rename alone is enough, so the computed migration is gated `"<1.1.0"`.
+- **Computed or `immutable`?** An `immutable` field pins the installed value too, but it is read-only on upgrade and a YAML change is `IMMUTABLE_CHANGED` (§6.16). gitea's password can legally change after `ALTER ROLE` (its `info` rule over `oldSelf` says so), so a pin would block a valid rotation; the computed migration keeps the field editable. The user and database names are `immutable`: PostgreSQL creates them once.
+- Test every such path with `tw carry` from each old version, with the release values equal to the old defaults (§9.7).
 
 Lint checks on migrations:
 
@@ -1885,7 +1957,7 @@ Place the note in the section it concerns (the AWS S3 section for an IAM policy 
 ### 9.7 What to check on every upgrade path
 
 - `tw paths-diff` against every earlier version a release may still run, not only the previous one; migrations with `fromVersions` cover them all.
-- `tw carry` from a realistic release of the oldest supported version.
+- `tw carry` from a realistic release of the oldest supported version, and from a release that kept every old default: a renamed key whose default changed must still carry the value the release runs with (§9.2).
 - Removed keys the chart now refuses have both a drop (or rename) migration and a `!has()` rule with `mirrors`.
 - Settings that only take effect at first initialization have an `info` rule over `oldSelf`.
 
@@ -1974,9 +2046,12 @@ Round 1 made PgBouncer look always on through texts outside its toggle:
 | option "Nobody": "No workload can connect, including PgBouncer and the backup job." | "No workload can connect." (plus a warning rule that names PgBouncer and the backup job only when they are on) |
 | Advanced step: "Images and resources of the pooler and the backup job." | "Images and resources of the optional connection pooler and backup job." |
 
+The Round 2 review then moved those images and resources into the toggle sections (§5.5), so no text outside the toggles names the components at all.
+
 - Inside a toggle section, name the component freely.
 - Outside it, say "optional", or put the text in a rule, note or section gated by the component's flag.
 - The same applies to backups, exporters, dashboards and every other feature behind a switch.
+- **With imports, an excluded component counts as never on.** An imported step keeps the child's description, which may name what the parent excluded: postgres's network step says "Who can connect, and an optional connection pooler.", but gitea excludes the pooler. Give the step its own `description` in `imports[].steps` (§16.2).
 
 ### 10.6 Other conventions
 
@@ -2024,11 +2099,13 @@ Where the docs page has no section for a topic, **drop the link**; never point a
 tw check-docs <template>/versions/<version>
 ```
 
-It collects every `docs` value and every relative markdown link in `help`, `description`, note `text` and `ref.create.hint`, fetches each page once, and checks each anchor against the page's heading ids. `DOCS_ANCHOR_MISSING` and `DOCS_PAGE_MISSING` exit 1; `DOCS_UNREACHABLE` (offline) exits 2. `lint` stays offline and cannot catch a missing anchor, so both are required. To find the right anchor, open the page and copy the heading's link, or list its ids:
+It collects every `docs` value and every relative markdown link in `help`, `description`, note `text`, `ref.create.hint` and rule `message` strings, fetches each page once, and checks each anchor against the page's heading ids. `DOCS_ANCHOR_MISSING` and `DOCS_PAGE_MISSING` exit 1; `DOCS_UNREACHABLE` (offline) exits 2. `lint` stays offline and cannot catch a missing anchor, so both are required.
+
+**Only the ids of `<h1>`–`<h6>` elements count as anchors.** The docs site puts every heading anchor on the heading itself (`<h2 id="overview">`); the other ids on a page belong to page chrome (`#footer`, `#navbar`, `#content`, `#table-of-contents`) and are not link targets, so check-docs reports them as missing. To find the right anchor, open the page and copy the heading's link, or list the heading ids:
 
 ```sh
 curl -s https://docs.controlplane.com/template-catalog/templates/postgres \
-  | grep -o '<h[1-4][^>]*id="[^"]*"' | sed -E 's/.*id="([^"]*)".*/\1/'
+  | grep -oE '<h[1-6][^>]*id="[^"]*"' | sed -E 's/.*id="([^"]*)".*/\1/'
 ```
 
 ### 11.4 What to link
@@ -2055,7 +2132,20 @@ Install sessions in the console clear every reference that still holds its chart
 
 The user then picks a real object, or sees `REQUIRED`.
 
-**On upgrade** the console asks for the same clearing, but only for references **new in the target version**: a reference (or `optionsFrom` enum) is cleared only when the installed values hold no value at its path (missing, `null`, `""` or `[]`). Carry-over writes the release's answers over the new `values.yaml`, so a reference the new version adds would otherwise arrive holding its placeholder (postgres 3.3.0 → 3.4.1 would carry `credentialsSecretName: my-postgres-credentials`). A value the release runs with is **never** cleared, even when it equals a chart default: a 3.3.0 release that installed `backup.gcp.cloudAccountName: my-backup-cloudaccount` keeps the 3.4.1 default `my-gcs-cloud-account` that replaces it. Without readable installed values, an upgrade clears nothing. With imports, the installed values are layered too, so only child references new in the target child version are cleared.
+**On upgrade** the console asks for the same clearing, limited to references the running release does not use. Carry-over writes the release's answers over the new `values.yaml`, so a reference the new version adds, or whose placeholder changed, would otherwise arrive holding the new placeholder. A reference (list-item, map-value, list and csv references, and dependent `optionsFrom` enums included) whose value is non-empty and still the chart default is cleared when either:
+
+- **(a)** the installed values hold no value at its path (missing, `null`, `""` or `[]`): a reference new in the target version (postgres 3.3.0 → 3.4.1 would carry `config.credentialsSecretName: my-postgres-credentials`); or
+- **(b)** the installed value equals the **old** chart default and the field is **hidden when the session is created**: an unused branch. postgres 3.3.0 → 3.4.1 with backups off used to keep `backup.gcp.cloudAccountName: my-gcs-cloud-account`, the 3.4.1 placeholder that replaced the installed `my-backup-cloudaccount`; now it starts empty (owner decision, 2026-09-30).
+
+A reference the running release uses (visible at load) is **never** cleared, even when it holds a placeholder name: a credentials secret really named `my-postgres-credentials` stays. Details:
+
+- The old defaults come from `CreateSessionOptions.oldDefaultsText` (the installed version's `values.yaml`) and, per import, `ImportSource.oldDefaultsText` (the child's `values.yaml` at its installed version); the console passes both. A same-version upgrade needs none. Without them only rule (a) applies, and without readable installed values an upgrade clears nothing.
+- The comparison is at the same path: a path a migration renamed is kept.
+- "Hidden at load" is decided once, when the session is created (step, section, toggle and field `when`, an optional block that is off, an import's `when`); `enableBlock`, `reset` and `resetAll` re-apply the clearing with that record, so a branch opened later still clears on reset.
+- An imported template the old chart did not have (`ImportSource.fromVersion` null) is new: all its references count as ones the release did not have.
+- A same-version upgrade clears unused branches too, and `changes({ against: "installed" })` lists them (`"my-gcs-cloud-account" → ""`, "Edited").
+
+**The install page's version switch** does not carry the previous session's clearing: a change that is only an emptied reference (a reference, list or `optionsFrom` enum that is empty where the old chart default is not) is left out, the new version's placeholder stays in the document, and the new session empties it again. A list with another edit is carried whole, as it is.
 
 `lint` and the CLI's `render` do not clear anything.
 
@@ -2086,12 +2176,19 @@ For a string that is a placeholder (a bucket, an IAM policy name, a hostname, an
 
   ```yaml
   # gitea 1.2.0
-  - when: context.mode == 'install'
-    rule: self.postgres.config.credentialsSecretName != 'my-gitea-db-credentials'
+  - rule: self.postgres.config.credentialsSecretName != 'my-gitea-db-credentials'
     severity: info
     paths: [postgres.config.credentialsSecretName]
-    message: Secret names are org-wide; a second Gitea release on this name is refused at install.
+    messageExpression: >-
+      'Secret names are org-wide: a release on this name is refused while another release manages that
+      secret. Give each Gitea release its own name, for example ' + context.releaseName +
+      '-gitea-db-credentials.'
+    message: >-
+      Secret names are org-wide: a release on this name is refused while another release manages that
+      secret. Give each Gitea release its own name.
   ```
+
+  Gate such a rule on the value, not on the mode. It used to have `when: context.mode == 'install'`, but upgrades from gitea 1.1.0, which had no such key, receive the same shared default (Round 2 review).
 
 - A `placeholder` (input hint) is not a default and needs no `example`.
 
@@ -2186,6 +2283,7 @@ How the check behaves (owner decision):
 - Without permission to reveal the secret, the result is `SECRET_KEYS_UNCHECKED`, an `info` note that the keys could not be checked.
 - A check that fails for another reason shows its message and blocks nothing.
 - Picking another secret, or a change of the required keys, drops the result.
+- Only the latest check of a field counts: an earlier check that answers late changes nothing. The session's `validate()` returns `SECRET_KEYS_MISSING` too, like the snapshot and `validateAsync()`.
 
 ### 13.4 `mustExist`
 
@@ -2214,7 +2312,7 @@ gvc:
 Non-negative integers, `minLocations` ≤ `maxLocations`, either may be left out.
 
 - **On install**, when the target GVC is known and its location count is outside the limits, the session reports `GVC_LOCATIONS` as an **error** on the Release step: "Choose a GVC with exactly 1 location for this template (claude-dev has 3)."
-- **On upgrade** the same check is **info**, because the release's GVC cannot change during an upgrade and an error would strand every release installed before the limits existed: "This release already runs in 3 locations (claude-dev), one independent copy per location; this upgrade does not change that."
+- **On upgrade** the same check is **info**, because the release's GVC cannot change during an upgrade and an error would strand every release installed before the limits existed: "This release already runs in 3 locations (claude-dev); this upgrade does not change that." (With no locations: "This release's GVC claude-dev has no locations; this upgrade does not change that.") The note states the count only: whether that means one copy per location depends on the template.
 - Nothing is reported while the GVC's locations are unknown.
 - The console's GVC picker shows each GVC's location count and disables the GVCs that do not fit, with the reason ("Has 3 locations; this template needs exactly 1"). It judges a GVC by its static location links, so a GVC placed by a location query is never disabled there; `GVC_LOCATIONS` reports it once its locations are known.
 - "Create GVC" opens an embedded create limited the same way: a single-choice location list when the maximum is 1, and it cannot be created with fewer locations than the minimum.
@@ -2364,8 +2462,8 @@ imports:
 | `template`, `version`, `alias` | Must equal a `Chart.yaml` dependency with the same `name` and `alias` (`IMPORT_NOT_A_DEPENDENCY`), at exactly the pinned version (`IMPORT_VERSION_MISMATCH`, also reported when Chart.yaml pins a range). Library charts (`cpln-common`) are never imported. |
 | `when` | CEL bool in the parent's scope (`self` is the whole tree). It must be exactly `self.<condition>`, and an import without `when` needs a dependency without `condition` (`IMPORT_CONDITION_MISMATCH`, both ways). The condition path should be a boolean field of the parent (`IMPORT_CONDITION_UNDECLARED`, warning). It gates every imported step and the child's root rules; values of an import that is off stay in the document. A `when` that fails counts as on (`WHEN_EVAL_ERROR`), as Helm renders a dependency whose condition is missing. |
 | `after`, `before` | A parent step id (`IMPORT_ANCHOR_UNKNOWN` otherwise); not both. Several imports at one step keep the `imports` order. Without either, after the last parent step. |
-| `steps` | Orders and renames child steps (`title`, `description`); unlisted steps follow in the child's order. An unknown id is `IMPORT_STEP_UNKNOWN`. |
-| `exclude` | Drops a field and everything below its path (or a virtual field by id), then every section and step left without a field (with their notes and rules), every rule whose owner went, and every rule path that went (a rule with no path left is dropped). **Excluded fields stay declared**, so the child's expressions still see a normalized `self`. An entry that matches nothing is `IMPORT_EXCLUDE_UNKNOWN`; an excluded section toggle whose section keeps fields is `IMPORT_TOGGLE_EXCLUDED`. |
+| `steps` | Orders and renames child steps (`title`, `description`); unlisted steps follow in the child's order. An unknown id is `IMPORT_STEP_UNKNOWN`. A step keeps the child's description unless the entry gives one: give one whenever the child's names something the import excludes (gitea: `{ id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }`, since postgres's says "and an optional connection pooler"). No `#anchor` links in it (`IMPORT_OVERRIDE_ANCHOR`): the step is an imported entry, so the link would resolve to the child's page. |
+| `exclude` | Drops a field and everything below its path (or a virtual field by id), then every section and step left without a field (with their notes and rules), every rule whose owner went, and every rule path that went (a rule with no path left is dropped, `mirrors` and all: restate a chart check the bundle still needs as a parent rule, §16.4). **Excluded fields stay declared**, so the child's expressions still see a normalized `self`. Excluding a virtual field also uncovers the leaves its options `set` (§16.11). An entry that matches nothing is `IMPORT_EXCLUDE_UNKNOWN`; an excluded section toggle whose section keeps fields is `IMPORT_TOGGLE_EXCLUDED`. |
 | `override` | Each key **replaces** the child's value for that key (`cpu` and `memory` bounds as a whole, so repeat the bound you keep). Allowed keys: `label`, `description`, `help`, `docs`, `placeholder`, `widget`, `advanced`, `required`, `example`, `sensitive`, `immutable`, `readOnly`, `min`, `max`, `minLength`, `maxLength`, `pattern`, `patternMessage`, `minItems`, `maxItems`, `unit`, `cpu`, `memory`, `maxRatio`, `suggestions`. Overrides also apply to section toggles (by the toggle's path: gitea overrides the `help` of postgres's `backup.enabled` switch). The merged field is validated again, and what the override adds is reported at `/imports/<i>/override/<path>/…`. |
 
 Override errors and warnings:
@@ -2373,7 +2471,7 @@ Override errors and warnings:
 | Code | Severity | Meaning |
 |---|---|---|
 | `IMPORT_OVERRIDE_NOT_ALLOWED` | error (parser) | a key outside the allow-list: `type`, `path`, `id`, `virtual`, `init`, `options`, `optionsFrom`, `ref`, `rules`, `when`, `fields`, `item`, `values`, `absent`, `default`, `serialize`, `quantity` are the child's contract with its chart |
-| `IMPORT_OVERRIDE_ANCHOR` | error (parser; the schema rejects `#` in `docs` too) | a `#anchor` link in `docs`, `description` or `help`: it would resolve to the child's page; write `/template-catalog/templates/<parent>#anchor` |
+| `IMPORT_OVERRIDE_ANCHOR` | error (parser; the schema rejects `#` in an override's `docs` too, but not in a step description) | a `#anchor` link in an override's `docs`, `description` or `help`, or in an `imports[].steps[].description`: it would resolve to the child's page; write `/template-catalog/templates/<parent>#anchor` |
 | `IMPORT_OVERRIDE_UNKNOWN` | error | the override names no child field, or an excluded one |
 | `IMPORT_OVERRIDE_LOOSENS` | warning | the override loosens a bound, `required`, `readOnly` or `immutable` |
 
@@ -2384,10 +2482,10 @@ A child descriptor that has `imports` of its own is `IMPORT_NESTED` (§16.10).
 - **One binding per path and id** across the parent and its imports. A parent field on a path a child field still binds is `DUPLICATE_PATH`, naming the import and the path to exclude; a parent `yamlOnly` over a bound child path is `CONFLICT`.
 - **CEL scope.** Every imported expression (visibility, rules, `optionsFrom`, `init`, `itemLabel`, note texts, `requiredKeysFrom`, `suggestName`, child migrations, and lint's passes) is bound in the child's scope: `self` and `oldSelf` are rebased at the values key; `context.templateName` and `context.version` are the child's, and on upgrade `context.fromVersion` is the installed child version (`null` on install or when unknown); `ui` holds the child's own virtual fields under their local ids. `releaseName`, `gvc`, `mode`, `gvcLocations`, `gvcSpec` and `renderer` stay the parent's: a subchart is part of the release, so postgres's `context.releaseName + '-pgbouncer'` stays correct.
 - **Parent expressions see the whole tree** (`self.postgres.internalAccess.type`, `oldSelf.postgres.image`), with the child's declarations prefixed (`self.postgres.internalAccess.workloads` is normalized to `[]`). A parent expression cannot read a child's `ui` (`CEL_UNKNOWN_UI`), and a child never sees parent values: anything that needs parent facts is a parent rule.
-- **Layered defaults for reading, the parent's for writing.** The chart defaults the session reads are the child's `values.yaml` under the key, then the parent's `values.yaml` over it, exactly as Helm merges them: the effective values and `self`, field values, `isDefault`, `EXAMPLE_VALUE`, `changes()`, `getAnswers()` and the default a block turns on with. Writing uses the parent's `values.yaml` alone: the document starts as it, `reset` goes back to it (without a parent default the key is deleted, so the child default shows through), `resetAll` re-reads it, and pruning keeps only its keys (no `postgres.backup: {}` residue). The document never receives child defaults, except when the user turns on an optional block whose child default is on.
+- **Layered defaults for reading, the parent's for writing.** The chart defaults the session reads are the child's `values.yaml` under the key, then the parent's `values.yaml` over it, exactly as Helm merges them: the effective values and `self`, field values, `isDefault`, `EXAMPLE_VALUE`, `changes()`, `getAnswers()` and the default a block turns on with. Writing uses the parent's `values.yaml` alone: the document starts as it, `reset` goes back to it (without a parent default the key is deleted, so the child default shows through), `resetAll` re-reads it, and pruning keeps only its keys (no `postgres.backup: {}` residue). The document never receives child defaults: turning a block on again over a layered default that is on writes the parent's own default, or without one deletes the `null`, so the child default shows through and the session is clean again. A `reset` of an imported reference at its example default writes the cleared value where the key is, so no key moves.
 - **Origins and docs.** Imported steps, sections, notes, fields and review rows carry an origin (the values key, the child template and version, the import's title, the child's docs page). `docs` values and markdown links of imported entries resolve against the **child's** page: a child `#backup` goes to `/template-catalog/templates/postgres#backup`.
 - **Issues and changes.** `Issue.import` is set on the issues of imported steps and of the child's own rules and expressions; `Issue.rule.import` only when the rule is in the child's file (a parent root rule on `postgres.internalAccess.type` lands on `postgres:network` with `import` but without `rule.import`). `Change.import` is the import of the changed field: parent fields under the key (gitea's `postgres.credentials.*`) have none, and paths without a field take the import by their prefix.
-- **Placeholders.** Child `example: true` fields stay placeholders under the layered defaults. `clearRefDefaults` decides with the layered defaults and writes into the parent's document, so child references that hold an example default (`postgres.backup.aws.cloudAccountName`) start as `""` on install, hidden ones included; on upgrade only child references new in the target child version are cleared.
+- **Placeholders.** Child `example: true` fields stay placeholders under the layered defaults. `clearRefDefaults` decides with the layered defaults and writes into the parent's document, so child references that hold an example default (`postgres.backup.aws.cloudAccountName`) start as `""` on install, hidden ones included. On upgrade §12.1's rule applies per import: child references new in the target child version are cleared, and, with the child's old defaults (`ImportSource.oldDefaultsText`), references in branches hidden at load that still hold the child's old placeholder; an import the old chart did not have clears all its references.
 - `requiredKeysFrom`, `allowCreate`, `suggestions` and `patternMessage` work in imported fields as in any other. `createHint` follows the child reference's own `allowCreate`, and `suggestName` runs in the child's scope.
 
 ### 16.4 Parent fields for parent-owned keys
@@ -2418,7 +2516,20 @@ steps:
 
 - Parent fields under the key are ordinary parent fields with absolute paths, in parent steps, with the parent's docs page and CEL scope.
 - Parent-only keys the child does not know (`postgres.credentials.*`) need parent fields like any other leaf.
-- An excluded path that no parent field covers is `UNCOVERED_VALUE` "(excluded from import postgres)": bind it with a parent field, or list it under the parent's `yamlOnly` with a reason (gitea lists the excluded `postgres.pgbouncer`).
+- An excluded path that no parent field covers is `UNCOVERED_VALUE` "(excluded from import postgres)": bind it with a parent field, or list it under the parent's `yamlOnly` with a reason (gitea lists the excluded `postgres.pgbouncer`). Excluding a child virtual field by id uncovers the leaves its options `set` in the same way (excluding a `schedule` virtual whose options set `backup.enabled` leaves `backup.enabled` without a writer).
+- **An exclusion also drops the child's rules on the excluded path, including the ones that mirror a chart `fail`.** When the chart still performs that check, restate it as a parent rule, with the parent's advice. postgres's `pg.validateCredentials` rule (paths `[config.credentialsSecretName]`) rejects plaintext `config.username`, `config.password` and `config.database`; excluding `config.credentialsSecretName` dropped it, but the subchart still fails on those keys when a user adds them in YAML mode. gitea restates it next to its own field, pointing to where gitea wants the values (there is no `mirrors`: the define is in the child's `_helpers.tpl`, and `mirrors` names the parent's):
+
+  ```yaml
+  # gitea 1.2.0, step database
+  - rule: >-
+      !has(self.postgres.config.username) && !has(self.postgres.config.password) &&
+      !has(self.postgres.config.database)
+    paths: [postgres.config.credentialsSecretName]
+    message: >-
+      postgres.config.username, postgres.config.password and postgres.config.database were removed in
+      1.2.0. Move them to postgres.credentials, from which Gitea creates the secret, and remove them from
+      postgres.config.
+  ```
 
 ### 16.5 `when` mirrors `condition`
 
@@ -2467,10 +2578,10 @@ The effective limits intersect the parent's `gvc` block with the block of every 
 ### 16.9 Upgrades with imports
 
 - Carry-over takes each import's installed and target child versions. The CLI reads the installed child versions from the `Chart.yaml` next to `--old-defaults`, or from `--old-import postgres=3.2.1`; the console takes them from the release's chart metadata.
-- Both sides are layered, only the parent's document is written, and the descriptors are composed, so child immutable fields are pinned and child lists and blocks stay atomic.
+- Both sides are layered, only the parent's document is written, and the descriptors are composed, so child immutable fields are pinned and child lists and blocks stay atomic. A pin compares the installed value with the layered value: a child immutable field whose installed value is the child's default is neither written into the parent's document nor reported as `pinned`.
 - **Parent migrations run first. The child's own migrations follow, for the child's own versions and prefixed, minus every one whose `from`, `to` or `assume` touches a path a parent migration claims.** gitea 1.1.0 (with postgres 3.2.1) → 1.2.0 (with postgres 3.4.1) renames `postgres.config.password` to `postgres.credentials.password`; that beats postgres's own `<3.4.0` drop, so the password is carried and there is no drop entry.
 - A child `valueExpr` sees the child's part of the old values, normalized by the old child descriptor, and the child's context.
-- An unknown installed child version (none given, or no old child `values.yaml`) lets the new child defaults stand in, skips the child's migrations, and is an `IMPORT_FROM_UNKNOWN` warning. A declared import whose sources were not given is `IMPORT_UNRESOLVED` (error; `ok` is false).
+- An unknown installed child version (none given) lets the new child defaults stand in, skips the child's migrations, and is an `IMPORT_FROM_UNKNOWN` warning. With a known version but no old child `values.yaml`, the new child defaults stand in too and the child's migrations run, except computed ones (a `valueExpr` would read keys the stand-in defaults lack); the `IMPORT_FROM_UNKNOWN` warning names them ("… and its computed values (db.volume.class) are not migrated"). A declared import whose sources were not given is `IMPORT_UNRESOLVED` (error; `ok` is false).
 - Every report entry carries `import` (the changed field's import, else by prefix).
 
 ```sh
@@ -2484,6 +2595,16 @@ renamed (1):
   postgres.config.password → postgres.credentials.password = "s3cret-db"
 defaultChanged (5):
   postgres.backup.aws.bucket: "my-backup-bucket" → "my-postgres-bucket"
+  …
+```
+
+From 1.0.0, whose default password differs, the computed migration of §9.2 carries the password even when the release kept the default (`--old-values gitea/versions/1.0.0/values.yaml`):
+
+```
+carried (1):
+  postgres.credentials.password = "change-me-db-pass" — PostgreSQL keeps the password it was initialized with, so the installed one is kept.
+dropped (2):
+  gitea.admin = {…} (migration) — The admin login moved into the auth secret (adminUsername, adminPassword, adminEmail); choose it under Gitea.
   …
 ```
 
@@ -2509,8 +2630,8 @@ An import lives at `<root>/<template>/versions/<version>`; a missing one is `IMP
 What lint does with imports:
 
 - **Composes** the descriptor and lints it over the layered defaults: field paths, coverage, rule paths, CEL chains (child chains prefixed), the defaults, the install and upgrade session passes and the hidden-scope pass, each with per-import bindings.
-- **Does not repeat the child's own findings.** It runs the child's own lint and skips a composed finding with the same code at the same child pointer; child rule paths, child `set` targets, `CREATE_WITHOUT_ALLOW_CREATE`, `mirrors` and the child's own texts are the child's lint's business. What the composition causes is reported: at the parent's `values.yaml` line when the parent's values set the offending default (gitea setting `postgres.resources.maxCpu` past `maxRatio` is `DEFAULT_INVALID` at gitea's `values.yaml`), else at the child's `wizard.yaml` with "(as imported under …)". The parent's own texts for the import (override `help` and `description`, `steps` descriptions) are checked.
-- **Coverage** lists every leaf of the layered defaults. A child leaf that the child covers but an exclusion uncovers is `UNCOVERED_VALUE` "(excluded from import …)", at the parent's `values.yaml` when it sets the key, else at the exclusion. A leaf the child alone leaves uncovered is for the child's lint.
+- **Does not repeat the child's own findings.** It runs the child's own lint and skips a composed finding with the same code at the same child pointer; child rule paths, child `set` targets, `CREATE_WITHOUT_ALLOW_CREATE`, `mirrors` and the child's own texts are the child's lint's business. What the composition causes is reported: at the parent's `values.yaml` line when the parent's values set the offending default (gitea setting `postgres.resources.maxCpu` past `maxRatio` is `DEFAULT_INVALID` at gitea's `values.yaml`), else at the child's `wizard.yaml` with "(as imported under …)". The parent's own texts for the import (override `help` and `description`, `steps` descriptions) are checked; a `#anchor` in them is already a parser error (`IMPORT_OVERRIDE_ANCHOR`).
+- **Coverage** lists every leaf of the layered defaults. A child leaf that the child covers but an exclusion uncovers is `UNCOVERED_VALUE` "(excluded from import …)", at the parent's `values.yaml` when it sets the key, else at the exclusion. That includes the leaves an excluded virtual field's options `set`, unless a parent field or `yamlOnly` covers them. A leaf the child alone leaves uncovered is for the child's lint.
 - **Chart.yaml:** `IMPORT_NOT_A_DEPENDENCY`, `IMPORT_VERSION_MISMATCH` and `IMPORT_CONDITION_MISMATCH` (errors), `IMPORT_CONDITION_UNDECLARED` (warning).
 - **Migrations:** `IMPORT_MIGRATION_EXCLUDED` (warning) for a child migration, not claimed by the parent, that touches an excluded path. Keys removed from the parent's previous `values.yaml` are explained by the parent's migrations, or by the child's migrations for the child version in `prevChartText`.
 - `IMPORT_GVC_CONFLICT` (error) when no GVC fits the combined limits.
@@ -2519,7 +2640,7 @@ Lint the child on its own as well (`tw lint postgres/versions/3.4.1`).
 
 ### 16.12 Worked example: gitea 1.2.0
 
-gitea 1.2.0 depends on postgres 3.4.1 (no alias, no condition) and on the library chart cpln-common. Gitea creates the database secret itself from `postgres.credentials.*` (`templates/secret-db.yaml`), and its workload connects to `<release>-postgres` directly (`GITEA__database__HOST`), so PostgreSQL's pooler would sit unused. Excerpts from `gitea/versions/1.2.0/wizard.yaml`:
+gitea 1.2.0 depends on postgres 3.4.1 (no alias, no condition) and on the library chart cpln-common. Gitea creates the database secret itself from `postgres.credentials.*` (`templates/secret-db.yaml`), and its workload connects to `<release>-postgres` directly (`GITEA__database__HOST`), so PostgreSQL's pooler would sit unused. Excerpts from `gitea/versions/1.2.0/wizard.yaml` (after the Round 2 review):
 
 ```yaml
 # One stateful replica with its own repository volume: every GVC location would run its own copy.
@@ -2535,16 +2656,14 @@ imports:
     steps:
       - { id: server, title: Database server }
       - { id: storage, title: Database storage }
-      - { id: network, title: Database network }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
       - { id: backup, title: Database backups }
-      - { id: advanced, title: Database backup job }
     exclude:
       # Gitea creates this secret itself (templates/secret-db.yaml) and names it in the Database step below.
       - config.credentialsSecretName
       # Gitea connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
       - pgbouncer
     override:
-      # …
       internalAccess.type:
         description: >-
           Gitea connects to its database like any other workload: keep Same GVC, or add the Gitea
@@ -2553,7 +2672,9 @@ imports:
         help: Adds one cron workload that runs `pg_dumpall` and uploads a gzipped dump to the bucket.
 ```
 
-The parent's own steps (Gitea, Storage, Access) are ordinary steps; the Database step holds the parent-only keys under `postgres.`:
+The network entry has its own description because postgres's names the excluded pooler (§10.5). postgres 3.4.1 has no Advanced step any more (its pooler and backup job images and resources are fields of their toggle sections, §5.5), so there is no "Database backup job" step to rename.
+
+The parent's own steps (Gitea, Storage, Access) are ordinary steps. The Access step's SSH section carries its advice in the description (§5.3), and its port is bounded by the platform's range for a direct load balancer port (`min: 22, max: 32768`, `/reference/workload/load-balancing`). The Database step holds the parent-only keys under `postgres.`:
 
 ```yaml
   - id: database
@@ -2594,15 +2715,27 @@ The parent's own steps (Gitea, Storage, Access) are ordinary steps; the Database
         message: >-
           PostgreSQL keeps the password it was initialized with. Run ALTER ROLE first, or Gitea loses its
           database connection after this upgrade.
-      - when: context.mode == 'install'
-        rule: self.postgres.config.credentialsSecretName != 'my-gitea-db-credentials'
+      - rule: self.postgres.config.credentialsSecretName != 'my-gitea-db-credentials'
         severity: info
         paths: [postgres.config.credentialsSecretName]
         messageExpression: >-
-          'Secret names are org-wide: a second Gitea release on this name is refused at install. For example ' +
-          context.releaseName + '-gitea-db-credentials.'
-        message: Secret names are org-wide; a second Gitea release on this name is refused at install.
+          'Secret names are org-wide: a release on this name is refused while another release manages that
+          secret. Give each Gitea release its own name, for example ' + context.releaseName +
+          '-gitea-db-credentials.'
+        message: >-
+          Secret names are org-wide: a release on this name is refused while another release manages that
+          secret. Give each Gitea release its own name.
+      - rule: >-
+          !has(self.postgres.config.username) && !has(self.postgres.config.password) &&
+          !has(self.postgres.config.database)
+        paths: [postgres.config.credentialsSecretName]
+        message: >-
+          postgres.config.username, postgres.config.password and postgres.config.database were removed in
+          1.2.0. Move them to postgres.credentials, from which Gitea creates the secret, and remove them from
+          postgres.config.
 ```
+
+The last rule restates the child check the exclusion dropped (§16.4).
 
 The root rules of §16.7 guard the child's firewall. The excluded pooler and the renamed keys finish the file:
 
@@ -2614,6 +2747,12 @@ yamlOnly:
 migrations:
   - { fromVersions: "<1.2.0", from: postgres.config.username, to: postgres.credentials.username }
   - { fromVersions: "<1.2.0", from: postgres.config.password, to: postgres.credentials.password }
+  # A rename moves changed values only, and 1.1.0 changed the default password (change-me-db-pass became
+  # change-me-gitea-db): carry a 1.0.0 release's password even when it is the old default.
+  - fromVersions: "<1.1.0"
+    to: postgres.credentials.password
+    valueExpr: self.postgres.config.password
+    note: PostgreSQL keeps the password it was initialized with, so the installed one is kept.
   - { fromVersions: "<1.2.0", from: postgres.config.database, to: postgres.credentials.database }
   - fromVersions: "<1.1.0"
     from: gitea.admin
@@ -2634,17 +2773,17 @@ The composed wizard on install:
 | 5 | `postgres:server` | Database server | postgres 3.4.1 | `postgres.image`, `postgres.resources` |
 | – | `postgres:credentials` | (dropped) | | its only field is excluded; its note and rules go with it |
 | 6 | `postgres:storage` | Database storage | postgres | `postgres.volumeset.*` |
-| 7 | `postgres:network` | Database network | postgres | `postgres.internalAccess.*`; the pooler section is excluded |
-| 8 | `postgres:backup` | Database backups | postgres | `postgres.backup.*`; its links go to the postgres page |
-| 9 | `postgres:advanced` | Database backup job | postgres | shown only with backups on; the PgBouncer section is excluded |
+| 7 | `postgres:network` | Database network | postgres | `postgres.internalAccess.*`, with gitea's description; the pooler section is excluded |
+| 8 | `postgres:backup` | Database backups | postgres | `postgres.backup.*`, the backup job's image and resources in the backups section's Advanced group; its links go to the postgres page |
 
 What the example shows:
 
 - the child's reference to a secret the parent creates is excluded and replaced by a parent `string` field;
 - a child subtree the bundle never uses is excluded and listed under `yamlOnly`;
-- overrides change presentation only (a description, a toggle's help);
+- overrides change presentation only (a description, a toggle's help), and a renamed step gets its own description where the child's names an excluded part;
 - parent root rules guard what only the parent knows (Gitea must pass the child's firewall);
-- parent renames under `postgres.` beat the child's own drops for the same keys;
+- a chart check that the exclusion dropped is restated as a parent rule;
+- parent renames under `postgres.` beat the child's own drops for the same keys, and a computed migration carries a value whose default changed (§9.2);
 - `gvc` limits for the parent's own stateful replica.
 
 It lints with 0 diagnostics and 60/60 leaves covered, `check-docs` finds its 9 links, and `tw render` with an answers file renders the `postgres:` block the chart's `helm template` accepts (the core's helm test checks that the subchart's `.Values` equal the session's values under `postgres`).
@@ -2655,7 +2794,8 @@ The console resolves each import when it loads a version: the child's values fro
 
 - **Rail order.** The imported steps are ordinary steps in the rail, where the composition puts them: after the `after:` step (or before the `before:` step), else after the parent's last step; in the child's order unless `steps` reorders them; several imports at one step in `imports` order. The rail shows the step title alone (the `steps` title, else the child's), with no import prefix, so rename child steps to read as part of the parent (§16.6).
 - **Caption.** An imported step's content opens with "From the <import title> template <version> · Docs": the import's `title` (else the child's `title`, else `template`), the child version, and a link to the child's docs page (`/template-catalog/templates/<child>`, accessible name "<import title> template docs"), next to the step's own Docs link. The step's description stays in the panel header and the rail, so it need not name the import.
-- **`#anchor` links** in the child's steps, sections, fields and notes open the child's docs page (`#backup` → `/template-catalog/templates/postgres#backup`). An override's text is on the imported field too, which is why it cannot use `#anchor` (`IMPORT_OVERRIDE_ANCHOR`, §16.2).
+- **`#anchor` links** in the child's steps, sections, fields and notes open the child's docs page (`#backup` → `/template-catalog/templates/postgres#backup`). An override's text, and a renamed step's description, is on the imported entry too, which is why it cannot use `#anchor` (`IMPORT_OVERRIDE_ANCHOR`, §16.2).
+- **Overridden toggle texts.** An override's `help` on a child toggle is the switch's "?" (gitea's "Adds one cron workload that runs `pg_dumpall` …" on the Database backups switch), and an override's `description` follows the section's own description.
 - **Review.** The Visual tab heads an imported step's group "<import title> › <step title>" ("Bundled PostgreSQL › Database server") and keeps its rows' own labels. The changes since the last apply label an imported field's change "<import title> › <label>", and the outstanding issues and advice put the import's title before an imported field's label ("Bundled PostgreSQL › Resources › Minimum CPU: Must be at least 25m.", §10.1).
 - **YAML mode.** A note above the editor, one line per import: "Keys under `postgres:` that you don't set keep the defaults of the Bundled PostgreSQL template (postgres 3.4.1), which aren't shown here." The document is the parent's `values.yaml`; the child's defaults are layered under it (§16.3).
 - **Upgrade.** The installed child version comes from the release revision's `chart.metadata.dependencies` (the entry whose `alias ?? name` is the values key and whose name is the import's template), else from the installed version's own descriptor `imports`, else it is unknown: the carry-over report lists `IMPORT_FROM_UNKNOWN` and the child's migrations are skipped (§16.9). Entries of an imported template in the carry-over report lead with "<import title>: ".
@@ -2668,7 +2808,7 @@ The console resolves each import when it loads a version: the child's values fro
 | `IMPORT_DUPLICATE` | error | parser | two imports with one values key |
 | `IMPORT_ANCHOR_UNKNOWN` | error | parser | `after` / `before` names no parent step |
 | `IMPORT_OVERRIDE_NOT_ALLOWED` | error | parser | an override key outside the allow-list |
-| `IMPORT_OVERRIDE_ANCHOR` | error | parser | a `#anchor` in an override's `docs`, `description` or `help` |
+| `IMPORT_OVERRIDE_ANCHOR` | error | parser | a `#anchor` in an override's `docs`, `description` or `help`, or in `imports[].steps[].description` |
 | `IMPORT_STEP_UNKNOWN` | error | composition | `steps` names no child step |
 | `IMPORT_EXCLUDE_UNKNOWN` | error | composition | an `exclude` entry matches nothing |
 | `IMPORT_OVERRIDE_UNKNOWN` | error | composition | an override names no child field, or an excluded one |
@@ -2744,7 +2884,7 @@ tw check-docs <template>/versions/<version> [--docs-base https://docs.controlpla
 ok   postgres 3.4.1: 15 links on 4 pages
 ```
 
-Exit 1 on a missing page or anchor (`DOCS_PAGE_MISSING`, `DOCS_ANCHOR_MISSING`, `DOCS_UNRESOLVED`), 2 when a page cannot be fetched (`DOCS_UNREACHABLE`, for example offline). Uses the network; run it after every change to a link or a `docs` value, and on every copy-forward (the docs site changes independently of the chart).
+Exit 1 on a missing page or anchor (`DOCS_PAGE_MISSING`, `DOCS_ANCHOR_MISSING`, `DOCS_UNRESOLVED`), 2 when a page cannot be fetched (`DOCS_UNREACHABLE`, for example offline). An anchor must be the id of a heading (`<h1>`–`<h6>`) on the page; relative links in rule messages are checked too (§11.3). Uses the network; run it after every change to a link or a `docs` value, and on every copy-forward (the docs site changes independently of the chart).
 
 ### 17.3 `render` with an answers file
 
@@ -2843,7 +2983,7 @@ open "http://localhost:4026/console/org/<org>/marketplace/template/<template>/in
 - After saving `wizard.yaml`, reload the page (descriptors are cached per template and version until a reload or an HMR update).
 - `?ui=classic` opens the classic screen; `?version=` picks the version.
 - A descriptor with parse errors shows them verbatim with a link to the classic screen.
-- Walk every step in light and dark: toggles on and off, each branch, the suggestion dropdowns, the YAML mode and back, Review (both tabs), a blocking warning, "Check keys" on a secret with and without the keys, "Create" only where `allowCreate` is set, references starting empty, the GVC picker with a one-location and a multi-location GVC, and an upgrade (free step navigation, the "Changes since last applied" list).
+- Walk every step in light and dark: toggles on and off (with each toggle section's "Advanced" group open), each branch, the suggestion dropdowns, the YAML mode and back, Review (both tabs), a blocking warning, "Check keys" on a secret with and without the keys, "Create" only where `allowCreate` is set, references starting empty, the GVC picker with a one-location and a multi-location GVC, the review's section headings with their toggles folded in, and an upgrade (free step navigation with unvisited steps waiting, the "Changes since last applied" list).
 - Stop the dev server when you are done.
 
 The console repo's `verify` skill describes logging in and driving the app.
@@ -2892,104 +3032,107 @@ Use it for your own descriptor before committing, and for reviewing someone else
 
 **Structure**
 
-17. Steps follow real dependencies: prerequisites early, Advanced last, four to seven steps.
+17. Steps follow real dependencies: prerequisites early, an Advanced step (if any) last, four to seven steps.
 18. No step has the id `release` (reserved for the renderer's release step).
 19. Step titles are short and in sentence case; each step description is one sentence.
 20. Every switch that enables a feature is the `toggle` of the section that holds the feature's settings.
 21. No section's `when` reads its own toggle.
-22. Every other section that depends on a toggled feature repeats the flag in its `when` (provider sections, Advanced sections).
+22. Every other section that depends on a toggled feature repeats the flag in its `when` (provider sections).
 23. Every toggle section has a `title` and an `id`.
 24. Branch sections' `when`s include every condition above them.
-25. Advanced sections of optional components are gated by the component's flag.
-26. A note is used only for display; anything that must block is a rule.
+25. An optional component's image, resources and other expert settings are `advanced: true` fields of its toggle section, never an Advanced step section; each toggle gates exactly what the chart's `if` gates; no Advanced step is left empty.
+26. Advice on whether to turn a feature on is in the toggle section's `description`, not in a note inside it.
+27. A note is used only for display; anything that must block is a rule.
 
 **Fields**
 
-27. Each field's type matches the chart value (`integer` vs `number`; strings with patterns for Redis-style sizes; `resources` for resource blocks).
-28. `required: true` is set wherever an empty value breaks the chart or the release.
-29. Units are in `unit`, not in labels or descriptions.
-30. `min`/`max` come from the chart, the platform or the README, not from taste.
-31. Enum options are exactly what the chart supports, in the chart's order.
-32. Every option description is true in every configuration.
-33. Images use `format: image`, URLs `format: url`, host names `format: hostname`, schedules `format: cron`.
-34. Patterns are single-quoted and anchored; where the regex would be the only explanation, a `patternMessage` says what to do.
-35. Object lists have `uniqueBy`, a sensible `newItem` and an `itemLabel`; scalar lists that must be unique have `unique`.
-36. List labels are plural nouns whose singular reads well on the "Add" button.
-37. Optional blocks have a valid `newValue`, and rules guard them with `self.<block> == null ||`.
-38. Virtual fields: `init` returns an option for every document (including `null` values), each `set` patch round-trips through `init`, and rules check the real values.
-39. `absent: true` only on keys `values.yaml` lacks; `default` only with `absent`.
-40. `immutable` (with a reason) wherever a change breaks the running release; `assume` for immutable keys added in this version.
-41. `sensitive` only on passwords stored in values, with `widget: password`.
-42. `suggestions` are valid for the field (within `min`/`max`), short, ascending, and not combined with `widget: slider` or `widget: stepper`.
+28. Each field's type matches the chart value (`integer` vs `number`; strings with patterns for Redis-style sizes; `resources` for resource blocks).
+29. `required: true` is set wherever an empty value breaks the chart or the release.
+30. Units are in `unit`, not in labels or descriptions.
+31. `min`/`max` come from the chart, the platform or the README, not from taste (a direct load balancer port is 22 to 32768, not 1 to 65535).
+32. Enum options are exactly what the chart supports, in the chart's order; an `optionsFrom` over names that may be empty filters them out.
+33. Every option description is true in every configuration.
+34. Images use `format: image`, URLs `format: url`, host names `format: hostname`, schedules `format: cron`.
+35. Patterns are single-quoted and anchored; where the regex would be the only explanation, a `patternMessage` says what to do.
+36. Object lists have `uniqueBy`, a sensible `newItem` and an `itemLabel`; scalar lists that must be unique have `unique`.
+37. List labels are plural nouns whose singular reads well on the "Add" button.
+38. Optional blocks have a valid `newValue`, and rules guard them with `self.<block> == null ||`.
+39. Virtual fields: `init` returns an option for every document (including `null` values), each `set` patch round-trips through `init`, and rules check the real values.
+40. `absent: true` only on keys `values.yaml` lacks; `default` only with `absent`.
+41. `immutable` (with a reason) wherever a change breaks the running release; `assume` for immutable keys added in this version.
+42. `sensitive` only on passwords stored in values, with `widget: password`.
+43. `suggestions` are valid for the field (within `min`/`max`), short, ascending, and not combined with `widget: slider` or `widget: stepper`.
 
 **References**
 
-43. `kind` and `format` match how the chart uses the value; firewall workload lists use `gvc: any` with `format: relativeLink`.
-44. Secrets have `filter.secretType`; cloud accounts have `filter.provider`.
-45. `mustExist: error` on prerequisites; `warning` on workload lists.
-46. `allowCreate: true` only on prerequisite secrets; never on workload lists or cloud accounts.
-47. A `create` block holds only what the defaults cannot give (a `suggestName` built from `context.releaseName`, `encoding: plain` for opaque secrets, a `hint` for generated content, a `secretType` when the filter does not name exactly one); there is no `create` without `allowCreate`.
-48. `requiredKeys` lists exactly the keys the chart reads; `requiredKeysFrom` where the key name is configurable; only on dictionary secrets.
-49. No reference has `example: true`.
-50. Rules and `when`s hold when a reference is empty.
+44. `kind` and `format` match how the chart uses the value; firewall workload lists use `gvc: any` with `format: relativeLink`.
+45. Secrets have `filter.secretType`; cloud accounts have `filter.provider`.
+46. `mustExist: error` on prerequisites; `warning` on workload lists.
+47. `allowCreate: true` only on prerequisite secrets; never on workload lists or cloud accounts.
+48. A `create` block holds only what the defaults cannot give (a `suggestName` built from `context.releaseName`, `encoding: plain` for opaque secrets, a `hint` for generated content, a `secretType` when the filter does not name exactly one); there is no `create` without `allowCreate`.
+49. `requiredKeys` lists exactly the keys the chart reads; `requiredKeysFrom` where the key name is configurable; only on dictionary secrets.
+50. No reference has `example: true`.
+51. Rules and `when`s hold when a reference is empty.
 
 **Text**
 
-51. Labels are sentence case and at most 60 characters.
-52. No description restates a validation: no ratio, bound, pattern, requiredness or option list that a check already enforces.
-53. Every claim is backed by the chart's templates for this version.
-54. No optional component is mentioned as always on, in option descriptions, step descriptions, notes or titles.
-55. Markdown-lite only; keys, values and commands in `code`.
-56. `example: true` on every plain-string placeholder that must be replaced; working defaults that may collide are `info` rules instead.
+52. Labels are sentence case and at most 60 characters.
+53. No description restates a validation: no ratio, bound, pattern, requiredness or option list that a check already enforces.
+54. Every claim is backed by the chart's templates for this version.
+55. No optional component is mentioned as always on, in option descriptions, step descriptions, notes or titles.
+56. Markdown-lite only; keys, values and commands in `code`.
+57. `example: true` on every plain-string placeholder that must be replaced; working defaults that may collide are `info` rules instead, gated on the value rather than the mode when upgrades can carry the same default.
 
 **Docs**
 
-57. Every `docs` value and markdown link to the docs site is relative, and `#anchor` values are quoted.
-58. Every anchor exists on the docs site (not taken from the README).
-59. Links point at the section that explains the setting, not just at the top of the template's page.
+58. Every `docs` value and markdown link to the docs site is relative, and `#anchor` values are quoted.
+59. Every anchor is a heading id on the docs site (not taken from the README, not a page-chrome id such as `#content`).
+60. Links point at the section that explains the setting, not just at the top of the template's page.
 
 **Rules**
 
-60. Each severity follows the policy (§8.2): advisory and legitimate-consequence rules are `info`.
-61. `paths` name the field the user should change, and the rule sits on the step where it is fixed.
-62. Every rule over `oldSelf` starts with `oldSelf == null ||`.
-63. Every use of `context.gvcLocations`, `context.gvcSpec` and `context.gvc` is guarded.
-64. Every `messageExpression` has a `message` fallback that says the same in general terms.
-65. No `has()` on declared paths; map keys are tested with `in`.
-66. `int` and `double` are not mixed in arithmetic.
-67. The chart defaults pass every error-severity rule.
+61. Each severity follows the policy (§8.2): advisory and legitimate-consequence rules are `info`.
+62. `paths` name the field the user should change, and the rule sits on the step where it is fixed.
+63. Every rule over `oldSelf` starts with `oldSelf == null ||`.
+64. Every use of `context.gvcLocations`, `context.gvcSpec` and `context.gvc` is guarded.
+65. Every `messageExpression` has a `message` fallback that says the same in general terms.
+66. No `has()` on declared paths; map keys are tested with `in`.
+67. `int` and `double` are not mixed in arithmetic.
+68. The chart defaults pass every error-severity rule.
 
 **Upgrades**
 
-68. `tw paths-diff` against the previous version (and older supported versions) is fully explained by fields and migrations.
-69. Every drop migration has a note that says where the value went and what to do.
-70. `fromVersions` ranges are quoted and bounded by the first version without the old key.
-71. The `tw carry` report of a realistic old release reads correctly.
-72. An in-place upgrade that destroys data is blocked by a root rule on `semverCompare(context.fromVersion, …)`.
-73. Version-specific upgrade notes sit in the section they concern, with `context.mode == 'upgrade'` and a `fromVersion` guard.
-74. Grow-only values (volume set capacity) have an error rule over `oldSelf`.
+69. `tw paths-diff` against the previous version (and older supported versions) is fully explained by fields and migrations.
+70. Every drop migration has a note that says where the value went and what to do.
+71. `fromVersions` ranges are quoted and bounded by the first version without the old key.
+72. The `tw carry` report of a realistic old release reads correctly, and a release that kept the old defaults keeps every value it runs with (a renamed key whose default changed has a computed migration, or an `immutable` pin when it can never change).
+73. An in-place upgrade that destroys data is blocked by a root rule on `semverCompare(context.fromVersion, …)`.
+74. Version-specific upgrade notes sit in the section they concern, with `context.mode == 'upgrade'` and a `fromVersion` guard.
+75. Grow-only values (volume set capacity) have an error rule over `oldSelf`.
 
 **Imports** (§16)
 
-75. `template`, `version` and `alias` equal the `Chart.yaml` dependency; `when` is exactly `self.<condition>`, and the condition is a parent boolean field.
-76. The child version has its own descriptor, lints clean on its own, and imports nothing itself.
-77. Secrets the parent creates are excluded from the child and bound as parent `string` fields.
-78. Child subtrees the bundle never uses are excluded and listed under `yamlOnly`.
-79. Overrides change presentation only, make no unbacked claims, repeat every bound they keep (`cpu` and `memory` are replaced whole), and link with `/template-catalog/templates/<parent>#…`.
-80. Parent rules check that the parent's workloads can reach the child.
-81. Imported steps sit after the parent step that configures the connection and are renamed to read as part of the template.
-82. Parent migrations rename the keys the parent moved under the child's key, and `tw carry` from the previous parent version reads correctly.
-83. The parent declares `gvc` limits for its own workloads.
+76. `template`, `version` and `alias` equal the `Chart.yaml` dependency; `when` is exactly `self.<condition>`, and the condition is a parent boolean field.
+77. The child version has its own descriptor, lints clean on its own, and imports nothing itself.
+78. Secrets the parent creates are excluded from the child and bound as parent `string` fields.
+79. Child subtrees the bundle never uses are excluded and listed under `yamlOnly`.
+80. Imported steps whose child description names an excluded part get their own `description` in `imports[].steps`, with no `#anchor` link.
+81. Every chart check the exclusions dropped (a child rule on an excluded path, `mirrors` included) that the chart still performs is restated as a parent rule.
+82. Overrides change presentation only, make no unbacked claims, repeat every bound they keep (`cpu` and `memory` are replaced whole), and link with `/template-catalog/templates/<parent>#…`.
+83. Parent rules check that the parent's workloads can reach the child.
+84. Imported steps sit after the parent step that configures the connection and are renamed to read as part of the template.
+85. Parent migrations rename the keys the parent moved under the child's key, and `tw carry` from the previous parent version reads correctly.
+86. The parent declares `gvc` limits for its own workloads.
 
 **Pilots**
 
-84. After the commit, `node scripts/sync-fixtures.mjs` and `--check` in the core pass, and the core tests pass.
+87. After the commit, `node scripts/sync-fixtures.mjs` and `--check` in the core pass, and the core tests pass.
 
 ---
 
 ## 19. Common mistakes
 
-Every finding from the Round 1 reviews and the Round 2 owner testing, generalised. The "Round" column says where it was found.
+Every finding from the Round 1 reviews, the Round 2 owner testing and the Round 2 review, generalised. The "Round" column says where it was found.
 
 | # | Mistake | Round | Why it is wrong | Do instead |
 |---|---|---|---|---|
@@ -3031,6 +3174,15 @@ Every finding from the Round 1 reviews and the Round 2 owner testing, generalise
 | 36 | Unguarded `context.gvcLocations` / `gvcSpec` | general | Errors until the renderer knows them | `context.x == null \|\| …` (§7.2) |
 | 37 | A `pattern` whose regex is the only explanation | general | The `PATTERN` message quotes the regex | A `patternMessage` (§6.2) |
 | 38 | Suggestions outside `min`/`max`, or with a slider or stepper | general | Lint error (outside the bounds) or warning `SUGGESTIONS_WIDGET`; the widget is replaced | Valid suggestions, no slider or stepper (§15) |
+| 39 | An optional component's image and resources in an Advanced step section gated by its flag | 2 (review, owner decision) | The settings sit away from the switch that turns the component on, and every gate is written twice | `advanced: true` fields in the component's toggle section; no Advanced step for them (§5.5) |
+| 40 | A rename relied on to carry a value whose default changed (gitea 1.0.0's database password) | 2 (review) | A rename moves changed values only: a release on the old default gets the new one, and Gitea loses its database connection | A computed migration from the old key for the versions with the other default, or `immutable` when the value can never change (§9.2) |
+| 41 | An imported step keeping a child description that names an excluded part ("… and an optional connection pooler") | 2 (review) | Mentions a component the bundle never runs | A `description` in `imports[].steps` (§16.2) |
+| 42 | A chart check lost with an exclusion (gitea's plaintext `postgres.config.*` keys) | 2 (review) | The subchart fails at install with no wizard issue | A parent rule restating the check (§16.4) |
+| 43 | Advice on whether to turn a feature on, in a note inside its toggle section | 2 (review) | It shows only after the user turned the feature on | The section `description` (§5.3) |
+| 44 | An `optionsFrom` over list names that may still be empty | 2 (review) | A blank option in the enum | `filter(l, l.name != '')` before `map` (§6.5) |
+| 45 | An `info` rule about a shared default limited to install (gitea's database secret name) | 2 (review) | Upgrades from a version without the key receive the same default | Gate on the value, not the mode (§12.2) |
+| 46 | A port bounded by the protocol range (1 to 65535) where the platform allows less | 2 (review) | A direct load balancer port must be 22 to 32768 | Bounds from the platform docs (`/reference/workload/load-balancing`) |
+| 47 | A `#anchor` in an imported step's description | 2 (review) | It resolves to the child's page (`IMPORT_OVERRIDE_ANCHOR`) | `/template-catalog/templates/<parent>#…` (§16.2) |
 
 ---
 
@@ -3111,7 +3263,7 @@ Generated from the JSON Schema (`.schema/wizard.v1.schema.json`, in sync with th
 | `default` | | any | | only with `absent: true` |
 | `example` | | bool | false | the default is a placeholder (`EXAMPLE_VALUE`) |
 | `sensitive` | | bool | false | `string` only: masked |
-| `advanced` | | bool | false | in the section's collapsed Advanced group |
+| `advanced` | | bool | false | in the section's collapsed Advanced group; an optional component's image and resources in its toggle section (§5.5) |
 | `rules` | | array | | field rules |
 | `virtual` | | bool | false | session-only field; needs `id` and `init`; top level only |
 | `init` | virtual | CEL | | the virtual field's value from the document |
@@ -3245,7 +3397,7 @@ One of: `from`; `to` + `valueExpr`; `assume`.
 | `when` | | CEL bool, parent scope | exactly `self.<condition>` |
 | `title` | | string | group label; default the child's `title`, else `template` |
 | `after`, `before` | | step id | a parent step the imported steps follow or precede; not both |
-| `steps` | | array of step ids or `{ id (req), title?, description? }` | order and titles of child steps |
+| `steps` | | array of step ids or `{ id (req), title?, description? }` | order, titles and descriptions of child steps; no `#anchor` in `description` (`IMPORT_OVERRIDE_ANCHOR`) |
 | `exclude` | | array of paths | child paths or virtual ids to drop, with everything below them |
 | `override` | | map of child path (or virtual id, or toggle path) → override | presentation and constraint overrides (below) |
 
@@ -3301,8 +3453,8 @@ Override keys (`importOverride`; each replaces the child's value whole): `label`
 | `YAML_PARSE`, `YAML_ROOT`, `YAML_MULTI_DOC` | error | the YAML tab's text is not one YAML map |
 | `REF_NOT_FOUND` | the ref's `mustExist` | the object does not exist, or has another secret type or provider |
 | `REF_CHECK_FAILED` | info | the existence check could not complete |
-| `GVC_LOCATIONS` | error on install, info on upgrade | the target GVC's location count is outside the `gvc` limits (Release step, no path) |
-| `SECRET_KEYS_MISSING` | error | a "Check keys" run found required keys missing |
+| `GVC_LOCATIONS` | error on install, info on upgrade | the target GVC's location count is outside the `gvc` limits (Release step, no path); on upgrade it states the count only |
+| `SECRET_KEYS_MISSING` | error | the latest "Check keys" run of the field found required keys missing (also returned by `validate()`) |
 | `SECRET_KEYS_UNCHECKED` | info | the keys could not be checked (no permission to reveal) |
 
 Only errors and warnings block Next and Install; `info` never blocks. Issues in hidden steps, sections and fields are never produced.
@@ -3327,7 +3479,7 @@ Field check messages never contain the field's label ("Required.", "Must be at l
 | `CONFLICT` | error | mutually exclusive properties (`sections` and `fields`, `options` and `optionsFrom`, `requiredKeys` and `requiredKeysFrom`, `unique` on objects, `uniqueBy` on scalars, `serialize: csv` on objects, `assume` with other keys, `valueExpr` with `from`, `gvc: any` with `format: name`, a path bound and listed under `yamlOnly`, virtual-only conflicts) |
 | `DUPLICATE_ID`, `DUPLICATE_PATH` | error | two fields or steps with one id, or two fields (or a field and a toggle) on one path; with imports, the message names the import and the path to exclude |
 | `RESERVED_STEP_ID` | error | a step with the id `release` |
-| `IMPORT_DUPLICATE`, `IMPORT_ANCHOR_UNKNOWN`, `IMPORT_OVERRIDE_NOT_ALLOWED`, `IMPORT_OVERRIDE_ANCHOR` | error | imports: two with one key, an unknown `after`/`before` step, a disallowed override key, a `#anchor` in an override (§16.14) |
+| `IMPORT_DUPLICATE`, `IMPORT_ANCHOR_UNKNOWN`, `IMPORT_OVERRIDE_NOT_ALLOWED`, `IMPORT_OVERRIDE_ANCHOR` | error | imports: two with one key, an unknown `after`/`before` step, a disallowed override key, a `#anchor` in an override or an imported step's description (§16.14) |
 | `DUPLICATE_VALUE` | warning | an option or suggestion listed twice |
 | `DOCS_ABSOLUTE`, `DOCS_INVALID` | error | `docs` is not `/path#anchor` or `#anchor` |
 | `DEFAULT_ON_PRESENT_PATH` | error | `default` without `absent: true` |
@@ -3343,7 +3495,7 @@ Lint reports every parser diagnostic, plus:
 |---|---|---|
 | `FIELD_PATH_MISSING` | error | a field path is not in values.yaml and nothing above it is `absent` |
 | `RULE_PATH_UNKNOWN`, `SET_PATH_UNKNOWN`, `MIGRATION_TARGET_UNKNOWN`, `ASSUME_PATH_UNKNOWN`, `YAML_ONLY_UNKNOWN` | error | a rule path, `set` target, migration `to`, `assume` key or `yamlOnly` path that nothing declares or has |
-| `UNCOVERED_VALUE` | error | a values leaf no field covers and no `yamlOnly` lists |
+| `UNCOVERED_VALUE` | error | a values leaf no field covers and no `yamlOnly` lists; with imports also a child leaf an exclusion uncovers, the `set` targets of an excluded virtual field included |
 | `DEFAULT_TYPE_MISMATCH`, `DEFAULT_NOT_IN_OPTIONS` | error | a chart default of the wrong type, or an enum default (or map key) outside its options |
 | `DEFAULT_INVALID` | error | a visible chart default fails its own field check (`REQUIRED` and `MIN_ITEMS` excepted) |
 | `CEL_UNKNOWN_PATH`, `CEL_UNKNOWN_CONTEXT`, `CEL_UNKNOWN_UI` | error | a `self.`/`oldSelf.`/`item.` chain to an unknown path (outside `has()`), an unknown `context.` key or `ui.` id |
@@ -3379,7 +3531,7 @@ Lint reports every parser diagnostic, plus:
 
 | Code | Exit | Meaning |
 |---|---|---|
-| `DOCS_ANCHOR_MISSING` | 1 | the page has no heading with that id |
+| `DOCS_ANCHOR_MISSING` | 1 | the page has no heading (`<h1>`–`<h6>`) with that id; ids of other elements do not count |
 | `DOCS_PAGE_MISSING` | 1 | the page answered non-2xx |
 | `DOCS_UNRESOLVED` | 1 | the link does not resolve to a docs URL |
 | `DOCS_UNREACHABLE` | 2 | the page could not be fetched (offline) |

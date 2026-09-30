@@ -16,9 +16,8 @@ imports:
     steps:
       - { id: server, title: Database server }
       - { id: storage, title: Database storage }
-      - { id: network, title: Database network }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
       - { id: backup, title: Database backups }
-      - { id: advanced, title: Database backup job }
     exclude:
       # Gitea creates this secret itself (templates/secret-db.yaml) and names it in the Database step below.
       - config.credentialsSecretName
@@ -171,17 +170,15 @@ steps:
         toggle: ssh.enabled
         description: >-
           Public SSH takes over the workload's only public endpoint, so the web UI and Git over HTTPS are no
-          longer served there.
+          longer served there. Turn it on only if you serve the web UI through a custom domain, or only need
+          Git over SSH.
         docs: "#the-ssh-and-https-endpoint-trade-off"
         fields:
-          - type: note
-            severity: warning
-            text: Turn this on only if you serve the web UI through a custom domain, or only need Git over SSH.
           - path: ssh.externalPort
             type: integer
             label: Public SSH port
-            min: 1
-            max: 65535
+            min: 22
+            max: 32768
             required: true
           - path: ssh.domain
             type: string
@@ -252,14 +249,24 @@ steps:
         message: >-
           PostgreSQL keeps the password it was initialized with. Run ALTER ROLE first, or Gitea loses its
           database connection after this upgrade.
-      - when: context.mode == 'install'
-        rule: self.postgres.config.credentialsSecretName != 'my-gitea-db-credentials'
+      - rule: self.postgres.config.credentialsSecretName != 'my-gitea-db-credentials'
         severity: info
         paths: [postgres.config.credentialsSecretName]
         messageExpression: >-
-          'Secret names are org-wide: a second Gitea release on this name is refused at install. For example ' +
-          context.releaseName + '-gitea-db-credentials.'
-        message: Secret names are org-wide; a second Gitea release on this name is refused at install.
+          'Secret names are org-wide: a release on this name is refused while another release manages that
+          secret. Give each Gitea release its own name, for example ' + context.releaseName +
+          '-gitea-db-credentials.'
+        message: >-
+          Secret names are org-wide: a release on this name is refused while another release manages that
+          secret. Give each Gitea release its own name.
+      - rule: >-
+          !has(self.postgres.config.username) && !has(self.postgres.config.password) &&
+          !has(self.postgres.config.database)
+        paths: [postgres.config.credentialsSecretName]
+        message: >-
+          postgres.config.username, postgres.config.password and postgres.config.database were removed in
+          1.2.0. Move them to postgres.credentials, from which Gitea creates the secret, and remove them from
+          postgres.config.
 
 # Rules over the imported values: their issues show on the imported fields' step (postgres:network).
 rules:
@@ -286,6 +293,12 @@ yamlOnly:
 migrations:
   - { fromVersions: "<1.2.0", from: postgres.config.username, to: postgres.credentials.username }
   - { fromVersions: "<1.2.0", from: postgres.config.password, to: postgres.credentials.password }
+  # A rename moves changed values only, and 1.1.0 changed the default password (change-me-db-pass became
+  # change-me-gitea-db): carry a 1.0.0 release's password even when it is the old default.
+  - fromVersions: "<1.1.0"
+    to: postgres.credentials.password
+    valueExpr: self.postgres.config.password
+    note: PostgreSQL keeps the password it was initialized with, so the installed one is kept.
   - { fromVersions: "<1.2.0", from: postgres.config.database, to: postgres.credentials.database }
   - fromVersions: "<1.1.0"
     from: gitea.admin

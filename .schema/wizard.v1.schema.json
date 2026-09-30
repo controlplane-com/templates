@@ -36,6 +36,13 @@
         }
       }
     },
+    "imports": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/import"
+      },
+      "markdownDescription": "Subcharts (Chart.yaml `dependencies`) shown with their own `wizard.yaml`: their steps, fields and rules, with every path below the values key (`alias ?? template`). Nested imports are not supported."
+    },
     "steps": {
       "type": "array",
       "minItems": 1,
@@ -95,6 +102,248 @@
     "id": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "import": {
+      "type": "object",
+      "markdownDescription": "A subchart shown with its own descriptor. `template` and `version` must equal a Chart.yaml dependency exactly; child paths are prefixed with the values key (`alias ?? template`) and child ids namespaced (`postgres:server`). Child expressions keep seeing the child's own values as `self`.",
+      "required": ["template", "version"],
+      "additionalProperties": false,
+      "not": {
+        "required": ["after", "before"],
+        "type": "object"
+      },
+      "properties": {
+        "template": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "markdownDescription": "The dependency `name`: the child template."
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "markdownDescription": "The dependency `version`, exactly (`x.y.z`, no ranges)."
+        },
+        "alias": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$",
+          "markdownDescription": "The dependency `alias`: the values key is `alias ?? template`."
+        },
+        "when": {
+          "$ref": "#/definitions/cel",
+          "markdownDescription": "CEL bool in this descriptor's scope mirroring the dependency `condition` exactly: `condition: postgres.enabled` ⇔ `when: self.postgres.enabled`."
+        },
+        "title": {
+          "type": "string",
+          "markdownDescription": "Group label of the imported steps (default: the child's `title`, else `template`)."
+        },
+        "after": {
+          "$ref": "#/definitions/id",
+          "markdownDescription": "A step of this descriptor the imported steps follow."
+        },
+        "before": {
+          "$ref": "#/definitions/id",
+          "markdownDescription": "A step of this descriptor the imported steps precede."
+        },
+        "steps": {
+          "type": "array",
+          "markdownDescription": "Child steps in the order to show them, optionally renamed; unlisted steps follow in the child's order.",
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/definitions/id"
+              },
+              {
+                "type": "object",
+                "required": ["id"],
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "$ref": "#/definitions/id"
+                  },
+                  "title": {
+                    "type": "string",
+                    "markdownDescription": "Step title."
+                  },
+                  "description": {
+                    "type": "string",
+                    "markdownDescription": "Plain text; inline `code` allowed."
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "exclude": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/path"
+          },
+          "markdownDescription": "Child paths (relative to the child's values) or virtual field ids to leave out, with everything below them. Sections and steps left without fields are dropped with their notes and rules. Bind what the chart needs with a field of this descriptor, or list it under `yamlOnly`."
+        },
+        "override": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/definitions/path"
+          },
+          "additionalProperties": {
+            "$ref": "#/definitions/importOverride"
+          },
+          "markdownDescription": "Child path (or virtual id) → presentation and constraint overrides."
+        }
+      },
+      "defaultSnippets": [
+        {
+          "label": "import a subchart",
+          "description": "Show a Chart.yaml dependency with its own wizard.yaml",
+          "body": {
+            "template": "$1",
+            "version": "$2",
+            "title": "$3",
+            "after": "$4"
+          }
+        }
+      ]
+    },
+    "importOverride": {
+      "type": "object",
+      "markdownDescription": "Keys that replace the child field's own: presentation and constraints. `type`, `path`, options, refs, rules and `when` are the child's contract with its chart. Links resolve against the child's docs page: link this template's page as `/template-catalog/templates/<name>#anchor`, not `#anchor`.",
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string",
+          "markdownDescription": "Sentence case, at most 60 characters."
+        },
+        "description": {
+          "type": "string",
+          "not": {
+            "pattern": "\\]\\(\\s*#",
+            "type": "string"
+          },
+          "markdownDescription": "Short text under the input."
+        },
+        "help": {
+          "type": "string",
+          "not": {
+            "pattern": "\\]\\(\\s*#",
+            "type": "string"
+          },
+          "markdownDescription": "Longer markdown-lite help."
+        },
+        "docs": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/docs"
+            },
+            {
+              "not": {
+                "pattern": "^\\s*#",
+                "type": "string"
+              }
+            }
+          ],
+          "markdownDescription": "Relative docs link: `/path#anchor`."
+        },
+        "placeholder": {
+          "type": "string",
+          "markdownDescription": "Placeholder text."
+        },
+        "widget": {
+          "enum": [
+            "input",
+            "textarea",
+            "password",
+            "switch",
+            "checkbox",
+            "select",
+            "radio",
+            "segmented",
+            "cards",
+            "stepper",
+            "slider",
+            "tags",
+            "table",
+            "kv",
+            "code",
+            "cron"
+          ],
+          "markdownDescription": "Rendering hint (`SPEC.md` §6)."
+        },
+        "advanced": {
+          "type": "boolean",
+          "markdownDescription": "Grouped under Advanced."
+        },
+        "required": {
+          "type": "boolean",
+          "markdownDescription": "Required while visible."
+        },
+        "example": {
+          "type": "boolean",
+          "markdownDescription": "The values.yaml value is a placeholder: unchanged, it is a blocking warning (`EXAMPLE_VALUE`)."
+        },
+        "sensitive": {
+          "type": "boolean",
+          "markdownDescription": "Masked input (`string`)."
+        },
+        "immutable": {
+          "type": ["boolean", "string"],
+          "markdownDescription": "Read-only on upgrade and pinned by carry-over. A string is the reason shown next to the control."
+        },
+        "readOnly": {
+          "type": "boolean",
+          "markdownDescription": "Always read-only in the wizard (editable in YAML)."
+        },
+        "min": {
+          "markdownDescription": "Minimum: a number for `integer`/`number`, a quantity (`200m`, `128Mi`) for `quantity`."
+        },
+        "max": {
+          "markdownDescription": "Maximum: a number for `integer`/`number`, a quantity (`2`, `4Gi`) for `quantity`."
+        },
+        "minLength": {
+          "type": "integer",
+          "minimum": 0,
+          "markdownDescription": "Minimum length (`string`)."
+        },
+        "maxLength": {
+          "type": "integer",
+          "minimum": 0,
+          "markdownDescription": "Maximum length (`string`)."
+        },
+        "pattern": {
+          "type": "string",
+          "markdownDescription": "JavaScript regular expression the value must match; anchor it yourself (`^…$`)."
+        },
+        "minItems": {
+          "type": "integer",
+          "minimum": 0,
+          "markdownDescription": "Minimum number of items."
+        },
+        "maxItems": {
+          "type": "integer",
+          "minimum": 0,
+          "markdownDescription": "Maximum number of items."
+        },
+        "unit": {
+          "type": "string",
+          "markdownDescription": "Unit shown next to the input, e.g. `GiB`, `%`, `seconds`."
+        },
+        "cpu": {
+          "$ref": "#/definitions/bounds",
+          "markdownDescription": "CPU bounds of a `resources` field."
+        },
+        "memory": {
+          "$ref": "#/definitions/bounds",
+          "markdownDescription": "Memory bounds of a `resources` field."
+        },
+        "maxRatio": {
+          "type": "number",
+          "minimum": 1,
+          "markdownDescription": "Largest allowed max:min ratio, checked separately for cpu (maxCpu:minCpu) and for memory (maxMemory:minMemory); exactly the ratio passes. 4 on stateful workloads. Applies to `{minCpu, maxCpu, minMemory, maxMemory}` resources only."
+        },
+        "suggestions": {
+          "$ref": "#/definitions/suggestions",
+          "markdownDescription": "Suggested values (`string`, `integer`, `number`, `quantity`) offered in a dropdown next to free typing; any other value can still be entered. A value, or `{value, label, description}`."
+        }
+      }
     },
     "step": {
       "type": "object",

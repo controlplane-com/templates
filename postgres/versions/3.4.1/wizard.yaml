@@ -218,6 +218,17 @@ steps:
             min: 1
             required: true
             suggestions: [1, 2, 3]
+          - path: pgbouncer.image
+            type: string
+            format: image
+            label: PgBouncer image
+            required: true
+            advanced: true
+          - path: pgbouncer.resources
+            type: resources
+            label: PgBouncer resources
+            required: true
+            advanced: true
         rules:
           - rule: self.pgbouncer.defaultPoolSize <= self.pgbouncer.maxClientConn
             severity: info
@@ -275,6 +286,27 @@ steps:
             format: cron
             label: Schedule (UTC)
             required: true
+          - path: backup.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+            description: Tag 18.x.x for Postgres 18, 17.x.x for Postgres 17.
+          - path: backup.resources
+            type: resources
+            label: Backup job resources
+            required: true
+            advanced: true
+        rules:
+          - rule: >-
+              imageMajor(self.image) < 0 || imageMajor(self.backup.image) < 0 ||
+              imageMajor(self.backup.image) >= imageMajor(self.image)
+            severity: warning
+            paths: [backup.image]
+            message: >-
+              The backup image's major version must be at least the Postgres major version; an
+              older pg_dump cannot dump a newer server.
       - title: AWS S3
         when: self.backup.enabled && self.backup.provider == 'aws'
         docs: "#aws-s3"
@@ -386,45 +418,6 @@ steps:
         severity: warning
         paths: [backup.enabled]
         message: Backups need Postgres 17 or later; the selected image is older.
-
-  - id: advanced
-    title: Advanced
-    description: Images and resources of the optional connection pooler and backup job.
-    sections:
-      - title: PgBouncer
-        when: self.pgbouncer.enabled
-        fields:
-          - path: pgbouncer.image
-            type: string
-            format: image
-            label: PgBouncer image
-            required: true
-          - path: pgbouncer.resources
-            type: resources
-            label: PgBouncer resources
-            required: true
-      - title: Backup job
-        when: self.backup.enabled
-        fields:
-          - path: backup.image
-            type: string
-            format: image
-            label: Backup image
-            required: true
-            description: Tag 18.x.x for Postgres 18, 17.x.x for Postgres 17.
-          - path: backup.resources
-            type: resources
-            label: Backup job resources
-            required: true
-        rules:
-          - rule: >-
-              imageMajor(self.image) < 0 || imageMajor(self.backup.image) < 0 ||
-              imageMajor(self.backup.image) >= imageMajor(self.image)
-            severity: warning
-            paths: [backup.image]
-            message: >-
-              The backup image's major version must be at least the Postgres major version; an
-              older pg_dump cannot dump a newer server.
 
 migrations:
   - fromVersions: "<3.4.0"

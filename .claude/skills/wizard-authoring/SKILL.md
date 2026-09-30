@@ -26,7 +26,7 @@ tw() { node ../template-wizard/dist/cli.cjs "$@"; }          # zsh does not word
    - no earlier descriptor → §3.1;
    - the previous version has one → copy forward, §3.2;
    - an older, published version → §3.3;
-   - `Chart.yaml` has non-library dependencies → imports, §3.4 and §16 (syntax final once core imports land);
+   - `Chart.yaml` has non-library dependencies → imports, §3.4 and §16 (worked example: gitea 1.2.0);
    - a review → §18 and §19.
 2. **Check the chart renders:**
    ```sh
@@ -39,7 +39,7 @@ tw() { node ../template-wizard/dist/cli.cjs "$@"; }          # zsh does not word
    grep -rn 'localOptions\|staticPlacement\|defaultOptions\|location' $D/templates/ $D/values.yaml   # location handling → gvc limits (§14)
    grep -rn 'type: stateful' $D/templates/                                       # maxRatio: 4 on those resources
    grep -rn 'cpln://secret' $D/templates/                                        # the keys for requiredKeys
-   sed -n '/^dependencies:/,$p' $D/Chart.yaml                                    # imports (skip cpln-common)
+   sed -n '/^dependencies:/,$p' $D/Chart.yaml                                    # imports (skip cpln-common); each child needs its own descriptor
    ```
    Read `values.yaml` comments and the README prerequisites and upgrade sections. The chart wins over the README and the docs page.
 4. **Copy forward** (when the previous version has a descriptor):
@@ -51,7 +51,7 @@ tw() { node ../template-wizard/dist/cli.cjs "$@"; }          # zsh does not word
 5. **Write or update the descriptor** with the guide: steps and sections (§5), fields (§6), CEL (§7), rules and severities (§8), migrations (§9), text (§10), docs (§11), placeholders (§12), references (§13), `gvc` limits (§14), suggestions (§15), imports (§16).
 6. **Lint until clean:**
    ```sh
-   tw lint $D                                   # previous version picked automatically
+   tw lint $D                                   # previous version picked automatically; imports read from the templates root
    tw lint $D --prev <template>/versions/<older> # to check against another previous version
    ```
    Required result: `0 errors, 0 warnings, N/N leaves covered`. Every leaf is bound to a field or listed under `yamlOnly` with a real reason.
@@ -63,28 +63,29 @@ tw() { node ../template-wizard/dist/cli.cjs "$@"; }          # zsh does not word
 8. **Render** the defaults, every provider branch and every optional feature, then render the chart with each output:
    ```sh
    tw render --descriptor $D/wizard.yaml --values $D/values.yaml --answers answers.json > /tmp/out.yaml   # exit 0 required
+   helm dependency update $D                                                                              # once, for cpln-common and subcharts
    helm template r $D -f /tmp/out.yaml --set global.cpln.gvc=test-gvc > /dev/null
    ```
-   `answers.json` is `{"context": {"org": "acme", "gvc": "prod", "releaseName": "r"}, "answers": {"<field id or path>": value}}`; virtual fields first; answer every `example: true` string (render does not clear anything).
+   `answers.json` is `{"context": {"org": "acme", "gvc": "prod", "releaseName": "r"}, "answers": {"<field id or path>": value}}`; virtual fields first; imported fields by their full path (`postgres.backup.enabled`); answer every `example: true` string (render does not clear anything).
 9. **Try the upgrade path** from a realistic release of the previous version:
    ```sh
    tw carry --old-defaults <template>/versions/<old>/values.yaml --old-values release-values.yaml \
      --new-defaults $D/values.yaml --from <old> --to <version> --descriptor $D/wizard.yaml > /tmp/carried.yaml
    ```
-   Read every `dropped` note as the user will.
+   Read every `dropped` note as the user will. With imports, the installed child versions come from the old version's `Chart.yaml`, or `--old-import <prefix>=<version>`.
 10. **Preview in the console** (§17.7), light and dark:
     ```sh
     cd ../console-template-wizard && TEMPLATE_WIZARD_DIR=../templates node_modules/.bin/vite --port 4026 --mode development
     curl -si http://localhost:4026/__template-wizard/<template>/<version>/wizard.yaml | head -3   # 200, x-template-wizard: dev
     # open http://localhost:4026/console/org/<org>/marketplace/template/<template>/install?version=<version>
     ```
-    Reload after each save. Stop the dev server when done.
+    Reload after each save. Stop the dev server when done. Descriptors with `imports` need the console's imports stage (guide §16.13); until then, rely on steps 6 to 9.
 11. **Walk the review checklist** (§18), every item.
 12. **Commit** the descriptor only, by explicit path, with one lowercase line and no body and no attribution; never push:
     ```sh
     git add $D/wizard.yaml && git commit -m "add wizard descriptor for <template> <version>"
     ```
-13. **Pilots only** (postgres 3.4.1, mongodb-cluster 2.0.0, redis 3.7.0, supabase 1.1.1, and gitea 1.2.0 once the core's `scripts/sync-fixtures.mjs` lists it): sync the core fixtures after the commit:
+13. **Pilots only** (postgres 3.4.1, mongodb-cluster 2.0.0, redis 3.7.0, supabase 1.1.1, gitea 1.2.0): sync the core fixtures after the commit:
     ```sh
     (cd ../template-wizard && node scripts/sync-fixtures.mjs && node scripts/sync-fixtures.mjs --check && pnpm test)
     ```
@@ -106,13 +107,15 @@ A descriptor is done only when all of these hold:
 - A `pattern` whose regex would be the only explanation gets a `patternMessage` ("Leave out the leading /.") (§6.2).
 - No text mentions an optional component as always on (§10.5); every claim is backed by this chart version (§10.3).
 - Docs links are relative and their anchors exist on the docs site; run `check-docs` (§11).
-- References start empty on install: never `example: true` on a ref; `required: true` when the chart needs it; rules hold for `''` (§12).
-- `allowCreate: true` only on prerequisite secrets, never on workload lists (§13.2); `requiredKeys` only the keys the chart reads (§13.3).
-- `gvc: { minLocations: 1, maxLocations: 1 }` for stateful charts without location handling (§14).
-- Suggestions within `min`/`max`, never with `widget: slider` (§15).
+- References start empty on install, and on upgrade when they are new in the target version: never `example: true` on a ref (lint: `EXAMPLE_ON_REF`); `required: true` when the chart needs it; rules hold for `''` (§12).
+- `allowCreate: true` only on prerequisite secrets, never on workload lists (§13.2); with it, the form's type and keys come from `filter.secretType` and `requiredKeys`, so `create` is only for `suggestName`, `encoding`, `hint` or an ambiguous type; `requiredKeys` only the keys the chart reads (§13.3).
+- `gvc: { minLocations: 1, maxLocations: 1 }` for stateful charts without location handling; `GVC_LOCATIONS` blocks installs and is only info on upgrades (§14).
+- Suggestions within `min`/`max`, never with `widget: slider` or `widget: stepper` (lint: `SUGGESTIONS_WIDGET`) (§15).
 - Severity: error and warning block, `info` never does; advisory findings are `info` (§8.2).
 - Every `fail` define has a rule with `mirrors`; removed keys get a `!has()` rule and a drop migration with a note (§8.6, §9.2).
 - `oldSelf == null ||` on every upgrade rule; `context.gvcLocations == null ||` on every location rule (§7).
+- No step id `release` (reserved: `RESERVED_STEP_ID`) (§2.4).
+- Imports: exclude child refs to secrets the parent creates and bind parent `string` fields; `when` is exactly `self.<condition>`; overrides replace a key's whole value and never use `#anchor` links; parent migrations for keys moved under the child's key (§16).
 - Never edit `.schema/wizard.v1.schema.json` by hand; it is copied byte for byte from the core.
 
 ## Owner's local test setup

@@ -12,7 +12,7 @@ Every excerpt marked with a pilot name is copied from that pilot's descriptor on
 | mongodb-cluster 2.0.0 | `mongodb-cluster/versions/2.0.0/wizard.yaml` |
 | redis 3.7.0 | `redis/versions/3.7.0/wizard.yaml` |
 | supabase 1.1.1 | `supabase/versions/1.1.1/wizard.yaml` |
-| gitea 1.2.0 (imports, in progress) | `gitea/versions/1.2.0/wizard.yaml` |
+| gitea 1.2.0 (imports postgres 3.4.1) | `gitea/versions/1.2.0/wizard.yaml` |
 
 Examples marked "not in a pilot" were written for this guide and checked with `template-wizard lint`.
 
@@ -34,7 +34,7 @@ Examples marked "not in a pilot" were written for this guide and checked with `t
 - [13. References to Control Plane objects](#13-references-to-control-plane-objects)
 - [14. GVC location limits](#14-gvc-location-limits)
 - [15. Suggestions](#15-suggestions)
-- [16. Subchart imports (syntax final once core imports land)](#16-subchart-imports-syntax-final-once-core-imports-land)
+- [16. Subchart imports](#16-subchart-imports)
 - [17. Validation tools and commands](#17-validation-tools-and-commands)
 - [18. Review checklist](#18-review-checklist)
 - [19. Common mistakes](#19-common-mistakes)
@@ -58,7 +58,7 @@ Paths are relative to this repo's root, with the other checkouts as siblings (`.
 | Console renderer | `../console-template-wizard/src/pages/marketplace/wizard/` (branch `template-wizard`) |
 | Docs site | the template pages are `/template-catalog/templates/<template>` on docs.controlplane.com |
 
-Where the spec's examples (`SPEC.md` §17, §18) differ from this guide, this guide and the pilot files win: those examples predate Round 2 (they still show `example: true` on refs, separate toggle sections and restated validations).
+`SPEC.md` was updated for Round 2 (its §17 is the Round 2 postgres descriptor), but it does not describe `imports` yet and still lists `patternMessage` under "Not in v1". Where the spec and this guide differ, the core README's "Decisions" and this guide win.
 
 Every command in this guide uses this shell function (it works in bash and zsh; a plain `$TW` variable does not word-split in zsh):
 
@@ -114,19 +114,21 @@ tw render --descriptor <dir>/wizard.yaml --values <dir>/values.yaml --answers an
 
 | Part | What it is | Descriptor input |
 |---|---|---|
-| Header | Template name, icon, category, app version, and an always-visible "Template docs" link to `/template-catalog/templates/<template>` | none (automatic) |
-| Release step (install) | Release name, target GVC, template version. The GVC picker disables GVCs whose location count does not fit, with the reason; "Create GVC" opens an embedded create limited the same way. Versions without a descriptor are marked "YAML only" | `gvc` limits (§14) |
+| Header | Template name, icon, category, app version, and an always-visible "Template docs" link to `/template-catalog/templates/<template>`, on every step of install and upgrade | none (automatic) |
+| Release step (install) | Release name, target GVC and template version. The GVC picker shows each GVC's location count and disables the GVCs that do not fit, with the reason ("Has 3 locations; this template needs exactly 1"). "Create GVC" opens an embedded create limited the same way (a single-choice location list when the maximum is 1; it cannot be created with fewer than the minimum). Versions without a descriptor are marked "YAML only" | `gvc` limits (§14) |
 | Config steps | One per visible descriptor step, in order, on a rail | `steps` |
+| Sections | Untitled sections are a plain column; titled ones a box with the title, description and docs link. A toggle section has its switch as the box's header title; while it is off, the box shows only its description | sections, `toggle` (§5.3) |
+| Fields | One control per field type and widget. A switch sits right next to its label. A field with `suggestions` is a text input with a dropdown of the suggested values beside free typing, the unit written next to it (§15). A secret reference with required keys gets a "Check keys" button (§13.3). "Create" appears next to a reference only with `allowCreate: true` (§13.2) | field properties |
 | YAML mode | The whole values document in an editor; the Wizard mode is disabled while the text does not parse | none |
-| Review | Visual tab (every visible field with its formatted value, grouped by step and section) and YAML tab; on upgrade, "Changes since last applied" and a diff against the installed values. Outstanding issues and advice are listed above the tabs | labels, options labels, `sensitive` |
+| Review | Outstanding issues and advice above two tabs. **Visual**: every visible setting with its formatted value (option labels, On/Off, reference names, masked sensitive values), grouped by step and section, each step with an "Edit" link; on upgrade, changed rows are tagged "Changed" and a "Changes since last applied" list follows, each tagged "Edited" or "New default". **YAML**: the values document; on upgrade, also a diff against the installed values. Install has no "changes from the chart defaults" list | labels, option labels, `sensitive` |
 | Install / Upgrade | Enabled only while no error or warning remains | severities |
 
 Behaviour that shapes descriptors:
 
 - **Next** runs the step's sync validation and its async reference checks. Errors and warnings block; `info` is shown and never blocks.
-- **Upgrade mode** opens every step for free navigation, but Upgrade is still only on Review, which validates every step.
-- **Install sessions start with references empty** (`clearRefDefaults`, §12). Upgrades keep installed references.
-- **Imported steps** (§16) show "From the <child> template <version>" and link to the child's docs page.
+- **Upgrade mode** opens every step for free navigation (any step can be clicked at any time), but Upgrade is still only on Review, and it validates every step first.
+- **References start empty** (`clearRefDefaults`, §12.1): on install, every reference that still holds its chart default; on upgrade, only references new in the target version. Installed references are never cleared.
+- **Imported steps** (§16) carry their origin (the child template, version and docs page). The console's rendering of imports is a later stage (§16.13).
 
 ### 1.3 What the descriptor never does
 
@@ -162,7 +164,7 @@ apiVersion: template-wizard.controlplane.com/v1   # exact
 kind: TemplateWizard                              # exact
 title: PostgreSQL                                 # optional
 gvc: { minLocations: 1, maxLocations: 1 }         # optional (§14)
-imports: []                                       # optional (§16, syntax final once core imports land)
+imports: []                                       # optional (§16)
 steps: []                                         # required, at least one
 rules: []                                         # optional: root rules
 yamlOnly: []                                      # optional (§9.8)
@@ -196,7 +198,7 @@ The pilots order them: modeline, `apiVersion`, `kind`, `title`, `gvc`, `steps`, 
 
 **Virtual field ids** are identifiers (`^[A-Za-z_][A-Za-z0-9_]*$`), because CEL reads them as `ui.<id>`: `redisAuth`, `s3Flavour`.
 
-**Step ids** match `^[a-z][a-z0-9-]*$` and are unique. Keep them stable across versions: imports (§16) reference child step ids in `after`, `before` and `steps`, and the console keys its navigation on them.
+**Step ids** match `^[a-z][a-z0-9-]*$` and are unique. The id `release` is reserved (`RESERVED_STEP_ID`): renderers use it for their own release step, and `GVC_LOCATIONS` is reported on it (`release-notes`, or a section `release`, are fine). Keep step ids stable across versions: imports (§16) reference child step ids in `after`, `before` and `steps`, and the console keys its navigation on them.
 
 **Section ids** match the same pattern and are optional (default `s1`, `s2`, … within the step). Give every toggle section and every section you may reorder an explicit id, as the pilots do (`id: autoscaling`, `id: pgbouncer`, `id: backup`).
 
@@ -318,22 +320,23 @@ Adding a descriptor to an older, already published version lets installs of that
 
 ### 3.4 A template that bundles other templates (imports)
 
-> **(syntax final once core imports land)** The core's `imports` support is being implemented. The procedure below follows the design; §16 has the details.
+§16 has the details; gitea 1.2.0 is the worked example.
 
 1. **List the dependencies** in `Chart.yaml`. Skip library charts (`cpln-common`): they have no values. Note each dependency's `name`, `version` (an exact pin), `alias` and `condition`.
-2. **Check that each child version has a descriptor.** An import needs one. If it has none, write the child's descriptor first (§3.1), or bind the child's keys as plain parent fields (they are in the parent's `values.yaml` block).
-3. **Read the parent's block under the child's key** (`postgres:` or the alias): which child defaults it overrides, which parent-only keys it adds (`postgres.credentials.*`), and which child features the parent does not use.
+2. **Check that each child version has a descriptor** at `<child>/versions/<pinned version>/wizard.yaml` and lints clean on its own (`tw lint <child>/versions/<version>`). An import needs one. If it has none, write the child's descriptor first (§3.1), or bind the child's keys as plain parent fields (they are in the parent's `values.yaml` block). A child that imports a template itself cannot be imported (`IMPORT_NESTED`, §16.10).
+3. **Read the parent's block under the child's key** (`postgres:` or the alias): which child defaults it overrides, which parent-only keys it adds (`postgres.credentials.*`), and which child features the parent never uses.
 4. **Decide per import:**
    - `exclude` the child fields the parent owns (a secret the parent creates) or that do nothing in this bundle (a pooler the parent never connects through);
-   - bind parent fields for the parent-only keys and for every excluded path the parent still needs set;
-   - `override` presentation only (labels, descriptions, help, bounds);
+   - bind parent fields for the parent-only keys and for every excluded path the parent still needs set, and list excluded subtrees the parent does not bind under `yamlOnly`;
+   - `override` presentation only (labels, descriptions, help, bounds, a toggle's help); each override key replaces the child's value whole;
    - place the imported steps with `after` or `before`, and rename them with `steps` so they read as part of this template ("Database server");
-   - write `when` exactly as the Chart.yaml `condition` (`condition: postgres.enabled` → `when: self.postgres.enabled`).
+   - write `when` exactly as `self.<condition>` (`condition: postgres.enabled` → `when: self.postgres.enabled`), and declare the condition as a parent boolean field.
 5. **Write parent root rules** for facts only the parent knows: its workloads must pass the child's firewall, a "Nobody" setting breaks the app.
-6. **GVC limits:** the parent's own `gvc` block for its own workloads; the limits of every enabled import are intersected with it.
-7. **Migrations:** parent renames under the child's key beat the child's own migrations on the same paths.
-8. **Lint:** `tw lint <parent-dir>` resolves each import from the templates root (inferred from `<root>/<t>/versions/<v>`, or `--templates-root .`) and checks the dependency's name, version, alias and condition against `Chart.yaml`. Lint the child too; its own findings are not repeated in the parent's report.
-9. **Gate** as always, plus a `helm template` of the parent with the rendered values (it renders the subchart too).
+6. **GVC limits:** the parent's own `gvc` block for its own workloads; the limits of every import that is on are intersected with it.
+7. **Migrations:** parent renames under the child's key; they beat the child's own migrations on the same paths.
+8. **Lint:** `tw lint <parent-dir>` reads each import from the templates root (inferred from `<root>/<t>/versions/<v>`, or `--templates-root .`), reads `Chart.yaml` of this version and the previous one, and checks the dependency's name, version, alias and condition. The child's own findings are not repeated in the parent's report.
+9. **Render and carry:** `tw render` and `tw carry` resolve imports the same way; `helm template` of the parent with the rendered values renders the subchart too.
+10. **Gate** as always. The console preview of imports depends on the console's imports stage (§16.13).
 
 ### 3.5 After the commit: pilots only
 
@@ -341,12 +344,12 @@ The core keeps copies of the pilot descriptors as test fixtures. After committin
 
 ```sh
 cd ../template-wizard
-node scripts/sync-fixtures.mjs           # copies wizard.yaml and _helpers.tpl from the templates branch
+node scripts/sync-fixtures.mjs           # values.yaml and Chart.yaml of every fixture version; wizard.yaml and _helpers.tpl of the pilots
 node scripts/sync-fixtures.mjs --check   # exit 1 when a fixture differs
 pnpm test                                 # or pnpm verify
 ```
 
-`sync-fixtures` reads `wizard.yaml` from the templates repo's local branch `template-wizard` with `git show`, so it only sees committed changes. It covers the versions listed in its `FIXTURES` and `PILOTS` tables; making another version a pilot is a core change (a separate commit there). Commit the synced fixtures in the core repo with a message like `sync pilot descriptor fixtures for postgres`.
+`sync-fixtures` reads `wizard.yaml` from the templates repo's local branch `template-wizard` with `git show`, so it only sees committed changes. It covers the versions listed in its `FIXTURES` and `PILOTS` tables (the pilots are postgres 3.4.1, mongodb-cluster 2.0.0, redis 3.7.0, supabase 1.1.1 and gitea 1.2.0); making another version a pilot is a core change (a separate commit there). Commit the synced fixtures in the core repo with a message like `sync pilot descriptor fixtures for postgres`.
 
 ---
 
@@ -583,6 +586,8 @@ How a toggle behaves:
 - It is an implicit boolean field bound to the path, labelled with the section `title`. The section therefore needs a `title` (`MISSING_KEY`), and the path must be a boolean in `values.yaml` (`TOGGLE_NOT_BOOLEAN`, a lint error). Do not also declare a field on that path (`DUPLICATE_PATH`).
 - While it is off, the section shows its header and description only: its fields and notes are hidden (their `when`s are not evaluated) and its rules are skipped. The values stay in the document.
 - It is set, reset, reviewed, answered (`answers.json` key = the path) and covered like any field.
+- In the console the switch is the box's header title, so the title is not repeated next to it; while it is off, the box shows only the description. Write the description so it reads well on its own.
+- An import can override a child toggle's `help` or `description` by the toggle's path (§16.2).
 - The section's own `when` must not read its toggle (`TOGGLE_WHEN_DUPLICATE`): that would hide the switch while it is off. A section `when` on something else is fine; supabase shows the local-volume autoscaling toggle only for the local backend:
 
   ```yaml
@@ -1026,7 +1031,7 @@ When: the value names a Control Plane object: a secret, cloud account, location,
 | `mustExist` | `error`, `warning` (default) or `off`: the severity of `REF_NOT_FOUND` (§13.4). |
 | `allowCreate` | Offer "Create" in the picker (default false, §13.2). |
 | `requiredKeys` / `requiredKeysFrom` | Dictionary secrets: the keys the chart reads, for the "Check keys" button (§13.3). |
-| `create` | Prefills for the inline create form: `secretType`, `keys` (default: `requiredKeys`), `encoding` (`plain` for opaque secrets), `provider`, `suggestName` (CEL string), `hint` (a command to generate the value). Used only with `allowCreate: true`. |
+| `create` | Prefills for the inline create form: `secretType` (default: the one type in `filter.secretType`), `keys` (default: `requiredKeys`), `encoding` (`plain` for opaque secrets), `provider`, `suggestName` (CEL string), `hint` (a command to generate the value). Used only with `allowCreate: true`; often not needed at all (§13.2). |
 
 A list of references is a `list` whose `item` is a ref (§6.9).
 
@@ -1755,6 +1760,8 @@ The chart renders with its defaults, so every error-severity rule must hold on t
 - **Cross-version upgrade:** `carryOver` takes the old defaults, the release values, the new defaults, both versions and both descriptors. Only leaves the release changed from their old default are carried; everything else takes the new default. Lists, maps, `yaml` fields and optional blocks are carried whole. The target descriptor's `migrations` explain removed and renamed keys. The result is the upgrade session's document, and `oldSelf` is the installed effective values after migrations and `assume`.
 - **The report** (shown on the first step and on Review) lists `dropped` (with migration notes), `renamed`, `pinned` (immutable values kept), `conflicts` (the user changed a value whose default changed too), `unverified` (user-added keys the new version does not know, carried as they are) and counts of `carried` and `defaultChanged`.
 - **The install page's version switch** uses the same carry-over in install mode: nothing is pinned and `assume` is skipped.
+- **References new in the target version start empty** in the upgrade session, and installed references are kept (§12.1). A GVC outside the `gvc` limits is only `info` on upgrade, since the release cannot move (§14.1).
+- **Upgrade mode** in the console opens every step for free navigation; the Review's Visual tab tags changed rows and lists the changes since the last apply, each as "Edited" or "New default".
 
 ### 9.2 Migrations
 
@@ -2043,7 +2050,11 @@ Install sessions in the console clear every reference that still holds its chart
 - references below an optional block that is off are skipped, and read-only fields are kept;
 - it is re-applied after turning a block on, `reset` and `resetAll`, so a chart default never comes back.
 
-The user then picks a real object, or sees `REQUIRED`. On upgrade, installed references are kept; the console also asks for this on upgrade sessions so that a reference key new in the target version starts empty (see the core README for the current state of that behaviour). `lint` and the CLI's `render` do not clear anything.
+The user then picks a real object, or sees `REQUIRED`.
+
+**On upgrade** the console asks for the same clearing, but only for references **new in the target version**: a reference (or `optionsFrom` enum) is cleared only when the installed values hold no value at its path (missing, `null`, `""` or `[]`). Carry-over writes the release's answers over the new `values.yaml`, so a reference the new version adds would otherwise arrive holding its placeholder (postgres 3.3.0 → 3.4.1 would carry `credentialsSecretName: my-postgres-credentials`). A value the release runs with is **never** cleared, even when it equals a chart default: a 3.3.0 release that installed `backup.gcp.cloudAccountName: my-backup-cloudaccount` keeps the 3.4.1 default `my-gcs-cloud-account` that replaces it. Without readable installed values, an upgrade clears nothing. With imports, the installed values are layered too, so only child references new in the target child version are cleared.
+
+`lint` and the CLI's `render` do not clear anything.
 
 What this means for authors:
 
@@ -2071,7 +2082,7 @@ For a string that is a placeholder (a bucket, an IAM policy name, a hostname, an
 - Use it only when the default cannot work as is. A default that works but may collide (gitea's database secret name `my-gitea-db-credentials`, which only a second release would clash with) is an `info` rule instead:
 
   ```yaml
-  # gitea 1.2.0 (design)
+  # gitea 1.2.0
   - when: context.mode == 'install'
     rule: self.postgres.config.credentialsSecretName != 'my-gitea-db-credentials'
     severity: info
@@ -2108,18 +2119,26 @@ Put a warning note before prerequisite secrets that must exist first:
 
 ### 13.2 `allowCreate`
 
-`allowCreate: true` offers "Create" next to the picker, which opens the console's embedded create form prefilled from `create`. Default false.
+`allowCreate: true` offers "Create" next to the picker, which opens the console's embedded create form, prefilled. Default false; without it there is no Create button, whatever `create` says.
 
 - **Set it only on prerequisite secrets the user must bring for this release**: database credentials, keyfiles, JWT keys, dashboard and SMTP passwords, object storage keys, provider client secrets.
 - **Never on workload lists** (firewall `internalAccess.workloads`, `inboundAllowWorkload`): the user picks existing clients; creating a workload from a firewall field is never the task. This was the owner's Round 2 finding on postgres's Network step.
 - Not on cloud accounts, identities or policies (the console has no embedded create for them anyway). The kinds with an embedded create are secret, gvc, volumeset, workload and domain.
 - `create` without `allowCreate: true` is the lint warning `CREATE_WITHOUT_ALLOW_CREATE` (checked once the descriptor uses `allowCreate` anywhere): either add `allowCreate` or remove the prefill.
 
-`create` prefills:
+**What the form is prefilled with.** With `allowCreate: true` the prefill works without any `create` block:
+
+- the secret type is `create.secretType`, else the single type in `filter.secretType` (`[dictionary]` → a dictionary secret);
+- the keys are `create.keys`, else the resolved `requiredKeys` (`requiredKeysFrom` evaluated for the field);
+- `encoding`, `provider`, `hint` and the suggested name come only from `create`.
+
+So write a `create` block only for what the defaults cannot give: a `suggestName`, a `secretType` when the filter lists several types (or none), `encoding: plain` for an opaque secret read as text, a `provider`, or a `hint`. A `create: { secretType: dictionary }` next to `filter: { secretType: [dictionary] }` is redundant.
+
+`create` keys:
 
 | Key | Meaning |
 |---|---|
-| `secretType` | `dictionary` or `opaque` |
+| `secretType` | `dictionary` or `opaque`; defaults to the single type in `filter.secretType` |
 | `keys` | dictionary keys to prefill; defaults to `requiredKeys`, so leave it out when they are the same |
 | `encoding` | `plain` for opaque secrets the chart reads as text |
 | `provider` | cloud account provider |
@@ -2191,9 +2210,11 @@ gvc:
 
 Non-negative integers, `minLocations` ≤ `maxLocations`, either may be left out.
 
-- When the target GVC is known and its location count is outside the limits, the session reports `GVC_LOCATIONS` (error, on the Release step), for example "Choose a GVC with exactly 1 location for this template (claude-dev has 3)."
-- The console's GVC picker disables GVCs that do not fit, with the reason ("has 3 locations; this template runs one copy per location and needs exactly 1"), and the embedded GVC create enforces the same limits (a single location, none not allowed).
+- **On install**, when the target GVC is known and its location count is outside the limits, the session reports `GVC_LOCATIONS` as an **error** on the Release step: "Choose a GVC with exactly 1 location for this template (claude-dev has 3)."
+- **On upgrade** the same check is **info**, because the release's GVC cannot change during an upgrade and an error would strand every release installed before the limits existed: "This release already runs in 3 locations (claude-dev), one independent copy per location; this upgrade does not change that."
 - Nothing is reported while the GVC's locations are unknown.
+- The console's GVC picker shows each GVC's location count and disables the GVCs that do not fit, with the reason ("Has 3 locations; this template needs exactly 1"). It judges a GVC by its static location links, so a GVC placed by a location query is never disabled there; `GVC_LOCATIONS` reports it once its locations are known.
+- "Create GVC" opens an embedded create limited the same way: a single-choice location list when the maximum is 1, and it cannot be created with fewer locations than the minimum.
 - With imports, the limits of the parent and of every enabled import are intersected: the largest minimum and the smallest maximum (§16).
 
 ### 14.2 Deciding the limits
@@ -2258,6 +2279,7 @@ Why this belongs in the descriptor: in a 3-location GVC, postgres silently runs 
 ```
 
 - Allowed on `string`, `integer`, `number` and `quantity` fields, and on list item and map value schemas of those types. On other types it is `NOT_APPLICABLE`.
+- The console shows a text input with a dropdown of the suggestions beside free typing (in list rows too). A number's `unit` is written next to the input; a quantity's suggestions replace its number-and-unit pair with whole quantity strings. A typed value is parsed like any other, and a value outside `min`/`max` shows the field's own `MIN`/`MAX` issue.
 - A value, or `{ value, label, description }`. Labels default to the value.
 - **Every suggestion must be valid for the field:** within `min`/`max` (`INVALID_VALUE`: "Suggestion 5 is below "min" (10)"), of the field's type (`INVALID_TYPE`), and valid quantity grammar for quantities. An empty list is an error, a duplicate a warning.
 - For quantities, use full quantity strings: `["250m", "500m", "1", "2"]`, `[128Mi, 256Mi, 512Mi, 1Gi]`.
@@ -2292,9 +2314,7 @@ The standard lists from the pilots:
 
 ---
 
-## 16. Subchart imports (syntax final once core imports land)
-
-> This chapter follows the Round 2 imports design. The core implementation is in progress; the key names, codes and CLI flags below are final only once it lands. Re-check this chapter against the core README "Decisions" and `SPEC.md` when it does.
+## 16. Subchart imports
 
 ### 16.1 What imports are for
 
@@ -2314,7 +2334,7 @@ postgres:
   ...
 ```
 
-Helm gives the subchart the user's values under that key, over the parent's block, over the child's own `values.yaml`. An import reuses the child's descriptor unchanged for those values: the core composes the child's steps into the parent's wizard, with paths prefixed by the key.
+Helm gives the subchart the user's values under that key, over the parent's block, over the child's own `values.yaml`. An import reuses the child's own descriptor, unchanged, for those values: the core composes the child's steps, fields and rules into the parent's wizard at compile time, with every path below the key.
 
 ### 16.2 Syntax
 
@@ -2323,7 +2343,7 @@ imports:
   - template: postgres            # required: Chart.yaml dependencies[].name
     version: 3.4.1                # required: dependencies[].version, exactly (x.y.z, no ranges)
     alias: postgresHA             # optional: dependencies[].alias; the values key is alias ?? template
-    when: self.postgresHA.enabled # optional: mirrors dependencies[].condition exactly
+    when: self.postgresHA.enabled # optional: exactly self.<dependencies[].condition>
     title: Bundled PostgreSQL     # optional: the group label; default the child's title, else the template
     after: database               # optional: a parent step id (or before:, not both); default: after the last parent step
     steps:                        # optional: order and titles of child steps; never drops anything
@@ -2331,56 +2351,71 @@ imports:
       - { id: storage, title: Database storage, description: … }
     exclude:                      # optional: child paths (relative to the child's values) or child virtual ids
       - config.credentialsSecretName
-    override:                     # optional: child path (or virtual id) → presentation and constraint overrides
-      image: { label: PostgreSQL image }
+    override:                     # optional: child path (or virtual id, or a section toggle's path) → overrides
+      backup.enabled: { help: … }
 ```
 
 | Key | Rule |
 |---|---|
-| key (prefix) | `alias ?? template`, one path segment. Every child path is prefixed (`image` → `postgres.image`) and every child id namespaced (`server` → `postgres:server`). Unique across imports (`IMPORT_DUPLICATE`). |
-| `template`, `version`, `alias` | Must equal a `Chart.yaml` dependency with the same `name` and `alias`, and the exact pinned version (`IMPORT_NOT_A_DEPENDENCY`, `IMPORT_VERSION_MISMATCH`). Library charts (`cpln-common`) are never imported. |
-| `when` | Parent-scope CEL (`self` is the whole tree). Gates every imported step, section, field and rule. Must be exactly `self.<condition>` (`IMPORT_CONDITION_MISMATCH`), and the condition path must be a declared parent boolean (`IMPORT_CONDITION_UNDECLARED`, warning). A failing `when` shows the steps (fail-open, like Helm's "missing condition = enabled"). Values of a disabled import stay in the document. |
-| `after`, `before` | A parent step id (`IMPORT_ANCHOR_UNKNOWN` otherwise). Several imports anchored to one step keep `imports` order. |
-| `steps` | Reorders and renames child steps (`title`, `description`); unlisted steps follow in child order. An unknown id is `IMPORT_STEP_UNKNOWN`. |
-| `exclude` | The only way to drop child content: the field and everything below the path. A child section left without fields is dropped with its notes and rules, and so is a child step. A child rule is dropped when its owner field is excluded or all its `paths` are; otherwise excluded entries leave its `paths`. An entry that matches nothing is `IMPORT_EXCLUDE_UNKNOWN`. |
-| `override` | Allowed keys: `label`, `description`, `help`, `docs`, `placeholder`, `widget`, `advanced`, `required`, `example`, `sensitive`, `immutable`, `readOnly`, `min`, `max`, `minLength`, `maxLength`, `pattern`, `patternMessage`, `minItems`, `maxItems`, `unit`, `cpu`, `memory`, `maxRatio`, `suggestions`. Not allowed (`IMPORT_OVERRIDE_NOT_ALLOWED`): `type`, `path`, `id`, `virtual`, `init`, `options`, `optionsFrom`, `ref`, `rules`, `when`, `fields`, `item`, `values`, `absent`, `default`, `serialize`, `quantity`; those are the child's contract with its chart. The merged field is validated like any field. Loosening a bound or `required` is `IMPORT_OVERRIDE_LOOSENS` (warning). |
+| values key | `alias ?? template`, one path segment. Every child path is prefixed with it (`image` → `postgres.image`; also child rule `paths`, virtual `set` targets, section toggles and the child's `yamlOnly`). Child step ids and explicit or virtual field ids are namespaced (`server` → `postgres:server`); path-derived ids follow the path. Two imports with one key are `IMPORT_DUPLICATE`. |
+| `template`, `version`, `alias` | Must equal a `Chart.yaml` dependency with the same `name` and `alias` (`IMPORT_NOT_A_DEPENDENCY`), at exactly the pinned version (`IMPORT_VERSION_MISMATCH`, also reported when Chart.yaml pins a range). Library charts (`cpln-common`) are never imported. |
+| `when` | CEL bool in the parent's scope (`self` is the whole tree). It must be exactly `self.<condition>`, and an import without `when` needs a dependency without `condition` (`IMPORT_CONDITION_MISMATCH`, both ways). The condition path should be a boolean field of the parent (`IMPORT_CONDITION_UNDECLARED`, warning). It gates every imported step and the child's root rules; values of an import that is off stay in the document. A `when` that fails counts as on (`WHEN_EVAL_ERROR`), as Helm renders a dependency whose condition is missing. |
+| `after`, `before` | A parent step id (`IMPORT_ANCHOR_UNKNOWN` otherwise); not both. Several imports at one step keep the `imports` order. Without either, after the last parent step. |
+| `steps` | Orders and renames child steps (`title`, `description`); unlisted steps follow in the child's order. An unknown id is `IMPORT_STEP_UNKNOWN`. |
+| `exclude` | Drops a field and everything below its path (or a virtual field by id), then every section and step left without a field (with their notes and rules), every rule whose owner went, and every rule path that went (a rule with no path left is dropped). **Excluded fields stay declared**, so the child's expressions still see a normalized `self`. An entry that matches nothing is `IMPORT_EXCLUDE_UNKNOWN`; an excluded section toggle whose section keeps fields is `IMPORT_TOGGLE_EXCLUDED`. |
+| `override` | Each key **replaces** the child's value for that key (`cpu` and `memory` bounds as a whole, so repeat the bound you keep). Allowed keys: `label`, `description`, `help`, `docs`, `placeholder`, `widget`, `advanced`, `required`, `example`, `sensitive`, `immutable`, `readOnly`, `min`, `max`, `minLength`, `maxLength`, `pattern`, `patternMessage`, `minItems`, `maxItems`, `unit`, `cpu`, `memory`, `maxRatio`, `suggestions`. Overrides also apply to section toggles (by the toggle's path: gitea overrides the `help` of postgres's `backup.enabled` switch). The merged field is validated again, and what the override adds is reported at `/imports/<i>/override/<path>/…`. |
+
+Override errors and warnings:
+
+| Code | Severity | Meaning |
+|---|---|---|
+| `IMPORT_OVERRIDE_NOT_ALLOWED` | error (parser) | a key outside the allow-list: `type`, `path`, `id`, `virtual`, `init`, `options`, `optionsFrom`, `ref`, `rules`, `when`, `fields`, `item`, `values`, `absent`, `default`, `serialize`, `quantity` are the child's contract with its chart |
+| `IMPORT_OVERRIDE_ANCHOR` | error (parser; the schema rejects `#` in `docs` too) | a `#anchor` link in `docs`, `description` or `help`: it would resolve to the child's page; write `/template-catalog/templates/<parent>#anchor` |
+| `IMPORT_OVERRIDE_UNKNOWN` | error | the override names no child field, or an excluded one |
+| `IMPORT_OVERRIDE_LOOSENS` | warning | the override loosens a bound, `required`, `readOnly` or `immutable` |
 
 A child descriptor that has `imports` of its own is `IMPORT_NESTED` (§16.10).
 
 ### 16.3 How the composed wizard behaves
 
-- **Ids.** Child step ids become `<key>:<id>` (`postgres:server`), child section and note ids follow, child virtual ids become `<key>:<id>` (child CEL still reads `ui.<id>`), and path-derived field ids are prefixed (`postgres.image`).
-- **CEL scope.** Child expressions run in the child's scope: `self` and `oldSelf` are rebased at the key, `context.templateName`, `version` and `fromVersion` are the child's, and `ui` is the child's own. `context.releaseName`, `gvc`, `mode`, `gvcLocations`, `gvcSpec` and `renderer` stay the release's, because a subchart shares the release name and the GVC (so postgres's `context.releaseName + '-pgbouncer'` stays correct).
-- **Parent expressions see everything:** `self.postgres.internalAccess.type`, `oldSelf.postgres.image`. Child declarations are prefixed, so `self.postgres.internalAccess.workloads` is normalized to `[]`. The parent cannot read a child's `ui` (`CEL_UNKNOWN_UI`), and a child never sees parent values: anything that needs parent facts is a parent rule.
-- **Defaults are layered for reading, parent-only for writing.** The effective values (and `isDefault`, `changes`, placeholders) layer the child's `values.yaml` under the key, then the parent's `values.yaml`, exactly as Helm does. Writing uses the parent's `values.yaml` only: the initial document, `reset`, `resetAll` and pruning never write a child default into the document. The YAML step notes that unset keys under the key keep the child template's defaults.
-- **Docs and labels.** Everything on an imported field resolves against the child's docs page: a child `#backup` goes to `/template-catalog/templates/postgres#backup`. Imported step headers show "From the PostgreSQL template 3.4.1" with a link to the child's page, and review labels are prefixed with the import's title.
-- **Placeholders.** Child `example: true` fields stay placeholders under the layered defaults unless an override sets `example: false`, and install sessions clear child references that still hold their layered default.
+- **One binding per path and id** across the parent and its imports. A parent field on a path a child field still binds is `DUPLICATE_PATH`, naming the import and the path to exclude; a parent `yamlOnly` over a bound child path is `CONFLICT`.
+- **CEL scope.** Every imported expression (visibility, rules, `optionsFrom`, `init`, `itemLabel`, note texts, `requiredKeysFrom`, `suggestName`, child migrations, and lint's passes) is bound in the child's scope: `self` and `oldSelf` are rebased at the values key; `context.templateName` and `context.version` are the child's, and on upgrade `context.fromVersion` is the installed child version (`null` on install or when unknown); `ui` holds the child's own virtual fields under their local ids. `releaseName`, `gvc`, `mode`, `gvcLocations`, `gvcSpec` and `renderer` stay the parent's: a subchart is part of the release, so postgres's `context.releaseName + '-pgbouncer'` stays correct.
+- **Parent expressions see the whole tree** (`self.postgres.internalAccess.type`, `oldSelf.postgres.image`), with the child's declarations prefixed (`self.postgres.internalAccess.workloads` is normalized to `[]`). A parent expression cannot read a child's `ui` (`CEL_UNKNOWN_UI`), and a child never sees parent values: anything that needs parent facts is a parent rule.
+- **Layered defaults for reading, the parent's for writing.** The chart defaults the session reads are the child's `values.yaml` under the key, then the parent's `values.yaml` over it, exactly as Helm merges them: the effective values and `self`, field values, `isDefault`, `EXAMPLE_VALUE`, `changes()`, `getAnswers()` and the default a block turns on with. Writing uses the parent's `values.yaml` alone: the document starts as it, `reset` goes back to it (without a parent default the key is deleted, so the child default shows through), `resetAll` re-reads it, and pruning keeps only its keys (no `postgres.backup: {}` residue). The document never receives child defaults, except when the user turns on an optional block whose child default is on.
+- **Origins and docs.** Imported steps, sections, notes, fields and review rows carry an origin (the values key, the child template and version, the import's title, the child's docs page). `docs` values and markdown links of imported entries resolve against the **child's** page: a child `#backup` goes to `/template-catalog/templates/postgres#backup`.
+- **Issues and changes.** `Issue.import` is set on the issues of imported steps and of the child's own rules and expressions; `Issue.rule.import` only when the rule is in the child's file (a parent root rule on `postgres.internalAccess.type` lands on `postgres:network` with `import` but without `rule.import`). `Change.import` is the import of the changed field: parent fields under the key (gitea's `postgres.credentials.*`) have none, and paths without a field take the import by their prefix.
+- **Placeholders.** Child `example: true` fields stay placeholders under the layered defaults. `clearRefDefaults` decides with the layered defaults and writes into the parent's document, so child references that hold an example default (`postgres.backup.aws.cloudAccountName`) start as `""` on install, hidden ones included; on upgrade only child references new in the target child version are cleared.
+- `requiredKeysFrom`, `allowCreate`, `suggestions` and `patternMessage` work in imported fields as in any other. `createHint` follows the child reference's own `allowCreate`, and `suggestName` runs in the child's scope.
 
 ### 16.4 Parent fields for parent-owned keys
 
-Many parents create a secret themselves and hand the child only its name. The child's field for that path is a reference with `mustExist: error`, which would fail before install. Exclude it and bind a parent field instead:
+Many parents create a secret themselves and hand the child only its name. The child's field for that path is a reference with `mustExist: error`, which would fail before install, because the secret does not exist until the parent creates it. Exclude it and bind a parent field:
 
 ```yaml
+# gitea 1.2.0
 imports:
   - template: postgres
     version: 3.4.1
     exclude:
-      - config.credentialsSecretName   # the child's ref
+      # Gitea creates this secret itself (templates/secret-db.yaml) and names it in the Database step below.
+      - config.credentialsSecretName
+
 steps:
   - id: database
     title: Database
+    description: The bundled PostgreSQL's credentials. Gitea creates the secret from them; there is nothing to create first.
+    docs: "#backing-database"
     fields:
-      - path: postgres.config.credentialsSecretName   # a plain string owned by the parent
+      - path: postgres.config.credentialsSecretName
         type: string
         label: Credentials secret name
         required: true
+        description: The dictionary secret Gitea creates and PostgreSQL reads. Secret names are org-wide.
 ```
 
-- Parent fields under the key are ordinary parent fields with absolute paths, in parent steps, with the parent's docs and CEL scope.
-- A parent field on a path a child field still binds is `DUPLICATE_PATH` naming the import: exclude the child field first.
-- An excluded path that no parent field covers is `UNCOVERED_VALUE` "(excluded from import postgres)": bind it, or list it under the parent's `yamlOnly` with a reason.
+- Parent fields under the key are ordinary parent fields with absolute paths, in parent steps, with the parent's docs page and CEL scope.
 - Parent-only keys the child does not know (`postgres.credentials.*`) need parent fields like any other leaf.
-- Excluding a section's toggle but not its fields is `IMPORT_TOGGLE_EXCLUDED`.
+- An excluded path that no parent field covers is `UNCOVERED_VALUE` "(excluded from import postgres)": bind it with a parent field, or list it under the parent's `yamlOnly` with a reason (gitea lists the excluded `postgres.pgbouncer`).
 
 ### 16.5 `when` mirrors `condition`
 
@@ -2397,29 +2432,57 @@ imports:
     when: self.postgres.enabled
 ```
 
-The condition key is a parent-only key (the child's `values.yaml` has no `enabled`), so the parent declares it: a boolean field or a section toggle in a parent step ("Bundled PostgreSQL"). When a parent offers two mutually exclusive databases (chatwoot's `postgresHA.enabled` and `postgres.enabled`) and its `_helpers.tpl` requires exactly one, mirror that `fail` with a parent rule.
+The condition key is a parent-only key (the child's `values.yaml` has no `enabled`), so the parent declares it as a boolean field, for example in a "Database" step. When a parent offers two mutually exclusive databases (chatwoot's `postgresHA.enabled` and `postgres.enabled`) and its `_helpers.tpl` requires exactly one, mirror that `fail` with a parent rule. gitea's dependency has no condition, so its import has no `when`.
 
 ### 16.6 Placement and step titles
 
-Put the imported steps right after the parent step that configures the connection to the child (`after: database`), and rename them so they read as part of this template: "Database server", "Database storage", "Database network", "Database backups". Keep the parent's own step titles distinct from the child's ("Storage" for Gitea's repositories, "Database storage" for PostgreSQL's volume).
+Put the imported steps right after the parent step that configures the connection to the child (`after: database`), and rename them so they read as part of this template ("Database server", "Database storage", "Database network", "Database backups"). Keep the parent's own step titles distinct from the child's: "Storage" for Gitea's repositories, "Database storage" for PostgreSQL's volume.
 
 ### 16.7 Parent rules over imported values
 
-Parent rules can name imported fields in `paths`; the issues attach to them. A root rule takes the step of the field at its first path (`postgres:network`). Write parent rules for the facts only the parent knows:
+Parent rules can name imported fields in `paths`; the issues show on them, and a root rule takes the step of the field at its first path. Write parent rules for the facts only the parent knows:
 
-- the parent's workloads connect to the child, so the child's "Nobody" firewall option breaks the app (error), and a "Specific workloads" list must include the parent's workload (warning);
-- the parent requires one of several imports to be on.
+```yaml
+# gitea 1.2.0
+# Rules over the imported values: their issues show on the imported fields' step (postgres:network).
+rules:
+  - rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"Nobody" also blocks Gitea, which connects to its database like any other workload.'
+  - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-gitea') in self.postgres.internalAccess.workloads
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-gitea, or Gitea cannot reach its database.'"
+    message: Add the Gitea workload to the list, or Gitea cannot reach its database.
+```
 
 ### 16.8 GVC limits
 
-The effective limits are the intersection of the parent's `gvc` block and the blocks of every enabled import (the largest minimum, the smallest maximum). Limits that cannot both hold are `IMPORT_GVC_CONFLICT`. Declare the parent's own limits for the parent's own workloads; do not copy the child's.
+The effective limits intersect the parent's `gvc` block with the block of every import that is on (the largest minimum, the smallest maximum). `GVC_LOCATIONS` names whose limits the GVC misses ("Choose a GVC with exactly 1 location for Bundled PostgreSQL (g has 2)."). Limits no GVC can meet are the lint error `IMPORT_GVC_CONFLICT`. Declare the parent's own limits for its own workloads (gitea has one stateful replica, so `{ minLocations: 1, maxLocations: 1 }`); do not rely on the import for them.
 
 ### 16.9 Upgrades with imports
 
-- Carry-over takes each import's installed and target versions (the installed child version comes from the release's chart metadata, else the installed descriptor's `imports`). Child migrations run for the child's own version range.
-- **A parent migration on a path beats the child's migration on the same path.** gitea 1.1.0 (postgres 3.2.1) → 1.2.0 (postgres 3.4.1) renames `postgres.config.password` to `postgres.credentials.password`; without that precedence, postgres's own `<3.4.0` drop would discard the password.
-- A child `valueExpr` runs in the child's scope. An unknown old child version is an `IMPORT_FROM_UNKNOWN` warning, and the new child defaults stand in for the old ones.
-- A child migration that touches an excluded path is `IMPORT_MIGRATION_EXCLUDED` (warning): its note may point at a step that no longer exists.
+- Carry-over takes each import's installed and target child versions. The CLI reads the installed child versions from the `Chart.yaml` next to `--old-defaults`, or from `--old-import postgres=3.2.1`; the console takes them from the release's chart metadata.
+- Both sides are layered, only the parent's document is written, and the descriptors are composed, so child immutable fields are pinned and child lists and blocks stay atomic.
+- **Parent migrations run first. The child's own migrations follow, for the child's own versions and prefixed, minus every one whose `from`, `to` or `assume` touches a path a parent migration claims.** gitea 1.1.0 (with postgres 3.2.1) → 1.2.0 (with postgres 3.4.1) renames `postgres.config.password` to `postgres.credentials.password`; that beats postgres's own `<3.4.0` drop, so the password is carried and there is no drop entry.
+- A child `valueExpr` sees the child's part of the old values, normalized by the old child descriptor, and the child's context.
+- An unknown installed child version (none given, or no old child `values.yaml`) lets the new child defaults stand in, skips the child's migrations, and is an `IMPORT_FROM_UNKNOWN` warning. A declared import whose sources were not given is `IMPORT_UNRESOLVED` (error; `ok` is false).
+- Every report entry carries `import` (the changed field's import, else by prefix).
+
+```sh
+tw carry --old-defaults gitea/versions/1.1.0/values.yaml --old-values release-values.yaml \
+  --new-defaults gitea/versions/1.2.0/values.yaml --from 1.1.0 --to 1.2.0 \
+  --descriptor gitea/versions/1.2.0/wizard.yaml > /tmp/carried.yaml
+```
+
+```
+renamed (1):
+  postgres.config.password → postgres.credentials.password = "s3cret-db"
+defaultChanged (5):
+  postgres.backup.aws.bucket: "my-backup-bucket" → "my-postgres-bucket"
+  …
+```
 
 ### 16.10 Nested imports are not supported
 
@@ -2427,31 +2490,39 @@ A child that imports another template is `IMPORT_NESTED`. Real chains exist (pos
 
 ### 16.11 Linting imports
 
+Lint needs, besides the parent's own texts, the parent's `Chart.yaml` (`chartText`), the previous version's `Chart.yaml` (`prevChartText`, for the child version the previous values came with) and every child's `wizard.yaml` and `values.yaml`. The CLI reads all of them from the templates root:
+
 ```sh
-tw lint gitea/versions/1.2.0                    # imports resolved from the templates root inferred from the path
-tw lint --templates-root . gitea/versions/1.2.0 # explicit root
+tw lint gitea/versions/1.2.0                     # root inferred from <root>/<template>/versions/<version>
+tw lint gitea/versions/1.2.0 --templates-root .  # explicit root
 ```
 
-Lint reads each import's `wizard.yaml`, `values.yaml` and `Chart.yaml` from `<root>/<template>/versions/<version>`, plus this version's and the previous version's `Chart.yaml`. It then:
+```
+ok   gitea 1.2.0 (previous 1.1.0): 0 errors, 0 warnings, 60/60 leaves covered
+```
 
-- composes the descriptor and reports composition errors at the parent's pointer (`/imports/0/exclude/1`); child parse errors are `IMPORT_INVALID` with the child's own diagnostics and file names;
-- runs every ordinary check on the composed descriptor over the layered defaults, so a parent override of a child default that breaks a child check is caught (a gitea `postgres.resources.maxCpu` above `maxRatio` is `DEFAULT_INVALID` at gitea's `values.yaml` line);
-- checks coverage under the key: child leaves by child fields, excluded and parent-only keys by parent fields or `yamlOnly`;
-- checks the dependency's name, version, alias and condition against `Chart.yaml`;
-- does not repeat the child's own findings (lint the child separately).
+An import lives at `<root>/<template>/versions/<version>`; a missing one is `IMPORT_UNRESOLVED` with the path the CLI tried. Through the API without `chartText`, the dependency checks are skipped with the info `IMPORT_CHART_UNCHECKED`; the CLI always reads `Chart.yaml`.
 
-A missing import directory is `IMPORT_UNRESOLVED` with the path it tried.
+What lint does with imports:
+
+- **Composes** the descriptor and lints it over the layered defaults: field paths, coverage, rule paths, CEL chains (child chains prefixed), the defaults, the install and upgrade session passes and the hidden-scope pass, each with per-import bindings.
+- **Does not repeat the child's own findings.** It runs the child's own lint and skips a composed finding with the same code at the same child pointer; child rule paths, child `set` targets, `CREATE_WITHOUT_ALLOW_CREATE`, `mirrors` and the child's own texts are the child's lint's business. What the composition causes is reported: at the parent's `values.yaml` line when the parent's values set the offending default (gitea setting `postgres.resources.maxCpu` past `maxRatio` is `DEFAULT_INVALID` at gitea's `values.yaml`), else at the child's `wizard.yaml` with "(as imported under …)". The parent's own texts for the import (override `help` and `description`, `steps` descriptions) are checked.
+- **Coverage** lists every leaf of the layered defaults. A child leaf that the child covers but an exclusion uncovers is `UNCOVERED_VALUE` "(excluded from import …)", at the parent's `values.yaml` when it sets the key, else at the exclusion. A leaf the child alone leaves uncovered is for the child's lint.
+- **Chart.yaml:** `IMPORT_NOT_A_DEPENDENCY`, `IMPORT_VERSION_MISMATCH` and `IMPORT_CONDITION_MISMATCH` (errors), `IMPORT_CONDITION_UNDECLARED` (warning).
+- **Migrations:** `IMPORT_MIGRATION_EXCLUDED` (warning) for a child migration, not claimed by the parent, that touches an excluded path. Keys removed from the parent's previous `values.yaml` are explained by the parent's migrations, or by the child's migrations for the child version in `prevChartText`.
+- `IMPORT_GVC_CONFLICT` (error) when no GVC fits the combined limits.
+
+Lint the child on its own as well (`tw lint postgres/versions/3.4.1`).
 
 ### 16.12 Worked example: gitea 1.2.0
 
-Gitea 1.2.0 depends on postgres 3.4.1 (no alias, no condition) and on the library chart cpln-common. Gitea creates the database secret itself from `postgres.credentials.*` (`templates/secret-db.yaml`), and its workload connects to `<release>-postgres` directly (`GITEA__database__HOST`), so PostgreSQL's pooler would sit unused.
+gitea 1.2.0 depends on postgres 3.4.1 (no alias, no condition) and on the library chart cpln-common. Gitea creates the database secret itself from `postgres.credentials.*` (`templates/secret-db.yaml`), and its workload connects to `<release>-postgres` directly (`GITEA__database__HOST`), so PostgreSQL's pooler would sit unused. Excerpts from `gitea/versions/1.2.0/wizard.yaml`:
 
 ```yaml
-# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
-apiVersion: template-wizard.controlplane.com/v1
-kind: TemplateWizard
-title: Gitea
-gvc: { minLocations: 1, maxLocations: 1 }   # one stateful replica with its own volume
+# One stateful replica with its own repository volume: every GVC location would run its own copy.
+gvc:
+  minLocations: 1
+  maxLocations: 1
 
 imports:
   - template: postgres
@@ -2465,193 +2536,23 @@ imports:
       - { id: backup, title: Database backups }
       - { id: advanced, title: Database backup job }
     exclude:
-      # Gitea creates this secret and owns its name; the parent field in step "database" replaces the child's ref.
+      # Gitea creates this secret itself (templates/secret-db.yaml) and names it in the Database step below.
       - config.credentialsSecretName
-      # Gitea connects to <release>-postgres directly; a pooler would sit unused (yamlOnly below).
+      # Gitea connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
       - pgbouncer
     override:
-      image:
-        label: PostgreSQL image
+      # …
       internalAccess.type:
-        description: Gitea reaches its database through this firewall, like any other workload.
+        description: >-
+          Gitea connects to its database like any other workload: keep Same GVC, or add the Gitea
+          workload under Allowed workloads.
       backup.enabled:
-        help: >-
-          Backs up the bundled database on a schedule. See
-          [Backing database](/template-catalog/templates/gitea#backing-database).
+        help: Adds one cron workload that runs `pg_dumpall` and uploads a gzipped dump to the bucket.
+```
 
-steps:
-  - id: gitea
-    title: Gitea
-    description: The Gitea image, its compute, and the prerequisite auth secret.
-    docs: "#gitea"
-    sections:
-      - fields:
-          - path: image
-            type: string
-            format: image
-            label: Gitea image
-            required: true
-            description: Use a `-rootless` tag; the chart runs Gitea as UID 1000 with its built-in SSH server.
-          - path: resources
-            type: resources
-            label: Resources
-            required: true
-            description: One stateful replica.
-            maxRatio: 4
-            cpu: { min: 25m }
-            memory: { min: 32Mi }
-      - title: Admin and signing keys
-        docs: "#prerequisites"
-        fields:
-          - type: note
-            severity: warning
-            text: >-
-              The auth secret must exist **before** you install. If it is missing, the deployment waits and
-              `cpln logs` shows nothing at all.
-          - path: gitea.auth.secretName
-            type: ref
-            label: Auth secret
-            required: true
-            description: >-
-              A dictionary secret with `adminUsername`, `adminPassword`, `adminEmail`, `secretKey`,
-              `internalToken` and `jwtSecret`.
-            help: >-
-              `secretKey` and `jwtSecret` cannot be rotated: a new `secretKey` makes stored 2FA secrets, tokens
-              and mirror credentials unreadable. `jwtSecret` must be base64url of exactly 32 bytes.
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [dictionary] }
-              mustExist: error
-              allowCreate: true
-              requiredKeys: [adminUsername, adminPassword, adminEmail, secretKey, internalToken, jwtSecret]
-              create:
-                secretType: dictionary
-                suggestName: "context.releaseName + '-gitea-auth'"
-                hint: >-
-                  secretKey, internalToken: openssl rand -hex 32.
-                  jwtSecret: openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
-          - path: gitea.disableRegistration
-            type: boolean
-            label: Invite-only registration
-            description: On, only an admin creates accounts; off, anyone who reaches the web UI can sign up.
-        rules:
-          - rule: self.gitea.auth.secretName != null && self.gitea.auth.secretName != ''
-            mirrors: gitea.validateAuth
-            paths: [gitea.auth.secretName]
-            message: Name the prerequisite auth secret; the chart does not render without it.
-          - rule: oldSelf == null || self.gitea.auth.secretName == oldSelf.gitea.auth.secretName
-            severity: info
-            paths: [gitea.auth.secretName]
-            message: >-
-              The new secret must hold the same secretKey, internalToken and jwtSecret as the installed one, or
-              existing 2FA secrets, tokens and OAuth2 tokens stop working.
+The parent's own steps (Gitea, Storage, Access) are ordinary steps; the Database step holds the parent-only keys under `postgres.`:
 
-  - id: storage
-    title: Storage
-    description: The volume set with repositories, LFS objects, attachments and SSH host keys.
-    docs: /reference/volumeset
-    sections:
-      - fields:
-          - path: volumeset.capacity
-            type: integer
-            label: Initial capacity
-            unit: GiB
-            min: 10
-            required: true
-            suggestions: [10, 20, 50, 100, 250, 500, 1000]
-            help: Uninstalling the release deletes the volume set with every repository on it.
-            docs: "/reference/volumeset#capacity-and-billing"
-      - id: autoscaling
-        title: Grow storage automatically
-        toggle: volumeset.autoscaling.enabled
-        docs: "/reference/volumeset#autoscaling"
-        fields:
-          - path: volumeset.autoscaling.maxCapacity
-            type: integer
-            label: Maximum capacity
-            unit: GiB
-            min: 10
-            required: true
-            suggestions: [50, 100, 250, 500, 1000, 2000]
-          - path: volumeset.autoscaling.minFreePercentage
-            type: integer
-            label: Scale up below this free space
-            unit: "%"
-            min: 1
-            max: 100
-            required: true
-            suggestions: [10, 20, 30]
-          - path: volumeset.autoscaling.scalingFactor
-            type: number
-            label: Scaling factor
-            min: 1.1
-            step: 0.1
-            required: true
-        rules:
-          - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
-            paths: [volumeset.autoscaling.maxCapacity]
-            message: The maximum capacity must be at least the initial capacity.
-    rules:
-      - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
-        paths: [volumeset.capacity]
-        message: A volume set cannot shrink. Keep the capacity at or above the installed size.
-
-  - id: access
-    title: Access
-    description: Who reaches the web UI and Git, from the internet and from inside the GVC.
-    docs: "#access"
-    sections:
-      - fields:
-          - path: publicAccess.enabled
-            type: boolean
-            label: Public HTTPS endpoint
-            description: The web UI and Git over HTTPS on the workload's `*.cpln.app` endpoint.
-      - id: ssh
-        title: Git over SSH
-        toggle: ssh.enabled
-        description: Public SSH takes over the workload's only public endpoint, and the web UI on it goes away.
-        fields:
-          - type: note
-            severity: warning
-            text: Turn this on only if you serve the web UI through a custom domain, or only need Git over SSH.
-          - path: ssh.externalPort
-            type: integer
-            label: Public SSH port
-            min: 1
-            max: 65535
-            required: true
-          - path: ssh.domain
-            type: string
-            format: hostname
-            label: SSH host in clone URLs
-            description: Leave empty to use the web domain.
-      - title: Internal access
-        docs: /reference/workload/firewall
-        fields:
-          - path: internalAccess.type
-            type: enum
-            label: Who can connect
-            widget: cards
-            required: true
-            options:
-              - { value: none, label: Nobody, description: No workload can connect. }
-              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
-              - { value: same-org, label: Same org, description: Any workload in this org. }
-              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
-            rules:
-              - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
-                mirrors: gitea.validate
-                message: Choose who can connect.
-          - path: internalAccess.workloads
-            type: list
-            label: Allowed workloads
-            when: self.internalAccess.type in ['same-gvc', 'workload-list']
-            widget: tags
-            item:
-              type: ref
-              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
-
+```yaml
   - id: database
     title: Database
     description: The bundled PostgreSQL's credentials. Gitea creates the secret from them; there is nothing to create first.
@@ -2660,7 +2561,7 @@ steps:
       - type: note
         text: >-
           Gitea creates the dictionary secret named below from these three values, and the bundled PostgreSQL
-          reads it. The password is used as it is, so change it.
+          reads it. The password is used as-is, so change it.
       - path: postgres.credentials.username
         type: string
         label: Database user
@@ -2694,28 +2595,15 @@ steps:
         rule: self.postgres.config.credentialsSecretName != 'my-gitea-db-credentials'
         severity: info
         paths: [postgres.config.credentialsSecretName]
-        message: Secret names are org-wide; a second Gitea release on this name is refused at install.
         messageExpression: >-
           'Secret names are org-wide: a second Gitea release on this name is refused at install. For example ' +
           context.releaseName + '-gitea-db-credentials.'
+        message: Secret names are org-wide; a second Gitea release on this name is refused at install.
+```
 
-rules:
-  - rule: "!has(self.gitea.admin) && !has(self.gitea.security)"
-    mirrors: gitea.validateRemovedKeys
-    paths: [gitea.auth.secretName]
-    message: >-
-      gitea.admin.* and gitea.security.* were removed in 1.1.0: put them in the auth secret and remove them
-      from the values.
-  - rule: self.postgres.internalAccess.type != 'none'
-    paths: [postgres.internalAccess.type]
-    message: '"Nobody" also blocks Gitea, which connects to its database like any other workload.'
-  - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
-    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-gitea') in self.postgres.internalAccess.workloads
-    severity: warning
-    paths: [postgres.internalAccess.workloads]
-    message: Add the Gitea workload to the list, or Gitea cannot reach its database.
-    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-gitea, or Gitea cannot reach its database.'"
+The root rules of §16.7 guard the child's firewall. The excluded pooler and the renamed keys finish the file:
 
+```yaml
 yamlOnly:
   - path: postgres.pgbouncer
     reason: Gitea connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
@@ -2737,50 +2625,58 @@ The composed wizard on install:
 | # | Step id | Title | From | Contents |
 |---|---|---|---|---|
 | 1 | `gitea` | Gitea | parent | image, resources, auth secret, registration |
-| 2 | `storage` | Storage | parent | `volumeset.*` (autoscaling as a toggle section) |
-| 3 | `access` | Access | parent | public endpoint, SSH (toggle), internal access |
+| 2 | `storage` | Storage | parent | `volumeset.*`, autoscaling as a toggle section |
+| 3 | `access` | Access | parent | public endpoint, Git over SSH (toggle), internal access |
 | 4 | `database` | Database | parent | `postgres.credentials.*`, `postgres.config.credentialsSecretName` |
 | 5 | `postgres:server` | Database server | postgres 3.4.1 | `postgres.image`, `postgres.resources` |
 | – | `postgres:credentials` | (dropped) | | its only field is excluded; its note and rules go with it |
 | 6 | `postgres:storage` | Database storage | postgres | `postgres.volumeset.*` |
 | 7 | `postgres:network` | Database network | postgres | `postgres.internalAccess.*`; the pooler section is excluded |
-| 8 | `postgres:backup` | Database backups | postgres | `postgres.backup.*`; its `#backup` links go to the postgres page |
+| 8 | `postgres:backup` | Database backups | postgres | `postgres.backup.*`; its links go to the postgres page |
 | 9 | `postgres:advanced` | Database backup job | postgres | shown only with backups on; the PgBouncer section is excluded |
 
 What the example shows:
 
 - the child's reference to a secret the parent creates is excluded and replaced by a parent `string` field;
 - a child subtree the bundle never uses is excluded and listed under `yamlOnly`;
-- overrides change presentation only, and their links use `/template-catalog/templates/gitea#…` because a `#anchor` on an imported field would resolve to the child's page (`IMPORT_OVERRIDE_ANCHOR`);
+- overrides change presentation only (a description, a toggle's help);
 - parent root rules guard what only the parent knows (Gitea must pass the child's firewall);
-- parent renames under `postgres.` beat the child's own drops for the same keys.
+- parent renames under `postgres.` beat the child's own drops for the same keys;
+- `gvc` limits for the parent's own stateful replica.
 
-### 16.13 Import codes
+It lints with 0 diagnostics and 60/60 leaves covered, `check-docs` finds its 9 links, and `tw render` with an answers file renders the `postgres:` block the chart's `helm template` accepts (the core's helm test checks that the subchart's `.Values` equal the session's values under `postgres`).
 
-| Code | Severity | Meaning |
-|---|---|---|
-| `IMPORT_DUPLICATE` | error | two imports with one key |
-| `IMPORT_ANCHOR_UNKNOWN` | error | `after` / `before` names no parent step |
-| `IMPORT_STEP_UNKNOWN` | error | `steps` names no child step |
-| `IMPORT_EXCLUDE_UNKNOWN` | error | an `exclude` entry matches nothing |
-| `IMPORT_OVERRIDE_NOT_ALLOWED` | error | an override key outside the allow-list |
-| `IMPORT_OVERRIDE_LOOSENS` | warning | an override loosens a bound or `required` |
-| `IMPORT_OVERRIDE_ANCHOR` | error | a `#anchor` in an override's `docs`, `description` or `help` |
-| `IMPORT_TOGGLE_EXCLUDED` | error | a section's toggle is excluded but its fields are not |
-| `IMPORT_NESTED` | error | the child has imports of its own |
-| `IMPORT_UNRESOLVED` | error | the child's files cannot be found (lint prints the path it tried), or the version is not in the marketplace |
-| `IMPORT_MISMATCH` | error | the supplied child does not match the import's template and version |
-| `IMPORT_INVALID` | error | the child descriptor has errors (its diagnostics follow) |
-| `IMPORT_NO_DESCRIPTOR` | error (console) | the child version has no descriptor |
-| `IMPORT_NOT_A_DEPENDENCY` | error | no `Chart.yaml` dependency with that name and alias |
-| `IMPORT_VERSION_MISMATCH` | error | `version` differs from the pinned dependency version |
-| `IMPORT_CONDITION_MISMATCH` | error | `when` and `condition` do not match |
-| `IMPORT_CONDITION_UNDECLARED` | warning | the condition path is not a declared parent boolean |
-| `IMPORT_MIGRATION_EXCLUDED` | warning | a child migration touches an excluded path |
-| `IMPORT_GVC_CONFLICT` | error | parent and import location limits cannot both hold |
-| `IMPORT_CHART_UNCHECKED` | info | lint had no `Chart.yaml` to check against |
-| `IMPORT_FROM_UNKNOWN` | warning (carry-over) | the installed child version is unknown |
-| `IMPORT_MISSING` | thrown (`WizardError`) | a session was created without the import's sources |
+### 16.13 Imports in the console
+
+The console's support for imports (loading each child's descriptor and values, the sessions, and the imported steps with their "From the … template" caption and docs link) is a later console stage than the core's; see `PROGRESS.md`. Until it lands, check descriptors with imports with `tw lint`, `tw render` and `tw carry`.
+
+### 16.14 Import codes
+
+| Code | Severity | Where | Meaning |
+|---|---|---|---|
+| `IMPORT_DUPLICATE` | error | parser | two imports with one values key |
+| `IMPORT_ANCHOR_UNKNOWN` | error | parser | `after` / `before` names no parent step |
+| `IMPORT_OVERRIDE_NOT_ALLOWED` | error | parser | an override key outside the allow-list |
+| `IMPORT_OVERRIDE_ANCHOR` | error | parser | a `#anchor` in an override's `docs`, `description` or `help` |
+| `IMPORT_STEP_UNKNOWN` | error | composition | `steps` names no child step |
+| `IMPORT_EXCLUDE_UNKNOWN` | error | composition | an `exclude` entry matches nothing |
+| `IMPORT_OVERRIDE_UNKNOWN` | error | composition | an override names no child field, or an excluded one |
+| `IMPORT_OVERRIDE_LOOSENS` | warning | composition | an override loosens a bound, `required`, `readOnly` or `immutable` |
+| `IMPORT_TOGGLE_EXCLUDED` | error | composition | a section toggle is excluded but its section keeps fields |
+| `IMPORT_NESTED` | error | composition | the child has imports of its own |
+| `IMPORT_UNRESOLVED` | error | composition, lint, carry-over | no source for an import (lint prints the path it tried; carry-over `ok` is false) |
+| `IMPORT_MISMATCH` | error | composition | the supplied child does not match the import's template and version |
+| `IMPORT_INVALID` | error | composition, lint | the child descriptor is not valid (its own diagnostics follow) |
+| `IMPORT_NOT_A_DEPENDENCY` | error | lint | no `Chart.yaml` dependency with that name and alias |
+| `IMPORT_VERSION_MISMATCH` | error | lint | `version` differs from the dependency's pin, or the pin is a range |
+| `IMPORT_CONDITION_MISMATCH` | error | lint | `when` is not exactly `self.<condition>`, or one of them is missing |
+| `IMPORT_CONDITION_UNDECLARED` | warning | lint | the condition is no boolean field of the parent |
+| `IMPORT_MIGRATION_EXCLUDED` | warning | lint | a child migration the parent does not claim touches an excluded path |
+| `IMPORT_GVC_CONFLICT` | error | lint | no GVC can meet the parent's and the imports' limits |
+| `IMPORT_CHART_UNCHECKED` | info | lint (API) | no `chartText`: the dependency checks were skipped |
+| `IMPORT_FROM_UNKNOWN` | warning | carry-over | the installed child version is unknown; the child's migrations are skipped |
+| `IMPORT_MISSING` | thrown (`WizardError`) | session | the descriptor imports a template whose sources were not given |
+| `IMPORT_INVALID` | thrown (`WizardError`) | session | the imports cannot be composed (the diagnostics say why) |
 
 ---
 
@@ -2793,11 +2689,12 @@ All commands run from this repo's root with the `tw` function from §0.
 ```sh
 tw lint <template>/versions/<version>                     # one or more version directories
 tw lint <template>/versions/<version> --prev <template>/versions/<older>   # explicit previous version (one directory only)
+tw lint <dir> --templates-root .                          # where imports are read from (default: inferred from the path)
 tw lint --templates-root . --all                          # every directory that has a wizard.yaml
 tw lint <dir> --format json                               # { ok, results: [{ dir, templateName, version, prevVersion, ok, errors, warnings, diagnostics, coverage }] }
 ```
 
-It reads `wizard.yaml`, `values.yaml` and `templates/_helpers.tpl` of each directory, and the `values.yaml` of the previous version (the greatest lower semver sibling, or `--prev`). Directories without `wizard.yaml` are skipped. Exit 0 when no directory has an error, 1 otherwise, 2 on bad input.
+It reads `wizard.yaml`, `values.yaml`, `Chart.yaml` and `templates/_helpers.tpl` of each directory, the `values.yaml` and `Chart.yaml` of the previous version (the greatest lower semver sibling, or `--prev`), and for a descriptor with `imports` each child's `wizard.yaml` and `values.yaml` from `<root>/<template>/versions/<version>` (§16.11). Directories without `wizard.yaml` are skipped. Exit 0 when no directory has an error, 1 otherwise, 2 on bad input.
 
 A clean result:
 
@@ -2842,7 +2739,7 @@ Exit 1 on a missing page or anchor (`DOCS_PAGE_MISSING`, `DOCS_ANCHOR_MISSING`, 
 
 ```sh
 tw render --descriptor <dir>/wizard.yaml --values <dir>/values.yaml --answers answers.json \
-  [--context context.json] [--allow-raw] > /tmp/out.yaml
+  [--context context.json] [--allow-raw] [--templates-root .] > /tmp/out.yaml
 ```
 
 `answers.json`:
@@ -2866,6 +2763,8 @@ tw render --descriptor <dir>/wizard.yaml --values <dir>/values.yaml --answers an
 - An unknown key is exit 2 unless `--allow-raw` writes it as a raw values path.
 - The YAML goes to stdout; issues go to stderr (`error FORMAT image: Postgres image: Enter an image reference such as postgres:17 …`). Exit 1 when an error **or a warning** remains (both block an install), 0 otherwise. Without a data source every reference is an `info` `REF_CHECK_FAILED`, so references never fail a render.
 - `render` does not clear references (§12.1): answer every `example: true` string, or the render exits 1 with `EXAMPLE_VALUE`.
+- Imports are read from the templates root like `lint`'s. Answers for imported fields use their full paths (`"postgres.backup.enabled": true`); see `../template-wizard/test/fixtures/answers/gitea-backup.json`.
+- `"mode": "upgrade"` with `"gvcLocations"` in the context shows `GVC_LOCATIONS` as the upgrade `info`.
 
 Then render the chart with the output, which proves the chart accepts what the wizard writes:
 
@@ -2881,7 +2780,7 @@ Render at least: the defaults (with every placeholder answered), every provider 
 ```sh
 tw carry --old-defaults <old>/values.yaml --old-values release-values.yaml --new-defaults <new>/values.yaml \
   --from <old-version> --to <new-version> [--descriptor <new>/wizard.yaml] [--old-descriptor <old>/wizard.yaml] \
-  [--format yaml|json] > /tmp/carried.yaml
+  [--templates-root .] [--old-import <prefix>=<version>,…] [--format yaml|json] > /tmp/carried.yaml
 ```
 
 Prints the carried values; the report goes to stderr:
@@ -2897,7 +2796,7 @@ defaultChanged (6):
   …
 ```
 
-`--format json` prints the whole result. Exit 2 when a text cannot be read (`ok: false`). Use `--from X --to X` with the same defaults to check a same-version re-hydration.
+`--format json` prints the whole result. Exit 2 when a text cannot be read (`ok: false`). Use `--from X --to X` with the same defaults to check a same-version re-hydration. With imports, the installed child versions come from the `Chart.yaml` next to `--old-defaults`, or from `--old-import postgres=3.2.1` (§16.9).
 
 ### 17.5 `paths-diff`
 
@@ -2929,10 +2828,11 @@ open "http://localhost:4026/console/org/<org>/marketplace/template/<template>/in
 ```
 
 - The dev endpoint serves only `wizard.yaml`. The template's versions and `values.yaml` come from the marketplace the dev server talks to, so the version must be published there, and local changes to `values.yaml` are not previewed.
+- Descriptors with `imports` need the console's imports stage (§16.13); until it lands, check them with `tw lint`, `tw render` and `tw carry`.
 - After saving `wizard.yaml`, reload the page (descriptors are cached per template and version until a reload or an HMR update).
 - `?ui=classic` opens the classic screen; `?version=` picks the version.
 - A descriptor with parse errors shows them verbatim with a link to the classic screen.
-- Walk every step in light and dark: toggles on and off, each branch, the YAML mode and back, Review (both tabs), a blocking warning, "Check keys" on a secret with and without the keys, the GVC picker with a one-location and a multi-location GVC.
+- Walk every step in light and dark: toggles on and off, each branch, the suggestion dropdowns, the YAML mode and back, Review (both tabs), a blocking warning, "Check keys" on a secret with and without the keys, "Create" only where `allowCreate` is set, references starting empty, the GVC picker with a one-location and a multi-location GVC, and an upgrade (free step navigation, the "Changes since last applied" list).
 - Stop the dev server when you are done.
 
 The console repo's `verify` skill describes logging in and driving the app.
@@ -2982,93 +2882,97 @@ Use it for your own descriptor before committing, and for reviewing someone else
 **Structure**
 
 17. Steps follow real dependencies: prerequisites early, Advanced last, four to seven steps.
-18. Step titles are short and in sentence case; each step description is one sentence.
-19. Every switch that enables a feature is the `toggle` of the section that holds the feature's settings.
-20. No section's `when` reads its own toggle.
-21. Every other section that depends on a toggled feature repeats the flag in its `when` (provider sections, Advanced sections).
-22. Every toggle section has a `title` and an `id`.
-23. Branch sections' `when`s include every condition above them.
-24. Advanced sections of optional components are gated by the component's flag.
-25. A note is used only for display; anything that must block is a rule.
+18. No step has the id `release` (reserved for the renderer's release step).
+19. Step titles are short and in sentence case; each step description is one sentence.
+20. Every switch that enables a feature is the `toggle` of the section that holds the feature's settings.
+21. No section's `when` reads its own toggle.
+22. Every other section that depends on a toggled feature repeats the flag in its `when` (provider sections, Advanced sections).
+23. Every toggle section has a `title` and an `id`.
+24. Branch sections' `when`s include every condition above them.
+25. Advanced sections of optional components are gated by the component's flag.
+26. A note is used only for display; anything that must block is a rule.
 
 **Fields**
 
-26. Each field's type matches the chart value (`integer` vs `number`; strings with patterns for Redis-style sizes; `resources` for resource blocks).
-27. `required: true` is set wherever an empty value breaks the chart or the release.
-28. Units are in `unit`, not in labels or descriptions.
-29. `min`/`max` come from the chart, the platform or the README, not from taste.
-30. Enum options are exactly what the chart supports, in the chart's order.
-31. Every option description is true in every configuration.
-32. Images use `format: image`, URLs `format: url`, host names `format: hostname`, schedules `format: cron`.
-33. Patterns are single-quoted and anchored; where the regex would be the only explanation, a rule gives a readable message instead.
-34. Object lists have `uniqueBy`, a sensible `newItem` and an `itemLabel`; scalar lists that must be unique have `unique`.
-35. List labels are plural nouns whose singular reads well on the "Add" button.
-36. Optional blocks have a valid `newValue`, and rules guard them with `self.<block> == null ||`.
-37. Virtual fields: `init` returns an option for every document (including `null` values), each `set` patch round-trips through `init`, and rules check the real values.
-38. `absent: true` only on keys `values.yaml` lacks; `default` only with `absent`.
-39. `immutable` (with a reason) wherever a change breaks the running release; `assume` for immutable keys added in this version.
-40. `sensitive` only on passwords stored in values, with `widget: password`.
-41. `suggestions` are valid for the field (within `min`/`max`), short, ascending, and not combined with `widget: slider` or `widget: stepper`.
+27. Each field's type matches the chart value (`integer` vs `number`; strings with patterns for Redis-style sizes; `resources` for resource blocks).
+28. `required: true` is set wherever an empty value breaks the chart or the release.
+29. Units are in `unit`, not in labels or descriptions.
+30. `min`/`max` come from the chart, the platform or the README, not from taste.
+31. Enum options are exactly what the chart supports, in the chart's order.
+32. Every option description is true in every configuration.
+33. Images use `format: image`, URLs `format: url`, host names `format: hostname`, schedules `format: cron`.
+34. Patterns are single-quoted and anchored; where the regex would be the only explanation, a `patternMessage` says what to do.
+35. Object lists have `uniqueBy`, a sensible `newItem` and an `itemLabel`; scalar lists that must be unique have `unique`.
+36. List labels are plural nouns whose singular reads well on the "Add" button.
+37. Optional blocks have a valid `newValue`, and rules guard them with `self.<block> == null ||`.
+38. Virtual fields: `init` returns an option for every document (including `null` values), each `set` patch round-trips through `init`, and rules check the real values.
+39. `absent: true` only on keys `values.yaml` lacks; `default` only with `absent`.
+40. `immutable` (with a reason) wherever a change breaks the running release; `assume` for immutable keys added in this version.
+41. `sensitive` only on passwords stored in values, with `widget: password`.
+42. `suggestions` are valid for the field (within `min`/`max`), short, ascending, and not combined with `widget: slider` or `widget: stepper`.
 
 **References**
 
-42. `kind` and `format` match how the chart uses the value; firewall workload lists use `gvc: any` with `format: relativeLink`.
-43. Secrets have `filter.secretType`; cloud accounts have `filter.provider`.
-44. `mustExist: error` on prerequisites; `warning` on workload lists.
-45. `allowCreate: true` only on prerequisite secrets; never on workload lists or cloud accounts.
-46. `create` prefills name the secret type, a `suggestName` built from `context.releaseName`, `encoding: plain` for opaque secrets, and a `hint` for generated content; there is no `create` without `allowCreate`.
-47. `requiredKeys` lists exactly the keys the chart reads; `requiredKeysFrom` where the key name is configurable; only on dictionary secrets.
-48. No reference has `example: true`.
-49. Rules and `when`s hold when a reference is empty.
+43. `kind` and `format` match how the chart uses the value; firewall workload lists use `gvc: any` with `format: relativeLink`.
+44. Secrets have `filter.secretType`; cloud accounts have `filter.provider`.
+45. `mustExist: error` on prerequisites; `warning` on workload lists.
+46. `allowCreate: true` only on prerequisite secrets; never on workload lists or cloud accounts.
+47. A `create` block holds only what the defaults cannot give (a `suggestName` built from `context.releaseName`, `encoding: plain` for opaque secrets, a `hint` for generated content, a `secretType` when the filter does not name exactly one); there is no `create` without `allowCreate`.
+48. `requiredKeys` lists exactly the keys the chart reads; `requiredKeysFrom` where the key name is configurable; only on dictionary secrets.
+49. No reference has `example: true`.
+50. Rules and `when`s hold when a reference is empty.
 
 **Text**
 
-50. Labels are sentence case and at most 60 characters.
-51. No description restates a validation: no ratio, bound, pattern, requiredness or option list that a check already enforces.
-52. Every claim is backed by the chart's templates for this version.
-53. No optional component is mentioned as always on, in option descriptions, step descriptions, notes or titles.
-54. Markdown-lite only; keys, values and commands in `code`.
-55. `example: true` on every plain-string placeholder that must be replaced; working defaults that may collide are `info` rules instead.
+51. Labels are sentence case and at most 60 characters.
+52. No description restates a validation: no ratio, bound, pattern, requiredness or option list that a check already enforces.
+53. Every claim is backed by the chart's templates for this version.
+54. No optional component is mentioned as always on, in option descriptions, step descriptions, notes or titles.
+55. Markdown-lite only; keys, values and commands in `code`.
+56. `example: true` on every plain-string placeholder that must be replaced; working defaults that may collide are `info` rules instead.
 
 **Docs**
 
-56. Every `docs` value and markdown link to the docs site is relative, and `#anchor` values are quoted.
-57. Every anchor exists on the docs site (not taken from the README).
-58. Links point at the section that explains the setting, not just at the top of the template's page.
+57. Every `docs` value and markdown link to the docs site is relative, and `#anchor` values are quoted.
+58. Every anchor exists on the docs site (not taken from the README).
+59. Links point at the section that explains the setting, not just at the top of the template's page.
 
 **Rules**
 
-59. Each severity follows the policy (§8.2): advisory and legitimate-consequence rules are `info`.
-60. `paths` name the field the user should change, and the rule sits on the step where it is fixed.
-61. Every rule over `oldSelf` starts with `oldSelf == null ||`.
-62. Every use of `context.gvcLocations`, `context.gvcSpec` and `context.gvc` is guarded.
-63. Every `messageExpression` has a `message` fallback that says the same in general terms.
-64. No `has()` on declared paths; map keys are tested with `in`.
-65. `int` and `double` are not mixed in arithmetic.
-66. The chart defaults pass every error-severity rule.
+60. Each severity follows the policy (§8.2): advisory and legitimate-consequence rules are `info`.
+61. `paths` name the field the user should change, and the rule sits on the step where it is fixed.
+62. Every rule over `oldSelf` starts with `oldSelf == null ||`.
+63. Every use of `context.gvcLocations`, `context.gvcSpec` and `context.gvc` is guarded.
+64. Every `messageExpression` has a `message` fallback that says the same in general terms.
+65. No `has()` on declared paths; map keys are tested with `in`.
+66. `int` and `double` are not mixed in arithmetic.
+67. The chart defaults pass every error-severity rule.
 
 **Upgrades**
 
-67. `tw paths-diff` against the previous version (and older supported versions) is fully explained by fields and migrations.
-68. Every drop migration has a note that says where the value went and what to do.
-69. `fromVersions` ranges are quoted and bounded by the first version without the old key.
-70. The `tw carry` report of a realistic old release reads correctly.
-71. An in-place upgrade that destroys data is blocked by a root rule on `semverCompare(context.fromVersion, …)`.
-72. Version-specific upgrade notes sit in the section they concern, with `context.mode == 'upgrade'` and a `fromVersion` guard.
-73. Grow-only values (volume set capacity) have an error rule over `oldSelf`.
+68. `tw paths-diff` against the previous version (and older supported versions) is fully explained by fields and migrations.
+69. Every drop migration has a note that says where the value went and what to do.
+70. `fromVersions` ranges are quoted and bounded by the first version without the old key.
+71. The `tw carry` report of a realistic old release reads correctly.
+72. An in-place upgrade that destroys data is blocked by a root rule on `semverCompare(context.fromVersion, …)`.
+73. Version-specific upgrade notes sit in the section they concern, with `context.mode == 'upgrade'` and a `fromVersion` guard.
+74. Grow-only values (volume set capacity) have an error rule over `oldSelf`.
 
 **Imports** (§16)
 
-74. `template`, `version` and `alias` equal the `Chart.yaml` dependency; `when` is exactly `self.<condition>`.
-75. Secrets the parent creates are excluded from the child and bound as parent `string` fields.
-76. Child subtrees the bundle never uses are excluded and listed under `yamlOnly`.
-77. Overrides change presentation only, make no unbacked claims, and link with `/template-catalog/templates/<parent>#…`.
-78. Parent rules check that the parent's workloads can reach the child.
-79. Imported steps sit after the parent step that configures the connection and are renamed to read as part of the template.
+75. `template`, `version` and `alias` equal the `Chart.yaml` dependency; `when` is exactly `self.<condition>`, and the condition is a parent boolean field.
+76. The child version has its own descriptor, lints clean on its own, and imports nothing itself.
+77. Secrets the parent creates are excluded from the child and bound as parent `string` fields.
+78. Child subtrees the bundle never uses are excluded and listed under `yamlOnly`.
+79. Overrides change presentation only, make no unbacked claims, repeat every bound they keep (`cpu` and `memory` are replaced whole), and link with `/template-catalog/templates/<parent>#…`.
+80. Parent rules check that the parent's workloads can reach the child.
+81. Imported steps sit after the parent step that configures the connection and are renamed to read as part of the template.
+82. Parent migrations rename the keys the parent moved under the child's key, and `tw carry` from the previous parent version reads correctly.
+83. The parent declares `gvc` limits for its own workloads.
 
 **Pilots**
 
-80. After the commit, `node scripts/sync-fixtures.mjs` and `--check` in the core pass, and the core tests pass.
+84. After the commit, `node scripts/sync-fixtures.mjs` and `--check` in the core pass, and the core tests pass.
 
 ---
 
@@ -3105,7 +3009,7 @@ Every finding from the Round 1 reviews and the Round 2 owner testing, generalise
 | 25 | A configurable key name with a fixed `requiredKeys` (redis `passwordKey`) | 2 | Checks the wrong key | `requiredKeysFrom` (§13.3) |
 | 26 | A secret the parent creates modelled with the child's reference and `mustExist: error` | 2 (imports design) | Fails before install, since the parent creates it at install | `exclude` it and bind a parent `string` field (§16.4) |
 | 27 | Claims copied from general knowledge or another chart ("Gitea needs PostgreSQL 12 or later") | 2 (imports design) | Not in this chart; may be false | Only what the chart backs (§10.3) |
-| 28 | A `#anchor` in an import override's text | 2 (imports design) | It resolves to the child's page | `/template-catalog/templates/<parent>#…` (§16.3) |
+| 28 | A `#anchor` in an import override's text | 2 (imports design) | It resolves to the child's page (`IMPORT_OVERRIDE_ANCHOR`) | `/template-catalog/templates/<parent>#…` (§16.2) |
 | 29 | Stale docs page taken as truth (supabase page showing 1.0.0 plaintext keys) | 2 | The chart changed | The chart's templates win (§4) |
 | 30 | Rules comparing a reference with its placeholder name | general | Never true in the console (refs start empty) | Test for `''` (§12.1) |
 | 31 | Workload names written by hand | general | Drift from the chart's helpers | Build them from `context.releaseName` and the helper suffix (§8.9) |
@@ -3121,7 +3025,7 @@ Every finding from the Round 1 reviews and the Round 2 owner testing, generalise
 
 ## 20. Appendix A: property reference
 
-Derived from the JSON Schema (`.schema/wizard.v1.schema.json`) and the core's validator. "Req" marks required keys.
+Generated from the JSON Schema (`.schema/wizard.v1.schema.json`, in sync with the core's `schema/wizard.v1.schema.json`) and checked against the core's validator (`src/descriptor/validate.ts`). "Req" marks required keys. The schema is for editors; the parser also checks CEL, duplicate ids and paths, enum defaults, `uniqueBy` keys, regex and quantity syntax, label length and the reserved step id.
 
 ### A.1 Top level
 
@@ -3130,8 +3034,8 @@ Derived from the JSON Schema (`.schema/wizard.v1.schema.json`) and the core's va
 | `apiVersion` | yes | const | `template-wizard.controlplane.com/v1` |
 | `kind` | yes | const | `TemplateWizard` |
 | `title` | | string | wizard title; default the chart name |
-| `gvc` | | object | `{ minLocations?, maxLocations? }`, non-negative integers, min ≤ max (§14) |
-| `imports` | | array | subchart imports (§16; syntax final once core imports land) |
+| `gvc` | | object | `minLocations`, `maxLocations`: non-negative integers, min ≤ max, either optional (§14) |
+| `imports` | | array | subchart imports (§A.15, §16) |
 | `steps` | yes | array, ≥ 1 | steps |
 | `rules` | | array | root rules |
 | `migrations` | | array | migrations |
@@ -3141,7 +3045,7 @@ Derived from the JSON Schema (`.schema/wizard.v1.schema.json`) and the core's va
 
 | Key | Req | Type | Meaning |
 |---|---|---|---|
-| `id` | yes | `^[a-z][a-z0-9-]*$` | unique step id |
+| `id` | yes | `^[a-z][a-z0-9-]*$` | unique step id; not `release` (`RESERVED_STEP_ID`) |
 | `title` | yes | string | step title |
 | `description` | | string | one sentence; inline code allowed |
 | `docs` | | docs link | relative (§11) |
@@ -3209,7 +3113,7 @@ Not allowed on a virtual field: `path`, `absent`, `default`, `immutable`, `examp
 |---|---|---|---|
 | `minLength`, `maxLength` | string | integer | length bounds |
 | `pattern` | string | JS regex | anchored by the author |
-| `patternMessage` | string | string | the `PATTERN` message instead of the regex |
+| `patternMessage` | string | string | the `PATTERN` message instead of the regex; needs `pattern` (`NOT_APPLICABLE` otherwise); map key patterns keep the plain message |
 | `format` | string | enum | `image`, `url`, `hostname`, `email`, `cron`, `cidr`, `duration` |
 | `multiline` | string | bool | textarea; block literal |
 | `min`, `max` | integer, number, quantity | number (integer for `integer`) or quantity string | bounds |
@@ -3262,7 +3166,7 @@ No `path` or `id`. Types: `string`, `integer`, `number`, `boolean`, `yaml`, `obj
 | `requiredKeysFrom` | | CEL `list<string>` | | computed required keys; not with `requiredKeys` |
 | `create` | | object | | prefills (below) |
 
-`create`: `secretType`, `keys` (default `requiredKeys`), `encoding`, `provider`, `suggestName` (CEL string), `hint`.
+`create` (only with `allowCreate: true`): `secretType` (default: the single type in `filter.secretType`), `keys` (default: `requiredKeys`), `encoding`, `provider`, `suggestName` (CEL string), `hint`.
 
 ### A.10 Option and suggestion
 
@@ -3320,19 +3224,21 @@ One of: `from`; `to` + `valueExpr`; `assume`.
 | `kv` | map |
 | `code` | yaml |
 
-### A.15 Import (§16; syntax final once core imports land)
+### A.15 Import (`imports[]`)
 
 | Key | Req | Type | Meaning |
 |---|---|---|---|
-| `template` | yes | `^[a-z0-9][a-z0-9-]*$` | dependency name |
-| `version` | yes | `x.y.z` | exact pinned version |
-| `alias` | | identifier | dependency alias; the values key |
-| `when` | | CEL bool | mirrors the dependency's `condition` |
-| `title` | | string | group label |
-| `after`, `before` | | step id | placement (one of them) |
-| `steps` | | array of ids or `{ id, title?, description? }` | order and titles of child steps |
-| `exclude` | | array of child paths or virtual ids | dropped content |
-| `override` | | map of child path → allowed keys | presentation and constraint overrides |
+| `template` | yes | `^[a-z0-9][a-z0-9-]*$` | the dependency's `name` |
+| `version` | yes | `^\d+\.\d+\.\d+$` | the dependency's exact pinned version |
+| `alias` | | `^[A-Za-z_][A-Za-z0-9_-]*$` | the dependency's `alias`; the values key is `alias ?? template` |
+| `when` | | CEL bool, parent scope | exactly `self.<condition>` |
+| `title` | | string | group label; default the child's `title`, else `template` |
+| `after`, `before` | | step id | a parent step the imported steps follow or precede; not both |
+| `steps` | | array of step ids or `{ id (req), title?, description? }` | order and titles of child steps |
+| `exclude` | | array of paths | child paths or virtual ids to drop, with everything below them |
+| `override` | | map of child path (or virtual id, or toggle path) → override | presentation and constraint overrides (below) |
+
+Override keys (`importOverride`; each replaces the child's value whole): `label`, `description`, `help`, `docs` (a `/path` link only, no `#anchor`), `placeholder`, `widget`, `advanced`, `required`, `example`, `sensitive`, `immutable`, `readOnly`, `min`, `max`, `minLength`, `maxLength`, `pattern`, `patternMessage`, `minItems`, `maxItems`, `unit`, `cpu`, `memory`, `maxRatio`, `suggestions`. Any other key is `IMPORT_OVERRIDE_NOT_ALLOWED`.
 
 ### A.16 Defaults the compiler applies
 
@@ -3344,7 +3250,10 @@ One of: `from`; `to` + `valueExpr`; `assume`.
 | `ref.mustExist` | `warning` |
 | `ref.gvc` | `target` (gvc-scoped kinds) |
 | `ref.scope` | `org` (locations) |
-| `ref.create.keys` | `requiredKeys` |
+| `ref.create.secretType` | the single type in `filter.secretType` (with `allowCreate: true`) |
+| `ref.create.keys` | `requiredKeys` (with `allowCreate: true`) |
+| import `title` | the child's `title`, else `template` |
+| import placement | after the last parent step |
 | rule `severity` | `error` |
 | rule `paths` | the owning field |
 | note `severity` | `info` |
@@ -3381,7 +3290,7 @@ One of: `from`; `to` + `valueExpr`; `assume`.
 | `YAML_PARSE`, `YAML_ROOT`, `YAML_MULTI_DOC` | error | the YAML tab's text is not one YAML map |
 | `REF_NOT_FOUND` | the ref's `mustExist` | the object does not exist, or has another secret type or provider |
 | `REF_CHECK_FAILED` | info | the existence check could not complete |
-| `GVC_LOCATIONS` | error | the target GVC's location count is outside the `gvc` limits (Release step) |
+| `GVC_LOCATIONS` | error on install, info on upgrade | the target GVC's location count is outside the `gvc` limits (Release step, no path) |
 | `SECRET_KEYS_MISSING` | error | a "Check keys" run found required keys missing |
 | `SECRET_KEYS_UNCHECKED` | info | the keys could not be checked (no permission to reveal) |
 
@@ -3403,7 +3312,9 @@ Only errors and warnings block Next and Install; `info` never blocks. Issues in 
 | `MISSING_KEY` | error | a required key (`type`, `label`, `path`, a virtual field's `id`/`init`, a toggle section's `title`, `optional: true` on an object, `valueExpr` without `to`, …) |
 | `INVALID_TYPE`, `INVALID_VALUE`, `INVALID_PATH` | error (a label over 60 characters is an `INVALID_VALUE` warning) | wrong YAML type, a value outside the allowed set (bad regex, id, range, suggestion out of bounds), bad path syntax |
 | `CONFLICT` | error | mutually exclusive properties (`sections` and `fields`, `options` and `optionsFrom`, `requiredKeys` and `requiredKeysFrom`, `unique` on objects, `uniqueBy` on scalars, `serialize: csv` on objects, `assume` with other keys, `valueExpr` with `from`, `gvc: any` with `format: name`, a path bound and listed under `yamlOnly`, virtual-only conflicts) |
-| `DUPLICATE_ID`, `DUPLICATE_PATH` | error | two fields or steps with one id, or two fields (or a field and a toggle) on one path |
+| `DUPLICATE_ID`, `DUPLICATE_PATH` | error | two fields or steps with one id, or two fields (or a field and a toggle) on one path; with imports, the message names the import and the path to exclude |
+| `RESERVED_STEP_ID` | error | a step with the id `release` |
+| `IMPORT_DUPLICATE`, `IMPORT_ANCHOR_UNKNOWN`, `IMPORT_OVERRIDE_NOT_ALLOWED`, `IMPORT_OVERRIDE_ANCHOR` | error | imports: two with one key, an unknown `after`/`before` step, a disallowed override key, a `#anchor` in an override (§16.14) |
 | `DUPLICATE_VALUE` | warning | an option or suggestion listed twice |
 | `DOCS_ABSOLUTE`, `DOCS_INVALID` | error | `docs` is not `/path#anchor` or `#anchor` |
 | `DEFAULT_ON_PRESENT_PATH` | error | `default` without `absent: true` |
@@ -3443,7 +3354,13 @@ Lint reports every parser diagnostic, plus:
 | `CREATE_WITHOUT_ALLOW_CREATE` | warning | a ref `create` without `allowCreate: true` (once the descriptor uses `allowCreate`) |
 | `EXAMPLE_ON_REF` | warning | `example: true` on a ref or a list of refs (install sessions clear example refs) |
 | `SUGGESTIONS_WIDGET` | warning | `suggestions` with `widget: slider` or `widget: stepper` (the combobox replaces the widget) |
-| `IMPORT_*` | see §16.13 | imports (syntax final once core imports land) |
+| `IMPORT_STEP_UNKNOWN`, `IMPORT_EXCLUDE_UNKNOWN`, `IMPORT_OVERRIDE_UNKNOWN`, `IMPORT_TOGGLE_EXCLUDED`, `IMPORT_NESTED`, `IMPORT_UNRESOLVED`, `IMPORT_MISMATCH`, `IMPORT_INVALID` | error | composing the imports failed (§16.14) |
+| `IMPORT_OVERRIDE_LOOSENS` | warning | an override loosens a bound, `required`, `readOnly` or `immutable` |
+| `IMPORT_NOT_A_DEPENDENCY`, `IMPORT_VERSION_MISMATCH`, `IMPORT_CONDITION_MISMATCH` | error | an import does not match its `Chart.yaml` dependency |
+| `IMPORT_CONDITION_UNDECLARED` | warning | the dependency's condition is no boolean field of the parent |
+| `IMPORT_MIGRATION_EXCLUDED` | warning | a child migration the parent does not claim touches an excluded path |
+| `IMPORT_GVC_CONFLICT` | error | no GVC can meet the parent's and the imports' `gvc` limits |
+| `IMPORT_CHART_UNCHECKED` | info | no `Chart.yaml` given (API only; the CLI always reads it) |
 
 ### B.5 `check-docs`
 
@@ -3461,7 +3378,10 @@ Lint reports every parser diagnostic, plus:
 | `YAML_PARSE`, `YAML_ROOT`, `YAML_MULTI_DOC` | error | a text cannot be read; `ok` is false and renderers block |
 | `YAML_DUPLICATE_KEY` | warning | a duplicate key in the release values (the last one wins, as in Helm) |
 | `MIGRATION_EVAL_ERROR` | warning | a `valueExpr` failed; nothing was computed |
-| `IMPORT_FROM_UNKNOWN`, `IMPORT_UNRESOLVED` | warning, error | imports (§16) |
+| `IMPORT_FROM_UNKNOWN` | warning | an import's installed child version is unknown; the new child defaults stand in and the child's migrations are skipped |
+| `IMPORT_UNRESOLVED` | error | an import of the new descriptor was not given; `ok` is false |
+
+Values texts (the YAML tab, carry-over inputs) can also carry `YAML_WARNING`, a warning from the YAML parser that does not stop the text from being read.
 
 ### B.7 `WizardError` (programmer errors, thrown)
 

@@ -2,114 +2,61 @@
 apiVersion: template-wizard.controlplane.com/v1
 kind: TemplateWizard
 title: Supabase
+gvc:
+  minLocations: 1
+  maxLocations: 1
 
 steps:
-  - id: components
-    title: Components
-    description: The optional services. Postgres, Kong, PostgREST and Auth always run.
-    docs: "#architecture"
-    fields:
-      - type: note
-        severity: warning
-        when: >-
-          context.mode == 'upgrade' && context.fromVersion != null &&
-          semverCompare(context.fromVersion, '1.1.1') < 0
-        text: >-
-          Before upgrading from 1.1.0 or earlier, update your AWS IAM policies to the full action list
-          in the README: this version removes `ReadOnlyAccess` from the backup identity, which was
-          silently supplying any read action your bucket-scoped policy omitted.
-      - path: studio.enabled
-        type: boolean
-        label: Studio dashboard
-        description: >-
-          The web dashboard, served by Kong at `/` behind a username and password. Needs the dashboard
-          password secret.
-      - path: realtime.enabled
-        type: boolean
-        label: Realtime
-        description: WebSocket subscriptions to database changes. Runs as a single replica.
-      - path: storage.enabled
-        type: boolean
-        label: Storage API
-        description: File and object storage. Turn it off if your app stores no files; it saves a workload.
-      - path: pgbouncer.enabled
-        type: boolean
-        label: Connection pooler (PgBouncer)
-        description: Pools application connections into fewer real Postgres connections.
-
   - id: credentials
     title: Credentials
     description: The prerequisite secrets. None of these values passes through the release values.
     docs: "#prerequisites"
-    sections:
-      - fields:
-          - type: note
-            severity: warning
-            text: >-
-              These secrets must exist **before** you install. If one is missing, the deployment waits
-              for it and looks broken.
-          - path: jwt.secretName
-            type: ref
-            label: JWT keys secret
-            required: true
-            example: true
-            description: >-
-              A dictionary secret with the keys `secret`, `anonKey`, `serviceRoleKey` and
-              `secretKeyBase`.
-            help: >-
-              `anonKey` and `serviceRoleKey` must be HS256 JWTs signed by `secret`, or every service
-              returns `bad_jwt`; the README has a snippet that mints all four consistently.
-              `serviceRoleKey` bypasses row-level security: keep it server-side.
-            docs: "#jwt"
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [dictionary] }
-              mustExist: error
-              create:
-                secretType: dictionary
-                keys: [secret, anonKey, serviceRoleKey, secretKeyBase]
-                suggestName: "context.releaseName + '-jwt'"
-          - path: postgres.credentialsSecretName
-            type: ref
-            label: Postgres credentials secret
-            required: true
-            example: true
-            description: A dictionary secret with the keys `password` and `database`.
-            help: >-
-              The login role is always `postgres`. The password is read only when the data directory is
-              first initialized; to rotate it later, run `ALTER ROLE` first and then update the secret.
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [dictionary] }
-              mustExist: error
-              create:
-                secretType: dictionary
-                keys: [password, database]
-                suggestName: "context.releaseName + '-postgres-credentials'"
-      - title: Studio login
-        when: self.studio.enabled
-        fields:
-          - path: studio.username
-            type: string
-            label: Dashboard login name
-            required: true
-          - path: studio.passwordSecretName
-            type: ref
-            label: Dashboard password secret
-            required: true
-            example: true
-            description: An opaque secret (encoding plain) holding only the dashboard password, on one line.
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [opaque] }
-              mustExist: error
-              create:
-                secretType: opaque
-                encoding: plain
-                suggestName: "context.releaseName + '-studio-password'"
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          These secrets must exist **before** you install. If one is missing, the deployment waits
+          for it and looks broken.
+      - path: jwt.secretName
+        type: ref
+        label: JWT keys secret
+        required: true
+        description: >-
+          A dictionary secret with the keys `secret`, `anonKey`, `serviceRoleKey` and
+          `secretKeyBase`.
+        help: >-
+          `anonKey` and `serviceRoleKey` must be HS256 JWTs signed by `secret`, or every service
+          returns `bad_jwt`; the README has a snippet that mints all four consistently.
+          `serviceRoleKey` bypasses row-level security: keep it server-side.
+        docs: "#jwt-keys"
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeys: [secret, anonKey, serviceRoleKey, secretKeyBase]
+          create:
+            secretType: dictionary
+            suggestName: "context.releaseName + '-jwt'"
+      - path: postgres.credentialsSecretName
+        type: ref
+        label: Postgres credentials secret
+        required: true
+        description: A dictionary secret with the keys `password` and `database`.
+        help: >-
+          The login role is always `postgres`. The password is read only when the data directory is
+          first initialized; to rotate it later, run `ALTER ROLE` first and then update the secret.
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeys: [password, database]
+          create:
+            secretType: dictionary
+            suggestName: "context.releaseName + '-postgres-credentials'"
     rules:
       - rule: >-
           oldSelf == null ||
@@ -136,9 +83,7 @@ steps:
             type: resources
             label: Postgres resources
             required: true
-            description: >-
-              A single stateful replica. The maximum CPU and the maximum memory can each be at most 4
-              times their minimum.
+            description: A single stateful replica.
             maxRatio: 4
             cpu: { min: 25m }
             memory: { min: 32Mi }
@@ -148,13 +93,12 @@ steps:
             unit: GiB
             min: 10
             required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
             docs: "/reference/volumeset#capacity-and-billing"
-          - path: postgres.volumeset.autoscaling.enabled
-            type: boolean
-            label: Grow storage automatically
-            docs: "/reference/volumeset#autoscaling"
-      - title: Autoscaling
-        when: self.postgres.volumeset.autoscaling.enabled
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: postgres.volumeset.autoscaling.enabled
+        docs: "/reference/volumeset#autoscaling"
         fields:
           - path: postgres.volumeset.autoscaling.maxCapacity
             type: integer
@@ -162,20 +106,26 @@ steps:
             unit: GiB
             min: 10
             required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
           - path: postgres.volumeset.autoscaling.minFreePercentage
             type: integer
             label: Scale up below this free space
             unit: "%"
             min: 1
             max: 100
-            widget: slider
             required: true
+            suggestions: [10, 20, 30]
           - path: postgres.volumeset.autoscaling.scalingFactor
             type: number
             label: Scaling factor
             min: 1.1
             step: 0.1
             required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
         rules:
           - rule: self.postgres.volumeset.autoscaling.maxCapacity >= self.postgres.volumeset.capacity
             paths: [postgres.volumeset.autoscaling.maxCapacity]
@@ -188,13 +138,10 @@ steps:
             label: Who can reach Postgres
             widget: cards
             required: true
-            description: >-
-              Auth, PostgREST, Realtime, Storage, pg_meta, PgBouncer and the backup job all connect to
-              Postgres directly; this is also PgBouncer's firewall.
             options:
               - value: none
                 label: Nobody
-                description: Cuts off every Supabase service as well.
+                description: No workload can connect.
               - value: same-gvc
                 label: Same GVC
                 description: Any workload in this GVC.
@@ -203,7 +150,7 @@ steps:
                 description: Any workload in this org.
               - value: workload-list
                 label: Specific workloads
-                description: Only the workloads listed below; list the Supabase services too.
+                description: Only the workloads listed below.
             rules:
               - rule: self.postgres.internalAccess.type != 'none'
                 severity: warning
@@ -216,7 +163,7 @@ steps:
             label: Allowed workloads
             description: >-
               With Same GVC, extra workloads from other GVCs. With Specific workloads, every workload
-              that connects, the Supabase services included: the chart does not add them.
+              that connects.
             when: self.postgres.internalAccess.type in ['same-gvc', 'workload-list']
             widget: tags
             item:
@@ -248,9 +195,11 @@ steps:
               The chart does not add its own workloads to the list, and each of them connects to
               Postgres directly: add Auth, PostgREST and every enabled service (Realtime, Storage,
               Studio, PgBouncer, the logical backup job), or they cannot connect.
-      - title: Connection pooling
-        when: self.pgbouncer.enabled
-        docs: "#pgbouncer-optional"
+      - id: pgbouncer
+        title: Connection pooler (PgBouncer)
+        toggle: pgbouncer.enabled
+        description: Pools application connections into fewer real Postgres connections.
+        docs: "#pgbouncer"
         fields:
           - type: note
             text: >-
@@ -272,17 +221,19 @@ steps:
             label: Server connections per pool
             min: 1
             required: true
+            suggestions: [10, 25, 50, 100]
           - path: pgbouncer.maxClientConn
             type: integer
             label: Max client connections
             min: 1
             required: true
+            suggestions: [100, 500, 1000, 5000]
           - path: pgbouncer.replicas
             type: integer
             label: Replicas
             min: 1
-            widget: stepper
             required: true
+            suggestions: [1, 2, 3]
         rules:
           - rule: self.pgbouncer.defaultPoolSize <= self.pgbouncer.maxClientConn
             severity: info
@@ -294,45 +245,44 @@ steps:
         message: A volume set cannot shrink. Keep the capacity at or above the installed size.
 
   - id: access
-    title: Access and auth
-    description: The public API endpoint, sign-ups, email, OAuth and dashboard access.
+    title: API and auth
+    description: The API endpoint, Realtime, sign-ups, email, OAuth and the Studio dashboard.
     sections:
-      - title: API endpoint
+      - id: kong-public
+        title: Public API endpoint
+        toggle: kong.publicAccess.enabled
+        description: >-
+          Gives Kong a public endpoint. With Studio on, this also publishes the dashboard behind its
+          login.
         docs: "#kong-api-gateway"
         fields:
-          - path: kong.publicAccess.enabled
-            type: boolean
-            label: Public API endpoint
-            description: >-
-              Gives Kong a public endpoint. With Studio on, this also publishes the dashboard behind its
-              login.
           - path: kong.publicAccess.siteUrl
             type: string
             format: url
             label: Public site URL
             required: true
-            when: self.kong.publicAccess.enabled
             placeholder: https://api.my-app.com
             description: >-
               The URL clients reach Kong at. Auth uses it for OAuth redirects and magic-link emails.
+      - id: realtime
+        title: Realtime
+        toggle: realtime.enabled
+        description: >-
+          WebSocket subscriptions to database changes, served through Kong. Runs as a single replica.
+        fields: []
       - title: Auth
-        docs: "#postgrest-auth-and-realtime"
+        docs: "#auth-gotrue"
         fields:
           - path: auth.disableSignup
             type: boolean
             label: Disable sign-ups
             description: Prevents new user registration.
-          - path: auth.smtp.enabled
-            type: boolean
-            label: Email (SMTP)
-            description: Needed for magic links, sign-up confirmation and password reset.
-            docs: "#smtp"
-          - type: note
-            when: "!self.auth.smtp.enabled"
-            text: Without SMTP, sign-ups are confirmed automatically and email flows are unavailable.
-      - title: SMTP
-        when: self.auth.smtp.enabled
-        docs: "#smtp"
+      - id: smtp
+        title: Email (SMTP)
+        toggle: auth.smtp.enabled
+        description: >-
+          Needed for magic links, sign-up confirmation and password reset. Without it, sign-ups are
+          confirmed automatically and email flows are unavailable.
         fields:
           - path: auth.smtp.host
             type: string
@@ -346,7 +296,9 @@ steps:
             min: 1
             max: 65535
             required: true
-            help: Usually 587 (STARTTLS) or 465 (TLS).
+            suggestions:
+              - { value: 587, label: "587 (STARTTLS)" }
+              - { value: 465, label: "465 (TLS)" }
           - path: auth.smtp.user
             type: string
             label: SMTP user
@@ -362,6 +314,7 @@ steps:
               format: name
               filter: { secretType: [opaque] }
               mustExist: error
+              allowCreate: true
               create:
                 secretType: opaque
                 encoding: plain
@@ -376,7 +329,6 @@ steps:
             required: true
             example: true
       - title: OAuth providers
-        docs: "#oauth-providers"
         fields:
           - path: auth.providers
             type: map
@@ -408,6 +360,7 @@ steps:
                     format: name
                     filter: { secretType: [opaque] }
                     mustExist: error
+                    allowCreate: true
                     create: { secretType: opaque, encoding: plain }
             rules:
               - rule: size(self.auth.providers) == 0 || self.kong.publicAccess.enabled
@@ -427,16 +380,37 @@ steps:
                   ignores it, but it stays in the release values in plain text and the provider editor
                   does not show it: remove it in YAML mode. The client secret is read only from the
                   secret named by clientSecretName.
-      - title: Dashboard access
-        when: self.studio.enabled
+      - id: studio
+        title: Studio dashboard
+        toggle: studio.enabled
+        description: The web dashboard, served by Kong at `/` behind a username and password.
         docs: "#studio-web-dashboard"
         fields:
+          - path: studio.username
+            type: string
+            label: Dashboard login name
+            required: true
+          - path: studio.passwordSecretName
+            type: ref
+            label: Dashboard password secret
+            required: true
+            description: >-
+              An opaque secret (encoding plain) holding only the dashboard password, on one line. It
+              must exist before you install.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                secretType: opaque
+                encoding: plain
+                suggestName: "context.releaseName + '-studio-password'"
           - path: studio.allowedCidrs
             type: list
             label: Direct dashboard access (bypasses the login)
-            description: >-
-              CIDRs that reach the Studio workload directly, skipping Kong and therefore the password.
-              Keep it empty and use Kong's URL.
+            description: Keep it empty and reach the dashboard through Kong's URL.
             widget: tags
             item:
               type: string
@@ -462,15 +436,13 @@ steps:
             options:
               - value: none
                 label: None
-                description: >-
-                  Blocks every internal caller, Kong included: the dashboard is not served through
-                  Kong, only to the direct-access CIDRs.
+                description: No internal caller.
               - value: same-gvc
                 label: Same GVC
-                description: Any workload in this GVC, without a password.
+                description: Any workload in this GVC.
               - value: same-org
                 label: Same org
-                description: Any workload in this org, without a password.
+                description: Any workload in this org.
               - value: workload-list
                 label: Kong and listed workloads
                 description: Kong plus the workloads listed below.
@@ -502,7 +474,10 @@ steps:
     description: Where the Storage API keeps files.
     docs: "#storage"
     sections:
-      - when: self.storage.enabled
+      - id: storage-api
+        title: Storage API
+        toggle: storage.enabled
+        description: File and object storage. Turn it off if your app stores no files; it saves a workload.
         fields:
           - path: storage.backend
             type: enum
@@ -523,11 +498,19 @@ steps:
             when: self.storage.backend == 'local'
             text: >-
               A local backend makes Storage a stateful workload with one replica: the replica settings
-              are ignored, and the maximum CPU and memory can each be at most 4 times their minimum.
+              are ignored.
       - title: S3
         when: self.storage.enabled && self.storage.backend == 's3'
-        docs: "#aws-s3-storage-backend-and-backups"
         fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.1.1') < 0 && ui.s3Flavour == 'aws'
+            text: >-
+              This version no longer grants the Supabase identity `aws::ReadOnlyAccess`, which was
+              silently supplying any read action your bucket-scoped IAM policy omitted. Update the policy
+              to the full action list in the README before upgrading.
           - id: s3Flavour
             virtual: true
             type: enum
@@ -557,7 +540,6 @@ steps:
             type: ref
             label: Cloud account
             required: true
-            example: true
             when: ui.s3Flavour == 'aws'
             help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
             ref:
@@ -565,7 +547,6 @@ steps:
               format: name
               filter: { provider: [aws] }
               mustExist: error
-              create: { provider: aws }
           - path: storage.s3.policyName
             type: string
             label: IAM policy name
@@ -602,9 +583,10 @@ steps:
               format: name
               filter: { secretType: [dictionary] }
               mustExist: error
+              allowCreate: true
+              requiredKeys: [accessKeyId, secretAccessKey]
               create:
                 secretType: dictionary
-                keys: [accessKeyId, secretAccessKey]
                 suggestName: "context.releaseName + '-s3-credentials'"
         rules:
           - when: self.storage.s3.endpoint != null && self.storage.s3.endpoint != ''
@@ -622,7 +604,6 @@ steps:
             message: AWS S3 (no endpoint set) needs a cloud account and an IAM policy name.
       - title: Google Cloud Storage
         when: self.storage.enabled && self.storage.backend == 'gcs'
-        docs: "#google-cloud-storage--storage-backend"
         fields:
           - path: storage.gcs.bucket
             type: string
@@ -633,7 +614,6 @@ steps:
             type: ref
             label: HMAC key secret
             required: true
-            example: true
             description: >-
               A dictionary secret with the keys `accessKeyId` and `secretAccessKey`, an HMAC pair for a
               service account with Storage Object Admin on the bucket.
@@ -642,9 +622,10 @@ steps:
               format: name
               filter: { secretType: [dictionary] }
               mustExist: error
+              allowCreate: true
+              requiredKeys: [accessKeyId, secretAccessKey]
               create:
                 secretType: dictionary
-                keys: [accessKeyId, secretAccessKey]
                 suggestName: "context.releaseName + '-gcs-hmac'"
       - title: Local volume
         when: self.storage.enabled && self.storage.backend == 'local'
@@ -656,15 +637,13 @@ steps:
             unit: GiB
             min: 10
             required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
             docs: "/reference/volumeset#capacity-and-billing"
-          - path: storage.volumeset.autoscaling.enabled
-            type: boolean
-            label: Grow storage automatically
-            docs: "/reference/volumeset#autoscaling"
-      - title: Local volume autoscaling
-        when: >-
-          self.storage.enabled && self.storage.backend == 'local' &&
-          self.storage.volumeset.autoscaling.enabled
+      - id: local-autoscaling
+        title: Grow the local volume automatically
+        toggle: storage.volumeset.autoscaling.enabled
+        when: self.storage.enabled && self.storage.backend == 'local'
+        docs: "/reference/volumeset#autoscaling"
         fields:
           - path: storage.volumeset.autoscaling.maxCapacity
             type: integer
@@ -672,20 +651,26 @@ steps:
             unit: GiB
             min: 10
             required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
           - path: storage.volumeset.autoscaling.minFreePercentage
             type: integer
             label: Scale up below this free space
             unit: "%"
             min: 1
             max: 100
-            widget: slider
             required: true
+            suggestions: [10, 20, 30]
           - path: storage.volumeset.autoscaling.scalingFactor
             type: number
             label: Scaling factor
             min: 1.1
             step: 0.1
             required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
         rules:
           - rule: self.storage.volumeset.autoscaling.maxCapacity >= self.storage.volumeset.capacity
             paths: [storage.volumeset.autoscaling.maxCapacity]
@@ -729,13 +714,11 @@ steps:
   - id: backup
     title: Backups
     description: Logical dumps or continuous WAL archiving to object storage.
-    docs: "#backup-optional"
+    docs: "#backing-up"
     sections:
-      - fields:
-          - path: backup.enabled
-            type: boolean
-            label: Backups
-      - when: self.backup.enabled
+      - id: backup
+        title: Backups
+        toggle: backup.enabled
         fields:
           - path: backup.mode
             type: enum
@@ -773,8 +756,17 @@ steps:
             help: 300 seconds or more is recommended.
       - title: AWS S3
         when: self.backup.enabled && self.backup.provider == 'aws'
-        docs: "#aws-s3-storage-backend-and-backups"
+        docs: "#aws-s3"
         fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.1.1') < 0
+            text: >-
+              This version no longer grants the Supabase identity `aws::ReadOnlyAccess`, which was
+              silently supplying any read action your bucket-scoped IAM policy omitted. Update the policy
+              to the full action list in the README before upgrading.
           - path: backup.aws.bucket
             type: string
             label: Bucket
@@ -791,14 +783,12 @@ steps:
             type: ref
             label: Cloud account
             required: true
-            example: true
             help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
             ref:
               kind: cloudaccount
               format: name
               filter: { provider: [aws] }
               mustExist: error
-              create: { provider: aws }
           - path: backup.aws.policyName
             type: string
             label: IAM policy name
@@ -809,10 +799,9 @@ steps:
             type: string
             label: Folder prefix
             pattern: "^(?!/)"
-            description: Without a leading `/`.
       - title: Google Cloud Storage
         when: self.backup.enabled && self.backup.provider == 'gcp'
-        docs: "#google-cloud-storage--backups"
+        docs: "#gcs"
         fields:
           - path: backup.gcp.bucket
             type: string
@@ -823,7 +812,6 @@ steps:
             type: ref
             label: Cloud account
             required: true
-            example: true
             help: >-
               A GCP [cloud account](/guides/create-cloud-account) whose service account has the Storage
               Admin role.
@@ -832,12 +820,10 @@ steps:
               format: name
               filter: { provider: [gcp] }
               mustExist: error
-              create: { provider: gcp }
           - path: backup.gcp.prefix
             type: string
             label: Folder prefix
             pattern: "^(?!/)"
-            description: Without a leading `/`.
     rules:
       - rule: >-
           oldSelf == null || !self.backup.enabled || !oldSelf.backup.enabled ||
@@ -868,7 +854,6 @@ steps:
             format: image
             label: Postgres image
             required: true
-            description: Must be a `supabase/postgres` image; it ships the extensions the services need.
             rules:
               - rule: >-
                   self.postgres.image.startsWith('supabase/postgres') ||
@@ -894,11 +879,13 @@ steps:
             label: Kong minimum replicas
             min: 1
             required: true
+            suggestions: [1, 2, 3, 5]
           - path: kong.maxReplicas
             type: integer
             label: Kong maximum replicas
             min: 1
             required: true
+            suggestions: [1, 2, 3, 5]
             rules:
               - rule: self.kong.minReplicas <= self.kong.maxReplicas
                 message: The maximum replicas must be at least the minimum.
@@ -918,11 +905,13 @@ steps:
             label: PostgREST minimum replicas
             min: 1
             required: true
+            suggestions: [1, 2, 3, 5]
           - path: postgrest.maxReplicas
             type: integer
             label: PostgREST maximum replicas
             min: 1
             required: true
+            suggestions: [1, 2, 3, 5]
             rules:
               - rule: self.postgrest.minReplicas <= self.postgrest.maxReplicas
                 message: The maximum replicas must be at least the minimum.
@@ -942,11 +931,13 @@ steps:
             label: Auth minimum replicas
             min: 1
             required: true
+            suggestions: [1, 2, 3, 5]
           - path: auth.maxReplicas
             type: integer
             label: Auth maximum replicas
             min: 1
             required: true
+            suggestions: [1, 2, 3, 5]
             rules:
               - rule: self.auth.minReplicas <= self.auth.maxReplicas
                 message: The maximum replicas must be at least the minimum.
@@ -992,12 +983,14 @@ steps:
             label: Storage minimum replicas
             min: 1
             required: true
+            suggestions: [1, 2, 3, 5]
             when: self.storage.backend != 'local'
           - path: storage.maxReplicas
             type: integer
             label: Storage maximum replicas
             min: 1
             required: true
+            suggestions: [1, 2, 3, 5]
             when: self.storage.backend != 'local'
             rules:
               - rule: self.storage.minReplicas <= self.storage.maxReplicas

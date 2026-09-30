@@ -19,6 +19,23 @@
       "type": "string",
       "markdownDescription": "Wizard title; defaults to the chart name."
     },
+    "gvc": {
+      "type": "object",
+      "additionalProperties": false,
+      "markdownDescription": "Limits on the location count of the GVC the template installs into, e.g. `{minLocations: 1, maxLocations: 1}` for a chart that runs one independent copy per location. The console only offers GVCs that fit.",
+      "properties": {
+        "minLocations": {
+          "type": "integer",
+          "minimum": 0,
+          "markdownDescription": "Fewest locations the GVC may have."
+        },
+        "maxLocations": {
+          "type": "integer",
+          "minimum": 0,
+          "markdownDescription": "Most locations the GVC may have."
+        }
+      }
+    },
     "steps": {
       "type": "array",
       "minItems": 1,
@@ -168,6 +185,10 @@
           "$ref": "#/definitions/cel",
           "markdownDescription": "CEL bool: the section is shown while true."
         },
+        "toggle": {
+          "$ref": "#/definitions/path",
+          "markdownDescription": "Boolean values path: the section's switch, labelled with the section `title`. While it is off, the section shows its header only: its fields and notes are hidden and its rules skipped. Put a feature's switch here, next to the fields it enables; do not repeat it in `when`."
+        },
         "advanced": {
           "type": "boolean",
           "markdownDescription": "Collapsed under Advanced."
@@ -182,6 +203,14 @@
         "rules": {
           "$ref": "#/definitions/rules"
         }
+      },
+      "if": {
+        "required": ["toggle"],
+        "type": "object"
+      },
+      "then": {
+        "required": ["title"],
+        "type": "object"
       }
     },
     "items": {
@@ -412,6 +441,10 @@
           "type": "boolean",
           "markdownDescription": "Allow a value outside the options (combobox)."
         },
+        "suggestions": {
+          "$ref": "#/definitions/suggestions",
+          "markdownDescription": "Suggested values (`string`, `integer`, `number`, `quantity`) offered in a dropdown next to free typing; any other value can still be entered. A value, or `{value, label, description}`."
+        },
         "quantity": {
           "enum": ["cpu", "memory"],
           "markdownDescription": "`cpu` (`200m`, `0.5`) or `memory` (`128Mi`, `2Gi`)."
@@ -579,6 +612,40 @@
           "if": {
             "properties": {
               "type": {
+                "const": "string"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "properties": {
+              "suggestions": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "properties": {
+                        "value": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
                 "const": "enum"
               }
             },
@@ -620,6 +687,24 @@
               },
               "max": {
                 "type": ["string", "number"]
+              },
+              "suggestions": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": ["string", "number"]
+                    },
+                    {
+                      "properties": {
+                        "value": {
+                          "type": ["string", "number"]
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
               }
             },
             "type": "object"
@@ -657,6 +742,24 @@
               },
               "max": {
                 "type": "integer"
+              },
+              "suggestions": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "properties": {
+                        "value": {
+                          "type": "integer"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
               }
             },
             "type": "object"
@@ -679,6 +782,24 @@
               },
               "max": {
                 "type": "number"
+              },
+              "suggestions": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "properties": {
+                        "value": {
+                          "type": "number"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
               }
             },
             "type": "object"
@@ -990,6 +1111,10 @@
           "type": "boolean",
           "markdownDescription": "Multi-line text (textarea); written as a YAML block literal."
         },
+        "suggestions": {
+          "$ref": "#/definitions/suggestions",
+          "markdownDescription": "Suggested values (`string`, `integer`, `number`, `quantity`) offered in a dropdown next to free typing; any other value can still be entered. A value, or `{value, label, description}`."
+        },
         "min": {
           "markdownDescription": "Minimum: a number for `integer`/`number`, a quantity (`200m`, `128Mi`) for `quantity`."
         },
@@ -1059,7 +1184,8 @@
                 "maxLength",
                 "pattern",
                 "format",
-                "multiline"
+                "multiline",
+                "suggestions"
               ]
             },
             "type": "object"
@@ -1077,7 +1203,19 @@
           },
           "then": {
             "propertyNames": {
-              "enum": ["type", "label", "description", "help", "placeholder", "widget", "min", "max", "step", "unit"]
+              "enum": [
+                "type",
+                "label",
+                "description",
+                "help",
+                "placeholder",
+                "widget",
+                "min",
+                "max",
+                "step",
+                "unit",
+                "suggestions"
+              ]
             },
             "type": "object"
           }
@@ -1094,7 +1232,19 @@
           },
           "then": {
             "propertyNames": {
-              "enum": ["type", "label", "description", "help", "placeholder", "widget", "min", "max", "step", "unit"]
+              "enum": [
+                "type",
+                "label",
+                "description",
+                "help",
+                "placeholder",
+                "widget",
+                "min",
+                "max",
+                "step",
+                "unit",
+                "suggestions"
+              ]
             },
             "type": "object"
           }
@@ -1155,7 +1305,18 @@
           },
           "then": {
             "propertyNames": {
-              "enum": ["type", "label", "description", "help", "placeholder", "widget", "quantity", "min", "max"]
+              "enum": [
+                "type",
+                "label",
+                "description",
+                "help",
+                "placeholder",
+                "widget",
+                "quantity",
+                "min",
+                "max",
+                "suggestions"
+              ]
             },
             "type": "object"
           }
@@ -1190,6 +1351,40 @@
           "then": {
             "propertyNames": {
               "enum": ["type", "label", "description", "help", "placeholder", "widget", "fields", "rules"]
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "string"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "properties": {
+              "suggestions": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "properties": {
+                        "value": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
             },
             "type": "object"
           }
@@ -1239,6 +1434,24 @@
               },
               "max": {
                 "type": ["string", "number"]
+              },
+              "suggestions": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": ["string", "number"]
+                    },
+                    {
+                      "properties": {
+                        "value": {
+                          "type": ["string", "number"]
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
               }
             },
             "type": "object"
@@ -1276,6 +1489,24 @@
               },
               "max": {
                 "type": "integer"
+              },
+              "suggestions": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "properties": {
+                        "value": {
+                          "type": "integer"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
               }
             },
             "type": "object"
@@ -1298,6 +1529,24 @@
               },
               "max": {
                 "type": "number"
+              },
+              "suggestions": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "properties": {
+                        "value": {
+                          "type": "number"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
               }
             },
             "type": "object"
@@ -1402,6 +1651,10 @@
           "type": "boolean",
           "markdownDescription": "Multi-line text (textarea); written as a YAML block literal."
         },
+        "suggestions": {
+          "$ref": "#/definitions/suggestions",
+          "markdownDescription": "Suggested values (`string`, `integer`, `number`, `quantity`) offered in a dropdown next to free typing; any other value can still be entered. A value, or `{value, label, description}`."
+        },
         "min": {
           "markdownDescription": "Minimum: a number for `integer`/`number`, a quantity (`200m`, `128Mi`) for `quantity`."
         },
@@ -1451,7 +1704,8 @@
                 "maxLength",
                 "pattern",
                 "format",
-                "multiline"
+                "multiline",
+                "suggestions"
               ]
             },
             "type": "object"
@@ -1469,7 +1723,19 @@
           },
           "then": {
             "propertyNames": {
-              "enum": ["type", "label", "description", "help", "placeholder", "widget", "min", "max", "step", "unit"]
+              "enum": [
+                "type",
+                "label",
+                "description",
+                "help",
+                "placeholder",
+                "widget",
+                "min",
+                "max",
+                "step",
+                "unit",
+                "suggestions"
+              ]
             },
             "type": "object"
           }
@@ -1486,7 +1752,19 @@
           },
           "then": {
             "propertyNames": {
-              "enum": ["type", "label", "description", "help", "placeholder", "widget", "min", "max", "step", "unit"]
+              "enum": [
+                "type",
+                "label",
+                "description",
+                "help",
+                "placeholder",
+                "widget",
+                "min",
+                "max",
+                "step",
+                "unit",
+                "suggestions"
+              ]
             },
             "type": "object"
           }
@@ -1546,6 +1824,40 @@
           "if": {
             "properties": {
               "type": {
+                "const": "string"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "then": {
+            "properties": {
+              "suggestions": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "properties": {
+                        "value": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
                 "const": "integer"
               }
             },
@@ -1559,6 +1871,24 @@
               },
               "max": {
                 "type": "integer"
+              },
+              "suggestions": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "properties": {
+                        "value": {
+                          "type": "integer"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
               }
             },
             "type": "object"
@@ -1581,6 +1911,24 @@
               },
               "max": {
                 "type": "number"
+              },
+              "suggestions": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "properties": {
+                        "value": {
+                          "type": "number"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
               }
             },
             "type": "object"
@@ -1641,6 +1989,36 @@
       "items": {
         "$ref": "#/definitions/option"
       }
+    },
+    "suggestions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/definitions/suggestion"
+      }
+    },
+    "suggestion": {
+      "oneOf": [
+        {
+          "type": ["string", "number"]
+        },
+        {
+          "type": "object",
+          "required": ["value"],
+          "additionalProperties": false,
+          "properties": {
+            "value": {
+              "type": ["string", "number"]
+            },
+            "label": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            }
+          }
+        }
+      ]
     },
     "option": {
       "oneOf": [
@@ -1746,7 +2124,25 @@
           "enum": ["error", "warning", "off"],
           "markdownDescription": "Severity when the object does not exist (default `warning`)."
         },
+        "allowCreate": {
+          "type": "boolean",
+          "markdownDescription": "Offer to create the object inline (default false). Set it on prerequisites the user creates for this release, such as a credentials secret; `create` only prefills that form."
+        },
+        "requiredKeys": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "markdownDescription": "Dictionary secrets: the keys the chart reads. The console's Check keys button compares them with the secret's key names; also the default of `create.keys`."
+        },
+        "requiredKeysFrom": {
+          "$ref": "#/definitions/cel",
+          "markdownDescription": "CEL `list<string>` of the required keys, in the field's scope, instead of `requiredKeys` (e.g. `[self.auth.passwordKey]`)."
+        },
         "create": {
+          "markdownDescription": "Prefills of the inline create form; used only with `allowCreate: true`.",
           "type": "object",
           "additionalProperties": false,
           "properties": {
@@ -1798,6 +2194,12 @@
                 }
               }
             },
+            "type": "object"
+          }
+        },
+        {
+          "not": {
+            "required": ["requiredKeys", "requiredKeysFrom"],
             "type": "object"
           }
         }

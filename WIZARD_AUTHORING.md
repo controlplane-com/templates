@@ -1034,7 +1034,7 @@ Pitfalls:
 
 - A `ref` to an object the chart creates itself is wrong: redis's `publicAccess.address` is a `string` with `format: hostname`, because the chart creates a domain with that name. A reference is for objects that must already exist.
 - `format` must match how the chart uses the value; firewall lists take `relativeLink` (`//gvc/<gvc>/workload/<name>`).
-- Never `example: true` on a ref (§12).
+- Never `example: true` on a ref (§12); lint warns (`EXAMPLE_ON_REF`).
 
 ### 6.9 `list`
 
@@ -2271,7 +2271,7 @@ When not to:
 
 - names and identifiers the user invents (buckets, hostnames);
 - when the valid set is closed: that is an `enum`;
-- **together with `widget: slider`**: the console renders suggestions as a combobox, which replaces the slider. Pick one: a slider for a bounded range, suggestions for typical values;
+- **together with `widget: slider` or `widget: stepper`**: the console renders suggestions as a combobox, which replaces the widget (lint warns: `SUGGESTIONS_WIDGET`). Pick one: a slider for a bounded range, suggestions for typical values;
 - values outside the chart's real use (do not suggest 5 Sentinels for a chart that documents 3).
 
 Label the chart default when it helps ("1.2× (default)"). Keep lists short (three to seven values) and ascending.
@@ -3008,7 +3008,7 @@ Use it for your own descriptor before committing, and for reviewing someone else
 38. `absent: true` only on keys `values.yaml` lacks; `default` only with `absent`.
 39. `immutable` (with a reason) wherever a change breaks the running release; `assume` for immutable keys added in this version.
 40. `sensitive` only on passwords stored in values, with `widget: password`.
-41. `suggestions` are valid for the field (within `min`/`max`), short, ascending, and not combined with `widget: slider`.
+41. `suggestions` are valid for the field (within `min`/`max`), short, ascending, and not combined with `widget: slider` or `widget: stepper`.
 
 **References**
 
@@ -3115,7 +3115,7 @@ Every finding from the Round 1 reviews and the Round 2 owner testing, generalise
 | 35 | A plaintext value "renamed" into a secret name | general | The value is not a name | A drop with a note (§9.2) |
 | 36 | Unguarded `context.gvcLocations` / `gvcSpec` | general | Errors until the renderer knows them | `context.x == null \|\| …` (§7.2) |
 | 37 | A `pattern` whose regex is the only explanation | general | The `PATTERN` message quotes the regex | A `patternMessage` (§6.2) |
-| 38 | Suggestions outside `min`/`max`, or with a slider | general | Lint error; the slider is replaced | Valid suggestions, no slider (§15) |
+| 38 | Suggestions outside `min`/`max`, or with a slider or stepper | general | Lint error (outside the bounds) or warning `SUGGESTIONS_WIDGET`; the widget is replaced | Valid suggestions, no slider or stepper (§15) |
 
 ---
 
@@ -3441,6 +3441,8 @@ Lint reports every parser diagnostic, plus:
 | `PREV_VALUES_INVALID` | warning | the previous values.yaml cannot be read |
 | `BOOLEAN_KEY` | warning | a key spelled like a YAML 1.1 boolean |
 | `CREATE_WITHOUT_ALLOW_CREATE` | warning | a ref `create` without `allowCreate: true` (once the descriptor uses `allowCreate`) |
+| `EXAMPLE_ON_REF` | warning | `example: true` on a ref or a list of refs (install sessions clear example refs) |
+| `SUGGESTIONS_WIDGET` | warning | `suggestions` with `widget: slider` or `widget: stepper` (the combobox replaces the widget) |
 | `IMPORT_*` | see §16.13 | imports (syntax final once core imports land) |
 
 ### B.5 `check-docs`

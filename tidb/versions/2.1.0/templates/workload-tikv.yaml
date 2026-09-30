@@ -2,7 +2,19 @@
 kind: workload
 name: {{ include "tidb.tikv.name" . }}
 description: TiKV storage
-tags: {{- include "tidb.tags" . | nindent 4 }}
+tags:
+  {{- /*
+    A rescheduled/restarting TiKV replica is NOT-READY while it replays and
+    re-registers its stores. The platform otherwise RSTs all inbound to a
+    not-ready replicaDirect replica (measured 2026-09-30), so peers (other
+    TiKV for raft, and PD's health view) cannot reach it during that window.
+    This tag routes internal traffic to a not-ready replica, so a single node
+    reschedule stays reachable instead of forcing the tier to re-converge.
+    Same tag and reason as the PD workload. See
+    PLATFORM-REPORT-replicaDirect-readiness-gating.md.
+  */}}
+  cpln/publishNotReadyAddresses: "true"
+  {{- include "tidb.tags" . | nindent 2 }}
 spec:
   type: stateful
   containers:

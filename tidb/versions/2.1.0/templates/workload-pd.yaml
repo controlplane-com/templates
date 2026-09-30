@@ -2,7 +2,18 @@
 kind: workload
 name: {{ include "tidb.pd.name" . }}
 description: TiDB placement driver
-tags: {{- include "tidb.tags" . | nindent 4 }}
+tags:
+  {{- /*
+    Peer discovery must reach a replica on its replicaDirect endpoint while it is
+    still NOT-READY during bootstrap. The platform otherwise RSTs all inbound to a
+    not-ready replica (measured 2026-09-30) — which deadlocks PD/etcd raft join,
+    since a member can only become ready by exchanging the peer traffic it can't
+    receive until it is ready. This tag routes internal traffic to not-ready
+    replicas. Precedent: redis (same tag, same reason). See
+    PLATFORM-REPORT-replicaDirect-readiness-gating.md.
+  */}}
+  cpln/publishNotReadyAddresses: "true"
+  {{- include "tidb.tags" . | nindent 2 }}
 spec:
   type: stateful
   containers:
@@ -34,12 +45,14 @@ spec:
           value: {{ include "tidb.pdEndpointList" . | quote }}
       readinessProbe:
         {{- /*
-          2.0.0 shipped NO PD readiness probe, so `ready: true` never reflected
-          quorum. This one is self-scoped on purpose: it passes when THIS PD is
-          up and the cluster has an elected leader — it does NOT require every
-          peer healthy, so a peer going down never restarts a surviving PD (the
-          readiness deadline restarts the container on this platform). The
-          serialized bootstrap fits inside the deadline (failureThreshold ≤ 20).
+          Safe to gate readiness now that `cpln/publishNotReadyAddresses: "true"`
+          (tag above) routes inbound/peer traffic to a not-ready replica — so the
+          probe no longer blocks bootstrap. This makes `ready: true` mean "this PD
+          is in a cluster with an elected leader". Self-scoped: it checks only
+          THIS node's view of a leader, not every peer's health, so a peer going
+          down never restarts a surviving PD (the readiness deadline restarts the
+          container on this platform); the serialized bootstrap fits inside the
+          deadline (failureThreshold ≤ 20).
         */}}
         exec:
           command:

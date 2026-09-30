@@ -1,0 +1,297 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Gitea
+
+# One stateful replica with its own repository volume: every GVC location would run its own copy.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.4.1
+    title: Bundled PostgreSQL
+    after: database
+    steps:
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network }
+      - { id: backup, title: Database backups }
+      - { id: advanced, title: Database backup job }
+    exclude:
+      # Gitea creates this secret itself (templates/secret-db.yaml) and names it in the Database step below.
+      - config.credentialsSecretName
+      # Gitea connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      image:
+        description: Gitea needs PostgreSQL 12 or later.
+      internalAccess.type:
+        description: >-
+          Gitea connects to its database like any other workload: keep Same GVC, or add the Gitea
+          workload under Allowed workloads.
+      backup.enabled:
+        help: Adds one cron workload that runs `pg_dumpall` and uploads a gzipped dump to the bucket.
+
+steps:
+  - id: gitea
+    title: Gitea
+    description: The Gitea image, its compute, and the prerequisite auth secret.
+    docs: "#configuration"
+    sections:
+      - title: Server
+        docs: "#image-and-resources"
+        fields:
+          - path: image
+            type: string
+            format: image
+            label: Gitea image
+            required: true
+            description: Use a `-rootless` tag; the chart runs Gitea as UID 1000 with its built-in SSH server.
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            maxRatio: 4
+            cpu: { min: 100m }
+            memory: { min: 256Mi }
+      - title: Admin and signing keys
+        docs: "#prerequisites"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The auth secret must exist **before** you install. If it is missing, the deployment waits and
+              `cpln logs` shows nothing at all.
+          - path: gitea.auth.secretName
+            type: ref
+            label: Auth secret
+            required: true
+            description: >-
+              A dictionary secret with `adminUsername`, `adminPassword`, `adminEmail`, `secretKey`,
+              `internalToken` and `jwtSecret`.
+            help: >-
+              `secretKey` and `jwtSecret` cannot be rotated: a new `secretKey` makes stored 2FA secrets, tokens
+              and mirror credentials unreadable. `jwtSecret` must be base64url of exactly 32 bytes.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [adminUsername, adminPassword, adminEmail, secretKey, internalToken, jwtSecret]
+              create:
+                secretType: dictionary
+                suggestName: "context.releaseName + '-gitea-auth'"
+                hint: >-
+                  secretKey and internalToken: openssl rand -hex 32. jwtSecret: openssl rand -base64 32 |
+                  tr '+/' '-_' | tr -d '='
+          - path: gitea.disableRegistration
+            type: boolean
+            label: Invite-only registration
+            description: On, only an admin creates accounts; off, anyone who reaches the web UI can sign up.
+    rules:
+      - rule: self.gitea.auth.secretName != ''
+        mirrors: gitea.validateAuth
+        paths: [gitea.auth.secretName]
+        message: Name the prerequisite auth secret; the chart does not render without it.
+      - rule: oldSelf == null || self.gitea.auth.secretName == oldSelf.gitea.auth.secretName
+        severity: info
+        paths: [gitea.auth.secretName]
+        message: >-
+          The new secret must hold the same secretKey, internalToken and jwtSecret as the installed one, or
+          existing 2FA secrets, tokens and OAuth2 tokens stop working.
+
+  - id: storage
+    title: Storage
+    description: The volume set with repositories, LFS objects, attachments and SSH host keys.
+    docs: "#storage"
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            help: Uninstalling the release deletes the volume set with every repository on it.
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: volumeset.autoscaling.enabled
+        docs: /reference/volumeset#autoscaling
+        fields:
+          - path: volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [50, 100, 200, 500, 1000, 2000]
+          - path: volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
+            paths: [volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+    rules:
+      - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+
+  - id: access
+    title: Access
+    description: Who reaches the web UI and Git, from the internet and from inside the GVC.
+    sections:
+      - title: Public access
+        docs: "#access"
+        fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Public HTTPS endpoint
+            description: The web UI and Git over HTTPS on the workload's `*.cpln.app` endpoint.
+      - id: ssh
+        title: Git over SSH
+        toggle: ssh.enabled
+        description: >-
+          Public SSH takes over the workload's only public endpoint, so the web UI and Git over HTTPS are no
+          longer served there.
+        docs: "#the-ssh-and-https-endpoint-trade-off"
+        fields:
+          - type: note
+            severity: warning
+            text: Turn this on only if you serve the web UI through a custom domain, or only need Git over SSH.
+          - path: ssh.externalPort
+            type: integer
+            label: Public SSH port
+            min: 1
+            max: 65535
+            required: true
+          - path: ssh.domain
+            type: string
+            format: hostname
+            label: SSH host in clone URLs
+            description: Leave empty to use the web domain.
+      - title: Internal access
+        docs: /reference/workload/firewall
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            options:
+              - { value: none, label: Nobody, description: No workload can reach Gitea internally. }
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+            rules:
+              - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+                mirrors: gitea.validate
+                message: The internal access must be none, same-gvc, same-org or workload-list.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type in ['same-gvc', 'workload-list']
+            widget: tags
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+
+  - id: database
+    title: Database
+    description: The bundled PostgreSQL's credentials. Gitea creates the secret from them; there is nothing to create first.
+    docs: "#backing-database"
+    fields:
+      - type: note
+        text: >-
+          Gitea creates the dictionary secret named below from these three values, and the bundled PostgreSQL
+          reads it. The password is used as-is, so change it.
+      - path: postgres.credentials.username
+        type: string
+        label: Database user
+        required: true
+        immutable: PostgreSQL creates this user once, when its data directory is initialized.
+      - path: postgres.credentials.password
+        type: string
+        label: Database password
+        required: true
+        sensitive: true
+        widget: password
+        example: true
+      - path: postgres.credentials.database
+        type: string
+        label: Database name
+        required: true
+        immutable: PostgreSQL creates this database once, when its data directory is initialized.
+      - path: postgres.config.credentialsSecretName
+        type: string
+        label: Credentials secret name
+        required: true
+        description: The dictionary secret Gitea creates and PostgreSQL reads. Secret names are org-wide.
+    rules:
+      - rule: oldSelf == null || self.postgres.credentials.password == oldSelf.postgres.credentials.password
+        severity: info
+        paths: [postgres.credentials.password]
+        message: >-
+          PostgreSQL keeps the password it was initialized with. Run ALTER ROLE first, or Gitea loses its
+          database connection after this upgrade.
+      - when: context.mode == 'install'
+        rule: self.postgres.config.credentialsSecretName != 'my-gitea-db-credentials'
+        severity: info
+        paths: [postgres.config.credentialsSecretName]
+        messageExpression: >-
+          'Secret names are org-wide: a second Gitea release on this name is refused at install. For example ' +
+          context.releaseName + '-gitea-db-credentials.'
+        message: Secret names are org-wide; a second Gitea release on this name is refused at install.
+
+# Rules over the imported values: their issues show on the imported fields' step (postgres:network).
+rules:
+  - rule: "!has(self.gitea.admin) && !has(self.gitea.security)"
+    mirrors: gitea.validateRemovedKeys
+    paths: [gitea.auth.secretName]
+    message: >-
+      gitea.admin.* and gitea.security.* were removed in 1.1.0: put them in the auth secret and remove them
+      from the values.
+  - rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"Nobody" also blocks Gitea, which connects to its database like any other workload.'
+  - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-gitea') in self.postgres.internalAccess.workloads
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-gitea, or Gitea cannot reach its database.'"
+    message: Add the Gitea workload to the list, or Gitea cannot reach its database.
+
+yamlOnly:
+  - path: postgres.pgbouncer
+    reason: Gitea connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+
+migrations:
+  - { fromVersions: "<1.2.0", from: postgres.config.username, to: postgres.credentials.username }
+  - { fromVersions: "<1.2.0", from: postgres.config.password, to: postgres.credentials.password }
+  - { fromVersions: "<1.2.0", from: postgres.config.database, to: postgres.credentials.database }
+  - fromVersions: "<1.1.0"
+    from: gitea.admin
+    note: The admin login moved into the auth secret (adminUsername, adminPassword, adminEmail); choose it under Gitea.
+  - fromVersions: "<1.1.0"
+    from: gitea.security
+    note: secretKey, internalToken and jwtSecret moved into the auth secret; reuse the SAME values, they cannot be rotated.

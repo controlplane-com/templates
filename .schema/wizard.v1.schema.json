@@ -312,6 +312,10 @@
           "type": "string",
           "markdownDescription": "JavaScript regular expression the value must match; anchor it yourself (`^…$`)."
         },
+        "patternMessage": {
+          "type": "string",
+          "markdownDescription": "Shown instead of the regular expression when the value does not match `pattern`, e.g. \"Leave out the leading /.\""
+        },
         "minItems": {
           "type": "integer",
           "minimum": 0,
@@ -654,6 +658,10 @@
         "pattern": {
           "type": "string",
           "markdownDescription": "JavaScript regular expression the value must match; anchor it yourself (`^…$`)."
+        },
+        "patternMessage": {
+          "type": "string",
+          "markdownDescription": "Shown instead of the regular expression when the value does not match `pattern`, e.g. \"Leave out the leading /.\""
         },
         "format": {
           "enum": ["image", "url", "hostname", "email", "cron", "cidr", "duration"],
@@ -1352,6 +1360,10 @@
           "type": "string",
           "markdownDescription": "JavaScript regular expression the value must match; anchor it yourself (`^…$`)."
         },
+        "patternMessage": {
+          "type": "string",
+          "markdownDescription": "Shown instead of the regular expression when the value does not match `pattern`, e.g. \"Leave out the leading /.\""
+        },
         "format": {
           "enum": ["image", "url", "hostname", "email", "cron", "cidr", "duration"],
           "markdownDescription": "String format: `image`, `url`, `hostname`, `email`, `cron`, `cidr` or `duration` (`7d`, `30s`)."
@@ -1432,6 +1444,7 @@
                 "minLength",
                 "maxLength",
                 "pattern",
+                "patternMessage",
                 "format",
                 "multiline",
                 "suggestions"
@@ -1892,6 +1905,10 @@
           "type": "string",
           "markdownDescription": "JavaScript regular expression the value must match; anchor it yourself (`^…$`)."
         },
+        "patternMessage": {
+          "type": "string",
+          "markdownDescription": "Shown instead of the regular expression when the value does not match `pattern`, e.g. \"Leave out the leading /.\""
+        },
         "format": {
           "enum": ["image", "url", "hostname", "email", "cron", "cidr", "duration"],
           "markdownDescription": "String format: `image`, `url`, `hostname`, `email`, `cron`, `cidr` or `duration` (`7d`, `30s`)."
@@ -1952,6 +1969,7 @@
                 "minLength",
                 "maxLength",
                 "pattern",
+                "patternMessage",
                 "format",
                 "multiline",
                 "suggestions"

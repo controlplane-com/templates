@@ -2,17 +2,15 @@
 apiVersion: template-wizard.controlplane.com/v1
 kind: TemplateWizard
 title: MongoDB Cluster
+gvc:
+  minLocations: 1
 
 steps:
   - id: topology
     title: Locations
     description: Where the replica set members run. Every member votes.
-    docs: "#locations"
+    docs: "#locations-and-sizing"
     fields:
-      - type: note
-        text: >-
-          Every location must already exist in the GVC you install into; members in a missing
-          location never start. MongoDB allows at most 7 voting members.
       - type: note
         textExpression: >-
           sum(self.locations.map(l, l.replicas)) < 1 ? 'No members configured.' :
@@ -105,7 +103,7 @@ steps:
   - id: credentials
     title: Credentials
     description: The two prerequisite secrets. Neither value passes through the release values.
-    docs: "#credentials"
+    docs: "#prerequisites"
     fields:
       - type: note
         severity: warning
@@ -114,23 +112,24 @@ steps:
         type: ref
         label: Database credentials secret
         required: true
-        example: true
-        description: A dictionary secret with the keys `username`, `password` and `database`.
+        description: >-
+          A dictionary secret with the keys `username` and `password`. The chart does not read a
+          `database` key; add one only for your own connection strings.
         help: The root user is created from it once, when the cluster is first initialized.
         ref:
           kind: secret
           format: name
           filter: { secretType: [dictionary] }
           mustExist: error
+          allowCreate: true
+          requiredKeys: [username, password]
           create:
             secretType: dictionary
-            keys: [username, password, database]
             suggestName: "context.releaseName + '-mongodb-credentials'"
       - path: mongodb.keyfileSecretName
         type: ref
         label: Replica set keyfile secret
         required: true
-        example: true
         immutable: The keyfile cannot be changed after the cluster is initialized.
         description: >-
           An opaque secret (encoding plain) with 6 to 1024 characters from the base64 alphabet. Keep it
@@ -140,6 +139,7 @@ steps:
           format: name
           filter: { secretType: [opaque] }
           mustExist: error
+          allowCreate: true
           create:
             secretType: opaque
             encoding: plain
@@ -180,14 +180,13 @@ steps:
             unit: GiB
             min: 10
             required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
             help: Uninstalling the release deletes the volume set with the data.
             docs: "/reference/volumeset#capacity-and-billing"
-          - path: volumeset.autoscaling.enabled
-            type: boolean
-            label: Grow storage automatically
-            docs: "/reference/volumeset#autoscaling"
-      - title: Autoscaling
-        when: self.volumeset.autoscaling.enabled
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: volumeset.autoscaling.enabled
+        docs: "/reference/volumeset#autoscaling"
         fields:
           - path: volumeset.autoscaling.maxCapacity
             type: integer
@@ -195,20 +194,26 @@ steps:
             unit: GiB
             min: 10
             required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
           - path: volumeset.autoscaling.minFreePercentage
             type: integer
             label: Scale up below this free space
             unit: "%"
             min: 1
             max: 100
-            widget: slider
             required: true
+            suggestions: [10, 20, 30]
           - path: volumeset.autoscaling.scalingFactor
             type: number
             label: Scaling factor
             min: 1.1
             step: 0.1
             required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
         rules:
           - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
             paths: [volumeset.autoscaling.maxCapacity]
@@ -223,7 +228,7 @@ steps:
     description: Who can connect, and the HAProxy endpoint that routes to the primary.
     sections:
       - title: Access
-        docs: "#access"
+        docs: "#firewall"
         fields:
           - path: firewall.internalAllowType
             type: enum
@@ -244,26 +249,25 @@ steps:
             item:
               type: ref
               ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
-      - title: HAProxy
-        docs: "#haproxy"
-        fields:
-          - path: proxy.enabled
-            type: boolean
-            label: HAProxy primary endpoint
-            description: One stable address that always routes to the current primary. Backups do not use it.
-      - when: self.proxy.enabled
+      - id: proxy
+        title: HAProxy primary endpoint
+        toggle: proxy.enabled
+        description: One stable address that always routes to the current primary. Backups do not use it.
+        docs: "#haproxy-proxy"
         fields:
           - path: proxy.minReplicas
             type: integer
             label: Minimum proxy replicas per location
             min: 1
             required: true
+            suggestions: [1, 2, 3, 5]
           - path: proxy.maxReplicas
             type: integer
             label: Maximum proxy replicas per location
             min: 1
             required: true
-            description: Each configured location runs this many proxies.
+            suggestions: [1, 2, 3, 5]
+            description: In each configured location, HAProxy scales between the two by requests per second.
         rules:
           - rule: self.proxy.minReplicas <= self.proxy.maxReplicas
             paths: [proxy.minReplicas]
@@ -277,13 +281,11 @@ steps:
   - id: backup
     title: Backups
     description: Scheduled logical backups (mongodump) to object storage.
-    docs: "#backups"
+    docs: "#backing-up"
     sections:
-      - fields:
-          - path: backup.enabled
-            type: boolean
-            label: Scheduled backups
-      - when: self.backup.enabled
+      - id: backup
+        title: Scheduled backups
+        toggle: backup.enabled
         fields:
           - path: backup.provider
             type: enum
@@ -298,6 +300,17 @@ steps:
             format: cron
             label: Schedule (UTC)
             required: true
+          - path: backup.location
+            type: enum
+            label: Run the backup job in
+            required: true
+            optionsFrom: self.locations.map(l, l.name)
+            description: The one location the job runs in; the other locations run no backup.
+        rules:
+          - rule: self.backup.location in self.locations.map(l, l.name)
+            mirrors: mongo-cluster.validateBackupLocation
+            paths: [backup.location]
+            message: The backup location must be one of the configured locations, or the job never runs.
       - title: AWS S3
         when: self.backup.enabled && self.backup.provider == 'aws'
         docs: "#aws-s3"
@@ -318,14 +331,12 @@ steps:
             type: ref
             label: Cloud account
             required: true
-            example: true
             help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
             ref:
               kind: cloudaccount
               format: name
               filter: { provider: [aws] }
               mustExist: error
-              create: { provider: aws }
           - path: backup.aws.policyName
             type: string
             label: IAM policy name
@@ -336,7 +347,6 @@ steps:
             type: string
             label: Folder prefix
             pattern: "^(?!/)"
-            description: Without a leading `/`.
       - title: Google Cloud Storage
         when: self.backup.enabled && self.backup.provider == 'gcp'
         docs: "#gcs"
@@ -350,7 +360,6 @@ steps:
             type: ref
             label: Cloud account
             required: true
-            example: true
             help: >-
               A GCP [cloud account](/guides/create-cloud-account) whose service account has the
               Storage Admin role on the bucket.
@@ -359,12 +368,10 @@ steps:
               format: name
               filter: { provider: [gcp] }
               mustExist: error
-              create: { provider: gcp }
           - path: backup.gcp.prefix
             type: string
             label: Folder prefix
             pattern: "^(?!/)"
-            description: Without a leading `/`.
     rules:
       - when: "!self.backup.enabled"
         rule: self.backup.mode != 'physical'
@@ -373,23 +380,6 @@ steps:
         message: >-
           backup.mode physical was removed in 2.0.0, and the chart refuses it even with backups off.
           Set backup.mode to logical.
-
-  - id: backup-location
-    title: Backup location
-    description: The one location the backup job runs in.
-    when: self.backup.enabled
-    fields:
-      - path: backup.location
-        type: enum
-        label: Run the backup job in
-        required: true
-        optionsFrom: self.locations.map(l, l.name)
-        description: Must be one of the configured locations; otherwise the job never runs anywhere.
-    rules:
-      - rule: self.backup.location in self.locations.map(l, l.name)
-        mirrors: mongo-cluster.validateBackupLocation
-        paths: [backup.location]
-        message: The backup location must be one of the configured locations, or the job never runs.
 
   - id: advanced
     title: Advanced

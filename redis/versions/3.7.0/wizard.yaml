@@ -317,6 +317,56 @@ steps:
                   - { value: 1.2, label: "1.2× (default)" }
                   - { value: 1.5, label: "1.5×" }
                   - { value: 2, label: "2×" }
+          - path: redis.persistence.volumes.data.fileSystemType
+            type: enum
+            label: File system
+            widget: segmented
+            required: true
+            immutable: true
+            advanced: true
+            options: [ext4, xfs]
+          - path: redis.persistence.volumes.data.snapshots
+            type: object
+            optional: true
+            label: Scheduled snapshots
+            advanced: true
+            docs: "/reference/volumeset#snapshots"
+            newValue: { retentionDuration: 7d, schedule: "0 0 * * *" }
+            fields:
+              - path: retentionDuration
+                type: string
+                format: duration
+                label: Keep snapshots for
+                required: true
+                placeholder: 7d
+              - path: schedule
+                type: string
+                format: cron
+                label: Schedule (UTC)
+                required: true
+          - path: redis.persistence.volumes.data.customEncryption
+            type: object
+            optional: true
+            absent: true
+            label: Encrypt with your own KMS key
+            immutable: Encryption is chosen when the volume set is created.
+            advanced: true
+            newValue: { enabled: true, region: "", keyId: "" }
+            fields:
+              - path: enabled
+                type: boolean
+                label: Use the KMS key
+              - path: region
+                type: ref
+                label: Location
+                required: true
+                help: AWS locations only; the key must be in the same region.
+                ref: { kind: location, scope: gvc, format: name, mustExist: error }
+              - path: keyId
+                type: string
+                label: KMS key ARN
+                required: true
+                placeholder: arn:aws:kms:us-east-1:123456789012:key/…
         rules:
           - rule: >-
               self.redis.persistence.volumes.data.performanceClass != 'high-throughput-ssd' ||
@@ -399,6 +449,56 @@ steps:
                   - { value: 1.2, label: "1.2× (default)" }
                   - { value: 1.5, label: "1.5×" }
                   - { value: 2, label: "2×" }
+          - path: sentinel.persistence.volumes.data.fileSystemType
+            type: enum
+            label: File system
+            widget: segmented
+            required: true
+            immutable: true
+            advanced: true
+            options: [ext4, xfs]
+          - path: sentinel.persistence.volumes.data.snapshots
+            type: object
+            optional: true
+            label: Scheduled snapshots
+            advanced: true
+            docs: "/reference/volumeset#snapshots"
+            newValue: { retentionDuration: 7d, schedule: "0 0 * * *" }
+            fields:
+              - path: retentionDuration
+                type: string
+                format: duration
+                label: Keep snapshots for
+                required: true
+                placeholder: 7d
+              - path: schedule
+                type: string
+                format: cron
+                label: Schedule (UTC)
+                required: true
+          - path: sentinel.persistence.volumes.data.customEncryption
+            type: object
+            optional: true
+            absent: true
+            label: Encrypt with your own KMS key
+            immutable: Encryption is chosen when the volume set is created.
+            advanced: true
+            newValue: { enabled: true, region: "", keyId: "" }
+            fields:
+              - path: enabled
+                type: boolean
+                label: Use the KMS key
+              - path: region
+                type: ref
+                label: Location
+                required: true
+                help: AWS locations only; the key must be in the same region.
+                ref: { kind: location, scope: gvc, format: name, mustExist: error }
+              - path: keyId
+                type: string
+                label: KMS key ARN
+                required: true
+                placeholder: arn:aws:kms:us-east-1:123456789012:key/…
         rules:
           - rule: >-
               self.sentinel.persistence.volumes.data.performanceClass != 'high-throughput-ssd' ||
@@ -658,6 +758,17 @@ steps:
             format: cron
             label: Schedule (UTC)
             required: true
+          - path: backup.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+          - path: backup.resources
+            type: resources
+            label: Backup job resources
+            required: true
+            advanced: true
       - title: AWS S3
         when: self.backup.enabled && self.backup.provider == 'aws'
         docs: "#aws-s3"
@@ -743,6 +854,19 @@ steps:
             label: Drop metrics matching
             description: Regular expressions matched against metric names, e.g. `redis_commands_latencies_usec_bucket`.
             item: { type: string }
+          - path: redis.exporter.image
+            type: string
+            format: image
+            label: Exporter image
+            required: true
+            advanced: true
+          - path: redis.exporter.resources
+            type: resources
+            label: Exporter resources
+            required: true
+            advanced: true
+            description: A sidecar next to each Redis node.
+            maxRatio: 4
     rules:
       - rule: "!self.backup.enabled || self.backup.provider in ['aws', 'gcp']"
         mirrors: redis.validateBackupConfig
@@ -757,7 +881,7 @@ steps:
 
   - id: advanced
     title: Advanced
-    description: Images, tuning, extra settings and volume details.
+    description: Images, timeouts, replication tuning, health probes and extra workload settings.
     sections:
       - title: Images
         when: self.engine == 'redis'
@@ -994,134 +1118,6 @@ steps:
                   type: enum
                   options:
                     [connect-failure, refused-stream, unavailable, cancelled, resource-exhausted, retriable-status-codes]
-      - title: Redis volume details
-        when: self.redis.persistence.enabled
-        docs: /reference/volumeset
-        fields:
-          - path: redis.persistence.volumes.data.fileSystemType
-            type: enum
-            label: File system
-            widget: segmented
-            required: true
-            immutable: true
-            options: [ext4, xfs]
-          - path: redis.persistence.volumes.data.snapshots
-            type: object
-            optional: true
-            label: Scheduled snapshots
-            docs: "/reference/volumeset#snapshots"
-            newValue: { retentionDuration: 7d, schedule: "0 0 * * *" }
-            fields:
-              - path: retentionDuration
-                type: string
-                format: duration
-                label: Keep snapshots for
-                required: true
-                placeholder: 7d
-              - path: schedule
-                type: string
-                format: cron
-                label: Schedule (UTC)
-                required: true
-          - path: redis.persistence.volumes.data.customEncryption
-            type: object
-            optional: true
-            absent: true
-            label: Encrypt with your own KMS key
-            immutable: Encryption is chosen when the volume set is created.
-            newValue: { enabled: true, region: "", keyId: "" }
-            fields:
-              - path: enabled
-                type: boolean
-                label: Use the KMS key
-              - path: region
-                type: ref
-                label: Location
-                required: true
-                help: AWS locations only; the key must be in the same region.
-                ref: { kind: location, scope: gvc, format: name, mustExist: error }
-              - path: keyId
-                type: string
-                label: KMS key ARN
-                required: true
-                placeholder: arn:aws:kms:us-east-1:123456789012:key/…
-      - title: Sentinel volume details
-        when: self.sentinel.persistence.enabled
-        docs: /reference/volumeset
-        fields:
-          - path: sentinel.persistence.volumes.data.fileSystemType
-            type: enum
-            label: File system
-            widget: segmented
-            required: true
-            immutable: true
-            options: [ext4, xfs]
-          - path: sentinel.persistence.volumes.data.snapshots
-            type: object
-            optional: true
-            label: Scheduled snapshots
-            docs: "/reference/volumeset#snapshots"
-            newValue: { retentionDuration: 7d, schedule: "0 0 * * *" }
-            fields:
-              - path: retentionDuration
-                type: string
-                format: duration
-                label: Keep snapshots for
-                required: true
-                placeholder: 7d
-              - path: schedule
-                type: string
-                format: cron
-                label: Schedule (UTC)
-                required: true
-          - path: sentinel.persistence.volumes.data.customEncryption
-            type: object
-            optional: true
-            absent: true
-            label: Encrypt with your own KMS key
-            immutable: Encryption is chosen when the volume set is created.
-            newValue: { enabled: true, region: "", keyId: "" }
-            fields:
-              - path: enabled
-                type: boolean
-                label: Use the KMS key
-              - path: region
-                type: ref
-                label: Location
-                required: true
-                help: AWS locations only; the key must be in the same region.
-                ref: { kind: location, scope: gvc, format: name, mustExist: error }
-              - path: keyId
-                type: string
-                label: KMS key ARN
-                required: true
-                placeholder: arn:aws:kms:us-east-1:123456789012:key/…
-      - title: Metrics exporter
-        when: self.redis.exporter.enabled
-        fields:
-          - path: redis.exporter.image
-            type: string
-            format: image
-            label: Exporter image
-            required: true
-          - path: redis.exporter.resources
-            type: resources
-            label: Exporter resources
-            required: true
-            description: A sidecar next to each Redis node.
-            maxRatio: 4
-      - title: Backup job
-        when: self.backup.enabled
-        fields:
-          - path: backup.image
-            type: string
-            format: image
-            label: Backup image
-            required: true
-          - path: backup.resources
-            type: resources
-            label: Backup job resources
-            required: true
 
 yamlOnly:
   - path: grafana

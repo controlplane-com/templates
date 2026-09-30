@@ -25,8 +25,6 @@ imports:
       # Gitea connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
       - pgbouncer
     override:
-      image:
-        description: Gitea needs PostgreSQL 12 or later.
       internalAccess.type:
         description: >-
           Gitea connects to its database like any other workload: keep Same GVC, or add the Gitea

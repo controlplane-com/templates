@@ -234,6 +234,17 @@ steps:
             min: 1
             required: true
             suggestions: [1, 2, 3]
+          - path: pgbouncer.image
+            type: string
+            format: image
+            label: PgBouncer image
+            required: true
+            advanced: true
+          - path: pgbouncer.resources
+            type: resources
+            label: PgBouncer resources
+            required: true
+            advanced: true
         rules:
           - rule: self.pgbouncer.defaultPoolSize <= self.pgbouncer.maxClientConn
             severity: info
@@ -269,7 +280,18 @@ steps:
         toggle: realtime.enabled
         description: >-
           WebSocket subscriptions to database changes, served through Kong. Runs as a single replica.
-        fields: []
+        fields:
+          - path: realtime.image
+            type: string
+            format: image
+            label: Realtime image
+            required: true
+            advanced: true
+          - path: realtime.resources
+            type: resources
+            label: Realtime resources
+            required: true
+            advanced: true
       - title: Auth
         docs: "#auth-gotrue"
         fields:
@@ -468,6 +490,28 @@ steps:
             item:
               type: ref
               ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+          - path: studio.image
+            type: string
+            format: image
+            label: Studio image
+            required: true
+            advanced: true
+          - path: studio.resources
+            type: resources
+            label: Studio resources
+            required: true
+            advanced: true
+          - path: studio.meta.image
+            type: string
+            format: image
+            label: pg_meta image
+            required: true
+            advanced: true
+          - path: studio.meta.resources
+            type: resources
+            label: pg_meta resources
+            required: true
+            advanced: true
 
   - id: storage
     title: Storage
@@ -499,6 +543,49 @@ steps:
             text: >-
               A local backend makes Storage a stateful workload with one replica: the replica settings
               are ignored.
+          - path: storage.image
+            type: string
+            format: image
+            label: Storage image
+            required: true
+            advanced: true
+          - path: storage.resources
+            type: resources
+            label: Storage resources
+            required: true
+            advanced: true
+            rules:
+              - rule: >-
+                  self.storage.backend != 'local' ||
+                  cpuMillicores(self.storage.resources.maxCpu) <= 4 * cpuMillicores(self.storage.resources.minCpu)
+                message: >-
+                  With a local backend Storage is stateful, where the maximum CPU can be at most 4 times
+                  the minimum.
+              - rule: >-
+                  self.storage.backend != 'local' ||
+                  memoryBytes(self.storage.resources.maxMemory) <= 4 * memoryBytes(self.storage.resources.minMemory)
+                message: >-
+                  With a local backend Storage is stateful, where the maximum memory can be at most 4
+                  times the minimum.
+          - path: storage.minReplicas
+            type: integer
+            label: Storage minimum replicas
+            min: 1
+            required: true
+            advanced: true
+            suggestions: [1, 2, 3, 5]
+            when: self.storage.backend != 'local'
+          - path: storage.maxReplicas
+            type: integer
+            label: Storage maximum replicas
+            min: 1
+            required: true
+            advanced: true
+            suggestions: [1, 2, 3, 5]
+            when: self.storage.backend != 'local'
+            rules:
+              - rule: self.storage.minReplicas <= self.storage.maxReplicas
+                message: The maximum replicas must be at least the minimum.
       - title: S3
         when: self.storage.enabled && self.storage.backend == 's3'
         fields:
@@ -754,6 +841,22 @@ steps:
             required: true
             when: self.backup.mode == 'walg'
             help: 300 seconds or more is recommended.
+          - path: backup.logical.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+            when: self.backup.mode == 'logical'
+            description: pg_dump 17 is backward-compatible with Postgres 15.
+          - path: backup.resources
+            type: resources
+            label: Backup resources
+            required: true
+            advanced: true
+            description: >-
+              In WAL-G mode the archiving sidecar uses only the maximum CPU and memory; the minimums
+              apply to the logical backup job.
       - title: AWS S3
         when: self.backup.enabled && self.backup.provider == 'aws'
         docs: "#aws-s3"
@@ -847,7 +950,7 @@ steps:
 
   - id: advanced
     title: Advanced
-    description: Images, resources and replica counts of every service.
+    description: Images, resources and replica counts of the services that always run.
     sections:
       - title: Postgres
         fields:
@@ -943,110 +1046,6 @@ steps:
             rules:
               - rule: self.auth.minReplicas <= self.auth.maxReplicas
                 message: The maximum replicas must be at least the minimum.
-      - title: Realtime
-        when: self.realtime.enabled
-        fields:
-          - path: realtime.image
-            type: string
-            format: image
-            label: Realtime image
-            required: true
-          - path: realtime.resources
-            type: resources
-            label: Realtime resources
-            required: true
-      - title: Storage
-        when: self.storage.enabled
-        fields:
-          - path: storage.image
-            type: string
-            format: image
-            label: Storage image
-            required: true
-          - path: storage.resources
-            type: resources
-            label: Storage resources
-            required: true
-            rules:
-              - rule: >-
-                  self.storage.backend != 'local' ||
-                  cpuMillicores(self.storage.resources.maxCpu) <= 4 * cpuMillicores(self.storage.resources.minCpu)
-                message: >-
-                  With a local backend Storage is stateful, where the maximum CPU can be at most 4 times
-                  the minimum.
-              - rule: >-
-                  self.storage.backend != 'local' ||
-                  memoryBytes(self.storage.resources.maxMemory) <= 4 * memoryBytes(self.storage.resources.minMemory)
-                message: >-
-                  With a local backend Storage is stateful, where the maximum memory can be at most 4
-                  times the minimum.
-          - path: storage.minReplicas
-            type: integer
-            label: Storage minimum replicas
-            min: 1
-            required: true
-            suggestions: [1, 2, 3, 5]
-            when: self.storage.backend != 'local'
-          - path: storage.maxReplicas
-            type: integer
-            label: Storage maximum replicas
-            min: 1
-            required: true
-            suggestions: [1, 2, 3, 5]
-            when: self.storage.backend != 'local'
-            rules:
-              - rule: self.storage.minReplicas <= self.storage.maxReplicas
-                message: The maximum replicas must be at least the minimum.
-      - title: Studio
-        when: self.studio.enabled
-        fields:
-          - path: studio.image
-            type: string
-            format: image
-            label: Studio image
-            required: true
-          - path: studio.resources
-            type: resources
-            label: Studio resources
-            required: true
-          - path: studio.meta.image
-            type: string
-            format: image
-            label: pg_meta image
-            required: true
-          - path: studio.meta.resources
-            type: resources
-            label: pg_meta resources
-            required: true
-      - title: PgBouncer
-        when: self.pgbouncer.enabled
-        fields:
-          - path: pgbouncer.image
-            type: string
-            format: image
-            label: PgBouncer image
-            required: true
-          - path: pgbouncer.resources
-            type: resources
-            label: PgBouncer resources
-            required: true
-      - title: Backup job
-        when: self.backup.enabled
-        fields:
-          - path: backup.logical.image
-            type: string
-            format: image
-            label: Backup image
-            required: true
-            when: self.backup.mode == 'logical'
-            description: pg_dump 17 is backward-compatible with Postgres 15.
-          - path: backup.resources
-            type: resources
-            label: Backup resources
-            required: true
-            description: >-
-              In WAL-G mode the archiving sidecar uses only the maximum CPU and memory; the minimums
-              apply to the logical backup job.
 
 migrations:
   - fromVersions: "<1.1.0"

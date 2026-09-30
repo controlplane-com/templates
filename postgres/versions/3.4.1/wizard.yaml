@@ -2,6 +2,9 @@
 apiVersion: template-wizard.controlplane.com/v1
 kind: TemplateWizard
 title: PostgreSQL
+gvc:
+  minLocations: 1
+  maxLocations: 1
 
 steps:
   - id: server
@@ -19,18 +22,14 @@ steps:
         format: image
         label: Postgres image
         required: true
-        description: Backups need `postgres:17` or later.
         help: >-
           For example `postgres:18` or `postgres:17`. The data directory is specific to a
           major version: a different major on an existing volume does not start.
-        docs: "#server-and-credentials"
       - path: resources
         type: resources
         label: Resources
         required: true
-        description: >-
-          A single replica. On a stateful workload the maximum CPU and the maximum memory can each
-          be at most 4 times their minimum.
+        docs: "#resources"
         maxRatio: 4
         cpu: { min: 25m }
         memory: { min: 32Mi }
@@ -58,19 +57,20 @@ steps:
         type: ref
         label: Database credentials secret
         required: true
-        example: true
         description: A dictionary secret with the keys `username`, `password` and `database`.
         help: >-
           Postgres reads these values only when its data directory is first initialized. To
           rotate the password later, run `ALTER ROLE ... PASSWORD` and then update the secret.
+        docs: "#credentials"
         ref:
           kind: secret
           format: name
           filter: { secretType: [dictionary] }
           mustExist: error
+          allowCreate: true
+          requiredKeys: [username, password, database]
           create:
             secretType: dictionary
-            keys: [username, password, database]
             suggestName: "context.releaseName + '-postgres-credentials'"
     rules:
       - rule: "!has(self.config.username) && !has(self.config.password) && !has(self.config.database)"
@@ -98,16 +98,15 @@ steps:
             unit: GiB
             min: 10
             required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
             help: >-
               Uninstalling the release deletes the volume set, so the data does not survive a
               reinstall.
             docs: "/reference/volumeset#capacity-and-billing"
-          - path: volumeset.autoscaling.enabled
-            type: boolean
-            label: Grow storage automatically
-            docs: "/reference/volumeset#autoscaling"
-      - title: Autoscaling
-        when: self.volumeset.autoscaling.enabled
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: volumeset.autoscaling.enabled
+        docs: "/reference/volumeset#autoscaling"
         fields:
           - path: volumeset.autoscaling.maxCapacity
             type: integer
@@ -115,20 +114,26 @@ steps:
             unit: GiB
             min: 10
             required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
           - path: volumeset.autoscaling.minFreePercentage
             type: integer
             label: Scale up below this free space
             unit: "%"
             min: 1
             max: 100
-            widget: slider
             required: true
+            suggestions: [10, 20, 30]
           - path: volumeset.autoscaling.scalingFactor
             type: number
             label: Scaling factor
             min: 1.1
             step: 0.1
             required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
         rules:
           - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
             paths: [volumeset.autoscaling.maxCapacity]
@@ -154,7 +159,7 @@ steps:
             options:
               - value: none
                 label: Nobody
-                description: No workload can connect, including PgBouncer and the backup job.
+                description: No workload can connect.
               - value: same-gvc
                 label: Same GVC
                 description: Any workload in this GVC.
@@ -173,14 +178,11 @@ steps:
             item:
               type: ref
               ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
-      - title: Connection pooling
-        docs: "#pgbouncer-connection-pooler"
-        fields:
-          - path: pgbouncer.enabled
-            type: boolean
-            label: Connection pooler (PgBouncer)
-            description: When on, PgBouncer becomes the endpoint your applications connect to.
-      - when: self.pgbouncer.enabled
+      - id: pgbouncer
+        title: Connection pooler (PgBouncer)
+        toggle: pgbouncer.enabled
+        description: When on, PgBouncer becomes the endpoint your applications connect to.
+        docs: "#pgbouncer-connection-pooling"
         fields:
           - type: note
             text: >-
@@ -203,17 +205,19 @@ steps:
             label: Server connections per pool
             min: 1
             required: true
+            suggestions: [10, 25, 50, 100]
           - path: pgbouncer.maxClientConn
             type: integer
             label: Max client connections
             min: 1
             required: true
+            suggestions: [100, 500, 1000, 5000]
           - path: pgbouncer.replicas
             type: integer
             label: Replicas
             min: 1
-            widget: stepper
             required: true
+            suggestions: [1, 2, 3]
         rules:
           - rule: self.pgbouncer.defaultPoolSize <= self.pgbouncer.maxClientConn
             severity: info
@@ -251,14 +255,11 @@ steps:
   - id: backup
     title: Backups
     description: Scheduled logical backups to object storage.
-    docs: "#backups"
+    docs: "#backup"
     sections:
-      - fields:
-          - path: backup.enabled
-            type: boolean
-            label: Scheduled backups
-            description: Needs Postgres 17 or later.
-      - when: self.backup.enabled
+      - id: backup
+        title: Scheduled backups
+        toggle: backup.enabled
         fields:
           - path: backup.provider
             type: enum
@@ -294,14 +295,12 @@ steps:
             type: ref
             label: Cloud account
             required: true
-            example: true
             help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
             ref:
               kind: cloudaccount
               format: name
               filter: { provider: [aws] }
               mustExist: error
-              create: { provider: aws }
           - path: backup.aws.policyName
             type: string
             label: IAM policy name
@@ -313,10 +312,9 @@ steps:
             type: string
             label: Folder prefix
             pattern: "^(?!/)"
-            description: Without a leading `/`.
       - title: Google Cloud Storage
         when: self.backup.enabled && self.backup.provider == 'gcp'
-        docs: "#google-cloud-storage"
+        docs: "#gcs"
         fields:
           - path: backup.gcp.bucket
             type: string
@@ -327,7 +325,6 @@ steps:
             type: ref
             label: Cloud account
             required: true
-            example: true
             help: >-
               A GCP [cloud account](/guides/create-cloud-account) whose service account has the
               Storage Admin role on the bucket.
@@ -336,15 +333,13 @@ steps:
               format: name
               filter: { provider: [gcp] }
               mustExist: error
-              create: { provider: gcp }
           - path: backup.gcp.prefix
             type: string
             label: Folder prefix
             pattern: "^(?!/)"
-            description: Without a leading `/`.
       - title: MinIO or S3-compatible
         when: self.backup.enabled && self.backup.provider == 'minio'
-        docs: "#minio--s3-compatible"
+        docs: "#minio"
         fields:
           - path: backup.minio.endpoint
             type: string
@@ -363,19 +358,19 @@ steps:
             type: ref
             label: MinIO credentials secret
             required: true
-            example: true
             description: A dictionary secret with the keys `accessKey` and `secretKey`.
             ref:
               kind: secret
               format: name
               filter: { secretType: [dictionary] }
               mustExist: error
-              create: { secretType: dictionary, keys: [accessKey, secretKey] }
+              allowCreate: true
+              requiredKeys: [accessKey, secretKey]
+              create: { secretType: dictionary }
           - path: backup.minio.prefix
             type: string
             label: Folder prefix
             pattern: "^(?!/)"
-            description: Without a leading `/`.
         rules:
           - rule: "!has(self.backup.minio.accessKey) && !has(self.backup.minio.secretKey)"
             mirrors: pg.validateBackupConfig
@@ -391,7 +386,7 @@ steps:
 
   - id: advanced
     title: Advanced
-    description: Images and resources of the pooler and the backup job.
+    description: Images and resources of the optional connection pooler and backup job.
     sections:
       - title: PgBouncer
         when: self.pgbouncer.enabled

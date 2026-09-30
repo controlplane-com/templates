@@ -2,6 +2,9 @@
 apiVersion: template-wizard.controlplane.com/v1
 kind: TemplateWizard
 title: Redis
+gvc:
+  minLocations: 1
+  maxLocations: 1
 
 steps:
   - id: topology
@@ -9,7 +12,7 @@ steps:
     description: Which server both tiers run, and how many Redis nodes and Sentinels.
     sections:
       - title: Engine
-        docs: "#engine-redis-or-valkey"
+        docs: "#redis-or-valkey-engine"
         fields:
           - type: note
             severity: warning
@@ -39,7 +42,7 @@ steps:
             label: Valkey image
             required: true
             when: self.engine == 'valkey'
-            description: Used for both tiers. Debian-based tags only; the `-alpine` tags have no bash.
+            description: Used for both tiers.
         rules:
           - rule: self.engine != 'valkey' || (self.valkeyImage != null && self.valkeyImage != '')
             mirrors: redis.validateEngine
@@ -64,8 +67,8 @@ steps:
             type: integer
             label: Redis nodes
             min: 1
-            widget: stepper
             required: true
+            suggestions: [1, 2, 3, 5]
             description: One primary plus replicas, each on its own volume when persistence is on.
           - path: redis.multiZone
             type: boolean
@@ -85,9 +88,8 @@ steps:
             type: integer
             label: Sentinels
             min: 1
-            widget: stepper
             required: true
-            description: An odd number avoids a split vote.
+            suggestions: [1, 3, 5]
           - path: sentinel.quorumAutoCalculation
             type: boolean
             label: Calculate the quorum automatically
@@ -147,14 +149,10 @@ steps:
             required: true
             example: true
             when: ui.redisAuth == 'password'
-            description: >-
-              Stored in the release values. Changing it on a running release deadlocks the rollout;
-              reinstall, or plan a brief outage, to rotate it.
           - path: redis.auth.fromSecret.name
             type: ref
             label: Password secret
             required: true
-            example: true
             when: ui.redisAuth == 'secret'
             description: A dictionary secret; the key named below holds the password.
             ref:
@@ -162,16 +160,16 @@ steps:
               format: name
               filter: { secretType: [dictionary] }
               mustExist: warning
+              allowCreate: true
+              requiredKeysFrom: "[self.redis.auth.fromSecret.passwordKey]"
               create:
                 secretType: dictionary
-                keys: [password]
                 suggestName: "context.releaseName + '-redis-password'"
           - path: redis.auth.fromSecret.passwordKey
             type: string
             label: Key in the secret
             required: true
             when: ui.redisAuth == 'secret'
-            help: The secret's key names are not checked; make sure this key exists in the secret.
       - title: Sentinel
         fields:
           - id: sentinelAuth
@@ -202,14 +200,10 @@ steps:
             required: true
             example: true
             when: ui.sentinelAuth == 'password'
-            description: >-
-              Stored in the release values. Changing it on a running release deadlocks the rollout;
-              reinstall, or plan a brief outage, to rotate it.
           - path: sentinel.auth.fromSecret.name
             type: ref
             label: Password secret
             required: true
-            example: true
             when: ui.sentinelAuth == 'secret'
             description: A dictionary secret; the key named below holds the password.
             ref:
@@ -217,16 +211,16 @@ steps:
               format: name
               filter: { secretType: [dictionary] }
               mustExist: warning
+              allowCreate: true
+              requiredKeysFrom: "[self.sentinel.auth.fromSecret.passwordKey]"
               create:
                 secretType: dictionary
-                keys: [password]
                 suggestName: "context.releaseName + '-sentinel-password'"
           - path: sentinel.auth.fromSecret.passwordKey
             type: string
             label: Key in the secret
             required: true
             when: ui.sentinelAuth == 'secret'
-            help: The secret's key names are not checked; make sure this key exists in the secret.
     rules:
       - rule: "!(self.redis.auth.fromSecret.enabled && self.redis.auth.password.enabled)"
         mirrors: validateAuth
@@ -266,17 +260,11 @@ steps:
             type: resources
             label: Redis resources
             required: true
-            description: >-
-              Per node. On a stateful workload the maximum CPU and the maximum memory can each be at most 4
-              times their minimum.
+            description: Per node.
             maxRatio: 4
-          - path: redis.persistence.enabled
-            type: boolean
-            label: Persistent volume for Redis
-            description: >-
-              Set it at install. Turning it on for a running release stalls the rollout indefinitely.
-      - title: Redis volume
-        when: self.redis.persistence.enabled
+      - id: redis-volume
+        title: Persistent volume for Redis
+        toggle: redis.persistence.enabled
         docs: /reference/volumeset
         fields:
           - path: redis.persistence.volumes.data.initialCapacity
@@ -285,6 +273,7 @@ steps:
             unit: GiB
             min: 10
             required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
             docs: "/reference/volumeset#capacity-and-billing"
           - path: redis.persistence.volumes.data.performanceClass
             type: enum
@@ -294,7 +283,7 @@ steps:
             immutable: true
             options:
               - { value: general-purpose-ssd, label: General purpose SSD }
-              - { value: high-throughput-ssd, label: High throughput SSD, description: At least 1000 GiB. }
+              - { value: high-throughput-ssd, label: High throughput SSD }
           - path: redis.persistence.volumes.data.autoscaling
             type: object
             optional: true
@@ -308,20 +297,26 @@ steps:
                 unit: GiB
                 min: 10
                 required: true
+                suggestions: [50, 100, 250, 500, 1000, 2000]
               - path: minFreePercentage
                 type: integer
                 label: Scale up below this free space
                 unit: "%"
                 min: 1
                 max: 100
-                widget: slider
                 required: true
+                suggestions: [10, 20, 30]
               - path: scalingFactor
                 type: number
                 label: Scaling factor
                 min: 1.1
                 step: 0.1
                 required: true
+                suggestions:
+                  - { value: 1.1, label: "1.1×" }
+                  - { value: 1.2, label: "1.2× (default)" }
+                  - { value: 1.5, label: "1.5×" }
+                  - { value: 2, label: "2×" }
         rules:
           - rule: >-
               self.redis.persistence.volumes.data.performanceClass != 'high-throughput-ssd' ||
@@ -344,22 +339,14 @@ steps:
             type: resources
             label: Sentinel resources
             required: true
-            description: >-
-              Per Sentinel. On a stateful workload the maximum CPU and the maximum memory can each be
-              at most 4 times their minimum.
+            description: Per Sentinel.
             maxRatio: 4
-          - path: sentinel.persistence.enabled
-            type: boolean
-            label: Persistent volume for Sentinel
-            description: >-
-              Set it at install. Turning it on for a running release stalls the rollout indefinitely.
-          - type: note
-            when: "!self.sentinel.persistence.enabled"
-            text: >-
-              Sentinel persistence is recommended in production: it keeps the post-failover primary across
-              restarts, so replicas rejoin the real primary.
-      - title: Sentinel volume
-        when: self.sentinel.persistence.enabled
+      - id: sentinel-volume
+        title: Persistent volume for Sentinel
+        toggle: sentinel.persistence.enabled
+        description: >-
+          Recommended in production: it keeps the post-failover primary across restarts, so replicas
+          rejoin the real primary.
         docs: /reference/volumeset
         fields:
           - path: sentinel.persistence.volumes.data.initialCapacity
@@ -368,6 +355,7 @@ steps:
             unit: GiB
             min: 10
             required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
             docs: "/reference/volumeset#capacity-and-billing"
           - path: sentinel.persistence.volumes.data.performanceClass
             type: enum
@@ -377,7 +365,7 @@ steps:
             immutable: true
             options:
               - { value: general-purpose-ssd, label: General purpose SSD }
-              - { value: high-throughput-ssd, label: High throughput SSD, description: At least 1000 GiB. }
+              - { value: high-throughput-ssd, label: High throughput SSD }
           - path: sentinel.persistence.volumes.data.autoscaling
             type: object
             optional: true
@@ -391,20 +379,26 @@ steps:
                 unit: GiB
                 min: 10
                 required: true
+                suggestions: [50, 100, 250, 500, 1000, 2000]
               - path: minFreePercentage
                 type: integer
                 label: Scale up below this free space
                 unit: "%"
                 min: 1
                 max: 100
-                widget: slider
                 required: true
+                suggestions: [10, 20, 30]
               - path: scalingFactor
                 type: number
                 label: Scaling factor
                 min: 1.1
                 step: 0.1
                 required: true
+                suggestions:
+                  - { value: 1.1, label: "1.1×" }
+                  - { value: 1.2, label: "1.2× (default)" }
+                  - { value: 1.5, label: "1.5×" }
+                  - { value: 2, label: "2×" }
         rules:
           - rule: >-
               self.sentinel.persistence.volumes.data.performanceClass != 'high-throughput-ssd' ||
@@ -448,10 +442,7 @@ steps:
       - fields:
           - type: note
             text: >-
-              Public access forces per-replica endpoints and publishes one port per node (Redis from 6380,
-              Sentinel from 26380). It needs a dedicated load balancer on the GVC, and the DNS TXT and CNAME
-              records must exist before you install. Setting either external CIDR list renders both; the other
-              one becomes empty.
+              Setting either external CIDR list of a tier renders both; the other one becomes empty.
       - title: Redis
         docs: "/reference/workload/firewall"
         fields:
@@ -495,17 +486,18 @@ steps:
             when: "!self.redis.publicAccess.enabled"
             docs: "/reference/workload/general#internal-endpoint-formatting"
             description: Public access turns this on.
-          - path: redis.publicAccess.enabled
-            type: boolean
-            label: Public TCP access to Redis
-            docs: "#public-access-external-tcp"
+      - id: redis-public
+        title: Public TCP access to Redis
+        toggle: redis.publicAccess.enabled
+        description: Publishes one port per Redis node, from 6380, and forces per-replica endpoints.
+        docs: "#public-access"
+        fields:
           - path: redis.publicAccess.address
             type: string
             format: hostname
             label: Redis hostname
             required: true
             example: true
-            when: self.redis.publicAccess.enabled
             description: A subdomain you own. The chart creates a domain with this name.
             help: >-
               Before you install, add a TXT record `_cpln-<subdomain>` with your org name and a CNAME from
@@ -553,17 +545,18 @@ steps:
             when: "!self.sentinel.publicAccess.enabled"
             docs: "/reference/workload/general#internal-endpoint-formatting"
             description: Public access turns this on.
-          - path: sentinel.publicAccess.enabled
-            type: boolean
-            label: Public TCP access to Sentinel
-            docs: "#public-access-external-tcp"
+      - id: sentinel-public
+        title: Public TCP access to Sentinel
+        toggle: sentinel.publicAccess.enabled
+        description: Publishes one port per Sentinel, from 26380, and forces per-replica endpoints.
+        docs: "#public-access"
+        fields:
           - path: sentinel.publicAccess.address
             type: string
             format: hostname
             label: Sentinel hostname
             required: true
             example: true
-            when: self.sentinel.publicAccess.enabled
             description: A subdomain you own. The chart creates a domain with this name.
             help: >-
               Before you install, add a TXT record `_cpln-<subdomain>` with your org name and a CNAME from
@@ -647,12 +640,10 @@ steps:
     title: Backup and monitoring
     description: Scheduled backups to object storage, and a metrics exporter.
     sections:
-      - docs: "#backing-up"
-        fields:
-          - path: backup.enabled
-            type: boolean
-            label: Scheduled backups
-      - when: self.backup.enabled
+      - id: backup
+        title: Scheduled backups
+        toggle: backup.enabled
+        docs: "#backup"
         fields:
           - path: backup.provider
             type: enum
@@ -695,14 +686,12 @@ steps:
             type: ref
             label: Cloud account
             required: true
-            example: true
             help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
             ref:
               kind: cloudaccount
               format: name
               filter: { provider: [aws] }
               mustExist: error
-              create: { provider: aws }
           - path: backup.aws.policyName
             type: string
             label: IAM policy name
@@ -714,7 +703,6 @@ steps:
             type: string
             label: Folder prefix
             pattern: "^(?!/)"
-            description: Without a leading `/`.
       - title: Google Cloud Storage
         when: self.backup.enabled && self.backup.provider == 'gcp'
         docs: "#gcs"
@@ -728,7 +716,6 @@ steps:
             type: ref
             label: Cloud account
             required: true
-            example: true
             help: >-
               A GCP [cloud account](/guides/create-cloud-account) whose service account has the Storage Admin
               role.
@@ -737,25 +724,22 @@ steps:
               format: name
               filter: { provider: [gcp] }
               mustExist: error
-              create: { provider: gcp }
           - path: backup.gcp.prefix
             type: string
             label: Folder prefix
             pattern: "^(?!/)"
-            description: Without a leading `/`.
-      - title: Metrics
+      - id: metrics
+        title: Metrics exporter
+        toggle: redis.exporter.enabled
+        description: >-
+          Adds a redis_exporter sidecar; metrics are scraped from :9121/metrics. Authentication is wired
+          automatically.
+        docs: "#metrics"
         fields:
-          - path: redis.exporter.enabled
-            type: boolean
-            label: Metrics exporter
-            description: >-
-              Adds a redis_exporter sidecar; metrics are scraped from :9121/metrics. Authentication is wired
-              automatically.
           - path: redis.exporter.dropMetrics
             type: list
             label: Drop metrics matching
             description: Regular expressions matched against metric names, e.g. `redis_commands_latencies_usec_bucket`.
-            when: self.redis.exporter.enabled
             item: { type: string }
     rules:
       - rule: "!self.backup.enabled || self.backup.provider in ['aws', 'gcp']"
@@ -781,7 +765,6 @@ steps:
             format: image
             label: Redis image
             required: true
-            description: Moving from Redis 7.4 to 8 is one-way once data is written.
           - path: sentinel.image
             type: string
             format: image
@@ -1123,9 +1106,7 @@ steps:
             type: resources
             label: Exporter resources
             required: true
-            description: >-
-              A sidecar of a stateful workload, so the maximum CPU and the maximum memory can each be
-              at most 4 times their minimum.
+            description: A sidecar next to each Redis node.
             maxRatio: 4
       - title: Backup job
         when: self.backup.enabled

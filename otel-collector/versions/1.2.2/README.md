@@ -4,10 +4,10 @@ The OpenTelemetry Collector receives, processes, and exports telemetry over OTLP
 
 ## Architecture
 
-- **Workload** `{release}` — the collector (`standard`, stateless, `replicas` copies behind one endpoint)
-- **Secret** `{release}-conf` — the rendered collector configuration, mounted as a file
+- **Workload** `RELEASE_NAME` — the collector (`standard`, stateless, `replicas` copies behind one endpoint)
+- **Secret** `RELEASE_NAME-conf` — the rendered collector configuration, mounted as a file
 - **Identity + policy** — workload identity with `reveal` on the config secret and (only when auth is enabled) your auth secret
-- **Optional direct load balancer** — TCP passthrough on 4317/4318, created only for public mTLS ingestion
+- **Optional direct load balancer** — TCP passthrough, created only for public mTLS ingestion: external 4318 → the authenticated HTTP receiver (4318), external 4317 → the authenticated gRPC receiver (container port 4319)
 
 ## Prerequisites
 
@@ -16,7 +16,7 @@ None for a default install.
 - **Bearer auth** (`auth.method: bearer`): create an opaque secret holding the token **before install** — the deployment waits on it otherwise:
 
   ```bash
-  openssl rand -hex 32 | tr -d '\n' | cpln secret create-opaque --name my-otel-ingest-token --encoding plain -f -
+  printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name my-otel-ingest-token --encoding plain -f -
   ```
 
 - **mTLS auth** (`auth.method: mtls`): create a dictionary secret **before install** with exactly the keys `cert` (server certificate), `key` (server private key), and `ca` (CA that signed your client certificates), e.g. via `cpln apply -f`:
@@ -65,7 +65,7 @@ otelCollector:
 
 ```yaml
 metrics:
-  enabled: true   # adds an OTLP → prometheus_remote_write pipeline (simple mode only)
+  enabled: false  # true adds an OTLP → prometheus_remote_write pipeline (simple mode only)
   remoteWrite:
     endpoint: http://YOUR_WORKLOAD.YOUR_GVC.cpln.local:9095/api/v1/write  # any Prometheus-remote-write-compatible URL
 ```
@@ -74,11 +74,11 @@ metrics:
 
 ```yaml
 auth:
-  method: bearer  # none | bearer | mtls — required (not none) for public ingestion
+  method: none    # none | bearer | mtls — required (not none) for public ingestion
   bearer:
-    secretName: my-otel-ingest-token  # opaque secret created BEFORE install (see Prerequisites)
+    secretName: ""  # e.g. my-otel-ingest-token — opaque secret created BEFORE install (see Prerequisites)
   mtls:
-    secretName: my-otel-mtls-certs    # dictionary secret (cert/key/ca) created BEFORE install
+    secretName: ""  # e.g. my-otel-mtls-certs — dictionary secret (cert/key/ca) created BEFORE install
 ```
 
 Auth applies to a dedicated `otlp/ingest` receiver on 4318 (HTTP) / 4319 (gRPC). The plain gRPC :4317 receiver stays unauthenticated for the GVC tracing integration and is never exposed publicly.
@@ -87,8 +87,8 @@ Auth applies to a dedicated `otlp/ingest` receiver on 4318 (HTTP) / 4319 (gRPC).
 
 ```yaml
 publicAccess:
-  enabled: true                     # bearer → canonical https endpoint; mtls → direct TCP 4317/4318
-  allowedCidrs: ["203.0.113.0/24"]  # REQUIRED when enabled; use ["0.0.0.0/0"] to explicitly allow all
+  enabled: false    # bearer → canonical https endpoint; mtls → direct TCP 4317/4318 (authenticated receivers)
+  allowedCidrs: []  # REQUIRED when enabled, e.g. ["203.0.113.0/24"]; use ["0.0.0.0/0"] to explicitly allow all
 internalAccess:
   type: same-gvc                    # none | same-gvc | same-org
 ```
@@ -115,18 +115,19 @@ The `auth.*` and `publicAccess.*` knobs still wire secret mounts, the reveal pol
 
 | Endpoint | Address | Auth |
 |---|---|---|
-| In-GVC OTLP gRPC (traces + metrics) | `{release}.{gvc}.cpln.local:4317` | none (GVC tracing target) |
-| In-GVC OTLP HTTP | `http://{release}.{gvc}.cpln.local:4318` | none, or bearer when auth is on (in mTLS mode use plain gRPC `:4317` instead) |
-| Public OTLP HTTP (bearer) | `https://{canonical-endpoint}/v1/traces` `/v1/metrics` | `Authorization: Bearer <token>` |
-| Public OTLP (mTLS) | `{direct-lb-endpoint}:4318` (HTTP), `:4317` (gRPC) | client certificate signed by your CA |
-| Spanmetrics scrape | `http://{release}.{gvc}.cpln.local:8889/metrics` | none |
+| In-GVC OTLP gRPC (traces + metrics) | `RELEASE_NAME.GVC_NAME.cpln.local:4317` | none (GVC tracing target) |
+| In-GVC OTLP HTTP | `http://RELEASE_NAME.GVC_NAME.cpln.local:4318` | none, or bearer when auth is on (in mTLS mode use plain gRPC `:4317` instead) |
+| Public OTLP HTTP (bearer) | `CANONICAL_ENDPOINT/v1/traces`, `/v1/metrics` | `Authorization: Bearer <token>` |
+| Public OTLP (mTLS) | direct load balancer address, port `4318` (HTTP) and `4317` (gRPC — the authenticated receiver) | client certificate signed by your CA |
+| Spanmetrics scrape | `http://RELEASE_NAME.GVC_NAME.cpln.local:8889/metrics` | none |
 
-The canonical endpoint is in `status.canonicalEndpoint` of `cpln workload get {release}`. The bearer token is whatever you stored in your prerequisite secret.
+Read the canonical endpoint (a full `https://` URL) from `status.canonicalEndpoint` of `cpln workload get RELEASE_NAME --gvc GVC_NAME -o yaml`. The bearer token is whatever you stored in your prerequisite secret.
 
 ## Important Notes
 
+- **Upgrading from 1.2.0:** the resource limits are named `cpu`/`memory` again — 1.2.0's `maxCpu`/`maxMemory` are not read, so rename them back.
 - **Default `mode` changed from `advanced` to `simple` in 1.1.0** — if you customized `advanced.config` while relying on the old default, set `mode: advanced` explicitly when upgrading.
-- Enable tracing at the GVC level after install (target `{release}`, port 4317); this restarts all workloads in the GVC.
+- Enable tracing at the GVC level after install (endpoint `RELEASE_NAME.GVC_NAME.cpln.local:4317`); this restarts all workloads in the GVC.
 - Public ingestion requires auth: `publicAccess.enabled` with `auth.method: none` or an empty `allowedCidrs` fails at install — opening to the world requires an explicit `["0.0.0.0/0"]`.
 - Create the auth secret before installing — a missing secret leaves the deployment waiting on it.
 - mTLS uses the direct load balancer (raw TCP), not the canonical endpoint; in mTLS mode the canonical `https://` endpoint intentionally stops accepting traffic.
@@ -136,7 +137,7 @@ The canonical endpoint is in `status.canonicalEndpoint` of `cpln workload get {r
   unresolvable endpoint fails silently at the last hop. The collector accepts, authenticates and
   batches your data, then logs `Dropping data` and discards it, so metrics never arrive and Grafana
   shows an empty metric picker with no error anywhere. If metrics are missing and nothing looks wrong,
-  check the exporter endpoint before anything else — `cpln logs '{gvc="GVC", workload="WORKLOAD"}' | grep -i 'dropping data'`.
+  check the exporter endpoint before anything else — `cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME"} |= "Dropping data"' --limit 50 --since 10m`.
 - One collector pushes to one remote-write store; run multiple installs for multiple targets.
 - **Remote-write appends a unit suffix to metric names.** A metric sent as `my_metric` is stored as `my_metric_ratio`, `my_metric_seconds` and so on, following the OTLP unit — so query the suffixed name in Prometheus, not the one your app emits.
 

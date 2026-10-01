@@ -12,6 +12,6 @@ dependencies:
 
 annotations:
   created: "2026-09-26"
-  lastModified: "2026-09-29"
+  lastModified: "2026-10-01"
   category: "event-streaming"
   createsGvc: false

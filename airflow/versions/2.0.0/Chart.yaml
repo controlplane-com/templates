@@ -7,7 +7,7 @@ appVersion: "3.0.3"
 
 annotations:
   created: "2025-08-14"
-  lastModified: "2026-08-28"
+  lastModified: "2026-10-01"
   category: "workflow-orchestration"
   createsGvc: false
 

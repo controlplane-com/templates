@@ -56,6 +56,23 @@
 - Location survival needs **≥3 locations with PD spread one per location**. Verified on 1.x: converged in 2 m 51 s, query-ready ~5 min, 66 regions replicated one per location.
 - tidb-server readiness (2.1.0) gates on the server's OWN `/status` (:10080), independent of cluster-wide TiKV state — one location down never makes a server unready, and the SQL tier cannot cascade-restart on a TiKV shortfall. (2.0.0 and earlier gated on a 2-of-N TiKV `Up` quorum via PD.)
 
+### Stress-tested 2026-10-01 (2.1.0, ProxySQL on, 3 AWS locations, continuous write+read-back load from every location, fresh connection per query, 10 s per-query timeout)
+| Event | Failed queries per stream | Notes |
+|---|---|---|
+| tidb-server crash, **1**/location | direct 21, ProxySQL 5 — that location only | ~10 s local hole; other locations 0 |
+| tidb-server crash, **2**/location | **ProxySQL 0**, direct 8 (~5 s) | ProxySQL connect-retry masks the mesh's endpoint-removal lag |
+| ProxySQL replica crash (2/location) | 2 (~1 s), that location's pooled path only | no retry layer above the client→ProxySQL hop |
+| TiKV follower frozen 90 s | 0 | |
+| TiKV **leader** store frozen 90 s | 1 everywhere (stalled ~10 s) | Raft election; requests block, not error |
+| PD follower / **leader** frozen 90 s | 0 / 1 everywhere | leader moved; all members healthy after |
+| **Whole location's PD+TiKV down 3 min** (held PD leader) | 3 everywhere, all in first ~33 s, then **0** | incl. that location's own clients (via remote storage) |
+| Rolling redeploy (servers at 1/location, ProxySQL), 2 no-op upgrades, live scale-out 1→2/location | 0 | planned restarts surge new-before-old |
+| 2 locations: lose minority location | 0 | |
+| 2 locations: lose **majority** location 2 min | 100% during (correct); recovered unaided — co-located clients +16 s, minority-side clients +159 s | `ERROR 8027 Information schema is out of date` for ~60 s after restore (schema lease expired) |
+- **The mesh is location-pinned for service names.** A client in a GVC location the release does not run in got 100% connection failures; a location-qualified name (`{workload}.{location}.{gvc}.cpln.local`) does not exist for a standard workload (resolves, then times out exactly like a bogus location). So neither ProxySQL nor anything else can fail SQL traffic over to another location's servers — in-location redundancy (`replicas ≥ 2`) is the only zero-downtime lever for the SQL tier.
+- **`replicas` couples TiKV and tidb-server counts per location**, so zero-downtime SQL (2 servers/location) also doubles TiKV. An independent `serverReplicas` knob would remove that cost — not built, pending a maintainer decision.
+- Simulation technique: `SIGSTOP` on `pd-server`/`tikv-server` (children of bash) holds a store down with no reschedule; `tidb-server` and `proxysql` run as PID 1 and can't be frozen from inside — crash them with `kill -TERM 1`. Never `suspend`.
+
 ## Troubleshooting / considerations
 - **TESTED LIVE (2.1.0).** The multi-location path is now verified end-to-end across three clouds (`gcp-us-central1`/`azure-eastus2`/`gcp-us-east1`): deterministic 3-cloud cold-start convergence (3/3, 0 PD restarts), cross-cloud write/read, drift-clean no-op upgrade, and the bug-2 readiness decoupling. The 2.0.0-specific GVC-guard items below were chart-level; they carry into 2.1.0 unchanged and the deploy path is now exercised.
 - **`exposeServer` was REMOVED in 2.0.0** (maintainer ruling). It opened public inbound on the server workload but rendered no `loadBalancer.direct`, so TCP 4000 was never published — the only `http` port is TiDB's unauthenticated status/API port 10080, which is what the canonical endpoint would have served. Never tested in three rounds. A values file still setting it now fails at render rather than being silently ignored.

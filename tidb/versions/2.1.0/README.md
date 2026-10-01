@@ -134,6 +134,12 @@ pdReplicas: 3
 Three locations with one PD member each: PD keeps quorum when one location goes away, and TiKV
 spreads each region's three copies one per location. Every location must be in the GVC.
 
+Losing a whole location stalls queries for 20–30 seconds while new leaders are elected, then the
+remaining locations serve reads and writes normally. With `replicas: 1`, a tidb-server crash costs
+that location's clients about 10 seconds; for **zero downtime** use `replicas: 2` and connect through
+[ProxySQL](#connection-pooling-proxysql), which retries onto the surviving server. Run clients in a
+listed location — the server's service name only reaches servers in the caller's own location.
+
 ### Images and Resources
 
 ```yaml

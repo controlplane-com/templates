@@ -11,7 +11,7 @@ that should not be publicly reachable itself.
 
 | Resource | Notes |
 |---|---|
-| workload `-proxy` | the nginx proxy; autoscaling knobs exposed |
+| workload `-nginx` | the nginx proxy; autoscaling knobs exposed; always public |
 | secret | the generated `nginx.conf`, built from `locations` |
 | identity + policy | `reveal` on the configuration secret |
 | workload `-example` *(optional)* | demo backend, created when `enableExample: true` |
@@ -31,8 +31,17 @@ Does not create a GVC.
 
 - **`enableExample: true` is the default and swallows all traffic.** A user who adds `locations` but leaves
   the example on will not reach their own services. Turning it off is step one of any real use.
-- **Targets must be fully qualified.** `WORKLOAD.GVC.cpln.local` — the bare workload name is not reliably
-  resolvable, and this is the most common cause of a 502 here.
+- **`locations[].workload` takes the BARE workload name.** `files/_nginxConf.txt` appends
+  `.{gvc}.cpln.local` itself (for both `proxy_pass` and the `Host` header), so a user who types an FQDN gets a
+  doubled hostname and a 502 (served as the `/fail` body).
+- **Targets must allow the proxy in their internal firewall.** Only the example backend is set up for this
+  (`workload-list` naming the proxy); a user's own targets need `same-gvc` or a list that includes it.
+- **`proxyWorkload.port` is inert.** nginx.conf hardcodes `listen 80` and both probes hardcode port 80; the value
+  only changes the declared container port. Chart follow-up candidate.
+- **The proxy is always public.** `inboundAllowCIDR: 0.0.0.0/0` is hardcoded with no access knob, and no
+  internal firewall is set. Chart follow-up candidate.
+- **Routing changes need a forced redeployment** so replicas pick up the remounted `nginx.conf` (whether the
+  upgrade alone restarts the proxy is unverified).
 - **The example backend image cannot be pinned.** `gcr.io/knative-samples/helloworld-go` publishes only
   `:latest`, so the demo target can change under you. It does not affect the proxy, which is pinned.
 - **Config errors surface at container start, not at render.** `locations` is templated into `nginx.conf`, so

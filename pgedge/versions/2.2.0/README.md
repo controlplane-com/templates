@@ -10,7 +10,7 @@ This template deploys a pgEdge active-active distributed PostgreSQL cluster usin
 - **Spock**: Multi-master logical replication extension included in the pgEdge image. Handles cross-node replication with last-update-wins conflict resolution.
 - **Volume set**: One `ext4` volume per pgEdge replica, with daily snapshots retained for 7 days.
 - **Identity + two policies**: `reveal` on this release's secrets and your credentials secret, plus `view` on the one GVC you install into so each node can confirm at boot that the GVC really has every location you listed.
-- **Backup cron** (optional): `pg_dump` to S3 or GCS, suspended everywhere except your first configured location.
+- **Backup cron** (optional): a gzip-compressed `pg_dumpall` of the whole server to S3 or GCS, written as `PREFIX/postgres-YYYY-MM-DDTHH-MM-SSZ.sql.gz`; suspended everywhere except your first configured location.
 
 This template does **not** create a GVC. Every resource lands in the GVC you pass to `--gvc`, so `cpln workload exec`, `cpln logs` and `cpln helm uninstall` all work against that GVC, and uninstalling can never delete it.
 
@@ -21,7 +21,7 @@ The requirement is one-directional: the GVC may have *more* locations than you l
 pgEdge-related runs in those. Check what a GVC has before you install:
 
 ```bash
-cpln gvc get GVC_NAME -o json
+cpln gvc get GVC_NAME -o yaml
 ```
 
 The locations are under `spec.staticPlacement.locationLinks`. If you list a location the GVC does
@@ -391,37 +391,22 @@ For the cron job to have access to a GCS bucket, ensure the following prerequisi
 
 ### Restoring Backup
 
-Run the following command with password from a client with access to the bucket.
+**There is no verified restore procedure for this template.** The backup is a gzip-compressed `pg_dumpall`
+of replica-0 in `locations[0]` — every database plus roles — written to
+`BUCKET_NAME/PREFIX/postgres-YYYY-MM-DDTHH-MM-SSZ.sql.gz`.
 
-S3
-```SH
-export PGPASSWORD="PASSWORD"
+Earlier versions of this page said to stream that file through the pgcat endpoint with
+`--dbname=DATABASE`. That cannot work: pgcat pools exactly one database, in transaction mode, while a
+`pg_dumpall` script opens with `\connect template1` and later runs `\connect postgres`. pgcat refuses
+both, and a non-interactive `psql` stops at the first failed `\connect`, so the replay ends before it
+writes a row. The dump's `CREATE ROLE` and `CREATE DATABASE` statements also collide with the objects a
+running cluster already has — and DDL does not replicate between pgEdge nodes, so a dump replayed into one
+node would create tables there alone.
 
-aws s3 cp "s3://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" - \
-  | gunzip \
-  | psql \
-      --host=RELEASE_NAME-pgcat.GVC_NAME.cpln.local \
-      --port=5432 \
-      --username=USERNAME \
-      --dbname=DATABASE
-
-unset PGPASSWORD
-```
-
-GCS
-```SH
-export PGPASSWORD="PASSWORD"
-
-gsutil cp "gs://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" - \
-  | gunzip \
-  | psql \
-      --host=RELEASE_NAME-pgcat.GVC_NAME.cpln.local \
-      --port=5432 \
-      --username=USERNAME \
-      --dbname=DATABASE
-
-unset PGPASSWORD
-```
+What a restore has to do instead: create the schema on **every** node (DDL is per node), then load the data
+into **one** node (`replica-0.RELEASE_NAME-pgedge.LOCATION.GVC_NAME.cpln.local:5432`, from a client workload
+in the same GVC that has bucket access) and let Spock replicate the rows. Verify the whole sequence on a
+throwaway release before relying on it — it has not been exercised against a backup this template produced.
 
 ## Important Notes
 

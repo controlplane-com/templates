@@ -19,7 +19,7 @@ reads near users, and active-active deployments that must survive the loss of a 
 | secret `-startup` | pgEdge/Spock start script; topology comes from `PGEDGE_*` env, not from Helm loops (2.0.0) |
 | secret `-pgcat-config` | **a startup script** from 1.1.0, not a TOML file; from 2.0.0 it also builds the `servers` list itself, in POSIX `sh`, from the same `PGEDGE_*` env |
 | secret `-config` | backup destination only (1.1.0+), and only when `backup.enabled` |
-| workload `-backup` (cron, optional) | `pg_dump` to S3 or GCS; `defaultOptions.suspend: true` from 2.0.0, unsuspended in `locations[0]` only |
+| workload `-backup` (cron, optional) | `pg_dumpall | gzip` of the whole server to S3 or GCS (`PREFIX/postgres-YYYY-MM-DDTHH-MM-SSZ.sql.gz`); `defaultOptions.suspend: true` from 2.0.0, unsuspended in `locations[0]` only |
 | identity | plus the conditional `aws:`/`gcp:` cloud binding when backups are on |
 | policy `-pgedge-policy` | `reveal` on this release's secrets plus the prerequisite credentials secret |
 | policy `-pgedge-gvc-policy` | **new in 2.0.0** — `view` on the ONE install GVC, so a node can read its own GVC's location list at boot. Scoped with `targetLinks`, never `target: all` |
@@ -184,3 +184,8 @@ reads near users, and active-active deployments that must survive the loss of a 
 - **The upgrade guard is load-bearing, and this was proven destructively (2026-08-27).** With the render-time `fail` removed, `helm upgrade` of a 1.1.1 release onto a GVC-less chart **deleted the GVC and everything in it in 6 seconds — and printed `upgraded successfully`.** Verified independently: `cpln gvc get` returned 404 afterwards. The guarded control refused and touched nothing. Never weaken or remove that check, and every other converted template needs its own.
 - **A rolling restart is a ~60 s write outage** and pgcat bans a failed backend for a further 60 s. The mesh reconciles itself afterwards without intervention — proven across three consecutive simultaneous 3-location restarts.
 - **Self-repair restores replication, not history.** Rows written while a subscription was down are not backfilled.
+- **There is no verified restore, and the one documented through 2.2.0 could not work.** The README told users
+  to pipe the `pg_dumpall` output through pgcat with `--dbname=DATABASE`; pgcat pools one database in
+  transaction mode and the dump opens with `\connect template1`, which a non-interactive `psql` turns into an
+  immediate exit. DDL also does not replicate between pgEdge nodes. The README now says so plainly: schema on
+  every node, data loaded on one, verified on a throwaway release. Do not replace that with a plausible recipe.

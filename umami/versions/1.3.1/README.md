@@ -7,7 +7,7 @@ This app deploys [Umami](https://umami.is/) — a privacy-first, cookieless web 
 - **Umami**: Stateless `standard` workload on port 3000 — dashboard and tracking/collect endpoint share the same port. `replicas: 1` by default (proven single-instance shape); `≥2` forms an always-on scaled tier for zero-downtime rolling restarts. All state lives in PostgreSQL, so replicas are independent (no clustering).
 - **PostgreSQL (single-instance, default)**: The `postgres` template — the backing store for all users, websites, sessions, and events.
 - **PostgreSQL (HA, optional)**: The `postgres-highly-available` template instead — 3 Patroni replicas with automatic failover and an HAProxy leader endpoint, for a durable production store.
-- **Database credentials secret**: A `dictionary` secret holding the bundled database's `username`, `password` and `database`, built by this template from `postgres.credentials.*` and handed to the Postgres store by name. Nothing for you to create. (Not rendered on the HA path — `postgres-highly-available` still makes its own.)
+- **Database credentials secret**: A `dictionary` secret holding the bundled database's `username`, `password` and `database`, built by this template from `postgres.credentials.*` in **both** store modes and handed to the active Postgres store by name (`postgres.config.credentialsSecretName`, or `postgresHA.config.credentialsSecretName` on the HA path). Nothing for you to create.
 - **Identity and policy**: A least-privilege policy granting the workload `reveal` on exactly two secrets — the app secret you create and the active database's credential secret.
 
 ## Prerequisites
@@ -22,11 +22,13 @@ printf '%s' "$(openssl rand -base64 32)" | cpln secret create-opaque --name my-u
 
 Keep it for the life of the install — changing it logs every user out.
 
-Nothing else is required for a default install. **The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*`.
+Nothing else is required for a default install. **The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*`, whichever store is enabled.
 
 Optional, only if you turn on backups: a cloud account + bucket (AWS/GCP), or — for `provider: minio` — a `dictionary` secret holding the S3-compatible endpoint's keys (see **Storage setup**).
 
 **Upgrading from 1.1.0:** the database credentials moved from `postgres.config.username/password/database` to `postgres.credentials.username/password/database`. If you carry the old keys, the install fails with `config.username was REMOVED in postgres 3.4.0` — move the three keys and you are done. Ignore that message's advice to create a secret yourself; this template creates it.
+
+**Upgrading from 1.2.x (HA store):** `postgresHA.postgres.username/password/database` were removed in 1.3.0 (postgres-highly-available 2.5.0). Move those three values into `postgres.credentials.*` **unchanged** — this template now builds the HA credentials secret from them, named by `postgresHA.config.credentialsSecretName`. Carrying the old block fails the render with `the postgres block was REMOVED in 2.5.0`; ignore that message's advice to create a secret yourself — this template creates it. `postgresHA.backup.minio.accessKey`/`secretKey` moved to a prerequisite secret named by `postgresHA.backup.minio.credentialsSecretName` (see **Storage setup**).
 
 ## Configuration
 
@@ -66,7 +68,7 @@ Exactly one of the two stores must be enabled (the chart enforces this at render
 ```yaml
 postgres:             # default: single-instance PostgreSQL
   enabled: true
-  credentials:        # this template builds the DB credential secret from these
+  credentials:        # this template builds the DB credential secret from these — used by BOTH stores
     username: umami
     password: change-me-umami-db   # change before installing
     database: umami
@@ -92,7 +94,7 @@ postgres:
 postgresHA:           # durable HA: 3-replica Patroni store with an HAProxy leader endpoint
   enabled: true
   config:
-    credentialsSecretName: my-umami-db-credentials # see Prerequisites — must exist before install
+    credentialsSecretName: my-umami-db-credentials # name of the secret this template CREATES from postgres.credentials.*; org-wide, unique per release
   replicas: 3
   volumeset:
     capacity: 10      # GiB per replica
@@ -128,14 +130,14 @@ internalAccess:
 | What | Value |
 |---|---|
 | Local access (public access off) | `cpln port-forward {release}-umami 3000:3000 --gvc {gvc}` then open `http://localhost:3000` |
-| Public URL | `status.canonicalEndpoint` from `cpln workload get {release}-umami -o yaml` — only when `publicAccess.enabled: true` |
+| Public URL | `status.canonicalEndpoint` from `cpln workload get {release}-umami --gvc {gvc} -o yaml` — only when `publicAccess.enabled: true` |
 | Dashboard / login | `https://{canonical-endpoint}/login` |
 | Tracking script | `https://{canonical-endpoint}/script.js` (embed on your site) |
 | Collect endpoint | `https://{canonical-endpoint}/api/send` (where the tracker POSTs events) |
 | In-GVC (internal) | `http://{release}-umami.{gvc}.cpln.local:3000` — subject to `internalAccess.type` |
 | Default admin | `admin` / `umami` (hardcoded — change it before publishing, see below) |
 | App secret | the payload of your `app.appSecretName` secret; never stored in the Helm release |
-| Database credentials | the `username` / `password` / `database` keys of the secret named by `postgres.config.credentialsSecretName` |
+| Database credentials | the `username` / `password` / `database` keys of the secret named by `postgres.config.credentialsSecretName` (HA store: `postgresHA.config.credentialsSecretName`) — `cpln secret reveal SECRET_NAME -o yaml` |
 
 To start collecting data, add a website in the dashboard, then paste the generated `<script>` tag (which loads `/script.js` and POSTs to `/api/send`) into your site's HTML.
 
@@ -178,7 +180,8 @@ The backing template's README has the full per-provider walkthrough.
 
   Firewall changes take up to a couple of minutes (30–150 s) to propagate, so re-test the public URL rather than trusting the first response.
 - **Tracking does not collect anything until `publicAccess.enabled: true`** — browsers on the sites you track must reach `/script.js` and `/api/send`. Public access is a deliberate second step, not an optional one, if you are collecting analytics.
-- **Give each umami release its own `postgres.config.credentialsSecretName`.** Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
+- **Changing `postgres.credentials.password` on an existing release does not change the database password** — it only rewrites the secret, so the new value no longer matches the database and logins fail. The password is set once, when the database volume is first initialised.
+- **Give each umami release its own credentials secret name — `postgres.config.credentialsSecretName` for the single-instance store, or the separate `postgresHA.config.credentialsSecretName` for the HA store** (making only one unique does not help the other mode). Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
 - **Create the app-secret before installing.** A missing `app.appSecretName` secret leaves the workload waiting on a secret that does not exist, which looks like a platform fault rather than a missing prerequisite.
 - **The first `helm upgrade` after an install re-applies the bundled Postgres** — including the upgrade that turns public access on. Expect Umami to be briefly unreachable (~2 minutes) while the database restarts; later upgrades do not do this.
 - **Ad blockers block the default `/script.js` and `/api/send`** — set `tracker.scriptName` / `tracker.collectEndpoint` to custom paths to reduce blocking.

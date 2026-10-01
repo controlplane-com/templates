@@ -33,26 +33,28 @@ spec:
         - number: 4000
           protocol: tcp
       readinessProbe:
+        {{- /*
+          Gate on THIS server's OWN health (TiDB's /status on :10080), not on
+          cluster-wide TiKV store count. The old probe keyed every tidb-server
+          off the same global PD `/stores` view, so a sustained sub-quorum TiKV
+          shortfall would fail readiness on ALL servers at once and restart the
+          entire SQL tier across every location simultaneously — a correlated
+          multi-region outage from a single-tier problem. A tidb-server that is
+          up and serving /status can accept SQL connections and routes to
+          whatever TiKV is available; transient or partial TiKV loss surfaces as
+          query-time errors on individual statements, not by pulling the whole
+          SQL tier out of rotation (and the server recovers the instant TiKV
+          returns, with no restart). /status also only becomes 200 once the
+          server has bootstrapped against the cluster, so first-boot ordering is
+          preserved. This matches TiDB-Operator's own readiness probe.
+        */}}
         exec:
           command:
             - /bin/sh
             - '-c'
             - >-
-              for endpoint in {{ include "tidb.pdEndpointList" . }};
-              do
-                stores=$(curl -sf --max-time 4 "http://${endpoint}/pd/api/v1/stores" 2>/dev/null || echo "");
-                if [ -z "$stores" ]; then continue; fi;
-                stores_clean=$(echo "$stores" | sed 's/"state_name":[[:space:]]*"/"state_name":"/g');
-                up_count=$(echo "$stores_clean" | grep -o '"state_name":"Up"' | wc -l | tr -d ' ');
-                total_count=$(echo "$stores_clean" | grep -o '"state_name":' | wc -l | tr -d ' ');
-                echo "$up_count / $total_count TiKV stores Up at $endpoint";
-                {{- /* A quorum of TiKV's replication factor, not every store —
-                       requiring all of them would leave tidb-server permanently
-                       unready whenever one location is down, which is the
-                       opposite of what the replication is for. */}}
-                if [ "$up_count" -ge {{ include "tidb.readyStores" . }} ]; then echo "Sufficient TiKV stores healthy."; exit 0; fi;
-              done;
-              echo "TiKV not ready yet"; exit 1
+              curl -sf --max-time 4 http://localhost:10080/status
+              | grep -q '"version"'
         failureThreshold: 12
         initialDelaySeconds: 15
         periodSeconds: 10

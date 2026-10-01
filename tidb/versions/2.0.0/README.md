@@ -27,7 +27,7 @@ The requirement is one-directional: the GVC may have *more* locations than you l
 TiDB-related runs in those. Check what a GVC has before you install:
 
 ```bash
-cpln gvc get GVC_NAME -o json
+cpln gvc get GVC_NAME -o yaml
 ```
 
 The locations are under `spec.staticPlacement.locationLinks`. If you list a location the GVC does

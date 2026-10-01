@@ -12,7 +12,7 @@ Chatwoot is an open-source customer engagement platform — a live-chat widget, 
 - **Redis volumeset** — AOF persistence at `/data`.
 - **Start-script secrets** — the Chatwoot image declares no entrypoint, so the web and worker containers each mount their own start script.
 - **Credentials secret** — the template-managed Redis password.
-- **Database credentials secret** — a `dictionary` secret holding the bundled single-instance database's `username`, `password` and `database`, built by this template from `postgres.credentials.*` and handed to the Postgres subchart by name. Nothing for you to create. (Not rendered on the HA path — `postgres-highly-available` still makes its own.)
+- **Database credentials secret** — a `dictionary` secret holding the bundled database's `username`, `password` and `database`, built by this template from `postgres.credentials.*` in **both** database modes and handed to the active Postgres subchart by name (`postgresHA.config.credentialsSecretName` in HA mode, `postgres.config.credentialsSecretName` in single-instance mode). Nothing for you to create.
 - **Identity + policy** — one identity shared by web and worker, granted `reveal` on exactly the secrets they mount; it also carries the AWS cloud-account link in keyless S3 mode.
 
 ## Prerequisites
@@ -29,7 +29,7 @@ Chatwoot is an open-source customer engagement platform — a live-chat widget, 
 
 - **(Only for `storage.type: s3`)** an AWS S3 bucket, a Control Plane cloud account, and a bucket-scoped IAM policy — keyless; static keys are not accepted for AWS. See Storage setup.
 - **(Only for `storage.type: s3-compatible`)** a bucket on a MinIO / SeaweedFS / Spaces server plus a dictionary secret holding its static keys. See Storage setup.
-- **(Only for database backups)** a bucket on AWS S3, Google Cloud Storage, or a MinIO endpoint, plus the matching cloud account. See Storage setup. For `postgres.backup.provider: minio` (single-instance mode) the endpoint's keys are a prerequisite dictionary secret — see Storage setup.
+- **(Only for database backups)** a bucket on AWS S3, Google Cloud Storage, or a MinIO endpoint, plus the matching cloud account. See Storage setup. For `provider: minio` (either database mode) the endpoint's keys are a prerequisite dictionary secret — see Storage setup.
 - **(Optional, only for authenticated SMTP)** a dictionary secret with `SMTP_USERNAME` + `SMTP_PASSWORD`, referenced via `smtp.auth.secretName`.
 
   ```bash
@@ -37,7 +37,7 @@ Chatwoot is an open-source customer engagement platform — a live-chat widget, 
     --entry SMTP_USERNAME=apikey --entry SMTP_PASSWORD=...
   ```
 
-**The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*` (HA mode) or `postgres.credentials.*` (single-instance mode).
+**The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*` in either database mode.
 
 ## Configuration
 
@@ -129,7 +129,7 @@ Enable exactly one of `postgresHA` (default) and `postgres`.
 postgresHA:
   enabled: true
   config:
-    credentialsSecretName: my-chatwoot-db-credentials # see Prerequisites — must exist before install
+    credentialsSecretName: my-chatwoot-db-credentials # name of the secret this template CREATES from postgres.credentials.*; org-wide, unique per release
   replicas: 3
   volumeset:
     capacity: 10              # GiB per replica (minimum 10)
@@ -141,7 +141,7 @@ postgresHA:
 postgres:                     # single-instance alternative (dev/lightweight)
   enabled: false
   image: pgvector/pgvector:pg18   # MUST carry pgvector — stock postgres:18 does not
-  credentials:                # this template builds the DB credential secret from these
+  credentials:                # this template builds the DB credential secret from these — used in BOTH modes
     username: chatwoot
     password: change-me-chatwoot-pg
     database: chatwoot
@@ -207,7 +207,7 @@ The default install (`storage.type: local`, backups off) needs none of this.
 
 ### MinIO / S3-compatible attachments (static keys)
 
-1. Create the bucket on your server (for the in-catalog `minio` template in the same GVC: `http://WORKLOAD_NAME:9000`).
+1. Create the bucket on your server (for the in-catalog `minio` template in the same GVC: `http://WORKLOAD_NAME.GVC_NAME.cpln.local:9000`).
 2. Set `storage.type: s3-compatible`, `storage.s3Compatible.endpoint` to the S3 API address (with scheme and port), and keep `forcePathStyle: true`.
 3. Create the static-key dictionary secret and set `storage.s3Compatible.auth.secretName` to its name:
 
@@ -218,7 +218,7 @@ cpln secret create-dictionary --name my-chatwoot-s3-keys \
 
 ### Database backups
 
-Set `postgresHA.backup.enabled: true` (or `postgres.backup.enabled: true` in single-instance mode) and pick a provider:
+Set `postgresHA.backup.enabled: true` (or `postgres.backup.enabled: true` in single-instance mode) and pick a provider (the same `aws`/`gcp`/`minio` sub-keys exist under both blocks):
 
 - **AWS** — create the bucket, create a [cloud account](https://docs.controlplane.com/guides/create-cloud-account), and create an IAM policy with the JSON above (substituting your backup bucket). Set `backup.provider: aws` plus `backup.aws.bucket`, `region`, `cloudAccountName`, and `policyName`.
 - **GCP** — create the bucket, create a [cloud account](https://docs.controlplane.com/guides/create-cloud-account), and grant its service account **Storage Object Admin** (`roles/storage.objectAdmin`) on that bucket. Set `backup.provider: gcp` plus `backup.gcp.bucket` and `cloudAccountName`.
@@ -234,12 +234,12 @@ Set `postgresHA.backup.enabled: true` (or `postgres.backup.enabled: true` in sin
 
 | Target | Address | Credentials |
 |---|---|---|
-| Public UI / widget | `https://<canonical>.cpln.app` | first visit runs `/installation/onboarding` and creates the super admin |
+| Public UI / widget | the canonical endpoint — read `status.canonicalEndpoint` (below) | first visit runs `/installation/onboarding` and creates the super admin |
 | Internal (same GVC) | `http://{release}-chatwoot.{gvc}.cpln.local:3000` | account login |
 | Health | `GET /api` (readiness — checks Postgres + Redis), `GET /health` (liveness) | none |
-| Database | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432` (HA) or `{release}-postgres.{gvc}.cpln.local:5432` | the `{release}-postgres-config` secret (HA) or the secret named by `postgres.config.credentialsSecretName` (single-instance) |
+| Database | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432` (HA) or `{release}-postgres.{gvc}.cpln.local:5432` | the secret named by `postgresHA.config.credentialsSecretName` (HA) or `postgres.config.credentialsSecretName` (single-instance) — `cpln secret reveal SECRET_NAME -o yaml` |
 
-The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`cpln workload get {release}-chatwoot -o yaml`).
+The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`cpln workload get {release}-chatwoot --gvc {gvc} -o yaml`).
 
 ## Important Notes
 
@@ -258,8 +258,10 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`c
 - **Redis is a single node and cannot be scaled** — Chatwoot's ActionCable adapter reads `REDIS_URL` directly (no Sentinel support), and Redis does not propagate pub/sub between replicas, so a second node would silently drop live updates.
 - **Self-serve signup is toggled after install, not in values** — Chatwoot stores the flag in its database, so sign in as the super admin at `/super_admin`, open **Settings**, and set `ENABLE_ACCOUNT_SIGNUP`. It is disabled on a fresh install.
 - **Enterprise features are not included** — the `-ce` image omits SSO/SAML, audit logs, agent capacity management, custom branding, SLA policies, and Captain AI.
-- **Upgrading from 1.0.x**: the single-instance database credentials moved from `postgres.config.username/password/database` to `postgres.credentials.username/password/database`, named by the new `postgres.config.credentialsSecretName`. Carrying the old keys fails the render with `config.username was REMOVED in postgres 3.4.0` — move the three keys and you are done. **Ignore that message's advice to create a secret yourself; this template creates it**, and the database password stays a value. `postgres.backup.minio.accessKey`/`secretKey` were removed the same way (see Storage setup). The HA path (`postgresHA.*`), Redis, and the `secrets.name` prerequisite secret are all unchanged.
-- **Give each chatwoot release its own `postgres.config.credentialsSecretName`** (single-instance mode only). Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
+- **Upgrading from 1.0.x**: the single-instance database credentials moved from `postgres.config.username/password/database` to `postgres.credentials.username/password/database`, named by the new `postgres.config.credentialsSecretName`. Carrying the old keys fails the render with `config.username was REMOVED in postgres 3.4.0` — move the three keys and you are done. **Ignore that message's advice to create a secret yourself; this template creates it**, and the database password stays a value. `postgres.backup.minio.accessKey`/`secretKey` were removed the same way (see Storage setup). Redis and the `secrets.name` prerequisite secret are unchanged; for the HA path see the next note.
+- **Upgrading from 1.1.x (HA mode)**: `postgresHA.postgres.username/password/database` were removed in 1.2.0 (postgres-highly-available 2.5.0). Move those three values into `postgres.credentials.*` **unchanged** — this template now builds the HA credentials secret from them, named by `postgresHA.config.credentialsSecretName`. Carrying the old block fails the render with `the postgres block was REMOVED in 2.5.0`; **ignore that message's advice to create a secret yourself — this template creates it.** `postgresHA.backup.minio.accessKey`/`secretKey` moved to a prerequisite secret named by `postgresHA.backup.minio.credentialsSecretName` (see Storage setup).
+- **Changing `postgres.credentials.password` on an existing release does not change the database password** — it only rewrites the secret, so the new value no longer matches the database and logins fail. The password is set once, when the database volume is first initialised.
+- **Give each chatwoot release its own `postgresHA.config.credentialsSecretName` (HA) or `postgres.config.credentialsSecretName` (single-instance).** Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
 - **Data survives reinstall** — conversations live in the database volumeset and local attachments in the storage volumeset; delete those volumesets to wipe all data.
 
 ## Links

@@ -26,7 +26,7 @@
 
 ## Availability posture
 - Multi-instance is **OSS-supported and NOT enterprise-gated**. Default `replicas: 1` (proven shape); set **≥2** for the near-zero-downtime tier — requires Redis on so rate limits/budgets are global, not per-replica.
-- Redis subchart is Sentinel master-replica (HA); Postgres is single-instance by default with `postgres-highly-available` as the documented durable-HA swap.
+- Redis subchart is Sentinel master-replica (HA); Postgres is single-instance only — 1.1.0 has no `postgresHA` option (no `postgres-highly-available` dependency in Chart.yaml) and the README documents no HA swap, so the database is the remaining single point of downtime (minutes, not data loss — it sits on a snapshotted volumeset).
 
 ## Key knobs
 | Knob | Default | Effect |

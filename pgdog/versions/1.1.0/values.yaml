@@ -11,7 +11,7 @@ replicas: 1
 # ─── Connection Pooling ────────────────────────────────────────────────────────
 
 pooling:
-  mode: transaction          # options: transaction, session
+  mode: transaction          # options: transaction, session, statement
   defaultPoolSize: 10        # max server connections per pool
   minPoolSize: 1             # minimum idle connections kept open
   workers: 2                 # tokio async threads; recommend 2× vCPU count
@@ -37,11 +37,11 @@ loadBalancing:
 
 databases:
   - name: my-pgdog-database  # logical name clients connect to; must be a real database on the backend
-    host: my-postgres-workload  # e.g. WORKLOAD_NAME for an in-GVC Postgres, or an external hostname
+    host: my-postgres-workload  # e.g. WORKLOAD_NAME.GVC_NAME.cpln.local for an in-GVC Postgres, or an external hostname
     port: 5432
     role: primary            # options: primary, replica, auto
   # - name: my-pgdog-database
-  #   host: my-postgres-replica
+  #   host: my-postgres-replica.GVC_NAME.cpln.local
   #   port: 5432
   #   role: replica
 

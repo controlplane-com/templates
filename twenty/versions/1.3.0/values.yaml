@@ -98,8 +98,11 @@ postgres:
   enabled: true
   image: postgres:18          # PostgreSQL 18 (the HA path below runs 17 — the majors differ)
   # Credentials for the bundled database — internal plumbing no human types elsewhere.
-  # Twenty CREATES the dictionary secret named by config.credentialsSecretName below out
-  # of these three values, so there is nothing for you to create before installing.
+  # Used in BOTH database modes: Twenty CREATES the dictionary secret named by
+  # config.credentialsSecretName below (single-instance) or
+  # postgresHA.config.credentialsSecretName (HA) out of these three values, so there is
+  # nothing for you to create before installing. Changing the password later does not
+  # change it in an existing database.
   credentials:
     username: twenty
     password: change-me-twenty-db     # change before install; letters/digits/-/_ only (it is embedded in a URL)

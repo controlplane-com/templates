@@ -43,10 +43,9 @@ spec:
   firewallConfig:
     {{- include "crowler.firewall.external" (list . false) | nindent 4 }}
     internal:
-      inboundAllowType: workload-list
-      inboundAllowWorkload:
-        - {{ include "crowler.workloadLink" (list . (include "crowler.api.name" .)) }}
-        - {{ include "crowler.workloadLink" (list . (include "crowler.events.name" .)) }}
+      # Nothing calls the engine: it pulls work from the database and dials out to
+      # its browser nodes. Its control API (:8081) is for its own readiness probe.
+      inboundAllowType: none
   loadBalancer:
     direct:
       enabled: false

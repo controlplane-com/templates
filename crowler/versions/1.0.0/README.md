@@ -11,7 +11,7 @@ The CROWler is an open-source, self-hosted platform for web crawling, scraping a
 - **Schema loader** — a sidecar in the engine, API and events workloads. It loads CROWler's database schema once, then idles; the CROWler process starts only after it finishes.
 - **PostgreSQL** (`postgres` template, version 17) — all crawl data. Backups are available through that template.
 - **Pushgateway** and **Jaeger** (optional, off by default) — crawl counters into the platform's built-in metrics, and browser-session traces.
-- **Secrets, identity and policy** — this template creates the database and app credentials, the rendered `config.yaml` and two start scripts, and grants its identity `reveal` on exactly those.
+- **Secrets, identity and policy** — this template creates the database and app credentials, the rendered `config.yaml`, the app start wrapper and the schema-loader script, and grants its identity `reveal` on exactly those.
 
 ## Prerequisites
 
@@ -133,12 +133,12 @@ The database is the `postgres` template, so its scheduled backups work here unch
 
 ## Important Notes
 
-- **Keep the API private.** It has no authentication at this version, and anyone who can reach it can add sources. `publicAccess.api` exposes it to the internet.
-- **Network reconnaissance is unavailable.** CROWler's nmap-based DNS, WHOIS and service scans need Linux capabilities the platform does not grant, so they are switched off.
+- **Keep the API private.** It has no authentication at this version, and anyone who can reach it can add sources. `publicAccess.api` exposes it to the internet. Access changes take from about 30 seconds to a few minutes to apply.
+- **Do not change either database password after install.** Both are applied to the database once. A changed value reaches the containers on their next restart while the database keeps the old one, so the CROWler tiers stop starting. To rotate one, change it inside PostgreSQL first, then upgrade with the matching value.
 - **Upgrading the CROWler images can need a manual schema migration.** The schema loader never re-runs the schema on an existing database. If the new release expects a newer schema, it logs a `WARNING` and the apps start anyway; apply the matching upstream `db_migrations` script.
-- **`crowlerDb.password` is applied once.** Changing it later does not change the existing database role.
+- **The first upgrade after install can restart the database.** With the default single replicas, crawling and the API may pause for a minute or two.
+- **Network reconnaissance is unavailable.** CROWler's nmap-based DNS, WHOIS and service scans need Linux capabilities the platform does not grant, so they are switched off.
 - **Give each release its own `postgres.config.credentialsSecretName`.** Secret names are org-wide, so a second release on the default name is refused at install.
-- **Crawl data survives reinstall** in the PostgreSQL volumeset; delete that volumeset to start empty.
 
 ## Links
 

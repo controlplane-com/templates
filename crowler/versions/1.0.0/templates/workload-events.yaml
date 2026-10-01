@@ -1,0 +1,60 @@
+---
+kind: workload
+name: {{ include "crowler.events.name" . }}
+description: CROWler events manager — events API, HTTP :8082
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "crowler.tags" . | nindent 4 }}
+spec:
+  # stateful: the singleton master is elected by hostname, and only a stateful
+  # workload gives replica 0 the deterministic name {workload}-0 the rendered
+  # config names as master_events_manager.
+  type: stateful
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "crowler.identity.name" . }}
+  containers:
+    - name: events
+      image: {{ .Values.images.events }}
+      command: /bin/sh
+      args:
+        - /cpln/start.sh
+        - events
+      inheritEnv: false
+      minCpu: {{ .Values.events.resources.minCpu | quote }}
+      cpu: {{ .Values.events.resources.maxCpu | quote }}
+      minMemory: {{ .Values.events.resources.minMemory | quote }}
+      memory: {{ .Values.events.resources.maxMemory | quote }}
+      env: {{- include "crowler.app.env" . | nindent 8 }}
+      ports:
+        - number: 8082
+          protocol: http
+      readinessProbe:
+        # Deadline 10 + 20x12 = 250s covers the 180s schema wait.
+        exec:
+          command:
+            - ./healthCheck
+            - -service
+            - events
+            - -type
+            - ready
+        initialDelaySeconds: 10
+        periodSeconds: 12
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      volumes: {{- include "crowler.app.volumes" . | nindent 8 }}
+    {{- include "crowler.schemaLoader" . | nindent 4 }}
+  defaultOptions: {{- include "crowler.fixedScale" .Values.events.replicas | nindent 4 }}
+  firewallConfig:
+    {{- include "crowler.firewall.external" (list . .Values.publicAccess.events) | nindent 4 }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  supportDynamicTags: false

@@ -1,0 +1,54 @@
+---
+kind: workload
+name: {{ include "crowler.engine.name" . }}
+description: CROWler crawl engine — polls the database for sources and drives its pinned browser nodes
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "crowler.tags" . | nindent 4 }}
+spec:
+  # stateful: engine pinning matches crawler.engine[].name against the hostname,
+  # which is the deterministic {workload}-{i} only on a stateful workload.
+  type: stateful
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "crowler.identity.name" . }}
+  containers:
+    - name: engine
+      image: {{ .Values.images.engine }}
+      command: /bin/sh
+      args:
+        - /cpln/start.sh
+        - engine
+      inheritEnv: false
+      minCpu: {{ .Values.engine.resources.minCpu | quote }}
+      cpu: {{ .Values.engine.resources.maxCpu | quote }}
+      minMemory: {{ .Values.engine.resources.minMemory | quote }}
+      memory: {{ .Values.engine.resources.maxMemory | quote }}
+      env: {{- include "crowler.app.env" . | nindent 8 }}
+      readinessProbe:
+        # healthCheck reads /app/config.yaml and GETs the control API /v1/ready.
+        # Deadline 10 + 20x18 = 370s covers the 180s schema wait + 150s browser gate.
+        exec:
+          command:
+            - ./healthCheck
+            - -service
+            - crowler
+            - -type
+            - ready
+        initialDelaySeconds: 10
+        periodSeconds: 18
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      volumes: {{- include "crowler.app.volumes" . | nindent 8 }}
+    {{- include "crowler.schemaLoader" . | nindent 4 }}
+  defaultOptions: {{- include "crowler.fixedScale" .Values.engine.replicas | nindent 4 }}
+  firewallConfig:
+    {{- include "crowler.firewall.external" (list . false) | nindent 4 }}
+    internal:
+      inboundAllowType: workload-list
+      inboundAllowWorkload:
+        - {{ include "crowler.workloadLink" (list . (include "crowler.api.name" .)) }}
+        - {{ include "crowler.workloadLink" (list . (include "crowler.events.name" .)) }}
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  supportDynamicTags: false

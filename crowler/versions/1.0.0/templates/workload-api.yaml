@@ -1,0 +1,57 @@
+---
+kind: workload
+name: {{ include "crowler.api.name" . }}
+description: CROWler API — search and source management, HTTP :8080
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "crowler.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "crowler.identity.name" . }}
+  containers:
+    - name: api
+      image: {{ .Values.images.api }}
+      command: /bin/sh
+      args:
+        - /cpln/start.sh
+        - api
+      inheritEnv: false
+      minCpu: {{ .Values.api.resources.minCpu | quote }}
+      cpu: {{ .Values.api.resources.maxCpu | quote }}
+      minMemory: {{ .Values.api.resources.minMemory | quote }}
+      memory: {{ .Values.api.resources.maxMemory | quote }}
+      env: {{- include "crowler.app.env" . | nindent 8 }}
+      ports:
+        - number: 8080
+          protocol: http
+      readinessProbe:
+        # Deadline 10 + 20x12 = 250s covers the 180s schema wait.
+        exec:
+          command:
+            - ./healthCheck
+            - -service
+            - api
+            - -type
+            - ready
+        initialDelaySeconds: 10
+        periodSeconds: 12
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      volumes: {{- include "crowler.app.volumes" . | nindent 8 }}
+    {{- include "crowler.schemaLoader" . | nindent 4 }}
+  defaultOptions: {{- include "crowler.fixedScale" .Values.api.replicas | nindent 4 }}
+  firewallConfig:
+    {{- include "crowler.firewall.external" (list . .Values.publicAccess.api) | nindent 4 }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  supportDynamicTags: false

@@ -1,0 +1,127 @@
+# ─── Images ─────────────────────────────────────────────────────────
+# The four CROWler images share ONE release tag — bump them together.
+images:
+  engine: zfpsystems/crowler-engine:v2.1.8
+  api: zfpsystems/crowler-api:v2.1.8
+  events: zfpsystems/crowler-events:v2.1.8
+  db: zfpsystems/crowler-db:v2.1.8              # used ONLY by the schema-loader sidecar (psql + schema file)
+  vdi: zfpsystems/crowler-vdi:4.28.1-20260819    # Selenium standalone Chromium, versioned separately
+  pushgateway: prom/pushgateway:v1.11.3          # pulled only when pushgateway.enabled
+  jaeger: jaegertracing/all-in-one:1.76.0        # pulled only when jaeger.enabled
+
+timezone: UTC                                    # TZ on every CROWler container
+
+# ─── Crawl engine ───────────────────────────────────────────────────
+# Engine i uses browser node j for every j where j mod engine.replicas == i,
+# so vdi.replicas is the crawl concurrency and must be >= engine.replicas.
+engine:
+  replicas: 1
+  resources:
+    minCpu: 500m
+    maxCpu: 2000m
+    minMemory: 1Gi
+    maxMemory: 2Gi
+
+# ─── Browser pool (VDI) ─────────────────────────────────────────────
+vdi:
+  replicas: 1                                    # one Chromium per replica; must be >= engine.replicas
+  vncPassword: change-me-crowler-vnc             # VNC/noVNC password — internal only, never exposed
+  resources:
+    minCpu: 500m
+    maxCpu: 2000m
+    minMemory: 2Gi                               # Chromium under load; do not go lower
+    maxMemory: 4Gi
+
+# ─── API (search + source management, :8080) ────────────────────────
+api:
+  replicas: 1
+  enableConsole: true                            # /v1/source/add and /v1/source/statuses
+  enableApiDocs: true                            # /v1/openapi.json and /v1/docs
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 256Mi
+    maxMemory: 1Gi
+
+# ─── Events manager (:8082) ─────────────────────────────────────────
+events:
+  replicas: 1                                    # replica 0 is the singleton master (scheduler, janitor)
+  enableApiDocs: true                            # /v1/openapi.json and /v1/docs
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 256Mi
+    maxMemory: 1Gi
+
+# ─── CROWler application database login ─────────────────────────────
+# Created by the schema loader on first install; engine/api/events log in with it.
+# Internal plumbing — change the password before install. Set once: changing it
+# later does not alter the existing role.
+crowlerDb:
+  username: crowler                              # lowercase letters, digits and _ only
+  password: change-me-crowler-app
+
+# ─── Crawler behaviour (rendered into config.yaml) ──────────────────
+crawler:
+  queryTimer: 30                                 # seconds between polls for new sources (>= 5)
+  timeout: 30                                    # page fetch/render timeout, seconds
+  crawlingInterval: 3 days                       # re-crawl cadence for a successfully crawled source
+  crawlingIfError: 15 minutes                    # retry delay after a failed crawl
+  maxDepth: 3                                    # link-following depth (0 = unlimited)
+  maxLinks: 0                                    # links followed per page (0 = unlimited)
+  headless: true                                 # false = visible Chromium under Xvfb (watch via VNC)
+  debugLevel: 1                                  # 0 = silent; higher = more log lines
+
+# ─── Full-config escape hatch (optional) ────────────────────────────
+# Opaque secret (encoding: plain) whose payload is a complete CROWler config.yaml.
+# When set it REPLACES the rendered file, so the crawler/api/events values above are
+# ignored. It may reference ${CROWLER_DB_USER}, ${CROWLER_DB_PASSWORD}, ${CROWLER_LOCATION}.
+config:
+  existingSecretName: ""                         # e.g. my-crowler-config
+
+# ─── Optional telemetry (both off — the platform has native metrics and tracing) ─
+pushgateway:
+  enabled: false                                 # engines push crawl counters; scraped into the built-in dashboards
+  resources:
+    cpu: 200m
+    memory: 256Mi
+jaeger:
+  enabled: false                                 # browser-session traces from the VDI tier (in-memory, UI :16686)
+  resources:
+    cpu: 500m
+    memory: 1Gi
+
+# ─── Access ─────────────────────────────────────────────────────────
+# The API has no authentication at this version, source creation included.
+# Reach it privately through `cpln port-forward` (see README "Connecting").
+publicAccess:
+  api: false                                     # true = API on its automatic *.cpln.app HTTPS endpoint
+  events: false                                  # true = events API on its own *.cpln.app endpoint
+internalAccess:                                  # who inside Control Plane may call api and events
+  type: same-gvc                                 # none | same-gvc | same-org | workload-list
+  workloads: []                                  # used only with workload-list, e.g. //gvc/GVC/workload/NAME
+
+# ─── PostgreSQL (postgres template as a dependency) ─────────────────
+# Every knob of the postgres template is available under this key, including
+# scheduled backups (see README "Backing up the database").
+postgres:
+  image: postgres:17                             # must stay on 17 — the schema loader ships psql 17
+  # Superuser for the bundled database — internal plumbing no human types. This chart
+  # CREATES the dictionary secret named below from these values; nothing to create first.
+  credentials:
+    username: postgres
+    password: change-me-crowler-postgres         # change before install
+    database: crowler                            # CROWler's schema is loaded here
+  config:
+    # Secret names are org-wide: give each release its own. A second release left on
+    # this name is refused at install (owned by the first) — nothing is overwritten.
+    credentialsSecretName: my-crowler-db-credentials
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 2Gi
+  volumeset:
+    capacity: 10                                 # GiB (minimum 10)
+  backup:
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0   # Postgres 17 backup image; backups stay off unless enabled

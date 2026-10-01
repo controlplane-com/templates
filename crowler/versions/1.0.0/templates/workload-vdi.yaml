@@ -1,0 +1,84 @@
+---
+kind: workload
+name: {{ include "crowler.vdi.name" . }}
+description: CROWler browser pool — Selenium standalone Chromium, WebDriver :4444
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "crowler.tags" . | nindent 4 }}
+spec:
+  # stateful + replicaDirect: a WebDriver session lives on ONE node, so each engine
+  # addresses its pinned nodes by per-replica name
+  # (replica-{j}.{workload}.{location}.{gvc}.cpln.local).
+  type: stateful
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "crowler.identity.name" . }}
+  containers:
+    - name: vdi
+      image: {{ .Values.images.vdi }}
+      inheritEnv: false
+      minCpu: {{ .Values.vdi.resources.minCpu | quote }}
+      cpu: {{ .Values.vdi.resources.maxCpu | quote }}
+      minMemory: {{ .Values.vdi.resources.minMemory | quote }}
+      memory: {{ .Values.vdi.resources.maxMemory | quote }}
+      env:
+        - name: SE_ROLE
+          value: standalone
+        - name: SE_SCREEN_WIDTH
+          value: "1920"
+        - name: SE_SCREEN_HEIGHT
+          value: "1080"
+        - name: SE_SCREEN_DEPTH
+          value: "24"
+        - name: SE_REJECT_UNSUPPORTED_CAPS
+          value: "true"
+        - name: SE_NODE_ENABLE_CDP
+          value: "true"
+        {{- if .Values.jaeger.enabled }}
+        - name: SE_ENABLE_TRACING
+          value: "true"
+        - name: SE_OTEL_TRACES_EXPORTER
+          value: otlp
+        - name: SE_OTEL_EXPORTER_ENDPOINT
+          value: {{ printf "http://%s:4317" (include "crowler.jaeger.host" .) | quote }}
+        {{- else }}
+        # Selenium images trace by default and would spam errors at localhost:4317.
+        - name: SE_ENABLE_TRACING
+          value: "false"
+        {{- end }}
+        - name: SEL_PASSWD
+          value: cpln://secret/{{ include "crowler.secret.creds.name" . }}.vncPassword
+        - name: TZ
+          value: {{ .Values.timezone | quote }}
+      ports:
+        - number: 4444
+          protocol: http
+        - number: 4445
+          protocol: http
+        - number: 5900
+          protocol: tcp
+        - number: 7900
+          protocol: http
+        - number: 9222
+          protocol: http
+      readinessProbe:
+        exec:
+          command:
+            - sh
+            - -c
+            - 'curl -sf http://localhost:4444/status | grep -Eq ''"ready": *true'''
+        initialDelaySeconds: 15
+        periodSeconds: 10
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions: {{- include "crowler.fixedScale" .Values.vdi.replicas | nindent 4 }}
+  firewallConfig:
+    {{- include "crowler.firewall.external" (list . false) | nindent 4 }}
+    internal:
+      # Only the engines drive the browsers.
+      inboundAllowType: workload-list
+      inboundAllowWorkload:
+        - {{ include "crowler.workloadLink" (list . (include "crowler.engine.name" .)) }}
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: true
+  supportDynamicTags: false

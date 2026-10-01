@@ -4,14 +4,14 @@
 
 - **Workload** — the Ollama server, with an optional Open WebUI front end.
 - **Volume set** — stores pulled models, which are large; size it for the models you intend to run.
-- **Secret** — the startup script, which pulls `defaultModel` on first boot.
+- **Secret** — the startup script, which starts the Ollama server and attempts to pull `defaultModel` on first boot.
 - **Identity and policy** — `reveal` on the startup secret.
 
 This template does not create a GVC.
 
 ### Prerequisites
 
-None. The model named by `defaultModel` is pulled on first start.
+None.
 
 ### Warning
 
@@ -88,10 +88,10 @@ internal_access:
 
 ### Connecting
 
-Once deployed, access the Open WebUI through the Control Plane endpoint:
+Once deployed, open the Open WebUI at the workload's canonical endpoint — read `status.canonicalEndpoint` from:
 
-```
-https://RELEASE_NAME-ollama.GVC_NAME.cpln.app
+```bash
+cpln workload get RELEASE_NAME-ollama --gvc GVC_NAME -o yaml
 ```
 
 The Ollama API is also available internally to other workloads in the same GVC:
@@ -109,6 +109,6 @@ http://RELEASE_NAME-ollama.GVC_NAME.cpln.local:11434
 
 - **Quotas are the usual first blocker.** CPU and memory beyond the org defaults need a quota increase, and GPU access must be enabled explicitly — see the Warning above.
 - **Models are large and live on the volume set.** Size it for what you intend to pull; a default-sized volume fills quickly once you add a second model.
-- **The first start is slow.** `defaultModel` is downloaded before the server is useful, so an install that looks stuck early is usually still pulling.
+- **Check that `defaultModel` is actually available after the first start.** If it does not appear in the Open WebUI model list, pull it yourself (through Open WebUI's model settings or the Ollama API) — models are large, so the first pull is slow.
 - **The Open WebUI sidecar on `8080` is the exposed interface**; the Ollama API on `11434` is reached internally by the UI. Exposing `11434` directly gives unauthenticated access to the model server.
 - **Uninstalling deletes the volume set**, so every pulled model is downloaded again on the next install.

@@ -12,7 +12,7 @@ hosted provider, and low-latency serving by deploying the same template to sever
 |---|---|
 | workload (stateful) | two containers — Open WebUI on `8080` (exposed) and Ollama on `11434` (internal) |
 | volumeset | pulled models; these are large |
-| secret | startup script that pulls `defaultModel` on first boot |
+| secret | startup script that starts `ollama serve` and attempts to pull `defaultModel` on first boot (see trap below) |
 | identity + policy | `reveal` on the startup secret |
 
 Does not create a GVC.
@@ -31,7 +31,7 @@ Does not create a GVC.
 
 - **Quotas are the usual first blocker.** CPU and memory beyond org defaults need an increase, and GPU access
   must be enabled explicitly by Control Plane support.
-- **First start is slow and looks stuck.** `defaultModel` downloads before the server is useful.
+- **`defaultModel` preload is suspected never to fire (unverified live, open chart item).** The script lives in `entrypoint.payload` and reads `$DEFAULT_MODELS`, but `workload.yaml` sets `DEFAULT_MODELS` only on the Open WebUI container — the `ollama` container has `inheritEnv: false` and no env; the pull body is also single-quoted, so `$DEFAULT_MODELS` would be sent literally; and the `MODEL_DIR` check matches untagged names only. The README now says the script *attempts* the pull and tells users to check / pull manually. Fixing it changes the render → needs a new version.
 - **Never expose `11434`.** The Ollama API has no authentication; the WebUI on `8080` is the intended surface.
   Exposing the API directly hands anyone an unauthenticated model server.
 - **Models live on the volumeset, and uninstall deletes it** — every model is re-downloaded on the next

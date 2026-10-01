@@ -95,6 +95,17 @@ Server Secret Name
 {{- printf "%s-tidb-server-startup" .Release.Name }}
 {{- end }}
 
+{{/*
+ProxySQL connection pooler (optional) Workload and Secret Name
+*/}}
+{{- define "tidb.proxysql.name" -}}
+{{- printf "%s-proxysql" .Release.Name }}
+{{- end }}
+
+{{- define "tidb.proxysqlSecret.name" -}}
+{{- printf "%s-tidb-proxysql-startup" .Release.Name }}
+{{- end }}
+
 
 {{/* Topology */}}
 
@@ -214,6 +225,9 @@ workload that does not exist is not an error, but it is a lie in the spec.
 {{- end }}
 {{- if .Values.backup.enabled }}
 - //gvc/{{ $gvc }}/workload/{{ include "tidb.backup.name" . }}
+{{- end }}
+{{- if .Values.proxysql.enabled }}
+- //gvc/{{ $gvc }}/workload/{{ include "tidb.proxysql.name" . }}
 {{- end }}
 {{- end -}}
 
@@ -409,6 +423,9 @@ rather than silently ignoring a key someone set on purpose.
 {{- if not .Values.autoCreateDatabase.credentialsSecretName -}}
 {{- fail "tidb: autoCreateDatabase.credentialsSecretName is required when autoCreateDatabase.enabled — it names the `dictionary` secret holding rootPassword, user, password and db. Create it BEFORE installing; see Prerequisites in the README." -}}
 {{- end -}}
+{{- end -}}
+{{- if and .Values.proxysql.enabled (not .Values.autoCreateDatabase.enabled) -}}
+{{- fail "tidb: proxysql.enabled requires autoCreateDatabase.enabled — ProxySQL authenticates clients with the user, password and rootPassword from the credentials secret (autoCreateDatabase.credentialsSecretName)." -}}
 {{- end -}}
 {{- end -}}
 

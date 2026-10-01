@@ -44,6 +44,19 @@ autoCreateDatabase: # Enable to automatically create the database on initializat
   # How often the init job runs. It fast-exits once the database exists, so
   # this only controls how soon after install that happens.
   schedule: "*/5 * * * *"
+
+# ─── ProxySQL connection pooler (optional) ────────────────────────────────────
+# A pooling tier in front of the TiDB servers, in every location. Clients connect
+# to RELEASE-proxysql.GVC.cpln.local:4000 instead of RELEASE-server. Requires
+# autoCreateDatabase.enabled (it authenticates with that secret's credentials).
+proxysql:
+  enabled: false
+  image: proxysql/proxysql:3.0.11
+  replicas: 2 # pooler replicas per location
+  resources:
+    cpu: 500m
+    memory: 512Mi
+
 volumeset:
   tikv:
     capacity: 10 # initial capacity in GiB (minimum is 10)

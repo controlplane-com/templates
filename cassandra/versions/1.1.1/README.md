@@ -228,29 +228,39 @@ upgrading</b>; if it already matches, no action is needed. Nothing else changes.
 
 ## Restoring a Backup
 
+**Neither restore path has been verified end to end against this template** — rehearse on a scratch install
+before you need one. Both are driven by `/usr/local/bin/restore.sh` in the backup image, which takes
+`RESTORE_TIMESTAMP` (the timestamp directory in your bucket, e.g. `cassandra/backups/2026-05-15T02-00-00Z/`)
+and reads the same `BACKUP_*` environment the backup job has.
+
 ### Logical Restore
 
-Exec into the backup cron workload and run `restore.sh` with the timestamp of the backup you want to restore:
+The backup is one gzip-compressed CSV per table, written by `cqlsh COPY TO`, at
+`PREFIX/TIMESTAMP/KEYSPACE/TABLE.csv.gz`. `restore.sh` downloads them and replays each with `cqlsh COPY FROM`:
+rows with matching primary keys are overwritten; rows not in the backup are left in place.
 
-```bash
-RESTORE_TIMESTAMP=2026-05-15T02-00-00Z /usr/local/bin/restore.sh
-```
-
-The timestamp format matches the backup filename in your bucket (e.g. `cassandra/backups/2026-05-15T02-00-00Z/`).
-
-The script downloads the CSVs for the configured keyspace and replays them into Cassandra using `cqlsh COPY FROM`. Existing rows with matching primary keys are overwritten; rows not in the backup are left in place.
+There is nothing to exec into: the logical backup workload (`RELEASE_NAME-cassandra-backup`) is a `cron`
+workload whose container runs `backup.sh` and exits, so it has no running replica between runs. Run
+`restore.sh` from a one-off workload built on the backup image, with the backup job's environment
+(`BACKUP_PROVIDER`, `BACKUP_BUCKET`, `BACKUP_PREFIX`, `AWS_REGION` on S3, `CASSANDRA_HOST`, `CASSANDRA_PORT`,
+`CASSANDRA_USER`, `CASSANDRA_PASSWORD`, `CASSANDRA_KEYSPACE`) plus `RESTORE_TIMESTAMP`, under the same identity
+so it can read the bucket.
 
 ### Physical Restore
 
-Physical backups are per-node — each replica backed up its own SSTable slice. To restore, exec into the **backup sidecar container** (not the cassandra container) on each replica that needs to be restored and run:
+Physical backups are per-node — each replica uploaded its own SSTable snapshot to `PREFIX/TIMESTAMP/HOSTNAME/`.
+The `backup` sidecar on each replica stays running, mounts the data volume and has `nodetool`, so the restore
+runs there; `restore.sh` downloads that replica's snapshot files and calls `nodetool import` for each table,
+loading the SSTables into the live node without a restart:
 
 ```bash
-RESTORE_TIMESTAMP=2026-05-15T02-00-00Z /usr/local/bin/restore.sh
+cpln workload exec RELEASE_NAME-cassandra --gvc GVC_NAME --container backup -- \
+  sh -c 'RESTORE_TIMESTAMP=2026-05-15T02-00-00Z /usr/local/bin/restore.sh'
 ```
 
-The script downloads the snapshot files for that replica from `{prefix}/{timestamp}/{hostname}/`, writes them to the shared volume, then calls `nodetool import` to load the SSTables into the live Cassandra instance without a restart.
-
-**Important**: Repeat this on every replica. Because each node owns a different token range, restoring only one replica leaves the cluster with incomplete data.
+**Repeat this on every replica** — `cpln workload exec` takes `--location` and `--replica` to pick one; see
+`cpln workload exec --help`. Each node owns a different token range, so restoring only one replica leaves the
+cluster with incomplete data.
 
 ## Important Notes
 

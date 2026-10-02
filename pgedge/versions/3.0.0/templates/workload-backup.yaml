@@ -8,6 +8,16 @@ spec:
   type: cron
   containers:
     - name: backup-pgedge
+      # The image supplies the tools; the chart's script is the procedure (see
+      # secret-backup-script.yaml): backup by default, restore with
+      # `cron start --env PGEDGE_ACTION=restore`.
+      command: /bin/bash
+      args:
+        - /scripts/pgedge-backup.sh
+      volumes:
+        - path: /scripts/pgedge-backup.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "pgedge.secretBackupScript.name" . }}.payload
       cpu: {{ .Values.backup.resources.cpu | quote }}
       memory: {{ .Values.backup.resources.memory | quote }}
       env:
@@ -39,6 +49,7 @@ spec:
           value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.username
         - name: PG_DATABASE
           value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.database
+        {{- include "pgedge.locationEnv" . | nindent 8 }}
       image: {{ .Values.backup.image | quote }}
       inheritEnv: false
   defaultOptions:

@@ -10,7 +10,7 @@ This template deploys a pgEdge active-active distributed PostgreSQL cluster usin
 - **Spock**: Multi-master logical replication extension included in the pgEdge image. Handles cross-node replication with last-update-wins conflict resolution.
 - **Volume set**: One `ext4` volume per pgEdge replica, with daily snapshots retained for 7 days.
 - **Identity + two policies**: `reveal` on this release's secrets and your credentials secret, plus `view` on the one GVC you install into so each node can confirm at boot that the GVC really has every location you listed.
-- **Backup cron** (optional): `pg_dump` to S3 or GCS, suspended everywhere except your first configured location.
+- **Backup cron** (optional): a `pg_dump` of your database to S3 or GCS on a schedule, written as `PREFIX/pgedge-YYYY-MM-DDTHH-MM-SSZ.dump`. The same job restores a backup into every node with one command. It runs only in your first configured location.
 
 This template does **not** create a GVC. Every resource lands in the GVC you pass to `--gvc`, so `cpln workload exec`, `cpln logs` and `cpln helm uninstall` all work against that GVC, and uninstalling can never delete it.
 
@@ -21,7 +21,7 @@ The requirement is one-directional: the GVC may have *more* locations than you l
 pgEdge-related runs in those. Check what a GVC has before you install:
 
 ```bash
-cpln gvc get GVC_NAME -o json
+cpln gvc get GVC_NAME -o yaml
 ```
 
 The locations are under `spec.staticPlacement.locationLinks`. If you list a location the GVC does
@@ -81,6 +81,9 @@ The pgEdge nodes, their volumes and their data are kept.
 
 `pgcat.routing: single-writer` has no equivalent: every location now writes to its own node, which
 was already 2.2.0's default behaviour.
+
+Backups change format in 3.0.0 (one database, `pg_dump` custom format, `.dump`). The restore job reads
+only this format, so **run a backup right after upgrading** (see [Backing Up](#backing-up)).
 
 ## Migrating from 1.x
 
@@ -220,8 +223,16 @@ pgbouncer:
 
 **Pool modes:**
 - `transaction` — connection held only for the duration of a transaction. Best for most web and API workloads. Protocol-level prepared statements work; session-level `SET`, temporary tables, advisory locks and `LISTEN` do not.
-- `session` — connection held for the entire client session. Compatible with all Postgres features but provides less connection reuse.
+- `session` — connection held for the entire client session. Compatible with all Postgres features but provides less connection reuse. A session idle for more than 1 hour is closed by the failover tier; clients reconnect.
 - `statement` — connection returned after every statement. Multi-statement transactions are rejected. Rarely used.
+
+**Session settings in the connection string.** Clients may pass these through the `options` startup
+parameter (`PGOPTIONS='-c statement_timeout=5s'`, libpq `options=`, JDBC `options=`), and PgBouncer applies
+them on every server connection the client uses: `statement_timeout`, `lock_timeout`,
+`idle_in_transaction_session_timeout`, `idle_session_timeout`, `work_mem`, `maintenance_work_mem`,
+`default_transaction_isolation`, `client_min_messages`, plus `search_path`, `application_name`,
+`TimeZone`, `DateStyle` and `client_encoding`. Any other setting in `options` is refused at connect
+(`unsupported startup parameter in options`) — set it with `ALTER ROLE … SET` instead.
 
 ## Connecting
 
@@ -233,7 +244,7 @@ Connect through PgBouncer for all application traffic. Nothing in this template 
 | Unpooled, with failover | `RELEASE_NAME-pgedge-proxy.GVC_NAME.cpln.local:5432` |
 | A single node, directly | `replica-N.RELEASE_NAME-pgedge.LOCATION.GVC_NAME.cpln.local:5432` |
 | PgBouncer admin console | pooled endpoint, database `pgbouncer` |
-| Database | the `database` entry of your credentials secret |
+| Database | the `database` entry of your credentials secret — the only database the pooler serves |
 | Username / password | the `username` / `password` entries of your credentials secret |
 
 PgBouncer does not offer TLS — use `sslmode=disable` or `prefer` (traffic stays inside the GVC). Use
@@ -317,7 +328,10 @@ id serial PRIMARY KEY
 
 ## Backing Up
 
-Set your desired backup schedule in the values file and configure your AWS S3 or GCS bucket. You can also set a prefix where your backups will be stored in the bucket. Because every pgEdge node holds a full copy of the data, the backup job connects to replica-0 of the first configured location — and runs in that location only, however many locations the GVC has.
+Set your desired backup schedule in the values file and configure your AWS S3 or GCS bucket. Each run
+dumps **your database** (the `database` entry of your credentials secret) from `replica-0` of your first
+location — every node holds a full copy — and writes it as `PREFIX/pgedge-YYYY-MM-DDTHH-MM-SSZ.dump`.
+Roles are not included: the user from your credentials secret owns everything that is restored.
 
 ```yaml
 backup:
@@ -327,7 +341,7 @@ backup:
 
   resources:
     cpu: 100m
-    memory: 128Mi
+    memory: 256Mi  # 128Mi measured OOM-killing the GCS upload
 
   provider: aws  # Options: aws or gcp
 
@@ -342,6 +356,12 @@ backup:
     bucket: my-backup-bucket
     cloudAccountName: my-backup-cloudaccount
     prefix: pgedge/backups  # folder where backups will be stored
+```
+
+To take a backup now, start the job in your first location (`locations[0]`):
+
+```bash
+cpln workload cron start RELEASE_NAME-pgedge-backup --gvc GVC_NAME --location FIRST_LOCATION
 ```
 
 ### AWS S3
@@ -403,37 +423,33 @@ For the cron job to have access to a GCS bucket, ensure the following prerequisi
 
 ### Restoring Backup
 
-Run the following command with password from a client with access to the bucket.
+The backup job also restores. It puts the schema on **every** node (DDL does not replicate), adds each
+table to the replication set, loads the data **once** so Spock replicates it, sets sequences on every node,
+and then waits until every node holds the same row counts. It refuses to run unless every node is
+reachable and the database is **empty on every node**, so it can never merge into or overwrite data.
 
-S3
-```SH
-export PGPASSWORD="PASSWORD"
+```bash
+# Restore the newest backup under the prefix
+cpln workload cron start RELEASE_NAME-pgedge-backup --gvc GVC_NAME --location FIRST_LOCATION \
+  --env PGEDGE_ACTION=restore
 
-aws s3 cp "s3://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" - \
-  | gunzip \
-  | psql \
-      --host=RELEASE_NAME-pgbouncer.GVC_NAME.cpln.local \
-      --port=5432 \
-      --username=USERNAME \
-      --dbname=DATABASE
-
-unset PGPASSWORD
+# Or a specific one: a file name under the prefix, or a full path inside the bucket
+cpln workload cron start RELEASE_NAME-pgedge-backup --gvc GVC_NAME --location FIRST_LOCATION \
+  --env PGEDGE_ACTION=restore --env RESTORE_FILE=pgedge-2026-10-02T23-07-23Z.dump
 ```
 
-GCS
-```SH
-export PGPASSWORD="PASSWORD"
+Follow it with `cpln workload cron get RELEASE_NAME-pgedge-backup --gvc GVC_NAME` (status `successful`
+or `failed`) and read the log for the reason:
 
-gsutil cp "gs://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" - \
-  | gunzip \
-  | psql \
-      --host=RELEASE_NAME-pgbouncer.GVC_NAME.cpln.local \
-      --port=5432 \
-      --username=USERNAME \
-      --dbname=DATABASE
-
-unset PGPASSWORD
+```bash
+cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-pgedge-backup", container="backup-pgedge"}' --since 30m
 ```
+
+- **Recovering into a new release** (lost cluster, new GVC): install with `backup.enabled: true` against
+  the same bucket, then restore with `RESTORE_FILE=OLD_PREFIX/pgedge-….dump`.
+- **Restoring over an existing database**: drop your objects on **every** node first (connect to each
+  node directly; tables in a replication set need `CASCADE`, e.g. `DROP TABLE orders CASCADE;`).
+- Ownership and `GRANT`s are not restored; every object belongs to the credentials user.
 
 ## Important Notes
 
@@ -443,6 +459,7 @@ unset PGPASSWORD
 - **Use at least 3 replicas per location** in production, to survive a node loss within a location
 - **Release names must be unique per organization** — secrets are organization-wide, so two releases with the same name collide even in different GVCs
 - **Conflict resolution is last-update-wins** — concurrent writes to the same row from different nodes resolve by commit timestamp. For stronger consistency, route a given entity's writes to one node in your application
+- **Run a backup after upgrading from 2.x** — the restore job reads only 3.0.0's `.dump` format
 - **`helm upgrade` restarts every pgEdge replica** — treat it as a planned write interruption (~1–2 min). Data is preserved and the mesh reconciles itself afterward
 - **multiZone** — verify your location supports multiple availability zones before enabling
 

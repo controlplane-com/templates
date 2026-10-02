@@ -75,7 +75,7 @@ backup:
 
   resources:
     cpu: 100m
-    memory: 128Mi
+    memory: 256Mi  # 128Mi measured OOM-killing the GCS upload
 
   provider: aws  # Options: aws or gcp
 

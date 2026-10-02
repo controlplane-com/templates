@@ -17,4 +17,5 @@ targetLinks:
   - //secret/{{ include "pgedge.secretProxyStartup.name" . }}
   {{- if .Values.backup.enabled }}
   - //secret/{{ include "pgedge.secretConfig.name" . }}
+  - //secret/{{ include "pgedge.secretBackupScript.name" . }}
   {{- end }}

@@ -50,6 +50,13 @@ pgEdge PgBouncer Startup Secret Name
 {{- end }}
 
 {{/*
+pgEdge Backup/Restore Script Secret Name
+*/}}
+{{- define "pgedge.secretBackupScript.name" -}}
+{{- printf "%s-pgedge-backup-script" .Release.Name }}
+{{- end }}
+
+{{/*
 pgEdge Identity Name
 */}}
 {{- define "pgedge.identity.name" -}}

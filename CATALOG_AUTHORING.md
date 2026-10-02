@@ -142,7 +142,7 @@ kind: TemplateCatalogEntry
 internal: true
 ```
 
-Search never returns an internal template. Where it appears in the catalog still follows its `environments.yaml` (the test apps stay on staging), and the catalog lists it under Other, because an internal entry has no category. Use `internal: true` only for templates nobody should find by searching: test apps and internal tools.
+Search never returns an internal template. Where it appears in the catalog still follows its `environments.yaml` (the test apps stay on staging), and it has no category. Use `internal: true` only for templates nobody should find by searching: test apps and internal tools.
 
 ---
 

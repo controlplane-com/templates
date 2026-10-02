@@ -14,5 +14,4 @@ dependencies:
 annotations:
   created: "2026-06-11"
   lastModified: "2026-08-22"
-  category: "database"
   createsGvc: false

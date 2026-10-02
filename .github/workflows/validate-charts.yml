@@ -52,7 +52,9 @@ jobs:
             base_sha="$(git rev-parse HEAD^)"
           fi
 
+          # wizard.yaml is not part of the chart's rendered output; a change to it alone needs no chart validation
           version_dirs=$(git diff --name-only "$base_sha" HEAD \
+            | grep -v -E '/wizard\.yaml$' \
             | grep -E '^[^/]+/versions/[^/]+/' \
             | sed -E 's|^([^/]+/versions/[^/]+)/.*|\1|' \
             | sort -u | tr '\n' ' ')
@@ -144,7 +146,7 @@ jobs:
             fi
 
             # 3. Required Chart.yaml annotations
-            for annotation in category created lastModified createsGvc; do
+            for annotation in created lastModified createsGvc; do
               if ! grep -qE "^\s+${annotation}:" "$version_dir/Chart.yaml"; then
                 echo "FAIL [$template @ $version]: Missing annotation '$annotation' in Chart.yaml"
                 failed=1

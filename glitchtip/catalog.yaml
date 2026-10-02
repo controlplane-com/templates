@@ -1,0 +1,102 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: GlitchTip
+category: observability
+topology: stateless
+
+summary: >-
+  GlitchTip error tracking with a Sentry-compatible API: apps report exceptions with the standard
+  Sentry SDKs to a GlitchTip DSN. It deploys a stateless web tier for the UI and event ingest, one
+  background worker for event processing and alerts, highly available PostgreSQL (or a single-instance
+  one), and Redis with Sentinel for queue and cache, which can be turned off. Options include outbound
+  email for alerts and invites, a custom domain and database backups to S3, GCS or an S3-compatible
+  bucket. Pick it for self-hosted crash and exception reporting.
+
+keywords:
+  - error tracking
+  - error monitoring
+  - exception tracking
+  - crash reporting
+  - sentry
+  - sentry sdk
+  - sentry api
+  - sentry-compatible
+  - stack traces
+  - dsn
+  - error alerts
+  - frontend errors
+
+useCases:
+  - Capture exceptions and stack traces from web, backend and mobile apps
+  - Point existing Sentry SDKs at a self-hosted server
+  - Get an email when new errors appear in production
+  - Group recurring errors into issues for a development team
+
+alternativeTo:
+  - Sentry
+  - Bugsnag
+  - Rollbar
+  - Honeybadger
+  - Raygun
+  - Airbrake
+
+pickInsteadIf:
+  - need: uptime checks of websites with public status pages
+    template: uptime-kuma
+  - need: dashboards and alerts on metrics
+    template: grafana
+  - need: collect OpenTelemetry traces from instrumented apps
+    template: otel-collector
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [secretKey, adminEmail, adminPassword]
+    valuesPath: auth.secretName
+    required: true
+    description: Django signing key and the initial superuser login. Without it both workloads wait silently with no logs.
+  - kind: secret
+    secretType: opaque
+    valuesPath: email.secretName
+    required: false
+    when: email.secretName set, for invites, alerts and password resets
+    description: Outbound email settings as one email URL, such as smtp://user:password@smtp.example.com:587. Created before install.
+  - kind: domain
+    valuesPath: domain
+    required: false
+    when: domain set
+    description: Custom domain routed to the GlitchTip web workload; DSNs and email links use the URL set in domain.
+  - kind: bucket
+    valuesPath:
+      - postgresHA.backup.aws.bucket
+      - postgresHA.backup.gcp.bucket
+      - postgresHA.backup.minio.bucket
+      - postgres.backup.aws.bucket
+      - postgres.backup.gcp.bucket
+      - postgres.backup.minio.bucket
+    required: false
+    when: postgresHA.backup.enabled or postgres.backup.enabled
+    description: Bucket on AWS S3, GCS or an S3-compatible server that receives the scheduled database backups.
+  - kind: cloud-account
+    valuesPath:
+      - postgresHA.backup.aws.cloudAccountName
+      - postgresHA.backup.gcp.cloudAccountName
+      - postgres.backup.aws.cloudAccountName
+      - postgres.backup.gcp.cloudAccountName
+    required: false
+    when: database backup enabled with backup.provider aws or gcp
+    description: Control Plane cloud account for the backup bucket; on GCP its service account also needs Storage Admin or bucket-scoped objectAdmin.
+  - kind: other
+    valuesPath: [postgresHA.backup.aws.policyName, postgres.backup.aws.policyName]
+    required: false
+    when: database backup enabled with backup.provider aws
+    description: AWS IAM policy granting read, write, list and delete on the backup bucket, attached through the cloud account.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath: [postgresHA.backup.minio.credentialsSecretName, postgres.backup.minio.credentialsSecretName]
+    required: false
+    when: database backup enabled with backup.provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

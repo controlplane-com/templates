@@ -1,0 +1,85 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Open WebUI
+category: ai
+topology: single
+
+summary: >-
+  Open WebUI, a ChatGPT-style chat interface with user accounts, chat over uploaded documents and
+  model management, as one workload keeping SQLite, uploads and its Chroma vector store on a
+  persistent volume with daily platform snapshots. It connects to an Ollama workload in the same
+  GVC and to any OpenAI-compatible API with your key. It stays private until you register the
+  admin and turn on public access. Pick it to give a team one chat UI over models you already run
+  or pay for.
+
+keywords:
+  - chat ui
+  - llm chat interface
+  - ai chat
+  - llm frontend
+  - chat with documents
+  - document rag
+  - rag
+  - ollama ui
+  - openai-compatible
+  - multi-user chat
+  - team ai assistant
+  - webui
+
+useCases:
+  - Private ChatGPT-style chat for a team over local or hosted models
+  - Chat with uploaded documents using built-in retrieval
+  - Web front end for an existing Ollama server or OpenAI-compatible gateway
+  - Give staff access to LLMs through one UI with accounts an admin manages
+
+alternativeTo:
+  - ChatGPT
+  - ChatGPT Team
+  - LibreChat
+  - AnythingLLM
+  - LobeChat
+  - TypingMind
+
+pickInsteadIf:
+  - need: run open-weight models on your own GPU, with a chat UI in the same workload
+    template: ollama
+  - need: an OpenAI-compatible gateway with virtual keys, budgets and rate limits
+    template: litellm
+  - need: an AI agent with persistent memory, browser automation and chat-platform gateways
+    template: hermes-agent
+
+related:
+  - template: ollama
+    relation: companion
+    note: Runs the local models that Open WebUI chats with
+  - template: litellm
+    relation: companion
+    note: One OpenAI-compatible backend for Open WebUI in front of many providers
+  - template: searxng
+    relation: companion
+    note: Web search provider for chats that need live results
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: auth.secretKeyName
+    required: true
+    description: Opaque secret whose payload signs every session and JWT. Create it before installing; when it is missing the deployment waits. Changing it logs everyone out.
+  - kind: secret
+    secretType: opaque
+    valuesPath: openai.apiKeySecretName
+    required: false
+    when: connecting an OpenAI-compatible API at openai.baseUrl
+    description: Opaque secret holding the API key for the OpenAI-compatible backend. Empty leaves that backend off.
+  - kind: other
+    valuesPath: ollama.workloadName
+    required: false
+    when: ollama.enabled (the default), to chat with local models
+    description: An Ollama workload in the same GVC, such as {release}-ollama from the ollama template. Without it the UI starts but lists no Ollama models.
+  - kind: domain
+    valuesPath: customDomain
+    required: false
+    when: customDomain is set
+    description: A Control Plane domain you create and verify for that hostname; the chart only sets WEBUI_URL. Set it at first install, later changes are ignored.

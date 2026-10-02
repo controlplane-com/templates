@@ -11,6 +11,7 @@ Each template lives in its own top-level directory and follows this layout:
 ```
 <template-name>/
 ├── icon.png                  # Square, transparent-background icon
+├── catalog.yaml              # Search metadata for the latest version (see CATALOG_AUTHORING.md)
 ├── versions/
 │   ├── 1.0.0/
 │   │   ├── Chart.yaml        # Helm chart metadata + Control Plane annotations
@@ -40,9 +41,10 @@ In addition to standard Helm fields, Control Plane requires these annotations:
 annotations:
   created: "2025-12-23"       # Date first published (YYYY-MM-DD)
   lastModified: "2025-12-24"  # Date of most recent change (YYYY-MM-DD)
-  category: "database"        # Marketplace category (e.g., database, app)
   createsGvc: false           # Whether the template creates its own GVC (see below)
 ```
+
+A template's category is set by `category` in its `catalog.yaml`. Don't add a `category` annotation to Chart.yaml; older versions still carry one, which nothing reads.
 
 ### `createsGvc`
 
@@ -50,6 +52,14 @@ This annotation controls the GVC strategy for the entire template and must be se
 
 - **`true`** — The template includes a `gvc.yaml` and manages its own GVC. Users configure the GVC name and locations in `values.yaml`. All resources reference `{{ .Values.gvc.name }}`.
 - **`false`** — The template deploys into an existing GVC. The platform injects the GVC name as `{{ .Values.global.cpln.gvc }}`, which must be used in place of any hardcoded GVC name.
+
+---
+
+## catalog.yaml — Search Metadata
+
+Every template has a `catalog.yaml` at its root that says what the template is for: a summary, keywords, use cases, the external products it can replace, prerequisites, and which sibling template to pick instead for needs it does not meet. The marketplace search ranks templates with it for AI agents and the Console.
+
+It describes the latest version and lives outside `versions/`, so it can be improved at any time without publishing a chart version. It is required: a template that must not be public sets `internal: true` instead of the search fields, and library charts need none. **Write it with [CATALOG_AUTHORING.md](CATALOG_AUTHORING.md)**, which covers every field, the vocabularies, the procedure and a review checklist.
 
 ---
 
@@ -117,6 +127,7 @@ Always build connection strings using the naming helpers from `_helpers.tpl` rat
 - Follow [SemVer](https://semver.org/): breaking changes bump major, new features bump minor, fixes bump patch.
 - Never edit a published version — create a new version folder instead.
 - Update `lastModified` in `Chart.yaml` when changing a version before it is published.
+- When a new version changes what the template deploys, its prerequisites or its topology, update `catalog.yaml` in the same pull request.
 
 ---
 
@@ -164,7 +175,8 @@ Each published template version is available in the **Packages** tab of this rep
 ## Checklist for Creating a New Template
 
 - [ ] `icon.png` — square, transparent background
-- [ ] `Chart.yaml` — all annotations present (`createsGvc`, `category`, `created`, `lastModified`)
+- [ ] `catalog.yaml` — written with [CATALOG_AUTHORING.md](CATALOG_AUTHORING.md); siblings' `pickInsteadIf` updated for a new variant
+- [ ] `Chart.yaml` — all annotations present (`createsGvc`, `created`, `lastModified`)
 - [ ] `createsGvc` set correctly — `gvc.yaml` included only if `true`; `{{ .Values.global.cpln.gvc }}` used if `false`
 - [ ] All resource names defined in `_helpers.tpl` — no hardcoded names in template files
 - [ ] Tags helper in `_helpers.tpl` includes `cpln/marketplace*` tags; applied to every resource

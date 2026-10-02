@@ -1,0 +1,49 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Uptime Kuma
+category: observability
+topology: single
+
+summary: >-
+  Uptime Kuma, a single-instance uptime monitor with its SQLite database on a persistent volume. It
+  checks HTTP(S) endpoints, TCP ports and DNS records, alerts through 90+ notification providers and
+  serves public status pages; monitors and notifications are set up in its web UI after you claim the
+  admin account over a port-forward. Pick it for website and service uptime checks with a status
+  page; it has no clustering, so a restart briefly pauses checks.
+
+keywords:
+  - uptime monitoring
+  - status page
+  - website monitoring
+  - downtime alerts
+  - outage notifications
+  - http monitoring
+  - tcp port monitoring
+  - dns monitoring
+  - endpoint monitoring
+  - health checks
+  - availability monitoring
+
+useCases:
+  - Check that websites and APIs are up and get alerted when they go down
+  - Publish a public status page for customers
+  - Monitor TCP ports and DNS records of my services
+  - Send downtime alerts to Slack, Discord, Telegram, email or PagerDuty
+
+alternativeTo:
+  - UptimeRobot
+  - Pingdom
+  - Better Stack
+  - StatusCake
+  - Atlassian Statuspage
+  - Instatus
+
+pickInsteadIf:
+  - need: capture application exceptions and stack traces
+    template: glitchtip
+  - need: dashboards and alerts on metrics
+    template: grafana
+
+prerequisites: []

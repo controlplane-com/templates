@@ -8,7 +8,6 @@ appVersion: "1.102.3"
 annotations:
   created: 2025-05-13
   lastModified: "2026-08-23"
-  category: "mesh-vpn"
   createsGvc: false
 
 dependencies:

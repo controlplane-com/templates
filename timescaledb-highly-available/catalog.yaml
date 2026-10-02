@@ -1,0 +1,93 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: TimescaleDB (highly available)
+category: database
+family: timescaledb
+topology: highly-available
+
+summary: >-
+  A TimescaleDB cluster of three Patroni-managed replicas in one location, one leader and two
+  hot standbys, with a bundled etcd quorum for automatic failover and an HAProxy endpoint that
+  routes writes to the current leader. Hypertables, compression, continuous aggregates and
+  retention policies work out of the box. Options: multi-zone placement, a PgBouncer pooler,
+  and scheduled logical backups to S3, GCS or an S3-compatible endpoint. Pick it for production
+  time-series data that must survive a replica failure.
+
+keywords:
+  - time-series database
+  - tsdb
+  - timescale
+  - hypertables
+  - continuous aggregates
+  - compression
+  - high availability
+  - automatic failover
+  - patroni
+  - etcd
+  - haproxy
+  - hot standby
+  - streaming replication
+  - multi-zone
+  - iot data
+  - metrics storage
+  - postgresql
+  - pg
+  - pgbouncer
+  - database backups
+
+useCases:
+  - Production time-series store that keeps accepting writes when a replica fails
+  - IoT or telemetry ingestion with automatic failover
+  - Highly available metrics or event database queried with SQL
+
+alternativeTo:
+  - Timescale Cloud
+  - InfluxDB Cloud
+  - Amazon Timestream
+
+compatibleWith: [postgres-wire]
+
+pickInsteadIf:
+  - need: a single time-series server for development or a small workload
+    template: timescaledb
+  - need: Prometheus metrics storage queried with PromQL
+    template: prometheus
+  - need: general Postgres with automatic failover and WAL-G point-in-time recovery
+    template: postgres-highly-available
+
+related:
+  - template: grafana
+    relation: companion
+    note: Dashboards and alerts over the time-series data
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: postgres.credentialsSecretName
+    required: true
+    description: Database credentials. Create it before installing; when it is missing the workload waits with no logs.
+  - kind: bucket
+    valuesPath: [backup.aws.bucket, backup.gcp.bucket, backup.minio.bucket]
+    required: false
+    when: backup.enabled
+    description: Object storage bucket that receives the scheduled backups.
+  - kind: cloud-account
+    valuesPath: [backup.aws.cloudAccountName, backup.gcp.cloudAccountName]
+    required: false
+    when: backup.enabled with backup.provider aws or gcp
+    description: Control Plane cloud account for the backup bucket's AWS account or GCP project; on GCP grant its service account the Storage Admin role.
+  - kind: other
+    valuesPath: backup.aws.policyName
+    required: false
+    when: backup.enabled with backup.provider aws
+    description: AWS IAM policy scoped to the backup bucket (object read, write, delete and list actions); the README has the JSON.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath: backup.minio.credentialsSecretName
+    required: false
+    when: backup.enabled with backup.provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

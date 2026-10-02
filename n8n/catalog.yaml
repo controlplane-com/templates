@@ -1,0 +1,100 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: n8n
+category: workflow
+topology: single
+
+summary: >-
+  n8n workflow automation with its editor, REST API and webhook endpoints on one public HTTPS
+  endpoint, a persistent volume for instance data, and a bundled three-node PostgreSQL cluster with
+  Patroni failover, or a single PostgreSQL instance instead. The owner account comes from a secret,
+  so there is no open setup page, and optional scheduled database backups go to S3, GCS or an
+  S3-compatible endpoint. Pick it to build trigger- and webhook-driven automations that connect
+  apps, APIs and AI models in a visual editor.
+
+keywords:
+  - workflow automation
+  - automation
+  - no-code
+  - low-code
+  - visual workflow editor
+  - integrations
+  - ipaas
+  - webhooks
+  - triggers
+  - api integration
+  - saas integration
+  - ai workflows
+  - ai agents
+  - scheduled workflows
+  - fair-code
+
+useCases:
+  - Automate tasks across SaaS apps, such as syncing CRM leads to Slack and spreadsheets
+  - Receive webhooks and run multi-step workflows in response
+  - Build AI agent and LLM workflows that call APIs and tools
+  - Schedule recurring automations such as reports and data syncs
+  - Connect internal APIs and databases without writing glue code
+
+alternativeTo:
+  - Zapier
+  - Make
+  - Microsoft Power Automate
+  - Workato
+  - Pipedream
+  - IFTTT
+
+pickInsteadIf:
+  - need: workflows written as code that survive crashes and run for hours or days
+    template: temporal
+  - need: scheduled data pipelines defined as Python DAGs
+    template: airflow
+  - need: internal tools and admin panels built on top of databases and APIs
+    template: tooljet
+
+related:
+  - template: ollama
+    relation: companion
+    note: Runs local LLMs that n8n AI nodes can call
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: encryptionKey.secretName
+    required: true
+    description: Key that encrypts every stored credential. Back it up and never change it after first boot. A missing secret leaves n8n waiting with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [email, passwordHash]
+    valuesPath: owner.secretName
+    required: true
+    description: Instance owner login; passwordHash is a bcrypt hash, never plaintext. Re-applied on every start. A missing secret leaves n8n waiting with no logs.
+  - kind: bucket
+    valuesPath:
+      - postgresHA.backup.aws.bucket
+      - postgresHA.backup.gcp.bucket
+      - postgresHA.backup.minio.bucket
+      - postgres.backup.aws.bucket
+      - postgres.backup.gcp.bucket
+      - postgres.backup.minio.bucket
+    required: false
+    when: postgresHA.backup.enabled or postgres.backup.enabled
+    description: Object storage bucket that receives the scheduled database backups.
+  - kind: cloud-account
+    valuesPath:
+      - postgresHA.backup.aws.cloudAccountName
+      - postgresHA.backup.gcp.cloudAccountName
+      - postgres.backup.aws.cloudAccountName
+      - postgres.backup.gcp.cloudAccountName
+    required: false
+    when: backups enabled with provider aws or gcp
+    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy on AWS named by backup.aws.policyName.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath: [postgresHA.backup.minio.credentialsSecretName, postgres.backup.minio.credentialsSecretName]
+    required: false
+    when: backups enabled with provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

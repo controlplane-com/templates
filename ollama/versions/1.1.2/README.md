@@ -4,7 +4,7 @@
 
 - **Workload** — the Ollama server, with an optional Open WebUI front end.
 - **Volume set** — stores pulled models, which are large; size it for the models you intend to run.
-- **Secret** — the startup script, which starts the Ollama server and attempts to pull `defaultModel` on first boot.
+- **Secret** — the startup script, which starts the Ollama server.
 - **Identity and policy** — `reveal` on the startup secret.
 
 This template does not create a GVC.
@@ -19,13 +19,13 @@ You will need to request a quota increase for CPU and memory if your org is at t
 
 ### Overview
 
-Deploys [Ollama](https://github.com/ollama/ollama) as a stateful workload with the [Open WebUI](https://github.com/open-webui/open-webui) as a sidecar. The WebUI runs on port 8080 and is the externally exposed interface. The Ollama API runs on port 11434 and is accessed internally by the WebUI. On first startup, a script downloads the configured default model if it is not already present on the volume.
+Deploys [Ollama](https://github.com/ollama/ollama) as a stateful workload with the [Open WebUI](https://github.com/open-webui/open-webui) as a sidecar. The WebUI runs on port 8080 and is the externally exposed interface. The Ollama API runs on port 11434 and is accessed internally by the WebUI. The template does not download a model: pull the one you want once after install (see Important Notes).
 
 On Control Plane, GPUs are available across multiple cloud provider locations. You can deploy this template to several regions simultaneously and end users will be routed to the closest available instance.
 
 ### Configuration
 
-**Default model** — set the model to pull on first startup. Any model available in the [Ollama library](https://ollama.com/library) can be used:
+**Default model** — the model Open WebUI preselects. It is not downloaded automatically; pull it once after install. Any model in the [Ollama library](https://ollama.com/library) can be used:
 ```yaml
 defaultModel: llama3
 ```
@@ -109,6 +109,6 @@ http://RELEASE_NAME-ollama.GVC_NAME.cpln.local:11434
 
 - **Quotas are the usual first blocker.** CPU and memory beyond the org defaults need a quota increase, and GPU access must be enabled explicitly — see the Warning above.
 - **Models are large and live on the volume set.** Size it for what you intend to pull; a default-sized volume fills quickly once you add a second model.
-- **Check that `defaultModel` is actually available after the first start.** If it does not appear in the Open WebUI model list, pull it yourself (through Open WebUI's model settings or the Ollama API) — models are large, so the first pull is slow.
+- **Pull `defaultModel` once after the first start — the template does not download it.** Run `cpln workload exec RELEASE_NAME-ollama --gvc GVC_NAME --container ollama -- ollama pull llama3` (or use Open WebUI's model settings); models are large, so the first pull is slow. It lands on the volume set and survives restarts.
 - **The Open WebUI sidecar on `8080` is the exposed interface**; the Ollama API on `11434` is reached internally by the UI. Exposing `11434` directly gives unauthenticated access to the model server.
 - **Uninstalling deletes the volume set**, so every pulled model is downloaded again on the next install.

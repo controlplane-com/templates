@@ -172,7 +172,7 @@ The product name as people write it: `PostgreSQL`, `Apache Kafka`, `n8n`. A vari
 
 ### `category`
 
-The one category a person would browse to find it. It is the only category the catalog shows; `Chart.yaml` has none.
+The one category a person would browse to find it. It is the only category the catalog shows. `Chart.yaml` needs no `category` annotation; older versions still carry one, which nothing reads.
 
 ### `topology`
 

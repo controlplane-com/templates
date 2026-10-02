@@ -7,5 +7,6 @@ appVersion: "11.0.0"
 annotations:
   created: "2025-04-16"
   lastModified: "2025-04-16"
+  category: "test"
   file-customFile: "Test Configuration File"
   createsGvc: false

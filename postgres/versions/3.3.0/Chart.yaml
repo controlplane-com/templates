@@ -14,5 +14,6 @@ dependencies:
 annotations:
   created: "2025-12-23"
   lastModified: "2026-06-30"
+  category: "database"
   postgresVersion: "18"
   createsGvc: false

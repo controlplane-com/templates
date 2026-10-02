@@ -13,4 +13,5 @@ dependencies:
 annotations:
   created: "2026-07-13"
   lastModified: "2026-08-17"
+  category: "storage"
   createsGvc: false

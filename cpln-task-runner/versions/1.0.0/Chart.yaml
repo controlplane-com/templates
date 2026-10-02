@@ -13,4 +13,5 @@ dependencies:
 annotations:
   created: "2025-12-03"
   lastModified: "2025-12-05"
+  category: "queue"
   createsGvc: false

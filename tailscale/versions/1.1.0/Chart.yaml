@@ -8,4 +8,5 @@ appVersion: "stable"
 annotations:
   created: 2025-05-13
   lastModified: 2025-05-13
+  category: "mesh-vpn"
   createsGvc: false

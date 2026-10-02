@@ -8,4 +8,5 @@ appVersion: "custom"
 annotations:
   created: "2025-06-08"
   lastModified: "2025-06-08"
+  category: "cache"
   createsGvc: false

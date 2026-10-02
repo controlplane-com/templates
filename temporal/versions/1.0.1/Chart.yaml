@@ -22,4 +22,5 @@ dependencies:
 annotations:
   created: "2026-07-22"
   lastModified: "2026-08-17"
+  category: "durable-execution"
   createsGvc: false

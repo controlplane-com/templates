@@ -8,4 +8,5 @@ appVersion: "3.9"
 annotations:
   created: "2025-12-02"
   lastModified: "2025-12-15"
+  category: "event-streaming"
   createsGvc: false

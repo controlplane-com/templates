@@ -44,7 +44,7 @@ annotations:
   createsGvc: false           # Whether the template creates its own GVC (see below)
 ```
 
-A template's category is set by `category` in its `catalog.yaml`; Chart.yaml has none.
+A template's category is set by `category` in its `catalog.yaml`. Don't add a `category` annotation to Chart.yaml; older versions still carry one, which nothing reads.
 
 ### `createsGvc`
 

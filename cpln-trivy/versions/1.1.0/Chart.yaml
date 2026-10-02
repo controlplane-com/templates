@@ -13,4 +13,5 @@ dependencies:
 annotations:
   created: "2026-06-22"
   lastModified: "2026-07-02"
+  category: "security"
   createsGvc: false

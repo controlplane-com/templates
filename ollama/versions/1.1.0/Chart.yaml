@@ -14,4 +14,5 @@ dependencies:
 annotations:
   created: "2024-12-03"
   lastModified: "2026-04-27"
+  category: "llm"
   createsGvc: false

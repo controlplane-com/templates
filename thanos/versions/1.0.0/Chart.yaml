@@ -13,4 +13,5 @@ dependencies:
 annotations:
   created: "2026-07-29"
   lastModified: "2026-09-28"
+  category: "observability"
   createsGvc: false

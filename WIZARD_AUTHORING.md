@@ -4,7 +4,7 @@
 
 This guide is the complete manual for writing and reviewing a `wizard.yaml` descriptor for any template version in this repo. A person or an agent should be able to create, copy forward, review or fix a descriptor from this document alone. It covers descriptor spec v1 (`apiVersion: template-wizard.controlplane.com/v1`) as of Round 2 and the Round 2 review (2026-09-30).
 
-Every excerpt marked with a pilot name is copied from that pilot's descriptor on the branch `template-wizard`:
+Every excerpt marked with a pilot name is copied from that pilot's descriptor in this repo:
 
 | Pilot | File |
 |---|---|
@@ -45,17 +45,17 @@ Examples marked "not in a pilot" were written for this guide and checked with `t
 
 ## 0. Where things are
 
-Paths are relative to this repo's root, with the other checkouts as siblings (`../template-wizard`, `../console-template-wizard`). On the owner's machine the root is `/Users/hakan/repos/work/templates`.
+Paths are relative to this repo's root, with a checkout of the Console repo as the sibling `../console`. The core engine is the private package `template-wizard/` inside the Console repo.
 
 | What | Where |
 |---|---|
 | Descriptors | `<template>/versions/<version>/wizard.yaml`, one per version, next to `values.yaml` |
 | JSON Schema (editor hovers, snippets) | `.schema/wizard.v1.schema.json`. A byte-identical copy of the core's generated schema. Never edit it by hand; the core's `test/schema.test.ts` fails when it drifts |
-| Core engine and CLI | `../template-wizard` (`@controlplane/template-wizard`, private, local only). CLI: `../template-wizard/dist/cli.cjs` (bin `template-wizard`) |
-| Core decisions log | `../template-wizard/README.md`, section "Decisions": the behaviour details behind every rule in this guide |
-| Public API types | `../template-wizard/dist/index.d.ts` |
-| Spec and design | `../console-template-wizard/docs/template-wizard/`: `SPEC.md` (spec v1), `core.md`, `console.md`, `pilots.md` (per-pilot inventories), `PROGRESS.md` |
-| Console renderer | `../console-template-wizard/src/pages/marketplace/wizard/` (branch `template-wizard`) |
+| Core engine and CLI | `../console/template-wizard` (`@controlplane/template-wizard`, a private package in the Console repo). CLI: `../console/template-wizard/dist/cli.cjs` (bin `template-wizard`) |
+| Core decisions log | `../console/template-wizard/README.md`, section "Decisions": the behaviour details behind every rule in this guide |
+| Public API types | `../console/template-wizard/dist/index.d.ts` |
+| Spec and design | `../console/docs/template-wizard/`: `SPEC.md` (spec v1), `core.md`, `console.md`, `pilots.md` (per-pilot inventories), `PROGRESS.md` |
+| Console renderer | `../console/src/pages/marketplace/wizard/` (shown in test and staging only) |
 | Docs site | the template pages are `/template-catalog/templates/<template>` on docs.controlplane.com |
 
 `SPEC.md` was updated for Round 2 (its §17 is the Round 2 postgres descriptor), but it does not describe `imports` yet and still lists `patternMessage` under "Not in v1". Where the spec and this guide differ, the core README's "Decisions" and this guide win.
@@ -63,11 +63,10 @@ Paths are relative to this repo's root, with the other checkouts as siblings (`.
 Every command in this guide uses this shell function (it works in bash and zsh; a plain `$TW` variable does not word-split in zsh):
 
 ```sh
-tw() { node ../template-wizard/dist/cli.cjs "$@"; }
-# absolute form: tw() { node /Users/hakan/repos/work/template-wizard/dist/cli.cjs "$@"; }
+tw() { node ../console/template-wizard/dist/cli.cjs "$@"; }
 ```
 
-If `dist/` is older than the core's source, rebuild it first: `(cd ../template-wizard && pnpm build)`.
+If `dist/` is missing or older than the core's source, build it first: `(cd ../console && pnpm --filter @controlplane/template-wizard build)`.
 
 **Quick start.** The gate for any descriptor, run from this repo's root:
 
@@ -107,7 +106,7 @@ tw render --descriptor <dir>/wizard.yaml --values <dir>/values.yaml --answers an
 - **The output is a values.yaml document.** The wizard never produces anything else: no manifests, no side channel. Whatever the wizard shows is read from and written to that document. Values of hidden fields stay in it.
 - **`values.yaml` stays the single source of truth for defaults and comments.** The descriptor never repeats a default (a `default:` is allowed only on a key that `values.yaml` does not have, §6.15).
 - **The YAML hatch.** The user can switch to a YAML editor at any point and back. Anything the descriptor does not cover can still be edited there, and `yamlOnly` subtrees (§9.8) are edited only there.
-- **Delivery.** Today the console loads a descriptor from a dev-only endpoint that serves the local checkout (`TEMPLATE_WIZARD_DIR`, §17.7). The plan is for the marketplace-service to serve it as `versions[<v>].wizard`. The values always come from the marketplace. A version without a descriptor, or with chart `files` annotations (nginx, test-app), opens the classic YAML screen; `?ui=classic` forces it.
+- **Delivery.** The marketplace service serves each descriptor at `GET /template/<template>/<version>/wizard` and marks those versions with `hasWizard: true`; for local work a dev-only endpoint serves your checkout (`TEMPLATE_WIZARD_DIR`, §17.7). The console shows the wizard in test and staging only. The values always come from the marketplace. A version without a descriptor, or with chart `files` annotations (nginx, test-app), opens the classic YAML screen; `?ui=classic` forces it.
 - **A descriptor with errors is never silently skipped.** The console shows its parse diagnostics with a link to the classic screen. `lint` must be clean before a descriptor ships.
 
 ### 1.2 What the user sees in the console
@@ -314,7 +313,7 @@ Adding a descriptor to an older, already published version lets installs of that
 
 1. **Start from the nearest newer descriptor** and remove what the old chart lacks, rather than starting from scratch. Then run §3.2's steps in reverse: `tw paths-diff <old>/values.yaml <newer>/values.yaml` shows what to take out.
 2. **Migrations describe upgrades into this version only.** Keep a migration only if its `fromVersions` admits versions below this one and its `from` exists in those versions; delete the ones that belong to later versions. `tw lint` checks against the next lower sibling and warns `UNUSED_MIGRATION` and `MIGRATION_KEY_PRESENT` for leftovers.
-3. **Never edit the chart files of a published version.** Only `wizard.yaml` is added. Note that the current publish workflow republishes a version directory when any file in it changes, which would re-push the same semver; coordinate before this reaches `main`.
+3. **Never edit the chart files of a published version.** Only `wizard.yaml` is added. The publish and validate workflows skip version folders whose only change is `wizard.yaml`, so adding one never re-publishes the chart.
 4. **Docs describe the latest version.** The template's docs page documents the current chart. Link only sections that also hold for the old version, and make no claim the old chart does not back. `tw check-docs` is still required.
 5. **How the console uses it:** the version select on the install page, the same-version edit of a release on this version, and the `oldDescriptor` of a cross-version upgrade (its declared lists, maps and optional blocks are carried whole). An upgrade from this version to a later one runs the later descriptor's migrations and rules.
 6. **Gate** as always.
@@ -344,13 +343,13 @@ Adding a descriptor to an older, already published version lets installs of that
 The core keeps copies of the pilot descriptors as test fixtures. After committing a change to a pilot descriptor:
 
 ```sh
-cd ../template-wizard
+cd ../console/template-wizard
 node scripts/sync-fixtures.mjs           # values.yaml and Chart.yaml of every fixture version; wizard.yaml and _helpers.tpl of the pilots
 node scripts/sync-fixtures.mjs --check   # exit 1 when a fixture differs
 pnpm test                                 # or pnpm verify
 ```
 
-`sync-fixtures` reads `wizard.yaml` from the templates repo's local branch `template-wizard` with `git show`, so it only sees committed changes. It covers the versions listed in its `FIXTURES` and `PILOTS` tables (the pilots are postgres 3.4.1, mongodb-cluster 2.0.0, redis 3.7.0, supabase 1.1.1 and gitea 1.2.0); making another version a pilot is a core change (a separate commit there). Commit the synced fixtures in the core repo with a message like `sync pilot descriptor fixtures for postgres`.
+`sync-fixtures` reads `wizard.yaml` from the templates repo's `main` branch with `git show` (`--branch` picks another), so it only sees committed changes. It covers the versions listed in its `FIXTURES` and `PILOTS` tables (the pilots are postgres 3.4.1, mongodb-cluster 2.0.0, redis 3.7.0, supabase 1.1.1 and gitea 1.2.0); making another version a pilot is a core change (a separate commit there). Commit the synced fixtures in the core repo with a message like `sync pilot descriptor fixtures for postgres`.
 
 ---
 
@@ -2918,7 +2917,7 @@ tw render --descriptor <dir>/wizard.yaml --values <dir>/values.yaml --answers an
 - An unknown key is exit 2 unless `--allow-raw` writes it as a raw values path.
 - The YAML goes to stdout; issues go to stderr as `<severity> <code> <path> (<label>): <message>` (`error FORMAT image (Postgres image): Enter an image reference such as postgres:17 …`, `error MIN locations[0].replicas (Locations › Members): Must be at least 1.`). Exit 1 when an error **or a warning** remains (both block an install), 0 otherwise. Without a data source every reference is an `info` `REF_CHECK_FAILED`, so references never fail a render.
 - `render` does not clear references (§12.1): answer every `example: true` string, or the render exits 1 with `EXAMPLE_VALUE`.
-- Imports are read from the templates root like `lint`'s. Answers for imported fields use their full paths (`"postgres.backup.enabled": true`); see `../template-wizard/test/fixtures/answers/gitea-backup.json`.
+- Imports are read from the templates root like `lint`'s. Answers for imported fields use their full paths (`"postgres.backup.enabled": true`); see `../console/template-wizard/test/fixtures/answers/gitea-backup.json`.
 - `"mode": "upgrade"` with `"gvcLocations"` in the context shows `GVC_LOCATIONS` as the upgrade `info`.
 
 Then render the chart with the output, which proves the chart accepts what the wizard writes:
@@ -2970,7 +2969,7 @@ With the YAML language server (VS Code's YAML extension), the modeline gives hov
 The console's dev server can serve local descriptors from this checkout:
 
 ```sh
-cd ../console-template-wizard
+cd ../console
 TEMPLATE_WIZARD_DIR=../templates node_modules/.bin/vite --port 4026 --mode development
 # or add TEMPLATE_WIZARD_DIR=../templates to .env.development.local (gitignored) and start the dev server as usual
 ```
@@ -2994,7 +2993,7 @@ The console repo's `verify` skill describes logging in and driving the app.
 
 ### 17.8 Core fixtures (pilots only)
 
-See §3.5: `node scripts/sync-fixtures.mjs` and `--check` in `../template-wizard`, after committing here.
+See §3.5: `node scripts/sync-fixtures.mjs` and `--check` in `../console/template-wizard`, after committing here.
 
 ### 17.9 The gate
 

@@ -11,11 +11,11 @@ description: Create, update or review a template's wizard.yaml descriptor (the i
 
 ## Setup
 
-Run everything from the templates repo root. The core checkout is the sibling `../template-wizard` (`/Users/hakan/repos/work/template-wizard`).
+Run everything from the templates repo root. The core engine is the private package `template-wizard/` in the Console repo, checked out as the sibling `../console`.
 
 ```sh
-tw() { node ../template-wizard/dist/cli.cjs "$@"; }          # zsh does not word-split a $TW variable; use a function
-(cd ../template-wizard && pnpm build)                         # only if dist/ is older than the core's source
+tw() { node ../console/template-wizard/dist/cli.cjs "$@"; }          # zsh does not word-split a $TW variable; use a function
+(cd ../console && pnpm --filter @controlplane/template-wizard build)   # when dist/ is missing or older than the source
 ```
 
 `D=<template>/versions/<version>` below is the version directory.
@@ -75,7 +75,7 @@ tw() { node ../template-wizard/dist/cli.cjs "$@"; }          # zsh does not word
    Read every `dropped` note as the user will. Carry a release that kept the old defaults too (`--old-values` = the old `values.yaml`), from every earlier version whose defaults differ: a rename moves changed values only, so a renamed key whose default changed needs a computed migration to keep the value the release runs with (guide §9.2, gitea 1.0.0's database password). With imports, the installed child versions come from the old version's `Chart.yaml`, or `--old-import <prefix>=<version>`.
 10. **Preview in the console** (§17.7), light and dark:
     ```sh
-    cd ../console-template-wizard && TEMPLATE_WIZARD_DIR=../templates node_modules/.bin/vite --port 4026 --mode development
+    cd ../console && TEMPLATE_WIZARD_DIR=../templates node_modules/.bin/vite --port 4026 --mode development
     curl -si http://localhost:4026/__template-wizard/<template>/<version>/wizard.yaml | head -3   # 200, x-template-wizard: dev
     # open http://localhost:4026/console/org/<org>/marketplace/template/<template>/install?version=<version>
     ```
@@ -87,7 +87,7 @@ tw() { node ../template-wizard/dist/cli.cjs "$@"; }          # zsh does not word
     ```
 13. **Pilots only** (postgres 3.4.1, mongodb-cluster 2.0.0, redis 3.7.0, supabase 1.1.1, gitea 1.2.0): sync the core fixtures after the commit:
     ```sh
-    (cd ../template-wizard && node scripts/sync-fixtures.mjs && node scripts/sync-fixtures.mjs --check && pnpm test)
+    (cd ../console/template-wizard && node scripts/sync-fixtures.mjs && node scripts/sync-fixtures.mjs --check && pnpm test)
     ```
 
 ## The gate
@@ -126,6 +126,6 @@ A descriptor is done only when all of these hold:
 
 ## Owner's local test setup
 
-- Console worktree: `/Users/hakan/repos/work/console-template-wizard` (branch `template-wizard`); core: `/Users/hakan/repos/work/template-wizard`; nothing in this effort is pushed, published or deployed.
+- Console: `../console` (the wizard UI in `src/pages/marketplace/wizard/`, the core in `template-wizard/`). The wizard is shown in test and staging only.
 - Test org `efe`. GVC `claude-dev-single` has one location (aws-us-west-2) for single-location templates; `claude-dev` has three for multi-location templates (mongodb-cluster) and for checking that single-location templates disable it. New test GVCs are prefixed `claude-dev-`.
 - The console repo's `verify` skill describes logging in and driving the app.

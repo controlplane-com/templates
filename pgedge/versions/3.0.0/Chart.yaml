@@ -4,12 +4,11 @@ description: Active-active distributed PostgreSQL with Spock multi-master replic
 
 type: application
 version: 3.0.0
-appVersion: "17"
+appVersion: "17-spock5-standard"
 
 annotations:
   created: "2026-04-03"
   lastModified: "2026-10-02"
-  category: "database"
   createsGvc: false
 
 dependencies:

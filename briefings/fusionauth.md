@@ -32,7 +32,7 @@
 | `firewall.internal.type` | `same-gvc` | internal scope for the app workload |
 | `postgres.credentials.{username,password,database}` | `username` / `change-me-fusionauth-db` / `test` | **2.4.1** — password placeholder fixed; bundled plumbing, correctly plain values |
 | `postgres.config.credentialsSecretName` | `my-fusionauth-db-credentials` | **2.4.0** — name of the dictionary secret the CHART creates and the subchart reads; org-wide, so unique per release |
-| `postgres.backup.*` | `enabled: false`, provider aws/gcp | pass-through to the postgres template's native backup |
+| `postgres.backup.*` | `enabled: false`, provider `aws` | pass-through to the postgres template's native backup; the subchart also accepts `minio` (keys in a prerequisite secret — not exposed in fusionauth's values, untested through this chart). The README's AWS IAM policy was the 6-action one until 2026-10-01; it now matches the subchart's 10-action policy (adds `GetBucketLocation` + multipart actions) |
 
 ## Troubleshooting / considerations
 - **2.4.0 adopted postgres 3.4.1 and absorbed the break rather than passing it on.** 3.4.0 deleted its `{release}-pg-config` secret and now takes only a secret NAME. Because a parent cannot template a subchart value, the name is a plain value (`postgres.config.credentialsSecretName`) that BOTH sides read: fusionauth's `secret-db.yaml` renders it, the subchart's env refs and policy consume it, and `fusionauth.secretPostgres.name` points the app at it. Net user-visible change is one rename (`postgres.config.*` → `postgres.credentials.*`); **no new prerequisite**, because no human ever types this password.

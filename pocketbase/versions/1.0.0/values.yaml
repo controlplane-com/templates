@@ -15,7 +15,7 @@ volumeset:
 #   password       superuser password, at least 8 characters (re-applied on EVERY
 #                  start — the secret is authoritative; changing it in the
 #                  dashboard is reverted)
-#   encryptionKey  EXACTLY 32 characters (openssl rand -hex 16) — encrypts SMTP,
+#   encryptionKey  32 random characters (openssl rand -hex 16) — encrypts SMTP,
 #                  OAuth2 and S3 settings at rest. NEVER change it after install.
 # Installing without this secret wedges the deployment silently: no logs at all.
 # The missing name appears only in `cpln workload get-deployments` under

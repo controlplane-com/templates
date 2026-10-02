@@ -119,9 +119,10 @@ value that both sides read, which is why it is not derived from the release name
 
 {{/*
 Credentials secret of the ACTIVE database.
-HA path: still created by postgres-highly-available 2.4.2 (pg-ha.secretDatabase.name)
-— unchanged, that chart has not adopted the prerequisite-secret convention.
-Single-instance path: created by this chart, named by postgres.config.credentialsSecretName.
+Created by this chart (secret-db.yaml) in BOTH modes from postgres.credentials.*.
+HA path: named by postgresHA.config.credentialsSecretName (postgres-highly-available
+2.5.0 creates no credentials secret of its own).
+Single-instance path: named by postgres.config.credentialsSecretName.
 Both hold the same three keys — username, password, database.
 */}}
 {{- define "chatwoot.postgres.secret.name" -}}
@@ -167,8 +168,7 @@ configured entirely through env vars — there is no config file to mount.
 - name: POSTGRES_PORT
   value: "5432"
 {{- /* Both stores' credential secrets carry a `database` key, so this is read the
-  same way in either mode (the single-instance secret is created by this chart,
-  the HA one by postgres-highly-available). */}}
+  same way in either mode (this chart creates it in both). */}}
 - name: POSTGRES_DATABASE
   value: cpln://secret/{{ include "chatwoot.postgres.secret.name" . }}.database
 - name: POSTGRES_USERNAME

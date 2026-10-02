@@ -54,7 +54,7 @@ proxy:
 pgbouncer:
   image: ghcr.io/cloudnative-pg/pgbouncer:1.26.0-202610011121-trixie  # pinned immutable build
   poolMode: transaction  # options: session, transaction, statement
-  defaultPoolSize: 25    # real Postgres connections per PgBouncer replica; × replicas must fit node max_connections (100)
+  defaultPoolSize: 20    # real Postgres connections per PgBouncer replica; node max_connections is 300
   maxClientConn: 1000    # client connections accepted per PgBouncer replica
   resources:
     cpu: 500m            # PgBouncer is single-threaded: add replicas rather than cores
@@ -72,6 +72,7 @@ backup:
   enabled: false
   image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
   schedule: "0 2 * * *"   # daily at 2am UTC — runs in locations[0] only
+  activeDeadlineSeconds: 21600  # a backup or restore still running after 6 h is stopped
 
   resources:
     cpu: 100m

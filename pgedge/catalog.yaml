@@ -11,7 +11,7 @@ summary: >-
   nodes in several locations of an existing GVC all accept reads and writes and replicate row
   changes to each other, with last-update-wins conflict resolution. Each location gets a PgBouncer
   connection pooler and an HAProxy tier that fails over to another local or remote node, plus
-  optional scheduled pg_dump backups to S3 or GCS. Pick it for low-latency writes in several
+  optional scheduled backups to S3 or GCS with a one-command restore into every node. Pick it for low-latency writes in several
   regions; DDL does not replicate and every table needs a primary key.
 
 keywords:

@@ -33,6 +33,31 @@ spec:
         - path: /proxy/start.sh
           recoveryPolicy: retain   # API backfill, declared so rendered == stored
           uri: cpln://secret/{{ include "pgedge.secretProxyStartup.name" . }}.payload
+      # "haproxy is running", deliberately NOT "has a healthy node": PgBouncer's own
+      # readiness already reports backend health, and a backend-aware probe here
+      # would restart-loop the proxy during a cluster-wide outage. The stats page
+      # answers only once haproxy has started, so a replica is never marked ready
+      # while nothing listens on 5432.
+      readinessProbe:
+        httpGet:
+          path: /stats
+          port: 8405
+          scheme: HTTP
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        timeoutSeconds: 3
+        failureThreshold: 12   # start.sh waits at most 60 s for the local node first
+        successThreshold: 1
+      livenessProbe:
+        httpGet:
+          path: /stats
+          port: 8405
+          scheme: HTTP
+        initialDelaySeconds: 90
+        periodSeconds: 10
+        timeoutSeconds: 3
+        failureThreshold: 3
+        successThreshold: 1
   identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pgedge.identity.name" . }}
   defaultOptions:
     autoscaling:

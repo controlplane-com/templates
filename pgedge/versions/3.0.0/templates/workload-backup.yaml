@@ -39,12 +39,8 @@ spec:
         - name: BACKUP_PREFIX
           value: {{ .Values.backup.gcp.prefix | quote }}
       {{- end }}
-        - name: PG_HOST
-          value: replica-0.{{ include "pgedge.name" . }}.{{ (index .Values.locations 0).name }}.{{ .Values.global.cpln.gvc }}.cpln.local
         - name: PG_PASSWORD
           value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
-        - name: PG_PORT
-          value: '5432'
         - name: PG_USER
           value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.username
         - name: PG_DATABASE
@@ -101,6 +97,9 @@ spec:
       inboundAllowWorkload: []
   identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pgedge.identity.name" . }}
   job:
+    # Bounds a hung run: with Forbid, a run that never ends would block every
+    # later scheduled backup.
+    activeDeadlineSeconds: {{ .Values.backup.activeDeadlineSeconds | int }}
     concurrencyPolicy: Forbid
     historyLimit: 5
     restartPolicy: Never

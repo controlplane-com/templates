@@ -262,11 +262,11 @@ steps:
             label: Server connections per replica
             min: 1
             required: true
-            suggestions: [10, 25, 50, 100]
+            suggestions: [10, 20, 40]
             help: >-
-              All PgBouncer replicas of a location pool onto that location's first node, which allows about
-              97 connections. Keep this value times the maximum replicas under that, and lower it if a
-              location may fail over onto another location's node, which then carries both locations' pools.
+              All PgBouncer replicas of a location pool onto that location's first node, which accepts 300
+              connections. After a failover one node can carry several locations' pools, so keep this value
+              times the maximum replicas times the number of locations under about 290.
           - path: pgbouncer.maxClientConn
             type: integer
             label: Max client connections per replica
@@ -369,6 +369,14 @@ steps:
             format: cron
             label: Schedule (UTC)
             required: true
+          - path: backup.activeDeadlineSeconds
+            type: integer
+            label: Time limit per backup or restore
+            unit: s
+            min: 1
+            required: true
+            advanced: true
+            suggestions: [3600, 21600, 43200]
           - path: backup.image
             type: string
             format: image

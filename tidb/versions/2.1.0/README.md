@@ -8,8 +8,8 @@ From 2.0.0 the chart deploys into the GVC you install into and creates none of i
 ## Architecture
 
 - **Stateful PD workload** (`RELEASE_NAME-pd`) — the placement driver quorum, `pdReplicas` members spread across `locations`, each individually addressable via `replicaDirect`.
-- **Stateful TiKV workload** (`RELEASE_NAME-tikv`) — the storage nodes; `locations[].replicas` per location, each with its own persistent volume.
-- **TiDB server workload** (`RELEASE_NAME-server`) — the MySQL-compatible SQL layer on port 4000.
+- **Stateful TiKV workload** (`RELEASE_NAME-tikv`) — the storage nodes; `locations[].tikvReplicas` per location, each with its own persistent volume.
+- **TiDB server workload** (`RELEASE_NAME-server`) — the MySQL-compatible SQL layer on port 4000; `locations[].serverReplicas` per location.
 - **DB init workload** *(optional, on by default)* — a one-time job that sets the root password and creates the application database and user. Turn it off after the first deploy.
 - **Volume sets** — PD and TiKV storage, each with 7-day snapshot retention.
 - **Secrets** — the PD, TiKV and tidb-server startup scripts, plus the init job's script.
@@ -72,6 +72,30 @@ skip the wait.
 Backups additionally need a bucket and a Control Plane
 [cloud account](https://docs.controlplane.com/guides/create-cloud-account) — see [Backing Up](#backing-up).
 
+## Upgrading from 2.0.0
+
+In each `locations` entry, replace `replicas: N` with `tikvReplicas: N` and `serverReplicas: N` to
+keep your current shape exactly. The chart refuses to render while a location still sets `replicas`,
+so an upgrade with your old values file fails before touching anything.
+
+The upgrade restarts PD, TiKV and the TiDB servers. PD and TiKV restart one replica at a time and
+keep quorum throughout; expect a few queries to stall for up to about 10 seconds while leaders move.
+Measured restarting each tier of a 3-node cluster under continuous load: 3 failed queries in total,
+data intact.
+
+**First, check your 2.0.0 cluster is actually healthy.** A 2.0.0 bootstrap can leave a TiKV store
+that never comes up, so the cluster runs without fault tolerance — or never serves SQL at all.
+Upgrading does not repair that. Check from any PD replica:
+
+```bash
+cpln workload exec RELEASE_NAME-pd --gvc GVC_NAME --location LOCATION --replica RELEASE_NAME-pd-0 \
+  --container tidb-pd -- sh -c 'curl -s 127.0.0.1:2379/pd/api/v1/stores | grep state_name'
+```
+
+Every store must say `"Up"`. If one is `"Down"` and the cluster has never served queries, it holds
+no data: uninstall it and install 2.1.0 fresh. If it has been serving with a store down, back it up
+and restore into a fresh 2.1.0 install (see [Backing Up](#backing-up)).
+
 ## Migrating from 1.x
 
 **Never `helm upgrade` a 1.x release onto 2.0.0.** Versions through 1.8.1 created their own GVC, so
@@ -106,39 +130,45 @@ deletes that GVC and everything else in it. There is nothing left to point at th
 ```yaml
 locations:
   - name: aws-us-east-1
-    replicas: 3
+    tikvReplicas: 3    # TiKV storage nodes in this location
+    serverReplicas: 3  # TiDB SQL servers in this location
 pdReplicas: 3
 ```
 
-Every location listed must already exist in the GVC you install into. `replicas` is the number of
-TiKV nodes **and** tidb-server nodes in that location, and must be at least 1. `pdReplicas` is the
-total number of PD members, spread evenly across the locations with any remainder going to the
-first ones; PD is Raft based, so it must be 1, 3, 5 or 7.
+Every location listed must already exist in the GVC you install into. `tikvReplicas` and
+`serverReplicas` set the TiKV storage nodes and TiDB SQL servers in that location independently;
+each must be at least 1. `pdReplicas` is the total number of PD members, spread evenly across the
+locations with any remainder going to the first ones; PD is Raft based, so it must be 1, 3, 5 or 7.
 
 The default — one location, three TiKV nodes, three PD members — survives the loss of a node. It
 does **not** survive the loss of a location.
 
-#### Example: surviving the loss of a location
+#### Example: surviving the loss of a location, with zero downtime
 
 ```yaml
 locations:
   - name: aws-us-east-1
-    replicas: 1
+    tikvReplicas: 1
+    serverReplicas: 2
   - name: aws-us-west-2
-    replicas: 1
+    tikvReplicas: 1
+    serverReplicas: 2
   - name: aws-eu-central-1
-    replicas: 1
+    tikvReplicas: 1
+    serverReplicas: 2
 pdReplicas: 3
+proxysql:
+  enabled: true
 ```
 
-Three locations with one PD member each: PD keeps quorum when one location goes away, and TiKV
-spreads each region's three copies one per location. Every location must be in the GVC.
+Three locations with one PD member and one TiKV node each: PD keeps quorum when one location goes
+away, and TiKV spreads each region's three copies one per location. Every location must be in the GVC.
 
 Losing a whole location stalls queries for 20–30 seconds while new leaders are elected, then the
-remaining locations serve reads and writes normally. With `replicas: 1`, a tidb-server crash costs
-that location's clients about 10 seconds; for **zero downtime** use `replicas: 2` and connect through
-[ProxySQL](#connection-pooling-proxysql), which retries onto the surviving server. Run clients in a
-listed location — the server's service name only reaches servers in the caller's own location.
+remaining locations serve reads and writes normally. Two SQL servers per location behind
+[ProxySQL](#connection-pooling-proxysql) keep a location serving through a server crash with zero
+failed queries; with `serverReplicas: 1` that location's clients lose about 10 seconds. Run clients
+in a listed location — the server's service name only reaches servers in the caller's own location.
 
 ### Images and Resources
 

@@ -123,12 +123,14 @@ one quoting change away from silently becoming a location named "".
 {{- end -}}
 
 {{/*
-Total TiKV (and TiDB server) replicas across every location.
+Total TiKV replicas (stores) across every location. tidb-server counts are
+independent (`serverReplicas`) and deliberately NOT included: this feeds PD's
+max-replicas, which must be bounded by the stores that can hold a copy.
 */}}
-{{- define "tidb.totalReplicas" -}}
+{{- define "tidb.totalTikvReplicas" -}}
 {{- $total := 0 -}}
 {{- range .Values.locations -}}
-{{- $total = add $total (.replicas | int) -}}
+{{- $total = add $total (.tikvReplicas | int) -}}
 {{- end -}}
 {{- $total -}}
 {{- end -}}
@@ -147,24 +149,11 @@ this value is fixed for the life of the cluster. An install that starts with
 fewer than 3 TiKV nodes keeps that replication factor even after it is scaled up.
 */}}
 {{- define "tidb.maxReplicas" -}}
-{{- $total := include "tidb.totalReplicas" . | int -}}
+{{- $total := include "tidb.totalTikvReplicas" . | int -}}
 {{- if lt $total 1 -}}1
 {{- else if gt $total 3 -}}3
 {{- else -}}{{ $total }}
 {{- end -}}
-{{- end -}}
-
-{{/*
-How many TiKV stores must report `Up` before tidb-server is considered ready.
-
-2 on any install with 2+ stores: that is a quorum of TiKV's 3-way replication,
-NOT 3. Requiring every store would mean one location down keeps tidb-server
-permanently unready, which is the opposite of what the replication is for.
-A single-store install can only ever reach 1.
-*/}}
-{{- define "tidb.readyStores" -}}
-{{- $total := include "tidb.totalReplicas" . | int -}}
-{{- if lt $total 2 -}}1{{- else -}}2{{- end -}}
 {{- end -}}
 
 {{/*
@@ -290,7 +279,7 @@ Validate the shape of `locations`.
 */}}
 {{- define "tidb.validateLocations" -}}
 {{- if and .Values.locations (not (kindIs "slice" .Values.locations)) -}}
-{{- fail "tidb: `locations` must be a LIST of {name, replicas} entries, not a scalar. (`--set locations=[]` sets the two-character string \"[]\", not an empty list — use a values file for list values.)" -}}
+{{- fail "tidb: `locations` must be a LIST of {name, tikvReplicas, serverReplicas} entries, not a scalar. (`--set locations=[]` sets the two-character string \"[]\", not an empty list — use a values file for list values.)" -}}
 {{- end -}}
 {{- if lt (len (.Values.locations | default (list))) 1 -}}
 {{- fail "tidb: `locations` must contain at least 1 location. It is a top-level values key from 2.0.0 (it was `gvc.locations` in 1.x) and every location listed must already exist in the GVC you install into." -}}
@@ -304,8 +293,17 @@ Validate the shape of `locations`.
 {{- fail (printf "tidb: location '%s' is listed more than once in `locations`. A duplicate produces duplicate PD endpoints and a duplicated localOptions entry, which the platform accepts without validating. List each location exactly once." .name) -}}
 {{- end -}}
 {{- $_ := set $seen .name true -}}
-{{- if lt (.replicas | int) 1 -}}
-{{- fail (printf "tidb: location '%s' needs `replicas` set to at least 1. To stop running in a location, remove it from `locations` — 1.x turned `replicas: 0` into a suspended location, and localOptions[].suspend permanently breaks a workload's inbound reachability from other locations." .name) -}}
+{{- /* Refuse the 2.0.0 key rather than ignore it: silently ignoring `replicas`
+       on an upgrade would re-size a live cluster to whatever the new keys
+       default to. */ -}}
+{{- if hasKey . "replicas" -}}
+{{- fail (printf "tidb: location '%s' sets `replicas`, which 2.1.0 SPLIT into `tikvReplicas` (TiKV storage nodes) and `serverReplicas` (TiDB SQL servers) so they can differ. Replace `replicas: N` with `tikvReplicas: N` and `serverReplicas: N` to keep your current shape exactly; see Locations in the README." .name) -}}
+{{- end -}}
+{{- if lt (.tikvReplicas | int) 1 -}}
+{{- fail (printf "tidb: location '%s' needs `tikvReplicas` set to at least 1. To stop running in a location, remove it from `locations` — 1.x turned `replicas: 0` into a suspended location, and localOptions[].suspend permanently breaks a workload's inbound reachability from other locations." .name) -}}
+{{- end -}}
+{{- if lt (.serverReplicas | int) 1 -}}
+{{- fail (printf "tidb: location '%s' needs `serverReplicas` set to at least 1 — clients reach only the TiDB servers in their OWN location, so a location without one serves no clients. Use 2 or more for zero downtime when a server fails." .name) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

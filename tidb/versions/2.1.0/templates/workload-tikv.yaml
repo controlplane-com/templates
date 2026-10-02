@@ -77,7 +77,7 @@ spec:
     than from this workload's own defaultOptions.
 
     1.x also mapped `replicas: 0` onto localOptions[].suspend. That is gone —
-    a location with 0 replicas is now refused at render. Suspending a location
+    a location with 0 tikvReplicas is now refused at render. Suspending a location
     permanently withdraws that workload's endpoints from other locations' service
     discovery, and resuming does not restore them.
   */}}
@@ -85,9 +85,9 @@ spec:
     {{- range $location := .Values.locations }}
     - autoscaling:
         maxConcurrency: 0
-        maxScale: {{ $location.replicas | int }}
+        maxScale: {{ $location.tikvReplicas | int }}
         metric: disabled
-        minScale: {{ $location.replicas | int }}
+        minScale: {{ $location.tikvReplicas | int }}
         scaleToZeroDelay: 300
         target: 100
       capacityAI: false

@@ -2,14 +2,18 @@
 # This chart deploys into the GVC you install into — it does NOT create one.
 # Every location listed here MUST already exist in that GVC, or PD refuses to
 # bootstrap with a named error (see Prerequisites in the README).
-# Extra locations in the GVC are fine: nothing TiDB-related runs in them.
+# Extra locations in the GVC are fine: nothing TiDB-related runs in them (and
+# clients in them cannot reach this cluster — run clients in a listed location).
 #
-# `replicas` is the number of TiKV nodes AND TiDB server nodes in that location.
-# The default — one location, three nodes — survives the loss of a node.
-# Surviving the loss of a whole LOCATION needs at least three locations.
+# `tikvReplicas` = TiKV storage nodes and `serverReplicas` = TiDB SQL servers in
+# that location; both at least 1. The default — one location, three of each —
+# survives the loss of a node. Surviving the loss of a whole LOCATION needs at
+# least three locations. serverReplicas >= 2 keeps a location serving through a
+# server failure (zero downtime with proxysql.enabled).
 locations:
   - name: aws-us-east-1
-    replicas: 3
+    tikvReplicas: 3
+    serverReplicas: 3
 
 # PD (placement driver) members, spread evenly across `locations`. PD is Raft
 # based, so odd counts only: 1, 3, 5 or 7. 1 is a single point of failure and is

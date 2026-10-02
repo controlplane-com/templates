@@ -86,9 +86,9 @@ spec:
     {{- range $location := .Values.locations }}
     - autoscaling:
         maxConcurrency: 0
-        maxScale: {{ $location.replicas | int }}
+        maxScale: {{ $location.serverReplicas | int }}
         metric: disabled
-        minScale: {{ $location.replicas | int }}
+        minScale: {{ $location.serverReplicas | int }}
         scaleToZeroDelay: 300
         target: 100
       capacityAI: false

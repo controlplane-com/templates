@@ -2,18 +2,7 @@
 kind: workload
 name: {{ include "tidb.pd.name" . }}
 description: TiDB placement driver
-tags:
-  {{- /*
-    Peer discovery must reach a replica on its replicaDirect endpoint while it is
-    still NOT-READY during bootstrap. The platform otherwise RSTs all inbound to a
-    not-ready replica (measured 2026-09-30) — which deadlocks PD/etcd raft join,
-    since a member can only become ready by exchanging the peer traffic it can't
-    receive until it is ready. This tag routes internal traffic to not-ready
-    replicas. Precedent: redis (same tag, same reason). See
-    PLATFORM-REPORT-replicaDirect-readiness-gating.md.
-  */}}
-  cpln/publishNotReadyAddresses: "true"
-  {{- include "tidb.tags" . | nindent 2 }}
+tags: {{- include "tidb.tags" . | nindent 4 }}
 spec:
   type: stateful
   containers:
@@ -45,22 +34,25 @@ spec:
           value: {{ include "tidb.pdEndpointList" . | quote }}
       readinessProbe:
         {{- /*
-          Safe to gate readiness now that `cpln/publishNotReadyAddresses: "true"`
-          (tag above) routes inbound/peer traffic to a not-ready replica — so the
-          probe no longer blocks bootstrap. This makes `ready: true` mean "this PD
-          is in a cluster with an elected leader". Self-scoped: it checks only
-          THIS node's view of a leader, not every peer's health, so a peer going
-          down never restarts a surviving PD (the readiness deadline restarts the
-          container on this platform); the serialized bootstrap fits inside the
-          deadline (failureThreshold ≤ 20).
+          Readiness = THIS pd-server is up and listening on its peer port, checked
+          on loopback (not through the mesh). It must NOT require quorum or a
+          leader: the platform resets ALL inbound to a not-ready replicaDirect
+          replica, so members that are not-ready cannot reach each other — and a
+          member that only becomes ready once a leader exists can never help
+          elect one. Measured 2026-10-02 on 3 locations x 1 PD: a leader-gated
+          probe plus a concurrent restart (every upgrade that touches PD — each
+          location's deployment rolls in parallel) left PD with no leader for 13+
+          minutes, then a restart loop; the database was down the whole time.
+          `cpln/publishNotReadyAddresses` does NOT bypass the gate (controlled
+          test: tagged and untagged not-ready stateful replicas were both reset on
+          per-replica and service names, same- and cross-region, 5 min after
+          start), so readiness itself has to stay quorum-independent.
         */}}
         exec:
           command:
-            - /bin/sh
+            - /bin/bash
             - '-c'
-            - >-
-              curl -sf --max-time 4 http://localhost:2379/pd/api/v1/leader
-              | grep -q '"member_id"'
+            - exec 3<>/dev/tcp/127.0.0.1/2380
         failureThreshold: 20
         initialDelaySeconds: 15
         periodSeconds: 15

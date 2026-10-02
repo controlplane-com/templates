@@ -68,8 +68,9 @@ The secret holds three keys: `username`, `password` and `database`. PgBouncer's 
 endpoint changes** from `RELEASE_NAME-pgcat` to `RELEASE_NAME-pgbouncer` (port 5432 unchanged).
 The pgEdge nodes, their volumes and their data are kept.
 
-1. Edit your values: rename `pgcat:` to `pgbouncer:`, and delete `pgcat.image`, `pgcat.routing` and
-   `proxy.enabled`. The chart refuses to render while any of them remain.
+1. Edit your values: rename `pgcat:` to `pgbouncer:`, and delete `image` and `routing` from that
+   block, and `proxy.enabled`. The chart refuses to render while a `pgcat` key, a pgcat image,
+   `routing` or `proxy.enabled: false` remains.
 2. Optional, to shorten the client gap: point applications at
    `RELEASE_NAME-pgedge-proxy.GVC_NAME.cpln.local:5432` first. That is HAProxy, present on any 2.2.0
    install with the default `proxy.enabled: true`. It is unpooled, so stay well under ~97
@@ -215,7 +216,7 @@ pgbouncer:
   maxReplicas: 4         # per location
 ```
 
-**Connection budget:** every PgBouncer replica in a location pools onto that location's `replica-0`, which allows ~97 connections. Keep `defaultPoolSize × maxReplicas` under that (25 × 4 = 100 is the edge), and lower it if a location may fail over onto another location's node, which then carries both locations' pools.
+**Connection budget:** every PgBouncer replica in a location pools onto that location's `replica-0`, which allows ~97 connections. Keep `defaultPoolSize × maxReplicas` under that (the defaults, 25 × 4 = 100, are already over it at full scale), and lower it if a location may fail over onto another location's node, which then carries both locations' pools.
 
 **Pool modes:**
 - `transaction` — connection held only for the duration of a transaction. Best for most web and API workloads. Protocol-level prepared statements work; session-level `SET`, temporary tables, advisory locks and `LISTEN` do not.
@@ -442,7 +443,7 @@ unset PGPASSWORD
 - **Use at least 3 replicas per location** in production, to survive a node loss within a location
 - **Release names must be unique per organization** — secrets are organization-wide, so two releases with the same name collide even in different GVCs
 - **Conflict resolution is last-update-wins** — concurrent writes to the same row from different nodes resolve by commit timestamp. For stronger consistency, route a given entity's writes to one node in your application
-- **`helm upgrade` restarts every pgEdge replica** — treat it as a planned write interruption (~60s). Data is preserved and the mesh reconciles itself afterward
+- **`helm upgrade` restarts every pgEdge replica** — treat it as a planned write interruption (~1–2 min). Data is preserved and the mesh reconciles itself afterward
 - **multiZone** — verify your location supports multiple availability zones before enabling
 
 ## Links

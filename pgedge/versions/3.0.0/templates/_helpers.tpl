@@ -196,6 +196,13 @@ only surfaces as a crash-looping pooler -- catch them at render instead.
 */}}
 {{- define "pgedge.validatePgbouncer" -}}
 {{- $b := .Values.pgbouncer -}}
+{{- /* catch a 2.x pgcat block that was renamed but not trimmed */ -}}
+{{- if hasKey $b "routing" -}}
+{{- fail "pgedge 3.0.0: pgbouncer.routing does not exist -- PgBouncer cannot split reads from writes, and every location writes to its own node-0 through HAProxy. Delete it. See `Upgrading from 2.x` in the README." -}}
+{{- end -}}
+{{- if contains "pgcat" (toString $b.image) -}}
+{{- fail (printf "pgedge 3.0.0: pgbouncer.image is a pgcat image (%s). Delete it from your values to use the chart's pinned PgBouncer image. See `Upgrading from 2.x` in the README." $b.image) -}}
+{{- end -}}
 {{- if not (has $b.poolMode (list "session" "transaction" "statement")) -}}
 {{- fail (printf "pgedge: pgbouncer.poolMode must be one of session, transaction, statement (got %v)" $b.poolMode) -}}
 {{- end -}}

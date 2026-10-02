@@ -78,10 +78,10 @@ In each `locations` entry, replace `replicas: N` with `tikvReplicas: N` and `ser
 keep your current shape exactly. The chart refuses to render while a location still sets `replicas`,
 so an upgrade with your old values file fails before touching anything.
 
-The upgrade restarts PD, TiKV and the TiDB servers. PD and TiKV restart one replica at a time and
-keep quorum throughout; expect a few queries to stall for up to about 10 seconds while leaders move.
-Measured restarting each tier of a 3-node cluster under continuous load: 3 failed queries in total,
-data intact.
+The upgrade restarts PD, TiKV and the TiDB servers. Replicas in the same location restart one at a
+time; separate locations restart at the same time, so on a one-PD-per-location install writes pause
+for up to about a minute while PD re-forms (measured: ~45 s, no failed queries with a 60 s client
+timeout; connections and `SELECT 1` uninterrupted). Data is never at risk.
 
 **First, check your 2.0.0 cluster is actually healthy.** A 2.0.0 bootstrap can leave a TiKV store
 that never comes up, so the cluster runs without fault tolerance — or never serves SQL at all.
@@ -164,11 +164,15 @@ proxysql:
 Three locations with one PD member and one TiKV node each: PD keeps quorum when one location goes
 away, and TiKV spreads each region's three copies one per location. Every location must be in the GVC.
 
-Losing a whole location stalls queries for 20–30 seconds while new leaders are elected, then the
-remaining locations serve reads and writes normally. Two SQL servers per location behind
-[ProxySQL](#connection-pooling-proxysql) keep a location serving through a server crash with zero
-failed queries; with `serverReplicas: 1` that location's clients lose about 10 seconds. Run clients
-in a listed location — the server's service name only reaches servers in the caller's own location.
+Measured with one location fully dark (servers, ProxySQL, PD leader and TiKV all gone): clients in
+the other locations kept connecting with no interruption, and writes paused about 15 seconds while
+new leaders were elected, then ran normally — no failed queries with a 60 s client timeout. Use a
+client timeout of 30 s or more (or retry) so that pause is a delay, not an error.
+
+Two SQL servers per location behind [ProxySQL](#connection-pooling-proxysql) keep a location serving
+through a server crash with zero failed queries; with `serverReplicas: 1` that location's clients
+lose about 10 seconds. Run clients in a listed location — the server's service name only reaches
+servers in the caller's own location.
 
 ### Images and Resources
 

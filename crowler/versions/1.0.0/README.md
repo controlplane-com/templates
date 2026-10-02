@@ -67,6 +67,7 @@ crawler:
   queryTimer: 30                # seconds between polls for new sources (>= 5)
   crawlingInterval: 3 days      # re-crawl cadence for a successful source
   crawlingIfError: 15 minutes   # retry delay after a failed crawl
+  processingTimeout: 30 minutes # a source stuck 'processing' after an engine restart is crawled again after this
   maxDepth: 3                   # link-following depth (0 = unlimited)
   maxLinks: 0                   # links followed per page (0 = unlimited)
   debugLevel: 1

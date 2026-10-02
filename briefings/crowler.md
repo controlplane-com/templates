@@ -27,7 +27,7 @@
 - Nothing is public by default. Reach the API with `cpln port-forward {r}-crowler-api 8080:8080`.
 
 ## Key knobs
-`engine.replicas` 1 · `vdi.replicas` 1 (= crawl concurrency, ≥ engine) · `api.replicas` / `events.replicas` 1 · `crowlerDb.password` and `postgres.credentials.password` (`change-me-…`, change before install) · `crawler.{queryTimer 30, crawlingInterval "3 days", crawlingIfError "15 minutes", maxDepth 3, maxLinks 0, debugLevel 1}` · `config.existingSecretName` "" · `publicAccess.{api,events}` false · `pushgateway`/`jaeger` false · `postgres.*` (full postgres-template pass-through, backups included).
+`engine.replicas` 1 · `vdi.replicas` 1 (= crawl concurrency, ≥ engine) · `api.replicas` / `events.replicas` 1 · `crowlerDb.password` and `postgres.credentials.password` (`change-me-…`, change before install) · `crawler.{queryTimer 30, crawlingInterval "3 days", crawlingIfError "15 minutes", processingTimeout "30 minutes", maxDepth 3, maxLinks 0, debugLevel 1}` · `config.existingSecretName` "" · `publicAccess.{api,events}` false · `pushgateway`/`jaeger` false · `postgres.*` (full postgres-template pass-through, backups included).
 
 ## Availability posture
 - Engines, VDIs, API and events scale horizontally (there is only one, free edition).

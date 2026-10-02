@@ -1,0 +1,98 @@
+{{- if .Values.backup.enabled }}
+---
+kind: workload
+name: {{ include "pgedge.backup.name" . }}
+description: pgEdge Backup
+tags: {{- include "pgedge.tags" . | nindent 2 }}
+spec:
+  type: cron
+  containers:
+    - name: backup-pgedge
+      cpu: {{ .Values.backup.resources.cpu | quote }}
+      memory: {{ .Values.backup.resources.memory | quote }}
+      env:
+      {{- if eq .Values.backup.provider "aws" }}
+        - name: AWS_REGION
+          value: cpln://secret/{{ include "pgedge.secretConfig.name" . }}.aws-region
+        - name: BACKUP_PROVIDER
+          value: aws
+        - name: BACKUP_BUCKET
+          value: cpln://secret/{{ include "pgedge.secretConfig.name" . }}.backup-bucket
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.aws.prefix | quote }}
+      {{- end }}
+      {{- if eq .Values.backup.provider "gcp" }}
+        - name: BACKUP_PROVIDER
+          value: gcp
+        - name: BACKUP_BUCKET
+          value: cpln://secret/{{ include "pgedge.secretConfig.name" . }}.backup-bucket
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.gcp.prefix | quote }}
+      {{- end }}
+        - name: PG_HOST
+          value: replica-0.{{ include "pgedge.name" . }}.{{ (index .Values.locations 0).name }}.{{ .Values.global.cpln.gvc }}.cpln.local
+        - name: PG_PASSWORD
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
+        - name: PG_PORT
+          value: '5432'
+        - name: PG_USER
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.username
+        - name: PG_DATABASE
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.database
+      image: {{ .Values.backup.image | quote }}
+      inheritEnv: false
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: true    # a GVC location this release did not ask for must NOT run a second backup
+    timeoutSeconds: 5
+  localOptions:
+  {{- /*
+    Every field defaultOptions carries is repeated here. The API BACKFILLS a
+    PARTIAL localOptions block with its OWN platform defaults rather than with
+    this workload's defaultOptions -- measured on cockroach 2026-08-27, where a
+    two-field block was stored as seven, silently turning `capacityAI` ON in the
+    one location the cron actually runs and cutting timeoutSeconds to 5. Send
+    the whole block or none of it; half is what produces the contradiction.
+  */}}
+  {{- range $i, $loc := .Values.locations }}
+    - autoscaling:
+        maxConcurrency: 0
+        maxScale: 1
+        metric: disabled
+        minScale: 1
+        scaleToZeroDelay: 300
+        target: 95
+      capacityAI: false
+      debug: false
+      location: //location/{{ $loc.name }}
+      suspend: {{ if eq $i 0 }}false{{ else }}true{{ end }}
+      timeoutSeconds: 5
+  {{- end }}
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: none
+      inboundAllowWorkload: []
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pgedge.identity.name" . }}
+  job:
+    concurrencyPolicy: Forbid
+    historyLimit: 5
+    restartPolicy: Never
+    schedule: {{ .Values.backup.schedule | quote }}
+  supportDynamicTags: false
+{{- end }}

@@ -2,6 +2,9 @@
 
 High-level, user-facing catalog changes by month: new templates and notable version updates, one line each. Feeds the marketplace "What's New" section. Maintained by the template pipeline at ship time (entry added when a template or version merges); internal tooling changes are not listed.
 
+## 2026-10
+- **ess 2.1.1** — bumps the syncer image to v2.0.2, picking up dependency security updates (including multer, axios, js-yaml, brace-expansion and uuid). No configuration changes
+
 ## 2026-09
 - **pgedge 2.1.0** — pgcat gains a `routing` mode, defaulting to `local`: each location's pgcat reads and writes against its **own local pgEdge node**, so every region writes locally — true active/active with no single write bottleneck, and losing one location does not stop writes in the others. Set `single-writer` if your app needs one global write target instead. Note the pooled endpoint does **not** automatically fail a client over to another location if its own location goes down — an app that must survive the loss of its own location connects to another location's endpoint itself (documented in the README)
 - **nocodb 1.3.0** — adds `allowLocalWebhooks` so webhooks can target private / same-GVC addresses (e.g. an internal service at `*.cpln.local`); off by default because NocoDB's SSRF guard otherwise refuses them. Also documents connecting an AI client to NocoDB's per-base **MCP** server (`claude mcp add --transport http …`)

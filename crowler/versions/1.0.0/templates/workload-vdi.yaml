@@ -43,9 +43,18 @@ spec:
         - name: SE_ENABLE_TRACING
           value: "false"
         {{- end }}
-        # The image's start-vnc.sh reads SE_VNC_PASSWORD (default "secret").
+        {{- if .Values.vdi.vncSecretName }}
+        # VNC guards a human-facing viewer, so its password is a user-created
+        # prerequisite secret. The image's start-vnc.sh reads SE_VNC_PASSWORD.
+        - name: SE_START_VNC
+          value: "true"
         - name: SE_VNC_PASSWORD
-          value: cpln://secret/{{ include "crowler.secret.creds.name" . }}.vncPassword
+          value: cpln://secret/{{ .Values.vdi.vncSecretName }}.payload
+        {{- else }}
+        # Off by default: no VNC or noVNC process, so no login exists at all.
+        - name: SE_START_VNC
+          value: "false"
+        {{- end }}
         - name: TZ
           value: {{ .Values.timezone | quote }}
       ports:
@@ -53,10 +62,12 @@ spec:
           protocol: http
         - number: 4445
           protocol: http
+        {{- if .Values.vdi.vncSecretName }}
         - number: 5900
           protocol: tcp
         - number: 7900
           protocol: http
+        {{- end }}
         - number: 9222
           protocol: http
       readinessProbe:

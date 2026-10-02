@@ -25,7 +25,9 @@ engine:
 # ─── Browser pool (VDI) ─────────────────────────────────────────────
 vdi:
   replicas: 1                                    # one Chromium per replica; must be >= engine.replicas
-  vncPassword: change-me-crowler-vnc             # VNC/noVNC password — internal only, never exposed
+  # Optional VNC/noVNC (watch the browser while it crawls). "" = off: nothing is started.
+  # To enable, name an opaque secret holding the password, e.g. my-crowler-vnc-password.
+  vncSecretName: ""
   resources:
     minCpu: 500m
     maxCpu: 2000m

@@ -17,6 +17,7 @@ The CROWler is an open-source, self-hosted platform for web crawling, scraping a
 
 - **None for a default install.** Every credential is internal plumbing that this template creates from the values below. Change the `change-me-…` passwords before installing.
 - **A single-location GVC.** Each location would get its own, separate database.
+- **Optional:** an opaque VNC-password secret, only if you want to watch the browser (see below). If `vdi.vncSecretName` names a secret that does not exist, the browser pool never starts and `cpln logs` shows nothing; read `status.versions[].message` from `cpln workload get-deployments {release}-crowler-vdi -o yaml`.
 
 ## Configuration
 
@@ -42,7 +43,7 @@ engine:
   resources: { minCpu: 500m, maxCpu: 2000m, minMemory: 1Gi, maxMemory: 2Gi }
 vdi:
   replicas: 1          # one browser per replica = crawl concurrency; must be >= engine.replicas
-  vncPassword: change-me-crowler-vnc
+  vncSecretName: ""   # optional opaque secret with a VNC password; "" = VNC/noVNC off
   resources: { minCpu: 500m, maxCpu: 2000m, minMemory: 2Gi, maxMemory: 4Gi }
 ```
 
@@ -125,6 +126,17 @@ curl 'http://localhost:8080/v1/search/general?q=example'
 ```
 
 `restricted: 2` lets the crawl follow links within the same site; without it only the page you added is crawled. CROWler 2.1.8 follows absolute and root-relative links (`/docs/a.html`) but not bare relative ones (`a.html`). The full API is described at `http://localhost:8080/v1/docs`.
+
+## Watching the browser (optional)
+
+VNC and noVNC are off by default, so a default install has no browser login at all. To watch a crawl, create an opaque secret holding a VNC password, set `vdi.vncSecretName` to its name, then tunnel to noVNC and open `http://localhost:7900`:
+
+```bash
+printf '%s' 'choose-a-vnc-password' | cpln secret create-opaque --name my-crowler-vnc-password --encoding plain -f -
+cpln port-forward {release}-crowler-vdi 7900:7900 --gvc {gvc}
+```
+
+The browser nodes are never public; only the engine and your tunnel can reach them.
 
 ## Backing up the database
 

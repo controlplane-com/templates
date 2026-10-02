@@ -21,3 +21,6 @@ targetLinks:
   - //secret/{{ include "crowler.secret.start.name" . }}
   - //secret/{{ include "crowler.secret.schema.name" . }}
   - //secret/{{ include "crowler.secret.configMounted.name" . }}
+  {{- if .Values.vdi.vncSecretName }}
+  - //secret/{{ .Values.vdi.vncSecretName }}
+  {{- end }}

@@ -264,7 +264,7 @@ timeoutSeconds: 5
 {{- if not .Values.postgres.credentials.username -}}
 {{- fail "crowler: postgres.credentials.username is required" -}}
 {{- end -}}
-{{- range $k, $v := dict "crowlerDb.password" .Values.crowlerDb.password "postgres.credentials.password" .Values.postgres.credentials.password "vdi.vncPassword" .Values.vdi.vncPassword -}}
+{{- range $k, $v := dict "crowlerDb.password" .Values.crowlerDb.password "postgres.credentials.password" .Values.postgres.credentials.password -}}
 {{- if not (regexMatch $secretChars (toString $v)) -}}
 {{- fail (printf "crowler: %s must be non-empty and use only letters, digits, '_' and '-' — it passes through psql variables and shell" $k) -}}
 {{- end -}}

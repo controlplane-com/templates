@@ -132,11 +132,11 @@ curl 'http://localhost:8080/v1/search/general?q=example'
 VNC and noVNC are off by default, so a default install has no browser login at all. To watch a crawl, create an opaque secret holding a VNC password, set `vdi.vncSecretName` to its name, then tunnel to noVNC and open `http://localhost:7900`:
 
 ```bash
-printf '%s' 'choose-a-vnc-password' | cpln secret create-opaque --name my-crowler-vnc-password --encoding plain -f -
+printf '%s' 'vnc8char' | cpln secret create-opaque --name my-crowler-vnc-password --encoding plain -f -
 cpln port-forward {release}-crowler-vdi 7900:7900 --gvc {gvc}
 ```
 
-The browser nodes are never public; only the engine and your tunnel can reach them.
+VNC uses only the first 8 characters of the password. The browser nodes are never public; only the engine and your tunnel can reach them.
 
 ## Backing up the database
 

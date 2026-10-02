@@ -17,7 +17,8 @@
 | workload `{release}-etcd` (stateful) | Consensus for leader election — needs an ODD replica count |
 | workload `{release}-postgres-ha-proxy` (optional) | HAProxy; routes writes to the current leader |
 | workload `{release}-pgbouncer` (optional) | Connection pooling in front of HAProxy |
-| secret `{release}-patroni-startup` | The startup script that WRITES Patroni's config at boot |
+| secret `{release}-postgres-proxy-startup` | The **Patroni** startup script that WRITES Patroni's config at boot — mounted at `/patroni/start.sh` on the postgres workload. The name is historical and does not describe the content |
+| secret `{release}-patroni-startup` | The **HAProxy** startup script, mounted at `/proxy/start.sh` on the proxy workload (rendered only when `proxy.enabled` or `pgbouncer.enabled`) |
 | secret `{release}-postgres-ha-config` | Non-sensitive backup config only; gated on `backup.enabled` |
 | identity + policy | `reveal` on the startup secrets and the user's prerequisite secrets |
 
@@ -76,7 +77,7 @@
   reads. So a cluster configured for a 30s DCS budget demoted its primary after 14. Found from a production
   incident: a ~14.8s blackout between Patroni and etcd exhausted the clamped budget, and the
   demote/restart-as-standby/re-promote cycle cost ~12s of refused writes while the database itself was
-  healthy throughout. **2.6.0 ships 60 / 10 / 20.**
+  healthy throughout. **2.6.0 and 2.7.0 ship `ttl: 45`, `loop_wait: 10`, `retry_timeout: 15`** (10 + 2×15 = 40 ≤ 45).
 - **2.6.0 does NOT fix a running cluster.** `bootstrap.dcs` applies once, at first init; after that the
   values live in etcd. Existing clusters need `patronictl edit-config`, all three set together — raising
   `ttl` alone leaves `retry_timeout` clamped and drops `loop_wait` to 1, multiplying etcd traffic.

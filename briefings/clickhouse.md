@@ -75,8 +75,10 @@ read cache. **From 3.0.0 it deploys into an existing GVC and creates none.**
   upgrade rather than a rolling one. The chart renders no `rolloutOptions`, so no availability claim rests
   on that field.
 - **The credentials secret has no `username`** — ClickHouse authenticates as its built-in `default` user.
-  Credentials apply on **first initialisation only**; rotate inside ClickHouse first, then update the
-  secret, then force a redeployment (a `cpln://` secret rotation does **not** redeploy by itself).
+  To rotate: update the secret's value, `cpln workload force-redeployment` the server workload, then update
+  clients. The startup script regenerates `users.xml` with `<password>${CLICKHOUSE_PASSWORD}</password>` on
+  **every** start, so the new value applies at the redeploy; `ALTER USER` cannot change a user defined in
+  `users.xml` (a `cpln://` secret rotation does **not** redeploy by itself).
 - **An identity's cloud binding is never removed once set** (the API merges on update), so switching
   `provider` on an existing release leaves the old cloud-account binding attached. Switch providers with a
   fresh install.

@@ -40,7 +40,7 @@ The requirement is one-directional: the GVC may have *more* locations than you l
 ClickHouse-related runs in those. Check what a GVC has before you install:
 
 ```bash
-cpln gvc get GVC_NAME -o json
+cpln gvc get GVC_NAME -o yaml
 ```
 
 The locations are under `spec.staticPlacement.locationLinks`. If you list a location the GVC does not
@@ -94,9 +94,10 @@ values file fails before touching anything. A 2.x install made on pure defaults 
 **not** protected — nothing at render time can see it. Migrate instead:
 
 1. Create (or pick) the GVC you want 3.0.0 to live in, with the locations you intend to use.
-2. Install 3.0.0 as a **new release** with a **new release name** into that GVC. Point it at the **same
-   bucket with a different prefix**, or at a new bucket. Secret names are organization-wide and would
-   otherwise collide with the 2.x release's.
+2. Install 3.0.0 as a **new release** with a **new release name** into that GVC, and give it its **own
+   bucket or container** — the chart has no prefix knob (the S3 and Hetzner endpoints end in a fixed
+   `/data/`, GCS in `/BUCKET/`), so two releases pointed at one bucket would share a data path. Secret
+   names are organization-wide and would otherwise collide with the 2.x release's.
 3. Re-ingest your data into the new cluster. Do **not** try to adopt the old release's volume set: it holds
    metadata whose `<macros><shard>` identity and Keeper paths belong to the old topology, and it cannot be
    moved between releases.
@@ -386,7 +387,7 @@ position in `locations`.
 - **The GVC must contain every location you list**, and may contain more. A missing one is not caught at install: the container exits with `FATAL: locations declared in values are not in GVC …`. An already-initialised node logs a `WARNING` instead and keeps serving, so this can never stop a running cluster
 - **2 locations is not supported.** Use 1 (single-node or single-shard) or 3 or more
 - **Object storage is required in every mode**, including single-node. There is no local-only shape
-- **The credentials secret has no `username` key**, and credentials apply on first initialization only — rotate inside ClickHouse first, then update the secret, then force a redeployment. Updating a `cpln://` secret does not restart the workload by itself
+- **The credentials secret has no `username` key.** To rotate the password: update the secret's value, run `cpln workload force-redeployment RELEASE_NAME-clickhouse-server --gvc GVC_NAME`, then update your clients. The startup script rewrites `users.xml` from the secret on every start, so the new password takes effect at the redeploy — and because `default` is defined in `users.xml`, it cannot be changed with `ALTER USER`. Updating a `cpln://` secret does not restart the workload by itself
 - **Switch object-storage providers with a fresh install, not an upgrade.** An identity's cloud binding is never removed once set, so an existing release keeps the old provider's binding attached
 - **Keeper is the availability floor.** Three members tolerate one loss; the single-shard shape has one member and tolerates none. If a majority of Keeper locations are missing from the GVC, the containers exit with a named error rather than waiting for an election that can never complete
 - **`helm upgrade` restarts every replica in every location at once** — nothing serialises a rolling restart on a stateful workload, so treat an upgrade as a planned query interruption

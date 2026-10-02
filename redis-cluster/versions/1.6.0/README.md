@@ -124,11 +124,11 @@ Important: To access workloads listening on a TCP port, the client workload must
 
 #### Option 1:
 
-Syntax: <WORKLOAD_NAME>
+Syntax: <WORKLOAD_NAME>.<GVC_NAME>.cpln.local
 
 ```
-redis-cli -c -h {workload-name} -p 6379 set mykey "test"
-redis-cli -c -h {workload-name} -p 6379 get mykey
+redis-cli -c -h {workload-name}.{gvc}.cpln.local -p 6379 set mykey "test"
+redis-cli -c -h {workload-name}.{gvc}.cpln.local -p 6379 get mykey
 ```
 
 #### Option 2: (By replica)
@@ -207,19 +207,11 @@ For the cron job to have access to a GCS bucket, ensure the following prerequisi
 
 ### Restoring a Backup
 
-Each primary shard produces its own backup file (`redis-<timestamp>-node-0.rdb.gz`, etc.). Download and decompress the file for the shard you want to restore, then copy it to `/data/dump.rdb` on the corresponding replica and restart that replica.
+Each primary shard produces its own backup file (`redis-<timestamp>-node-0.rdb.gz`, etc.), a standard gzipped RDB file taken with `redis-cli --rdb`.
 
-S3
-```sh
-aws s3 cp s3://BUCKET_NAME/PREFIX/BACKUP_FILE.rdb.gz - \
-  | gunzip > /tmp/dump.rdb
-```
+**There is no verified procedure for restoring one of these files into a running node of this template.** Copying the decompressed file to `/data/dump.rdb` on the node and restarting it does nothing: the chart runs with `appendonly yes`, and when both AOF and RDB persistence are enabled Redis rebuilds the dataset from the AOF at startup and ignores `dump.rdb`. Note also that `redis-cli --rdb FILE` *downloads* an RDB from a server; it does not load one.
 
-GCS
-```sh
-gsutil cp gs://BUCKET_NAME/PREFIX/BACKUP_FILE.rdb.gz - \
-  | gunzip > /tmp/dump.rdb
-```
+RDB files are portable. The upstream-documented way to read one is to start a standalone Redis or Valkey server with AOF disabled and the decompressed file in place as its `dump.rdb` — for example on a local machine with Docker — and from there inspect the data or replay the keys into your cluster with your own tooling, letting the cluster route each key to its shard. Loading a file into this template's nodes in place has not been tested; if you need that path, rehearse it on a throwaway release before relying on it.
 
 ### Supported External Services
 - [Redis Documentation](https://redis.io/docs/)

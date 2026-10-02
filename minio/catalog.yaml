@@ -1,0 +1,87 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: MinIO
+category: storage
+topology: distributed
+
+summary: >-
+  MinIO S3-compatible object storage in distributed mode: an even number of replicas (at least
+  four, six by default) form one erasure-coded pool, each on its own persistent volume, so objects
+  stay readable and writable while some nodes are down. It serves the S3 API and the MinIO web
+  console inside the GVC, with root credentials from a secret you create. Pick it for durable
+  S3-compatible storage in one location for files, backups and data that other workloads share.
+
+keywords:
+  - object storage
+  - s3
+  - s3 compatible
+  - s3 api
+  - erasure coding
+  - distributed object storage
+  - bucket storage
+  - blob storage
+  - backup target
+  - minio console
+  - mc client
+  - data lake storage
+
+useCases:
+  - S3-compatible storage for application uploads and files
+  - Backup target for databases and other templates that write to S3
+  - Object storage for long-term metrics or lakehouse data
+  - Keep object data in your own storage instead of Amazon S3
+  - Object storage that keeps serving when nodes fail
+
+alternativeTo:
+  - Amazon S3
+  - Google Cloud Storage
+  - Azure Blob Storage
+  - Cloudflare R2
+  - Wasabi
+  - Backblaze B2
+  - DigitalOcean Spaces
+  - Ceph Object Gateway
+
+compatibleWith: [s3-api]
+
+pickInsteadIf:
+  - need: a light single-node S3 endpoint for development or small backups
+    template: seaweedfs
+  - need: an S3 API reachable from the public internet
+    template: seaweedfs
+  - need: SFTP access for users or partners, with files stored in a bucket
+    template: sftpgo
+
+related:
+  - template: sftpgo
+    relation: companion
+    note: SFTP front end that stores uploaded files in a MinIO bucket
+  - template: thanos
+    relation: companion
+    note: Long-term Prometheus metrics retention in a MinIO bucket
+  - template: mimir
+    relation: companion
+    note: Prometheus metrics store that keeps its blocks in MinIO
+  - template: postgres
+    relation: companion
+    note: Sends scheduled pg_dump backups to a MinIO bucket
+  - template: duckdb
+    relation: companion
+    note: Scheduled SQL jobs that read and write Parquet in MinIO buckets
+  - template: polaris
+    relation: companion
+    note: Iceberg REST catalog for lakehouse tables stored in MinIO
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    valuesPath: admin.credentialsSecretName
+    required: true
+    description: Root user (3+ chars) and password (8+ chars), also the S3 access and secret key clients use. When missing, the workload waits with no logs.
+  - kind: other
+    valuesPath: replicas
+    required: true
+    description: An org quota of more than 5 replicas per workload. The default install runs 6 replicas, so request a quota increase first.

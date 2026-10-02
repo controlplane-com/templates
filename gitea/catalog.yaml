@@ -1,0 +1,81 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Gitea
+category: developer-tools
+topology: single
+
+summary: >-
+  Gitea Git service with repositories, pull requests and code review, issues, Git LFS and a
+  built-in package registry: one Gitea server on a persistent volume for repositories and
+  attachments, backed by a bundled PostgreSQL. Git over HTTPS works on the public endpoint by
+  default; Git over SSH through a direct load balancer and scheduled database backups are
+  optional. Pick it for lightweight Git hosting for a team or for CI pipelines.
+
+keywords:
+  - git
+  - git hosting
+  - git server
+  - source code hosting
+  - version control
+  - pull requests
+  - code review
+  - issue tracker
+  - git lfs
+  - package registry
+  - container registry
+  - repository mirroring
+  - git over ssh
+
+useCases:
+  - Host private Git repositories with pull requests, code review and issues for a team
+  - Give CI pipelines a Git remote to clone from and push to over HTTPS
+  - Mirror repositories from GitHub or GitLab into your own infrastructure
+  - Publish packages and container images to a registry next to the code
+  - Replace a paid hosted Git service with a lightweight self-hosted one
+
+alternativeTo:
+  - GitHub
+  - GitLab
+  - Bitbucket
+  - Azure Repos
+  - AWS CodeCommit
+  - Gogs
+
+pickInsteadIf:
+  - need: a CI server that runs builds and pipelines on on-demand agents
+    template: cpln-jenkins
+  - need: a team wiki or knowledge base outside of code repositories
+    template: docmost
+
+related:
+  - template: cpln-jenkins
+    relation: companion
+    note: Runs CI builds for repositories hosted in Gitea
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [adminUsername, adminPassword, adminEmail, secretKey, internalToken, jwtSecret]
+    valuesPath: gitea.auth.secretName
+    required: true
+    description: First site-admin login plus write-once signing keys (jwtSecret is base64url of 32 bytes). When it is missing the deployment waits with no logs.
+  - kind: domain
+    required: false
+    when: ssh.enabled while the web UI must stay public
+    description: A custom domain for the web UI. Public SSH takes over the canonical *.cpln.app endpoint, so the web UI needs its own domain.
+  - kind: bucket
+    required: false
+    when: postgres.backup.enabled (pass-through to the bundled postgres template)
+    description: AWS S3, GCS or MinIO bucket that receives scheduled pg_dumpall backups, set under postgres.backup.aws, .gcp or .minio.
+  - kind: cloud-account
+    required: false
+    when: postgres.backup.enabled with postgres.backup.provider aws or gcp
+    description: Control Plane cloud account for the backup bucket (postgres.backup.<provider>.cloudAccountName), plus a bucket-scoped IAM policy on AWS.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    required: false
+    when: postgres.backup.enabled with postgres.backup.provider minio
+    description: Access keys for the MinIO backup endpoint, named in postgres.backup.minio.credentialsSecretName.

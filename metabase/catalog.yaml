@@ -1,0 +1,110 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Metabase
+category: analytics
+topology: stateless
+
+summary: >-
+  Metabase open-source BI: dashboards, a visual query builder, a SQL editor and scheduled dashboard
+  subscriptions, with the admin account created on first boot. One Metabase replica keeps users,
+  questions and saved connections in a bundled PostgreSQL, highly available by default or
+  single-instance, with optional scheduled backups; the databases you analyze are connected in the
+  app after install. Pick it for self-service business intelligence and reporting over your own
+  databases.
+
+keywords:
+  - bi
+  - business intelligence
+  - dashboards
+  - sql editor
+  - query builder
+  - data visualization
+  - charts
+  - reporting
+  - scheduled reports
+  - dashboard subscriptions
+  - self-service analytics
+  - ad hoc queries
+  - kpi dashboards
+  - data exploration
+
+useCases:
+  - Build dashboards and charts over a PostgreSQL, MySQL or other database
+  - Let non-technical teammates explore data without writing SQL
+  - Write, save and share SQL queries and questions
+  - Send scheduled reports and dashboard subscriptions by email
+  - Replace a paid BI tool with one you run yourself
+
+alternativeTo:
+  - Tableau
+  - Microsoft Power BI
+  - Looker
+  - Looker Studio
+  - Apache Superset
+  - Redash
+  - Mode
+  - Sigma Computing
+  - Amazon QuickSight
+  - Domo
+
+pickInsteadIf:
+  - need: monitoring dashboards and alerts over metrics, logs and traces
+    template: grafana
+  - need: website traffic and visitor analytics from a tracking script
+    template: umami
+  - need: a browser-based SQL client and database administration console
+    template: dbeaver
+  - need: one SQL query that joins several databases at once
+    template: trino
+  - need: internal CRUD apps and admin panels on top of a database
+    template: tooljet
+
+related:
+  - template: trino
+    relation: companion
+    note: Federated query engine Metabase can use as one data source over many databases
+  - template: clickhouse
+    relation: companion
+    note: Analytical database for charting large event and log tables
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [email, password]
+    valuesPath: admin.secretName
+    required: true
+    description: Admin login created on first boot; password needs letters and digits, 8+ chars, no quotes or backslashes. When missing, the workload waits with no logs.
+  - kind: secret
+    secretType: opaque
+    valuesPath: encryptionKey.secretName
+    required: true
+    description: Random string of 16+ characters (plain encoding) that encrypts saved database connections. Back it up; losing it means re-entering every connection.
+  - kind: bucket
+    valuesPath:
+      - postgresHA.backup.aws.bucket
+      - postgresHA.backup.gcp.bucket
+      - postgresHA.backup.minio.bucket
+      - postgres.backup.aws.bucket
+      - postgres.backup.gcp.bucket
+      - postgres.backup.minio.bucket
+    required: false
+    when: postgresHA.backup.enabled or postgres.backup.enabled
+    description: Object storage bucket that receives the scheduled app-database backups.
+  - kind: cloud-account
+    valuesPath:
+      - postgresHA.backup.aws.cloudAccountName
+      - postgresHA.backup.gcp.cloudAccountName
+      - postgres.backup.aws.cloudAccountName
+      - postgres.backup.gcp.cloudAccountName
+    required: false
+    when: backup enabled with provider aws or gcp
+    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy (backup.aws.policyName) on AWS.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath: [postgresHA.backup.minio.credentialsSecretName, postgres.backup.minio.credentialsSecretName]
+    required: false
+    when: backup enabled with provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

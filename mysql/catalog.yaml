@@ -1,0 +1,81 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: MySQL
+category: database
+topology: single
+
+summary: >-
+  A single MySQL server on a persistent volume, reachable only on the internal network, with an
+  optional phpMyAdmin web console and optional scheduled mysqldump backups to Amazon S3 or Google
+  Cloud Storage. The application user, its database and the root password come from secrets you
+  create. The default MySQL database for an app in one location, without automatic failover.
+
+keywords:
+  - sql
+  - relational database
+  - rdbms
+  - innodb
+  - phpmyadmin
+  - mysqldump
+  - database backups
+  - s3 backups
+  - database admin console
+  - wordpress database
+
+useCases:
+  - Relational database for a web app or API that uses a MySQL driver
+  - Database for WordPress, Drupal, Magento or another app built for MySQL
+  - Browse and edit tables from a browser with phpMyAdmin
+  - Nightly SQL dumps of a database to an S3 or GCS bucket
+  - Development or staging database that mirrors a production MySQL
+
+alternativeTo:
+  - Amazon RDS for MySQL
+  - Google Cloud SQL for MySQL
+  - Azure Database for MySQL
+  - DigitalOcean Managed MySQL
+
+compatibleWith: [mysql-wire]
+
+pickInsteadIf:
+  - need: MySQL-compatible SQL that scales out across nodes and survives losing one
+    template: tidb
+  - need: MariaDB server, the community-developed fork of MySQL
+    template: mariadb
+  - need: a PostgreSQL database instead of MySQL
+    template: postgres
+
+related:
+  - template: dbeaver
+    relation: companion
+    note: Browser-based SQL client that can connect to this MySQL server
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: credentialsSecretName
+    required: true
+    description: Application user and database created on first boot. Create it before installing; when it is missing the workload waits with no logs.
+  - kind: secret
+    secretType: opaque
+    valuesPath: rootPasswordSecretName
+    required: true
+    description: MySQL root password as a plain opaque secret, kept apart from the app credentials. Create it before installing; when it is missing the workload waits.
+  - kind: bucket
+    valuesPath: [backup.aws.bucket, backup.gcp.bucket]
+    required: false
+    when: backup.enabled
+    description: S3 or GCS bucket that receives the scheduled mysqldump archives.
+  - kind: cloud-account
+    valuesPath: [backup.aws.cloudAccountName, backup.gcp.cloudAccountName]
+    required: false
+    when: backup.enabled
+    description: Control Plane cloud account for the AWS account or GCP project holding the bucket; on GCP its service account needs the Storage Admin role.
+  - kind: other
+    valuesPath: backup.aws.policyName
+    required: false
+    when: backup.enabled with backup.provider aws
+    description: AWS IAM policy scoped to the backup bucket, with the S3 actions listed in the README; the chart attaches it to the backup identity.

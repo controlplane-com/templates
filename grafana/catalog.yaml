@@ -1,0 +1,122 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Grafana
+category: observability
+topology: stateless
+
+summary: >-
+  Grafana OSS dashboards and alerting over datasources you provision, such as Prometheus, Thanos,
+  Mimir, SQL databases or external APIs; it ships no datasources or dashboards. All state lives in a
+  bundled highly available PostgreSQL (or a single-instance one for lighter installs), so the Grafana
+  tier is stateless and can run several replicas with Redis Sentinel coordinating alerting. Options
+  include datasources as code, SMTP alert emails and database backups to S3, GCS or an S3-compatible
+  bucket. The pick for dashboards in one location.
+
+keywords:
+  - dashboards
+  - data visualization
+  - metrics dashboards
+  - monitoring dashboard
+  - alerting
+  - alert notifications
+  - email alerts
+  - prometheus datasource
+  - promql
+  - datasource provisioning
+  - grafana oss
+  - observability ui
+
+useCases:
+  - Build dashboards over metrics stored in Prometheus, Thanos or Mimir
+  - Alert by email when a metric crosses a threshold
+  - Visualize data from PostgreSQL, MySQL and other databases
+  - Give a team a shared, login-protected view of application metrics
+  - Provision datasources as code alongside the deployment
+  - Chart custom workload metrics and cost series from the platform's Prometheus-compatible metrics endpoint
+
+alternativeTo:
+  - Grafana Cloud
+  - Amazon Managed Grafana
+  - Azure Managed Grafana
+  - Datadog
+  - New Relic
+
+pickInsteadIf:
+  - need: dashboards and alerting that keep serving after losing a whole region
+    template: grafana-multi-location
+  - need: a database that stores and queries metrics with PromQL
+    template: prometheus
+  - need: business intelligence dashboards, SQL questions and scheduled reports for non-engineers
+    template: metabase
+  - need: uptime checks of websites with public status pages
+    template: uptime-kuma
+
+related:
+  - template: prometheus
+    relation: companion
+    note: Metrics source for dashboards and alert rules
+  - template: thanos
+    relation: companion
+    note: One PromQL datasource across several Prometheus servers
+  - template: mimir
+    relation: companion
+    note: Long-term metrics datasource backed by object storage
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: admin.passwordSecretName
+    required: true
+    description: First-boot password for the admin login; the install waits without it. Delete it after first login by setting admin.applyPassword false.
+  - kind: secret
+    secretType: opaque
+    valuesPath: admin.secretKeySecretName
+    required: true
+    description: Key that encrypts stored datasource credentials, read on every boot. The install waits without it; never delete or rotate it.
+  - kind: secret
+    secretType: dictionary
+    keys: ["one key per $KEY used in datasources.definitions"]
+    valuesPath: datasources.credentialSecrets
+    required: false
+    when: datasources.credentialSecrets has entries
+    description: Credentials Grafana uses to reach a provisioned datasource, one dictionary secret per credentialSecrets entry, created before install.
+  - kind: secret
+    secretType: opaque
+    valuesPath: smtp.passwordSecretName
+    required: false
+    when: smtp.enabled with smtp.user set
+    description: SMTP password for alert emails, encoding plain. The render fails without its name when smtp.user is set.
+  - kind: bucket
+    valuesPath:
+      - postgresHA.backup.aws.bucket
+      - postgresHA.backup.gcp.bucket
+      - postgresHA.backup.minio.bucket
+      - postgres.backup.aws.bucket
+      - postgres.backup.gcp.bucket
+      - postgres.backup.minio.bucket
+    required: false
+    when: postgresHA.backup.enabled or postgres.backup.enabled
+    description: Bucket on AWS S3, GCS or an S3-compatible server that receives the scheduled database backups.
+  - kind: cloud-account
+    valuesPath:
+      - postgresHA.backup.aws.cloudAccountName
+      - postgresHA.backup.gcp.cloudAccountName
+      - postgres.backup.aws.cloudAccountName
+      - postgres.backup.gcp.cloudAccountName
+    required: false
+    when: database backup enabled with backup.provider aws or gcp
+    description: Control Plane cloud account for the backup bucket; on GCP its service account also needs Storage Admin or bucket-scoped objectAdmin.
+  - kind: other
+    valuesPath: [postgresHA.backup.aws.policyName, postgres.backup.aws.policyName]
+    required: false
+    when: database backup enabled with backup.provider aws
+    description: AWS IAM policy granting read, write, list and delete on the backup bucket, attached through the cloud account.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath: [postgresHA.backup.minio.credentialsSecretName, postgres.backup.minio.credentialsSecretName]
+    required: false
+    when: database backup enabled with backup.provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

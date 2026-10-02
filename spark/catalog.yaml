@@ -1,0 +1,76 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Apache Spark
+category: analytics
+topology: stateless
+
+summary: >-
+  An Apache Spark standalone cluster: one master with the Web UI and cluster port, a worker tier
+  scaled by a replica count, an optional Spark Connect gRPC server for remote PySpark and Scala
+  clients, and an optional History Server that reads event logs from Amazon S3 or Google Cloud
+  Storage. Nothing is persisted locally, and the UIs and cluster port have no authentication. Pick
+  it to run batch ETL and large DataFrame or Spark SQL jobs submitted with spark-submit.
+
+keywords:
+  - spark standalone
+  - pyspark
+  - spark sql
+  - dataframes
+  - spark-submit
+  - spark connect
+  - spark history server
+  - batch processing
+  - etl
+  - distributed computing
+  - cluster computing
+  - big data
+  - data engineering
+  - scala
+
+useCases:
+  - Run batch ETL jobs over large datasets with PySpark or Scala
+  - Transform and aggregate data with Spark SQL and DataFrames
+  - Submit jobs remotely from notebooks or apps through Spark Connect
+  - Keep a browsable history of completed Spark applications in S3 or GCS
+  - Spark cluster for data engineering without a managed platform
+
+alternativeTo:
+  - Databricks
+  - Amazon EMR
+  - Google Cloud Dataproc
+  - Azure HDInsight
+  - AWS Glue
+
+pickInsteadIf:
+  - need: interactive SQL across existing databases through one JDBC endpoint
+    template: trino
+  - need: a single scheduled SQL script over files that fits in one container
+    template: duckdb
+  - need: scheduling and orchestrating pipelines with dependencies and retries
+    template: airflow
+  - need: a database that stores analytical data and answers queries in real time
+    template: clickhouse
+
+related:
+  - template: airflow
+    relation: companion
+    note: Orchestrates pipelines whose steps submit jobs to the Spark cluster
+
+prerequisites:
+  - kind: bucket
+    valuesPath: storage.bucket
+    required: false
+    when: historyServer.enabled
+    description: S3 or GCS bucket for Spark event logs. The History Server crash-loops if it does not exist.
+  - kind: cloud-account
+    valuesPath: storage.cloudAccountName
+    required: false
+    when: historyServer.enabled
+    description: AWS or GCP cloud account for keyless bucket access; on GCP, grant its service account object admin on the bucket.
+  - kind: other
+    valuesPath: storage.policyName
+    required: false
+    when: historyServer.enabled with storage.provider aws
+    description: Bucket-scoped AWS IAM policy for the event-log bucket.

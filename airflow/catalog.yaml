@@ -1,0 +1,81 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Apache Airflow
+category: workflow
+topology: single
+
+summary: >-
+  Apache Airflow with the CeleryExecutor in one location: a webserver workload running the API
+  server, scheduler, DAG processor and triggerer, Celery workers, a Redis broker and a PostgreSQL
+  metadata database, with DAGs and logs on a shared volume. Options are git-sync to pull DAGs from
+  a repository and KEDA autoscaling of workers on queue length, down to zero. The UI ships closed
+  to the internet. Pick it to schedule and monitor batch data pipelines written as Python DAGs.
+
+keywords:
+  - dag
+  - workflow orchestration
+  - data pipelines
+  - etl
+  - elt
+  - scheduler
+  - job scheduling
+  - cron jobs
+  - batch jobs
+  - celery
+  - celeryexecutor
+  - python workflows
+  - task orchestration
+  - data engineering
+  - git-sync
+  - keda autoscaling
+
+useCases:
+  - Schedule and monitor ETL and ELT pipelines written as Python DAGs
+  - Replace scattered cron jobs with dependency-aware, retryable task scheduling
+  - Orchestrate batch jobs across databases, warehouses and cloud APIs
+  - Deploy DAGs from a Git repository automatically
+  - Scale task workers with queue depth and down to zero when idle
+
+alternativeTo:
+  - Amazon Managed Workflows for Apache Airflow
+  - Google Cloud Composer
+  - Astronomer
+  - Prefect
+  - Dagster
+
+pickInsteadIf:
+  - need: long-running application workflows in code that survive crashes and wait on signals
+    template: temporal
+  - need: no-code automations connecting SaaS apps with triggers and webhooks
+    template: n8n
+  - need: an HTTP task queue that calls your services with retries and rate limits
+    template: cpln-task-runner
+  - need: scheduled SQL batch jobs over object storage without running an orchestrator
+    template: duckdb
+  - need: distributed data processing on a cluster of workers
+    template: spark
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [jwtSecret, fernetKey, adminPassword]
+    valuesPath: airflow.auth.secretName
+    required: true
+    description: API token signing key, Fernet key (32 url-safe base64 bytes, never rotate) and admin UI password. A missing secret leaves the deployment waiting with no logs.
+  - kind: other
+    valuesPath: location
+    required: true
+    description: Set location to a location your GVC already has (default aws-us-east-1); otherwise nothing runs and no error is shown.
+  - kind: other
+    valuesPath: keda.enabled
+    required: false
+    when: keda.enabled
+    description: KEDA enabled on the GVC (spec.keda.enabled); without it workers never autoscale and stay at keda.minScale.
+  - kind: secret
+    secretType: opaque
+    valuesPath: gitSync.auth.secretName
+    required: false
+    when: gitSync.enabled with a private repository
+    description: Git personal access token for the private DAG repository; the secret payload is the token.

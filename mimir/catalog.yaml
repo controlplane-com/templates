@@ -1,0 +1,86 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Grafana Mimir
+category: observability
+topology: single
+
+summary: >-
+  Grafana Mimir in monolithic mode: one process running every Mimir component, with the ingester WAL
+  on a persistent volume and metric blocks stored in an S3, GCS or S3-compatible bucket you create.
+  Collectors push with Prometheus remote write and any PromQL client queries it back; options include
+  multi-tenancy by X-Scope-OrgID, block retention, and 3 or more replicas for 3-way replicated ingest.
+  Internal-only, with no authentication of its own. Pick it for long-term, push-based metrics storage.
+
+keywords:
+  - long-term metrics storage
+  - prometheus long-term storage
+  - metrics
+  - time-series database
+  - remote write
+  - promql
+  - multi-tenant metrics
+  - metrics retention
+  - object storage
+  - s3
+  - gcs
+  - metrics backend
+
+useCases:
+  - Store Prometheus metrics long term in an S3 or GCS bucket
+  - Receive remote-write metrics from Prometheus, Grafana Alloy or OpenTelemetry collectors
+  - Query months of metrics with PromQL from Grafana
+  - Keep the metrics of several teams or environments apart by tenant
+  - Keep metrics beyond the retention of a local Prometheus volume
+
+alternativeTo:
+  - Amazon Managed Service for Prometheus
+  - Google Cloud Managed Service for Prometheus
+  - Azure Monitor managed service for Prometheus
+  - Grafana Cloud
+  - Chronosphere
+  - Cortex
+  - VictoriaMetrics
+
+compatibleWith: [prometheus-remote-write, promql]
+
+pickInsteadIf:
+  - need: scrape metrics from targets rather than receive pushed metrics
+    template: prometheus
+  - need: one PromQL query over existing Prometheus servers without moving their data
+    template: thanos
+  - need: dashboards, alerting and a login-protected UI over my metrics
+    template: grafana
+
+related:
+  - template: grafana
+    relation: companion
+    note: Dashboards and alerting with Mimir as a Prometheus datasource
+  - template: prometheus
+    relation: companion
+    note: Scrapes targets and remote-writes the samples into Mimir
+  - template: otel-collector
+    relation: companion
+    note: Converts OTLP metrics from apps into remote write for Mimir
+
+prerequisites:
+  - kind: bucket
+    valuesPath: [storage.aws.bucket, storage.gcp.bucket, storage.minio.bucket]
+    required: true
+    description: Bucket for metric blocks on AWS S3 (storage.type aws, the default), GCS or an S3-compatible server. It must exist before install.
+  - kind: cloud-account
+    valuesPath: [storage.aws.cloudAccountName, storage.gcp.cloudAccountName]
+    required: true
+    description: Control Plane cloud account for the AWS (default) or GCP account holding the bucket; access is keyless. Not needed with storage.type minio.
+  - kind: other
+    valuesPath: storage.aws.policyName
+    required: true
+    description: With storage.type aws (the default), an AWS IAM policy granting List, Get, Put and Delete on the bucket. Not needed for gcp or minio.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath: storage.minio.credentialsSecretName
+    required: false
+    when: storage.type minio
+    description: Access keys for the MinIO or S3-compatible bucket endpoint.

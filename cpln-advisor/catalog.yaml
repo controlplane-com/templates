@@ -1,0 +1,99 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: CPLN Advisor
+category: observability
+topology: stateless
+
+summary: >-
+  An advisor that scans the workloads in your org, reads their CPU, memory, replica, error-log and
+  billed-cost data, and has an LLM (Anthropic or OpenAI) propose memory limits, autoscaling thresholds
+  and replica counts. Suggestions appear in a password-protected dashboard with an optional Slack
+  digest, and Autopilot can apply qualifying ones, each with a one-click revert. It deploys a
+  dashboard, API, worker, scheduler and Redis, with a bundled PostgreSQL and optional backups. Pick it
+  to right-size workloads and cut their cost.
+
+keywords:
+  - rightsizing
+  - right-sizing
+  - cost optimization
+  - finops
+  - overprovisioning
+  - resource recommendations
+  - workload tuning
+  - memory limits
+  - autoscaling recommendations
+  - capacity planning
+  - cloud cost
+  - llm recommendations
+  - autopilot
+  - slack digest
+
+useCases:
+  - Find over- and under-provisioned workloads from their real usage
+  - Get recommended memory limits, autoscaling thresholds and replica counts
+  - Reduce spend using each workload's billed cost
+  - Apply tuning changes automatically with a one-click revert
+  - Receive a Slack digest of tuning suggestions
+
+alternativeTo:
+  - Kubecost
+  - CAST AI
+  - StormForge
+  - PerfectScale
+  - Densify
+
+pickInsteadIf:
+  - need: dashboards and alerting over my own metrics
+    template: grafana
+  - need: collect and query my own application metrics with PromQL
+    template: prometheus
+
+prerequisites:
+  - kind: other
+    required: true
+    description: An existing GVC with exactly one location to install into. The chart creates none; a second location would run a second scheduler and a separate database.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: postgres.config.credentialsSecretName
+    required: true
+    description: Credentials for the bundled PostgreSQL; they must match DATABASE_URL in the advisor secret. The deployment fails silently without it.
+  - kind: secret
+    secretType: dictionary
+    keys: [ADVISOR_API_TOKEN, ADVISOR_SECRET_KEY, ADVISOR_SESSION_SECRET, ADVISOR_USERNAME, ADVISOR_PASSWORD, DATABASE_URL]
+    valuesPath: auth.secretName
+    required: true
+    description: API token, encryption and session keys, the dashboard login, and a postgresql+asyncpg:// URL to RELEASE-postgres. The deployment fails silently without it.
+  - kind: other
+    required: true
+    description: A service account key with gvc and workload view plus readLogs, readMetrics and readUsage (workload edit for Autopilot), pasted into the UI after install.
+  - kind: other
+    required: true
+    description: An Anthropic or OpenAI API key, entered in the UI after install; the LLM generates the suggestions.
+  - kind: other
+    required: false
+    when: Slack digests wanted, configured in the UI after install
+    description: A Slack bot token for the digest of suggestions.
+  - kind: bucket
+    valuesPath: postgres.backup.aws.bucket
+    required: false
+    when: postgres.backup.enabled
+    description: Bucket that receives the scheduled database backups; AWS S3 by default, or GCS or S3-compatible through the postgres subchart values.
+  - kind: cloud-account
+    valuesPath: postgres.backup.aws.cloudAccountName
+    required: false
+    when: postgres.backup.enabled with postgres.backup.provider aws or gcp
+    description: Control Plane cloud account for the backup bucket.
+  - kind: other
+    valuesPath: postgres.backup.aws.policyName
+    required: false
+    when: postgres.backup.enabled with postgres.backup.provider aws
+    description: AWS IAM policy granting read, write, list and delete on the backup bucket.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    required: false
+    when: postgres.backup.enabled with postgres.backup.provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint, named in postgres.backup.minio.credentialsSecretName.

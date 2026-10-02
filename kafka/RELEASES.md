@@ -1,3 +1,13 @@
+# Release Notes - Version 4.2.0
+
+## What's New
+
+- **Brokers no longer fill ephemeral storage with `server.log`**: for official `apache/kafka:3.x.y` images the broker now sets `KAFKA_LOG4J_ROOT_LOGLEVEL=INFO`, so the main broker log goes to stdout only.
+  - Earlier versions also wrote a copy of every line to `/opt/kafka/logs/server.log`, rolled every hour and never deleted. That directory is on the container filesystem, so long-running brokers eventually hit the ephemeral-storage limit (1Gi per CPU core) and were evicted, often several at once. Nothing is lost: the file was a duplicate of stdout, which `cpln logs` already collects.
+  - The small per-component logs and the size-capped JVM GC log still go to `/opt/kafka/logs`, as before.
+  - A non-empty `KAFKA_LOG4J_ROOT_LOGLEVEL` in `kafka.env` takes precedence. Other images (4.x, custom, digest-only) are left unchanged.
+  - Upgrading rolls the brokers one at a time.
+
 # Release Notes - Version 4.1.0
 
 ## What's New

@@ -1,0 +1,58 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Meilisearch
+category: search
+topology: single
+
+summary: >-
+  A single Meilisearch server on a persistent volume, serving a REST search API protected by a
+  master key, with daily platform volume snapshots. Options add Meilisearch's own snapshots,
+  Prometheus metrics and a public HTTPS endpoint that front-ends can call with a search-only key.
+  Pick it for instant, typo-tolerant, faceted search in a website or app; it runs one replica with
+  no failover.
+
+keywords:
+  - search engine
+  - instant search
+  - search-as-you-type
+  - typo tolerance
+  - faceted search
+  - full-text search
+  - site search
+  - ecommerce search
+  - product search
+  - filtering and sorting
+  - search api
+  - search api keys
+  - rest api
+
+useCases:
+  - Search-as-you-type for a website, docs site or online store
+  - Typo-tolerant product search with facets and filters
+  - In-app search called straight from the browser with a search-only key
+  - Replace a hosted search service with one you run yourself
+
+alternativeTo:
+  - Algolia
+  - Typesense
+  - Meilisearch Cloud
+  - Amazon CloudSearch
+
+pickInsteadIf:
+  - need: a multi-node search cluster that keeps serving when a node is lost
+    template: opensearch
+  - need: Elasticsearch API compatibility with Kibana
+    template: elasticsearch
+  - need: log search and analytics with aggregations and dashboards
+    template: opensearch
+  - need: vector similarity search on embeddings for RAG
+    template: qdrant
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: auth.secretName
+    required: true
+    description: Opaque secret whose payload is the master key, at least 16 bytes. Create it before installing; when it is missing the workload waits indefinitely.

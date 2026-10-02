@@ -1,0 +1,104 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: PostgreSQL (highly available)
+category: database
+family: postgres
+topology: highly-available
+
+summary: >-
+  A PostgreSQL cluster of three Patroni-managed replicas in one location, with a bundled etcd
+  quorum for leader election and automatic failover, and an HAProxy endpoint that always routes
+  to the current primary. Options: multi-zone placement, a PgBouncer pooler, and backups to S3,
+  GCS or MinIO as scheduled logical dumps or continuous WAL-G archiving with point-in-time
+  recovery. Pick it for a production Postgres that must keep accepting writes when a replica or
+  node fails.
+
+keywords:
+  - postgresql
+  - pg
+  - sql
+  - relational database
+  - high availability
+  - ha
+  - automatic failover
+  - patroni
+  - etcd
+  - haproxy
+  - streaming replication
+  - hot standby
+  - leader election
+  - multi-zone
+  - pgbouncer
+  - connection pooling
+  - wal-g
+  - point-in-time recovery
+  - pitr
+  - database backups
+
+useCases:
+  - Production relational database that survives a replica or node failure
+  - Postgres for an app that cannot tolerate a single-server outage
+  - Postgres replicas spread across availability zones in one region
+  - Restore a Postgres database to a point in time from continuous WAL archives
+
+alternativeTo:
+  - Amazon RDS for PostgreSQL
+  - Amazon Aurora PostgreSQL-Compatible Edition
+  - Google Cloud SQL for PostgreSQL
+  - Azure Database for PostgreSQL
+  - Crunchy Bridge
+  - CloudNativePG
+
+compatibleWith: [postgres-wire]
+
+pickInsteadIf:
+  - need: one cluster across several locations that survives losing a location
+    template: postgres-multi-location
+  - need: active-active writes in several regions
+    template: pgedge
+  - need: a single small Postgres server for development or a low-traffic app
+    template: postgres
+  - need: time-series data with hypertables and automatic failover
+    template: timescaledb-highly-available
+  - need: distributed SQL that scales writes out across nodes with PostgreSQL drivers
+    template: cockroach
+
+related:
+  - template: pgdog
+    relation: companion
+    note: Proxy that sends writes to the primary and spreads reads across the replicas
+  - template: dbeaver
+    relation: companion
+    note: Browser-based SQL client for querying and administering the database
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: config.credentialsSecretName
+    required: true
+    description: Database credentials. Create it before installing; when it is missing the workload waits with no logs.
+  - kind: bucket
+    valuesPath: [backup.aws.bucket, backup.gcp.bucket, backup.minio.bucket]
+    required: false
+    when: backup.enabled
+    description: Object storage bucket that receives the logical dumps or WAL-G archives.
+  - kind: cloud-account
+    valuesPath: [backup.aws.cloudAccountName, backup.gcp.cloudAccountName]
+    required: false
+    when: backup.enabled with backup.provider aws or gcp
+    description: Control Plane cloud account for the backup bucket's AWS account or GCP project; on GCP grant its service account the Storage Admin role.
+  - kind: other
+    valuesPath: backup.aws.policyName
+    required: false
+    when: backup.enabled with backup.provider aws
+    description: AWS IAM policy scoped to the backup bucket (object read, write, delete and list actions); the README has the JSON.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath: backup.minio.credentialsSecretName
+    required: false
+    when: backup.enabled with backup.provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

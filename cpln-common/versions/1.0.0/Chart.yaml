@@ -8,5 +8,4 @@ appVersion: "1.0.0"
 annotations:
   created: "2026-04-13"
   lastModified: "2026-09-28"
-  category: "library"
   createsGvc: false

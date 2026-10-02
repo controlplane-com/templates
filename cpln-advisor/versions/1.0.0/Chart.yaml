@@ -9,7 +9,6 @@ appVersion: "1.0.0"
 annotations:
   created: "2026-08-17"
   lastModified: "2026-09-01"
-  category: "observability"
   createsGvc: false
 
 dependencies:

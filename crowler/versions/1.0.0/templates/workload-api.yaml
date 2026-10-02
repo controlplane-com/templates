@@ -49,6 +49,8 @@ spec:
         {{- range .Values.internalAccess.workloads }}
         - {{ . }}
         {{- end }}
+      {{- else }}
+      inboundAllowWorkload: []
       {{- end }}
   loadBalancer:
     direct:

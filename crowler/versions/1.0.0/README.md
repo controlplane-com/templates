@@ -65,12 +65,10 @@ events:
 ```yaml
 crawler:
   queryTimer: 30                # seconds between polls for new sources (>= 5)
-  timeout: 30                   # page fetch/render timeout, seconds
   crawlingInterval: 3 days      # re-crawl cadence for a successful source
   crawlingIfError: 15 minutes   # retry delay after a failed crawl
   maxDepth: 3                   # link-following depth (0 = unlimited)
   maxLinks: 0                   # links followed per page (0 = unlimited)
-  headless: true
   debugLevel: 1
 config:
   existingSecretName: ""        # opaque secret with a full config.yaml that REPLACES the rendered one
@@ -121,11 +119,11 @@ Reach the API from your machine, add a site to crawl, then search what was colle
 
 ```bash
 cpln port-forward {release}-crowler-api 8080:8080 --gvc {gvc}
-curl -X POST http://localhost:8080/v1/source/add -H 'Content-Type: application/json' -d '{"url":"https://example.com"}'
+curl -X POST http://localhost:8080/v1/source/add -H 'Content-Type: application/json' -d '{"url":"https://example.com","restricted":2}'
 curl 'http://localhost:8080/v1/search/general?q=example'
 ```
 
-The full API is described at `http://localhost:8080/v1/docs`.
+`restricted: 2` lets the crawl follow links within the same site; without it only the page you added is crawled. The full API is described at `http://localhost:8080/v1/docs`.
 
 ## Backing up the database
 
@@ -138,6 +136,7 @@ The database is the `postgres` template, so its scheduled backups work here unch
 - **Upgrading the CROWler images can need a manual schema migration.** The schema loader never re-runs the schema on an existing database. If the new release expects a newer schema, it logs a `WARNING` and the apps start anyway; apply the matching upstream `db_migrations` script.
 - **The first upgrade after install can restart the database.** With the default single replicas, crawling and the API may pause for a minute or two.
 - **Network reconnaissance is unavailable.** CROWler's nmap-based DNS, WHOIS and service scans need Linux capabilities the platform does not grant, so they are switched off.
+- **Uninstalling deletes all crawl data.** The database volumeset is removed with the release, so a reinstall starts empty. Back up first if you need the data.
 - **Give each release its own `postgres.config.credentialsSecretName`.** Secret names are org-wide, so a second release on the default name is refused at install.
 
 ## Links

@@ -64,12 +64,10 @@ crowlerDb:
 # ─── Crawler behaviour (rendered into config.yaml) ──────────────────
 crawler:
   queryTimer: 30                                 # seconds between polls for new sources (>= 5)
-  timeout: 30                                    # page fetch/render timeout, seconds
   crawlingInterval: 3 days                       # re-crawl cadence for a successfully crawled source
   crawlingIfError: 15 minutes                    # retry delay after a failed crawl
   maxDepth: 3                                    # link-following depth (0 = unlimited)
   maxLinks: 0                                    # links followed per page (0 = unlimited)
-  headless: true                                 # false = visible Chromium under Xvfb (watch via VNC)
   debugLevel: 1                                  # 0 = silent; higher = more log lines
 
 # ─── Full-config escape hatch (optional) ────────────────────────────

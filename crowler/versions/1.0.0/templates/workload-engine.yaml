@@ -46,6 +46,7 @@ spec:
       # Nothing calls the engine: it pulls work from the database and dials out to
       # its browser nodes. Its control API (:8081) is for its own readiness probe.
       inboundAllowType: none
+      inboundAllowWorkload: []
   loadBalancer:
     direct:
       enabled: false

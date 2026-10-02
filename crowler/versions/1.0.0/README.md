@@ -123,7 +123,7 @@ curl -X POST http://localhost:8080/v1/source/add -H 'Content-Type: application/j
 curl 'http://localhost:8080/v1/search/general?q=example'
 ```
 
-`restricted: 2` lets the crawl follow links within the same site; without it only the page you added is crawled. The full API is described at `http://localhost:8080/v1/docs`.
+`restricted: 2` lets the crawl follow links within the same site; without it only the page you added is crawled. CROWler 2.1.8 follows absolute and root-relative links (`/docs/a.html`) but not bare relative ones (`a.html`). The full API is described at `http://localhost:8080/v1/docs`.
 
 ## Backing up the database
 

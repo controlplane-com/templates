@@ -54,7 +54,7 @@ admin:
   passwordSecretName: my-jenkins-admin-password   # opaque secret; must EXIST BEFORE INSTALL
 ```
 
-Applied on every boot, so changing the secret and redeploying does change the password — unlike a first-boot-only bootstrap.
+Applied on every boot, so changing the secret and forcing a redeployment (`cpln workload force-redeployment RELEASE_NAME-jenkins --gvc GVC_NAME`) does change the password — unlike a first-boot-only bootstrap. Updating the secret alone does not redeploy the controller.
 
 ### Control Plane cloud
 
@@ -112,7 +112,7 @@ cpln port-forward RELEASE_NAME-jenkins 8080:8080 --gvc GVC_NAME
 
 | Path | Address | Notes |
 |---|---|---|
-| Public UI | `https://<canonical-endpoint>` | Only when `publicAccess.enabled: true`. Read it from `status.canonicalEndpoint` in `cpln workload get RELEASE_NAME-jenkins -o yaml`. |
+| Public UI | `status.canonicalEndpoint` of `RELEASE_NAME-jenkins` | Only when `publicAccess.enabled: true`. Read it with `cpln workload get RELEASE_NAME-jenkins --gvc GVC_NAME -o yaml`. |
 | Internal UI | `http://RELEASE_NAME-jenkins.GVC_NAME.cpln.local:8080` | Subject to `internalAccess.type`. Use the full name; the short one does not always resolve. |
 | Admin login | `admin.username` + the payload of your `admin.passwordSecretName` secret | Never stored in the Helm release. |
 
@@ -131,7 +131,7 @@ pipeline {
 }
 ```
 
-An agent workload appears in the GVC within about 30 seconds, runs the build, and is deleted once `cloud.retentionMins` elapses. With `allowJobsWithoutLabels: true` (the default), unlabelled jobs also run on Control Plane agents.
+Jenkins creates an agent workload in the agent GVC whose name starts with `cloud.agentWorkload`, runs the build on it, and deletes it once it has been idle for `cloud.retentionMins`. With `allowJobsWithoutLabels: true` (the default), unlabelled jobs also run on Control Plane agents.
 
 ## Diagnosing a stuck install
 
@@ -141,19 +141,28 @@ A missing prerequisite secret produces **no log output at all** — the containe
 cpln workload get-deployments RELEASE_NAME-jenkins --gvc GVC_NAME -o yaml
 ```
 
-Read `status.versions[].message`; it names the missing secret. Note this is `get-deployments` — plain `cpln workload get` has no `versions` field. Creating the secret repairs it on its own within roughly 5.5 to 10.5 minutes, or force a redeployment to skip the wait.
+Read `status.versions[].message`; it names the missing secret. Note this is `get-deployments` — plain `cpln workload get` has no `versions` field. Creating the secret repairs it on its own after several minutes, or force a redeployment to skip the wait:
 
-If Jenkins starts but no agents appear, the API key is the usual cause. Querying the controller's logs shows `Failed to list workloads: 403` when the key lacks workload permissions — the Jenkins UI shows only an idle cloud, so the log is the place to look.
+```bash
+cpln workload force-redeployment RELEASE_NAME-jenkins --gvc GVC_NAME
+```
+
+If Jenkins starts but no agents appear, the API key is the usual cause. The controller logs `Failed to list workloads: 403` when the key lacks workload permissions — the Jenkins UI shows only an idle cloud, so the log is the place to look:
+
+```bash
+cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-jenkins"} |= "Failed to list workloads"' --limit 50 --since 10m
+```
 
 ## Important Notes
 
 - **Create both secrets before installing** — a missing one wedges the deployment silently.
 - **The agent GVC must have exactly one location.** Multi-location GVCs are rejected by the plugin.
-- **An API key with no policy bindings authenticates but provisions nothing** — it needs workload `view`/`create`/`delete` in the agent GVC.
+- **An API key with no policy bindings authenticates but provisions nothing** — it needs workload `view`/`create`/`delete` in the agent GVC, plus `view` on GVCs, identities and volume sets.
+- **Agents in a different GVC (`cloud.gvc`) dial back to the controller's internal address**, which the default `internalAccess.type: same-gvc` does not admit; widen it (for example `same-org`) for cross-GVC agents. This combination has not been tested.
 - **`publicAccess.enabled: true` puts a Jenkins login on the internet.** Set a strong admin password first, or use a port-forward tunnel instead.
 - **Agent CPU and memory have floors** (50 millicores, 128 MiB). The chart refuses to render below them, because the agent JVM fails to start or is OOM-killed.
 - **Jobs, build history and installed plugins live on the volume set** and survive redeployment; uninstalling the release deletes it.
-- **Access changes take up to a couple of minutes to propagate** after toggling `publicAccess` or `internalAccess`.
+- **Access changes can take a few minutes to propagate** after toggling `publicAccess` or `internalAccess`.
 
 ## Links
 

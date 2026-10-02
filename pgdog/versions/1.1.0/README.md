@@ -62,12 +62,12 @@ Each entry maps to a `[[databases]]` block in `pgdog.toml`. Multiple entries sha
 ```yaml
 databases:
   - name: my-pgdog-database   # logical name clients connect to; must be a real database on the backend
-    host: my-postgres-workload  # e.g. WORKLOAD_NAME for an in-GVC Postgres, or an external hostname
+    host: my-postgres-workload  # e.g. WORKLOAD_NAME.GVC_NAME.cpln.local for an in-GVC Postgres, or an external hostname
     port: 5432
     role: primary             # options: primary, replica, auto
 ```
 
-With the **postgres** template, `host` is `{release-name}-postgres` — the short name resolves inside the GVC. With **postgres-highly-available**, point the `primary` entry at `{release-name}-postgres-ha-proxy` and add `replica` entries using the replicaDirect hostnames (`replica-{n}.{release-name}-postgres-ha.{location}.{gvc}.cpln.local`).
+For an in-GVC backend always use the fully-qualified `WORKLOAD_NAME.GVC_NAME.cpln.local` — a bare workload name does not resolve for every workload type. With the **postgres** template, `host` is `PG_RELEASE_NAME-postgres.GVC_NAME.cpln.local`. With **postgres-highly-available**, point the `primary` entry at `PG_RELEASE_NAME-postgres-ha-proxy.GVC_NAME.cpln.local` (HAProxy always routes to the current leader) and add `replica` entries using the replicaDirect hostnames (`replica-N.PG_RELEASE_NAME-postgres-ha.LOCATION.GVC_NAME.cpln.local`). `PG_RELEASE_NAME` is the backend template's release name.
 
 ### Pooled users
 
@@ -141,11 +141,16 @@ admin:
   passwordSecretName: my-pgdog-admin-password
 ```
 
-From a workload inside the GVC:
+To reach it from your machine, tunnel to the proxy:
 
 ```sh
-PGPASSWORD="$(cpln secret reveal my-pgdog-admin-password -o yaml | awk '/^  payload:/ {print $2}')" \
-  psql -h {release-name}-pgdog.{gvc}.cpln.local -p 6432 -U admin -d admin
+cpln port-forward RELEASE_NAME-pgdog 6432:6432 --gvc GVC_NAME
+```
+
+Then, from another terminal, connect as `admin.user` with the admin secret's payload as the password (`cpln secret reveal my-pgdog-admin-password -o yaml`) and run `SHOW POOLS` or `SHOW CLIENTS`:
+
+```sh
+psql -h 127.0.0.1 -p 6432 -U admin -d admin
 ```
 
 ### Authentication and logging
@@ -171,7 +176,7 @@ internalAccess:
   workloads: []      # used when type is workload-list
 ```
 
-With `publicAccess.enabled: true` Control Plane assigns a canonical `*.cpln.app` hostname automatically — read it from `status.canonicalEndpoint` in `cpln workload get {release-name}-pgdog -o yaml`; `address` is only needed for a custom domain. A change to either access knob takes up to a couple of minutes to propagate.
+With `publicAccess.enabled: true` Control Plane opens a TCP load balancer on port `6432` and assigns a canonical `*.cpln.app` hostname automatically — read it from `status.canonicalEndpoint` in `cpln workload get RELEASE_NAME-pgdog --gvc GVC_NAME -o yaml`. `address` attaches an existing domain resource to that load balancer; that path has not been verified. A change to either access knob can take several minutes to propagate.
 
 ## Connecting
 
@@ -179,7 +184,7 @@ Applications connect exactly as they would to PostgreSQL — PgDog speaks the fu
 
 | Setting | Value |
 |---|---|
-| Host (in-GVC) | `{release-name}-pgdog.{gvc}.cpln.local` — the fully-qualified form is required; the short name does **not** resolve for this workload |
+| Host (in-GVC) | `RELEASE_NAME-pgdog.GVC_NAME.cpln.local` — the fully-qualified form is required; the short name does **not** resolve for this workload |
 | Host (public) | the workload's `status.canonicalEndpoint`, when `publicAccess.enabled` is true |
 | Port | `6432` |
 | Database | a `name` from your `databases` list |
@@ -189,12 +194,12 @@ Applications connect exactly as they would to PostgreSQL — PgDog speaks the fu
 
 ## Important Notes
 
-- **A missing prerequisite secret wedges the deployment silently** — `cpln logs` returns zero lines because the container never starts. The only diagnostic is `cpln workload get-deployments {release-name}-pgdog --gvc {gvc} -o yaml` and reading `status.versions[].message` (plain `cpln workload get` has no `versions` key). It recovers on its own within about 6–8 minutes of the secret appearing, or immediately with `cpln workload force-redeployment`.
+- **A missing prerequisite secret wedges the deployment silently** — `cpln logs` returns zero lines because the container never starts. The only diagnostic is `cpln workload get-deployments RELEASE_NAME-pgdog --gvc GVC_NAME -o yaml` and reading `status.versions[].message` (plain `cpln workload get` has no `versions` key). It recovers on its own several minutes after the secret appears, or immediately with `cpln workload force-redeployment RELEASE_NAME-pgdog --gvc GVC_NAME`.
 - **PgDog does not manage PostgreSQL** — it is a proxy only. Deploy a backend before pointing PgDog at it.
 - **Port 6432, not 5432** — update application connection strings accordingly.
 - **Transaction mode drops session state** — if your application relies on `SET` variables, temporary tables, or advisory locks, use `pooling.mode: session`.
 - **Each replica keeps its own pool** — when raising `replicas`, lower `pooling.defaultPoolSize` proportionally or the backend sees `replicas × defaultPoolSize` connections.
-- **Rotating a credential needs a restart** — the config files are assembled once at container start, so run `cpln workload force-redeployment` after changing a secret's contents.
+- **Rotating a credential needs a restart** — the config files are assembled once at container start, so run `cpln workload force-redeployment RELEASE_NAME-pgdog --gvc GVC_NAME` after changing a secret's contents.
 
 ## Links
 

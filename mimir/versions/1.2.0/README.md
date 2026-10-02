@@ -31,7 +31,7 @@ This is a **self-hosted metrics store for your own metrics from your own sources
 - **Mimir**: Stateful workload running all Mimir components in one process (`target: all`); single replica by default — set `replicas: 3` or more for an HA cluster with 3-way-replicated ingest, where queries and pushes continue through a replica loss or rolling restart. Remote-write ingest and PromQL query on port 8080; internal gRPC on 9095; memberlist on 7946 (self-contained ring — no Consul/etcd).
 - **Volumeset**: 20 GiB at `/data` for the ingester WAL/TSDB and compactor workspace; metric blocks are durably stored in your object bucket, not on the volume.
 - **Config secret**: the rendered Mimir configuration, mounted as a file.
-- **Identity + policy**: least privilege — `reveal` on the config secret only, plus cloud access scoped to your bucket (AWS/GCP).
+- **Identity + policy**: least privilege — `reveal` on the config secret (plus your MinIO credentials secret with `storage.type: minio`), and cloud access scoped to your bucket (AWS/GCP).
 
 
 ## Prerequisites
@@ -40,7 +40,7 @@ An existing bucket in one of the supported backends, and access setup for it (st
 
 - **AWS S3** — an S3 bucket, a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) for your AWS account, and a bucket-scoped IAM policy.
 - **Google Cloud Storage** — a GCS bucket and a Control Plane cloud account for your GCP project.
-- **S3-compatible (MinIO, R2, Wasabi, …)** — a bucket and static access credentials (no cloud account).
+- **S3-compatible (MinIO, R2, Wasabi, …)** — a bucket, and a `dictionary` secret holding its `accessKey`/`secretKey`, created before install (no cloud account).
 
 ## Configuration
 
@@ -75,7 +75,7 @@ storage:
     cloudAccountName: my-gcs-cloud-account
 
   minio:
-    endpoint: my-minio:9000        # host:port, no scheme
+    endpoint: my-minio:9000        # host:port, no scheme — use the FQDN, e.g. my-minio.my-gvc.cpln.local:9000
     insecure: true                 # true for plain-HTTP endpoints
     bucket: my-mimir-bucket
     region: us-east-1
@@ -143,15 +143,16 @@ internalAccess:
 
 ### S3-compatible (MinIO, R2, Wasabi, …)
 
-1. Create the bucket on your server and credentials that can read/write it.
-2. Set `storage.minio.*`: endpoint as `host:port` (no scheme; `insecure: true` for plain HTTP), bucket, region, and the access key pair.
+1. Create the bucket on your server and an access key pair that can read/write it.
+2. Create the dictionary secret holding that key pair **before** install (see the snippet at the top of this README) and set `storage.minio.credentialsSecretName` to its name.
+3. Set `storage.minio.*`: endpoint as `host:port` (no scheme — a fully qualified `WORKLOAD_NAME.GVC_NAME.cpln.local:9000` for a server in Control Plane; `insecure: true` for plain HTTP), bucket and region.
 
 ## Connecting
 
 | What | Endpoint |
 |---|---|
-| Remote-write ingest (from your collectors) | `http://RELEASE-mimir.GVC.cpln.local:8080/api/v1/push` |
-| PromQL / Grafana datasource | `http://RELEASE-mimir.GVC.cpln.local:8080/prometheus` |
+| Remote-write ingest (from your collectors) | `http://RELEASE_NAME-mimir.GVC_NAME.cpln.local:8080/api/v1/push` |
+| PromQL / Grafana datasource | `http://RELEASE_NAME-mimir.GVC_NAME.cpln.local:8080/prometheus` |
 | Tenant header (when `multitenancy.enabled`) | `X-Scope-OrgID: <tenant>` on every request |
 
 Point a Grafana Prometheus datasource at the PromQL URL. Collectors inside the GVC (or org, per `internalAccess`) push directly to the ingest endpoint.
@@ -162,7 +163,7 @@ Point a Grafana Prometheus datasource at the PromQL URL. Collectors inside the G
 - **With `multitenancy.enabled: true`, every request needs `X-Scope-OrgID`** — pushes and queries without it are rejected; tenants are implicit (no provisioning step).
 - **Transient "Access Denied" warnings in the first seconds of a fresh boot are expected** — the workload identity's cloud credentials are still being issued; Mimir retries and proceeds.
 - **Data lives in your bucket** — the volumeset only holds the WAL and scratch space. Reinstalling the template against the same bucket resumes with your data; deleting data means emptying the bucket.
-- **After scaling `replicas` 1 → 3 on a live install**, metrics written shortly before the scale-up can be intermittently invisible to queries (roughly a third of requests) for up to ~12 hours while their blocks age into the store. No data is lost, new writes are unaffected, and it resolves on its own — scale up at a quiet hour if that window matters.
+- **After scaling `replicas` 1 → 3 on a live install**, metrics written shortly before the scale-up can be intermittently missing from query results for up to about 12 hours while their blocks age into the store. No data is lost, new writes are unaffected, and it resolves on its own — scale up at a quiet hour if that window matters.
 - **Retention is enforced by the compactor** — changing `retention.period` applies to existing blocks too.
 - **After uninstall, re-check your bucket**: the terminating replica can re-write a small cluster-seed file (`blocks/__mimir_cluster/`) minutes after teardown — delete it if you are emptying the bucket.
 

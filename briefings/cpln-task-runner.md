@@ -13,9 +13,9 @@
 ## Architecture on cpln
 | Resource | Purpose |
 |---|---|
-| workload `{release}-task-runner-api` (**serverless**, 1–3) | HTTP API on 8080. `public.enabled: true` by default |
+| workload `{release}-task-runner-api` (**serverless**, 1–3) | HTTP API on 8080. `public.enabled: false` by default since 1.3.0; internal `same-gvc` |
 | workload `{release}-task-runner-worker` (**serverless**, 1–5) | Delivery. Internal only; outbound `0.0.0.0/0` |
-| secret `task-runner-secrets` (dictionary, optional) | Bundled Redis + Sentinel passwords, from values |
+| secret `task-runner-secrets` (dictionary, optional) | Bundled Redis + Sentinel passwords, from values. **Org-level and NOT release-prefixed** — a second install in the same org collides unless `secretName` (and both `fromSecret.name`) change |
 | identity + policy | `reveal` on the Redis secret(s) **and** the admin-key secret |
 | *(user-created)* opaque secret | The admin API key — payload IS the key |
 | redis subchart | Redis + Sentinel workloads, volumes, their own identity/policy |
@@ -25,7 +25,7 @@
 
 ## Troubleshooting / considerations
 - **Security history — 1.2.x is the most exposed default in the 2026-08 audit (row 22).** `api.env.adminApiKey: ""` meant "disable admin auth", and `api.public.enabled` was `true`, so `/admin/*` — create/edit/delete clients and rate-limit tiers — was open to the internet on a default install. `redisPassword`/`sentinelPassword` were both the working value `mypassword`.
-- **A GUARD, not a default flip, is the 1.3.0 fix — and that was a deliberate choice.** Flipping `public.enabled` to false would break the template's actual purpose (receiving task submissions from outside the GVC) while leaving an empty admin key legal. The chart instead makes the key a required prerequisite secret and **fails the render** when `apiKeySecretName` is empty while `public.enabled` is true. An empty key stays legal for an internal-only install, which is a deliberate act the user has to spell out.
+- **A GUARD, not a default flip, was the first 1.3.0 fix (superseded the same day: `public.enabled` was ALSO flipped to `false` after the enqueue finding below).** Flipping `public.enabled` to false would break the template's actual purpose (receiving task submissions from outside the GVC) while leaving an empty admin key legal. The chart instead makes the key a required prerequisite secret and **fails the render** when `apiKeySecretName` is empty while `public.enabled` is true. An empty key stays legal for an internal-only install, which is a deliberate act the user has to spell out.
 - **Behaviour of an empty key is confirmed from the binary, not assumed.** The image was inspected via the registry API (Docker was broken on the build machine): the binary contains `Admin API key not configured - admin endpoints are unprotected`, plus `X-Admin-Key`, `ADMIN_API_KEY` and the routes `/v1/enqueue`, `/admin/clients{,/set,/get,/delete}`, `/admin/tiers`, `/health/{live,ready,detailed}`.
 - **OPEN PRODUCT BUG — `/v1/enqueue` has NO authentication and AUTO-REGISTERS unknown clients. Fix belongs in the app, not this template.** An earlier draft of this briefing said enqueue "rejects an unregistered `client_id`, so the client ID is the whole access control". **Measured 2026-08-19 and that is false** — posting a never-seen ID returns `status: enqueued` *and creates the client*:
 
@@ -46,8 +46,9 @@
 - **Both workloads are `serverless`, so the 4:1 `cpu:minCpu` cap does not apply** and neither block exposes a reservation — hence the bare `cpu`/`memory` names, which is correct per the per-block naming rule.
 - **The first `helm upgrade` after an install re-applies the bundled Redis** even with identical values, restarting it; the API errors for a minute or two. Catalog-wide behaviour, documented in the README so a tester does not diagnose it as a credential fault.
 - **A missing prerequisite secret wedges silently** — zero lines from `cpln logs`; the only diagnostic is `status.versions[].message` from `cpln workload get-deployments` (plain `get` has no `versions` key).
+- **`api.public.pathPrefix` has no routing effect.** The only thing it changes is whether `outboundAllowHostname: []` is rendered on the public firewall. The values comment and README said it set a route prefix; corrected 2026-10-01 (comment-only, render byte-identical). Removing or wiring the knob needs a new version.
 - **No `aws::ReadOnlyAccess`** — the identity has no cloud bindings, so the catalog sweep had nothing to remove.
 
 ## Status
-- **NOT yet deploy-tested at 1.3.0.** Verified at build: bare render, `createSecret: false` render, the private + empty-key render, every `fail` guard, the policy target list in all paths, and both README secret commands run against the live org.
-- A test round owes: the API reaching `ready: true` with the key mounted, `/admin/clients` returning 401/403 without `X-Admin-Key` and succeeding with it (the one thing only a deploy can settle — the binary's routing was read, not exercised), an end-to-end enqueue and delivery, and the no-op `helm upgrade` drift gate on both workloads.
+- **Deploy-tested at 1.3.0** (2026-08-19; the earlier "not yet deploy-tested" line here was stale). The pre-rewrite docs page records the live results: `/admin/clients` returned `401` with no header and with a wrong key and `200` with the correct one, over both the public endpoint and in-GVC DNS; with an empty key name it served the client list unauthenticated through a port-forward; the `createSecret: false` path worked with non-default key names; a missing admin secret self-healed (measured 8 min 43 s); disabling public access surfaces as `421`, not `403`.
+- Not recorded anywhere that survives: the no-op `helm upgrade` drift gate result for both workloads. Treat it as owed.

@@ -34,7 +34,7 @@
 | `appUrl` | `""` | Override only for a custom domain; otherwise derived. Never `*` (validated) |
 | `session.hours` / `.rememberDays` | 12 / 30 | Idle windows, sliding, under a hard ceiling the app enforces |
 | `logLevel` | `INFO` | `DEBUG` adds per-query Control Plane detail and is very noisy |
-| per-workload `.resources` | see below | `minCpu`/`maxCpu`/`minMemory`/`maxMemory` throughout, including `worker` and `redis` |
+| per-workload `.resources` | see below | `minCpu`/`maxCpu`/`minMemory`/`maxMemory` on `web`, `api`, `scheduler` and `postgres`; **`maxCpu`/`maxMemory` only** on `worker` and `redis` (Capacity AI off, so a floor would be inert) |
 | `redis.maxmemory` | `100mb` | Redis' own cache cap, below the container's `maxMemory` (128Mi) on purpose |
 | `postgres.backup.enabled` | **`false`** | Needs a bucket + cloud account first. Push users to turn it on |
 
@@ -66,4 +66,8 @@ There is deliberately **no** GVC, location, `publicAccess` or `internalAccess` k
 - **Backups are off by default** (`postgres.backup.enabled`) because they need a bucket plus a cloud account. Nothing else protects the data, so pushing users to turn them on is the single most useful thing to say about this template. `backup.image` is **coupled to** `postgres.image` — 18.1.0 backs up Postgres 18.
 - **Redis is unauthenticated on purpose.** Everything in it is derived or transient. The `workload-list` firewall is the only thing protecting it, so widening it is a real exposure.
 - **Autopilot redeploys production workloads.** Off until enabled, per-workload, with revert — but the redeploy is real. `workload: edit` on the service-account token is what unlocks it; without it the advisor is read-only.
+- **The derived dashboard URL is hand-assembled by the app** (`{workload}-{gvc alias}.cpln.app`), and CLAUDE.md records that some GVCs serve `*.{org alias}.cpln.app` instead. If Slack links/CORS break, the README now tells users to set `appUrl` to `status.canonicalEndpoint`. App-side fix: derive from the web workload's own `CPLN_GLOBAL_ENDPOINT` rather than assembling.
+- **No supported way to stop api/worker/scheduler for a restore** (no replica knobs; the docs page says scale them to zero by hand) and the restore is unverified.
+- **Secret-name defaults are real names** (`advisor-config`, `advisor-db-credentials`), not `my-…` placeholders; changing that is a values-default change, so it needs a new version.
+- **Rotation needs a forced redeployment** of api/web/worker/scheduler — updating a `cpln://`-referenced secret redeploys nothing. The README used to imply it reached them on its own; corrected 2026-10-01, along with an invalid `cpln workload logs` command (now `cpln logs` LogQL).
 - Known gaps: no per-user accounts (one login, Activity attributes every change to "user"); no CIDR knob for the dashboard; Redis has no volume set, so notification baselines do not survive a restart (at worst one repeated digest).

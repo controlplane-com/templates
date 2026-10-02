@@ -14,7 +14,7 @@ This app deploys [SFTPGo](https://github.com/drakkan/sftpgo) — an SFTP server 
 | | `scale_to_zero` (default) | `always_warm` |
 |---|---|---|
 | Cost when idle | Proxy (~100m/128Mi) + the dedicated load balancer | Full SFTPGo replica + load balancer |
-| First connect after idle | ~30s cold start (occasionally up to ~75s) | Instant |
+| First connect after idle | Waits while SFTPGo wakes, which can take a minute or more | Instant |
 | Client requirements | Timeout ≥120s or retry (see below) | None — works unchanged |
 | Best for | Cost-sensitive, periodic transfers, cooperative clients | Strict SLAs, arbitrary third-party clients |
 
@@ -37,7 +37,13 @@ Set `admin.secretName` to that name. Read it back later with `cpln secret reveal
 | `username` | The administrator login. |
 | `password` | Its password. Used only when the embedded database has no admin yet, i.e. on first boot. |
 
-**If the secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments <release>-sftpgo --gvc <gvc> -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own in roughly 6–10 minutes — poll rather than time-boxing — or clear it immediately with `cpln workload force-redeployment <release>-sftpgo --gvc <gvc>` (~90 s).
+**If the secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key):
+
+```bash
+cpln workload get-deployments RELEASE_NAME-sftpgo --gvc GVC_NAME -o yaml
+```
+
+Create the missing secret and it recovers on its own after several minutes, or immediately with `cpln workload force-redeployment RELEASE_NAME-sftpgo --gvc GVC_NAME`.
 
 ### Object storage
 
@@ -83,8 +89,8 @@ volumeset:
   capacity: 10        # GiB — embedded database + SSH host keys
 
 webAdmin:
-  enabled: false      # declare the web admin/REST port 8080 (reachable via the
-                      # canonical endpoint in always_warm mode with publicAccess)
+  enabled: false      # declare the web admin/REST port 8080 (reach it with cpln port-forward;
+                      # the public endpoint serves raw TCP 2022 only)
 ```
 
 ### Storage backend
@@ -118,7 +124,7 @@ For an S3-compatible server — MinIO, R2, Wasabi, … (static keys) — set `st
 ```yaml
 storage:
   minio:
-    endpoint: http://my-minio-workload:9000   # required
+    endpoint: http://my-minio-workload:9000   # required; in-GVC: http://WORKLOAD_NAME.GVC_NAME.cpln.local:9000
     bucket: my-sftp-bucket
     region: us-east-1
     accessKey: my-minio-username
@@ -154,15 +160,15 @@ Public access uses a dedicated direct load balancer, required for raw-TCP protoc
 
 | What | Value |
 |---|---|
-| Public SFTP endpoint | `tcp://...cpln.app:2022` — `status.endpoint` of `{release}-sftpgo-proxy` (scale_to_zero) or `{release}-sftpgo` (always_warm) |
-| Connect | `sftp -P 2022 {username}@{endpoint-host}` |
-| In-GVC (internal) | `{release}-sftpgo-proxy:2022` (scale_to_zero) or `{release}-sftpgo:2022` (always_warm) |
-| Web admin (if enabled) | **`cpln port-forward {release}-sftpgo 8080:8080 --gvc {gvc}`**, then `http://localhost:8080`. Not the canonical endpoint: `loadBalancer.direct` on 2022 makes that a `tcp://…:2022` address, so HTTPS to it does not reach the web admin. |
+| Public SFTP endpoint | `tcp://….cpln.app:2022` — `status.endpoint` of `RELEASE_NAME-sftpgo-proxy` (scale_to_zero) or `RELEASE_NAME-sftpgo` (always_warm) |
+| Connect | `sftp -P 2022 USERNAME@ENDPOINT_HOST` |
+| In-GVC (internal) | `RELEASE_NAME-sftpgo-proxy.GVC_NAME.cpln.local:2022` (scale_to_zero) or `RELEASE_NAME-sftpgo.GVC_NAME.cpln.local:2022` (always_warm) |
+| Web admin (if enabled) | **`cpln port-forward RELEASE_NAME-sftpgo 8080:8080 --gvc GVC_NAME`**, then `http://localhost:8080`. The public endpoint is a raw `tcp://…:2022` address in every mode, so it does not serve the web admin. In scale_to_zero, connect once over SFTP first to wake SFTPGo. |
 | Credentials | SFTP logins from `users[]`; the admin from your `admin.secretName` secret |
 
 ## Cold starts and client configuration (`scale_to_zero` mode)
 
-The first connection after an idle period wakes the server (measured ~30s, occasionally up to ~75s — the persistent volume attaches on each wake). The proxy holds the TCP connection so nothing is refused, but clients with short SSH banner timeouts (~15s in several libraries) give up right at the finish line. Configure clients generously:
+The first connection after an idle period waits while the server wakes, which can take a minute or more (the persistent volume attaches on each wake). The proxy holds the TCP connection so nothing is refused, but clients with a short SSH banner timeout give up before the server answers. Configure clients generously:
 
 - **paramiko**: `connect(..., banner_timeout=120, timeout=120)`
 - **WinSCP**: Session → Timeout ≥ 120s
@@ -203,7 +209,7 @@ Complete the steps for your chosen backend before installing.
 ### S3-compatible (MinIO, R2, Wasabi, …)
 
 1. Create your bucket on the server. Set `storage.minio.bucket`.
-2. Set `storage.minio.endpoint` to the S3 API address including port. For the `minio` marketplace template deployed in the same GVC, this is `http://WORKLOAD_NAME:9000`.
+2. Set `storage.minio.endpoint` to the S3 API address including scheme and port. For the `minio` marketplace template deployed in the same GVC, use its fully qualified internal name, `http://WORKLOAD_NAME.GVC_NAME.cpln.local:9000`.
 3. Set `storage.minio.accessKey` and `storage.minio.accessSecret` to credentials with access to the bucket. For the MinIO marketplace template, these are the `username` and `password` in the dictionary secret named by its `admin.credentialsSecretName`.
 
 ## Important Notes

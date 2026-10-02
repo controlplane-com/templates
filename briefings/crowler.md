@@ -40,7 +40,7 @@
 - **Two database logins exist on purpose**: a superuser (only the loader uses it) and the `crowler` app role (engine/api/events). Inspect data with the app role.
 - **`SELENIUM_HOST` does nothing** at 2.1.8. VDI addressing is the `vdi:` list in config. Check the effective list with `cpln workload exec {r}-crowler-engine --container engine -- wget -qO- http://127.0.0.1:8081/v1/config`; nothing else can reach the engine (its internal firewall is `none`).
 - **No crawling with a custom config**: `crawler.engine[].name` must equal the engine hostname `{r}-crowler-engine-{i}`, lowercase, or pinning silently falls back to "all VDIs" and the engines collide.
-- **After an engine restart mid-crawl, its first new crawl waits ~5 min**: the dead session holds the browser node's only slot until Selenium reaps it (300 s). The engine's boot gate checks only that the node answers, so this is a queue, not a failure.
+- **After an engine restart mid-crawl, the new engine waits up to ~5 min before crawling**: the dead session holds the browser node's only slot until Selenium reaps it (300 s), and the boot gate waits for the node to be free. Gating only on the node answering was tried and made it worse: the engine claimed work, its session request timed out at 60 s, and CROWler marked the source errored (parked 15 min).
 - **A failed first crawl is not retried for 15 minutes** (`crawlingIfError`). Most "nothing happens" reports fall inside that window.
 - **The API is unauthenticated.** Keep `publicAccess.api` off unless something fronts it.
 - **Rotating any secret requires `cpln workload force-redeployment`.** The old value otherwise keeps working silently.

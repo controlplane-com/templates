@@ -24,7 +24,8 @@ spec:
       env: {{- include "crowler.app.env" . | nindent 8 }}
       readinessProbe:
         # healthCheck reads /app/config.yaml and GETs the control API /v1/ready.
-        # Deadline 10 + 20x18 = 370s covers the 180s schema wait + 150s browser gate.
+        # Deadline 10 + 20x27 = 550s covers the 180s schema wait + 330s browser gate
+        # (the browser gate waits out a session orphaned by a previous engine).
         exec:
           command:
             - ./healthCheck
@@ -33,7 +34,7 @@ spec:
             - -type
             - ready
         initialDelaySeconds: 10
-        periodSeconds: 18
+        periodSeconds: 27
         failureThreshold: 20
         successThreshold: 1
         timeoutSeconds: 5

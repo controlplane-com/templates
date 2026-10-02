@@ -1,0 +1,114 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Apache Polaris
+category: analytics
+topology: stateless
+
+summary: >-
+  Apache Polaris, an Apache Iceberg REST catalog that tracks which tables exist, where their
+  metadata lives in object storage and who may access them, with OAuth2 client credentials for
+  engines. Stateless server replicas and a one-time bootstrap keep all catalog state in a bundled
+  PostgreSQL, single-instance by default or highly available, with optional scheduled backups.
+  Pick it to turn an S3 or S3-compatible bucket into a lakehouse that Trino, Spark and other
+  Iceberg clients share.
+
+keywords:
+  - iceberg
+  - apache iceberg
+  - iceberg rest catalog
+  - rest catalog
+  - lakehouse
+  - data lake
+  - data catalog
+  - metastore
+  - table catalog
+  - open table format
+  - parquet
+  - oauth2
+  - catalog access control
+
+useCases:
+  - Iceberg REST catalog for Trino, Spark or other Iceberg engines
+  - Build a lakehouse on S3 or S3-compatible object storage
+  - Central table metadata and access grants shared by several query engines
+  - Replace AWS Glue Data Catalog or a Hive Metastore with an open Iceberg catalog
+
+alternativeTo:
+  - AWS Glue Data Catalog
+  - Snowflake Open Catalog
+  - Databricks Unity Catalog
+  - Apache Hive Metastore
+  - Project Nessie
+  - Lakekeeper
+  - Apache Gravitino
+  - Amazon S3 Tables
+
+compatibleWith: [iceberg-rest]
+
+pickInsteadIf:
+  - need: a SQL engine that queries and writes Iceberg tables
+    template: trino
+
+related:
+  - template: trino
+    relation: companion
+    note: Queries and writes Polaris-managed Iceberg tables through its iceberg connector
+  - template: seaweedfs
+    relation: companion
+    note: S3-compatible bucket in the same GVC for the Iceberg data and metadata files
+  - template: minio
+    relation: companion
+    note: Replicated S3-compatible object storage for the Iceberg files
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [CLIENT_ID, CLIENT_SECRET]
+    valuesPath: rootCredentials.secretName
+    required: true
+    description: Root principal credentials that engines authenticate with; no commas. Applied once at bootstrap. Without it the workloads wait.
+  - kind: secret
+    secretType: opaque
+    valuesPath: tokenSigningKey.secretName
+    required: true
+    description: Random string of 32+ characters (plain encoding) that every replica uses to sign access tokens. Without it the server waits.
+  - kind: secret
+    secretType: dictionary
+    keys: [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]
+    valuesPath: storage.credentialsSecretName
+    required: false
+    when: storage.credentialsSecretName is set, for catalogs on S3 or S3-compatible storage
+    description: Static keys Polaris uses for its own metadata I/O in the bucket; can be the seaweedfs or MinIO credentials secret.
+  - kind: bucket
+    required: false
+    when: catalogs are created on object storage
+    description: Bucket that holds the Iceberg tables. It is set in the catalog's storage config through the management API, not in values.
+  - kind: bucket
+    valuesPath:
+      - postgres.backup.aws.bucket
+      - postgres.backup.gcp.bucket
+      - postgres.backup.minio.bucket
+      - postgresHA.backup.aws.bucket
+      - postgresHA.backup.gcp.bucket
+      - postgresHA.backup.minio.bucket
+    required: false
+    when: postgres.backup.enabled or postgresHA.backup.enabled
+    description: Object storage bucket that receives the scheduled metastore backups.
+  - kind: cloud-account
+    valuesPath:
+      - postgres.backup.aws.cloudAccountName
+      - postgres.backup.gcp.cloudAccountName
+      - postgresHA.backup.aws.cloudAccountName
+      - postgresHA.backup.gcp.cloudAccountName
+    required: false
+    when: backup enabled with provider aws or gcp
+    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy (backup.aws.policyName) on AWS.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath: [postgres.backup.minio.credentialsSecretName, postgresHA.backup.minio.credentialsSecretName]
+    required: false
+    when: backup enabled with provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

@@ -1,0 +1,67 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Trivy Registry Scanner
+category: security
+topology: stateless
+
+summary: >-
+  Scheduled Trivy vulnerability scanning for the images in your Control Plane org's image registry: a
+  cron daemon with a Trivy sidecar scans new images and rescans old ones, and a small web server stores
+  each HTML report in your S3 bucket or Azure file share. Each image is then tagged with a link to its
+  report in the console. Pick it to find CVEs in the container images you push to Control Plane.
+
+keywords:
+  - vulnerability scanning
+  - container image scanning
+  - image scanner
+  - cve scanner
+  - cve
+  - container security
+  - registry scanning
+  - security scanning
+  - vulnerability report
+  - aqua trivy
+  - scheduled scans
+
+useCases:
+  - Scan every image in the org registry for known vulnerabilities
+  - Rescan images on a schedule as new CVEs are published
+  - See a vulnerability report for each image straight from the console
+  - Keep vulnerability reports in your own S3 bucket or Azure file share
+
+alternativeTo:
+  - Snyk Container
+  - Docker Scout
+  - Amazon Inspector
+  - Google Artifact Analysis
+  - Microsoft Defender for Containers
+
+pickInsteadIf:
+  - need: block attacks on live HTTP traffic with a web application firewall
+    template: coraza
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: postToken.secretName
+    required: true
+    description: Random bearer token guarding the public report-upload endpoint. Create before installing; when missing the workloads wait with no logs.
+  - kind: other
+    valuesPath: serviceAccountName
+    required: true
+    description: Control Plane service account with a key, used by Trivy to pull images from the registry. The template grants it pull and view.
+  - kind: secret
+    secretType: opaque
+    valuesPath: trivyAuth.secretName
+    required: true
+    description: The service account key as an opaque secret. Create before installing; when missing the workloads wait with no logs.
+  - kind: bucket
+    valuesPath: [storage.s3.bucket, storage.azureFileshare.fileShare]
+    required: true
+    description: Existing S3 bucket (default, storage.type s3) or Azure storage account file share that stores the HTML reports.
+  - kind: cloud-account
+    valuesPath: [storage.s3.cloudAccountName, storage.azureFileshare.cloudAccountName]
+    required: true
+    description: AWS or Azure cloud account for report storage; on AWS also a bucket-scoped IAM policy (storage.s3.policyName), on Azure the storage account scope.

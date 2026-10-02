@@ -1,0 +1,93 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Apache Kafka
+category: messaging
+topology: distributed
+
+summary: >-
+  An Apache Kafka cluster in KRaft mode with no ZooKeeper: three brokers by default, the first ones
+  also acting as controllers, each with its own snapshotted volume, SASL authentication and ACLs.
+  The Kafbat web UI and a Confluent REST Proxy are on by default; Kafka Connect workers with
+  connector plugins and public listeners with per-broker TLS hostnames are optional. The default
+  pick for durable, replayable event streaming between services.
+
+keywords:
+  - event streaming
+  - message broker
+  - kraft
+  - pub/sub
+  - topics
+  - consumer groups
+  - commit log
+  - event bus
+  - kafka connect
+  - connectors
+  - kafbat ui
+  - kafka ui
+  - rest proxy
+  - sasl
+  - acl
+  - rack awareness
+  - data streaming
+
+useCases:
+  - Stream events between microservices through durable, replayable topics
+  - Ingest high-volume logs, clickstreams or IoT telemetry into a central event log
+  - Decouple producers and consumers with consumer groups and configurable retention
+  - Move data between systems with Kafka Connect source and sink connectors
+  - Produce and consume over HTTP for clients that have no Kafka driver
+  - Event backbone for event sourcing or change data capture
+
+alternativeTo:
+  - Confluent Cloud
+  - Amazon MSK
+  - Aiven for Apache Kafka
+  - Azure Event Hubs
+  - Google Cloud Managed Service for Apache Kafka
+  - Amazon Kinesis Data Streams
+
+compatibleWith: [kafka-api]
+
+pickInsteadIf:
+  - need: a Kafka-compatible broker with a built-in Schema Registry and no JVM
+    template: redpanda
+  - need: an AMQP broker with exchanges, routing keys and per-message acknowledgements
+    template: rabbitmq
+  - need: lightweight pub/sub and request-reply, including one bus across several regions
+    template: nats
+  - need: a new Postgres whose row changes stream into Kafka, set up in one install
+    template: cdc-pipeline
+  - need: an HTTP task queue that delivers jobs to URLs with retries and rate limits
+    template: cpln-task-runner
+
+related:
+  - template: redpanda
+    relation: alternative
+    note: Kafka-compatible streaming platform written in C++
+  - template: debezium-server
+    relation: companion
+    note: Streams database change events into Kafka topics
+  - template: clickhouse
+    relation: companion
+    note: Analytics database often fed from Kafka topics
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: kafbat_ui.configuration_secret
+    required: true
+    description: Kafbat UI config file (YAML, example in the README). The UI is on by default and waits until this secret exists; set kafbat_ui.enabled false to skip it.
+  - kind: domain
+    required: false
+    when: a public listener under kafka.listeners, or kafbat_ui.domain or kafka_rest_proxy.domain, is set
+    description: A domain you control, with a CNAME per broker and an _acme-challenge record, for public client access or a UI or REST Proxy hostname.
+  - kind: other
+    required: false
+    when: a public listener under kafka.listeners is set
+    description: Dedicated load balancer enabled on the GVC; public listeners need it to route TCP traffic to each broker.
+  - kind: other
+    required: false
+    when: kafka.volumes.logs.customEncryption.enabled
+    description: An AWS KMS key for volume encryption; after install, finish the key setup from each volume's spec in the console.

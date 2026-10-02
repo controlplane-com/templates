@@ -1,0 +1,84 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: LiteLLM
+category: ai
+topology: stateless
+
+summary: >-
+  A LiteLLM proxy that exposes one OpenAI-compatible endpoint in front of OpenAI, Anthropic, Azure,
+  Bedrock and other providers, with virtual API keys, per-key and per-team budgets, spend tracking,
+  rate limits and an admin UI. Its stateless replicas keep keys and spend in a bundled PostgreSQL
+  and share rate-limit counters and cache through an optional bundled Redis with Sentinel. Pick it
+  to control and meter LLM API use across apps and teams.
+
+keywords:
+  - llm gateway
+  - llm proxy
+  - ai gateway
+  - openai-compatible api
+  - openai proxy
+  - virtual keys
+  - api key management
+  - spend tracking
+  - llm cost tracking
+  - budgets
+  - rate limiting
+  - model routing
+  - multi-provider llm
+  - anthropic
+  - azure openai
+  - amazon bedrock
+  - llm load balancing
+
+useCases:
+  - One OpenAI-compatible endpoint for apps that call several LLM providers
+  - Issue virtual API keys with budgets and rate limits per team or app
+  - Track LLM spend per key, team and model
+  - Keep provider API keys out of application code
+  - Switch between model providers without changing client code
+
+alternativeTo:
+  - OpenRouter
+  - Portkey
+  - Cloudflare AI Gateway
+  - Kong AI Gateway
+  - Helicone
+
+compatibleWith: [openai-api]
+
+pickInsteadIf:
+  - need: run open-weight models on your own GPU
+    template: ollama
+  - need: tracing, prompt management and evaluations for LLM applications
+    template: langfuse
+  - need: a chat UI for people to talk to models
+    template: open-webui
+
+related:
+  - template: langfuse
+    relation: companion
+    note: Traces and evaluates the requests that pass through the gateway
+  - template: ollama
+    relation: companion
+    note: Local models LiteLLM can route to alongside hosted providers
+  - template: open-webui
+    relation: companion
+    note: Chat UI that can use LiteLLM as its OpenAI-compatible backend
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [LITELLM_MASTER_KEY, LITELLM_SALT_KEY, OPENAI_API_KEY]
+    valuesPath: secrets.name
+    required: true
+    description: Master key, write-once salt key and one entry per name in litellm.providerEnv (default OPENAI_API_KEY). Create it before installing; when it is missing the deployment waits.
+  - kind: bucket
+    required: false
+    when: postgres.backup.enabled (backups of the bundled PostgreSQL)
+    description: S3, GCS or MinIO bucket for scheduled dumps of the bundled database, set under postgres.backup. MinIO also needs an accessKey/secretKey dictionary secret.
+  - kind: cloud-account
+    required: false
+    when: postgres.backup.enabled with postgres.backup.provider aws or gcp
+    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy named in postgres.backup.aws.policyName on AWS.

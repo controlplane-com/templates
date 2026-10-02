@@ -1,0 +1,84 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: MongoDB (replica set)
+category: database
+family: mongodb
+topology: multi-location
+
+summary: >-
+  A MongoDB replica set on Percona Server for MongoDB with keyfile authentication and automatic
+  primary election, deployed into one or several locations of an existing GVC, three members in
+  one location by default and up to seven. An HAProxy tier, on by default, gives clients one
+  address that always reaches the current primary, and an optional cron job takes mongodump
+  backups to Amazon S3 or Google Cloud Storage. Pick it for MongoDB that keeps serving after
+  losing a member, or a whole location when spread over three.
+
+keywords:
+  - mongo
+  - replica set
+  - percona server for mongodb
+  - document database
+  - document store
+  - nosql
+  - automatic failover
+  - high availability
+  - primary election
+  - multi-region
+  - haproxy
+  - mongodump
+  - database backups
+
+useCases:
+  - Production document database that keeps serving when a member fails
+  - MongoDB replica set spread across regions that survives losing a location
+  - One stable connection address that follows the primary through elections
+  - Read from secondary members to take query load off the primary
+  - Nightly mongodump backups of a replica set to an S3 or GCS bucket
+
+alternativeTo:
+  - MongoDB Atlas
+  - Amazon DocumentDB
+  - Azure Cosmos DB for MongoDB
+  - DigitalOcean Managed MongoDB
+
+compatibleWith: [mongodb-wire]
+
+pickInsteadIf:
+  - need: one small MongoDB server without replication
+    template: mongodb
+  - need: MongoDB reachable from outside the platform through a TCP load balancer
+    template: mongodb
+
+prerequisites:
+  - kind: other
+    valuesPath: locations
+    required: true
+    description: An existing GVC that has every location listed in locations. Members in a missing location never start, so the replica set is smaller than sized.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: mongodb.credentialsSecretName
+    required: true
+    description: Root user and database the cluster is bootstrapped with. Create it before installing; when it is missing the workload waits with no logs.
+  - kind: secret
+    secretType: opaque
+    valuesPath: mongodb.keyfileSecretName
+    required: true
+    description: Replica-set keyfile, 6 to 1024 base64 characters (openssl rand -base64 756). Missing, the install waits; invalid, mongod refuses to start.
+  - kind: bucket
+    valuesPath: [backup.aws.bucket, backup.gcp.bucket]
+    required: false
+    when: backup.enabled
+    description: S3 or GCS bucket that receives the scheduled mongodump archives.
+  - kind: cloud-account
+    valuesPath: [backup.aws.cloudAccountName, backup.gcp.cloudAccountName]
+    required: false
+    when: backup.enabled
+    description: Control Plane cloud account for the AWS account or GCP project holding the bucket; on GCP its service account needs the Storage Admin role.
+  - kind: other
+    valuesPath: backup.aws.policyName
+    required: false
+    when: backup.enabled with backup.provider aws
+    description: AWS IAM policy scoped to the backup bucket, with the S3 actions listed in the README; the chart attaches it to the backup identity.

@@ -1,0 +1,60 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: RabbitMQ
+category: messaging
+topology: single
+
+summary: >-
+  A single RabbitMQ broker with the management plugin and a Prometheus metrics endpoint, on a
+  persistent volume so queues, messages and users survive restarts. It speaks AMQP 0-9-1 to
+  workloads inside the GVC only; reach the management UI with a port-forward. The pick for a
+  classic work queue or routed pub/sub between services in one location.
+
+keywords:
+  - message broker
+  - message queue
+  - amqp
+  - amqp 0-9-1
+  - work queue
+  - task queue
+  - job queue
+  - pub/sub
+  - exchanges
+  - routing keys
+  - background jobs
+  - celery broker
+  - management ui
+  - prometheus metrics
+
+useCases:
+  - Queue background jobs for worker processes to consume
+  - Route messages between microservices with exchanges and routing keys
+  - Fan out events to several consumers with acknowledgements and redelivery
+  - Message broker for Celery, Spring AMQP or other AMQP client libraries
+
+alternativeTo:
+  - Amazon MQ
+  - CloudAMQP
+  - Amazon SQS
+  - Azure Service Bus
+  - Apache ActiveMQ
+
+compatibleWith: [amqp]
+
+pickInsteadIf:
+  - need: a durable, replayable event log with long retention and consumer groups
+    template: kafka
+  - need: a clustered message bus that survives a server loss or spans several regions
+    template: nats
+  - need: an HTTP push queue that calls your endpoints with retries and rate limits
+    template: cpln-task-runner
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    valuesPath: credentialsSecretName
+    required: true
+    description: Default user for AMQP clients and the management UI, applied on first boot only. A missing secret leaves the broker waiting with no logs.

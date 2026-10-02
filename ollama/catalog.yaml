@@ -1,0 +1,69 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Ollama
+category: ai
+topology: single
+
+summary: >-
+  An Ollama model server on an NVIDIA GPU, one T4 by default, with Open WebUI as a sidecar chat
+  interface on the public endpoint, keeping models and chat data on one persistent volume. It pulls
+  a default model on first start, and the Ollama API, including its OpenAI-compatible endpoints,
+  is reachable from other workloads in the GVC. Pick it to run open-weight models such as Llama,
+  Mistral or Gemma yourself instead of calling a hosted API.
+
+keywords:
+  - llm
+  - local llm
+  - llm server
+  - model serving
+  - inference server
+  - gpu inference
+  - nvidia gpu
+  - open-weight models
+  - llama
+  - mistral
+  - gemma
+  - embeddings
+  - open webui
+  - chat ui
+  - openai-compatible api
+  - private llm
+
+useCases:
+  - Run open-weight LLMs on your own GPU instead of a hosted API
+  - Private ChatGPT-style chat for a team with models that stay on your infrastructure
+  - Local embedding and chat models for a RAG application
+  - OpenAI-compatible model endpoint for internal services
+
+alternativeTo:
+  - OpenAI API
+  - ChatGPT
+  - LM Studio
+  - vLLM
+  - Hugging Face Inference Endpoints
+  - Amazon Bedrock
+
+compatibleWith: [openai-api]
+
+pickInsteadIf:
+  - need: a multi-user chat UI with document RAG over hosted OpenAI-compatible APIs, without a GPU
+    template: open-webui
+  - need: one OpenAI-compatible endpoint with virtual keys and spend tracking across many providers
+    template: litellm
+  - need: a self-hosted AI agent with memory, tools and chat-platform integrations
+    template: hermes-agent
+
+related:
+  - template: qdrant
+    relation: companion
+    note: Vector store for embeddings produced by Ollama in a RAG pipeline
+  - template: langfuse
+    relation: companion
+    note: Traces and evaluates the LLM calls your applications make
+
+prerequisites:
+  - kind: other
+    required: true
+    description: GPU access for the org (one NVIDIA T4 by default) and CPU and memory quota above the defaults. Ask Control Plane support; without them the workload cannot run.

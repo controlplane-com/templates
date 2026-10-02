@@ -1,0 +1,74 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Qdrant
+category: database
+topology: single
+
+summary: >-
+  A single Qdrant vector database server on a persistent volume, serving the REST API, web
+  dashboard and gRPC API, with daily platform volume snapshots. Optional API-key authentication
+  (with a separate read-only key) and an optional public HTTPS endpoint for the REST API. A simple
+  vector store for embeddings, semantic search and RAG retrieval in one location, with no
+  replication or failover.
+
+keywords:
+  - vector database
+  - vector search
+  - vector store
+  - embeddings
+  - semantic search
+  - similarity search
+  - nearest neighbor search
+  - rag
+  - retrieval-augmented generation
+  - hnsw
+  - grpc
+  - api key
+  - qdrant-client
+  - volume snapshots
+
+useCases:
+  - Store and query vector embeddings for retrieval-augmented generation
+  - Semantic search over documents, products or support tickets
+  - Recommendations and similarity matching from embeddings
+  - Vector store for a LangChain or LlamaIndex application
+  - Retrieval tier of a RAG stack with local or hosted models
+
+alternativeTo:
+  - Pinecone
+  - Qdrant Cloud
+  - Zilliz Cloud
+  - Milvus
+  - Chroma
+
+pickInsteadIf:
+  - need: vector similarity search inside PostgreSQL next to relational data
+    template: pgvector
+  - need: a multi-node vector database cluster with hybrid keyword and vector search
+    template: weaviate
+  - need: generate embeddings inside the database with OpenAI, Cohere or Hugging Face modules
+    template: weaviate
+  - need: typo-tolerant keyword search for a website or app
+    template: meilisearch
+
+related:
+  - template: ollama
+    relation: companion
+    note: Runs local embedding and chat models for a RAG pipeline that stores vectors in Qdrant
+  - template: litellm
+    relation: companion
+    note: OpenAI-compatible gateway for the generation step after retrieval
+  - template: langfuse
+    relation: companion
+    note: Traces the retrieval and generation calls of a RAG application
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [api-key, read-only-api-key]
+    valuesPath: auth.secretName
+    required: false
+    when: publicAccess.enabled, or to require an API key inside the GVC
+    description: API keys clients send to Qdrant; read-only-api-key only with auth.readOnlyKey. Public access without this secret fails at render time.

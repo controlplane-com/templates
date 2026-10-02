@@ -1,0 +1,67 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Redis Cluster
+category: cache
+family: redis
+topology: distributed
+
+summary: >-
+  A sharded Redis Cluster of six nodes, three primaries that split the hash slots and one replica
+  for each, running Redis or Valkey with a persistent volume per node. A replica takes over when
+  its primary fails, an optional password protects every node, and an optional cron job backs up
+  each shard to Amazon S3 or Google Cloud Storage. Pick it when data or write load outgrows one
+  Redis primary and your clients speak the Redis Cluster protocol.
+
+keywords:
+  - valkey
+  - valkey cluster
+  - redis sharding
+  - cluster mode
+  - hash slots
+  - sharded cache
+  - in-memory cache
+  - key-value store
+  - horizontal scaling
+  - automatic failover
+  - rdb backups
+
+useCases:
+  - Cache or key-value store that spreads its data across several primaries
+  - Spread write traffic over several Redis primaries instead of one
+  - Redis in cluster mode for clients built against a cluster-mode endpoint
+  - Valkey cluster as a BSD-licensed drop-in for Redis Cluster
+  - Scheduled per-shard RDB backups to an S3 or GCS bucket
+
+alternativeTo:
+  - Amazon ElastiCache
+  - Amazon MemoryDB
+  - Google Cloud Memorystore for Redis Cluster
+  - Azure Cache for Redis
+  - Redis Cloud
+
+compatibleWith: [redis-protocol]
+
+pickInsteadIf:
+  - need: one write endpoint with Sentinel failover for clients without cluster support
+    template: redis
+  - need: one Redis spread across several locations that survives losing a location
+    template: redis-multi-location
+
+prerequisites:
+  - kind: bucket
+    valuesPath: [backup.aws.bucket, backup.gcp.bucket]
+    required: false
+    when: backup.enabled
+    description: S3 or GCS bucket that receives one RDB snapshot per primary shard.
+  - kind: cloud-account
+    valuesPath: [backup.aws.cloudAccountName, backup.gcp.cloudAccountName]
+    required: false
+    when: backup.enabled
+    description: Control Plane cloud account for the AWS account or GCP project holding the bucket; on GCP its service account needs the Storage Admin role.
+  - kind: other
+    valuesPath: backup.aws.policyName
+    required: false
+    when: backup.enabled with backup.provider aws
+    description: AWS IAM policy scoped to the backup bucket, with the S3 actions listed in the README; the chart attaches it to the backup identity.

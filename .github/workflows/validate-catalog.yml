@@ -1,0 +1,29 @@
+name: Validate Catalog Entries
+
+# Every installable template needs a valid catalog.yaml (CATALOG_AUTHORING.md). The check reads the whole
+# repo because entries reference each other and each entry's valuesPath points into the latest values.yaml.
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: validate-catalog-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install validator dependencies
+        run: pip install jsonschema==4.23.0 pyyaml==6.0.2
+
+      - name: Validate catalog.yaml files
+        run: python3 .github/scripts/validate_catalog.py

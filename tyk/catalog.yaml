@@ -1,0 +1,72 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Tyk API Gateway
+category: networking
+topology: stateless
+
+summary: >-
+  Tyk Gateway, an open-source API gateway: autoscaling gateway replicas whose API definitions and
+  policies come from secrets you manage, with a bundled Redis and Sentinel holding keys, rate limits
+  and quotas. It proxies to upstream APIs in the GVC with API key or JWT authentication, per-key rate
+  limits and quotas, and a key-management admin API. Internal-only by default. Pick it to secure and
+  throttle access to your own HTTP APIs.
+
+keywords:
+  - api management
+  - api keys
+  - rate limiting
+  - throttling
+  - quotas
+  - jwt authentication
+  - api authentication
+  - api proxy
+  - reverse proxy
+  - access policies
+  - redis sentinel
+
+useCases:
+  - Require API keys or JWTs before requests reach your APIs
+  - Rate-limit and set quotas per API consumer
+  - Publish several internal APIs under one gateway by listen path
+  - Issue and revoke API keys through an admin API
+
+alternativeTo:
+  - Kong Gateway
+  - Amazon API Gateway
+  - Apigee
+  - Azure API Management
+  - KrakenD
+  - Gravitee
+
+pickInsteadIf:
+  - need: a plain reverse proxy routing URL paths to workloads, without keys or rate limits
+    template: nginx
+  - need: inspect requests against the OWASP Core Rule Set to block attacks
+    template: coraza
+  - need: an OpenAI-compatible LLM gateway with virtual keys and spend tracking
+    template: litellm
+
+related:
+  - template: keycloak
+    relation: companion
+    note: Identity provider that issues the JWTs Tyk can validate
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: adminSecretName
+    required: true
+    description: Gateway admin API key (X-Tyk-Authorization for /tyk/*). Create before installing; when missing the workload waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: ["*.json"]
+    valuesPath: apiSecretName
+    required: true
+    description: Tyk API definitions, one JSON file per key. Set apiSecretName to "" to skip it, and the gateway then serves Tyk's demo API instead of yours.
+  - kind: secret
+    secretType: opaque
+    valuesPath: policySecretName
+    required: true
+    description: Tyk security policies as one JSON object. Set policySecretName to "" to run without policies.

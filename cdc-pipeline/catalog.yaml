@@ -1,0 +1,67 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: CDC Pipeline (PostgreSQL to Kafka)
+category: messaging
+topology: distributed
+
+summary: >-
+  A wired change data capture stack in one install: a three-node PostgreSQL cluster with Patroni
+  failover as the source, a three-broker Apache Kafka cluster in KRaft mode with the Kafbat UI as
+  the transport, and Debezium Server streaming the database's row changes into Kafka topics.
+  Database and SASL credentials are set once and cross-checked at install, and internal hostnames
+  are wired for you. Pick it for a new Postgres whose changes stream into Kafka, not to add CDC to
+  a database you already run.
+
+keywords:
+  - cdc
+  - change data capture
+  - debezium
+  - postgres cdc
+  - postgres to kafka
+  - logical replication
+  - replication slot
+  - database change events
+  - database changes
+  - event streaming
+  - streaming etl
+  - data pipeline
+  - patroni
+  - kraft
+  - kafbat ui
+  - event-driven
+
+useCases:
+  - Stream every insert, update and delete in a Postgres database into Kafka topics
+  - Stand up a complete CDC environment to prototype event-driven services
+  - Feed analytics, search indexes or caches from database changes
+  - Let microservices react to row-level changes instead of polling the database
+
+alternativeTo:
+  - Confluent Cloud
+  - AWS Database Migration Service
+  - Google Cloud Datastream
+  - Striim
+  - Estuary Flow
+
+compatibleWith: [kafka-api, postgres-wire]
+
+pickInsteadIf:
+  - need: capture changes from a database you already run, or from MySQL, MongoDB, SQL Server or Oracle
+    template: debezium-server
+  - need: send database change events to Redis, NATS, Kinesis, Pub/Sub or a webhook instead of Kafka
+    template: debezium-server
+  - need: a Kafka cluster on its own, without a bundled source database
+    template: kafka
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: kafka.kafbat_ui.configuration_secret
+    required: true
+    description: Kafbat UI config file for the bundled Kafka (see the kafka README). The UI is on by default and waits until it exists; set kafka.kafbat_ui.enabled false to skip it.
+  - kind: other
+    valuesPath: debezium-server.source.postgres.heartbeatActionQuery
+    required: true
+    description: Right after install, create the debezium_heartbeat table in the bundled Postgres (SQL in the README), or clear heartbeatActionQuery; heartbeats are on by default.

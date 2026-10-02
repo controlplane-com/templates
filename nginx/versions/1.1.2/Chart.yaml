@@ -8,7 +8,6 @@ appVersion: "1.31.4"
 annotations:
   created: "2024-07-17"
   lastModified: "2026-10-01"
-  category: "proxy"
   file-nginxConf: "Nginx Configuration File"
   createsGvc: false
 

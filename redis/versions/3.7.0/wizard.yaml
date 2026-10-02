@@ -1,0 +1,1150 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Redis
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: topology
+    title: Engine and topology
+    description: Which server both tiers run, and how many Redis nodes and Sentinels.
+    sections:
+      - title: Engine
+        docs: "#redis-or-valkey-engine"
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '3.5.0') < 0
+            text: >-
+              This version moves the default image from Redis 7.4 to 8. The upgrade is one-way: once a node
+              has written its data under Redis 8, a 7.4 image cannot load it. Snapshot the volume set first
+              if you need a way back.
+          - path: engine
+            type: enum
+            label: Server
+            widget: cards
+            required: true
+            immutable: The engine is chosen at install and cannot change afterwards.
+            options:
+              - value: redis
+                label: Redis
+                description: The default. Runs the Redis image on both tiers.
+              - value: valkey
+                label: Valkey
+                description: The BSD-licensed fork of Redis 7.2, on both tiers.
+          - path: valkeyImage
+            type: string
+            format: image
+            label: Valkey image
+            required: true
+            when: self.engine == 'valkey'
+            description: Used for both tiers.
+        rules:
+          - rule: self.engine != 'valkey' || (self.valkeyImage != null && self.valkeyImage != '')
+            mirrors: redis.validateEngine
+            paths: [valkeyImage]
+            message: A Valkey image is required when the server is Valkey.
+          - when: self.engine == 'valkey'
+            rule: self.valkeyImage == null || !self.valkeyImage.contains('alpine')
+            paths: [valkeyImage]
+            message: >-
+              The -alpine Valkey tags have no bash, which the chart's health probes need. Use a Debian-based
+              tag such as valkey/valkey:8.1.9.
+          - rule: oldSelf == null || self.engine != 'valkey' || self.valkeyImage == oldSelf.valkeyImage
+            severity: info
+            paths: [valkeyImage]
+            message: >-
+              Changing the Valkey image restarts every Redis and Sentinel node. A newer major version can
+              write data files that an older image cannot load: snapshot the volume sets before a major
+              upgrade if you need a way back.
+      - title: Redis
+        fields:
+          - path: redis.replicas
+            type: integer
+            label: Redis nodes
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 5]
+            description: One primary plus replicas, each on its own volume when persistence is on.
+          - path: redis.multiZone
+            type: boolean
+            label: Spread Redis nodes across zones
+            description: Confirm that your locations support multiple zones.
+      - title: Sentinel
+        fields:
+          - type: note
+            text: Failover needs a quorum of Sentinels to agree.
+            textExpression: >-
+              self.sentinel.quorumAutoCalculation ?
+              'Failover needs ' + string(self.sentinel.replicas / 2 + 1) + ' of ' + string(self.sentinel.replicas) +
+              ' Sentinels to agree (replicas / 2 + 1).' :
+              'Failover needs ' + (self.sentinel.quorumOverride == null ? 'the quorum' : string(self.sentinel.quorumOverride)) +
+              ' of ' + string(self.sentinel.replicas) + ' Sentinels to agree.'
+          - path: sentinel.replicas
+            type: integer
+            label: Sentinels
+            min: 1
+            required: true
+            suggestions: [1, 3, 5]
+          - path: sentinel.quorumAutoCalculation
+            type: boolean
+            label: Calculate the quorum automatically
+            description: The quorum is replicas / 2 + 1.
+          - path: sentinel.quorumOverride
+            type: integer
+            label: Quorum
+            min: 1
+            required: true
+            when: "!self.sentinel.quorumAutoCalculation"
+            description: How many Sentinels must agree before a failover.
+          - path: sentinel.multiZone
+            type: boolean
+            label: Spread Sentinels across zones
+            description: Confirm that your locations support multiple zones.
+        rules:
+          - rule: self.sentinel.replicas % 2 == 1
+            severity: info
+            paths: [sentinel.replicas]
+            message: An odd number of Sentinels is recommended; an even number adds no fault tolerance.
+          - when: "!self.sentinel.quorumAutoCalculation"
+            rule: self.sentinel.quorumOverride >= 1 && self.sentinel.quorumOverride <= self.sentinel.replicas
+            paths: [sentinel.quorumOverride]
+            message: The quorum must be between 1 and the number of Sentinels.
+
+  - id: auth
+    title: Authentication
+    description: How clients authenticate to Redis and to Sentinel.
+    sections:
+      - title: Redis
+        fields:
+          - id: redisAuth
+            virtual: true
+            type: enum
+            label: Redis authentication
+            widget: segmented
+            required: true
+            init: >-
+              self.redis.auth.fromSecret.enabled ? 'secret' :
+              self.redis.auth.password.enabled ? 'password' : 'none'
+            options:
+              - value: none
+                label: No password
+                set: { redis.auth.fromSecret.enabled: false, redis.auth.password.enabled: false }
+              - value: password
+                label: Password in values
+                description: Stored in the release values.
+                set: { redis.auth.fromSecret.enabled: false, redis.auth.password.enabled: true }
+              - value: secret
+                label: Password from a secret
+                set: { redis.auth.fromSecret.enabled: true, redis.auth.password.enabled: false }
+          - path: redis.auth.password.value
+            type: string
+            label: Password
+            sensitive: true
+            widget: password
+            required: true
+            example: true
+            when: ui.redisAuth == 'password'
+          - path: redis.auth.fromSecret.name
+            type: ref
+            label: Password secret
+            required: true
+            when: ui.redisAuth == 'secret'
+            description: A dictionary secret; the key named below holds the password.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: warning
+              allowCreate: true
+              requiredKeysFrom: "[self.redis.auth.fromSecret.passwordKey]"
+              create:
+                secretType: dictionary
+                suggestName: "context.releaseName + '-redis-password'"
+          - path: redis.auth.fromSecret.passwordKey
+            type: string
+            label: Key in the secret
+            required: true
+            when: ui.redisAuth == 'secret'
+      - title: Sentinel
+        fields:
+          - id: sentinelAuth
+            virtual: true
+            type: enum
+            label: Sentinel authentication
+            widget: segmented
+            required: true
+            init: >-
+              self.sentinel.auth.fromSecret.enabled ? 'secret' :
+              self.sentinel.auth.password.enabled ? 'password' : 'none'
+            options:
+              - value: none
+                label: No password
+                set: { sentinel.auth.fromSecret.enabled: false, sentinel.auth.password.enabled: false }
+              - value: password
+                label: Password in values
+                description: Stored in the release values.
+                set: { sentinel.auth.fromSecret.enabled: false, sentinel.auth.password.enabled: true }
+              - value: secret
+                label: Password from a secret
+                set: { sentinel.auth.fromSecret.enabled: true, sentinel.auth.password.enabled: false }
+          - path: sentinel.auth.password.value
+            type: string
+            label: Password
+            sensitive: true
+            widget: password
+            required: true
+            example: true
+            when: ui.sentinelAuth == 'password'
+          - path: sentinel.auth.fromSecret.name
+            type: ref
+            label: Password secret
+            required: true
+            when: ui.sentinelAuth == 'secret'
+            description: A dictionary secret; the key named below holds the password.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: warning
+              allowCreate: true
+              requiredKeysFrom: "[self.sentinel.auth.fromSecret.passwordKey]"
+              create:
+                secretType: dictionary
+                suggestName: "context.releaseName + '-sentinel-password'"
+          - path: sentinel.auth.fromSecret.passwordKey
+            type: string
+            label: Key in the secret
+            required: true
+            when: ui.sentinelAuth == 'secret'
+    rules:
+      - rule: "!(self.redis.auth.fromSecret.enabled && self.redis.auth.password.enabled)"
+        mirrors: validateAuth
+        message: Redis has both a password in values and a password secret enabled; enable only one.
+      - rule: "!(self.sentinel.auth.fromSecret.enabled && self.sentinel.auth.password.enabled)"
+        mirrors: validateAuth
+        message: Sentinel has both a password in values and a password secret enabled; enable only one.
+      - rule: >-
+          oldSelf == null || !self.redis.auth.password.enabled || !oldSelf.redis.auth.password.enabled ||
+          self.redis.auth.password.value == oldSelf.redis.auth.password.value
+        severity: warning
+        paths: [redis.auth.password.value]
+        message: >-
+          Changing the Redis password on a running release deadlocks the rollout: restarted nodes cannot
+          authenticate to the old primary. Keep the installed password, or reinstall.
+      - rule: >-
+          oldSelf == null || !self.sentinel.auth.password.enabled || !oldSelf.sentinel.auth.password.enabled ||
+          self.sentinel.auth.password.value == oldSelf.sentinel.auth.password.value
+        severity: warning
+        paths: [sentinel.auth.password.value]
+        message: >-
+          Changing the Sentinel password on a running release deadlocks the rollout. Keep the installed
+          password, or reinstall.
+      - rule: >-
+          self.redis.auth.fromSecret.enabled == self.sentinel.auth.fromSecret.enabled &&
+          self.redis.auth.password.enabled == self.sentinel.auth.password.enabled
+        severity: info
+        message: Use the same authentication method on both tiers.
+
+  - id: resources
+    title: Resources and persistence
+    description: Compute per node, and the volumes that keep data across restarts.
+    sections:
+      - title: Redis
+        fields:
+          - path: redis.resources
+            type: resources
+            label: Redis resources
+            required: true
+            description: Per node.
+            maxRatio: 4
+      - id: redis-volume
+        title: Persistent volume for Redis
+        toggle: redis.persistence.enabled
+        docs: /reference/volumeset
+        fields:
+          - path: redis.persistence.volumes.data.initialCapacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            docs: "/reference/volumeset#capacity-and-billing"
+          - path: redis.persistence.volumes.data.performanceClass
+            type: enum
+            label: Disk class
+            widget: segmented
+            required: true
+            immutable: true
+            options:
+              - { value: general-purpose-ssd, label: General purpose SSD }
+              - { value: high-throughput-ssd, label: High throughput SSD }
+          - path: redis.persistence.volumes.data.autoscaling
+            type: object
+            optional: true
+            label: Grow the volume automatically
+            docs: "/reference/volumeset#autoscaling"
+            newValue: { maxCapacity: 100, minFreePercentage: 20, scalingFactor: 1.2 }
+            fields:
+              - path: maxCapacity
+                type: integer
+                label: Maximum capacity
+                unit: GiB
+                min: 10
+                required: true
+                suggestions: [50, 100, 250, 500, 1000, 2000]
+              - path: minFreePercentage
+                type: integer
+                label: Scale up below this free space
+                unit: "%"
+                min: 1
+                max: 100
+                required: true
+                suggestions: [10, 20, 30]
+              - path: scalingFactor
+                type: number
+                label: Scaling factor
+                min: 1.1
+                step: 0.1
+                required: true
+                suggestions:
+                  - { value: 1.1, label: "1.1×" }
+                  - { value: 1.2, label: "1.2× (default)" }
+                  - { value: 1.5, label: "1.5×" }
+                  - { value: 2, label: "2×" }
+          - path: redis.persistence.volumes.data.fileSystemType
+            type: enum
+            label: File system
+            widget: segmented
+            required: true
+            immutable: true
+            advanced: true
+            options: [ext4, xfs]
+          - path: redis.persistence.volumes.data.snapshots
+            type: object
+            optional: true
+            label: Scheduled snapshots
+            advanced: true
+            docs: "/reference/volumeset#snapshots"
+            newValue: { retentionDuration: 7d, schedule: "0 0 * * *" }
+            fields:
+              - path: retentionDuration
+                type: string
+                format: duration
+                label: Keep snapshots for
+                required: true
+                placeholder: 7d
+              - path: schedule
+                type: string
+                format: cron
+                label: Schedule (UTC)
+                required: true
+          - path: redis.persistence.volumes.data.customEncryption
+            type: object
+            optional: true
+            absent: true
+            label: Encrypt with your own KMS key
+            immutable: Encryption is chosen when the volume set is created.
+            advanced: true
+            newValue: { enabled: true, region: "", keyId: "" }
+            fields:
+              - path: enabled
+                type: boolean
+                label: Use the KMS key
+              - path: region
+                type: ref
+                label: Location
+                required: true
+                help: AWS locations only; the key must be in the same region.
+                ref: { kind: location, scope: gvc, format: name, mustExist: error }
+              - path: keyId
+                type: string
+                label: KMS key ARN
+                required: true
+                placeholder: arn:aws:kms:us-east-1:123456789012:key/…
+        rules:
+          - rule: >-
+              self.redis.persistence.volumes.data.performanceClass != 'high-throughput-ssd' ||
+              self.redis.persistence.volumes.data.initialCapacity >= 1000
+            paths: [redis.persistence.volumes.data.initialCapacity]
+            message: A high throughput SSD needs an initial capacity of at least 1000 GiB.
+          - rule: >-
+              self.redis.persistence.volumes.data.autoscaling == null ||
+              self.redis.persistence.volumes.data.autoscaling.maxCapacity >= self.redis.persistence.volumes.data.initialCapacity
+            paths: [redis.persistence.volumes.data.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+          - rule: >-
+              oldSelf == null || !oldSelf.redis.persistence.enabled ||
+              self.redis.persistence.volumes.data.initialCapacity >= oldSelf.redis.persistence.volumes.data.initialCapacity
+            paths: [redis.persistence.volumes.data.initialCapacity]
+            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+      - title: Sentinel
+        fields:
+          - path: sentinel.resources
+            type: resources
+            label: Sentinel resources
+            required: true
+            description: Per Sentinel.
+            maxRatio: 4
+      - id: sentinel-volume
+        title: Persistent volume for Sentinel
+        toggle: sentinel.persistence.enabled
+        description: >-
+          Recommended in production: it keeps the post-failover primary across restarts, so replicas
+          rejoin the real primary.
+        docs: /reference/volumeset
+        fields:
+          - path: sentinel.persistence.volumes.data.initialCapacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            docs: "/reference/volumeset#capacity-and-billing"
+          - path: sentinel.persistence.volumes.data.performanceClass
+            type: enum
+            label: Disk class
+            widget: segmented
+            required: true
+            immutable: true
+            options:
+              - { value: general-purpose-ssd, label: General purpose SSD }
+              - { value: high-throughput-ssd, label: High throughput SSD }
+          - path: sentinel.persistence.volumes.data.autoscaling
+            type: object
+            optional: true
+            label: Grow the volume automatically
+            docs: "/reference/volumeset#autoscaling"
+            newValue: { maxCapacity: 50, minFreePercentage: 20, scalingFactor: 1.2 }
+            fields:
+              - path: maxCapacity
+                type: integer
+                label: Maximum capacity
+                unit: GiB
+                min: 10
+                required: true
+                suggestions: [50, 100, 250, 500, 1000, 2000]
+              - path: minFreePercentage
+                type: integer
+                label: Scale up below this free space
+                unit: "%"
+                min: 1
+                max: 100
+                required: true
+                suggestions: [10, 20, 30]
+              - path: scalingFactor
+                type: number
+                label: Scaling factor
+                min: 1.1
+                step: 0.1
+                required: true
+                suggestions:
+                  - { value: 1.1, label: "1.1×" }
+                  - { value: 1.2, label: "1.2× (default)" }
+                  - { value: 1.5, label: "1.5×" }
+                  - { value: 2, label: "2×" }
+          - path: sentinel.persistence.volumes.data.fileSystemType
+            type: enum
+            label: File system
+            widget: segmented
+            required: true
+            immutable: true
+            advanced: true
+            options: [ext4, xfs]
+          - path: sentinel.persistence.volumes.data.snapshots
+            type: object
+            optional: true
+            label: Scheduled snapshots
+            advanced: true
+            docs: "/reference/volumeset#snapshots"
+            newValue: { retentionDuration: 7d, schedule: "0 0 * * *" }
+            fields:
+              - path: retentionDuration
+                type: string
+                format: duration
+                label: Keep snapshots for
+                required: true
+                placeholder: 7d
+              - path: schedule
+                type: string
+                format: cron
+                label: Schedule (UTC)
+                required: true
+          - path: sentinel.persistence.volumes.data.customEncryption
+            type: object
+            optional: true
+            absent: true
+            label: Encrypt with your own KMS key
+            immutable: Encryption is chosen when the volume set is created.
+            advanced: true
+            newValue: { enabled: true, region: "", keyId: "" }
+            fields:
+              - path: enabled
+                type: boolean
+                label: Use the KMS key
+              - path: region
+                type: ref
+                label: Location
+                required: true
+                help: AWS locations only; the key must be in the same region.
+                ref: { kind: location, scope: gvc, format: name, mustExist: error }
+              - path: keyId
+                type: string
+                label: KMS key ARN
+                required: true
+                placeholder: arn:aws:kms:us-east-1:123456789012:key/…
+        rules:
+          - rule: >-
+              self.sentinel.persistence.volumes.data.performanceClass != 'high-throughput-ssd' ||
+              self.sentinel.persistence.volumes.data.initialCapacity >= 1000
+            paths: [sentinel.persistence.volumes.data.initialCapacity]
+            message: A high throughput SSD needs an initial capacity of at least 1000 GiB.
+          - rule: >-
+              self.sentinel.persistence.volumes.data.autoscaling == null ||
+              self.sentinel.persistence.volumes.data.autoscaling.maxCapacity >= self.sentinel.persistence.volumes.data.initialCapacity
+            paths: [sentinel.persistence.volumes.data.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+          - rule: >-
+              oldSelf == null || !oldSelf.sentinel.persistence.enabled ||
+              self.sentinel.persistence.volumes.data.initialCapacity >= oldSelf.sentinel.persistence.volumes.data.initialCapacity
+            paths: [sentinel.persistence.volumes.data.initialCapacity]
+            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+    rules:
+      - rule: >-
+          !has(self.redis.resources.cpu) && !has(self.redis.resources.memory) &&
+          !has(self.redis.exporter.resources.cpu) && !has(self.redis.exporter.resources.memory) &&
+          !has(self.sentinel.resources.cpu) && !has(self.sentinel.resources.memory)
+        mirrors: redis.validateResourceKnobs
+        message: >-
+          The resource keys cpu and memory were renamed to maxCpu and maxMemory in 3.6.0 (redis,
+          redis.exporter and sentinel resources). Rename them in the values.
+      - rule: oldSelf == null || oldSelf.redis.persistence.enabled || !self.redis.persistence.enabled
+        paths: [redis.persistence.enabled]
+        message: >-
+          Persistence cannot be turned on for a running release: the rollout stalls indefinitely. Turn it
+          on at install, or reinstall.
+      - rule: oldSelf == null || oldSelf.sentinel.persistence.enabled || !self.sentinel.persistence.enabled
+        paths: [sentinel.persistence.enabled]
+        message: >-
+          Persistence cannot be turned on for a running release: the rollout stalls indefinitely. Turn it
+          on at install, or reinstall.
+
+  - id: network
+    title: Network
+    description: Internal firewall, and optional public TCP access per tier.
+    sections:
+      - fields:
+          - type: note
+            text: >-
+              Setting either external CIDR list of a tier renders both; the other one becomes empty.
+      - title: Redis
+        docs: "/reference/workload/firewall"
+        fields:
+          - path: redis.firewall.internal_inboundAllowType
+            type: enum
+            label: Internal access to Redis
+            widget: cards
+            required: true
+            description: Firewall changes take a few minutes to take effect.
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC (recommended). }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          - path: redis.firewall.inboundAllowWorkload
+            type: list
+            absent: true
+            label: Allowed workloads
+            description: Extra workloads allowed to connect, for example from another GVC.
+            when: self.redis.firewall.internal_inboundAllowType in ['same-gvc', 'workload-list']
+            widget: tags
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+          - path: redis.firewall.external_inboundAllowCIDR
+            type: list
+            absent: true
+            serialize: csv
+            label: Public inbound CIDRs
+            description: Addresses allowed to connect from the internet, e.g. `0.0.0.0/0`.
+            item: { type: string, format: cidr }
+          - path: redis.firewall.external_outboundAllowCIDR
+            type: list
+            absent: true
+            serialize: csv
+            label: Outbound CIDRs
+            description: Addresses Redis may connect to outside the platform.
+            item: { type: string, format: cidr }
+          - path: redis.replicaDirect
+            type: boolean
+            label: Per-replica internal endpoints
+            when: "!self.redis.publicAccess.enabled"
+            docs: "/reference/workload/general#internal-endpoint-formatting"
+            description: Public access turns this on.
+      - id: redis-public
+        title: Public TCP access to Redis
+        toggle: redis.publicAccess.enabled
+        description: Publishes one port per Redis node, from 6380, and forces per-replica endpoints.
+        docs: "#public-access"
+        fields:
+          - path: redis.publicAccess.address
+            type: string
+            format: hostname
+            label: Redis hostname
+            required: true
+            example: true
+            description: A subdomain you own. The chart creates a domain with this name.
+            help: >-
+              Before you install, add a TXT record `_cpln-<subdomain>` with your org name and a CNAME from
+              the subdomain to `<gvc-alias>.cpln.app`, with proxying off.
+      - title: Sentinel
+        docs: "/reference/workload/firewall"
+        fields:
+          - path: sentinel.firewall.internal_inboundAllowType
+            type: enum
+            label: Internal access to Sentinel
+            widget: cards
+            required: true
+            description: Firewall changes take a few minutes to take effect.
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC (recommended). }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          - path: sentinel.firewall.inboundAllowWorkload
+            type: list
+            absent: true
+            label: Allowed workloads
+            description: Extra workloads allowed to connect, for example from another GVC.
+            when: self.sentinel.firewall.internal_inboundAllowType in ['same-gvc', 'workload-list']
+            widget: tags
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+          - path: sentinel.firewall.external_inboundAllowCIDR
+            type: list
+            absent: true
+            serialize: csv
+            label: Public inbound CIDRs
+            description: Addresses allowed to connect from the internet, e.g. `0.0.0.0/0`.
+            item: { type: string, format: cidr }
+          - path: sentinel.firewall.external_outboundAllowCIDR
+            type: list
+            absent: true
+            serialize: csv
+            label: Outbound CIDRs
+            description: Addresses Sentinel may connect to outside the platform.
+            item: { type: string, format: cidr }
+          - path: sentinel.replicaDirect
+            type: boolean
+            label: Per-replica internal endpoints
+            when: "!self.sentinel.publicAccess.enabled"
+            docs: "/reference/workload/general#internal-endpoint-formatting"
+            description: Public access turns this on.
+      - id: sentinel-public
+        title: Public TCP access to Sentinel
+        toggle: sentinel.publicAccess.enabled
+        description: Publishes one port per Sentinel, from 26380, and forces per-replica endpoints.
+        docs: "#public-access"
+        fields:
+          - path: sentinel.publicAccess.address
+            type: string
+            format: hostname
+            label: Sentinel hostname
+            required: true
+            example: true
+            description: A subdomain you own. The chart creates a domain with this name.
+            help: >-
+              Before you install, add a TXT record `_cpln-<subdomain>` with your org name and a CNAME from
+              the subdomain to `<gvc-alias>.cpln.app`, with proxying off.
+    rules:
+      - when: self.redis.firewall.internal_inboundAllowType == 'workload-list' && context.gvc != null
+        rule: >-
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis') in self.redis.firewall.inboundAllowWorkload &&
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-sentinel') in self.redis.firewall.inboundAllowWorkload &&
+          (!self.backup.enabled ||
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis-backup') in self.redis.firewall.inboundAllowWorkload)
+        severity: warning
+        paths: [redis.firewall.inboundAllowWorkload]
+        messageExpression: >-
+          'The chart does not add its own workloads to the list. Add //gvc/' + context.gvc + '/workload/' +
+          context.releaseName + '-redis, //gvc/' + context.gvc + '/workload/' + context.releaseName + '-sentinel' +
+          (self.backup.enabled ? ' and //gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis-backup' : '') +
+          ', or replication, failover and backups cannot reach Redis.'
+        message: >-
+          The chart does not add its own workloads to the list. Add the Redis, Sentinel and (with backups)
+          backup workloads, or they cannot reach Redis.
+      - when: self.sentinel.firewall.internal_inboundAllowType == 'workload-list' && context.gvc != null
+        rule: >-
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-sentinel') in self.sentinel.firewall.inboundAllowWorkload &&
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis') in self.sentinel.firewall.inboundAllowWorkload
+        severity: warning
+        paths: [sentinel.firewall.inboundAllowWorkload]
+        messageExpression: >-
+          'The chart does not add its own workloads to the list. Add //gvc/' + context.gvc + '/workload/' +
+          context.releaseName + '-sentinel and //gvc/' + context.gvc + '/workload/' + context.releaseName +
+          '-redis, or Sentinels and Redis nodes cannot reach Sentinel.'
+        message: >-
+          The chart does not add its own workloads to the list. Add the Sentinel and Redis workloads, or they
+          cannot reach Sentinel.
+      - when: self.redis.publicAccess.enabled
+        rule: >-
+          context.gvcSpec == null || (has(context.gvcSpec.loadBalancer) &&
+          has(context.gvcSpec.loadBalancer.dedicated) && context.gvcSpec.loadBalancer.dedicated)
+        paths: [redis.publicAccess.enabled]
+        message: Public access needs a dedicated load balancer on the GVC. Enable it in the GVC settings first.
+      - when: self.sentinel.publicAccess.enabled
+        rule: >-
+          context.gvcSpec == null || (has(context.gvcSpec.loadBalancer) &&
+          has(context.gvcSpec.loadBalancer.dedicated) && context.gvcSpec.loadBalancer.dedicated)
+        paths: [sentinel.publicAccess.enabled]
+        message: Public access needs a dedicated load balancer on the GVC. Enable it in the GVC settings first.
+      - when: self.redis.publicAccess.enabled && self.sentinel.publicAccess.enabled
+        rule: self.redis.publicAccess.address != self.sentinel.publicAccess.address
+        paths: [sentinel.publicAccess.address]
+        message: Redis and Sentinel need different hostnames; each tier creates its own domain.
+      - rule: >-
+          oldSelf == null || !oldSelf.redis.publicAccess.enabled || !self.redis.publicAccess.enabled ||
+          self.redis.publicAccess.address == oldSelf.redis.publicAccess.address
+        severity: info
+        paths: [redis.publicAccess.address]
+        message: >-
+          Changing the hostname replaces the domain: the chart deletes the domain of the old hostname
+          and creates one for the new hostname, whose TXT and CNAME records must exist first. Clients
+          of the old hostname lose access.
+      - rule: >-
+          oldSelf == null || !oldSelf.sentinel.publicAccess.enabled || !self.sentinel.publicAccess.enabled ||
+          self.sentinel.publicAccess.address == oldSelf.sentinel.publicAccess.address
+        severity: info
+        paths: [sentinel.publicAccess.address]
+        message: >-
+          Changing the hostname replaces the domain: the chart deletes the domain of the old hostname
+          and creates one for the new hostname, whose TXT and CNAME records must exist first. Clients
+          of the old hostname lose access.
+      - when: self.redis.publicAccess.enabled
+        rule: size(self.redis.firewall.external_inboundAllowCIDR) > 0
+        severity: warning
+        paths: [redis.firewall.external_inboundAllowCIDR]
+        message: Public access is on, but no inbound CIDR is allowed, so nobody can connect from outside.
+      - when: self.sentinel.publicAccess.enabled
+        rule: size(self.sentinel.firewall.external_inboundAllowCIDR) > 0
+        severity: warning
+        paths: [sentinel.firewall.external_inboundAllowCIDR]
+        message: Public access is on, but no inbound CIDR is allowed, so nobody can connect from outside.
+
+  - id: backup
+    title: Backup and monitoring
+    description: Scheduled backups to object storage, and a metrics exporter.
+    sections:
+      - id: backup
+        title: Scheduled backups
+        toggle: backup.enabled
+        docs: "#backup"
+        fields:
+          - path: backup.provider
+            type: enum
+            label: Destination
+            widget: segmented
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+          - path: backup.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+          - path: backup.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+          - path: backup.resources
+            type: resources
+            label: Backup job resources
+            required: true
+            advanced: true
+      - title: AWS S3
+        when: self.backup.enabled && self.backup.provider == 'aws'
+        docs: "#aws-s3"
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '3.5.1') < 0
+            text: >-
+              This version no longer grants the backup identity `aws::ReadOnlyAccess`. Make sure your IAM
+              policy has the full action list from the README before upgrading.
+          - path: backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            docs: "#aws-s3"
+          - path: backup.aws.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+      - title: Google Cloud Storage
+        when: self.backup.enabled && self.backup.provider == 'gcp'
+        docs: "#gcs"
+        fields:
+          - path: backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the Storage Admin
+              role.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+      - id: metrics
+        title: Metrics exporter
+        toggle: redis.exporter.enabled
+        description: >-
+          Adds a redis_exporter sidecar; metrics are scraped from :9121/metrics. Authentication is wired
+          automatically.
+        docs: "#metrics"
+        fields:
+          - path: redis.exporter.dropMetrics
+            type: list
+            label: Drop metrics matching
+            description: Regular expressions matched against metric names, e.g. `redis_commands_latencies_usec_bucket`.
+            item: { type: string }
+          - path: redis.exporter.image
+            type: string
+            format: image
+            label: Exporter image
+            required: true
+            advanced: true
+          - path: redis.exporter.resources
+            type: resources
+            label: Exporter resources
+            required: true
+            advanced: true
+            description: A sidecar next to each Redis node.
+            maxRatio: 4
+    rules:
+      - rule: "!self.backup.enabled || self.backup.provider in ['aws', 'gcp']"
+        mirrors: redis.validateBackupConfig
+        paths: [backup.provider]
+        message: Backups need a destination, aws or gcp.
+      - rule: oldSelf == null || !oldSelf.backup.enabled || self.backup.provider == oldSelf.backup.provider
+        severity: info
+        paths: [backup.provider]
+        message: >-
+          Switching the destination leaves the previous provider's cloud binding on the backup identity
+          until you edit the identity or reinstall.
+
+  - id: advanced
+    title: Advanced
+    description: Images, timeouts, replication tuning, health probes and extra workload settings.
+    sections:
+      - title: Images
+        when: self.engine == 'redis'
+        fields:
+          - path: redis.image
+            type: string
+            format: image
+            label: Redis image
+            required: true
+          - path: sentinel.image
+            type: string
+            format: image
+            label: Sentinel image
+            required: true
+        rules:
+          - rule: >-
+              oldSelf == null || imageMajor(self.redis.image) < 0 || imageMajor(oldSelf.redis.image) < 0 ||
+              imageMajor(self.redis.image) >= imageMajor(oldSelf.redis.image)
+            severity: info
+            paths: [redis.image]
+            message: An older Redis major version cannot load data written by the installed one.
+      - title: Timeouts
+        fields:
+          - path: redis.timeoutSeconds
+            type: integer
+            label: Redis request timeout
+            unit: seconds
+            min: 1
+            max: 3600
+            required: true
+          - path: sentinel.timeoutSeconds
+            type: integer
+            label: Sentinel request timeout
+            unit: seconds
+            min: 1
+            max: 3600
+            required: true
+      - title: Replication tuning
+        fields:
+          - path: redis.replication.backlogSize
+            type: string
+            label: Replication backlog size
+            required: true
+            pattern: '^\d+([bB]|[kKmMgG][bB]?)?$'
+            description: Peak write throughput times the disconnect you want to survive without a full resync, e.g. `1gb`.
+          - path: redis.replication.timeout
+            type: integer
+            label: Replication timeout
+            unit: seconds
+            min: 1
+            required: true
+            description: Bounds a full resync plus loading the data.
+          - path: redis.replication.slaveOutputBufferLimit
+            type: string
+            label: Replica output buffer limit
+            required: true
+            pattern: '^\d+([bB]|[kKmMgG][bB]?)? \d+([bB]|[kKmMgG][bB]?)? \d+$'
+            description: Hard limit, soft limit and seconds, e.g. `2gb 512mb 300`.
+      - title: Health probes
+        fields:
+          - type: note
+            textExpression: >-
+              'Startup window: ' + string(self.redis.probes.readiness.initialDelaySeconds +
+              30 * self.redis.probes.readiness.periodSeconds) +
+              ' seconds (readiness initial delay + 30 × period). Raise the period if loading the data takes longer.'
+            text: The startup window is the readiness initial delay plus 30 times its period.
+          - path: redis.probes.readiness.failureThreshold
+            type: integer
+            label: Readiness failure threshold
+            min: 1
+            max: 20
+            required: true
+          - path: redis.probes.readiness.initialDelaySeconds
+            type: integer
+            label: Readiness initial delay
+            unit: seconds
+            min: 0
+            max: 600
+            required: true
+          - path: redis.probes.readiness.periodSeconds
+            type: integer
+            label: Readiness period
+            unit: seconds
+            min: 1
+            max: 600
+            required: true
+          - path: redis.probes.readiness.timeoutSeconds
+            type: integer
+            label: Readiness timeout
+            unit: seconds
+            min: 1
+            max: 600
+            required: true
+          - path: redis.probes.liveness.failureThreshold
+            type: integer
+            label: Liveness failure threshold
+            min: 1
+            max: 20
+            required: true
+          - path: redis.probes.liveness.initialDelaySeconds
+            type: integer
+            label: Liveness initial delay
+            unit: seconds
+            min: 0
+            max: 600
+            required: true
+          - path: redis.probes.liveness.periodSeconds
+            type: integer
+            label: Liveness period
+            unit: seconds
+            min: 1
+            max: 600
+            required: true
+          - path: redis.probes.liveness.timeoutSeconds
+            type: integer
+            label: Liveness timeout
+            unit: seconds
+            min: 1
+            max: 600
+            required: true
+      - title: Redis workload
+        collapsible: true
+        fields:
+          - path: redis.extraArgs
+            type: string
+            absent: true
+            label: Extra server arguments
+            placeholder: --maxclients 20000 --maxmemory 200mb --maxmemory-policy allkeys-lru
+          - path: redis.env
+            type: list
+            label: Extra environment variables
+            widget: table
+            newItem: { name: "", value: "" }
+            uniqueBy: [name]
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: string
+                  label: Name
+                  required: true
+                  pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+                - path: value
+                  type: string
+                  label: Value
+          - path: redis.tags
+            type: map
+            label: Extra tags
+            widget: kv
+            values: { type: string }
+          - path: redis.requestRetryPolicy
+            type: object
+            optional: true
+            label: Request retry policy
+            docs: /reference/workload/general
+            newValue:
+              attempts: 2
+              retryOn: [connect-failure, refused-stream, unavailable, cancelled, resource-exhausted, retriable-status-codes]
+            fields:
+              - path: attempts
+                type: integer
+                absent: true
+                label: Attempts
+                min: 1
+                required: true
+              - path: retryOn
+                type: list
+                absent: true
+                label: Retry on
+                widget: tags
+                minItems: 1
+                unique: true
+                item:
+                  type: enum
+                  options:
+                    [connect-failure, refused-stream, unavailable, cancelled, resource-exhausted, retriable-status-codes]
+        rules:
+          - rule: >-
+              self.engine != 'valkey' || self.redis.extraArgs == null ||
+              !self.redis.extraArgs.contains('dual-channel-replication-enabled yes')
+            severity: warning
+            paths: [redis.extraArgs]
+            message: >-
+              On Valkey, dual-channel replication makes Sentinel see duplicate replicas (a known upstream
+              defect). Remove it from the extra arguments.
+      - title: Sentinel workload
+        collapsible: true
+        fields:
+          - path: sentinel.env
+            type: list
+            label: Extra environment variables
+            widget: table
+            newItem: { name: "", value: "" }
+            uniqueBy: [name]
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: string
+                  label: Name
+                  required: true
+                  pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+                - path: value
+                  type: string
+                  label: Value
+          - path: sentinel.tags
+            type: map
+            label: Extra tags
+            widget: kv
+            values: { type: string }
+          - path: sentinel.requestRetryPolicy
+            type: object
+            optional: true
+            label: Request retry policy
+            docs: /reference/workload/general
+            newValue:
+              attempts: 2
+              retryOn: [connect-failure, refused-stream, unavailable, cancelled, resource-exhausted, retriable-status-codes]
+            fields:
+              - path: attempts
+                type: integer
+                absent: true
+                label: Attempts
+                min: 1
+                required: true
+              - path: retryOn
+                type: list
+                absent: true
+                label: Retry on
+                widget: tags
+                minItems: 1
+                unique: true
+                item:
+                  type: enum
+                  options:
+                    [connect-failure, refused-stream, unavailable, cancelled, resource-exhausted, retriable-status-codes]
+
+yamlOnly:
+  - path: grafana
+    reason: A Kubernetes GrafanaDashboard resource for the Grafana Operator; never reconciled on the managed platform.
+  - path: redis.serverCommand
+    reason: Correct for both engines; it only matters for exotic images, and a wrong value crash-loops the nodes.
+  - path: redis.dataDir
+    reason: Tied to the volume mount and the temp-file cleanup hooks; there is no reason to change it.
+
+migrations:
+  - fromVersions: "<3.7.0"
+    assume: { engine: redis }
+  - fromVersions: "<3.6.0"
+    from: redis.resources.cpu
+    to: redis.resources.maxCpu
+  - fromVersions: "<3.6.0"
+    from: redis.resources.memory
+    to: redis.resources.maxMemory
+  - fromVersions: "<3.6.0"
+    from: redis.exporter.resources.cpu
+    to: redis.exporter.resources.maxCpu
+  - fromVersions: "<3.6.0"
+    from: redis.exporter.resources.memory
+    to: redis.exporter.resources.maxMemory
+  - fromVersions: "<3.6.0"
+    from: sentinel.resources.cpu
+    to: sentinel.resources.maxCpu
+  - fromVersions: "<3.6.0"
+    from: sentinel.resources.memory
+    to: sentinel.resources.maxMemory

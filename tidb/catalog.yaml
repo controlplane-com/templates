@@ -1,0 +1,81 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: TiDB
+category: database
+topology: multi-location
+
+summary: >-
+  A TiDB distributed SQL cluster with its tiers as separate workloads: PD placement-driver
+  members, TiKV storage nodes on their own volumes and tidb-server SQL nodes speaking the MySQL
+  protocol on port 4000, in the locations of an existing GVC. The default, three nodes in one
+  location, survives a node loss; three locations survive losing one. A one-time job creates
+  the database and user, and optional scheduled br snapshots go to S3 or GCS. Pick it for
+  MySQL-compatible SQL that scales out across nodes.
+
+keywords:
+  - distributed sql
+  - newsql
+  - mysql compatible
+  - mysql wire protocol
+  - tikv
+  - pd
+  - placement driver
+  - raft consensus
+  - horizontal scaling
+  - auto sharding
+  - distributed transactions
+  - strong consistency
+  - multi-region database
+  - fault tolerant
+  - br backup
+  - database backups
+  - sql
+
+useCases:
+  - MySQL-compatible database that scales out beyond a single server
+  - Replace a manually sharded MySQL setup with one distributed SQL cluster
+  - SQL database that keeps serving through node failures, or region failures with three locations
+  - Large transactional datasets with strong consistency across nodes
+
+alternativeTo:
+  - TiDB Cloud
+  - PlanetScale
+  - Vitess
+  - Amazon Aurora MySQL-Compatible Edition
+
+compatibleWith: [mysql-wire]
+
+pickInsteadIf:
+  - need: a single MySQL server for a small app
+    template: mysql
+  - need: PostgreSQL-compatible distributed SQL
+    template: cockroach
+
+prerequisites:
+  - kind: other
+    valuesPath: locations
+    required: true
+    description: An existing GVC that contains every location listed in locations; a missing one makes PD refuse to bootstrap.
+  - kind: secret
+    secretType: dictionary
+    keys: [rootPassword, user, password, db]
+    valuesPath: autoCreateDatabase.credentialsSecretName
+    required: true
+    description: Root password plus the app database, user and password. Needed while autoCreateDatabase.enabled, the default; missing, the workload waits with no logs.
+  - kind: bucket
+    valuesPath: [backup.aws.bucket, backup.gcp.bucket]
+    required: false
+    when: backup.enabled
+    description: S3 or GCS bucket that receives the scheduled br snapshots.
+  - kind: cloud-account
+    valuesPath: [backup.aws.cloudAccountName, backup.gcp.cloudAccountName]
+    required: false
+    when: backup.enabled
+    description: Control Plane cloud account for the backup bucket's AWS account or GCP project; on GCP grant its service account the Storage Admin role.
+  - kind: other
+    valuesPath: backup.aws.policyName
+    required: false
+    when: backup.enabled with backup.provider aws
+    description: AWS IAM policy scoped to the backup bucket; the README has the JSON.

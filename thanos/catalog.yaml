@@ -1,0 +1,88 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Thanos
+category: observability
+topology: stateless
+
+summary: >-
+  Thanos Query, a stateless PromQL endpoint that fans each query out over the Store API of many
+  Prometheus servers (typically their Thanos sidecars) and deduplicates HA pairs by a replica label.
+  An optional long-term tier adds a Store Gateway that serves historical blocks from an S3, GCS or
+  S3-compatible bucket and a Compactor that compacts, downsamples and applies retention. Pick it for
+  one query view across several Prometheus installs or regions, or to read metric history kept in
+  object storage.
+
+keywords:
+  - thanos query
+  - global query view
+  - promql
+  - prometheus federation
+  - prometheus high availability
+  - deduplication
+  - multi-cluster metrics
+  - multi-region metrics
+  - store api
+  - store gateway
+  - compactor
+  - downsampling
+  - long-term metrics retention
+  - object storage
+
+useCases:
+  - Query metrics from several Prometheus servers in different regions through one endpoint
+  - Deduplicate metrics from two identical Prometheus instances run for high availability
+  - Read long-term metric history from an S3 or GCS bucket
+  - Downsample and apply retention to metric blocks in object storage
+  - Give Grafana one Prometheus datasource that covers every Prometheus install
+
+alternativeTo:
+  - Amazon Managed Service for Prometheus
+  - Google Cloud Managed Service for Prometheus
+  - Grafana Cloud
+  - Chronosphere
+  - Cortex
+  - Promxy
+
+compatibleWith: [promql]
+
+pickInsteadIf:
+  - need: scrape targets or receive remote-write metrics into a local metrics store
+    template: prometheus
+  - need: push metrics by remote write straight into object storage with per-tenant isolation
+    template: mimir
+  - need: dashboards, alerting and a login-protected UI over my metrics
+    template: grafana
+
+related:
+  - template: prometheus
+    relation: companion
+    note: Its Thanos sidecar is the Store API endpoint that Query fans out over and the uploader of bucket blocks
+  - template: grafana
+    relation: companion
+    note: Dashboards and alerting with Query as one Prometheus datasource
+
+prerequisites:
+  - kind: bucket
+    valuesPath: [storage.aws.bucket, storage.gcp.bucket, storage.minio.bucket]
+    required: false
+    when: storeGateway.enabled or compactor.enabled
+    description: The bucket your Prometheus Thanos sidecars upload blocks to, on AWS S3, GCS or an S3-compatible server. It must exist before install.
+  - kind: cloud-account
+    valuesPath: [storage.aws.cloudAccountName, storage.gcp.cloudAccountName]
+    required: false
+    when: storeGateway.enabled or compactor.enabled, with storage.type aws or gcp
+    description: Control Plane cloud account for the AWS or GCP account holding the bucket; access is keyless. The render fails without its name.
+  - kind: other
+    valuesPath: storage.aws.policyName
+    required: false
+    when: storeGateway.enabled or compactor.enabled, with storage.type aws
+    description: AWS IAM policy granting ListBucket, GetObject, PutObject and DeleteObject on the bucket, attached to the workload identity. The render fails without its name.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath: storage.minio.credentialsSecretName
+    required: false
+    when: storeGateway.enabled or compactor.enabled, with storage.type minio
+    description: Access keys for the MinIO or S3-compatible bucket endpoint.

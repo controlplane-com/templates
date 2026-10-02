@@ -1,0 +1,77 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: SFTPGo
+category: storage
+topology: single
+
+summary: >-
+  SFTPGo SFTP server that stores files in an Amazon S3, Google Cloud Storage or S3-compatible
+  bucket, with users declared in values (password or SSH public keys), each isolated to a folder,
+  and an admin login for the REST API and optional web admin. The default scale-to-zero mode
+  suspends the server when idle behind a small always-on proxy; always-warm mode keeps it running.
+  A dedicated load balancer exposes SFTP publicly. Pick it to exchange files over SFTP while
+  keeping them in object storage.
+
+keywords:
+  - sftp
+  - sftp server
+  - file transfer
+  - secure file transfer
+  - ssh file transfer
+  - managed file transfer
+  - sftp to s3
+  - s3-backed sftp
+  - gcs
+  - ssh keys
+  - partner file exchange
+  - scale to zero
+
+useCases:
+  - Give partners or customers an SFTP endpoint that writes into an S3 bucket
+  - Receive files from devices or legacy systems that only speak SFTP
+  - Per-user SFTP folders backed by Google Cloud Storage or S3-compatible storage
+  - Low-cost SFTP server that sleeps when idle and wakes on connect
+  - Replace a managed SFTP service with one you run yourself
+
+alternativeTo:
+  - AWS Transfer Family
+  - SFTP To Go
+  - Files.com
+  - Couchdrop
+  - ExaVault
+
+compatibleWith: [sftp]
+
+pickInsteadIf:
+  - need: object storage that applications use through the S3 API
+    template: minio
+
+related:
+  - template: seaweedfs
+    relation: companion
+    note: S3-compatible bucket in the same GVC to store the SFTP files (storage.type minio)
+  - template: minio
+    relation: companion
+    note: Replicated S3-compatible storage for the SFTP files (storage.type minio)
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    valuesPath: admin.secretName
+    required: true
+    description: Administrator login for the REST API and web admin, applied on first boot. When missing, the workload waits with no logs.
+  - kind: bucket
+    valuesPath: [storage.aws.bucket, storage.gcp.bucket, storage.minio.bucket]
+    required: true
+    description: Existing bucket that holds the SFTP files. With storage.type minio, its access keys go in storage.minio values.
+  - kind: cloud-account
+    valuesPath: [storage.aws.cloudAccountName, storage.gcp.cloudAccountName]
+    required: true
+    description: Cloud account for keyless bucket access with storage.type aws (the default) or gcp. Not used with minio.
+  - kind: other
+    valuesPath: storage.aws.policyName
+    required: true
+    description: Bucket-scoped AWS IAM policy granted through the cloud account, needed with storage.type aws (the default).

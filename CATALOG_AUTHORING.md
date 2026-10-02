@@ -142,7 +142,7 @@ kind: TemplateCatalogEntry
 internal: true
 ```
 
-Search never returns an internal template. Where it appears in the catalog still follows its `environments.yaml` (the test apps stay on staging), and the catalog shows its `Chart.yaml` category. Use `internal: true` only for templates nobody should find by searching: test apps and internal tools.
+Search never returns an internal template. Where it appears in the catalog still follows its `environments.yaml` (the test apps stay on staging), and the catalog shows its `Chart.yaml` `category` annotation, so keep one on internal templates. Use `internal: true` only for templates nobody should find by searching: test apps and internal tools.
 
 ---
 
@@ -172,7 +172,7 @@ The product name as people write it: `PostgreSQL`, `Apache Kafka`, `n8n`. A vari
 
 ### `category`
 
-The one category a person would browse to find it. It replaces the free-form `category` annotation in `Chart.yaml` everywhere the catalog is shown. Keep the annotation, because `Chart.yaml` still requires it.
+The one category a person would browse to find it. It replaces the free-form `category` annotation in `Chart.yaml` everywhere the catalog is shown, so that annotation is no longer required.
 
 ### `topology`
 

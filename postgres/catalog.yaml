@@ -1,0 +1,101 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: PostgreSQL
+category: database
+topology: single
+
+summary: >-
+  A single PostgreSQL server on a persistent, snapshotted volume, with an optional PgBouncer
+  connection pooler and optional scheduled pg_dump backups to S3, GCS or an S3-compatible
+  endpoint such as MinIO. It is reachable only from inside the org, with no public endpoint.
+  The default relational database for an app in one location.
+
+keywords:
+  - postgresql
+  - pg
+  - sql
+  - relational database
+  - rdbms
+  - pgbouncer
+  - connection pooling
+  - pg_dump
+  - database backups
+  - s3 backups
+
+useCases:
+  - Relational database for a web app or API
+  - Transactional SQL datastore for a service in one location
+  - Development or staging database that mirrors a production Postgres
+  - Postgres with nightly backups to an S3, GCS or MinIO bucket
+
+alternativeTo:
+  - Amazon RDS for PostgreSQL
+  - Google Cloud SQL for PostgreSQL
+  - Azure Database for PostgreSQL
+  - Heroku Postgres
+  - Neon
+
+compatibleWith: [postgres-wire]
+
+pickInsteadIf:
+  - need: automatic failover inside one location
+    template: postgres-highly-available
+  - need: one cluster across several locations that survives losing a location
+    template: postgres-multi-location
+  - need: active-active writes in several regions
+    template: pgedge
+  - need: vector similarity search on embeddings
+    template: pgvector
+  - need: geospatial data and queries
+    template: postgis
+  - need: time-series data with hypertables and compression
+    template: timescaledb
+  - need: auth, an auto-generated REST API, realtime and file storage on top of Postgres
+    template: supabase
+  - need: distributed SQL that scales out across nodes with PostgreSQL drivers
+    template: cockroach
+  - need: a MySQL database instead of PostgreSQL
+    template: mysql
+
+related:
+  - template: pgdog
+    relation: companion
+    note: Connection pooler, load balancer and read/write splitting proxy in front of Postgres
+  - template: dbeaver
+    relation: companion
+    note: Browser-based SQL client for querying and administering the database
+  - template: minio
+    relation: companion
+    note: S3-compatible bucket that can receive the scheduled backups
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: config.credentialsSecretName
+    required: true
+    description: Database credentials. Create it before installing; when it is missing the workload waits with no logs.
+  - kind: bucket
+    valuesPath: [backup.aws.bucket, backup.gcp.bucket, backup.minio.bucket]
+    required: false
+    when: backup.enabled
+    description: Object storage bucket that receives the scheduled backups.
+  - kind: cloud-account
+    valuesPath: [backup.aws.cloudAccountName, backup.gcp.cloudAccountName]
+    required: false
+    when: backup.enabled with backup.provider aws or gcp
+    description: Control Plane cloud account for the backup bucket's AWS account or GCP project; on GCP grant its service account the Storage Admin role.
+  - kind: other
+    valuesPath: backup.aws.policyName
+    required: false
+    when: backup.enabled with backup.provider aws
+    description: AWS IAM policy scoped to the backup bucket (object read, write, delete and list actions); the README has the JSON.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath: backup.minio.credentialsSecretName
+    required: false
+    when: backup.enabled with backup.provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

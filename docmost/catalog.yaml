@@ -1,0 +1,102 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Docmost
+category: apps
+topology: single
+
+summary: >-
+  Docmost knowledge base and wiki with real-time collaborative page editing, spaces and
+  permissions: one Docmost server with a bundled PostgreSQL for pages, users and spaces and a
+  bundled Redis for queues and live collaboration. Attachments live on a local volume or in AWS
+  S3 or an S3-compatible bucket, which is also what allows more than one replica; SMTP for
+  member invites and scheduled database backups are optional. Pick it for a self-hosted team
+  wiki or internal documentation space.
+
+keywords:
+  - wiki
+  - knowledge base
+  - team wiki
+  - internal documentation
+  - documentation
+  - collaborative editing
+  - real-time collaboration
+  - company handbook
+  - runbooks
+  - notes
+  - spaces
+  - page permissions
+
+useCases:
+  - Keep a team wiki that several people edit at the same time
+  - Organise runbooks, onboarding guides and company knowledge into spaces with permissions
+  - Share selected documentation pages through share links
+  - Replace a hosted wiki with one whose pages stay in your own database
+
+alternativeTo:
+  - Confluence
+  - Notion
+  - Outline
+  - GitBook
+  - BookStack
+  - Wiki.js
+  - Slab
+
+pickInsteadIf:
+  - need: a spreadsheet-style shared database with grid, kanban and form views
+    template: nocodb
+  - need: a public blog or newsletter with paid memberships
+    template: ghost
+  - need: docs-as-code in Git repositories with pull requests
+    template: gitea
+
+related:
+  - template: minio
+    relation: companion
+    note: S3-compatible bucket for attachments, needed to run more than one replica
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: secrets.name
+    required: true
+    description: Opaque secret whose payload is APP_SECRET, a random string of 32+ characters (write-once). When it is missing the deployment waits with no logs.
+  - kind: bucket
+    valuesPath: storage.s3.bucket
+    required: false
+    when: storage.type s3
+    description: AWS S3 or S3-compatible bucket for attachments. Required for docmost.replicas above 1.
+  - kind: cloud-account
+    valuesPath: storage.s3.cloudAccountName
+    required: false
+    when: storage.type s3 on AWS (storage.s3.endpoint empty)
+    description: Control Plane AWS cloud account for keyless S3 access, plus a bucket-scoped IAM policy named in storage.s3.policyName.
+  - kind: secret
+    secretType: dictionary
+    keys: [AWS_S3_ACCESS_KEY_ID, AWS_S3_SECRET_ACCESS_KEY]
+    valuesPath: storage.s3.auth.secretName
+    required: false
+    when: storage.type s3 with storage.s3.endpoint set (MinIO or S3-compatible)
+    description: Static access keys for the S3-compatible attachment bucket. AWS S3 itself accepts only the keyless cloud account.
+  - kind: secret
+    secretType: dictionary
+    keys: [SMTP_USERNAME, SMTP_PASSWORD]
+    valuesPath: smtp.auth.secretName
+    required: false
+    when: smtp.enabled with an authenticating SMTP relay
+    description: SMTP login for member invites. Without SMTP, invites cannot be delivered.
+  - kind: bucket
+    required: false
+    when: postgres.backup.enabled (pass-through to the bundled postgres template)
+    description: AWS S3, GCS or MinIO bucket that receives scheduled pg_dumpall backups, set under postgres.backup.aws, .gcp or .minio.
+  - kind: cloud-account
+    required: false
+    when: postgres.backup.enabled with postgres.backup.provider aws or gcp
+    description: Control Plane cloud account for the backup bucket (postgres.backup.<provider>.cloudAccountName), plus a bucket-scoped IAM policy on AWS.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    required: false
+    when: postgres.backup.enabled with postgres.backup.provider minio
+    description: Access keys for the MinIO backup endpoint, named in postgres.backup.minio.credentialsSecretName.

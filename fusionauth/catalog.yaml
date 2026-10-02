@@ -1,0 +1,75 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: FusionAuth
+category: identity
+topology: stateless
+
+summary: >-
+  FusionAuth identity and access management: an autoscaling FusionAuth server (one to three replicas)
+  that keeps all state in a bundled single-instance PostgreSQL, with optional scheduled pg_dump backups
+  to S3 or GCS. Admin setup happens in a first-run wizard; outbound traffic is closed until you open it
+  for external identity providers. Pick it for login, registration, OAuth2, OIDC and SAML for your own
+  apps without a database to provision.
+
+keywords:
+  - ciam
+  - customer identity
+  - authentication server
+  - identity provider
+  - idp
+  - oauth2
+  - oidc
+  - openid connect
+  - saml
+  - sso
+  - single sign-on
+  - user registration
+  - user management
+  - login
+  - mfa
+  - passwordless
+  - social login
+  - jwt
+
+useCases:
+  - Add login, registration and password reset to a web or mobile app
+  - Issue OAuth2 and OIDC tokens for apps and APIs
+  - Single sign-on across several of your own applications
+  - Act as a SAML identity provider for third-party tools
+  - Manage users, roles and multi-factor authentication through an admin UI and REST API
+
+alternativeTo:
+  - Auth0
+  - Okta
+  - Amazon Cognito
+  - Firebase Authentication
+  - Azure AD B2C
+  - Stytch
+  - Clerk
+
+compatibleWith: [oidc, saml]
+
+pickInsteadIf:
+  - need: clustered identity server replicas on a highly available PostgreSQL by default
+    template: keycloak
+  - need: a full app backend with Postgres, auth, REST API, realtime and file storage in one
+    template: supabase
+
+related:
+  - template: keycloak
+    relation: alternative
+    note: Keycloak identity server with SSO, OIDC, SAML and user federation
+
+prerequisites:
+  - kind: bucket
+    valuesPath: [postgres.backup.aws.bucket, postgres.backup.gcp.bucket]
+    required: false
+    when: postgres.backup.enabled
+    description: S3 or GCS bucket that receives the scheduled database backups.
+  - kind: cloud-account
+    valuesPath: [postgres.backup.aws.cloudAccountName, postgres.backup.gcp.cloudAccountName]
+    required: false
+    when: postgres.backup.enabled
+    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy on AWS or the Storage Admin role on GCP.

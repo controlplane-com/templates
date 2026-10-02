@@ -1,0 +1,61 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: SearXNG
+category: search
+topology: stateless
+
+summary: >-
+  SearXNG, a metasearch engine that sends each query to many public search engines and merges the
+  results without tracking users, run as stateless replicas with the web UI and a JSON API enabled.
+  A bundled single-instance Redis holds the state of the optional bot-detection rate limiter. It is
+  private by default with an optional public endpoint. Pick it as a web search tool for AI agents
+  or a private search page for people.
+
+keywords:
+  - metasearch engine
+  - metasearch api
+  - web search
+  - web search api
+  - json search api
+  - private search
+  - anonymous search
+  - agent web search
+  - search tool for llm
+  - google search results
+  - rate limiter
+  - image proxy
+
+useCases:
+  - Web search tool for an AI agent or LLM application, called over a JSON API
+  - Live web results for retrieval-augmented generation without a paid search API
+  - Private web search page for a team, without tracking or ads
+  - Aggregate results from Google, Bing, DuckDuckGo and other engines in one query
+
+alternativeTo:
+  - Tavily
+  - Brave Search API
+  - SerpApi
+  - Exa
+  - Google Custom Search JSON API
+  - DuckDuckGo
+  - Startpage
+
+pickInsteadIf:
+  - need: a search index over your own documents or product data
+    template: meilisearch
+  - need: full-text search and log analytics over your own data at scale
+    template: opensearch
+
+related:
+  - template: open-webui
+    relation: companion
+    note: Chat UI that can use SearXNG's JSON API as its web search provider
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: secretKey.secretName
+    required: true
+    description: Opaque secret whose payload signs preference cookies and CSRF tokens. Create it before installing; when it is missing the workload never starts and logs nothing.

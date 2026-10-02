@@ -1,0 +1,98 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Redis (multi-location)
+category: cache
+family: redis
+topology: multi-location
+
+summary: >-
+  One Redis or Valkey primary-replica cluster stretched across two or more locations of an
+  existing GVC, with replicas in every location and one Sentinel per location that promotes a
+  replica in a surviving location when the primary's location is lost; automatic failover needs
+  three or more locations. Options include password auth, public TCP access through your own
+  domain and scheduled RDB backups to Amazon S3 or Google Cloud Storage. Pick it for a cache or
+  session store that must keep serving through a regional outage.
+
+keywords:
+  - valkey
+  - redis sentinel
+  - multi-region
+  - cross-region replication
+  - regional failover
+  - disaster recovery
+  - geo-redundant cache
+  - in-memory cache
+  - key-value store
+  - session store
+  - automatic failover
+  - high availability
+  - rdb backups
+
+useCases:
+  - Cache or session store that keeps working when a whole region goes down
+  - Redis for an app deployed in several locations, with a replica close to each
+  - Promote a replica in a surviving region automatically when the primary's region fails
+  - Valkey across regions as a BSD-licensed drop-in for Redis
+
+alternativeTo:
+  - Amazon ElastiCache Global Datastore
+  - Google Cloud Memorystore for Redis
+  - Azure Cache for Redis
+  - Redis Cloud
+
+compatibleWith: [redis-protocol]
+
+pickInsteadIf:
+  - need: Redis in one location with Sentinel failover
+    template: redis
+  - need: shard the keyspace across several primaries for more memory or write throughput
+    template: redis-cluster
+
+related:
+  - template: postgres-multi-location
+    relation: companion
+    note: PostgreSQL cluster stretched across the same locations for the app's relational data
+
+prerequisites:
+  - kind: other
+    valuesPath: global.locations
+    required: true
+    description: An existing GVC with at least two locations, including every entry in global.locations; a missing location silently breaks the Sentinel quorum.
+  - kind: secret
+    secretType: opaque
+    valuesPath: redis.passwordSecretName
+    required: false
+    when: redis.passwordSecretName is set
+    description: Plain opaque secret whose payload is the Redis password. When it is named but missing, the workloads wait.
+  - kind: secret
+    secretType: opaque
+    valuesPath: sentinel.passwordSecretName
+    required: false
+    when: sentinel.passwordSecretName is set
+    description: Plain opaque secret whose payload is the Sentinel password, independent of the Redis one. When it is named but missing, the workloads wait.
+  - kind: domain
+    valuesPath: [redis.publicAccess.address, sentinel.publicAccess.address]
+    required: false
+    when: redis.publicAccess.enabled or sentinel.publicAccess.enabled
+    description: A domain you control, with its TXT and CNAME records added before install; without proven ownership the domain is rejected.
+  - kind: other
+    required: false
+    when: redis.publicAccess.enabled or sentinel.publicAccess.enabled
+    description: Dedicated load balancer enabled on the GVC before install; this chart cannot enable it, and without it the public domain serves no traffic.
+  - kind: bucket
+    valuesPath: [backup.aws.bucket, backup.gcp.bucket]
+    required: false
+    when: backup.enabled
+    description: S3 or GCS bucket that receives the nightly RDB snapshots, taken in the first listed location.
+  - kind: cloud-account
+    valuesPath: [backup.aws.cloudAccountName, backup.gcp.cloudAccountName]
+    required: false
+    when: backup.enabled
+    description: Control Plane cloud account for the AWS account or GCP project holding the bucket; on GCP its service account needs the Storage Admin role.
+  - kind: other
+    valuesPath: backup.aws.policyName
+    required: false
+    when: backup.enabled with backup.provider aws
+    description: AWS IAM policy scoped to the backup bucket, with the S3 actions listed in the README; the chart attaches it to the backup identity.

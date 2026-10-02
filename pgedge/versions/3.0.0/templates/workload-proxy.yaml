@@ -1,4 +1,3 @@
-{{- if .Values.proxy.enabled }}
 ---
 kind: workload
 name: {{ include "pgedge.proxy.name" . }}
@@ -85,13 +84,13 @@ spec:
       inboundAllowType: {{ .Values.internal_access.type | quote }}
       {{- if eq .Values.internal_access.type "workload-list" }}
       {{- /*
-        pgcat connects to this proxy on 5432, so a list naming only clients would
+        PgBouncer connects to this proxy on 5432, so a list naming only clients would
         silently break the pool while every replica reports ready. The chart adds
         its own workloads rather than requiring the user to know.
       */}}
       {{- $own := list
             (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.name" .))
-            (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.pgcat.name" .))
+            (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.pgbouncer.name" .))
             (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.proxy.name" .)) }}
       {{- if .Values.backup.enabled }}
       {{- $own = append $own (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.backup.name" .)) }}
@@ -116,4 +115,3 @@ spec:
       ports: []
     replicaDirect: false
   supportDynamicTags: false
-{{- end }}

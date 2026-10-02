@@ -8,10 +8,10 @@ pgEdge Workload Name
 {{- end }}
 
 {{/*
-pgEdge pgcat Workload Name
+pgEdge PgBouncer Workload Name
 */}}
-{{- define "pgedge.pgcat.name" -}}
-{{- printf "%s-pgcat" .Release.Name }}
+{{- define "pgedge.pgbouncer.name" -}}
+{{- printf "%s-pgbouncer" .Release.Name }}
 {{- end }}
 
 {{/*
@@ -43,10 +43,10 @@ pgEdge Secret Database Config Name
 {{- end }}
 
 {{/*
-pgEdge Secret pgcat Config Name
+pgEdge PgBouncer Startup Secret Name
 */}}
-{{- define "pgedge.secretPgcatConfig.name" -}}
-{{- printf "%s-pgcat-config" .Release.Name }}
+{{- define "pgedge.secretPgbouncerConfig.name" -}}
+{{- printf "%s-pgbouncer-config" .Release.Name }}
 {{- end }}
 
 {{/*
@@ -170,24 +170,71 @@ taking the GVC and everything inside it.
 {{- end -}}
 
 {{/*
+3.0.0 replaced pgcat with PgBouncer. Refuse leftover pgcat values rather than
+silently ignoring them -- the client endpoint changes too, so the user must
+know this upgrade is not a drop-in.
+*/}}
+{{- define "pgedge.validateNoPgcat" -}}
+{{- if hasKey .Values "pgcat" -}}
+{{- fail "pgedge 3.0.0: the pgcat pooler was REPLACED by PgBouncer and the `pgcat` values key was removed. Rename `pgcat:` to `pgbouncer:` and keep poolMode, defaultPoolSize, minReplicas, maxReplicas and resources (cpu/memory); DELETE pgcat.image and pgcat.routing -- PgBouncer cannot split reads from writes, so every location now writes to its own node-0 through HAProxy (2.2.0's default behaviour). New: pgbouncer.maxClientConn (default 1000). The client endpoint CHANGES from RELEASE-pgcat to RELEASE-pgbouncer (port 5432 unchanged). The pgEdge nodes and their data are untouched by this upgrade. See `Upgrading from 2.x` in the README." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+3.0.0 made the HAProxy failover tier mandatory. `proxy.enabled: true` changes
+nothing and is tolerated; `false` asks for a shape that no longer exists.
+*/}}
+{{- define "pgedge.validateNoProxyToggle" -}}
+{{- if and (hasKey .Values.proxy "enabled") (not .Values.proxy.enabled) -}}
+{{- fail "pgedge 3.0.0: proxy.enabled was REMOVED -- the HAProxy failover tier is now always on (app -> PgBouncer -> HAProxy -> pgEdge node). Delete proxy.enabled from your values; the other proxy.* keys (image, resources, minReplicas, maxReplicas) still configure HAProxy. An upgrade adds the HAProxy tier to a release that ran without it; the pgEdge nodes and their data are untouched. See `Upgrading from 2.x` in the README." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+PgBouncer knob checks. These values land in pgbouncer.ini, where a bad value
+only surfaces as a crash-looping pooler -- catch them at render instead.
+*/}}
+{{- define "pgedge.validatePgbouncer" -}}
+{{- $b := .Values.pgbouncer -}}
+{{- if not (has $b.poolMode (list "session" "transaction" "statement")) -}}
+{{- fail (printf "pgedge: pgbouncer.poolMode must be one of session, transaction, statement (got %v)" $b.poolMode) -}}
+{{- end -}}
+{{- range $k := list "defaultPoolSize" "maxClientConn" "minReplicas" "maxReplicas" -}}
+{{- $v := index $b $k -}}
+{{- if or (not (regexMatch "^[0-9]+$" (toString $v))) (lt (int $v) 1) -}}
+{{- fail (printf "pgedge: pgbouncer.%s must be an integer >= 1 (got %v)" $k $v) -}}
+{{- end -}}
+{{- end -}}
+{{- if gt (int $b.minReplicas) (int $b.maxReplicas) -}}
+{{- fail "pgedge: pgbouncer.minReplicas must not exceed pgbouncer.maxReplicas" -}}
+{{- end -}}
+{{- if gt (int .Values.proxy.minReplicas) (int .Values.proxy.maxReplicas) -}}
+{{- fail "pgedge: proxy.minReplicas must not exceed proxy.maxReplicas" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Single aggregate validator. Invoked once, from identity.yaml, which is
 unconditionally rendered -- so `is validation still wired up?` is one grep.
 */}}
 {{- define "pgedge.validate" -}}
 {{- include "pgedge.validateNoLegacyGvc" . -}}
+{{- include "pgedge.validateNoPgcat" . -}}
+{{- include "pgedge.validateNoProxyToggle" . -}}
 {{- include "pgedge.validateLocations" . -}}
 {{- include "pgedge.validateReplicas" . -}}
 {{- include "pgedge.validateUniqueLocations" . -}}
 {{- include "pgedge.validateBackupConfig" . -}}
 {{- include "pgedge.validateCredentials" . -}}
+{{- include "pgedge.validatePgbouncer" . -}}
 {{- end -}}
 
 {{/*
-The topology, rendered ONCE for the whole chart. Both the pgEdge and the pgcat
+The topology, rendered ONCE for the whole chart. Both the pgEdge and the HAProxy
 startup scripts build their peer/server lists from these, so the two tiers can
 never disagree. `PGEDGE_` and not `CPLN_`: env names starting with CPLN_ are
 rejected by the API at apply time, invisibly to `helm template`.
-pgcat needs PGEDGE_WORKLOAD because its own CPLN_WORKLOAD names pgcat.
+HAProxy needs PGEDGE_WORKLOAD because its own CPLN_WORKLOAD names the proxy.
 */}}
 {{- define "pgedge.locationEnv" -}}
 - name: PGEDGE_LOCATIONS

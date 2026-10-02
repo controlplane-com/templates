@@ -1,12 +1,12 @@
 # pgEdge Distributed PostgreSQL
 
-This template deploys a pgEdge active-active distributed PostgreSQL cluster using Spock multi-master replication. Every node accepts both reads and writes simultaneously, and data written to any node replicates to all others automatically. The cluster spans multiple geographic locations with configurable replicas per location, providing a globally distributed, fault-tolerant database with no single point of failure. From 2.0.0 the chart deploys into the GVC you install into and creates none of its own.
+This template deploys a pgEdge active-active distributed PostgreSQL cluster using Spock multi-master replication. Every node accepts both reads and writes simultaneously, and data written to any node replicates to all others automatically. The cluster spans multiple geographic locations with configurable replicas per location, providing a globally distributed, fault-tolerant database with no single point of failure. From 2.0.0 the chart deploys into the GVC you install into and creates none of its own. From 3.0.0 the connection pooler is PgBouncer.
 
 ## Architecture
 
 - **pgEdge**: Stateful workload running PostgreSQL 17 with the Spock extension. All nodes are active writers connected in a full-mesh replication ring. Each replica gets its own persistent volume.
-- **HAProxy failover tier** (per location, on by default): sits in front of the nodes and gives each location's pgcat a single stable target. It routes to the local node and, when the local nodes are unhealthy, fails over — first to another local node, then to a remote location — so a client keeps serving through a node failure. Disable with `proxy.enabled: false` to have pgcat connect to the nodes directly.
-- **pgcat**: Connection pooler providing a per-location virtual endpoint for applications. With the failover tier on (default) it pools the local HAProxy and node selection is HAProxy's job; with it off it pools the pgEdge nodes directly (active/active per region, or one global write target in `single-writer` mode — see pgcat Settings → Read/write routing).
+- **HAProxy failover tier** (per location): sits in front of the nodes and gives each location's PgBouncer a single stable target. It routes to the local node and, when the local nodes are unhealthy, fails over — first to another local node, then to a remote location — so a client keeps serving through a node failure.
+- **PgBouncer**: per-location connection pooler and the endpoint applications connect to. It pools one backend, the local HAProxy; node selection is HAProxy's job.
 - **Spock**: Multi-master logical replication extension included in the pgEdge image. Handles cross-node replication with last-update-wins conflict resolution.
 - **Volume set**: One `ext4` volume per pgEdge replica, with daily snapshots retained for 7 days.
 - **Identity + two policies**: `reveal` on this release's secrets and your credentials secret, plus `view` on the one GVC you install into so each node can confirm at boot that the GVC really has every location you listed.
@@ -60,7 +60,26 @@ cpln workload get-deployments RELEASE_NAME-pgedge --gvc GVC_NAME -o yaml
 Note this is `get-deployments` — plain `cpln workload get` has no `versions` field. Creating the secret
 repairs the deployment on its own in roughly 5.5 to 10.5 minutes, or force a redeployment to skip the wait.
 
-The secret holds three keys: `username`, `password` and `database`. pgcat uses the same password for its admin console, which replaces the fixed `pgcat_admin` password earlier versions shipped.
+The secret holds three keys: `username`, `password` and `database`. PgBouncer's admin console (database `pgbouncer`) accepts the same username and password. Clients must support SCRAM-SHA-256 authentication (libpq 10+, JDBC 42.2+).
+
+## Upgrading from 2.x
+
+3.0.0 replaces pgcat with PgBouncer and makes the HAProxy failover tier permanent. **The client
+endpoint changes** from `RELEASE_NAME-pgcat` to `RELEASE_NAME-pgbouncer` (port 5432 unchanged).
+The pgEdge nodes, their volumes and their data are kept.
+
+1. Edit your values: rename `pgcat:` to `pgbouncer:`, and delete `pgcat.image`, `pgcat.routing` and
+   `proxy.enabled`. The chart refuses to render while any of them remain.
+2. Optional, to shorten the client gap: point applications at
+   `RELEASE_NAME-pgedge-proxy.GVC_NAME.cpln.local:5432` first. That is HAProxy, present on any 2.2.0
+   install with the default `proxy.enabled: true`. It is unpooled, so stay well under ~97
+   connections per node.
+3. `helm upgrade` to 3.0.0. Every pgEdge node restarts once (a ~1–2 minute write interruption), and
+   the `-pgcat` workload is replaced by `-pgbouncer`.
+4. Point applications at `RELEASE_NAME-pgbouncer.GVC_NAME.cpln.local:5432`.
+
+`pgcat.routing: single-writer` has no equivalent: every location now writes to its own node, which
+was already 2.2.0's default behaviour.
 
 ## Migrating from 1.x
 
@@ -79,13 +98,13 @@ and is **not** protected — nothing at render time can see it. Migrate instead:
 3. Install 2.0.0 as a **new release** into that GVC. Use a different release name — secret names are
    organization-wide and would otherwise collide with the 1.x release's.
 4. Restore into the new cluster (see [Restoring Backup](#restoring-backup)) and cut your
-   applications over to the new pgcat endpoint.
+   applications over to the new PgBouncer endpoint.
 5. Uninstall the old release **against the GVC you originally installed it into**, not the GVC it
    created. That is where Helm tracks the release, and it takes the created GVC with it.
 
 ### Turning replication on in an existing 1.x cluster
 
-A 1.x cluster is likely not replicating (PostgreSQL 17.11 needs `spock_output` allow-listed). New 2.x installs handle this automatically. If you are still on 1.x, run this once on **every node** (connect directly, not through pgcat):
+A 1.x cluster is likely not replicating (PostgreSQL 17.11 needs `spock_output` allow-listed). New 2.x installs handle this automatically. If you are still on 1.x, run this once on **every node** (connect directly, not through PgBouncer):
 
 ```bash
 psql "host=replica-0.RELEASE_NAME-pgedge.LOCATION.GVC_NAME.cpln.local user=USERNAME dbname=DATABASE" \
@@ -126,8 +145,7 @@ postgres:
 multiZone: false  # Set to true to spread replicas across availability zones within each location
 ```
 
-The first entry of `locations` is special: it is the only location the backup cron runs in, and in
-`pgcat.routing: single-writer` its `replica-0` is the cluster's single write target (see pgcat Settings).
+The first entry of `locations` is special: it is the only location the backup cron runs in.
 
 **Replica counts:**
 
@@ -148,7 +166,7 @@ volumeset:
     scalingFactor: 1.2  # How much to scale up when triggered
 ```
 
-Configure which workloads can access pgEdge and pgcat:
+Configure which workloads can access pgEdge, PgBouncer and HAProxy:
 
 ```yaml
 internal_access:
@@ -161,18 +179,17 @@ internal_access:
 - `same-gvc`: Allow access from all workloads in the same GVC
 - `same-org`: Allow access from all workloads in the org
 - `workload-list`: Allow access only from specified workloads. List **only your clients** — the
-  pgEdge nodes replicate to each other with Spock and pgcat connects to every node, so the chart
+  pgEdge nodes replicate to each other with Spock and HAProxy connects to every node, so the chart
   always adds this release's own workloads to the list.
 
 ### HAProxy Failover Tier
 
-**Request flow:** `app → pgcat (pooler) → HAProxy (failover) → pgEdge node`. pgcat pools connections; HAProxy picks the node. Both run one set per location, and the client endpoint stays the pgcat one.
+**Request flow:** `app → PgBouncer (pooler) → HAProxy (failover) → pgEdge node`. PgBouncer pools connections; HAProxy picks the node. Both run one set per location.
 
-Each location's HAProxy sends traffic to **its own** location's `replica-0` and, if that node is unhealthy, fails over in order to the other local nodes, then to a remote location — so a client keeps serving through a node failure. On by default; set `proxy.enabled: false` to have pgcat connect to the nodes directly.
+Each location's HAProxy sends traffic to **its own** location's `replica-0` and, if that node is unhealthy, fails over in order to the other local nodes, then to a remote location — so a client keeps serving through a node failure. Every location writes to its own node (active/active).
 
 ```yaml
 proxy:
-  enabled: true          # set false to have pgcat connect to the pgEdge nodes directly
   image: haproxy:3.0.28  # pinned exact; Debian variant (perl needed by the startup gate)
   resources:
     cpu: 100m
@@ -181,52 +198,46 @@ proxy:
   maxReplicas: 2         # per location
 ```
 
-### pgcat Settings
+### PgBouncer Settings
 
-pgcat multiplexes application connections into a smaller pool of real database connections, reducing overhead and protecting Postgres from connection exhaustion under high concurrency.
+PgBouncer multiplexes application connections into a smaller pool of real database connections, protecting Postgres from connection exhaustion under high concurrency.
 
 ```yaml
-pgcat:
-  image: ghcr.io/postgresml/pgcat:v1.2.0 # pinned: `latest` makes installs non-reproducible
+pgbouncer:
+  image: ghcr.io/cloudnative-pg/pgbouncer:1.26.0-202610011121-trixie  # pinned immutable build
   poolMode: transaction  # options: session, transaction, statement
-  defaultPoolSize: 25    # Real Postgres connections pgcat maintains per pool
-  routing: local         # local | single-writer — IGNORED when proxy.enabled (the default)
+  defaultPoolSize: 25    # real Postgres connections per PgBouncer replica; × replicas must fit node max_connections (100)
+  maxClientConn: 1000    # client connections accepted per PgBouncer replica
   resources:
-    cpu: 500m
-    memory: 256Mi
+    cpu: 500m            # PgBouncer is single-threaded: add replicas rather than cores
+    memory: 128Mi
   minReplicas: 2         # per location
   maxReplicas: 4         # per location
 ```
 
-pgcat runs in the same locations as pgEdge, `minReplicas` to `maxReplicas` in each.
-
-**With the failover tier on (the default), `routing` does not apply** — pgcat pools a single backend (the local HAProxy) and all node selection is HAProxy's. The two modes below only take effect with `proxy.enabled: false`.
-
-**Read/write routing (`routing`, `proxy.enabled: false` only).** pgcat parses each query and splits reads from writes; the two modes differ in WHERE each pgcat sends them:
-
-- **`local` (default)** — each location's pgcat pools **only that location's nodes**: the local `replica-0` is the write target, other local replicas serve reads. Every region reads *and* writes locally, so this is true active/active and **losing one location does not stop writes in the others**. This is what pgEdge (multi-master) is for. With one node in a location, that node serves reads too (there is no other local node to read from).
-- **`single-writer`** — every pgcat, in every location, pools the **whole cluster** with a single write target (`replica-0` of your first location); reads go to the other nodes. Use this only if your app cannot tolerate multi-master last-update-wins conflict resolution and needs one write target. Trade-offs: **writes stop if the first location is down** (the write target is there), and reads are served **cross-region** (extra latency + egress). A misclassified write (`WITH x AS (INSERT …) SELECT`) lands on a replica and, on multi-master, replicates anyway — so single-writer is a routing convention, not an enforced guarantee.
+**Connection budget:** every PgBouncer replica in a location pools onto that location's `replica-0`, which allows ~97 connections. Keep `defaultPoolSize × maxReplicas` under that (25 × 4 = 100 is the edge), and lower it if a location may fail over onto another location's node, which then carries both locations' pools.
 
 **Pool modes:**
-- `transaction` — connection held only for the duration of a transaction. Best for most web and API workloads. Not compatible with session-level features like `SET` variables, temporary tables, or advisory locks.
+- `transaction` — connection held only for the duration of a transaction. Best for most web and API workloads. Protocol-level prepared statements work; session-level `SET`, temporary tables, advisory locks and `LISTEN` do not.
 - `session` — connection held for the entire client session. Compatible with all Postgres features but provides less connection reuse.
-- `statement` — connection returned after every statement. Transactions are not supported. Rarely used.
+- `statement` — connection returned after every statement. Multi-statement transactions are rejected. Rarely used.
 
 ## Connecting
 
-Connect through pgcat for all application traffic. Nothing in this template is exposed publicly. With the failover tier on (default), a per-location HAProxy behind pgcat handles node failover — the endpoint below is unchanged.
+Connect through PgBouncer for all application traffic. Nothing in this template is exposed publicly.
 
 | | |
 |---|---|
-| Pooled endpoint (use this) | `RELEASE_NAME-pgcat.GVC_NAME.cpln.local:5432` |
+| Pooled endpoint (use this) | `RELEASE_NAME-pgbouncer.GVC_NAME.cpln.local:5432` |
+| Unpooled, with failover | `RELEASE_NAME-pgedge-proxy.GVC_NAME.cpln.local:5432` |
 | A single node, directly | `replica-N.RELEASE_NAME-pgedge.LOCATION.GVC_NAME.cpln.local:5432` |
-| pgcat admin console | same host, database `pgcat`, user `pgcat_admin` |
+| PgBouncer admin console | pooled endpoint, database `pgbouncer` |
 | Database | the `database` entry of your credentials secret |
 | Username / password | the `username` / `password` entries of your credentials secret |
-| pgcat admin password | the `password` entry of your credentials secret |
 
-Use the fully-qualified `.GVC_NAME.cpln.local` form — the bare workload name does not resolve
-reliably from every workload type.
+PgBouncer does not offer TLS — use `sslmode=disable` or `prefer` (traffic stays inside the GVC). Use
+the fully-qualified `.GVC_NAME.cpln.local` form — the bare workload name does not resolve reliably
+from every workload type.
 
 ## Schema Changes (DDL)
 
@@ -252,7 +263,7 @@ trigger fires locally on each one, so the table ends up in the `default` replica
 and DML replicates in all directions:
 
 ```sql
--- Run on EVERY node, connecting to each directly (not through pgcat)
+-- Run on EVERY node, connecting to each directly (not through PgBouncer)
 CREATE TABLE orders (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   amount numeric,
@@ -400,7 +411,7 @@ export PGPASSWORD="PASSWORD"
 aws s3 cp "s3://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" - \
   | gunzip \
   | psql \
-      --host=RELEASE_NAME-pgcat.GVC_NAME.cpln.local \
+      --host=RELEASE_NAME-pgbouncer.GVC_NAME.cpln.local \
       --port=5432 \
       --username=USERNAME \
       --dbname=DATABASE
@@ -415,7 +426,7 @@ export PGPASSWORD="PASSWORD"
 gsutil cp "gs://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" - \
   | gunzip \
   | psql \
-      --host=RELEASE_NAME-pgcat.GVC_NAME.cpln.local \
+      --host=RELEASE_NAME-pgbouncer.GVC_NAME.cpln.local \
       --port=5432 \
       --username=USERNAME \
       --dbname=DATABASE
@@ -425,6 +436,7 @@ unset PGPASSWORD
 
 ## Important Notes
 
+- **3.0.0 changes the client endpoint** to `RELEASE_NAME-pgbouncer` — see [Upgrading from 2.x](#upgrading-from-2x)
 - **Never `helm upgrade` a 1.x release onto 2.0.0** — it deletes the GVC the 1.x chart created and everything in it. See [Migrating from 1.x](#migrating-from-1x)
 - **The GVC must contain every location you list** (it may contain more). A missing one is not caught at install — the pgEdge container exits with `FATAL: locations declared in values are not in GVC …`
 - **Use at least 3 replicas per location** in production, to survive a node loss within a location
@@ -437,5 +449,6 @@ unset PGPASSWORD
 
 - [pgEdge Documentation](https://docs.pgedge.com/)
 - [Spock Documentation](https://docs.pgedge.com/spock-v5/)
-- [pgcat Documentation](https://github.com/postgresml/pgcat)
+- [PgBouncer Configuration](https://www.pgbouncer.org/config.html)
+- [PgBouncer Usage and Admin Console](https://www.pgbouncer.org/usage.html)
 - [PostgreSQL Documentation](https://www.postgresql.org/docs/)

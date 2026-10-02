@@ -9,5 +9,4 @@ appVersion: "17-3.5"
 annotations:
   created: "2024-11-19"
   lastModified: "2025-11-26"
-  category: "database"
   createsGvc: false

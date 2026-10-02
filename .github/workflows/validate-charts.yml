@@ -146,7 +146,6 @@ jobs:
             fi
 
             # 3. Required Chart.yaml annotations
-            # The category comes from catalog.yaml (validate-catalog.yml), not Chart.yaml
             for annotation in created lastModified createsGvc; do
               if ! grep -qE "^\s+${annotation}:" "$version_dir/Chart.yaml"; then
                 echo "FAIL [$template @ $version]: Missing annotation '$annotation' in Chart.yaml"

@@ -22,5 +22,4 @@ dependencies:
 annotations:
   created: "2026-07-09"
   lastModified: "2026-08-17"
-  category: "authentication"
   createsGvc: false

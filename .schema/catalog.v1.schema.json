@@ -37,7 +37,7 @@
         "developer-tools",
         "apps"
       ],
-      "description": "The one category a person would browse to find it. Replaces the Chart.yaml category annotation in the catalog."
+      "description": "The one category a person would browse to find it; the only category the catalog shows."
     },
     "topology": {
       "enum": ["multi-location", "distributed", "highly-available", "single", "stateless"],

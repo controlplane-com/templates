@@ -7,7 +7,6 @@ appVersion: "1.27.1-rootless"
 annotations:
   created: "2026-07-27"
   lastModified: "2026-08-19"
-  category: "developer-tools"
   createsGvc: false
 dependencies:
   - name: postgres

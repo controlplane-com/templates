@@ -9,7 +9,6 @@ appVersion: "25.10"
 annotations:
   created: "2025-11-21"
   lastModified: "2026-08-21"
-  category: "database"
   createsGvc: true
 
 dependencies:

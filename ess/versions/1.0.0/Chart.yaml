@@ -8,5 +8,4 @@ appVersion: "1.0.0"
 annotations:
   created: "2025-03-12"
   lastModified: "2025-03-12"
-  category: "app"
   createsGvc: false

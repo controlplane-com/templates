@@ -9,5 +9,4 @@ appVersion: "3"
 annotations:
   created: "2024-01-23"
   lastModified: "2024-01-23"
-  category: "queue"
   createsGvc: false

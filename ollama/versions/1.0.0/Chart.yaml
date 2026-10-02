@@ -9,5 +9,4 @@ appVersion: "0.4"
 annotations:
   created: "2024-12-03"
   lastModified: "2024-12-03"
-  category: "llm"
   createsGvc: false

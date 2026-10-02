@@ -305,6 +305,8 @@ steps:
       - id: proxysql
         title: Connection pooler (ProxySQL)
         toggle: proxysql.enabled
+        # The docs page gains this heading with the 2.1.0 docs update ("Connection Pooling (ProxySQL)").
+        docs: "#connection-pooling-proxysql"
         description: >-
           A pooling tier in every location, at `RELEASE-proxysql` on port 4000. With two or more TiDB
           servers per location it keeps clients connected through a server failure. It uses the

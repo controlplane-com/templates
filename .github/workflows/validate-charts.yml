@@ -52,7 +52,9 @@ jobs:
             base_sha="$(git rev-parse HEAD^)"
           fi
 
+          # wizard.yaml is not part of the chart's rendered output; a change to it alone needs no chart validation
           version_dirs=$(git diff --name-only "$base_sha" HEAD \
+            | grep -v -E '/wizard\.yaml$' \
             | grep -E '^[^/]+/versions/[^/]+/' \
             | sed -E 's|^([^/]+/versions/[^/]+)/.*|\1|' \
             | sort -u | tr '\n' ' ')

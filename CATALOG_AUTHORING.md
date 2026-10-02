@@ -142,7 +142,7 @@ kind: TemplateCatalogEntry
 internal: true
 ```
 
-Search never returns an internal template. Where it appears in the catalog still follows its `environments.yaml` (the test apps stay on staging), and the catalog shows its `Chart.yaml` category. Use `internal: true` only for templates nobody should find by searching: test apps and internal tools.
+Search never returns an internal template. Where it appears in the catalog still follows its `environments.yaml` (the test apps stay on staging), and it has no category. Use `internal: true` only for templates nobody should find by searching: test apps and internal tools.
 
 ---
 
@@ -172,7 +172,7 @@ The product name as people write it: `PostgreSQL`, `Apache Kafka`, `n8n`. A vari
 
 ### `category`
 
-The one category a person would browse to find it. It replaces the free-form `category` annotation in `Chart.yaml` everywhere the catalog is shown. Keep the annotation, because `Chart.yaml` still requires it.
+The one category a person would browse to find it. It is the only category the catalog shows. `Chart.yaml` needs no `category` annotation; older versions still carry one, which nothing reads.
 
 ### `topology`
 
@@ -320,7 +320,7 @@ Knowing this explains the rules above. Weights are tuned against a set of real q
 
 1. **Strongest:** the template name, `title`, `keywords` and `alternativeTo`. A template whose name, keyword or `alternativeTo` product appears in the query gets an extra boost, larger the more of the query it covers. When the query asks for an alternative ("Sentry alternative"), only names and `alternativeTo` count: a keyword such as "slack digest" says the template works with Slack, not that it replaces Slack.
 2. **Strong:** `useCases` and `summary`.
-3. **Medium:** the `Chart.yaml` description, `category` and `compatibleWith`.
+3. **Medium:** `category`, `compatibleWith` and the `Chart.yaml` description.
 4. **Weak:** the latest version's README; upgrade and migration sections are skipped.
 
 How `pickInsteadIf` is indexed: each `need` counts as text of the template it points to, never of the template that declares it. `postgres` saying "automatic failover → postgres-highly-available" makes `postgres-highly-available` rank higher for "postgres with automatic failover", and does not make `postgres` rank for it.

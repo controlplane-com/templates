@@ -8,7 +8,6 @@ appVersion: "2026.8.22-9fea41204"
 annotations:
   created: "2026-08-25"
   lastModified: "2026-08-25"
-  category: "search"
   createsGvc: false
 
 dependencies:

@@ -146,7 +146,7 @@ jobs:
             fi
 
             # 3. Required Chart.yaml annotations
-            for annotation in category created lastModified createsGvc; do
+            for annotation in created lastModified createsGvc; do
               if ! grep -qE "^\s+${annotation}:" "$version_dir/Chart.yaml"; then
                 echo "FAIL [$template @ $version]: Missing annotation '$annotation' in Chart.yaml"
                 failed=1

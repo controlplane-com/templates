@@ -41,9 +41,10 @@ In addition to standard Helm fields, Control Plane requires these annotations:
 annotations:
   created: "2025-12-23"       # Date first published (YYYY-MM-DD)
   lastModified: "2025-12-24"  # Date of most recent change (YYYY-MM-DD)
-  category: "database"        # Marketplace category (e.g., database, app)
   createsGvc: false           # Whether the template creates its own GVC (see below)
 ```
+
+A template's category is set by `category` in its `catalog.yaml`. Don't add a `category` annotation to Chart.yaml; older versions still carry one, which nothing reads.
 
 ### `createsGvc`
 
@@ -175,7 +176,7 @@ Each published template version is available in the **Packages** tab of this rep
 
 - [ ] `icon.png` — square, transparent background
 - [ ] `catalog.yaml` — written with [CATALOG_AUTHORING.md](CATALOG_AUTHORING.md); siblings' `pickInsteadIf` updated for a new variant
-- [ ] `Chart.yaml` — all annotations present (`createsGvc`, `category`, `created`, `lastModified`)
+- [ ] `Chart.yaml` — all annotations present (`createsGvc`, `created`, `lastModified`)
 - [ ] `createsGvc` set correctly — `gvc.yaml` included only if `true`; `{{ .Values.global.cpln.gvc }}` used if `false`
 - [ ] All resource names defined in `_helpers.tpl` — no hardcoded names in template files
 - [ ] Tags helper in `_helpers.tpl` includes `cpln/marketplace*` tags; applied to every resource

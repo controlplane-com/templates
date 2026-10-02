@@ -1,0 +1,573 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: pgEdge
+# The chart lists its locations (localOptions) and scales every other GVC location to zero.
+gvc:
+  minLocations: 1
+
+steps:
+  - id: topology
+    title: Locations
+    description: Where the pgEdge nodes run. Every node accepts writes and replicates to all the others.
+    docs: "#locations-and-replicas"
+    fields:
+      - type: note
+        severity: warning
+        when: context.mode == 'upgrade'
+        text: >-
+          Every upgrade restarts all pgEdge nodes at once, in every location. Plan a write interruption of
+          about one to two minutes; the data is kept and replication catches up afterwards.
+      - type: note
+        when: >-
+          context.gvcLocations != null &&
+          context.gvcLocations.exists(g, !(g in self.locations.map(l, l.name)))
+        textExpression: >-
+          'GVC locations not listed here run nothing from this release: ' +
+          context.gvcLocations.filter(g, !(g in self.locations.map(l, l.name))).join(', ') + '.'
+      - path: locations
+        type: list
+        label: Locations
+        required: true
+        minItems: 1
+        uniqueBy: [name]
+        widget: table
+        newItem: { name: "", replicas: 3 }
+        itemLabel: "item.name + ' × ' + string(item.replicas)"
+        description: >-
+          One entry per location, each with its own pgEdge nodes. The first location is the only one the
+          optional backup job runs in.
+        item:
+          type: object
+          fields:
+            - path: name
+              type: ref
+              label: Location
+              required: true
+              ref: { kind: location, scope: gvc, format: name, mustExist: error }
+            - path: replicas
+              type: integer
+              label: Nodes
+              required: true
+              min: 1
+              widget: stepper
+          rules:
+            - rule: context.gvcLocations == null || item.name == '' || item.name in context.gvcLocations
+              paths: [name]
+              message: >-
+                This location is not enabled on the target GVC; its pgEdge nodes refuse to initialize.
+      - path: multiZone
+        type: boolean
+        label: Spread nodes across zones
+        description: Also applies to PgBouncer and HAProxy. Confirm that your locations support multiple zones.
+    rules:
+      - rule: size(self.locations) > 0
+        mirrors: pgedge.validateLocations
+        paths: [locations]
+        message: List at least one location.
+      - rule: self.locations.all(l, l.replicas == null || l.replicas >= 1)
+        mirrors: pgedge.validateReplicas
+        paths: [locations]
+        message: Every location needs at least 1 node; to stop running in a location, remove it.
+      - rule: isUnique(self.locations.filter(l, l.name != null && l.name != '').map(l, l.name))
+        mirrors: pgedge.validateUniqueLocations
+        paths: [locations]
+        message: >-
+          A location is listed more than once. Duplicate entries produce duplicate Spock node and
+          subscription names; list each location once.
+      - rule: self.locations.all(l, l.replicas == null || l.replicas >= 3)
+        severity: info
+        paths: [locations]
+        message: >-
+          A location with fewer than 3 nodes does not survive a node loss within that location; use 3 per
+          location in production.
+
+  - id: credentials
+    title: Credentials
+    description: The prerequisite secret with the database user, password and name.
+    docs: "#prerequisites"
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          The credentials secret must exist **before** you install. If it is missing, the deployment
+          waits and `cpln logs` shows nothing at all.
+      - path: postgres.credentialsSecretName
+        type: ref
+        label: Database credentials secret
+        required: true
+        description: >-
+          A dictionary secret with the keys `username`, `password` and `database`. PgBouncer and HAProxy
+          read it too.
+        help: >-
+          Each node creates the user and database from it once, when its data directory is first
+          initialized. Secret names are org-wide, so give each release its own secret.
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeys: [username, password, database]
+          create:
+            suggestName: "context.releaseName + '-pgedge-credentials'"
+    rules:
+      - rule: self.postgres.credentialsSecretName != null && self.postgres.credentialsSecretName != ''
+        mirrors: pgedge.validateCredentials
+        paths: [postgres.credentialsSecretName]
+        message: The database credentials secret is required.
+      - rule: >-
+          !has(self.postgres.username) && !has(self.postgres.password) && !has(self.postgres.database)
+        mirrors: pgedge.validateCredentials
+        paths: [postgres.credentialsSecretName]
+        message: >-
+          postgres.username, postgres.password and postgres.database were removed in 1.1.0. Put them in
+          the dictionary secret and remove them from the values.
+      - rule: >-
+          oldSelf == null || self.postgres.credentialsSecretName == oldSelf.postgres.credentialsSecretName
+        severity: info
+        paths: [postgres.credentialsSecretName]
+        message: >-
+          The nodes read the credentials only when their data directories are first initialized; pointing
+          at another secret does not change the existing user or password.
+
+  - id: resources
+    title: Resources and storage
+    description: Compute and storage of each pgEdge node.
+    sections:
+      - fields:
+          - path: resources
+            type: resources
+            label: Resources per node
+            required: true
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity per node
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            description: Every node has its own volume.
+            docs: "#volume-set"
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: volumeset.autoscaling.enabled
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
+            paths: [volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+    rules:
+      - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+
+  - id: access
+    title: Pooling and access
+    description: Who can connect, and the PgBouncer and HAProxy tiers in front of the nodes.
+    sections:
+      - title: Network access
+        docs: /reference/workload/firewall
+        fields:
+          - path: internal_access.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: >-
+              Applies to the pgEdge nodes, PgBouncer and HAProxy; none of them is public. A firewall change
+              can take several minutes to take effect.
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          - path: internal_access.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internal_access.type in ['same-gvc', 'workload-list']
+            widget: tags
+            description: >-
+              Your client workloads, for example from another GVC. This release's own workloads are added
+              automatically.
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+        rules:
+          - rule: self.internal_access.type != 'workload-list' || size(self.internal_access.workloads) > 0
+            severity: warning
+            paths: [internal_access.workloads]
+            message: With "Specific workloads" and an empty list, no client can connect.
+      - id: pgbouncer
+        title: PgBouncer connection pooler
+        description: >-
+          The endpoint applications connect to, `<release>-pgbouncer` on port 5432. Each location runs its
+          own PgBouncer, which pools that location's HAProxy.
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '3.0.0') < 0
+            text: >-
+              3.0.0 replaces pgcat with PgBouncer, so the client endpoint changes from `<release>-pgcat` to
+              `<release>-pgbouncer` (port 5432 unchanged). Point your applications at the new endpoint after
+              the upgrade.
+            textExpression: >-
+              '3.0.0 replaces pgcat with PgBouncer, so the client endpoint changes from `' +
+              context.releaseName + '-pgcat` to `' + context.releaseName + '-pgbouncer` (port 5432 unchanged).
+              Point your applications at the new endpoint after the upgrade.'
+          - path: pgbouncer.poolMode
+            type: enum
+            label: Pool mode
+            widget: segmented
+            required: true
+            help: >-
+              **transaction** holds a server connection for one transaction: best for most web and API
+              workloads; session-level `SET`, temporary tables, advisory locks and `LISTEN` do not work.
+              **session** holds it for the whole client session: compatible with everything, less reuse.
+              **statement** returns it after every statement: multi-statement transactions are rejected.
+            options: [session, transaction, statement]
+          - path: pgbouncer.defaultPoolSize
+            type: integer
+            label: Server connections per replica
+            min: 1
+            required: true
+            suggestions: [10, 25, 50, 100]
+            help: >-
+              All PgBouncer replicas of a location pool onto that location's first node, which allows about
+              97 connections. Keep this value times the maximum replicas under that, and lower it if a
+              location may fail over onto another location's node, which then carries both locations' pools.
+          - path: pgbouncer.maxClientConn
+            type: integer
+            label: Max client connections per replica
+            min: 1
+            required: true
+            suggestions: [100, 500, 1000, 5000]
+          - path: pgbouncer.minReplicas
+            type: integer
+            label: Minimum PgBouncer replicas per location
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 5]
+          - path: pgbouncer.maxReplicas
+            type: integer
+            label: Maximum PgBouncer replicas per location
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 5]
+            description: PgBouncer is single-threaded; add replicas rather than CPU.
+        rules:
+          - rule: self.pgbouncer.minReplicas <= self.pgbouncer.maxReplicas
+            mirrors: pgedge.validatePgbouncer
+            paths: [pgbouncer.minReplicas]
+            message: The minimum PgBouncer replicas must not be greater than the maximum.
+          - rule: self.pgbouncer.defaultPoolSize <= self.pgbouncer.maxClientConn
+            severity: info
+            paths: [pgbouncer.defaultPoolSize]
+            message: The pool is larger than the number of client connections PgBouncer accepts.
+          - rule: "!has(self.pgbouncer.routing)"
+            mirrors: pgedge.validatePgbouncer
+            paths: [pgbouncer.poolMode]
+            message: >-
+              pgbouncer.routing does not exist: PgBouncer cannot split reads from writes, and every location
+              writes to its own node through HAProxy. Remove it from the values.
+      - id: proxy
+        title: HAProxy failover tier
+        description: >-
+          Each location's HAProxy sends traffic to that location's first node and fails over to another
+          local node, then to a remote location, when it is unhealthy.
+        fields:
+          - path: proxy.minReplicas
+            type: integer
+            label: Minimum HAProxy replicas per location
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 5]
+          - path: proxy.maxReplicas
+            type: integer
+            label: Maximum HAProxy replicas per location
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 5]
+        rules:
+          - rule: self.proxy.minReplicas <= self.proxy.maxReplicas
+            mirrors: pgedge.validatePgbouncer
+            paths: [proxy.minReplicas]
+            message: The minimum HAProxy replicas must not be greater than the maximum.
+          - rule: "[self.proxy].all(p, !has(p.enabled) || p.enabled == true)"
+            mirrors: pgedge.validateNoProxyToggle
+            paths: [proxy.minReplicas]
+            message: >-
+              proxy.enabled was removed in 3.0.0: the HAProxy failover tier is always on. Remove
+              proxy.enabled from the values.
+    rules:
+      - rule: self.pgbouncer.poolMode in ['session', 'transaction', 'statement']
+        mirrors: pgedge.validatePgbouncer
+        paths: [pgbouncer.poolMode]
+        message: The pool mode must be session, transaction or statement.
+
+  - id: backup
+    title: Backups
+    description: Scheduled logical backups of your database to object storage.
+    docs: "#backup"
+    sections:
+      - id: backup
+        title: Scheduled backups
+        toggle: backup.enabled
+        description: >-
+          A cron job dumps your database with `pg_dump` from the first node of the first location and
+          uploads it to S3 or GCS. It runs only in the first location of the list.
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '3.0.0') < 0
+            text: >-
+              3.0.0 changes the backup format, and the restore job reads only the new one. Run a backup right
+              after upgrading.
+          - path: backup.provider
+            type: enum
+            label: Destination
+            widget: segmented
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+          - path: backup.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+          - path: backup.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+          - path: backup.resources
+            type: resources
+            label: Backup job resources
+            required: true
+            advanced: true
+        rules:
+          - rule: self.backup.provider in ['aws', 'gcp']
+            mirrors: pgedge.validateBackupConfig
+            paths: [backup.provider]
+            message: The backup destination must be AWS S3 or Google Cloud Storage.
+          - rule: >-
+              imageMajor(self.image) < 0 || imageMajor(self.backup.image) < 0 ||
+              imageMajor(self.backup.image) >= imageMajor(self.image)
+            severity: warning
+            paths: [backup.image]
+            message: >-
+              The backup image's major version must be at least the pgEdge Postgres major version; an older
+              pg_dump cannot dump a newer server.
+      - title: AWS S3
+        when: self.backup.enabled && self.backup.provider == 'aws'
+        docs: "#aws-s3-prerequisites"
+        fields:
+          - path: backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+          - path: backup.aws.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+      - title: Google Cloud Storage
+        when: self.backup.enabled && self.backup.provider == 'gcp'
+        docs: "#gcs-prerequisites"
+        fields:
+          - path: backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account). The chart grants its service account
+              `roles/storage.objectAdmin` on the bucket.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+
+  - id: advanced
+    title: Advanced
+    description: Images of the pgEdge nodes, PgBouncer and HAProxy, and the resources of the two tiers.
+    sections:
+      - fields:
+          - path: image
+            type: string
+            format: image
+            label: pgEdge image
+            required: true
+          - path: pgbouncer.image
+            type: string
+            format: image
+            label: PgBouncer image
+            required: true
+          - path: pgbouncer.resources
+            type: resources
+            label: PgBouncer resources
+            required: true
+            description: Per replica.
+          - path: proxy.image
+            type: string
+            format: image
+            label: HAProxy image
+            required: true
+          - path: proxy.resources
+            type: resources
+            label: HAProxy resources
+            required: true
+            description: Per replica.
+        rules:
+          - rule: >-
+              oldSelf == null || imageMajor(self.image) < 0 || imageMajor(oldSelf.image) < 0 ||
+              imageMajor(self.image) == imageMajor(oldSelf.image)
+            severity: warning
+            paths: [image]
+            message: >-
+              The data directories belong to the installed Postgres major version; a different major version
+              does not start on them. Move to a new major with a new release and a backup and restore.
+          - rule: self.pgbouncer.image == null || !self.pgbouncer.image.contains('pgcat')
+            mirrors: pgedge.validatePgbouncer
+            paths: [pgbouncer.image]
+            message: This is a pgcat image. Use a PgBouncer image, such as the chart's default.
+
+rules:
+  - rule: >-
+      context.mode != 'upgrade' || context.fromVersion == null ||
+      semverCompare(context.fromVersion, '2.0.0') >= 0
+    message: >-
+      Do not upgrade a 1.x release: the upgrade deletes the GVC that the 1.x chart created, with every
+      workload, volume set and identity in it. Install this version as a new release in an existing GVC,
+      restore a backup into it, then uninstall the old release.
+  - rule: "!has(self.gvc)"
+    mirrors: pgedge.validateNoLegacyGvc
+    message: >-
+      The gvc key was removed in 2.0.0: the chart deploys into the GVC you install into, and
+      gvc.locations moved to locations. Remove gvc from the values.
+  - rule: "!has(self.pgcat)"
+    mirrors: pgedge.validateNoPgcat
+    paths: [pgbouncer.poolMode]
+    message: >-
+      The pgcat key was removed in 3.0.0, when PgBouncer replaced pgcat. Move poolMode, defaultPoolSize,
+      minReplicas, maxReplicas and resources to pgbouncer, and remove pgcat from the values.
+
+migrations:
+  # 1.x: upgrades are blocked by the root rule above; these keep the carry-over report readable.
+  - fromVersions: "<2.0.0"
+    from: gvc.locations
+    to: locations
+  - fromVersions: "<2.0.0"
+    from: gvc.name
+    note: 2.0.0 deploys into the GVC you install into and no longer creates one.
+  - fromVersions: "<1.1.0"
+    from: postgres.username
+    note: Credentials moved to a dictionary secret with the keys username, password and database; choose it under Credentials.
+  - fromVersions: "<1.1.0"
+    from: postgres.password
+    note: Credentials moved to a dictionary secret with the keys username, password and database; choose it under Credentials.
+  - fromVersions: "<1.1.0"
+    from: postgres.database
+    note: Credentials moved to a dictionary secret with the keys username, password and database; choose it under Credentials.
+  - fromVersions: "<2.0.0"
+    from: pgcat.maxClientConn
+    to: pgbouncer.maxClientConn
+  # 2.x → 3.0.0: PgBouncer replaced pgcat, and the HAProxy tier is always on.
+  - fromVersions: "<3.0.0"
+    from: pgcat.poolMode
+    to: pgbouncer.poolMode
+  - fromVersions: "<3.0.0"
+    from: pgcat.defaultPoolSize
+    to: pgbouncer.defaultPoolSize
+  - fromVersions: "<3.0.0"
+    from: pgcat.minReplicas
+    to: pgbouncer.minReplicas
+  - fromVersions: "<3.0.0"
+    from: pgcat.maxReplicas
+    to: pgbouncer.maxReplicas
+  - fromVersions: "<3.0.0"
+    from: pgcat.resources.cpu
+    to: pgbouncer.resources.cpu
+  - fromVersions: "<3.0.0"
+    from: pgcat.resources.memory
+    to: pgbouncer.resources.memory
+  - fromVersions: "<3.0.0"
+    from: pgcat.image
+    note: PgBouncer replaced pgcat in 3.0.0 and uses the chart's pinned PgBouncer image (Advanced).
+  - fromVersions: "<3.0.0"
+    from: pgcat.routing
+    note: >-
+      PgBouncer cannot split reads from writes, so routing has no equivalent: every location writes to its
+      own node through HAProxy, as 2.2.0 already did by default.
+  - fromVersions: "<3.0.0"
+    from: proxy.enabled
+    note: The HAProxy failover tier is always on from 3.0.0; a release that ran without it gains it.

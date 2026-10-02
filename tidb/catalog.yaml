@@ -7,12 +7,12 @@ category: database
 topology: multi-location
 
 summary: >-
-  A TiDB distributed SQL cluster with its tiers as separate workloads: PD placement-driver
-  members, TiKV storage nodes on their own volumes and tidb-server SQL nodes speaking the MySQL
-  protocol on port 4000, in the locations of an existing GVC. The default, three nodes in one
-  location, survives a node loss; three locations survive losing one. A one-time job creates
-  the database and user, and optional scheduled br snapshots go to S3 or GCS. Pick it for
-  MySQL-compatible SQL that scales out across nodes.
+  A TiDB distributed SQL cluster in the locations of an existing GVC: PD placement-driver members,
+  TiKV storage nodes on their own volumes and tidb-server SQL nodes speaking the MySQL protocol on
+  port 4000, with TiKV and SQL-server counts set per location. Options add a ProxySQL connection
+  pooler in every location and scheduled br snapshots to S3 or GCS. Three nodes in one location
+  survive a node loss; three locations keep serving after losing one. Pick it for MySQL-compatible
+  SQL that scales out across nodes or regions.
 
 keywords:
   - distributed sql
@@ -30,6 +30,8 @@ keywords:
   - multi-region database
   - fault tolerant
   - br backup
+  - proxysql
+  - connection pooling
   - database backups
   - sql
 
@@ -63,7 +65,7 @@ prerequisites:
     keys: [rootPassword, user, password, db]
     valuesPath: autoCreateDatabase.credentialsSecretName
     required: true
-    description: Root password plus the app database, user and password. Needed while autoCreateDatabase.enabled, the default; missing, the workload waits with no logs.
+    description: Root password plus the app database, user and password. Needed while autoCreateDatabase.enabled (the default, and required by ProxySQL); missing, the workload waits with no logs.
   - kind: bucket
     valuesPath: [backup.aws.bucket, backup.gcp.bucket]
     required: false

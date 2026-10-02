@@ -99,6 +99,9 @@ Validate backup configuration - when backup is enabled, backup.provider must be 
 */}}
 {{- define "pgedge.validateBackupConfig" -}}
 {{- if .Values.backup.enabled -}}
+  {{- if or (not (regexMatch "^[0-9]+$" (toString .Values.backup.activeDeadlineSeconds))) (lt (int .Values.backup.activeDeadlineSeconds) 1) -}}
+    {{- fail (printf "pgedge: backup.activeDeadlineSeconds must be a whole number of seconds >= 1 (got %v)" .Values.backup.activeDeadlineSeconds) -}}
+  {{- end -}}
   {{- $provider := .Values.backup.provider -}}
   {{- if not (or (eq $provider "aws") (eq $provider "gcp")) -}}
     {{- fail "Invalid backup configuration: backup.provider must be set to 'aws' or 'gcp'." -}}

@@ -43,7 +43,7 @@ volumeset:
 # HAProxy failover tier (always on). Each location's HAProxy serves its own node-0
 # and fails over to another local node, then a remote location, when it is unhealthy.
 proxy:
-  image: haproxy:3.0.28  # pinned exact; Debian variant (perl needed by the startup gate)
+  image: haproxy:3.0.28  # pinned exact; Debian variant (perl needed by the startup check)
   resources:
     cpu: 100m
     memory: 128Mi

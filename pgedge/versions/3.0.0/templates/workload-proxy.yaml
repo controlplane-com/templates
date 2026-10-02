@@ -117,9 +117,6 @@ spec:
             (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.name" .))
             (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.pgbouncer.name" .))
             (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.proxy.name" .)) }}
-      {{- if .Values.backup.enabled }}
-      {{- $own = append $own (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.backup.name" .)) }}
-      {{- end }}
       inboundAllowWorkload:
         {{- range $own }}
         - {{ . }}

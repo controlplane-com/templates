@@ -194,7 +194,7 @@ Each location's HAProxy sends traffic to **its own** location's `replica-0` and,
 
 ```yaml
 proxy:
-  image: haproxy:3.0.28  # pinned exact; Debian variant (perl needed by the startup gate)
+  image: haproxy:3.0.28  # pinned exact; Debian variant (perl needed by the startup check)
   resources:
     cpu: 100m
     memory: 128Mi
@@ -423,13 +423,14 @@ For the cron job to have access to a GCS bucket, ensure the following prerequisi
 
 2. If you do not have a Cloud Account set up, refer to the docs to [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account). Update the value `cloudAccountName`.
 
-**Important**: You must add the `Storage Admin` role to the created GCP service account.
+**Important**: Grant the cloud account's GCP service account the `Storage Admin` role. Control Plane uses it
+to give the backup job `roles/storage.objectAdmin` on this one bucket.
 
 ### Restoring Backup
 
 The backup job also restores. It puts the schema on **every** node (DDL does not replicate), adds each
-table to the replication set, loads the data **once** so Spock replicates it, sets sequences and refreshes
-materialized views on every node, and then waits until every node holds the same row counts. It refuses to
+table to the replication set, loads the data **once** so Spock replicates it, sets sequences on every node,
+waits until every node holds the same row counts, and finally refreshes materialized views on every node. It refuses to
 run unless every node is reachable and the database is **empty on every node**, so it can never merge into
 or overwrite data. Keep applications from writing to the database while it runs.
 
@@ -453,8 +454,8 @@ cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-pgedge-backup", container="ba
 - **Recovering into a new release** (lost cluster, new GVC): install with `backup.enabled: true` against
   the same bucket, then restore with `RESTORE_FILE=OLD_PREFIX/pgedge-OLD_RELEASE-….dump`.
 - **Restoring over an existing database, or retrying a restore that failed part-way**: drop your objects
-  on **every** node first, connecting to each node directly. Tables in a replication set need `CASCADE`
-  (`DROP TABLE orders CASCADE;`). Do not drop the `public` schema: it holds the chart's auto-replication
+  (tables, views, sequences, functions, types, non-public schemas) on **every** node first, connecting to
+  each node directly. Tables in a replication set need `CASCADE` (`DROP TABLE orders CASCADE;`). Do not drop the `public` schema: it holds the chart's auto-replication
   trigger, which a node recreates only when it is first created.
 - The archive is downloaded to the job's local disk before it is applied. For a large database, raise
   `backup.activeDeadlineSeconds` or pass `--active-deadline-seconds` to `cron start`.

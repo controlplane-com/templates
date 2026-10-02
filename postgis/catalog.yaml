@@ -1,0 +1,81 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: PostGIS
+category: database
+topology: single
+
+summary: >-
+  A single PostgreSQL server with the PostGIS extension for geographic objects and spatial
+  queries, on a persistent, snapshotted volume with optional autoscaling. Optional scheduled
+  pg_dump backups to S3 or GCS. It is reachable only from inside the org. Pick it to store
+  points, lines and polygons alongside relational data and query them with spatial SQL.
+
+keywords:
+  - gis
+  - geospatial
+  - geospatial database
+  - spatial database
+  - spatial queries
+  - spatial index
+  - geometry
+  - geography
+  - geojson
+  - location data
+  - gps coordinates
+  - maps
+  - postgresql
+  - pg
+  - sql
+  - database backups
+
+useCases:
+  - Store locations and run distance or within-radius queries for a map app
+  - Geospatial backend for a GIS, mapping or fleet tracking application
+  - Spatial joins between points and polygons such as delivery zones or regions
+  - Return geometry as GeoJSON for a web map
+
+alternativeTo:
+  - Amazon RDS for PostgreSQL
+  - Google Cloud SQL for PostgreSQL
+  - Azure Database for PostgreSQL
+  - Oracle Spatial
+
+compatibleWith: [postgres-wire]
+
+pickInsteadIf:
+  - need: a general relational Postgres with a connection pooler or MinIO backups
+    template: postgres
+  - need: vector similarity search on embeddings
+    template: pgvector
+  - need: time-series data with hypertables and compression
+    template: timescaledb
+
+related:
+  - template: pgdog
+    relation: companion
+    note: Connection pooler in front of the PostGIS server
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: config.credentialsSecretName
+    required: true
+    description: Database credentials. Create it before installing; when it is missing the workload waits with no logs.
+  - kind: bucket
+    valuesPath: [backup.aws.bucket, backup.gcp.bucket]
+    required: false
+    when: backup.enabled
+    description: S3 or GCS bucket that receives the scheduled backups.
+  - kind: cloud-account
+    valuesPath: [backup.aws.cloudAccountName, backup.gcp.cloudAccountName]
+    required: false
+    when: backup.enabled
+    description: Control Plane cloud account for the backup bucket's AWS account or GCP project; on GCP grant its service account the Storage Admin role.
+  - kind: other
+    valuesPath: backup.aws.policyName
+    required: false
+    when: backup.enabled with backup.provider aws
+    description: AWS IAM policy scoped to the backup bucket (object read, write, delete and list actions); the README has the JSON.

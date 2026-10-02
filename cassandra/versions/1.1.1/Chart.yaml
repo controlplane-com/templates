@@ -8,7 +8,6 @@ appVersion: "5.0"
 annotations:
   created: "2026-05-18"
   lastModified: "2026-10-01"
-  category: "database"
   createsGvc: false
 
 dependencies:

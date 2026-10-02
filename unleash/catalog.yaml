@@ -1,0 +1,90 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Unleash
+category: developer-tools
+topology: stateless
+
+summary: >-
+  Unleash feature-flag server with the admin UI and the Admin, Client and Frontend APIs on one
+  HTTPS endpoint: a stateless server that scales by replica count, backed by a highly available
+  PostgreSQL cluster by default or a single-instance PostgreSQL. SDK API tokens can be seeded on
+  first boot, and scheduled database backups to S3, GCS or an S3-compatible endpoint are
+  optional. Pick it to turn features on and off and roll them out gradually without
+  redeploying, with flag data kept in your own database.
+
+keywords:
+  - feature flags
+  - feature toggles
+  - feature management
+  - gradual rollout
+  - percentage rollout
+  - kill switch
+  - a/b testing
+  - flag variants
+  - progressive delivery
+  - release toggles
+  - feature flag sdk
+
+useCases:
+  - Turn features on and off in production without redeploying
+  - Roll out a feature gradually to a percentage of users or a target segment
+  - Serve flags to backend services and to browser or mobile apps through SDKs
+  - Replace a hosted feature-flag service with one whose data stays in your own database
+
+alternativeTo:
+  - LaunchDarkly
+  - Split
+  - Flagsmith
+  - ConfigCat
+  - Statsig
+  - GrowthBook
+  - AWS AppConfig
+  - Firebase Remote Config
+
+pickInsteadIf:
+  - need: storing and serving application secrets and environment variables
+    template: infisical
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    valuesPath: admin.secretName
+    required: true
+    description: Initial admin login, seeded on first boot. When it is missing the deployment waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [backend, frontend]
+    valuesPath: apiTokens.secretName
+    required: false
+    when: apiTokens.secretName set
+    description: SDK tokens in the form project:environment.secret, seeded on first boot. Leave empty to create tokens in the admin UI.
+  - kind: bucket
+    valuesPath:
+      - postgresHA.backup.aws.bucket
+      - postgresHA.backup.gcp.bucket
+      - postgresHA.backup.minio.bucket
+      - postgres.backup.aws.bucket
+      - postgres.backup.gcp.bucket
+      - postgres.backup.minio.bucket
+    required: false
+    when: postgresHA.backup.enabled or postgres.backup.enabled
+    description: Object storage bucket that receives the scheduled database backups.
+  - kind: cloud-account
+    valuesPath:
+      - postgresHA.backup.aws.cloudAccountName
+      - postgresHA.backup.gcp.cloudAccountName
+      - postgres.backup.aws.cloudAccountName
+      - postgres.backup.gcp.cloudAccountName
+    required: false
+    when: database backups enabled with provider aws or gcp
+    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy on AWS or a Storage role on GCS.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath: [postgresHA.backup.minio.credentialsSecretName, postgres.backup.minio.credentialsSecretName]
+    required: false
+    when: database backups enabled with provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

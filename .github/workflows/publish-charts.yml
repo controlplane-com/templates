@@ -62,7 +62,10 @@ jobs:
           elif [ -n "${{ github.event.inputs.template }}" ]; then
             echo "charts=${{ github.event.inputs.template }}" >> $GITHUB_OUTPUT
           else
+            # A version folder whose only change is its wizard.yaml (the console's install wizard) is not a new
+            # chart release: re-packaging it would overwrite the published chart under the same version.
             version_dirs=$(git diff --name-only HEAD^ HEAD \
+              | grep -v -E '/wizard\.yaml$' \
               | grep -E '^[^/]+/versions/[^/]+/' \
               | sed -E 's|^([^/]+/versions/[^/]+)/.*|\1|' | sort -u \
               | tr '\n' ' ')

@@ -1,0 +1,81 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Hermes Agent
+category: ai
+topology: single
+
+summary: >-
+  Nous Research Hermes Agent, a model-agnostic AI agent with persistent memory, learned skills and
+  tools, as one workload keeping its SQLite state on a persistent volume. It serves an
+  OpenAI-compatible API, a web dashboard and optional signed webhooks, and uses Anthropic, OpenAI
+  or any OpenAI-compatible model with your key. Options add a headless Chromium sidecar for browser
+  automation and a WhatsApp bridge; the Control Plane MCP server comes pre-registered. Pick it for
+  a self-hosted assistant agent.
+
+keywords:
+  - ai agent
+  - autonomous agent
+  - llm agent
+  - personal assistant
+  - agent memory
+  - persistent memory
+  - agent skills
+  - tool use
+  - browser automation
+  - headless chromium
+  - mcp
+  - model context protocol
+  - openai-compatible api
+  - webhooks
+  - telegram bot
+  - slack bot
+  - discord bot
+  - whatsapp bot
+  - nous research
+
+useCases:
+  - Personal or team AI assistant that remembers context across sessions
+  - Agent that browses and reads websites with a real headless browser
+  - Chat with an agent from Telegram, Slack, Discord or WhatsApp
+  - Trigger agent work from external events through signed webhooks
+  - Manage Control Plane resources by chatting with an agent over MCP
+  - Wrap any LLM in an agent behind an OpenAI-compatible API
+
+alternativeTo:
+  - OpenClaw
+  - Manus
+  - ChatGPT agent
+  - Letta
+  - OpenAI Assistants API
+
+compatibleWith: [openai-api]
+
+pickInsteadIf:
+  - need: a chat UI where people talk to models, with user accounts and document RAG
+    template: open-webui
+  - need: run the language model itself on your own GPU
+    template: ollama
+  - need: visual workflow automation with AI steps and many app integrations
+    template: n8n
+
+related:
+  - template: litellm
+    relation: companion
+    note: OpenAI-compatible gateway Hermes can use as its model provider
+  - template: ollama
+    relation: companion
+    note: Local models Hermes can use through its custom OpenAI-compatible provider
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [api-key, api-server-key, dashboard-password]
+    valuesPath: secret.name
+    required: true
+    description: LLM provider key, gateway bearer token (16+ chars) and dashboard password; add webhook-secret for webhooks. Key names map under secret.keys. A missing secret wedges the install.
+  - kind: domain
+    required: false
+    when: webhooks.enabled with webhooks on your own hostname, or dashboard.publicUrl set
+    description: A Control Plane domain you create and route to the workload (443 to port 8644 for webhooks). The chart never creates it.

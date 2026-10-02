@@ -1,0 +1,80 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: PgDog
+category: database
+topology: stateless
+
+summary: >-
+  PgDog, a PostgreSQL proxy that pools client connections, sends writes to the primary and
+  load-balances reads across replica backends by parsing each query. It runs as a stateless
+  workload on port 6432 in front of an existing Postgres you point it at, with SCRAM
+  authentication, an admin database for stats and an optional public TCP endpoint; it deploys
+  no database itself. Pick it to protect Postgres from connection exhaustion or to split reads
+  and writes without changing application code.
+
+keywords:
+  - connection pooler
+  - connection pooling
+  - postgres proxy
+  - postgresql proxy
+  - load balancer
+  - read/write splitting
+  - read replicas
+  - query routing
+  - transaction pooling
+  - too many connections
+  - pgbouncer alternative
+  - postgresql
+  - pg
+  - scram
+
+useCases:
+  - Stop "too many connections" errors on a Postgres serving many clients
+  - Spread reads across Postgres replicas and send writes to the primary
+  - One pooled endpoint for autoscaled or serverless apps that connect to Postgres
+  - Put a connection pooler in front of an external or managed PostgreSQL
+
+alternativeTo:
+  - PgBouncer
+  - Pgpool-II
+  - PgCat
+  - Amazon RDS Proxy
+  - Supavisor
+
+compatibleWith: [postgres-wire]
+
+pickInsteadIf:
+  - need: a PostgreSQL database, not only a proxy in front of one
+    template: postgres
+  - need: Postgres with automatic failover to a standby
+    template: postgres-highly-available
+
+related:
+  - template: postgres
+    relation: companion
+    note: Single Postgres server for PgDog to pool connections to
+  - template: postgres-highly-available
+    relation: companion
+    note: Primary and replicas that PgDog can split writes and reads across
+
+prerequisites:
+  - kind: other
+    valuesPath: databases
+    required: true
+    description: A running PostgreSQL backend whose host, port and database names go in the databases list; PgDog deploys no database.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    required: true
+    description: One secret per users entry, named in users[].credentialsSecretName; must match a real Postgres role. Missing, the workload waits with no logs.
+  - kind: secret
+    secretType: opaque
+    valuesPath: admin.passwordSecretName
+    required: true
+    description: Password for PgDog's admin database, plain encoding with no trailing newline. Create it before installing; when it is missing the workload waits with no logs.
+  - kind: domain
+    required: false
+    when: publicAccess.enabled with publicAccess.address set to a custom domain
+    description: Existing Control Plane domain for the public endpoint; without it the workload gets a generated cpln.app hostname.

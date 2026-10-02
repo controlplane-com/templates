@@ -1,0 +1,128 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Chatwoot
+category: apps
+topology: single
+
+summary: >-
+  Chatwoot Community Edition customer support desk: a Rails web tier serving the agent
+  dashboard, API and website live-chat widget, a Sidekiq worker, a bundled Redis, and a
+  highly available pgvector PostgreSQL cluster (or a single-instance Postgres for development).
+  Attachments go on a local volume or in AWS S3 or an S3-compatible bucket, which also allows
+  more web replicas; SMTP and scheduled database backups are optional. Pick it for a
+  self-hosted live chat and shared inbox for customer conversations.
+
+keywords:
+  - live chat
+  - chat widget
+  - website chat
+  - shared inbox
+  - team inbox
+  - customer support
+  - help desk
+  - helpdesk
+  - omnichannel inbox
+  - customer messaging
+  - customer engagement
+  - support agents
+  - conversation management
+
+useCases:
+  - Add a live-chat widget to a website and answer visitors from a shared agent dashboard
+  - Handle customer conversations from several channels in one team inbox
+  - Run a support desk whose conversation history stays in your own database
+  - Replace a per-seat SaaS live-chat or customer messaging tool
+
+alternativeTo:
+  - Intercom
+  - Zendesk
+  - Freshdesk
+  - Freshchat
+  - Crisp
+  - LiveChat
+  - tawk.to
+  - Help Scout
+  - Front
+
+pickInsteadIf:
+  - need: a CRM for tracking contacts, companies and sales deals
+    template: twenty
+  - need: newsletters and bulk email campaigns to subscriber lists
+    template: listmonk
+  - need: a collaborative team wiki with real-time page editing
+    template: docmost
+  - need: a self-hosted chat interface for talking to LLMs
+    template: open-webui
+
+related:
+  - template: n8n
+    relation: companion
+    note: Automates workflows triggered by Chatwoot webhooks and API events
+  - template: minio
+    relation: companion
+    note: S3-compatible bucket for attachments, needed to run more than one web replica
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys:
+      - SECRET_KEY_BASE
+      - ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY
+      - ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY
+      - ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT
+    valuesPath: secrets.name
+    required: true
+    description: Chatwoot's write-once root keys. Create it before installing; when it is missing the deployment waits with no logs.
+  - kind: bucket
+    valuesPath: [storage.s3.bucket, storage.s3Compatible.bucket]
+    required: false
+    when: storage.type s3 or s3-compatible
+    description: AWS S3 or S3-compatible bucket for attachments. Required for chatwoot.replicas above 1.
+  - kind: cloud-account
+    valuesPath: storage.s3.cloudAccountName
+    required: false
+    when: storage.type s3
+    description: Control Plane AWS cloud account for keyless S3 access, plus a bucket-scoped IAM policy named in storage.s3.policyName.
+  - kind: secret
+    secretType: dictionary
+    keys: [STORAGE_ACCESS_KEY_ID, STORAGE_SECRET_ACCESS_KEY]
+    valuesPath: storage.s3Compatible.auth.secretName
+    required: false
+    when: storage.type s3-compatible
+    description: Static access keys for the MinIO, SeaweedFS or other S3-compatible attachment bucket.
+  - kind: secret
+    secretType: dictionary
+    keys: [SMTP_USERNAME, SMTP_PASSWORD]
+    valuesPath: smtp.auth.secretName
+    required: false
+    when: smtp.enabled with an authenticating SMTP relay
+    description: SMTP login for agent invites, password resets and email replies.
+  - kind: bucket
+    valuesPath:
+      - postgresHA.backup.aws.bucket
+      - postgresHA.backup.gcp.bucket
+      - postgresHA.backup.minio.bucket
+      - postgres.backup.aws.bucket
+      - postgres.backup.gcp.bucket
+      - postgres.backup.minio.bucket
+    required: false
+    when: postgresHA.backup.enabled or postgres.backup.enabled
+    description: Object storage bucket that receives the scheduled database backups.
+  - kind: cloud-account
+    valuesPath:
+      - postgresHA.backup.aws.cloudAccountName
+      - postgresHA.backup.gcp.cloudAccountName
+      - postgres.backup.aws.cloudAccountName
+      - postgres.backup.gcp.cloudAccountName
+    required: false
+    when: database backups enabled with provider aws or gcp
+    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy on AWS or Storage Object Admin on GCS.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath: [postgresHA.backup.minio.credentialsSecretName, postgres.backup.minio.credentialsSecretName]
+    required: false
+    when: database backups enabled with provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

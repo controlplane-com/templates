@@ -295,8 +295,9 @@ The `pingcap/tidb` image ships **no** mysql client, so run the command from anot
 same GVC — a throwaway `mysql:8` workload works, and the `RELEASE_NAME-tidb-db-init` workload
 already is one.
 
-Depending on how many replicas and locations you configured, the cluster can take up to 5 minutes
-to accept connections.
+A fresh install takes about 5 minutes to accept connections in one location, and 10 to 15 minutes
+when its locations span regions or clouds. The TiDB servers wait for TiKV and then create the system
+tables, and each step crosses the network between locations.
 
 ## Backing Up
 

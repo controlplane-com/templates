@@ -226,13 +226,15 @@ pgbouncer:
 - `session` — connection held for the entire client session. Compatible with all Postgres features but provides less connection reuse. A session idle for more than 1 hour is closed by the failover tier; clients reconnect.
 - `statement` — connection returned after every statement. Multi-statement transactions are rejected. Rarely used.
 
-**Session settings in the connection string.** Clients may pass these through the `options` startup
+**Session settings in the connection string** (`transaction` mode, the default). Clients may pass these through the `options` startup
 parameter (`PGOPTIONS='-c statement_timeout=5s'`, libpq `options=`, JDBC `options=`), and PgBouncer applies
 them on every server connection the client uses: `statement_timeout`, `lock_timeout`,
 `idle_in_transaction_session_timeout`, `idle_session_timeout`, `work_mem`, `maintenance_work_mem`,
 `default_transaction_isolation`, `client_min_messages`, plus `search_path`, `application_name`,
 `TimeZone`, `DateStyle` and `client_encoding`. Any other setting in `options` is refused at connect
-(`unsupported startup parameter in options`) — set it with `ALTER ROLE … SET` instead.
+(`unsupported startup parameter in options`) — set it with `ALTER ROLE … SET` instead. In `session`
+mode PgBouncer applies `options` only to a client's first server connection, so use
+`ALTER ROLE … SET` or run `SET` at the start of each session there.
 
 ## Connecting
 
@@ -258,7 +260,8 @@ replicate.** A plain `CREATE TABLE` or `ALTER TABLE` applies only to the node yo
 other nodes never learn about it, and rows written into the table on one node cannot be applied on
 a node where it does not exist.
 
-**Every table must have a PRIMARY KEY.** This template adds each new table to the `default`
+**Every table must have a PRIMARY KEY.** (Temporary and `UNLOGGED` tables are exempt: they are never
+replicated and stay on the node that created them.) This template adds each new table to the `default`
 replication set automatically, and that set replicates `UPDATE`/`DELETE`, which Spock cannot do
 without a key. A table without one does not merely fail to replicate — the `CREATE TABLE` itself is
 rejected:
@@ -330,7 +333,7 @@ id serial PRIMARY KEY
 
 Set your desired backup schedule in the values file and configure your AWS S3 or GCS bucket. Each run
 dumps **your database** (the `database` entry of your credentials secret) from the first node that
-answers — every node holds a full copy — and writes it as
+accepts a login, moving on to the next if a dump fails — every node holds a full copy — and writes it as
 `PREFIX/pgedge-RELEASE_NAME-YYYY-MM-DDTHH-MM-SSZ.dump`. A run that fails part-way leaves no backup
 behind. Roles and large objects (`lo_*`) are not included: Spock does not replicate large objects, and
 the user from your credentials secret owns everything that is restored. The job runs only in your first

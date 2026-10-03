@@ -64,7 +64,7 @@ pgbouncer:
 
 internal_access: # Applies to the pgedge, PgBouncer and HAProxy workloads
   type: same-gvc  # options: same-gvc, same-org, workload-list
-  workloads:  # Only used when type is workload-list; list only your clients --
+  workloads:  # For workload-list: list only your clients --
               # this release's own workloads are added automatically
     #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
 

@@ -16,8 +16,9 @@ steps:
         severity: warning
         when: context.mode == 'upgrade'
         text: >-
-          Every upgrade restarts all pgEdge nodes at once, in every location. Plan a write interruption of
-          about one to two minutes; the data is kept and replication catches up afterwards.
+          An upgrade that changes the pgEdge nodes (their image, resources, locations or replicas, or a new
+          chart version) restarts all of them at once, in every location. Plan a write interruption of about
+          one to two minutes; the data is kept and replication catches up afterwards.
       - type: note
         when: >-
           context.gvcLocations != null &&
@@ -214,11 +215,10 @@ steps:
           - path: internal_access.workloads
             type: list
             label: Allowed workloads
-            when: self.internal_access.type in ['same-gvc', 'workload-list']
+            when: self.internal_access.type == 'workload-list'
             widget: tags
             description: >-
-              Your client workloads, for example from another GVC. This release's own workloads are added
-              automatically.
+              Your client workloads. This release's own workloads are added automatically.
             item:
               type: ref
               ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
@@ -253,7 +253,8 @@ steps:
             required: true
             help: >-
               **transaction** holds a server connection for one transaction: best for most web and API
-              workloads; session-level `SET`, temporary tables, advisory locks and `LISTEN` do not work.
+              workloads; session-level `SET`, advisory locks and `LISTEN` do not work, and a temporary table
+              is safe only inside one transaction (`ON COMMIT DROP`) — otherwise other clients can see it.
               **session** holds it for the whole client session: compatible with everything, less reuse.
               **statement** returns it after every statement: multi-statement transactions are rejected.
             options: [session, transaction, statement]
@@ -345,8 +346,9 @@ steps:
         title: Scheduled backups
         toggle: backup.enabled
         description: >-
-          A cron job dumps your database with `pg_dump` from the first node of the first location and
-          uploads it to S3 or GCS. It runs only in the first location of the list.
+          A cron job dumps your database with `pg_dump` from the first node that accepts a login (moving
+          on to the next if a dump fails) and uploads it to S3 or GCS. It runs only in the first location
+          of the list.
         fields:
           - type: note
             severity: warning

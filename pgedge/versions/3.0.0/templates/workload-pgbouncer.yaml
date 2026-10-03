@@ -55,7 +55,7 @@ spec:
             - exec pg_isready -q -t 3 -h 127.0.0.1 -p 5432 -U "$PG_USERNAME" -d "$PG_DATABASE"
         initialDelaySeconds: 15
         periodSeconds: 5
-        failureThreshold: 3   # a hung pooler is replaced in ~15 s, not ~60-100 s
+        failureThreshold: 3   # measured: the platform acts after ~60 s regardless; a hung pooler serves again in ~90 s
         timeoutSeconds: 4
         successThreshold: 1
   identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pgedge.identity.name" . }}

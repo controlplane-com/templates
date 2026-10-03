@@ -1,114 +1,52 @@
 # pgEdge — maintainer briefing
 
-**What it is.** pgEdge Distributed PostgreSQL (PostgreSQL 17 + Spock 5): multi-master logical replication
-across locations, where every node accepts writes. Deploys into an existing GVC and creates none (2.0.0+).
-**3.0.0 replaced the pgcat pooler with PgBouncer 1.26 and made the HAProxy failover tier permanent.**
+**What it is.** pgEdge Distributed PostgreSQL (PG 17 + Spock 5): multi-master replication across locations, every
+node writable. Deploys into an existing GVC, creates none (2.0.0+). **3.0.0: PgBouncer 1.26 replaced pgcat, the
+HAProxy failover tier is always on, and backups gained a one-command restore.**
 
-**Common use cases.** Multi-region SaaS writing near users · low-latency regional reads · surviving the loss
-of a whole region · active-active without a single write primary.
+**Use cases.** Multi-region SaaS writing near users · low-latency regional reads · surviving a whole-region loss.
 
-## Architecture
-
-Request flow: `app → PgBouncer → local HAProxy → pgEdge node`. Every location writes to its own node-0.
-
+## Architecture (`app → PgBouncer → local HAProxy → pgEdge node`, one set per location)
 | Resource | Notes |
 |---|---|
-| workload `-pgbouncer` (standard) | **3.0.0, replaces `-pgcat`.** Client endpoint `RELEASE-pgbouncer.GVC.cpln.local:5432`. Pools ONE backend, the local HAProxy. `min/maxReplicas` per location |
-| workload `-pgedge-proxy` (standard) | HAProxy: local node-0 active → other local nodes → remote nodes as ordered `backup`s; `option pgsql-check`; SSLRequest startup gate. Always on from 3.0.0 |
-| workload `-pgedge` (stateful) | PG + Spock nodes, full mesh, `replicaDirect`. Unchanged by 3.0.0 |
-| volumeset | per-replica `ext4`, 7-day snapshots |
-| secret `-pgbouncer-config` | PgBouncer `start.sh`: writes `pgbouncer.ini` + `userlist.txt` at boot from the credentials env |
-| secret `-pgedge-proxy-startup` / `-pgedge-startup` | HAProxy and node start scripts; topology from `PGEDGE_*` env (`pgedge.locationEnv`) |
-| secret `-pgedge-config` | backup destination only, when `backup.enabled` |
-| workload `-pgedge-backup` (cron, optional) | `pg_dump` to S3/GCS; suspended except in `locations[0]` |
-| identity + policy `-pgedge-policy` | `reveal` on the chart's secrets + the prerequisite credentials secret |
-| policy `-pgedge-gvc-policy` | `view` on the ONE install GVC, for the boot-time location check. Never `target: all` |
-
-**Image choice.** No official PgBouncer image exists. We pin `ghcr.io/cloudnative-pg/pgbouncer` at an immutable
-dated tag (`1.26.0` itself is a rolling alias), override the entrypoint, and use only the binary. It is the
-CNCF CloudNativePG image, built with c-ares DNS; it runs as uid 998 and ships `sh`, `psql` 18 and
-`pg_isready`. `postgres-multi-location` / `postgres-highly-available` still use `edoburu/pgbouncer` through
-its entrypoint with `AUTH_TYPE: plain`; aligning them is a separate change.
+| `-pgbouncer` (standard, 2–4/location) | Client endpoint `RELEASE-pgbouncer.GVC.cpln.local:5432`. CNPG image at an immutable dated tag; `start.sh` writes ini + SCRAM userlist at boot. Serves only the configured database |
+| `-pgedge-proxy` (standard, 2/location) | HAProxy: local node-0 active → local nodes → remote nodes. Runtime DNS (`resolvers`), probes on :8405 |
+| `-pgedge` (stateful) | PG + Spock, full mesh, `replicaDirect`, `max_connections=300` on the command line |
+| `-pgedge-backup` (cron, optional) | Chart script in the stock backup image: backup by default, restore with `--env PGEDGE_ACTION=restore`. Runs in `locations[0]` only |
+| identity + 2 policies | reveal on chart secrets + credentials secret; `view` on the one install GVC |
 
 ## Key knobs (shipped defaults)
+`locations` 3×3 · `postgres.credentialsSecretName` (dictionary: username/password/database) · `pgbouncer.poolMode`
+transaction · `defaultPoolSize` 20 · `maxClientConn` 1000 · `pgbouncer.min/maxReplicas` 2/4 · `proxy` 2/2 ·
+`internal_access.type` same-gvc · `backup.enabled` false, `memory` 256Mi, `activeDeadlineSeconds` 21600.
 
-| Knob | Default | Notes |
-|---|---|---|
-| `locations[]` | 3 × 3 replicas | every entry must exist in the install GVC; extra GVC locations run nothing |
-| `postgres.credentialsSecretName` | `my-pgedge-credentials` | prerequisite `dictionary`: `username`, `password`, `database` |
-| `pgbouncer.image` | `ghcr.io/cloudnative-pg/pgbouncer:1.26.0-202610011121-trixie` | |
-| `pgbouncer.poolMode` | `transaction` | session / transaction / statement |
-| `pgbouncer.defaultPoolSize` | 25 | server connections **per PgBouncer replica**, all landing on the local node-0 |
-| `pgbouncer.maxClientConn` | 1000 | new in 3.0.0 (pgcat had no such limit) |
-| `pgbouncer.resources` | `500m` / `128Mi` | single-threaded — scale with replicas, not cores |
-| `pgbouncer.min/maxReplicas` | 2 / 4 | per location |
-| `proxy.image` / `min/maxReplicas` | `haproxy:3.0.28` / 2 / 2 | `proxy.enabled` removed in 3.0.0 |
-| `resources` (nodes) | `500m`/`1Gi` → `2`/`4Gi` | exactly 4:1, the stateful ceiling |
-| `internal_access.type` | `same-gvc` | with `workload-list` the chart adds its own workloads |
-| `backup.enabled` | `false` | `aws` or `gcp`; runs in `locations[0]` only |
+## Measured resilience (test rounds 2–3, AWS east/west + GCP)
+- PgBouncer or HAProxy replica down / rolling restart: 0 failed connects. One race seen once: an in-flight statement
+  failed ~60 s after an HAProxy rollout (1/1888), possibly after commit — README says make retries idempotent.
+- Local node-0 down: ~3 s of fast connect failures, then local node-1. All local down → remote; GCP → AWS: 0 failures.
+  Failback within `server_lifetime` (300 s).
+- Whole-location outage (+ HAProxy redeploy during it): other locations 0 failures. Clients *in* the dead location
+  fail fast — service DNS is location-pinned, never cross-location.
+- Three locations' pools on one node: 0 `too many clients` (20 × 4 × 3 = 240 < 300).
+- Hung PgBouncer replaced in ~90 s: platform exec liveness acts after ~60 s regardless of 5 s × 3 (proven with a
+  bare probe workload); `start.sh` escalates INT → KILL 30 s after SIGTERM.
 
-## PgBouncer traps (3.0.0)
-
-- **Fixed settings in `start.sh` that look tunable but are load-bearing:** `server_login_retry 3` (the 15 s
-  default makes PgBouncer fast-fail clients for longer than HAProxy's ~6 s failover); `server_idle_timeout
-  90` (under HAProxy's 2 m idle cut); `server_lifetime 300` (pooled connections drift back to a recovered
-  local node within ~5 min — HAProxy only moves sessions on mark-DOWN); `ignore_startup_parameters =
-  extra_float_digits` (JDBC is rejected without it).
-- **`[databases]` uses the `*` fallback entry, not a named one.** PgBouncer's ini parser rejects quoted keys
-  outright (measured on the pinned image: `syntax error in configuration`), so a database name containing a
-  space or quote would crash-loop the pooler. `*` routes any database name to the same name on HAProxy.
-- **Auth is SCRAM on both hops, not pass-through.** `userlist.txt` holds the plaintext password (written at
-  boot, umask 077, `"` doubled); PgBouncer verifies the client with SCRAM, then logs into the node with its
-  own SCRAM login. Clients need SCRAM support (libpq 10+, JDBC 42.2+). No TLS on the pooler — clients use
-  `sslmode=disable`/`prefer`. Admin console = database `pgbouncer`, same username/password
-  (`admin_users` cannot quote, so a username with a comma or space would break it).
-- **The start script deliberately does NOT `exec` PgBouncer.** PgBouncer's SIGTERM waits for every CLIENT to
-  disconnect, and pooled app connections never do, so a replica would sit until the kill deadline. `start.sh`
-  traps TERM and sends SIGINT instead (finish in-flight transactions, then exit). Measured locally: an 8 s
-  transaction in flight at `docker stop` committed and PgBouncer exited ~6 s later.
-- **Probes send real protocol bytes** (`pg_isready`), never a bare TCP check — the mesh sidecar completes TCP
-  handshakes. Readiness = local PgBouncer AND local HAProxy answer; liveness = local PgBouncer only, so a
-  cluster outage never restarts poolers. A SIGSTOP'd PgBouncer fails `pg_isready` in 3 s; a saturated one
-  (`max_client_conn` reached) still passes.
-- **Connection budget:** node `max_connections` is the default 100 (~97 usable). `defaultPoolSize ×
-  replicas` per location lands on ONE node-0, and a failed-over location adds its pools to the remote node.
-- **Cancel requests** reach a random PgBouncer replica (no `[peers]`: a standard workload has no stable
-  replica identity), so roughly 1/N succeed. Recommend `statement_timeout`.
-- **Autoscaling uses `metric: rps` on a TCP workload** — almost certainly never scales past `minReplicas`
-  (carried from pgcat; follow-up: `metric: cpu`).
-
-## Upgrade traps
-
-- **2.x → 3.0.0 changes the client hostname** (`-pgcat` → `-pgbouncer`, port unchanged). The render
-  REFUSES values still holding any `pgcat` key or `proxy.enabled: false`, with a message naming the edits.
-  `proxy.enabled: true` is tolerated. A pure-defaults 2.2.0 install upgrades cleanly. The data tier renders
-  identically to 2.2.0 apart from version tags, so nodes and volumes are kept, but nodes restart once.
-  Bridge option: point apps at `-pgedge-proxy` (unpooled HAProxy) during the switch.
-- **Never `helm upgrade` 1.x → 2.x+.** 1.x owned its GVC; Helm deletes what a chart stops declaring, which
-  took the GVC and everything in it **in 6 seconds while printing `upgraded successfully`** (proven
-  2026-08-27). The render refuses values with a `gvc:` key, but a pure-defaults 1.x install is not protected.
-  Migrate by new release + restore.
-- **`helm upgrade` restarts every pgEdge replica at once** — the API drops `maxUnavailableReplicas` on a
-  stateful workload. Plan a ~1–2 min write interruption.
-
-## Operational traps (carried from 2.x)
-
-- **Locations are one-directional.** The GVC must contain every listed location; extra ones run nothing
-  (`defaultOptions` min/maxScale 0 on all three long-running tiers). A missing one fails at BOOT, not install:
-  `FATAL: locations declared in values are not in GVC …` on a fresh node, WARNING on an initialised one. The
-  check fails OPEN on any API error (`WARNING: could not read the location list` = it did not run).
-- **The service DNS is location-pinned.** A location's clients always reach that location's PgBouncer and
-  HAProxy, never another location's, even when the local tier has zero endpoints. HAProxy fails over *node*
-  death (~6 s local, ~6 s to remote); losing a whole location is contained but not failed over for that
-  location's own clients.
-- **Failover testing:** the postmaster is PID 1, so SIGSTOP/kill from inside is ignored. Use a reversible
-  `pg_hba.conf` reject + `kill -HUP 1`. PgBouncer is NOT PID 1 (the shell is), so SIGSTOP on it works.
-- **Missing credentials secret wedges silently** — `cpln logs` returns nothing; read
-  `status.versions[].message` from `get-deployments`.
-- **`spock_output` must be allow-listed** (written on fresh initdb from 2.0.0; a pre-2.0 data directory needs
-  `ALTER SYSTEM SET output_plugin_libraries = pgoutput, test_decoding, spock_output`, unquoted).
-- **DDL does not replicate**, and every table needs a PRIMARY KEY or `CREATE TABLE` fails (auto-repset
-  trigger). Use uuid keys, never serial. `replicate_ddl` once, then `repset_add_table` on every OTHER node.
-- **Self-repair restores replication, not history** — rows written while a subscription was down are not
-  backfilled.
-- **`inheritEnv: false` on every container** — GVC-level env vars never reach them.
+## Traps
+- **2.x → 3.0.0:** client hostname changes (`-pgcat` → `-pgbouncer`); render refuses leftover `pgcat`,
+  `proxy.enabled: false`, `pgbouncer.routing` or a pgcat image. Data tier kept; every node restarts (~65 s). Old
+  `.sql.gz` backups are not restorable by the job — take a backup after upgrading.
+- **Never `helm upgrade` 1.x → 2.x+:** it deletes the GVC 1.x created (proven, 6 s, "upgraded successfully").
+- **HAProxy DNS holds are load-bearing:** `hold obsolete 30s` (a late-registered node is adopted in ≤ 34 s; 5m made it
+  ~5 min) and 5m failure holds (a DNS blip keeps the last good address). No backticks in the config heredoc.
+- **PgBouncer ini parser rejects quoted keys** — names it cannot key fall back to `*` with a WARNING.
+- **Session mode + `options`:** PgBouncer bug — DISCARD ALL doesn't invalidate its param cache, so options are lost on
+  pooled server connections. Kept DISCARD ALL (no cross-client leaks); README says use `SET`. Upstream issue drafted.
+- **Transaction mode temp tables** leak to other clients unless `ON COMMIT DROP`; TEMP/UNLOGGED tables are exempt
+  from the auto-repset trigger (refreshed every boot so existing clusters get it).
+- **Restore** refuses unless every node is reachable and the db is empty everywhere; drop with `CASCADE`, never
+  `DROP SCHEMA public` (holds the auto-repset trigger). Sequences realigned to column max on every node after data.
+  Large objects are not backed up (Spock doesn't replicate them).
+- **Backups** upload `.partial` then rename; source = first node accepting a login; a stopped job leaves nothing.
+- **Missing credentials secret** wedges silently — read `status.versions[].message` from `get-deployments`.
+- **DDL does not replicate;** every table needs a PRIMARY KEY; uuid keys, not serial (per-node sequences).
+- Subscription failure logs redact `password=`.

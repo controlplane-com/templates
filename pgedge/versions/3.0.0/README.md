@@ -463,7 +463,7 @@ cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-pgedge-backup", container="ba
   each node directly. Tables in a replication set need `CASCADE` (`DROP TABLE orders CASCADE;`). Do not drop the `public` schema: it holds the chart's auto-replication
   trigger, which a node recreates only when it is first created.
 - The archive is downloaded to the job's local disk before it is applied. For a large database, raise
-  `backup.activeDeadlineSeconds` or pass `--active-deadline-seconds` to `cron start`.
+  `backup.activeDeadlineSeconds`.
 - Ownership and `GRANT`s are not restored; every object belongs to the credentials user.
 
 ## Important Notes
@@ -474,7 +474,7 @@ cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-pgedge-backup", container="ba
 - **Use at least 3 replicas per location** in production, to survive a node loss within a location
 - **Conflict resolution is last-update-wins** — concurrent writes to the same row from different nodes resolve by commit timestamp. For stronger consistency, route a given entity's writes to one node in your application
 - **Retry failed statements, and make retried writes idempotent** — a rolling restart of PgBouncer or the failover tier can fail a statement that is in flight, occasionally after it committed
-- **`helm upgrade` restarts every pgEdge replica** — treat it as a planned write interruption (~1–2 min). Release names must be unique per organization (secrets are org-wide)
+- **An upgrade that changes the pgEdge nodes restarts all of them at once** (image, resources, locations or replicas, or a new chart version) — treat it as a planned write interruption (~1–2 min). Release names must be unique per organization (secrets are org-wide)
 
 ## Links
 

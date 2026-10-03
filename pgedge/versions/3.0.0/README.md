@@ -222,7 +222,7 @@ pgbouncer:
 **Connection budget:** every PgBouncer replica in a location pools onto that location's `replica-0`, and each node accepts 300 connections. The defaults use at most 20 × 4 = 80 per location, so one node can carry three locations' pools after a failover. If you raise `defaultPoolSize` or `maxReplicas`, keep `defaultPoolSize × maxReplicas × number of locations` under ~290.
 
 **Pool modes:**
-- `transaction` — connection held only for the duration of a transaction. Best for most web and API workloads. Protocol-level prepared statements work; session-level `SET`, temporary tables, advisory locks and `LISTEN` do not.
+- `transaction` — connection held only for the duration of a transaction. Best for most web and API workloads. Protocol-level prepared statements work; session-level `SET`, advisory locks and `LISTEN` do not, and temporary tables work only within a single transaction (`CREATE TEMP TABLE … ON COMMIT DROP`): one created outside a transaction stays on the pooled server connection and is visible to other clients.
 - `session` — connection held for the entire client session. Compatible with all Postgres features but provides less connection reuse. A session idle for more than 1 hour is closed by the failover tier; clients reconnect.
 - `statement` — connection returned after every statement. Multi-statement transactions are rejected. Rarely used.
 
@@ -233,8 +233,10 @@ them on every server connection the client uses: `statement_timeout`, `lock_time
 `default_transaction_isolation`, `client_min_messages`, plus `search_path`, `application_name`,
 `TimeZone`, `DateStyle` and `client_encoding`. Any other setting in `options` is refused at connect
 (`unsupported startup parameter in options`) — set it with `ALTER ROLE … SET` instead. In `session`
-mode PgBouncer applies `options` only to a client's first server connection, so use
-`ALTER ROLE … SET` or run `SET` at the start of each session there.
+mode `options` is reliably applied only on a brand-new server connection; a client handed a pooled
+connection silently gets the server defaults. Run `SET` at the start of each session instead, or
+`ALTER ROLE … SET` on **every** node (it reaches new server connections only — run `RECONNECT` on the
+PgBouncer admin console, or wait up to 5 minutes).
 
 ## Connecting
 
@@ -471,6 +473,7 @@ cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-pgedge-backup", container="ba
 - **The GVC must contain every location you list** (it may contain more). A missing one is not caught at install — the pgEdge container exits with `FATAL: locations declared in values are not in GVC …`
 - **Use at least 3 replicas per location** in production, to survive a node loss within a location
 - **Conflict resolution is last-update-wins** — concurrent writes to the same row from different nodes resolve by commit timestamp. For stronger consistency, route a given entity's writes to one node in your application
+- **Retry failed statements, and make retried writes idempotent** — a rolling restart of PgBouncer or the failover tier can fail a statement that is in flight, occasionally after it committed
 - **`helm upgrade` restarts every pgEdge replica** — treat it as a planned write interruption (~1–2 min). Release names must be unique per organization (secrets are org-wide)
 
 ## Links

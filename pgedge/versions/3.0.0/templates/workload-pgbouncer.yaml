@@ -39,7 +39,7 @@ spec:
           command:
             - /bin/sh
             - -c
-            - pg_isready -q -t 3 -h 127.0.0.1 -p 5432 && exec pg_isready -q -t 3 -p 5432 -h "{{ include "pgedge.proxy.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local"
+            - pg_isready -q -t 3 -h 127.0.0.1 -p 5432 -U "$PG_USERNAME" -d "$PG_DATABASE" && exec pg_isready -q -t 3 -p 5432 -U "$PG_USERNAME" -d "$PG_DATABASE" -h "{{ include "pgedge.proxy.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local"
         initialDelaySeconds: 20
         periodSeconds: 15
         failureThreshold: 20   # ~5 min first-ready budget while pgEdge + HAProxy boot (max is 20)
@@ -52,7 +52,7 @@ spec:
           command:
             - /bin/sh
             - -c
-            - exec pg_isready -q -t 3 -h 127.0.0.1 -p 5432
+            - exec pg_isready -q -t 3 -h 127.0.0.1 -p 5432 -U "$PG_USERNAME" -d "$PG_DATABASE"
         initialDelaySeconds: 15
         periodSeconds: 5
         failureThreshold: 3   # a hung pooler is replaced in ~15 s, not ~60-100 s

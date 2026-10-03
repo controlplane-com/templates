@@ -55,9 +55,20 @@ spec:
             - >-
               curl -sf --max-time 4 http://localhost:10080/status
               | grep -q '"version"'
-        failureThreshold: 12
+        {{- /*
+          The platform derives a STARTUP probe from this one: a container that has
+          never been ready is killed after about initialDelaySeconds + 30 x
+          periodSeconds, whatever failureThreshold says (measured 2026-10-03:
+          failureThreshold 1 and 20 were killed at the same time). A first boot
+          waits up to 600 s for TiKV in the startup script and then bootstraps the
+          system tables, which took ~4.5 min on a cross-cloud install, so 10 s
+          periods (315 s) killed the server mid-bootstrap with exit code 2.
+          30 s periods give 915 s; failureThreshold 3 keeps a server that stops
+          answering out of rotation after ~90 s.
+        */}}
+        failureThreshold: 3
         initialDelaySeconds: 15
-        periodSeconds: 10
+        periodSeconds: 30
         successThreshold: 1
         timeoutSeconds: 5
       volumes:

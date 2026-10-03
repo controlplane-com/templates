@@ -8,6 +8,8 @@ Control Plane secrets on an interval.
 **Common use cases.** Teams whose source of truth for secrets is already Vault or 1Password and who want
 workloads to consume Control Plane secrets without hand-copying values or wiring a second auth path.
 
+**Latest: 2.1.1** — identical to 2.1.0 except the syncer image (`v2.0.0` → `v2.0.2`); everything below applies to both.
+
 ## Architecture
 
 | Resource | Notes |

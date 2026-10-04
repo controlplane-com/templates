@@ -31,6 +31,9 @@ multiZone: false  # Set to true to spread replicas across availability zones wit
 
 volumeset:
   capacity: 10  # Initial capacity in GiB (minimum is 10)
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots of every node, daily at 3am UTC; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
   autoscaling:
     enabled: false  # Set to true to enable autoscaling
     maxCapacity: 100  # Maximum capacity in GiB when autoscaling is enabled

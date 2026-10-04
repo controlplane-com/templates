@@ -8,7 +8,7 @@ This template deploys a pgEdge active-active distributed PostgreSQL cluster usin
 - **HAProxy failover tier** (per location): sits in front of the nodes and gives each location's PgBouncer a single stable target. It routes to the local node and, when the local nodes are unhealthy, fails over — first to another local node, then to a remote location — so a client keeps serving through a node failure.
 - **PgBouncer**: per-location connection pooler and the endpoint applications connect to. It pools one backend, the local HAProxy; node selection is HAProxy's job.
 - **Spock**: Multi-master logical replication extension included in the pgEdge image. Handles cross-node replication with last-update-wins conflict resolution.
-- **Volume set**: One `ext4` volume per pgEdge replica, with daily snapshots retained for 7 days.
+- **Volume set**: One `ext4` volume per pgEdge replica, snapshotted daily (03:00 UTC) and kept for 7 days by default.
 - **Identity + two policies**: `reveal` on this release's secrets and your credentials secret, plus `view` on the one GVC you install into so each node can confirm at boot that the GVC really has every location you listed.
 - **Backup cron** (optional): a `pg_dump` of your database to S3 or GCS on a schedule, written as `PREFIX/pgedge-RELEASE_NAME-YYYY-MM-DDTHH-MM-SSZ.dump`. The same job restores a backup into every node with one command. It runs only in your first configured location.
 
@@ -76,7 +76,9 @@ The pgEdge nodes, their volumes and their data are kept.
    install with the default `proxy.enabled: true`. It is unpooled, so stay well under ~97
    connections per node.
 3. `helm upgrade` to 3.0.0. Every pgEdge node restarts once (a ~1–2 minute write interruption), and
-   the `-pgcat` workload is replaced by `-pgbouncer`.
+   the `-pgcat` workload is replaced by `-pgbouncer`. If `-pgbouncer` or `-pgedge-proxy` then stays not
+   ready and `cpln workload get-deployments` reports that the identity *is not allowed to reveal* its
+   startup secret, the new permission has not reached it yet; FORCE_REDEPLOY_REMEDY
 4. Point applications at `RELEASE_NAME-pgbouncer.GVC_NAME.cpln.local:5432`.
 
 `pgcat.routing: single-writer` has no equivalent: every location now writes to its own node, which
@@ -163,6 +165,9 @@ The first entry of `locations` is special: it is the only location the backup cr
 ```yaml
 volumeset:
   capacity: 10  # Initial capacity in GiB (minimum is 10)
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots of every node, daily at 3am UTC; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
   autoscaling:
     enabled: false  # Set to true to enable autoscaling
     maxCapacity: 100  # Maximum capacity in GiB when autoscaling is enabled

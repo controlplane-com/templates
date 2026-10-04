@@ -153,6 +153,17 @@ steps:
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             description: Every node has its own volume.
             docs: "#volume-set"
+          - path: volumeset.snapshots.schedule
+            type: string
+            format: cron
+            label: Snapshot schedule (UTC)
+            description: Volume snapshots of every node. Leave empty to turn them off.
+          - path: volumeset.snapshots.retentionDuration
+            type: string
+            format: duration
+            label: Keep snapshots for
+            required: true
+            placeholder: 7d
       - id: autoscaling
         title: Grow storage automatically
         toggle: volumeset.autoscaling.enabled

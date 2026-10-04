@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: NocoDB
+category: apps
+topology: single
+
+summary: >-
+  NocoDB Community Edition no-code database: spreadsheet-style grid, kanban, gallery,
+  calendar and form views over tables, with a REST API and webhooks, backed by a single-instance
+  or highly available PostgreSQL for its metadata and a bundled Redis. Attachments live on a
+  local volume or in AWS S3 or an S3-compatible bucket, which also allows more replicas; SMTP,
+  a bootstrapped super admin and database backups are optional. Pick it as a self-hosted
+  spreadsheet database for team data and simple apps.
+
+keywords:
+  - no-code database
+  - no-code
+  - spreadsheet database
+  - online database
+  - smart spreadsheet
+  - grid view
+  - kanban board
+  - form builder
+  - low-code
+  - rest api
+  - webhooks
+  - mcp server
+
+useCases:
+  - Give a team a shared spreadsheet-style database with grid, kanban, gallery and calendar views
+  - Collect data into tables through shareable forms
+  - Put a spreadsheet interface and REST API on an existing PostgreSQL or MySQL database
+  - Replace a hosted spreadsheet database with one whose data stays in your own Postgres
+  - Let AI agents read and write tables through a per-base MCP endpoint
+
+alternativeTo:
+  - Airtable
+  - Smartsheet
+  - Baserow
+  - SeaTable
+  - Google Sheets
+
+pickInsteadIf:
+  - need: building internal tools and admin panels from drag-and-drop UI components
+    template: tooljet
+  - need: a Postgres app backend with auth, auto-generated REST APIs, realtime and file storage
+    template: supabase
+  - need: a browser SQL client for querying and administering existing databases
+    template: dbeaver
+  - need: BI dashboards, charts and scheduled reports over your data
+    template: metabase
+  - need: a CRM with contacts, companies and deal pipelines
+    template: twenty
+
+related:
+  - template: n8n
+    relation: companion
+    note: Automates workflows triggered by NocoDB webhooks
+  - template: minio
+    relation: companion
+    note: S3-compatible bucket for attachments, needed to run more than one replica
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [NC_AUTH_JWT_SECRET, NC_CONNECTION_ENCRYPT_KEY]
+    valuesPath: secrets.name
+    required: true
+    description: NocoDB's write-once JWT and connection-encryption keys. When it is missing the deployment waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [NC_ADMIN_EMAIL, NC_ADMIN_PASSWORD]
+    valuesPath: admin.secretName
+    required: false
+    when: admin.secretName set
+    description: Super admin bootstrapped on every boot. Without it the first browser signup becomes super admin.
+  - kind: bucket
+    valuesPath: storage.s3.bucket
+    required: false
+    when: storage.type s3
+    description: AWS S3 or S3-compatible bucket for attachments. Required for nocodb.replicas above 1.
+  - kind: cloud-account
+    valuesPath: storage.s3.cloudAccountName
+    required: false
+    when: storage.type s3 on AWS (storage.s3.endpoint empty)
+    description: Control Plane AWS cloud account for keyless S3 access, plus a bucket-scoped IAM policy named in storage.s3.policyName.
+  - kind: secret
+    secretType: dictionary
+    keys: [NC_S3_ACCESS_KEY, NC_S3_ACCESS_SECRET]
+    valuesPath: storage.s3.auth.secretName
+    required: false
+    when: storage.type s3 with storage.s3.endpoint set (MinIO or S3-compatible)
+    description: Static access keys for the S3-compatible attachment bucket. AWS S3 itself accepts only the keyless cloud account.
+  - kind: secret
+    secretType: dictionary
+    keys: [NC_SMTP_USERNAME, NC_SMTP_PASSWORD]
+    valuesPath: smtp.auth.secretName
+    required: false
+    when: smtp.enabled with an authenticating SMTP relay
+    description: SMTP login for invitations and password-reset emails.
+  - kind: bucket
+    valuesPath:
+      - postgres.backup.aws.bucket
+      - postgres.backup.gcp.bucket
+      - postgres.backup.minio.bucket
+      - postgresHA.backup.aws.bucket
+      - postgresHA.backup.gcp.bucket
+      - postgresHA.backup.minio.bucket
+    required: false
+    when: postgres.backup.enabled or postgresHA.backup.enabled
+    description: Object storage bucket that receives the scheduled database backups.
+  - kind: cloud-account
+    valuesPath:
+      - postgres.backup.aws.cloudAccountName
+      - postgres.backup.gcp.cloudAccountName
+      - postgresHA.backup.aws.cloudAccountName
+      - postgresHA.backup.gcp.cloudAccountName
+    required: false
+    when: database backups enabled with provider aws or gcp
+    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy on AWS or Storage Object Admin on GCS.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath: [postgres.backup.minio.credentialsSecretName, postgresHA.backup.minio.credentialsSecretName]
+    required: false
+    when: database backups enabled with provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

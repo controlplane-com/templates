@@ -1,0 +1,20 @@
+---
+{{- /*
+  PD reads its own GVC at boot to confirm the GVC really has every location this
+  release declares — the platform does not validate localOptions locations, so a
+  typo is otherwise accepted silently and the PD members it names simply never
+  appear. Scoped to the ONE install GVC; never `target: all`, which would grant
+  view on every GVC in the org.
+*/}}
+kind: policy
+name: {{ include "tidb.policy.gvc.name" . }}
+description: TiDB GVC read policy
+tags: {{- include "tidb.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - view
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "tidb.identity.name" . }}
+targetKind: gvc
+targetLinks:
+  - //gvc/{{ .Values.global.cpln.gvc }}

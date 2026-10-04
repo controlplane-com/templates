@@ -1,0 +1,86 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Umami
+category: analytics
+topology: stateless
+
+summary: >-
+  Umami cookieless web and product analytics: one port serves the dashboard, the tracking script
+  and the collect endpoint, and the script and collect paths can be renamed to reduce ad blocking.
+  Stateless app replicas keep users, websites and events in a bundled PostgreSQL, single-instance
+  by default or highly available, with optional scheduled backups. Pick it as a privacy-friendly
+  replacement for Google Analytics on your websites and web apps.
+
+keywords:
+  - web analytics
+  - website analytics
+  - cookieless analytics
+  - privacy-friendly analytics
+  - gdpr
+  - page views
+  - visitor statistics
+  - referrers
+  - tracking script
+  - event tracking
+  - product analytics
+  - utm tracking
+
+useCases:
+  - Track page views, visitors and referrers for a website without cookies
+  - Replace Google Analytics with privacy-friendly analytics you host
+  - Measure custom events and conversions in a web app
+  - See analytics for several websites in one dashboard
+  - Keep visitor data in your own database for privacy compliance
+
+alternativeTo:
+  - Google Analytics
+  - Plausible Analytics
+  - Fathom Analytics
+  - Matomo
+  - Simple Analytics
+  - Cloudflare Web Analytics
+  - Vercel Web Analytics
+
+pickInsteadIf:
+  - need: BI dashboards and SQL over your own business databases
+    template: metabase
+  - need: uptime checks and public status pages for websites
+    template: uptime-kuma
+  - need: error and exception tracking for web apps
+    template: glitchtip
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: app.appSecretName
+    required: true
+    description: Random string (plain encoding) that signs auth tokens and sessions; keep it stable. When missing, the workload waits.
+  - kind: bucket
+    valuesPath:
+      - postgres.backup.aws.bucket
+      - postgres.backup.gcp.bucket
+      - postgres.backup.minio.bucket
+      - postgresHA.backup.aws.bucket
+      - postgresHA.backup.gcp.bucket
+      - postgresHA.backup.minio.bucket
+    required: false
+    when: postgres.backup.enabled or postgresHA.backup.enabled
+    description: Object storage bucket that receives the scheduled analytics-database backups.
+  - kind: cloud-account
+    valuesPath:
+      - postgres.backup.aws.cloudAccountName
+      - postgres.backup.gcp.cloudAccountName
+      - postgresHA.backup.aws.cloudAccountName
+      - postgresHA.backup.gcp.cloudAccountName
+    required: false
+    when: backup enabled with provider aws or gcp
+    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy (backup.aws.policyName) on AWS.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath: [postgres.backup.minio.credentialsSecretName, postgresHA.backup.minio.credentialsSecretName]
+    required: false
+    when: backup enabled with provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

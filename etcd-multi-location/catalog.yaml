@@ -1,0 +1,54 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: etcd (multi-location)
+category: database
+family: etcd
+topology: multi-location
+
+summary: >-
+  One etcd cluster stretched across the locations of an existing GVC, with exactly one member per
+  location sharing a single Raft quorum, raft timers tuned for cross-region latency and automatic
+  compaction. Three locations survive losing one and five survive losing two; the default of two
+  survives none. A recovery setting restarts a surviving member as a new cluster after quorum is
+  lost for good. Pick it for locks, leader election or configuration that must stay consistent
+  across regions.
+
+keywords:
+  - distributed key-value store
+  - key-value store
+  - raft
+  - consensus
+  - quorum
+  - strongly consistent
+  - multi-region
+  - cross-region
+  - regional failover
+  - disaster recovery
+  - leader election
+  - distributed locks
+  - service discovery
+  - configuration store
+  - coordination service
+  - etcdctl
+
+useCases:
+  - Strongly consistent coordination store that keeps working after losing a region
+  - Leader election and distributed locks for a service deployed in several locations
+  - Consensus store for a PostgreSQL Patroni cluster stretched across regions
+  - Cross-region configuration and service discovery with consistent reads
+
+alternativeTo:
+  - Apache ZooKeeper
+  - HashiCorp Consul
+
+pickInsteadIf:
+  - need: etcd in a single location
+    template: etcd
+
+prerequisites:
+  - kind: other
+    valuesPath: global.locations
+    required: true
+    description: An existing GVC that has every location in global.locations, at least two and ideally three; a fresh member refuses to start if one is missing.

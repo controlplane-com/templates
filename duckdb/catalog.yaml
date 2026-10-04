@@ -1,0 +1,101 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: DuckDB
+category: analytics
+topology: stateless
+
+summary: >-
+  DuckDB running one SQL script of yours on a cron schedule as a job that exits; it binds no port
+  and keeps no database file between runs. The script can read and write Parquet, CSV and JSON on
+  Amazon S3 (keyless through a cloud account) or any S3-compatible endpoint, and attach PostgreSQL,
+  MySQL or SQLite databases with passwords from secrets. Pick it for scheduled ETL, exports and file
+  conversions that fit in one container's memory, not as a query server.
+
+keywords:
+  - batch sql
+  - scheduled sql
+  - cron job
+  - etl
+  - elt
+  - parquet
+  - csv
+  - json
+  - data transformation
+  - data export
+  - file conversion
+  - in-process olap
+  - analytical sql
+  - s3
+  - object storage
+  - attach postgres
+  - sql script
+
+useCases:
+  - Export PostgreSQL or MySQL tables to Parquet files in S3 every night
+  - Convert CSV or JSON files in a bucket to Parquet on a schedule
+  - Run a nightly SQL transform over files in object storage
+  - Aggregate raw data into summary tables written back to a database or bucket
+  - Scheduled data quality checks written as SQL
+
+alternativeTo:
+  - MotherDuck
+  - AWS Glue
+  - Amazon Athena
+
+pickInsteadIf:
+  - need: an always-on SQL endpoint that BI tools and JDBC clients connect to
+    template: trino
+  - need: a persistent analytical database that ingests data and serves queries continuously
+    template: clickhouse
+  - need: multi-step pipelines with dependencies, retries and backfills
+    template: airflow
+  - need: distributed processing of datasets larger than one container's memory
+    template: spark
+
+related:
+  - template: seaweedfs
+    relation: companion
+    note: S3-compatible bucket in the same GVC for the job to read from and write to
+  - template: minio
+    relation: companion
+    note: Replicated S3-compatible object storage the job can use as its s3:// target
+  - template: postgres
+    relation: companion
+    note: Database the job can attach to export from or load into
+
+prerequisites:
+  - kind: cloud-account
+    valuesPath: objectStore.aws.cloudAccountName
+    required: false
+    when: objectStore.type aws
+    description: AWS cloud account that gives the job keyless access to S3.
+  - kind: other
+    valuesPath: objectStore.aws.policyName
+    required: false
+    when: objectStore.type aws
+    description: AWS IAM policy scoped to the bucket the job reads and writes.
+  - kind: bucket
+    required: false
+    when: objectStore.type aws or s3-compatible
+    description: Bucket the SQL reads from or writes to. It is named in the script's s3:// paths, not in values.
+  - kind: secret
+    secretType: dictionary
+    keys: [access-key-id, secret-access-key]
+    valuesPath: objectStore.s3Compatible.credentialsSecretName
+    required: false
+    when: objectStore.type s3-compatible
+    description: Access key pair for the S3-compatible endpoint (SeaweedFS, MinIO, Cloudflare R2, GCS HMAC keys).
+  - kind: secret
+    secretType: opaque
+    valuesPath: sql.secretName
+    required: false
+    when: sql.secretName is set
+    description: Opaque secret (plain encoding) whose payload is the SQL script, used instead of sql.inline.
+  - kind: secret
+    secretType: opaque
+    valuesPath: secretEnv
+    required: false
+    when: secretEnv has entries
+    description: Each secret named in secretEnv[].secretName, such as a database password read as PGPASSWORD; a dictionary works with secretKey. Missing ones leave the job waiting.

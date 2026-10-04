@@ -1,0 +1,90 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: listmonk
+category: apps
+topology: single
+
+summary: >-
+  listmonk newsletter and mailing list manager: one listmonk server with the admin dashboard,
+  campaign engine, public subscription pages and a transactional mail API, plus a media
+  volume, backed by a single-instance PostgreSQL or a highly available Patroni cluster.
+  Scheduled database backups to S3, GCS or an S3-compatible endpoint are optional, and mail
+  goes out through the SMTP provider you set in the admin UI. Pick it for newsletters and bulk
+  email campaigns to large subscriber lists.
+
+keywords:
+  - newsletter
+  - mailing list
+  - mailing list manager
+  - email marketing
+  - email campaigns
+  - bulk email
+  - subscriber management
+  - subscription forms
+  - double opt-in
+  - transactional email
+  - open and click tracking
+
+useCases:
+  - Send newsletters and marketing campaigns to large subscriber lists through your own SMTP provider
+  - Manage subscribers, lists and opt-in subscription forms
+  - Send templated transactional emails from an application through an API
+  - Replace an email marketing service that charges per subscriber
+
+alternativeTo:
+  - Mailchimp
+  - Brevo
+  - Kit
+  - MailerLite
+  - Campaign Monitor
+  - Constant Contact
+  - Sendy
+
+pickInsteadIf:
+  - need: a blog or publication with paid memberships alongside the newsletter
+    template: ghost
+  - need: a support inbox for replying to customer emails and chats
+    template: chatwoot
+  - need: a CRM tracking contacts, companies and deals
+    template: twenty
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    valuesPath: admin.secretName
+    required: true
+    description: Super Admin login (username 3+ chars, password 8+ chars), used on first install. When it is missing the deployment waits with no logs.
+  - kind: other
+    required: false
+    when: sending any campaign or transactional mail (set in Admin, Settings, SMTP after install)
+    description: An SMTP provider account such as Amazon SES, SendGrid or Mailgun. listmonk sends no mail until it is configured.
+  - kind: bucket
+    valuesPath:
+      - postgres.backup.aws.bucket
+      - postgres.backup.gcp.bucket
+      - postgres.backup.minio.bucket
+      - postgresHA.backup.aws.bucket
+      - postgresHA.backup.gcp.bucket
+      - postgresHA.backup.minio.bucket
+    required: false
+    when: postgres.backup.enabled or postgresHA.backup.enabled
+    description: Object storage bucket that receives the scheduled database backups.
+  - kind: cloud-account
+    valuesPath:
+      - postgres.backup.aws.cloudAccountName
+      - postgres.backup.gcp.cloudAccountName
+      - postgresHA.backup.aws.cloudAccountName
+      - postgresHA.backup.gcp.cloudAccountName
+    required: false
+    when: database backups enabled with provider aws or gcp
+    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy on AWS or Storage Object Admin on GCS.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath: [postgres.backup.minio.credentialsSecretName, postgresHA.backup.minio.credentialsSecretName]
+    required: false
+    when: database backups enabled with provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

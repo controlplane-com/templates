@@ -117,7 +117,7 @@ thanos:
       cloudAccountName: my-gcs-cloud-account
 
     minio:
-      endpoint: my-minio:9000             # host:port, no scheme
+      endpoint: my-minio:9000             # host:port, no scheme — use the FQDN, e.g. my-minio.my-gvc.cpln.local:9000
       insecure: true                      # true for plain-HTTP endpoints
       bucket: my-prometheus-bucket
       region: us-east-1
@@ -168,22 +168,22 @@ internalAccess:
 
 ### S3-compatible (MinIO, R2, Wasabi, …)
 
-1. Create the bucket on your server and credentials that can read/write it.
-2. Set `thanos.objectStorage.minio.*`: endpoint as `host:port` (no scheme; `insecure: true` for plain HTTP), bucket, region, and the access key pair.
+1. Create the bucket on your server and an access key pair that can read/write it.
+2. Create the dictionary secret holding that key pair **before** install (see the snippet at the top of this README) and set `thanos.objectStorage.minio.credentialsSecretName` to its name.
+3. Set `thanos.objectStorage.minio.*`: endpoint as `host:port` (no scheme — a fully qualified `WORKLOAD_NAME.GVC_NAME.cpln.local:9000` for a server in Control Plane; `insecure: true` for plain HTTP), bucket and region.
 
 ## Connecting
 
 | What | Endpoint |
 |---|---|
-| Remote-write ingest (from your senders) | `http://RELEASE-prometheus.GVC.cpln.local:9095/api/v1/write` |
-| PromQL / Grafana datasource | `http://RELEASE-prometheus.GVC.cpln.local:9095` |
-| Built-in web UI (see [Web UI](#web-ui)) | `http://RELEASE-prometheus.GVC.cpln.local:9095/query` |
-| Thanos Store API, same GVC | `RELEASE-prometheus:10901` |
-| Thanos Store API, cross-GVC | `RELEASE-prometheus.GVC.cpln.local:10901` |
+| Remote-write ingest (from your senders) | `http://RELEASE_NAME-prometheus.GVC_NAME.cpln.local:9095/api/v1/write` |
+| PromQL / Grafana datasource | `http://RELEASE_NAME-prometheus.GVC_NAME.cpln.local:9095` |
+| Built-in web UI (see [Web UI](#web-ui)) | `http://RELEASE_NAME-prometheus.GVC_NAME.cpln.local:9095/query` |
+| Thanos Store API (gRPC, no scheme; sidecar on) | `RELEASE_NAME-prometheus.GVC_NAME.cpln.local:10901` |
 
 For cross-GVC callers (e.g. a Thanos Query tier in another GVC), set `internalAccess.type` to `same-org`, or `workload-list` naming the caller. Cross-location internal traffic incurs egress charges — co-locate the query tier with its stores where practical.
 
-Use the service-level DNS name above — this workload is single-replica by design, so it addresses the one replica directly and is the most reliable path. (The per-replica form `replica-0.RELEASE-prometheus.LOCATION.GVC.cpln.local:10901` also exists but adds no value for a single-replica workload.)
+Always use the fully qualified service name above; the bare workload name is not reliable from other workloads.
 
 ## Web UI
 
@@ -197,26 +197,25 @@ Prometheus serves its own web interface on the same port as the API (`:9095`), w
 | Configuration | `/config` | The running `prometheus.yml` exactly as Prometheus parsed it — confirms your `extraScrapeConfigs` landed. |
 | TSDB status | `/tsdb-status` | Head-block cardinality by metric and label — the answer to "why is memory growing?". |
 
-Access is internal-only, so reach it from inside the GVC. Each page also has a JSON API equivalent, which is the practical form from a shell:
+Access is internal-only. Reach the UI from your machine through a port-forward, then open `http://localhost:9095/targets`:
 
 ```bash
-# from any workload in the same GVC (substitute your own workload and GVC)
-cpln workload exec MY-WORKLOAD --gvc MY-GVC -- curl -s http://RELEASE-prometheus.GVC.cpln.local:9095/api/v1/targets
+cpln port-forward RELEASE_NAME-prometheus 9095:9095 --gvc GVC_NAME
 ```
 
-`/api/v1/targets`, `/api/v1/status/config`, and `/api/v1/status/tsdb` back the Targets, Configuration, and TSDB status pages respectively.
+Each page also has a JSON API equivalent (`/api/v1/targets`, `/api/v1/status/config`, `/api/v1/status/tsdb`), which is the practical form from a shell.
 
-**Prometheus has no authentication of its own** — anyone who can reach port 9095 gets full read access and can run arbitrary PromQL — which is why this template offers `internalAccess` only and no public exposure. For a browser-facing, authenticated query UI, install the **grafana** template in the same GVC and add a Prometheus datasource pointing at `http://RELEASE-prometheus.GVC.cpln.local:9095`.
+**Prometheus has no authentication of its own** — anyone who can reach port 9095 gets full read access and can run arbitrary PromQL — which is why this template offers `internalAccess` only and no public exposure. For a browser-facing, authenticated query UI, install the **grafana** template in the same GVC and add a Prometheus datasource pointing at `http://RELEASE_NAME-prometheus.GVC_NAME.cpln.local:9095`.
 
 ## High availability
 
 Prometheus has no cluster mode; the upstream HA pattern is two independent, identically-configured instances deduplicated at query time. Install the template twice (e.g. releases `prom-a` and `prom-b`) with identical values except:
 
 ```yaml
-# prom-a                              # prom-b
-externalLabels:                       externalLabels:
-  prometheus: my-prom                   prometheus: my-prom
-  replica: a                            replica: b
+# prom-a                    (prom-b: identical, with replica: b)
+externalLabels:
+  prometheus: my-prom
+  replica: a
 ```
 
 Senders dual-write to both endpoints; a Thanos Query tier dedups via `--query.replica-label=replica`. Overriding `prometheus` to a shared value is required so the two label sets differ only in `replica`.
@@ -227,7 +226,9 @@ Senders dual-write to both endpoints; a Thanos Query tier dedups via `--query.re
 - **Remote-write password secrets must exist before install** — a missing `passwordSecretName` secret wedges the deployment waiting on it.
 - **Config changes ship via `helm upgrade`** (workload redeploy) — there is no hot reload.
 - **With object storage enabled, keep `retention.time` at least 3× `blockDuration`** (the default `15d`/`2h` satisfies this) — the sidecar needs blocks on the local volume long enough to upload them; history beyond local retention lives in your bucket.
-- **The TSDB survives reinstall** (`recoveryPolicy: retain` + final snapshot) — local data resumes when a new install binds the volume.
+- **Uninstalling deletes the volume set** — only its final snapshot (kept 7 days) and anything already uploaded to your bucket remain.
+- **In a GVC with several locations, each location runs its own independent Prometheus and volume**, so stored data is split across locations — use a single-location GVC for one store.
+- **Upgrading from 1.0.0: `resources.cpu`/`memory` (and `thanos.sidecar.resources.*`) were renamed to `maxCpu`/`maxMemory` in 1.1.0** — the old keys are silently ignored, so rename them.
 - **After a restart, readiness can take minutes on a large TSDB** — WAL replay holds `/-/ready` at 503; this is normal recovery, not a failure.
 
 ## Links

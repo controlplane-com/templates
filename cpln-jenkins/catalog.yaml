@@ -1,0 +1,77 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Jenkins
+category: developer-tools
+topology: single
+
+summary: >-
+  Jenkins CI controller with the Control Plane cloud plugin and Configuration as Code built in:
+  one controller on a persistent volume for jobs, build history and plugins, which creates a
+  workload per build agent on demand and deletes it once idle. The agent GVC, image, labels,
+  executors and agent CPU and memory come from values, and the UI stays private unless public
+  access is turned on. Pick it to run Jenkins pipelines with build capacity that exists only
+  while builds run.
+
+keywords:
+  - ci
+  - continuous integration
+  - ci/cd
+  - continuous delivery
+  - build server
+  - automation server
+  - jenkins pipeline
+  - jenkinsfile
+  - build agents
+  - ephemeral build agents
+  - configuration as code
+  - jcasc
+
+useCases:
+  - Run Jenkins pipelines without keeping build agents running between builds
+  - Move an existing Jenkins setup off long-lived build VMs onto on-demand agents
+  - Build and test code from Git repositories on a private CI server
+  - Run builds inside a GVC so they can reach internal services directly
+
+alternativeTo:
+  - GitHub Actions
+  - GitLab CI/CD
+  - CircleCI
+  - Travis CI
+  - TeamCity
+  - Bamboo
+  - CloudBees CI
+  - AWS CodeBuild
+
+pickInsteadIf:
+  - need: Git hosting with pull requests and issues for the code being built
+    template: gitea
+  - need: scheduled data pipelines defined as DAGs
+    template: airflow
+  - need: scanning registry images for vulnerabilities
+    template: cpln-trivy
+
+related:
+  - template: gitea
+    relation: companion
+    note: Hosts the Git repositories Jenkins builds from
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: admin.passwordSecretName
+    required: true
+    description: Password for the Jenkins admin login, re-applied on every boot. When it is missing the deployment waits with no logs.
+  - kind: secret
+    secretType: opaque
+    valuesPath: cloud.apiKeySecretName
+    required: true
+    description: Control Plane service account API key Jenkins uses to create and delete agent workloads. When it is missing the deployment waits with no logs.
+  - kind: other
+    required: true
+    description: Policy bindings for that service account - view, create and delete on workloads in the agent GVC, view on GVCs, identities and volume sets. Without them no agents start.
+  - kind: other
+    valuesPath: cloud.gvc
+    required: true
+    description: An agent GVC with exactly one location (empty cloud.gvc means the release GVC). The plugin rejects multi-location GVCs.

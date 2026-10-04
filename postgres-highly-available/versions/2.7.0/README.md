@@ -114,7 +114,7 @@ raises a `NOSPACE` alarm and goes **read-only**: Patroni replicas can no longer 
 restart-loop with `exitCode: 0`, which looks healthy. Compaction is what prevents that.
 
 **Already running an older version?** Upgrading turns compaction on, but it cannot shrink a backend that
-has already grown. Check with `cpln workload exec {release}-etcd -- etcdctl endpoint status --cluster`
+has already grown. Check with `cpln workload exec RELEASE_NAME-etcd --gvc GVC_NAME -- etcdctl endpoint status --cluster`
 and `etcdctl alarm list`; a cluster that is already alarmed needs an operator, not an upgrade.
 
 ### HA Proxy (Strongly Recommended)
@@ -273,7 +273,7 @@ Password: the `password` key of your credentials secret
 ```
 
 The credentials never pass through Helm values, so they do not appear in the
-release. Read them back with `cpln secret reveal <name>`.
+release. Read them back with `cpln secret reveal SECRET_NAME -o yaml`.
 
 ## Important Notes
 
@@ -410,7 +410,7 @@ the upload pipeline still writes a ~20-byte empty gzip under a normal-looking ti
 job exits non-zero. Check the object size before restoring from it: a real dump is kilobytes at minimum.
 
 
-Run the following command with password from a client with access to the bucket. Set `WORKLOAD_NAME` to match the proxy workload so restores write to the leader.
+Run the following from a client workload **in the same GVC** that has access to the bucket — `*.cpln.local` names do not resolve from anywhere else. It streams the dump through the proxy, `RELEASE_NAME-postgres-ha-proxy.GVC_NAME.cpln.local`, so the restore writes to the current leader.
 
 S3
 ```SH
@@ -419,7 +419,7 @@ export PGPASSWORD="PASSWORD"
 aws s3 cp "s3://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" - \
   | gunzip \
   | psql \
-      --host=WORKLOAD_NAME \
+      --host=RELEASE_NAME-postgres-ha-proxy.GVC_NAME.cpln.local \
       --port=5432 \
       --username=USERNAME \
       --dbname=postgres
@@ -434,7 +434,7 @@ export PGPASSWORD="PASSWORD"
 gsutil cp "gs://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" - \
   | gunzip \
   | psql \
-      --host=WORKLOAD_NAME \
+      --host=RELEASE_NAME-postgres-ha-proxy.GVC_NAME.cpln.local \
       --port=5432 \
       --username=USERNAME \
       --dbname=postgres
@@ -452,7 +452,7 @@ aws configure set default.s3.addressing_style path
 aws s3 cp "s3://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" - --endpoint-url "http://MINIO_ENDPOINT:9000" \
   | gunzip \
   | psql \
-      --host=WORKLOAD_NAME \
+      --host=RELEASE_NAME-postgres-ha-proxy.GVC_NAME.cpln.local \
       --port=5432 \
       --username=USERNAME \
       --dbname=postgres

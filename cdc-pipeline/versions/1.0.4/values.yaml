@@ -268,9 +268,9 @@ debezium-server:
     database:
       hostname: ""  # Auto-computed: <release>-postgres-ha-proxy.<gvc>.cpln.local
       port: 5432
-      name: cdcdb                           # Must match postgres-highly-available.postgres.database
-      user: cdc_user                        # Must match postgres-highly-available.postgres.username
-      password: "change-me-cdc-pipeline-postgres" # Must match postgres-highly-available.postgres.password
+      name: cdcdb                           # Must match database.name
+      user: cdc_user                        # Must match database.username
+      password: "change-me-cdc-pipeline-postgres" # Must match database.password
 
     serverName: "dbserver1"
     tableIncludeList: ""

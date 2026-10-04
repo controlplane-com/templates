@@ -222,14 +222,14 @@ No cloud account is needed — credentials are supplied as a secret.
 
 ## Restoring a backup
 
-Run from a client with access to the bucket, using the credentials from your prerequisite secret.
+Each backup is a gzip-compressed `pg_dumpall` script; replay it against the `postgres` maintenance database as the superuser from your prerequisite secret. Run it from a client that can reach both the bucket and the server — a workload inside the GVC, or your own machine with `cpln port-forward RELEASE_NAME-postgres 5432:5432 --gvc GVC_NAME` open and `--host=127.0.0.1` in place of the internal hostname. `already exists` errors for the role and database the server created at first boot are expected.
 
 ```bash
 export PGPASSWORD="PASSWORD"
 
 aws s3 cp "s3://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" - \
   | gunzip \
-  | psql --host=WORKLOAD_NAME --port=5432 --username=USERNAME --dbname=postgres
+  | psql --host=RELEASE_NAME-postgres.GVC_NAME.cpln.local --port=5432 --username=USERNAME --dbname=postgres
 
 unset PGPASSWORD
 ```

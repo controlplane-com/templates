@@ -10,7 +10,7 @@ This app deploys [Apache Polaris](https://polaris.apache.org/) — an Apache Ice
 - **Two identities and two policies**: Least privilege — only the bootstrap principal can reveal the root credentials; only the server principal can reveal the token signing key and the object-storage credentials.
 - **PostgreSQL (single-instance, default)**: The `postgres` template — every catalog, namespace, table pointer, principal and grant lives here.
 - **PostgreSQL (HA, optional)**: The `postgres-highly-available` template instead — 3 Patroni replicas, 3 etcd replicas, and an HAProxy leader endpoint.
-- **Metastore credentials secret**: A `dictionary` secret holding the bundled single-instance metastore's `username`, `password` and `database`, built by this template from `postgres.credentials.*` and handed to the Postgres subchart by name. Nothing for you to create. (Not rendered on the HA path — `postgres-highly-available` still makes its own.)
+- **Metastore credentials secret**: A `dictionary` secret holding the metastore's `username`, `password` and `database`, built by this template from `postgres.credentials.*` in **both** modes and handed to the database subchart by name (`postgres.config.credentialsSecretName`, or `postgresHA.config.credentialsSecretName` in HA mode). Nothing for you to create.
 - **No volumeset**: The Polaris server writes nothing to local disk that must survive a restart.
 
 ## Prerequisites
@@ -33,7 +33,7 @@ Optional:
 - **Object storage credentials** for the bucket that holds your Iceberg data — see **Iceberg bucket setup** below.
 - **Cloud account + bucket** only if you enable the Postgres backup pass-through (see **Storage setup**). With `postgres.backup.provider: minio` (single-instance mode) the endpoint's keys are a prerequisite dictionary secret instead — see that section.
 
-**The metastore password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*` (single-instance mode) or `postgres.credentials.*` (HA mode).
+**The metastore password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*` in both single-instance and HA mode.
 
 ## Iceberg bucket setup
 
@@ -48,7 +48,9 @@ cpln secret create-dictionary --name my-polaris-s3-credentials \
 
 Then set `storage.credentialsSecretName` to that name.
 
-**SeaweedFS / MinIO (in-GVC)** — point `storage.credentialsSecretName` at the *same* secret your `seaweedfs` (`s3.credentialsSecretName`) or MinIO deployment already uses; there is nothing else to create. Use the workload's internal endpoint (`http://{release}-seaweedfs.{gvc}.cpln.local:8333`) with `pathStyleAccess: true` when creating the catalog.
+**SeaweedFS (in-GVC)** — point `storage.credentialsSecretName` at the *same* secret your `seaweedfs` deployment uses (`s3.credentialsSecretName`, which already holds `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`); there is nothing else to create. Use its internal endpoint (`http://SEAWEEDFS_WORKLOAD_NAME.GVC_NAME.cpln.local:8333`) with `pathStyleAccess: true` when creating the catalog.
+
+**MinIO (in-GVC)** — the `minio` template's credentials secret holds `username` / `password`, not the `AWS_*` keys Polaris reads, so create the dictionary above with those values (`AWS_ACCESS_KEY_ID=` the MinIO username, `AWS_SECRET_ACCESS_KEY=` its password). Its endpoint is `http://MINIO_WORKLOAD_NAME.GVC_NAME.cpln.local:9000`.
 
 **AWS S3** — create the bucket and an access key scoped to it:
 
@@ -176,7 +178,7 @@ postgres:
 postgresHA: # set postgresHA.enabled: true for near-zero-downtime upgrades and failover
   enabled: true
   config:
-    credentialsSecretName: my-polaris-db-credentials # see Prerequisites — must exist before install
+    credentialsSecretName: my-polaris-db-credentials # created by this template from postgres.credentials.*; give each release its own
   replicas: 3
   volumeset:
     capacity: 10 # initial capacity in GiB per replica (minimum is 10)
@@ -192,20 +194,20 @@ Each Polaris replica opens up to 20 JDBC connections, plus the bootstrap workloa
 
 | What | Value |
 |---|---|
-| Public URL (when `publicAccess.enabled`) | `status.canonicalEndpoint` from `cpln workload get {release}-polaris -o yaml` |
+| Public URL (when `publicAccess.enabled`) | `status.canonicalEndpoint` from `cpln workload get RELEASE_NAME-polaris --gvc GVC_NAME -o yaml` |
 | Iceberg REST API | `{base}/api/catalog` |
 | Management API | `{base}/api/management/v1` |
 | OAuth2 token endpoint | `{base}/api/catalog/v1/oauth/tokens` |
-| In-GVC (internal) | `http://{release}-polaris.{gvc}.cpln.local:8181` |
-| Health and metrics | `http://{release}-polaris.{gvc}.cpln.local:8182/q/health`, `/q/metrics` — reachable in-GVC only |
+| In-GVC (internal) | `http://RELEASE_NAME-polaris.GVC_NAME.cpln.local:8181` |
+| Health and metrics | `http://RELEASE_NAME-polaris.GVC_NAME.cpln.local:8182/q/health`, `/q/metrics` — reachable in-GVC only |
 | Credentials | `CLIENT_ID` / `CLIENT_SECRET` from your `rootCredentials` secret |
 
-Only the **first declared container port is published** on the canonical endpoint, and this template declares `8181` first. That is what keeps `8182` — the unauthenticated Quarkus health and metrics interface — off the internet even with `publicAccess.enabled`: publicly, `/q/metrics`, `/q/health` and `/q/info` all return 404, while `:8182/q/metrics` answers in-GVC. The port order in the workload template is a security boundary, not cosmetics.
+With `publicAccess.enabled`, only port `8181` is served on the canonical endpoint; the unauthenticated Quarkus health and metrics interface on `8182` stays reachable in-GVC only.
 
-Every API call needs a bearer token:
+Every API call needs a bearer token. `POLARIS_URL` below is the public base URL (`status.canonicalEndpoint`) or, from inside the GVC, the internal one:
 
 ```bash
-curl -X POST https://{canonical-endpoint}/api/catalog/v1/oauth/tokens \
+curl -X POST "$POLARIS_URL/api/catalog/v1/oauth/tokens" \
   --user "$CLIENT_ID:$CLIENT_SECRET" \
   -d grant_type=client_credentials -d scope=PRINCIPAL_ROLE:ALL
 ```
@@ -215,7 +217,7 @@ curl -X POST https://{canonical-endpoint}/api/catalog/v1/oauth/tokens \
 Catalogs are a day-2 API call, not an install-time value. With `$TOKEN` from above and an S3-compatible bucket (`seaweedfs`, MinIO, AWS S3):
 
 ```bash
-curl -X POST https://{canonical-endpoint}/api/management/v1/catalogs \
+curl -X POST "$POLARIS_URL/api/management/v1/catalogs" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{
   "catalog": {
@@ -225,8 +227,8 @@ curl -X POST https://{canonical-endpoint}/api/management/v1/catalogs \
     "storageConfigInfo": {
       "storageType": "S3",
       "allowedLocations": ["s3://my-bucket/warehouse"],
-      "endpoint": "http://my-seaweedfs.my-gvc.cpln.local:8333",
-      "endpointInternal": "http://my-seaweedfs.my-gvc.cpln.local:8333",
+      "endpoint": "http://SEAWEEDFS_WORKLOAD_NAME.GVC_NAME.cpln.local:8333",
+      "endpointInternal": "http://SEAWEEDFS_WORKLOAD_NAME.GVC_NAME.cpln.local:8333",
       "pathStyleAccess": true,
       "stsUnavailable": true,
       "region": "us-east-1"
@@ -235,7 +237,7 @@ curl -X POST https://{canonical-endpoint}/api/management/v1/catalogs \
 }'
 
 # Let the root principal administer the new catalog
-curl -X PUT https://{canonical-endpoint}/api/management/v1/principal-roles/service_admin/catalog-roles/lakehouse \
+curl -X PUT "$POLARIS_URL/api/management/v1/principal-roles/service_admin/catalog-roles/lakehouse" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"catalogRole":{"name":"catalog_admin"}}'
 ```
@@ -252,14 +254,14 @@ catalogs:
     properties: |
       connector.name=iceberg
       iceberg.catalog.type=rest
-      iceberg.rest-catalog.uri=http://my-polaris.my-gvc.cpln.local:8181/api/catalog
+      iceberg.rest-catalog.uri=http://RELEASE_NAME-polaris.GVC_NAME.cpln.local:8181/api/catalog
       iceberg.rest-catalog.security=OAUTH2
       iceberg.rest-catalog.oauth2.credential=${ENV:POLARIS_CLIENT_ID}:${ENV:POLARIS_CLIENT_SECRET}
       iceberg.rest-catalog.oauth2.scope=PRINCIPAL_ROLE:ALL
       iceberg.rest-catalog.warehouse=lakehouse
       iceberg.rest-catalog.vended-credentials-enabled=false
       fs.native-s3.enabled=true
-      s3.endpoint=http://my-seaweedfs.my-gvc.cpln.local:8333
+      s3.endpoint=http://SEAWEEDFS_WORKLOAD_NAME.GVC_NAME.cpln.local:8333
       s3.region=us-east-1
       s3.path-style-access=true
       s3.aws-access-key=${ENV:S3_ACCESS_KEY}
@@ -301,7 +303,7 @@ Then set `provider: aws` and `aws.{bucket,region,cloudAccountName,policyName}`.
 
 **GCP Cloud Storage** — create the bucket and a cloud account, grant its service account **Storage Object Admin** (`roles/storage.objectAdmin`) on the bucket, then set `provider: gcp` and `gcp.{bucket,cloudAccountName}`.
 
-**MinIO / S3-compatible** — set `provider: minio` and `minio.{endpoint,bucket}` (no cloud account needed; the keys authenticate directly). On both paths the keys are a prerequisite dictionary secret, named by `postgresHA.backup.minio.credentialsSecretName` or `postgres.backup.minio.credentialsSecretName`. The same secret serves either:
+**MinIO / S3-compatible** — set `provider: minio` and `minio.{endpoint,bucket}` (no cloud account needed; the keys authenticate directly). Replace the default endpoint with the full address, e.g. `http://MINIO_WORKLOAD_NAME.GVC_NAME.cpln.local:9000` for an in-GVC MinIO. On both paths the keys are a prerequisite dictionary secret, named by `postgresHA.backup.minio.credentialsSecretName` or `postgres.backup.minio.credentialsSecretName`. The same secret serves either:
 
 ```bash
 cpln secret create-dictionary --name my-polaris-minio-credentials \
@@ -312,14 +314,16 @@ cpln secret create-dictionary --name my-polaris-minio-credentials \
 ## Important Notes
 
 - **Create both prerequisite secrets before installing** — without them the workloads wait on a secret that does not exist and the install looks broken.
-- **Expect a warm-up while the metastore comes up, and do not interrupt it.** The server restarts a couple of times logging `Failed to initialize DatasourceOperations` (measured: 2 restarts by 32 s) and the bootstrap workload retries on the same schedule; both self-heal. A default install is ready in about **90 s**; the `postgresHA` metastore takes about **6 minutes** (measured 348 s) before Polaris answers.
-- **Scaling is real, and measured.** With `replicas: 2`, a request loop through the service DNS name saw **403/403 2xx (0 non-2xx) across a rolling `helm upgrade`** (rollout converged in 95 s) and **384/384 2xx (0 non-2xx) while scaling back to one replica** — because all replicas share the signing key and the metastore.
+- **Expect a warm-up while the metastore comes up, and do not interrupt it.** The server may restart a few times and the bootstrap workload retries until PostgreSQL answers; both self-heal. The `postgresHA` metastore takes noticeably longer than the single instance.
+- **Use `replicas: 2` or more for rolling upgrades without downtime** — all replicas share the signing key and the metastore, so a token or catalog from one is valid on every other.
 - **Root credentials are write-once.** They are applied when the realm is first bootstrapped; changing them afterwards has no effect. Rotate by creating a new principal through the management API.
 - **Rotating `tokenSigningKey` invalidates every outstanding token** — clients must obtain a new one.
 - **`realm` is permanent.** Renaming it bootstraps a new, empty realm and hides the existing catalogs; changing it back makes them visible again.
 - **Change `postgres.credentials.password` before installing** — the default is a placeholder.
-- **Upgrading from 1.0.x**: the single-instance metastore credentials moved from `postgres.config.username/password/database` to `postgres.credentials.username/password/database`, named by the new `postgres.config.credentialsSecretName`. Carrying the old keys fails the render with `config.username was REMOVED in postgres 3.4.0` — move the three keys and you are done. **Ignore that message's advice to create a secret yourself; this template creates it**, and the metastore password stays a value. `postgres.backup.minio.accessKey`/`secretKey` were removed the same way (see Storage setup). The HA path (`postgresHA.*`) and the `rootCredentials` / `tokenSigningKey` prerequisite secrets are all unchanged.
-- **Give each polaris release its own `postgres.config.credentialsSecretName`** (single-instance mode only). Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
+- **Upgrading from 1.0.x**: the single-instance metastore credentials moved from `postgres.config.username/password/database` to `postgres.credentials.username/password/database`, named by the new `postgres.config.credentialsSecretName`. Carrying the old keys fails the render with `config.username was REMOVED in postgres 3.4.0` — move the three keys and you are done. **Ignore that message's advice to create a secret yourself; this template creates it**, and the metastore password stays a value. `postgres.backup.minio.accessKey`/`secretKey` were removed the same way (see Storage setup).
+- **Upgrading from 1.1.x (HA mode)**: 1.2.0 moved to `postgres-highly-available` 2.5.0, which removed `postgresHA.postgres.*`. Delete that block and put the username, password and database your cluster was **initialized with** into `postgres.credentials.*` — this template now creates the HA credentials secret too, so ignore the subchart error's advice to create it yourself. New values there change the secret but not the database password, and Polaris can no longer log in.
+- **Upgrading from 1.2.0 (HA MinIO backups only)**: `postgresHA.backup.minio.accessKey`/`secretKey` were replaced by `postgresHA.backup.minio.credentialsSecretName`; create that secret (see Storage setup) before upgrading.
+- **Give each polaris release its own credentials secret name** — `postgres.config.credentialsSecretName`, or `postgresHA.config.credentialsSecretName` in HA mode. Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. The first release is unaffected; you simply cannot install the second until you give it a distinct name.
 - **Database volumes survive restarts, redeploys and upgrades; uninstalling deletes them** — every catalog definition is lost with them. Use `postgresHA` and/or the backup pass-through for production.
 - **No credential vending in this version.** Polaris and each engine hold their own static object-storage credentials; keep `iceberg.rest-catalog.vended-credentials-enabled=false` in Trino.
 - **Polaris does not migrate its own database schema** — treat a future Polaris version bump as an explicit schema step, not something boot handles.

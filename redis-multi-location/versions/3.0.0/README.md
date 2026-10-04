@@ -48,7 +48,7 @@ have **at least two locations**; for a single-location cluster, use the `redis` 
    ```
 
    Each secret is `opaque` with `encoding: plain`, and its **payload is the password itself** — one
-   value, so no keys. Read one back with `cpln secret reveal my-redis-password`. Leave the matching
+   value, so no keys. Read one back with `cpln secret reveal my-redis-password -o yaml`. Leave the matching
    `passwordSecretName` empty to run without that password.
 
 3. **For backups only** — a bucket and a Control Plane
@@ -331,7 +331,7 @@ Add `--no-auth-warning -a "$PASSWORD"` to either if you set the matching passwor
 | Redis, one specific replica | `replica-{i}.{release}-redis.{location}.{gvc}.cpln.local:6379` |
 | Sentinel | `{release}-sentinel.{gvc}.cpln.local:26379`, or `replica-0.{release}-sentinel.{location}.{gvc}.cpln.local:26379` |
 | Redis, public (when enabled) | `redis.my-domain.com:6380+i` |
-| Credentials | the opaque secrets named by `redis.passwordSecretName` / `sentinel.passwordSecretName` — `cpln secret reveal <name>` |
+| Credentials | the opaque secrets named by `redis.passwordSecretName` / `sentinel.passwordSecretName` — `cpln secret reveal SECRET_NAME -o yaml` |
 
 Writes must go to the **current master**, which moves on failover. Ask Sentinel where it is. Drop the
 `-a` flags if you did not set the matching password:

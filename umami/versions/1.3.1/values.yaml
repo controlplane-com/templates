@@ -32,8 +32,11 @@ postgres:
   enabled: true
   image: postgres:18
   # Credentials for the bundled database — internal plumbing no human types elsewhere.
-  # Umami CREATES the dictionary secret named by config.credentialsSecretName below out
-  # of these three values, so there is nothing for you to create before installing.
+  # Used by BOTH stores: Umami CREATES the dictionary secret named by
+  # config.credentialsSecretName below (single-instance) or
+  # postgresHA.config.credentialsSecretName (HA) out of these three values, so there is
+  # nothing for you to create before installing. Changing the password later does not
+  # change it in an existing database.
   credentials:
     username: umami
     password: change-me-umami-db # change before installing

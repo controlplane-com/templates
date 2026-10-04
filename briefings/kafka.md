@@ -53,5 +53,10 @@ Does not create a GVC.
   quorum makes it unavailable.
 - **Replication factor derives from the replica count** unless overridden in `extra_configurations`, so a
   single-broker cluster replicates nothing and topics created there survive nothing.
+- **`server.log` is turned off by `KAFKA_LOG4J_ROOT_LOGLEVEL=INFO`** (4.2.0), which is set only for official
+  `apache/kafka:3.x.y` images. Without it that file grows forever in the container layer and gets brokers evicted.
+  On a 4.x (log4j2) image the variable strips every appender from the root logger, including stdout, so moving
+  to Kafka 4 needs its own fix. The GC log is still capped at 11 x 100MB, which is above the 1Gi limit of a
+  1-core broker, and kafka-connectors' `connect.log` has the same never-deleted rolling problem.
 - **`cdc-pipeline` pins kafka at 4.0.1**, not the latest. Bumping this template does not affect that chart.
 - **Uninstalling deletes the volumesets**, and with them every topic's log.

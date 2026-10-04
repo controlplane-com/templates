@@ -1,0 +1,69 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Apache Guacamole
+category: networking
+topology: stateless
+
+summary: >-
+  Apache Guacamole clientless remote desktop gateway: one workload running the Guacamole web app and
+  the guacd protocol daemon, with a bundled single-instance PostgreSQL holding users, connections,
+  permissions and session history. Users open RDP, VNC, SSH and telnet sessions in a browser tab. It is
+  private by default, runs one replica (a restart ends open sessions) and offers optional scheduled
+  database backups. Pick it for browser access to servers and desktops without a VPN or client.
+
+keywords:
+  - remote desktop gateway
+  - clientless remote desktop
+  - rdp
+  - vnc
+  - ssh
+  - telnet
+  - web ssh client
+  - browser rdp
+  - html5 remote desktop
+  - guacd
+  - jump server
+  - bastion host
+  - connection history
+
+useCases:
+  - Open RDP sessions to Windows servers from a browser
+  - Reach SSH and VNC hosts without installing a client or VPN
+  - Give contractors controlled browser access to specific machines
+  - Manage remote connections, users and permissions from one web UI
+
+alternativeTo:
+  - Azure Bastion
+  - Remote Desktop Gateway
+  - AWS Systems Manager Session Manager
+  - Teleport
+  - TeamViewer
+  - Kasm Workspaces
+
+pickInsteadIf:
+  - need: network-level VPN access from your devices to internal cpln.local workloads
+    template: tailscale
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    valuesPath: admin.secretName
+    required: true
+    description: Initial admin login, applied on first boot only and replacing guacadmin. Create before installing; when missing the workload waits with no logs.
+  - kind: bucket
+    required: false
+    when: postgres.backup.enabled
+    description: S3, GCS or S3-compatible bucket for scheduled database backups, set under postgres.backup.<provider>.bucket (passed to the bundled postgres).
+  - kind: cloud-account
+    required: false
+    when: postgres.backup.enabled with postgres.backup.provider aws or gcp
+    description: Cloud account for the backup bucket (postgres.backup.<provider>.cloudAccountName), plus a bucket-scoped IAM policy on AWS.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    required: false
+    when: postgres.backup.enabled with postgres.backup.provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint, named by postgres.backup.minio.credentialsSecretName.

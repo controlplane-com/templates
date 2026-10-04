@@ -1,0 +1,463 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: MongoDB Cluster
+gvc:
+  minLocations: 1
+
+steps:
+  - id: topology
+    title: Locations
+    description: Where the replica set members run. Every member votes.
+    docs: "#locations-and-sizing"
+    fields:
+      - type: note
+        textExpression: >-
+          sum(self.locations.map(l, l.replicas)) < 1 ? 'No members configured.' :
+          string(sum(self.locations.map(l, l.replicas))) + ' voting members; the replica set survives losing ' +
+          string((sum(self.locations.map(l, l.replicas)) - 1) / 2) + '.'
+      - type: note
+        when: >-
+          context.gvcLocations != null &&
+          context.gvcLocations.exists(g, !(g in self.locations.map(l, l.name)))
+        textExpression: >-
+          'GVC locations not listed here run nothing: ' +
+          context.gvcLocations.filter(g, !(g in self.locations.map(l, l.name))).join(', ') + '.'
+      - path: locations
+        type: list
+        label: Locations
+        required: true
+        minItems: 1
+        uniqueBy: [name]
+        widget: table
+        newItem: { name: "", replicas: 1 }
+        itemLabel: "item.name + ' × ' + string(item.replicas)"
+        description: One entry per location; members are the mongod replicas in that location.
+        help: >-
+          Before lowering a location's members (or removing a location), remove those members from
+          the replica set: connect to the primary and run `rs.remove(...)`.
+        item:
+          type: object
+          fields:
+            - path: name
+              type: ref
+              label: Location
+              required: true
+              ref: { kind: location, scope: gvc, format: name, mustExist: error }
+            - path: replicas
+              type: integer
+              label: Members
+              required: true
+              min: 1
+              max: 7
+              widget: stepper
+          rules:
+            - rule: context.gvcLocations == null || item.name == '' || item.name in context.gvcLocations
+              paths: [name]
+              message: This location is not enabled on the target GVC; its members would never start.
+      - path: multiZone
+        type: boolean
+        label: Spread members across zones
+        description: Also applies to HAProxy. Confirm that your locations support multiple zones.
+    rules:
+      - rule: size(self.locations) > 0 && self.locations.all(l, l.name != null && l.name != '')
+        mirrors: mongo-cluster.validateLocations
+        paths: [locations]
+        message: Every entry in the locations list needs a location name.
+      - rule: self.locations.all(l, l.replicas == null || l.replicas >= 1)
+        mirrors: mongo-cluster.validateReplicas
+        paths: [locations]
+        message: Every location needs at least 1 member; to stop running in a location, remove it.
+      - rule: sum(self.locations.map(l, l.replicas)) <= 7
+        mirrors: mongo-cluster.validateMemberCount
+        paths: [locations]
+        message: MongoDB allows at most 7 voting members.
+        messageExpression: >-
+          'The members add up to ' + string(sum(self.locations.map(l, l.replicas))) +
+          '; MongoDB allows at most 7 voting members. 3 or 5 are the usual choices.'
+      - rule: sum(self.locations.map(l, l.replicas)) != 2
+        mirrors: mongo-cluster.validateMemberCount
+        paths: [locations]
+        message: >-
+          A 2-member replica set has no fault tolerance and is worse than 1: losing either member
+          leaves no primary. Use 1 member, or 3 or more.
+      - rule: sum(self.locations.map(l, l.replicas)) != 1
+        severity: info
+        paths: [locations]
+        message: A single member has no failover.
+      - rule: >-
+          sum(self.locations.map(l, l.replicas)) < 4 ||
+          sum(self.locations.map(l, l.replicas)) % 2 == 1
+        severity: info
+        paths: [locations]
+        message: An even member count adds no fault tolerance over one member fewer; an odd count avoids a split majority.
+      - rule: >-
+          oldSelf == null ||
+          oldSelf.locations.all(o, self.locations.exists(l, l.name == o.name && l.replicas >= o.replicas))
+        severity: info
+        paths: [locations]
+        message: >-
+          Fewer members than installed: remove the members from the replica set with `rs.remove(...)`
+          on the primary before you upgrade, or elections and quorum are distorted.
+
+  - id: credentials
+    title: Credentials
+    description: The two prerequisite secrets. Neither value passes through the release values.
+    docs: "#prerequisites"
+    fields:
+      - type: note
+        severity: warning
+        text: Both secrets must exist **before** you install; otherwise the deployment waits for them.
+      - path: mongodb.credentialsSecretName
+        type: ref
+        label: Database credentials secret
+        required: true
+        description: >-
+          A dictionary secret with the keys `username` and `password`. The chart does not read a
+          `database` key; add one only for your own connection strings.
+        help: The root user is created from it once, when the cluster is first initialized.
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeys: [username, password]
+          create:
+            secretType: dictionary
+            suggestName: "context.releaseName + '-mongodb-credentials'"
+      - path: mongodb.keyfileSecretName
+        type: ref
+        label: Replica set keyfile secret
+        required: true
+        immutable: The keyfile cannot be changed after the cluster is initialized.
+        description: >-
+          An opaque secret (encoding plain) with 6 to 1024 characters from the base64 alphabet. Keep it
+          separate from the credentials.
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [opaque] }
+          mustExist: error
+          allowCreate: true
+          create:
+            secretType: opaque
+            encoding: plain
+            suggestName: "context.releaseName + '-mongodb-keyfile'"
+            hint: "Generate the content with: openssl rand -base64 756"
+    rules:
+      - rule: self.mongodb.credentialsSecretName != null && self.mongodb.credentialsSecretName != ''
+        mirrors: mongo-cluster.validateCredentials
+        paths: [mongodb.credentialsSecretName]
+        message: The database credentials secret is required.
+      - rule: >-
+          !has(self.mongodb.password) && !has(self.mongodb.username) &&
+          !has(self.mongodb.database) && !has(self.mongodb.replicaSetKey)
+        mirrors: mongo-cluster.validateRemovedKeys
+        paths: [mongodb.credentialsSecretName]
+        message: >-
+          mongodb.username, password, database and replicaSetKey were removed in 1.1.0. Put the
+          credentials in the dictionary secret, the keyfile in the opaque secret, and remove the keys.
+      - rule: oldSelf == null || self.mongodb.credentialsSecretName == oldSelf.mongodb.credentialsSecretName
+        severity: info
+        paths: [mongodb.credentialsSecretName]
+        message: >-
+          The root user is created only when the cluster is first initialized; pointing at another
+          secret does not change the existing user or password.
+
+  - id: resources
+    title: Resources and storage
+    description: Compute and storage of each member.
+    sections:
+      - fields:
+          - path: resources
+            type: resources
+            label: Resources per member
+            required: true
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity per member
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            help: Uninstalling the release deletes the volume set with the data.
+            docs: "/reference/volumeset#capacity-and-billing"
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: volumeset.autoscaling.enabled
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
+            paths: [volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+    rules:
+      - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+
+  - id: access
+    title: Access and proxy
+    description: Who can connect, and the HAProxy endpoint that routes to the primary.
+    sections:
+      - title: Access
+        docs: "#firewall"
+        fields:
+          - path: firewall.internalAllowType
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: MongoDB has no public endpoint. A firewall change can take about 10 minutes to apply.
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          - path: firewall.workloads
+            type: list
+            label: Client workloads
+            when: self.firewall.internalAllowType == 'workload-list'
+            widget: tags
+            description: List your clients only; this release's own workloads are added automatically.
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+      - id: proxy
+        title: HAProxy primary endpoint
+        toggle: proxy.enabled
+        description: One stable address that always routes to the current primary. Backups do not use it.
+        docs: "#haproxy-proxy"
+        fields:
+          - path: proxy.minReplicas
+            type: integer
+            label: Minimum proxy replicas per location
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 5]
+          - path: proxy.maxReplicas
+            type: integer
+            label: Maximum proxy replicas per location
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 5]
+            description: In each configured location, HAProxy scales between the two by requests per second.
+          - path: proxy.image
+            type: string
+            format: image
+            label: HAProxy image
+            required: true
+            advanced: true
+          - path: proxy.resources
+            type: resources
+            label: HAProxy resources
+            required: true
+            advanced: true
+        rules:
+          - rule: self.proxy.minReplicas <= self.proxy.maxReplicas
+            paths: [proxy.minReplicas]
+            message: The minimum proxy replicas must not be greater than the maximum.
+    rules:
+      - rule: self.firewall.internalAllowType in ['same-gvc', 'same-org', 'workload-list']
+        mirrors: mongo-cluster.validateFirewall
+        paths: [firewall.internalAllowType]
+        message: Choose who can connect - same GVC, same org or specific workloads.
+
+  - id: backup
+    title: Backups
+    description: Scheduled logical backups (mongodump) to object storage.
+    docs: "#backing-up"
+    sections:
+      - id: backup
+        title: Scheduled backups
+        toggle: backup.enabled
+        fields:
+          - path: backup.provider
+            type: enum
+            label: Destination
+            widget: segmented
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+          - path: backup.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+          - path: backup.location
+            type: enum
+            label: Run the backup job in
+            required: true
+            optionsFrom: self.locations.filter(l, l.name != '').map(l, l.name)
+            description: The one location the job runs in; the other locations run no backup.
+          - path: backup.mode
+            type: enum
+            label: Backup mode
+            readOnly: true
+            advanced: true
+            description: Physical backups were removed in 2.0.0.
+            options:
+              - { value: logical, label: Logical (mongodump) }
+          - path: backup.logical.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+          - path: backup.logical.resources
+            type: resources
+            label: Backup job resources
+            required: true
+            advanced: true
+        rules:
+          - rule: self.backup.location in self.locations.map(l, l.name)
+            mirrors: mongo-cluster.validateBackupLocation
+            paths: [backup.location]
+            message: The backup location must be one of the configured locations, or the job never runs.
+      - title: AWS S3
+        when: self.backup.enabled && self.backup.provider == 'aws'
+        docs: "#aws-s3"
+        fields:
+          - path: backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+          - path: backup.aws.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+      - title: Google Cloud Storage
+        when: self.backup.enabled && self.backup.provider == 'gcp'
+        docs: "#gcs"
+        fields:
+          - path: backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the
+              Storage Admin role on the bucket.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+    rules:
+      - when: "!self.backup.enabled"
+        rule: self.backup.mode != 'physical'
+        mirrors: mongo-cluster.validateBackupConfig
+        paths: [backup.enabled]
+        message: >-
+          backup.mode physical was removed in 2.0.0, and the chart refuses it even with backups off.
+          Set backup.mode to logical.
+
+  - id: advanced
+    title: Advanced
+    description: The MongoDB image.
+    sections:
+      - fields:
+          - path: image
+            type: string
+            format: image
+            label: MongoDB image
+            required: true
+        rules:
+          - rule: oldSelf == null || self.image == oldSelf.image
+            severity: info
+            paths: [image]
+            message: >-
+              Changing the MongoDB image restarts every member. MongoDB upgrades one major version at a
+              time (for example 7.0 to 8.0), raising featureCompatibilityVersion after each step, and a
+              raised featureCompatibilityVersion must be lowered before you can go back; take a backup
+              first.
+
+rules:
+  - rule: context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '2.0.0') >= 0
+    message: >-
+      Do not upgrade a 1.x release to 2.0.0: the upgrade deletes the GVC that the 1.x chart created,
+      with all its data. Install 2.0.0 as a new release, migrate with mongodump and mongorestore, then
+      uninstall the old release.
+  - rule: "!has(self.gvc)"
+    mirrors: mongo-cluster.validateNoLegacyGvc
+    message: >-
+      The gvc key was removed in 2.0.0: the chart deploys into the GVC you install into, and
+      gvc.locations moved to locations. Remove gvc from the values.
+
+migrations:
+  - fromVersions: "<2.0.0"
+    from: gvc.locations
+    to: locations
+  - fromVersions: "<2.0.0"
+    from: gvc.name
+    note: 2.0.0 deploys into the GVC you install into and no longer creates one.
+  - fromVersions: "<2.0.0"
+    from: backup.physical
+    note: Physical backups were removed in 2.0.0; logical backups (mongodump) remain.
+  - fromVersions: "<2.0.0"
+    from: backup.mode
+    values: { physical: logical }
+  - fromVersions: "<2.0.0"
+    to: backup.location
+    valueExpr: "self.backup.provider == 'aws' ? 'aws-' + self.backup.aws.region : self.gvc.locations[0].name"

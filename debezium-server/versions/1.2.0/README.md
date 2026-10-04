@@ -78,7 +78,7 @@ that still carries any removed credential is refused at render.
 source:
   type: postgres
   database:
-    hostname: postgres.mygvc.cpln.local
+    hostname: POSTGRES_WORKLOAD_NAME.GVC_NAME.cpln.local
     port: 5432
     name: mydb
     user: debezium
@@ -92,7 +92,7 @@ source:
 sink:
   type: kafka
   kafka:
-    bootstrapServers: kafka.mygvc.cpln.local:9092
+    bootstrapServers: KAFKA_WORKLOAD_NAME.GVC_NAME.cpln.local:9092
     topic: cdc-events
 
 format:
@@ -106,7 +106,7 @@ format:
 source:
   type: mysql
   database:
-    hostname: mysql.mygvc.cpln.local
+    hostname: MYSQL_WORKLOAD_NAME.GVC_NAME.cpln.local
     port: 3306
     name: mydb
     user: debezium
@@ -119,7 +119,7 @@ source:
 sink:
   type: redis
   redis:
-    address: redis.mygvc.cpln.local:6379
+    address: REDIS_WORKLOAD_NAME.GVC_NAME.cpln.local:6379
     streamName: cdc-stream
 ```
 
@@ -153,7 +153,7 @@ sink:
 |----------|-----------|--------------|-------------------|
 | PostgreSQL | PostgresConnector | 5432 | `slotName`, `publicationName`, `pluginName` |
 | MySQL | MySqlConnector | 3306 | `serverId`, `includeSchemaChanges` |
-| MongoDB | MongoDbConnector | 27017 | `connectionString`, `replicaSet` |
+| MongoDB | MongoDbConnector | 27017 | `useConnectionString` (string from the `mongodbConnectionString` secret key), `replicaSet` |
 | SQL Server | SqlServerConnector | 1433 | `databaseNames`, `snapshotMode` |
 | Oracle | OracleConnector | 1521 | `pdbName`, `logMiningStrategy` |
 
@@ -166,11 +166,15 @@ sink:
    max_wal_senders = 4
    ```
 
-2. Create a publication and replication slot:
+2. Create the publication named in `source.postgres.publicationName`:
    ```sql
    CREATE PUBLICATION dbz_publication FOR ALL TABLES;
-   -- Slot is created automatically by Debezium
+   -- The replication slot (source.postgres.slotName) is created automatically
    ```
+
+   With `source.postgres.heartbeatIntervalMs` above `0`, a startup step also creates a `debezium_heartbeat` table
+   (seeded with row `1`, the target of the `heartbeatActionQuery` example) and the replication slot before the
+   server starts. If that step fails it logs a warning and Debezium Server starts anyway.
 
 3. Grant permissions:
    ```sql
@@ -198,14 +202,14 @@ sink:
 
 | Sink | Required Configuration | Notes |
 |------|------------------------|-------|
-| Kafka | `bootstrapServers` | Simple Kafka producer (no Kafka Connect required) |
+| Kafka | `bootstrapServers` | Simple Kafka producer (no Kafka Connect required). SASL always uses a `PlainLoginModule` JAAS config, so only `saslMechanism: PLAIN` matches |
 | Redis | `address` | Redis Streams for real-time event streaming |
 | NATS JetStream | `url` | Cloud-native messaging with persistence |
 | HTTP | `url` | Webhooks and custom HTTP endpoints |
-| Kinesis | `region`, `streamName` | AWS Kinesis (uses Universal Cloud Identity) |
-| Pub/Sub | `projectId` | GCP Pub/Sub (uses Universal Cloud Identity) |
+| Kinesis | `region`, `streamName` | AWS Kinesis (cloud account linked to the identity; IAM access granted by you) |
+| Pub/Sub | `projectId` | GCP Pub/Sub (cloud account linked to the identity; role granted by you) |
 | Pulsar | `serviceUrl` | Apache Pulsar with optional authentication |
-| Event Hubs | `connectionString`, `hubName` | Azure Event Hubs |
+| Event Hubs | `hubName` + the `eventhubsConnectionString` secret key | Azure Event Hubs |
 
 ## Offset Storage
 
@@ -213,7 +217,7 @@ Debezium tracks the position of captured changes using offset storage. Three opt
 
 ### File Storage (Default)
 
-Stores offsets in a local file. Requires a volumeset for persistence.
+Stores offsets in a local file on the volume set the template creates whenever offsets or schema history use `file` storage.
 
 ```yaml
 source:
@@ -236,7 +240,7 @@ source:
   offset:
     storage: redis
     redis:
-      address: redis.mygvc.cpln.local:6379
+      address: REDIS_WORKLOAD_NAME.GVC_NAME.cpln.local:6379
       key: debezium:offsets
       # password, when the store needs auth, comes from your credentials secret
       ssl: false
@@ -251,9 +255,9 @@ source:
   offset:
     storage: jdbc
     jdbc:
-      url: jdbc:postgresql://postgres.mygvc.cpln.local:5432/offsets
+      url: jdbc:postgresql://POSTGRES_WORKLOAD_NAME.GVC_NAME.cpln.local:5432/offsets
       user: debezium
-      # password comes from the `sourcePassword` key of your credentials secret
+      # password comes from the `offsetJdbcPassword` key of your credentials secret
       tableName: debezium_offsets
 ```
 
@@ -281,20 +285,19 @@ format:
 
   # For Avro/Protobuf, configure schema registry:
   schemaRegistry:
-    url: http://schema-registry.mygvc.cpln.local:8081
+    url: http://SCHEMA_REGISTRY_WORKLOAD_NAME.GVC_NAME.cpln.local:8081
     username: ""
     # password, when the sink needs auth, comes from your credentials secret
 ```
 
 ## Universal Cloud Identity
 
-For AWS Kinesis and GCP Pub/Sub sinks, this template integrates with Control Plane's Universal Cloud Identity for credential-less authentication.
+For AWS Kinesis and GCP Pub/Sub sinks, set `cloudAccount.enabled: true` and `cloudAccount.name` to a Control Plane
+[cloud account](https://docs.controlplane.com/guides/create-cloud-account). The template links that cloud account to
+the workload identity (with the `pubsub` scope for GCP) but attaches **no AWS IAM policy and no GCP role** — grant
+the identity access to your stream or topic yourself.
 
 ### AWS Kinesis
-
-1. Create an AWS cloud account in Control Plane
-2. Configure the identity with appropriate IAM policies
-3. Enable the cloud account in your values:
 
 ```yaml
 sink:
@@ -351,29 +354,22 @@ Debezium Server exposes Quarkus health endpoints:
 - **Readiness**: `/q/health/ready` - Checks if the connector is ready
 - **Liveness**: `/q/health/live` - Checks if the server is alive
 
-## Installation
-
-```bash
-cpln helm install debezium ./debezium-server/versions/1.0.0 \
-  --gvc my-gvc \
-  -f my-values.yaml
-```
-
 ## Verification
 
-1. Check workload status:
+1. Check deployment status:
    ```bash
-   cpln workload get debezium-<release>-debezium --gvc my-gvc
+   cpln workload get-deployments RELEASE_NAME-debezium --gvc GVC_NAME -o yaml
    ```
 
-2. Check health endpoint:
+2. Check the health endpoint from inside the GVC (`http://RELEASE_NAME-debezium.GVC_NAME.cpln.local:8080/q/health`), or through a tunnel:
    ```bash
-   curl http://debezium-<release>-debezium.my-gvc.cpln.local:8080/q/health
+   cpln port-forward RELEASE_NAME-debezium 8080:8080 --gvc GVC_NAME
+   curl http://127.0.0.1:8080/q/health
    ```
 
 3. View logs:
    ```bash
-   cpln logs '{gvc="my-gvc", workload="debezium-<release>-debezium"}' --limit 50 --since 10m
+   cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-debezium"}' --limit 50 --since 10m
    ```
 
 4. Test CDC by making changes in the source database and verifying events appear in the configured sink.
@@ -395,14 +391,8 @@ cpln helm install debezium ./debezium-server/versions/1.0.0 \
 ### Sink Delivery Failures
 
 - Verify sink connectivity and authentication
-- For cloud sinks (Kinesis/Pub/Sub): ensure cloud account is properly configured
+- For cloud sinks (Kinesis/Pub/Sub): ensure the cloud account exists and you granted the identity access to the stream or topic
 - Check firewall rules allow outbound traffic to the sink
-
-## Resources
-
-- [Debezium Documentation](https://debezium.io/documentation/)
-- [Debezium Server Documentation](https://debezium.io/documentation/reference/stable/operations/debezium-server.html)
-- [Control Plane Documentation](https://docs.controlplane.com/)
 
 ## Important Notes
 
@@ -415,3 +405,4 @@ cpln helm install debezium ./debezium-server/versions/1.0.0 \
 
 - [Debezium Server documentation](https://debezium.io/documentation/reference/stable/operations/debezium-server.html)
 - [Debezium connectors](https://debezium.io/documentation/reference/stable/connectors/)
+- [Debezium documentation](https://debezium.io/documentation/)

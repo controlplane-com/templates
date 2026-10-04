@@ -53,6 +53,8 @@
 - **`internalAccess.type: workload-list` must include the cluster's own workloads** — master/worker/connect address each other over the GVC network. `same-gvc` (default) avoids this.
 - **REST submission port 6066 is intentionally never enabled** (unauthenticated remote code). Submit via `spark://…:7077` or Spark Connect.
 - **Master loss = minutes of downtime, not data loss** — no Master HA in v1 (out of scope).
+- **Multi-location GVC is unaddressed.** No `localOptions`/placement pinning, so a GVC with several locations runs a master (and every tier) per location. Docs + README say install into a single-location GVC; a chart guard is a follow-up candidate.
+- **GCP roles are two different grants:** the cloud account's service account needs `roles/storage.admin` (to create the bucket binding); the chart binds the workload identity to `roles/storage.objectAdmin` on the bucket. The README previously conflated them as "Storage Admin (`roles/storage.objectAdmin`)" (corrected 2026-10-01).
 
 ## Test evidence (2026-09-25, test-gvc, aws-us-east-1)
 - Core: master + single worker register (Master JSON `aliveworkers=1`); SparkPi completed (`Pi is roughly 3.14`), 20 tasks on the worker.

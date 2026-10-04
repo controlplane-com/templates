@@ -1,0 +1,88 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Infisical
+category: secrets
+topology: stateless
+
+summary: >-
+  Infisical secrets-management platform: an Infisical server tier (replica count configurable) serving
+  the web UI and REST API, with a bundled single-instance PostgreSQL holding every secret and version,
+  and a bundled Redis with Sentinel for cache and job queues. Optional SMTP for invites and password
+  reset, and optional scheduled database backups to S3, GCS or an S3-compatible endpoint. Pick it to
+  store, version and share app secrets per project and environment from your own deployment.
+
+keywords:
+  - secrets manager
+  - secrets management
+  - secret store
+  - environment variables
+  - env vars
+  - dotenv
+  - api keys
+  - credentials management
+  - secret versioning
+  - machine identities
+  - config management
+  - developer secrets
+
+useCases:
+  - Store and version application secrets per project and environment
+  - Replace .env files shared over chat with a central secrets store
+  - Serve secrets to apps, CI pipelines and scripts through an API and CLI
+  - Give developers a web UI to manage team secrets with access control
+  - Keep secrets in your own infrastructure instead of a SaaS secrets manager
+
+alternativeTo:
+  - Doppler
+  - HashiCorp Vault
+  - AWS Secrets Manager
+  - Azure Key Vault
+  - Google Cloud Secret Manager
+  - 1Password Secrets Automation
+
+pickInsteadIf:
+  - need: a Vault-compatible API with dynamic secrets, PKI and transit encryption
+    template: openbao
+  - need: sync secrets from an existing external secrets manager into Control Plane secrets
+    template: ess
+  - need: a password manager for people's logins that works with the Bitwarden apps
+    template: vaultwarden
+
+related:
+  - template: ess
+    relation: companion
+    note: Syncs Infisical secrets into Control Plane secrets that workloads read
+  - template: openbao
+    relation: alternative
+    note: Vault-compatible secrets engine with raft storage and auto-unseal
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [ENCRYPTION_KEY, AUTH_SECRET]
+    valuesPath: secrets.name
+    required: true
+    description: Root-of-trust keys, write-once (rotating ENCRYPTION_KEY corrupts stored secrets). Create before installing; when missing the workload waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [SMTP_USERNAME, SMTP_PASSWORD]
+    valuesPath: smtp.auth.secretName
+    required: false
+    when: smtp.enabled with an authenticated SMTP server
+    description: SMTP login for sending invites, verification and password reset email. Leave smtp.auth.secretName empty for an unauthenticated relay.
+  - kind: bucket
+    required: false
+    when: postgres.backup.enabled
+    description: S3, GCS or S3-compatible bucket for scheduled database backups, set under postgres.backup.<provider>.bucket (passed to the bundled postgres).
+  - kind: cloud-account
+    required: false
+    when: postgres.backup.enabled with postgres.backup.provider aws or gcp
+    description: Cloud account for the backup bucket (postgres.backup.<provider>.cloudAccountName), plus a bucket-scoped IAM policy on AWS.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    required: false
+    when: postgres.backup.enabled with postgres.backup.provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint, named by postgres.backup.minio.credentialsSecretName.

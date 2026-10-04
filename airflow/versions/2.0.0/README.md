@@ -206,22 +206,22 @@ API tokens are issued by `POST /auth/token` with the same credentials and passed
 **Never `helm upgrade` a 1.x release onto 2.0.0.** 1.x created its own GVC; 2.0.0 does not declare one, and Helm deletes what a chart no longer declares — so the upgrade would destroy that GVC and every workload, volumeset and identity in it, including your metadata database and DAGs, while reporting success. The chart refuses to render if your values still carry the `gvc` key, but an upgrade that passes no values at all sees only the new chart's defaults and cannot be stopped. Migrate to a **new release** instead:
 
 1. Install 2.0.0 as a **new release** into an existing GVC, pointing `airflow.auth.secretName` at the **same auth secret** the 1.x release used. The `fernetKey` must be identical or every stored Connection and Variable becomes unreadable.
-2. Move the metadata database, substituting the `postgres.config.username` / `postgres.config.database` values each release actually uses:
+2. Move the metadata database. The commands read each container's own `POSTGRES_USER` / `POSTGRES_DB`, so nothing is hardcoded. `cpln workload exec` mangles raw binary output and drops stdin unless `--stdin` is passed, so the dump travels base64-encoded in both directions:
 
    ```bash
-   cpln workload exec OLD-airflow-postgres --gvc OLD_GVC --container postgresql -- \
-     pg_dump -U username -d airflow -Fc > airflow.dump
-   cpln workload exec NEW-airflow-postgres --gvc NEW_GVC --container postgresql --stdin -- \
-     pg_restore -U username -d airflow --clean --if-exists < airflow.dump
+   cpln workload exec OLD-airflow-postgres --gvc OLD_GVC --container postgresql --quiet \
+     -- sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc | base64' | base64 -d > airflow.dump
+   base64 < airflow.dump | cpln workload exec NEW-airflow-postgres --gvc NEW_GVC --container postgresql --stdin --quiet \
+     -- sh -c 'base64 -d | pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists'
    ```
 
 3. Move the DAGs. With `gitSync.enabled: true` there is nothing to do — the sidecar re-clones. Otherwise copy them off the old shared volume onto the new one:
 
    ```bash
-   cpln workload exec OLD-airflow-webserver --gvc OLD_GVC --container airflow -- \
-     tar -cf - -C /opt/airflow/dags . > dags.tar
-   cpln workload exec NEW-airflow-webserver --gvc NEW_GVC --container airflow --stdin -- \
-     tar -xf - -C /opt/airflow/dags < dags.tar
+   cpln workload exec OLD-airflow-webserver --gvc OLD_GVC --container airflow --quiet \
+     -- sh -c 'tar -cf - -C /opt/airflow/dags . | base64' | base64 -d > dags.tar
+   base64 < dags.tar | cpln workload exec NEW-airflow-webserver --gvc NEW_GVC --container airflow --stdin --quiet \
+     -- sh -c 'base64 -d | tar -xf - -C /opt/airflow/dags'
    ```
 
 4. Force a redeployment of the new webserver so the scheduler re-reads the restored database, and confirm your DAGs and Connections are present in the UI.

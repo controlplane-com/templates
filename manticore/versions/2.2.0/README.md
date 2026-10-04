@@ -314,7 +314,7 @@ The last lines are k6's end-of-test summary (`http_req_duration`, `http_req_fail
 | Web UI | `{release}-ui.{gvc}.cpln.local:3000` | Public `*.cpln.app` endpoint only when `orchestrator.ui.publicAccess.enabled` is true |
 | Custom domain | `https://{domain.name}` | `/api/*` → orchestrator API, `/*` → UI |
 
-The bearer token is whatever you stored in the secret named by `orchestrator.agent.tokenSecretName`. Read it back with `cpln secret reveal my-manticore-agent-token`.
+The bearer token is whatever you stored in the secret named by `orchestrator.agent.tokenSecretName`. Read it back with `cpln secret reveal my-manticore-agent-token -o yaml` (a bare `reveal` prints only a summary table).
 
 ## Authentication
 

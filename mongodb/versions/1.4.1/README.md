@@ -29,6 +29,8 @@ cpln secret create-dictionary --name my-mongodb-credentials \
 
 Set `config.credentialsSecretName` to the name you used. Secret names are organization-wide, so give each release its own.
 
+On first boot MongoDB creates the user in the `admin` database with the `root` role, so connection strings must carry `authSource=admin`. The `database` entry is the name your applications use in their connection strings — MongoDB does not create it up front; it appears on the first write.
+
 **If the secret does not exist at install time, the deployment wedges silently.** `cpln logs` returns **zero lines** — the container never starts, so it has nothing to log. The one place the reason appears is `status.versions[].message`:
 
 ```bash
@@ -87,6 +89,12 @@ Once deployed, MongoDB will be reachable at:
 
 ```
 RELEASE_NAME-mongo.GVC_NAME.cpln.local:27017
+```
+
+The user lives in the `admin` database, so connection strings must carry `authSource=admin`:
+
+```
+mongodb://USERNAME:PASSWORD@RELEASE_NAME-mongo.GVC_NAME.cpln.local:27017/DATABASE?authSource=admin
 ```
 
 ### Backing Up
@@ -157,15 +165,17 @@ For the backup cron job to access a GCS bucket, complete the following in your G
 
 ### Restoring a Backup
 
-Run the following command from a client with access to the bucket (replace `aws s3 cp` with `gsutil cp` for GCS):
+Each backup is a `mongodump --archive --gzip` file of every database on the instance. Run the following from a client that can reach both the bucket and the server — a workload inside the GVC, or your own machine with `cpln port-forward RELEASE_NAME-mongo 27017:27017 --gvc GVC_NAME` open and `--host=127.0.0.1` in place of the internal hostname (replace `aws s3 cp` with `gsutil cp` for GCS). The user lives in `admin`, so `--authenticationDatabase=admin` is required. By default `mongorestore` adds the archive's documents to existing collections and keeps any document whose `_id` already exists; add `--drop` to replace each collection with the backup's contents.
 
 ```sh
-aws s3 cp s3://BUCKET_NAME/PREFIX/BACKUP_FILE.gz - \
+aws s3 cp s3://BUCKET_NAME/PREFIX/BACKUP_FILE.archive.gz - \
   | gunzip \
   | mongorestore \
       --host=RELEASE_NAME-mongo.GVC_NAME.cpln.local \
       --port=27017 \
       --username=USERNAME \
+      --password='PASSWORD' \
+      --authenticationDatabase=admin \
       --archive
 ```
 

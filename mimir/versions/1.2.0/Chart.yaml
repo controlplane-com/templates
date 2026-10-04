@@ -12,6 +12,5 @@ dependencies:
 
 annotations:
   created: "2026-07-20"
-  lastModified: "2026-08-23"
-  category: "database"
+  lastModified: "2026-10-01"
   createsGvc: false

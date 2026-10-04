@@ -1,11 +1,15 @@
 # cpln-trivy — Maintainer Briefing
 
+_Reconciled against shipped 1.2.0 `values.yaml` on 2026-10-01._
+
 **What it is:** a first-party (not upstream) template that scans every image in the org's Control Plane registry with [Trivy](https://trivy.dev), renders an HTML report per image, stores it in the customer's own S3 bucket or Azure file share, and writes the report URL back onto the image as a `cpln/trivy-scan` tag — so vulnerability results show up where the image already lives, in the console. The three images (`cpln-trivy-daemon`, `cpln-trivy-trivy-api`, `cpln-trivy-web-server`) are ours; their source lives in the `cpln-trivy` repo, not here.
 
 **Common use cases**
 - Standing CVE visibility over an org's registry with no CI changes — it scans what is already pushed
 - Compliance evidence: a dated HTML report per image, retained in the customer's own bucket
 - Periodic re-scan so an image built months ago still reflects today's CVE feed (`rescanAfter`)
+
+**Scope warning:** a run covers **every image in the org**, not only images this install created — it writes two tags (`cpln/trivy-scan`, `cpln/trivy-scan-time`) on each image it scans.
 
 **Architecture on cpln**
 
@@ -21,10 +25,13 @@
 **Troubleshooting / considerations**
 - **The two workloads talk over the PUBLIC internet, not the GVC.** The web-server ships `internal.inboundAllowType: none`, and the daemon posts to `https://web-server-${CPLN_GVC_ALIAS}.${REGION}.controlplane.us` (hard-coded in the daemon image's `run.sh`, not in the chart). This is the single most surprising fact about the template and it drives everything below.
 - **Therefore `postToken` is a PREREQUISITE OPAQUE SECRET as of 1.2.0, not bundled plumbing.** It gates a publicly reachable write endpoint that stores attacker-supplied HTML in the customer's bucket and serves it from their report URLs. The bundled-credential exception is explicitly premised on the credential being unreachable from outside the GVC, which is exactly what this is not. Through 1.1.0 it shipped as `postToken: changeme` — a working, publicly documented token on an internet-facing endpoint.
-- **Rotating the token needs BOTH workloads restarted.** They compare the same string; updating one leaves uploads failing 401 while every status surface reads healthy. Same trap on upgrade: an upgrader who generates a *new* token instead of reusing theirs breaks uploads silently.
+- **Rotating the token needs BOTH workloads force-redeployed.** Updating a `cpln://` secret redeploys nothing (CLAUDE.md, 2026-08-25), and the two compare the same string; a rotation that reaches one leaves uploads failing 401 while every status surface reads healthy. Rotate by applying the whole secret (`cpln secret update` cannot change a value), then `cpln workload force-redeployment` on `daemon` and `web-server`. Same trap on upgrade: an upgrader who generates a *new* token instead of reusing theirs breaks uploads silently.
 - **Report reads are unauthenticated** — the URL's SHA-256 is the only secret. Narrowing `webServer.firewall.inboundAllowCIDR` to make reports private also cuts off the daemon, since the daemon reaches the web-server by the same public path. Fixing that properly means teaching the daemon image to use internal DNS; that is a change in the `cpln-trivy` repo, not here.
 - **Workload names are hard-coded `daemon` and `web-server`** — not release-prefixed. Two installs in one GVC collide. Worth fixing, but it changes the report URL host, so existing tagged links would break.
 - **The images policy grants `manage` on `target: all` images.** Broader than least-privilege likes, but tagging is the product; scoping it would need per-image target links that do not exist at install time.
 - **GCP is not a storage option** — only AWS S3 (keyless) and Azure file share. Azure additionally needs the full storage-account resource ID in `storage.azureFileshare.scope`, which the chart `fail`s without.
-- First run over a large registry is slow (~15–20 s per image, ~30 min per 100). `concurrencyPolicy: Forbid` means a long run just delays the next tick rather than stacking.
+- First run over a large registry is slow (observed ~15–20 s per image, ~30 min per 100 — maintainer-only figure, removed from the README 2026-10-01). `concurrencyPolicy: Forbid` means a long run just delays the next tick rather than stacking.
+- **`cpln image query` stops at 50 records by default** — the README's bulk tag-clear uses `--max 0`; the old form (`--remove`, a flag that does not exist) was fixed to `--remove-tag` 2026-10-01.
+- **Missing prerequisite secret wedges `web-server` silently** — `cpln logs` is empty; read `status.versions[].message` via `cpln workload get-deployments web-server`. Self-heals after several minutes or on a forced redeployment.
+- **Secret/SA name defaults lack the `my-` prefix** (`trivy-credentials`, `trivy-service-account`) though they name user-created prerequisites — a placeholder-convention gap; changing them is a values-default change, so it needs a new version.
 - `trivyApi` at 2 CPU / 4 GiB is the cost driver, and it only exists while the cron job runs.

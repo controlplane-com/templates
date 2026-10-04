@@ -13,7 +13,6 @@ dependencies:
 
 annotations:
   created: "2026-08-26"
-  lastModified: "2026-08-26"
-  category: "database"
+  lastModified: "2026-10-01"
   postgresVersion: "18"
   createsGvc: false

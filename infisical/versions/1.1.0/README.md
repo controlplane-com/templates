@@ -113,11 +113,11 @@ redis:
 
 | Target | Address | Credentials |
 |---|---|---|
-| Public UI + API | `https://<canonical>.cpln.app` | first sign-up becomes super-admin |
+| Public UI + API | the canonical endpoint — read `status.canonicalEndpoint` (below) | first sign-up becomes super-admin |
 | Internal (same GVC) | `http://{release}-infisical.{gvc}.cpln.local:8080` | account login / API token |
 | Health | `GET /api/status` | none |
 
-The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`cpln workload get {release}-infisical -o yaml`).
+The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`cpln workload get {release}-infisical --gvc {gvc} -o yaml`).
 
 ## Upgrading from 1.0.0
 
@@ -147,7 +147,7 @@ Enabling it adds one `cron` workload that runs `pg_dumpall` and uploads a gzippe
 bundled database's identity picks up the bucket-scoped policy automatically.
 
 For the bucket, cloud account and IAM policy setup — including the exact policy JSON per
-provider — follow the Storage setup section of the [`postgres` template README](../../../postgres).
+provider — follow the Backup Prerequisites section of the [`postgres` template docs](https://docs.controlplane.com/template-catalog/templates/postgres#backup-prerequisites).
 
 **A zero-length backup object is a failed run, not a backup.** If the dump cannot reach the
 database, the upload still writes a ~20-byte empty gzip under a normal timestamped filename.

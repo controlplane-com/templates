@@ -64,7 +64,7 @@ postgres:
       cpu: 100m
       memory: 128Mi
 
-    provider: aws # Options: aws or gcp
+    provider: aws # Options: aws, gcp, or minio (minio keys go in a prerequisite secret — see the postgres template README)
 
     aws:
       bucket: my-backup-bucket

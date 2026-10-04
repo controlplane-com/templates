@@ -1,6 +1,6 @@
 # n8n
 
-This app deploys [n8n](https://n8n.io/) — a workflow automation platform (fair-code, [Sustainable Use License](https://docs.n8n.io/sustainable-use-license/)) — backed by a highly available PostgreSQL cluster by default. The editor, REST API, and webhook endpoints are served on one public HTTPS endpoint, and the instance owner account is pre-provisioned at install so there is never an unauthenticated setup page.
+This app deploys [n8n](https://n8n.io/) — a workflow automation platform (fair-code, [Sustainable Use License](https://docs.n8n.io/choose-n8n/faircode-license/)) — backed by a highly available PostgreSQL cluster by default. The editor, REST API, and webhook endpoints are served on one public HTTPS endpoint, and the instance owner account is pre-provisioned at install so there is never an unauthenticated setup page.
 
 ## Architecture
 
@@ -46,9 +46,9 @@ Set `owner.secretName` to that name. Read it back later with `cpln secret reveal
 
 **If either secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments <release>-n8n --gvc <gvc> -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own in roughly 6–10 minutes — poll rather than time-boxing — or clear it immediately with `cpln workload force-redeployment <release>-n8n --gvc <gvc>` (~90 s).
 
-**The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*` (HA mode) or `postgres.credentials.*` (single-instance mode).
+**The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*` in either database mode.
 
-- For optional database backups: a bucket and access setup for one of the supported providers (see [Backup storage setup](#backup-storage-setup)). With `provider: minio` on the single-instance store, the endpoint's keys are a prerequisite `dictionary` secret — see that section.
+- For optional database backups: a bucket and access setup for one of the supported providers (see [Backup storage setup](#backup-storage-setup)). With `provider: minio` (either database mode), the endpoint's keys are a prerequisite `dictionary` secret — see that section.
 
 ## Configuration
 
@@ -96,12 +96,17 @@ Exactly one of the two databases must be enabled (the chart enforces this at ren
 postgresHA:                   # default: highly available PostgreSQL
   enabled: true
   config:
-    credentialsSecretName: my-n8n-db-credentials # see Prerequisites — must exist before install
+    credentialsSecretName: my-n8n-db-credentials # name of the secret this template CREATES from postgres.credentials.*; org-wide, unique per release
   replicas: 3
   volumeset:
     capacity: 10              # GiB per replica
   backup:
     enabled: false            # optional — see Backup storage setup
+postgres:
+  credentials:                # HA mode also reads these — this template builds the HA credentials secret from them
+    username: n8n
+    password: change-me-n8n-db-password # change before installing
+    database: n8n
 ```
 
 ```yaml
@@ -127,12 +132,12 @@ postgres:                     # dev/lightweight: single-instance PostgreSQL
 
 | What | Value |
 |---|---|
-| Editor / API (public) | `https://<canonical>.cpln.app` — `status.canonicalEndpoint` of `{release}-n8n` |
-| Production webhooks | `https://<canonical>.cpln.app/webhook/<path>` |
-| Test webhooks | `https://<canonical>.cpln.app/webhook-test/<path>` |
+| Editor / API (public) | the canonical endpoint — read `status.canonicalEndpoint` from `cpln workload get {release}-n8n --gvc {gvc} -o yaml` |
+| Production webhooks | `{canonical endpoint}/webhook/<path>` |
+| Test webhooks | `{canonical endpoint}/webhook-test/<path>` |
 | Internal (same GVC) | `http://{release}-n8n.{gvc}.cpln.local:5678` |
 | Login | the `email` and the password behind `passwordHash` in your `owner.secretName` secret |
-| Postgres (internal, HA mode) | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432`, credentials in the `{release}-postgres-config` secret |
+| Postgres (internal, HA mode) | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432`, credentials in the secret named by `postgresHA.config.credentialsSecretName` |
 | Postgres (internal, single mode) | `{release}-postgres.{gvc}.cpln.local:5432`, credentials in the secret named by `postgres.config.credentialsSecretName` |
 
 ## Backup storage setup
@@ -165,7 +170,7 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
 ### S3-compatible (MinIO, R2, Wasabi, …)
 
 1. Create your bucket on the server. Set `backup.minio.bucket`.
-2. Set `backup.minio.endpoint` to the S3 API address including port. For the `minio` marketplace template in the same GVC, this is `http://WORKLOAD_NAME:9000`.
+2. Set `backup.minio.endpoint` to the S3 API address including port. For the `minio` marketplace template in the same GVC, this is `http://WORKLOAD_NAME.GVC_NAME.cpln.local:9000`.
 3. Create a `dictionary` secret holding the bucket credentials, and set `credentialsSecretName` to its name on whichever store you use — `postgresHA.backup.minio.credentialsSecretName` or `postgres.backup.minio.credentialsSecretName`. Both take the same secret:
 
 ```bash
@@ -177,11 +182,12 @@ cpln secret create-dictionary --name my-n8n-minio-credentials \
 ## Important Notes
 
 - **Back up the encryption-key secret** — losing it permanently bricks every credential n8n has stored; never change it after first boot (n8n fails to start on a key mismatch).
-- **Change the bundled database password (`postgres.credentials.password`) before installing** — it is used as-is. The owner login is no longer a value; it comes from the prerequisite secret.
-- **Give each n8n release its own `postgres.config.credentialsSecretName`** (single-instance mode only). Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
+- **Change the bundled database password (`postgres.credentials.password`) before installing** — it is used as-is, in either database mode. Changing it on an existing release does not change the database password, so n8n then fails to connect. The owner login is no longer a value; it comes from the prerequisite secret.
+- **Give each n8n release its own `postgresHA.config.credentialsSecretName` (HA) or `postgres.config.credentialsSecretName` (single-instance).** Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
 - **The n8n main instance is single-replica by upstream design** — the default HA Postgres backend removes the database as a failure point.
 - **Upgrades restart the single replica** — expect roughly a minute of editor/webhook downtime per `helm upgrade`; the first upgrade after an install also re-applies the bundled database, which can add a couple of minutes.
-- **Upgrading from 1.1.0**: the single-instance database credentials moved from `postgres.config.username/password/database` to `postgres.credentials.username/password/database`, named by the new `postgres.config.credentialsSecretName`. Carrying the old keys fails the render with `config.username was REMOVED in postgres 3.4.0` — move the three keys and you are done. **Ignore that message's advice to create a secret yourself; this template creates it.** `postgres.backup.minio.accessKey`/`secretKey` were removed the same way (see Backup storage setup). The HA path (`postgresHA.*`) is unchanged.
+- **Upgrading from 1.2.0 (HA mode)**: `postgresHA.postgres.username/password/database` were removed in 1.3.0 (postgres-highly-available 2.5.0). Copy those three values into `postgres.credentials.*` **unchanged** — this template now builds the HA credentials secret from them, named by `postgresHA.config.credentialsSecretName`. Carrying the old block fails the render with `the postgres block was REMOVED in 2.5.0`; **ignore that message's advice to create a secret yourself — this template creates it.** `postgresHA.backup.minio.accessKey`/`secretKey` were replaced by `postgresHA.backup.minio.credentialsSecretName` in 1.3.1 (see Backup storage setup).
+- **Upgrading from 1.1.0**: the single-instance database credentials moved from `postgres.config.username/password/database` to `postgres.credentials.username/password/database`, named by the new `postgres.config.credentialsSecretName`. Carrying the old keys fails the render with `config.username was REMOVED in postgres 3.4.0` — move the three keys and you are done. **Ignore that message's advice to create a secret yourself; this template creates it.** `postgres.backup.minio.accessKey`/`secretKey` were removed the same way (see Backup storage setup). The HA path changed later, in 1.3.0 — see the previous note.
 - **Upgrading from 1.0.x**: `owner.email` and `owner.password` were removed, and the render fails naming the replacement if either is still set. Put the email and a bcrypt hash of **the password you use today** into the prerequisite dictionary secret — the owner is re-applied from it at the next start, so a different password there silently becomes the new login.
 - **Access changes take up to a few minutes to propagate** — after toggling `publicAccess` or `internalAccess`, re-test over 30 s to 5 minutes before concluding the knob is broken.
 - **Synchronous webhook responses must finish within 30 seconds** (the platform edge times out longer ones) — for long-running workflows, set the Webhook node to respond immediately or use a Respond to Webhook node early; the workflow itself keeps running either way.
@@ -194,4 +200,4 @@ cpln secret create-dictionary --name my-n8n-minio-credentials \
 - [Environment variables reference](https://docs.n8n.io/deploy/host-n8n/configure-n8n/basic-configuration/use-environment-variables/deployment.md)
 - [User management](https://docs.n8n.io/deploy/host-n8n/configure-n8n/user-management.md)
 - [Webhook endpoints](https://docs.n8n.io/deploy/host-n8n/configure-n8n/basic-configuration/use-environment-variables/endpoints.md)
-- [Sustainable Use License](https://docs.n8n.io/sustainable-use-license/)
+- [Sustainable Use License](https://docs.n8n.io/choose-n8n/faircode-license/)

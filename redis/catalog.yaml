@@ -1,0 +1,95 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Redis
+category: cache
+topology: highly-available
+
+summary: >-
+  Redis or Valkey as one primary with replicas plus a Sentinel quorum that promotes a replica when
+  the primary fails, three of each by default, in one location. Options include password auth,
+  persistent volumes with snapshots, a redis_exporter metrics sidecar, public TCP access through
+  your own domain and scheduled RDB backups to Amazon S3 or Google Cloud Storage. The default
+  Redis for caching, sessions, job queues and pub/sub in one location.
+
+keywords:
+  - valkey
+  - redis sentinel
+  - in-memory cache
+  - key-value store
+  - session store
+  - pub/sub
+  - job queue backend
+  - automatic failover
+  - high availability
+  - primary replica replication
+  - redis exporter
+  - rdb backups
+  - sidekiq
+  - bullmq
+  - celery broker
+
+useCases:
+  - Cache in front of a database or API to cut response times
+  - Session store for a web app that keeps working when a cache node fails
+  - Broker or backend for job queues such as Sidekiq, BullMQ or Celery
+  - Pub/sub messaging between services
+  - Counters, leaderboards and rate limits kept in in-memory data structures
+  - Valkey as a BSD-licensed drop-in for Redis
+
+alternativeTo:
+  - Amazon ElastiCache
+  - Amazon MemoryDB
+  - Google Cloud Memorystore for Redis
+  - Azure Cache for Redis
+  - Redis Cloud
+  - Upstash
+
+compatibleWith: [redis-protocol]
+
+pickInsteadIf:
+  - need: shard the keyspace across several primaries for more memory or write throughput
+    template: redis-cluster
+  - need: one Redis spread across several locations that survives losing a location
+    template: redis-multi-location
+  - need: a durable message broker with acknowledgements, routing and dead-lettering
+    template: rabbitmq
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [password]
+    valuesPath: [redis.auth.fromSecret.name, sentinel.auth.fromSecret.name]
+    required: false
+    when: redis.auth.fromSecret.enabled or sentinel.auth.fromSecret.enabled
+    description: Existing secret holding the Redis or Sentinel password under the key set in passwordKey (default password). Missing, the workloads wait.
+  - kind: domain
+    valuesPath: [redis.publicAccess.address, sentinel.publicAccess.address]
+    required: false
+    when: redis.publicAccess.enabled or sentinel.publicAccess.enabled
+    description: A domain you control, with its TXT and CNAME records added before install; without proven ownership the domain is rejected.
+  - kind: other
+    required: false
+    when: redis.publicAccess.enabled or sentinel.publicAccess.enabled
+    description: Dedicated load balancer enabled on the GVC, needed to route the per-replica TCP ports of the public domain.
+  - kind: bucket
+    valuesPath: [backup.aws.bucket, backup.gcp.bucket]
+    required: false
+    when: backup.enabled
+    description: S3 or GCS bucket that receives the scheduled RDB snapshots.
+  - kind: cloud-account
+    valuesPath: [backup.aws.cloudAccountName, backup.gcp.cloudAccountName]
+    required: false
+    when: backup.enabled
+    description: Control Plane cloud account for the AWS account or GCP project holding the bucket; on GCP its service account needs the Storage Admin role.
+  - kind: other
+    valuesPath: backup.aws.policyName
+    required: false
+    when: backup.enabled with backup.provider aws
+    description: AWS IAM policy scoped to the backup bucket, with the S3 actions listed in the README; the chart attaches it to the backup identity.
+  - kind: other
+    valuesPath: grafana.instanceSelector.matchLabels
+    required: false
+    when: grafana.dashboard.enabled
+    description: Grafana Operator and a labelled Grafana CR in a Kubernetes cluster; the dashboard CRD does nothing on the managed platform.

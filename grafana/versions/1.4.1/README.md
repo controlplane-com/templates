@@ -31,9 +31,9 @@ Other prerequisites, only if you use the matching feature:
 
 - For credentialed provisioned datasources: a **dictionary** secret per `datasources.credentialSecrets` entry, created **before install** (see [Provisioning datasources](#provisioning-datasources)).
 - For authenticated SMTP: an **opaque** secret (encoding `plain`) holding the SMTP password, created **before install**.
-- For optional database backups: a bucket and access setup on AWS S3, Google Cloud Storage, or a MinIO/S3-compatible server (see [Backup storage setup](#backup-storage-setup)). With `provider: minio` on the single-instance store, the endpoint's keys are a prerequisite `dictionary` secret — see that section.
+- For optional database backups: a bucket and access setup on AWS S3, Google Cloud Storage, or a MinIO/S3-compatible server (see [Backup storage setup](#backup-storage-setup)). With `provider: minio` (either database mode), the endpoint's keys are a prerequisite `dictionary` secret — see that section.
 
-**The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*`, and feeds it to whichever store is enabled.
+**The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*` in **both** database modes, and feeds it to whichever store is enabled (named by `postgresHA.config.credentialsSecretName` in HA mode, `postgres.config.credentialsSecretName` in single-instance mode).
 
 ## Configuration
 
@@ -78,7 +78,7 @@ Exactly one of the two databases must be enabled (the chart enforces this at ren
 postgresHA:                   # default: highly available PostgreSQL
   enabled: true
   config:
-    credentialsSecretName: my-grafana-db-credentials # see Prerequisites — must exist before install
+    credentialsSecretName: my-grafana-db-credentials # name of the secret this template CREATES from postgres.credentials.*; org-wide, unique per release
   replicas: 3
   volumeset:
     capacity: 10              # GiB per replica
@@ -91,7 +91,7 @@ postgresHA:
   enabled: false
 postgres:                     # dev/lightweight: single-instance PostgreSQL
   enabled: true
-  credentials:                # this template builds the DB credential secret from these
+  credentials:                # this template builds the DB credential secret from these — used in BOTH modes
     username: grafana
     password: change-me-grafana-db-password # change before installing
     database: grafana
@@ -198,10 +198,10 @@ This complements the built-in workload dashboards rather than replacing them —
 
 | What | Value |
 |---|---|
-| UI / API (public) | `https://<canonical>.cpln.app` — `status.canonicalEndpoint` of `{release}-grafana` |
+| UI / API (public) | the canonical endpoint — read `status.canonicalEndpoint` from `cpln workload get {release}-grafana --gvc {gvc} -o yaml` |
 | Internal (same GVC) | `http://{release}-grafana.{gvc}.cpln.local:3000` |
 | Login | `admin.user` / the payload of the `admin.passwordSecretName` secret |
-| Postgres (internal, HA mode) | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432`, credentials in the `{release}-postgres-config` secret |
+| Postgres (internal, HA mode) | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432`, credentials in the secret named by `postgresHA.config.credentialsSecretName` (`cpln secret reveal SECRET_NAME -o yaml`) |
 | Postgres (internal, single mode) | `{release}-postgres.{gvc}.cpln.local:5432`, credentials in the secret named by `postgres.config.credentialsSecretName` |
 
 ## Backup storage setup
@@ -235,7 +235,7 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
 ### S3-compatible (MinIO, R2, Wasabi, …)
 
 1. Create your bucket on the server. Set `backup.minio.bucket`.
-2. Set `backup.minio.endpoint` to the S3 API address including port. For the `minio` marketplace template in the same GVC, this is `http://WORKLOAD_NAME:9000`.
+2. Set `backup.minio.endpoint` to the S3 API address including port. For the `minio` marketplace template in the same GVC, this is `http://WORKLOAD_NAME.GVC_NAME.cpln.local:9000`.
 3. Create a `dictionary` secret holding the bucket credentials, and set `credentialsSecretName` to its name on whichever store you use — `postgresHA.backup.minio.credentialsSecretName` or `postgres.backup.minio.credentialsSecretName`. Both take the same secret:
 
 ```bash
@@ -253,8 +253,10 @@ cpln secret create-dictionary --name my-grafana-minio-credentials \
 - **Scaling**: set `replicas >= 2` together with `redis.enabled: true` — the chart refuses to render multi-replica without Redis, which coordinates alerting so only one notification is sent per alert.
 - **Dashboards you create persist in Postgres** and survive Grafana restarts and redeploys; **uninstall deletes the database volumesets** — enable backups if the data matters.
 - **Grafana Live push updates are per-instance** in multi-replica mode — dashboard auto-refresh and alerting are unaffected.
-- **Upgrading from 1.2.x**: the single-instance database credentials moved from `postgres.config.username/password/database` to `postgres.credentials.username/password/database`, named by the new `postgres.config.credentialsSecretName`. Carrying the old keys fails the render with `config.username was REMOVED in postgres 3.4.0` — move the three keys and you are done. **Ignore that message's advice to create a secret yourself; this template creates it**, and the database password stays a value. `postgres.backup.minio.accessKey`/`secretKey` were removed the same way (see Backup storage setup). The HA path (`postgresHA.*`), Redis, and the admin/encryption-key prerequisite secrets are all unchanged.
-- **Give each grafana release its own `postgres.config.credentialsSecretName`** (single-instance mode only). Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
+- **Upgrading from 1.2.x**: the single-instance database credentials moved from `postgres.config.username/password/database` to `postgres.credentials.username/password/database`, named by the new `postgres.config.credentialsSecretName`. Carrying the old keys fails the render with `config.username was REMOVED in postgres 3.4.0` — move the three keys and you are done. **Ignore that message's advice to create a secret yourself; this template creates it**, and the database password stays a value. `postgres.backup.minio.accessKey`/`secretKey` were removed the same way (see Backup storage setup). Redis and the admin/encryption-key prerequisite secrets are unchanged; for the HA path see the next note.
+- **Upgrading from 1.3.x (HA mode)**: `postgresHA.postgres.username/password/database` were removed in 1.4.0 (postgres-highly-available 2.5.0). Move those three values into `postgres.credentials.*` **unchanged** — this template now builds the HA credentials secret from them, named by `postgresHA.config.credentialsSecretName`. Carrying the old block fails the render with `the postgres block was REMOVED in 2.5.0`; **ignore that message's advice to create a secret yourself — this template creates it.** `postgresHA.backup.minio.accessKey`/`secretKey` moved to a prerequisite secret named by `postgresHA.backup.minio.credentialsSecretName` (see Backup storage setup).
+- **Changing `postgres.credentials.password` on an existing release does not change the database password** — it only rewrites the secret, so the new value no longer matches the database and logins fail. The password is set once, when the database volume is first initialised.
+- **Give each grafana release its own `postgresHA.config.credentialsSecretName` (HA) or `postgres.config.credentialsSecretName` (single-instance).** Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
 - **This template ships Grafana OSS only** — Enterprise features (RBAC, reporting, query caching) are not available.
 
 ## Links

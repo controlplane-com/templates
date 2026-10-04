@@ -6,8 +6,7 @@ version: 1.0.0
 appVersion: "4.0.4-scala2.13-java17-python3-ubuntu"
 annotations:
   created: "2026-09-25"
-  lastModified: "2026-09-25"
-  category: "analytics"
+  lastModified: "2026-10-01"
   createsGvc: false
 dependencies:
   - name: cpln-common

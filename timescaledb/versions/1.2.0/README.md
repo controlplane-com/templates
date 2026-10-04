@@ -198,18 +198,18 @@ cpln secret create-dictionary --name my-timescaledb-minio-credentials \
 
 ## Restoring a backup
 
-Restoring a TimescaleDB dump is **not** the vanilla PostgreSQL procedure: the target server must run the **same TimescaleDB extension version** as the dump, and the replay must be wrapped in `timescaledb_pre_restore()` / `timescaledb_post_restore()`. From a client with access to the bucket and the (fresh) database:
+Restoring a TimescaleDB dump is **not** the vanilla PostgreSQL procedure: the target server must run the **same TimescaleDB extension version** as the dump, and the replay must be wrapped in `timescaledb_pre_restore()` / `timescaledb_post_restore()`. Run the commands from a client that can reach both the bucket and the (fresh) database — a workload inside the GVC, or your own machine with `cpln port-forward RELEASE_NAME-timescaledb 5432:5432 --gvc GVC_NAME` open and `-h 127.0.0.1` in place of the internal hostname:
 
 ```sh
 export PGPASSWORD="PASSWORD"
 
-psql -h WORKLOAD_NAME -U USERNAME -d DATABASE -c "SELECT timescaledb_pre_restore();"
+psql -h RELEASE_NAME-timescaledb.GVC_NAME.cpln.local -U USERNAME -d DATABASE -c "SELECT timescaledb_pre_restore();"
 
 aws s3 cp "s3://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" - \
   | gunzip \
-  | psql -h WORKLOAD_NAME -p 5432 -U USERNAME -d postgres
+  | psql -h RELEASE_NAME-timescaledb.GVC_NAME.cpln.local -p 5432 -U USERNAME -d postgres
 
-psql -h WORKLOAD_NAME -U USERNAME -d DATABASE -c "SELECT timescaledb_post_restore();"
+psql -h RELEASE_NAME-timescaledb.GVC_NAME.cpln.local -U USERNAME -d DATABASE -c "SELECT timescaledb_post_restore();"
 
 unset PGPASSWORD
 ```

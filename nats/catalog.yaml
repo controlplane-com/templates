@@ -1,0 +1,67 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: NATS
+category: messaging
+topology: multi-location
+
+summary: >-
+  A NATS server cluster, three servers in one location by default, with optional JetStream
+  persistence on per-server volumes for streams, key-value and object storage. List several GVC
+  locations to run one cluster per location, joined into a super cluster over gateways; clients
+  can also connect over WebSocket. No authentication is configured by default. The pick for
+  low-latency pub/sub, request-reply and queue groups between services, including across regions.
+
+keywords:
+  - jetstream
+  - pub/sub
+  - request-reply
+  - queue groups
+  - message bus
+  - message broker
+  - super cluster
+  - gateways
+  - multi-region messaging
+  - jetstream key-value
+  - jetstream object store
+  - streams
+  - websocket
+  - low latency messaging
+  - nats server
+  - event streaming
+
+useCases:
+  - Pub/sub and request-reply messaging between microservices
+  - Distribute work across consumers with queue groups
+  - Persist streams and replay messages with JetStream
+  - Connect services in several regions through one message bus
+  - Push messages to browsers and edge clients over WebSocket
+
+alternativeTo:
+  - Synadia Cloud
+  - Google Cloud Pub/Sub
+  - Amazon SNS
+  - Amazon SQS
+  - Azure Service Bus
+
+compatibleWith: [nats]
+
+pickInsteadIf:
+  - need: Kafka API compatibility for existing Kafka clients, connectors and tooling
+    template: kafka
+  - need: AMQP 0-9-1 clients with exchange and routing-key based delivery
+    template: rabbitmq
+  - need: an HTTP task queue that calls your endpoints with retries and rate limits
+    template: cpln-task-runner
+
+related:
+  - template: debezium-server
+    relation: companion
+    note: Streams database change events into NATS JetStream subjects
+
+prerequisites:
+  - kind: other
+    valuesPath: locations
+    required: true
+    description: Set locations to locations your GVC already has (default aws-us-east-1); servers in a location the GVC lacks never start.

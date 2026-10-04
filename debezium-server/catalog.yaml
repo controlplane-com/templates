@@ -1,0 +1,99 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Debezium Server
+category: messaging
+topology: single
+
+summary: >-
+  A standalone Debezium Server that captures row-level changes from PostgreSQL, MySQL, MongoDB,
+  SQL Server or Oracle and publishes them to Kafka, Redis Streams, NATS JetStream, HTTP, Amazon
+  Kinesis, Google Cloud Pub/Sub, Apache Pulsar or Azure Event Hubs, without Kafka Connect. Offsets
+  are kept on a volume, in Redis or in a database, and events can be JSON, Avro or Protobuf. It
+  deploys neither the source database nor the sink: pick it to add change data capture to systems
+  you already run.
+
+keywords:
+  - cdc
+  - change data capture
+  - logical replication
+  - replication slot
+  - wal
+  - binlog
+  - postgres cdc
+  - mysql cdc
+  - mongodb cdc
+  - sql server cdc
+  - oracle cdc
+  - database change events
+  - database changes
+  - kafka sink
+  - redis streams
+  - nats jetstream
+  - kinesis
+  - pub/sub
+  - event hubs
+  - pulsar
+  - webhooks
+  - avro
+  - protobuf
+
+useCases:
+  - Stream every insert, update and delete from Postgres or MySQL into Kafka topics
+  - Publish database changes to Redis Streams, NATS or a webhook without running Kafka Connect
+  - Feed database changes into Amazon Kinesis, Google Cloud Pub/Sub or Azure Event Hubs
+  - Keep a search index, cache or warehouse in sync with an operational database
+  - Trigger event-driven services from database row changes
+
+alternativeTo:
+  - AWS Database Migration Service
+  - Google Cloud Datastream
+  - Fivetran
+  - Striim
+  - Estuary Flow
+  - Airbyte
+
+pickInsteadIf:
+  - need: a new Postgres, a Kafka cluster and the CDC connector between them in one install
+    template: cdc-pipeline
+
+related:
+  - template: kafka
+    relation: companion
+    note: Kafka cluster that receives the change events
+  - template: redpanda
+    relation: companion
+    note: Kafka-compatible cluster that receives the change events
+  - template: nats
+    relation: companion
+    note: NATS JetStream as the change event sink
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [sourcePassword]
+    valuesPath: credentialsSecretName
+    required: true
+    description: Connector credentials. sourcePassword is the source DB password; add the sink, offset-store or schema-registry keys your config uses (README). Missing secret leaves it waiting.
+  - kind: other
+    valuesPath: source.database.hostname
+    required: true
+    description: A reachable source database prepared for CDC (Postgres wal_level=logical, MySQL ROW binlog) and a user with replication rights; otherwise no changes are emitted.
+  - kind: other
+    valuesPath:
+      - sink.kafka.bootstrapServers
+      - sink.redis.address
+      - sink.nats.url
+      - sink.http.url
+      - sink.kinesis.streamName
+      - sink.pubsub.projectId
+      - sink.pulsar.serviceUrl
+      - sink.eventhubs.hubName
+    required: true
+    description: An existing sink for the change events, Kafka by default; this template does not deploy one.
+  - kind: cloud-account
+    valuesPath: [sink.kinesis.cloudAccount.name, sink.pubsub.cloudAccount.name]
+    required: false
+    when: sink.type kinesis or pubsub with cloudAccount.enabled
+    description: Control Plane cloud account for AWS or GCP, with IAM permission to write to the Kinesis stream or Pub/Sub topic.

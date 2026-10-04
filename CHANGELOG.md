@@ -3,6 +3,7 @@
 High-level, user-facing catalog changes by month: new templates and notable version updates, one line each. Feeds the marketplace "What's New" section. Maintained by the template pipeline at ship time (entry added when a template or version merges); internal tooling changes are not listed.
 
 ## 2026-10
+- **tidb 2.1.0** — multi-location installs now come up reliably and keep serving through the loss of a location. Fixes a cold-start race between PD and TiKV, a TiDB server readiness check that restarted every SQL server at once when TiKV lost quorum, and a PD deadlock when every location restarted together during an upgrade. Each location's `replicas` is split into `tikvReplicas` and `serverReplicas`, so you can add SQL servers without adding storage, and an optional **ProxySQL** pooler (`proxysql.enabled`) keeps clients connected through a server failure. Upgrading from 2.0.0 requires replacing `replicas` with the two new keys (the chart refuses the old one)
 - **ess 2.1.1** — bumps the syncer image to v2.0.2, picking up dependency security updates (including multer, axios, js-yaml, brace-expansion and uuid). No configuration changes
 
 ## 2026-09

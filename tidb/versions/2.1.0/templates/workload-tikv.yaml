@@ -34,9 +34,15 @@ spec:
               do if curl -sf --max-time 4 "http://$endpoint/pd/health" | grep -q '"health":[[:space:]]*true';
               then exit 0; fi; done;
               echo "no healthy PDs"; exit 1
-        failureThreshold: 10
+        {{- /*
+          The derived startup window is about initialDelaySeconds + 30 x
+          periodSeconds (failureThreshold does not count; see workload-server.yaml).
+          20 s periods give 610 s, covering the startup script's 600 s wait for a
+          stable PD; failureThreshold 5 keeps the steady-state window at 100 s.
+        */}}
+        failureThreshold: 5
         initialDelaySeconds: 10
-        periodSeconds: 10
+        periodSeconds: 20
         successThreshold: 1
         timeoutSeconds: 5
       volumes:

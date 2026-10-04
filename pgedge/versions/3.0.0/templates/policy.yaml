@@ -11,11 +11,8 @@ bindings:
 targetKind: secret
 targetLinks:
   - //secret/{{ include "pgedge.secretStartup.name" . }}
-  - //secret/{{ include "pgedge.secretPgbouncerConfig.name" . }}
   {{- /* the user's prerequisite credentials secret */}}
   - //secret/{{ .Values.postgres.credentialsSecretName }}
-  - //secret/{{ include "pgedge.secretProxyStartup.name" . }}
   {{- if .Values.backup.enabled }}
   - //secret/{{ include "pgedge.secretConfig.name" . }}
-  - //secret/{{ include "pgedge.secretBackupScript.name" . }}
   {{- end }}

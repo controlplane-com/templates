@@ -11,11 +11,12 @@ spec:
       image: {{ .Values.proxy.image | quote }}
       command: "/bin/sh"
       args:
-        - "/proxy/start.sh"
+        - "-c"
+        - {{- include "pgedge.inlineScript" (include "pgedge.script.proxy" .) | nindent 10 }}
       env:
         # The pgsql-check username comes from the prerequisite credentials secret
         # via env — a cpln:// reference only resolves in an env var, never inside
-        # the config file the start.sh writes.
+        # the config file the start script writes.
         - name: PG_CHECK_USER
           value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.username
         {{- include "pgedge.locationEnv" . | nindent 8 }}
@@ -29,10 +30,6 @@ spec:
           protocol: http
         - number: 8405
           protocol: http
-      volumes:
-        - path: /proxy/start.sh
-          recoveryPolicy: retain   # API backfill, declared so rendered == stored
-          uri: cpln://secret/{{ include "pgedge.secretProxyStartup.name" . }}.payload
       # "haproxy is running", deliberately NOT "has a healthy node": PgBouncer's own
       # readiness already reports backend health, and a backend-aware probe here
       # would restart-loop the proxy during a cluster-wide outage. The stats page
@@ -46,7 +43,7 @@ spec:
         initialDelaySeconds: 5
         periodSeconds: 10
         timeoutSeconds: 3
-        failureThreshold: 12   # start.sh waits at most 60 s for the local node first
+        failureThreshold: 12   # the start script waits at most 60 s for the local node first
         successThreshold: 1
       livenessProbe:
         httpGet:

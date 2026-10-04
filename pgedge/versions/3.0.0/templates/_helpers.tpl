@@ -29,31 +29,10 @@ pgEdge Secret Startup Name
 {{- end }}
 
 {{/*
-pgEdge HAProxy Startup Secret Name
-*/}}
-{{- define "pgedge.secretProxyStartup.name" -}}
-{{- printf "%s-pgedge-proxy-startup" .Release.Name }}
-{{- end }}
-
-{{/*
 pgEdge Secret Database Config Name
 */}}
 {{- define "pgedge.secretConfig.name" -}}
 {{- printf "%s-pgedge-config" .Release.Name }}
-{{- end }}
-
-{{/*
-pgEdge PgBouncer Startup Secret Name
-*/}}
-{{- define "pgedge.secretPgbouncerConfig.name" -}}
-{{- printf "%s-pgbouncer-config" .Release.Name }}
-{{- end }}
-
-{{/*
-pgEdge Backup/Restore Script Secret Name
-*/}}
-{{- define "pgedge.secretBackupScript.name" -}}
-{{- printf "%s-pgedge-backup-script" .Release.Name }}
 {{- end }}
 
 {{/*
@@ -315,4 +294,16 @@ against a different password.
 {{- if not .Values.postgres.credentialsSecretName -}}
 {{- fail "pgedge: postgres.credentialsSecretName is required — it names the `dictionary` secret holding `username`, `password` and `database`. Create that secret BEFORE installing; see Prerequisites in the README." -}}
 {{- end -}}
+{{- end -}}
+
+
+{{/*
+Render a script for a container arg. The platform, like Kubernetes, expands
+$(VAR) and turns $$ into $ inside container args (measured 2026-10-04: even inside
+single quotes). Doubling every $ makes the shell receive the script byte for byte.
+A |- block scalar: the first line is "|-", so heredoc terminators keep column 0.
+*/}}
+{{- define "pgedge.inlineScript" -}}
+|-
+{{ . | replace "$" "$$" | indent 2 }}
 {{- end -}}

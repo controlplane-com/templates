@@ -8,10 +8,11 @@ spec:
   containers:
     - name: pgbouncer
       image: {{ .Values.pgbouncer.image | quote }}
-      # The image supplies only the binary; start.sh writes the config and runs it.
+      # The image supplies only the binary; the inline start script writes the config and runs it.
       command: "/bin/sh"
       args:
-        - "/pgbouncer/start.sh"
+        - "-c"
+        - {{- include "pgedge.inlineScript" (include "pgedge.script.pgbouncer" .) | nindent 10 }}
       env:
         - name: PG_USERNAME
           value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.username
@@ -25,10 +26,6 @@ spec:
       ports:
         - number: 5432
           protocol: tcp
-      volumes:
-        - path: /pgbouncer/start.sh
-          recoveryPolicy: retain
-          uri: cpln://secret/{{ include "pgedge.secretPgbouncerConfig.name" . }}.payload
       # Real protocol bytes, never a bare port check (the mesh sidecar completes TCP
       # handshakes). -t bounds each exec so the probe can never hang. Half 1: this
       # PgBouncer answers. Half 2: this location's HAProxy has a healthy node ANYWHERE

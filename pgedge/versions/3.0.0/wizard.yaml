@@ -164,6 +164,15 @@ steps:
             label: Keep snapshots for
             required: true
             placeholder: 7d
+        rules:
+          - rule: >-
+              self.volumeset.snapshots.schedule == null || self.volumeset.snapshots.schedule == '' ||
+              self.volumeset.snapshots.schedule.trim().matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$')
+            mirrors: pgedge.validateSnapshots
+            paths: [volumeset.snapshots.schedule]
+            message: >-
+              Snapshots cannot run more often than hourly: use a single fixed minute, for example
+              "0 3 * * *" for daily at 03:00 UTC.
       - id: autoscaling
         title: Grow storage automatically
         toggle: volumeset.autoscaling.enabled

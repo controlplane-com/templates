@@ -231,6 +231,20 @@ only surfaces as a crash-looping pooler -- catch them at render instead.
 {{- end -}}
 
 {{/*
+The platform rejects volume snapshot schedules more frequent than hourly, at
+apply time only -- the release would be left half-installed. A schedule runs at
+most hourly when its minute field is a single fixed minute.
+*/}}
+{{- define "pgedge.validateSnapshots" -}}
+{{- $s := toString .Values.volumeset.snapshots.schedule -}}
+{{- if $s -}}
+{{- if not (regexMatch "^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$" (trim $s)) -}}
+{{- fail (printf "pgedge: volumeset.snapshots.schedule %q must be a 5-field cron with a single fixed minute (snapshots cannot run more often than hourly), e.g. \"0 3 * * *\"; use \"\" to turn snapshots off" $s) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Single aggregate validator. Invoked once, from identity.yaml, which is
 unconditionally rendered -- so `is validation still wired up?` is one grep.
 */}}
@@ -244,6 +258,7 @@ unconditionally rendered -- so `is validation still wired up?` is one grep.
 {{- include "pgedge.validateBackupConfig" . -}}
 {{- include "pgedge.validateCredentials" . -}}
 {{- include "pgedge.validatePgbouncer" . -}}
+{{- include "pgedge.validateSnapshots" . -}}
 {{- end -}}
 
 {{/*

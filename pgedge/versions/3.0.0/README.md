@@ -78,7 +78,11 @@ The pgEdge nodes, their volumes and their data are kept.
 3. `helm upgrade` to 3.0.0. Every pgEdge node restarts once (a ~1–2 minute write interruption), and
    the `-pgcat` workload is replaced by `-pgbouncer`. If `-pgbouncer` or `-pgedge-proxy` then stays not
    ready and `cpln workload get-deployments` reports that the identity *is not allowed to reveal* its
-   startup secret, the new permission has not reached it yet; FORCE_REDEPLOY_REMEDY
+   startup secret, the new permission has not reached it yet. It clears by itself in about 10 minutes, or
+   wait about 5 minutes after the upgrade and run
+   `cpln workload force-redeployment RELEASE_NAME-pgbouncer --gvc GVC_NAME` (and the same for
+   `RELEASE_NAME-pgedge-proxy`) — it is ready within about a minute. A redeploy sooner than that can hit
+   the same refusal.
 4. Point applications at `RELEASE_NAME-pgbouncer.GVC_NAME.cpln.local:5432`.
 
 `pgcat.routing: single-writer` has no equivalent: every location now writes to its own node, which
@@ -166,7 +170,7 @@ The first entry of `locations` is special: it is the only location the backup cr
 volumeset:
   capacity: 10  # Initial capacity in GiB (minimum is 10)
   snapshots:
-    schedule: "0 3 * * *"    # volume snapshots of every node, daily at 3am UTC; "" turns them off
+    schedule: "0 3 * * *"    # volume snapshots of every node, daily at 3am UTC; at most hourly; "" turns them off
     retentionDuration: 7d    # how long each snapshot is kept
   autoscaling:
     enabled: false  # Set to true to enable autoscaling

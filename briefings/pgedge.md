@@ -18,7 +18,8 @@ HAProxy failover tier is always on, and backups gained a one-command restore.**
 ## Key knobs (shipped defaults)
 `locations` 3×3 · `postgres.credentialsSecretName` (dictionary: username/password/database) · `pgbouncer.poolMode`
 transaction · `defaultPoolSize` 20 · `maxClientConn` 1000 · `pgbouncer.min/maxReplicas` 2/4 · `proxy` 2/2 ·
-`internal_access.type` same-gvc · `backup.enabled` false, `memory` 256Mi, `activeDeadlineSeconds` 21600.
+`internal_access.type` same-gvc · `volumeset.snapshots` daily 03:00 UTC / 7d · `backup.enabled` false, `memory`
+256Mi, `activeDeadlineSeconds` 21600.
 
 ## Measured resilience (test rounds 2–3, AWS east/west + GCP)
 - PgBouncer or HAProxy replica down / rolling restart: 0 failed connects. One race seen once: an in-flight statement
@@ -35,6 +36,11 @@ transaction · `defaultPoolSize` 20 · `maxClientConn` 1000 · `pgbouncer.min/ma
 - **2.x → 3.0.0:** client hostname changes (`-pgcat` → `-pgbouncer`); render refuses leftover `pgcat`,
   `proxy.enabled: false`, `pgbouncer.routing` or a pgcat image. Data tier kept; every node restarts (~65 s). Old
   `.sql.gz` backups are not restorable by the job — take a backup after upgrading.
+- **2.0.x/2.1.0 → 3.0.0 reveal stall (reproduced 3/3 on 2.0.1):** the new tiers are refused their startup secrets
+  for ~10 min although the policy is already correct (authorization edge cache). README remedy, measured: wait ~5 min,
+  then force-redeploy `-pgbouncer` and `-pgedge-proxy` → ready in ~40 s; sooner can hit the same refusal.
+- **Volume snapshots never ran before 3.0.0** (no schedule rendered; README claimed daily). Now scheduled; the
+  platform rejects anything more frequent than hourly at apply, so the chart and wizard refuse it at render.
 - **Never `helm upgrade` 1.x → 2.x+:** it deletes the GVC 1.x created (proven, 6 s, "upgraded successfully").
 - **HAProxy DNS holds are load-bearing:** `hold obsolete 30s` (a late-registered node is adopted in ≤ 34 s; 5m made it
   ~5 min) and 5m failure holds (a DNS blip keeps the last good address). No backticks in the config heredoc.

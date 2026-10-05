@@ -299,6 +299,23 @@ A fresh install takes about 5 minutes to accept connections in one location, and
 when its locations span regions or clouds. The TiDB servers wait for TiKV and then create the system
 tables, and each step crosses the network between locations.
 
+## Resiliency
+
+The template handles failures inside a location. Surviving the loss of a whole location also needs
+your application running in more than one location.
+
+| Failure | What keeps the database serving | What your application needs |
+|---|---|---|
+| A TiDB server | The other servers in that location: `serverReplicas: 2` or more. Add ProxySQL for zero failed queries | Retry the statement that failed (about 10 s of failures with `serverReplicas: 1`) |
+| A ProxySQL replica | The other replicas in that location (`proxysql.replicas: 2` by default) | Retry a statement that was in flight |
+| A TiKV or PD node | Raft elects a new leader: at least 3 TiKV nodes and `pdReplicas: 3` (the default) | A client timeout of 30 s or more, or retry — writes pause briefly |
+| A whole location | The other locations keep reading and writing. Needs the [three-location layout](#example-surviving-the-loss-of-a-location-with-zero-downtime) | **Run in at least 2 of the listed locations**, behind a public endpoint that spans them |
+
+A client reaches only the TiDB servers and ProxySQL in its own location, so clients in a lost
+location cannot fail over to another one; your application's other locations take over instead. A
+workload's [canonical endpoint](https://docs.controlplane.com/reference/workload/general#canonical-endpoint-global)
+already sends each request to the nearest healthy location.
+
 ## Backing Up
 
 Set a schedule and point `backup` at your bucket. `backup.location` must be one of `locations` —
@@ -400,6 +417,7 @@ into a scratch release before you need one.
 
 - **Never `helm upgrade` a 1.x release onto 2.0.0** — it deletes the GVC the 1.x release created and everything inside it. Install a new release instead; see [Migrating from 1.x](#migrating-from-1x).
 - **Every location in `locations` must already exist in the GVC.** A location the GVC lacks is accepted silently by the platform; PD refuses to bootstrap and says so in its logs. A GVC location you did *not* list simply runs nothing.
+- **Surviving a location loss needs your application in at least 2 locations** — clients reach only their own location's TiDB servers. See [Resiliency](#resiliency).
 - **PD's replication factor is fixed when the cluster first bootstraps.** It is the number of TiKV nodes you configure, capped at 3, and PD persists it — scaling TiKV up later does not raise it. Start with at least 3 TiKV nodes if you ever want 3-way replication.
 - **There is no public access to the MySQL port.** Reach the server over internal GVC DNS, or with `cpln port-forward RELEASE_NAME-server 4000:4000 --gvc GVC_NAME`. (`exposeServer` was removed in 2.0.0: it opened public inbound without publishing port 4000, leaving TiDB's unauthenticated status port as the only thing served.)
 - **The database-init job is a cron that runs on a schedule, and that is intentional.** It fast-exits once the database exists (measured: ~200-300 ms), so every run after the first is a no-op; `autoCreateDatabase.schedule` only controls how soon after install the database appears. Set `autoCreateDatabase.deployInitWorkload: false` and upgrade if you would rather remove it entirely once initialised.

@@ -280,6 +280,8 @@ The tidb-server workload takes no public inbound traffic. Reach it over internal
 
 ## Connecting
 
+> **Your application must retry — build it in from the start.** Restarts, upgrades and failovers are routine, and each one fails a few connections or statements for a few seconds even though the database stays up. Retry a failed connection with a short backoff (about 0.5–1 s) for 10–15 s, and retry a failed statement, making retried writes idempotent. Connection pools usually replace a broken connection but do not re-run the failed query for you. Details: [Resiliency](#resiliency).
+
 | What | Where | Credentials |
 |---|---|---|
 | MySQL protocol (applications) | `RELEASE_NAME-server.GVC_NAME.cpln.local:4000` | `user` / `password` from the credentials secret; database `db` |
@@ -424,6 +426,7 @@ into a scratch release before you need one.
 
 ## Important Notes
 
+- **Your application must retry failed connections and statements** — without it, every upgrade and replica restart shows up as errors in your app. Retry with a short backoff for 10–15 s and make retried writes idempotent; see [Resiliency](#resiliency).
 - **Never `helm upgrade` a 1.x release onto 2.0.0** — it deletes the GVC the 1.x release created and everything inside it. Install a new release instead; see [Migrating from 1.x](#migrating-from-1x).
 - **Every location in `locations` must already exist in the GVC.** A location the GVC lacks is accepted silently by the platform; PD refuses to bootstrap and says so in its logs. A GVC location you did *not* list simply runs nothing.
 - **Surviving a location loss needs your application in at least 2 locations** — clients reach only their own location's TiDB servers. See [Resiliency](#resiliency).

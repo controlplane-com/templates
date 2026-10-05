@@ -260,20 +260,19 @@ from every workload type.
 
 ## Resiliency
 
-The template handles failures inside a location. Surviving the loss of a whole location also needs
-your application running in more than one location.
+Your application needs no failover logic for anything inside a location: the template handles it.
+The one thing it cannot handle is the loss of a whole location, because a client reaches only the
+PgBouncer in its own location.
 
-| Failure | What keeps the database serving | What your application needs |
+| Failure | Handled by | What it needs |
 |---|---|---|
-| A pgEdge node | HAProxy moves to another local node, or to a remote location if every local node is down. Use `replicas: 3` per location in production | Retry the statement that failed (a few seconds of failed connects) |
-| A PgBouncer or HAProxy replica | The other replicas in that location (2 of each by default) | Retry a statement that was in flight |
-| A whole location | The other locations keep reading and writing. Needs at least 2 locations | **Run in at least 2 of the listed locations**, behind a public endpoint that spans them |
+| A pgEdge node | The template (HAProxy moves to another local node, or to a remote location if every local node is down) | `replicas: 3` per location in production. New connections fail for about 3 seconds while HAProxy switches |
+| A PgBouncer or HAProxy replica | The template | 2 replicas of each per location (the default) |
+| A whole location | The template for the database; **your application** for its clients | At least 2 locations, and **your application running in at least 2 of them** behind a public endpoint that spans them. A workload's [canonical endpoint](https://docs.controlplane.com/reference/workload/general#canonical-endpoint-global) already sends each request to the nearest healthy location |
 
-A client reaches only the PgBouncer in its own location, so clients in a lost location cannot fail
-over to another one; your application's other locations take over instead. A workload's
-[canonical endpoint](https://docs.controlplane.com/reference/workload/general#canonical-endpoint-global)
-already sends each request to the nearest healthy location. Spock replicates asynchronously, so
-writes the lost location had not yet replicated reach the others when it returns.
+As with any database, a statement that was running when a process failed returns an error: use a
+driver or pool that reconnects, and retry the statement. Spock replicates asynchronously, so writes
+a lost location had not yet replicated reach the others when it returns.
 
 ## Schema Changes (DDL)
 

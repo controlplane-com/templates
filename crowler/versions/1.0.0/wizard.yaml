@@ -1,0 +1,554 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: The CROWler
+
+# Stateful tiers and a bundled database with no location handling: every GVC location would run its
+# own crawler against its own, separate database.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.4.1
+    title: Bundled PostgreSQL
+    after: database
+    steps:
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
+      - { id: backup, title: Database backups }
+    exclude:
+      # CROWler creates this secret itself (templates/secret-db.yaml) and names it in the Database step below.
+      - config.credentialsSecretName
+      # The CROWler tiers connect to <release>-postgres directly: a pooler would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      image:
+        help: >-
+          The data directory is specific to a major version: a different major on an existing volume
+          does not start.
+      internalAccess.type:
+        description: >-
+          The CROWler engine, API and events manager connect to the database like any other workload:
+          keep Same GVC, or add them under Allowed workloads.
+      backup.enabled:
+        help: Adds one cron workload that runs `pg_dumpall` and uploads a gzipped dump to the bucket.
+      backup.image:
+        description: Keep a 17.x.x tag, which matches the bundled Postgres 17.
+
+steps:
+  - id: engine
+    title: Crawl engine
+    description: The crawl engines and the pool of Chromium browser nodes they crawl through.
+    docs: "#engine-and-browser-pool"
+    sections:
+      - title: Engine
+        fields:
+          - path: engine.replicas
+            type: integer
+            label: Engines
+            min: 1
+            required: true
+            suggestions: [1, 2, 3]
+            description: Each engine crawls through its own share of the browser nodes.
+          - path: engine.resources
+            type: resources
+            label: Engine resources
+            required: true
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+            description: Per engine replica.
+          - path: images.engine
+            type: string
+            format: image
+            label: Engine image
+            required: true
+            advanced: true
+            description: The engine, API, events and schema loader images come from one CROWler release.
+      - title: Browser pool
+        fields:
+          - path: vdi.replicas
+            type: integer
+            label: Browser nodes
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 5]
+            description: One Chromium per replica, so this is the crawl concurrency.
+          - path: vdi.resources
+            type: resources
+            label: Browser node resources
+            required: true
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+            description: Per browser node. Chromium under load needs the default 2Gi minimum memory or more.
+          - type: note
+            severity: warning
+            when: self.vdi.vncSecretName != ''
+            text: >-
+              The VNC password secret must exist **before** you install. If it is missing, the browser pool
+              never starts and `cpln logs` shows nothing at all.
+          - path: vdi.vncSecretName
+            type: ref
+            label: VNC password secret
+            description: >-
+              An opaque secret holding a VNC password, to watch the browser while it crawls. Leave empty to
+              run no VNC or noVNC at all.
+            help: >-
+              With it set, run `cpln port-forward <release>-crowler-vdi 7900:7900 --gvc <gvc>` and open
+              `http://localhost:7900`. VNC uses only the first 8 characters of the password. The browser
+              nodes are never public.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-crowler-vnc-password'"
+          - path: images.vdi
+            type: string
+            format: image
+            label: Browser node image
+            required: true
+            advanced: true
+            description: Selenium standalone Chromium, versioned separately from CROWler.
+    rules:
+      - rule: self.vdi.replicas >= self.engine.replicas
+        mirrors: crowler.validate
+        paths: [vdi.replicas]
+        messageExpression: >-
+          'There are ' + string(self.engine.replicas) + ' engines but only ' + string(self.vdi.replicas) +
+          ' browser nodes. Each engine needs at least one browser node of its own, or it crawls nothing.'
+        message: >-
+          Each engine needs at least one browser node of its own, or it crawls nothing. Use at least as
+          many browser nodes as engines.
+      - rule: self.engine.replicas >= 1
+        mirrors: crowler.validate
+        paths: [engine.replicas]
+        message: Run at least one engine.
+      - rule: >-
+          self.images.api.split(':')[size(self.images.api.split(':')) - 1] ==
+          self.images.engine.split(':')[size(self.images.engine.split(':')) - 1] &&
+          self.images.events.split(':')[size(self.images.events.split(':')) - 1] ==
+          self.images.engine.split(':')[size(self.images.engine.split(':')) - 1] &&
+          self.images.db.split(':')[size(self.images.db.split(':')) - 1] ==
+          self.images.engine.split(':')[size(self.images.engine.split(':')) - 1]
+        severity: info
+        paths: [images.engine]
+        message: >-
+          The engine, API, events and schema loader images have different tags. They come from one
+          CROWler release; keep their tags the same.
+
+  - id: crawler
+    title: Crawler behaviour
+    description: How often sources are crawled, how far each crawl goes, and the configuration file.
+    docs: "#crawler-behaviour"
+    sections:
+      - fields:
+          - path: crawler.queryTimer
+            type: integer
+            label: Poll for new sources every
+            unit: seconds
+            min: 5
+            required: true
+            suggestions: [10, 30, 60]
+          - path: crawler.crawlingInterval
+            type: string
+            label: Re-crawl a successful source every
+            required: true
+            suggestions: ["1 day", "3 days", "7 days"]
+          - path: crawler.crawlingIfError
+            type: string
+            label: Retry a failed crawl after
+            required: true
+            suggestions: ["15 minutes", "1 hour", "1 day"]
+          - path: crawler.processingTimeout
+            type: string
+            label: Longest crawl
+            required: true
+            suggestions: ["1 hour", "6 hours", "1 day"]
+            description: >-
+              Also how long a crawl interrupted by an engine restart waits before it is retried. Crawls
+              that run longer are cut off and marked as errors.
+          - path: crawler.maxDepth
+            type: integer
+            label: Link-following depth
+            min: 0
+            required: true
+            suggestions: [1, 2, 3, 5]
+            description: 0 follows links without a depth limit.
+          - path: crawler.maxLinks
+            type: integer
+            label: Links followed per page
+            min: 0
+            required: true
+            description: 0 follows every link.
+          - path: crawler.debugLevel
+            type: integer
+            label: Debug level
+            min: 0
+            required: true
+            description: 0 is silent; higher values log more.
+          - path: timezone
+            type: string
+            label: Time zone
+            required: true
+            placeholder: Europe/Berlin
+            description: The `TZ` of every CROWler container.
+      - title: Your own configuration file
+        fields:
+          - type: note
+            severity: warning
+            when: self.config.existingSecretName != ''
+            text: >-
+              The configuration secret must exist **before** you install. If it is missing, the engine, API
+              and events manager never start and `cpln logs` shows nothing at all.
+          - path: config.existingSecretName
+            type: ref
+            label: Configuration secret
+            description: >-
+              An opaque secret whose payload is a complete CROWler `config.yaml`. It replaces the rendered
+              file, so the crawler settings above and the API and events options no longer apply. Leave
+              empty to use the rendered file.
+            help: >-
+              The file may reference `${CROWLER_DB_USER}`, `${CROWLER_DB_PASSWORD}` and
+              `${CROWLER_LOCATION}`.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-crowler-config'"
+    rules:
+      - rule: self.crawler.queryTimer >= 5
+        mirrors: crowler.validate
+        paths: [crawler.queryTimer]
+        message: Poll for new sources no more often than every 5 seconds.
+      - rule: self.crawler.maxDepth >= 0
+        mirrors: crowler.validate
+        paths: [crawler.maxDepth]
+        message: The link-following depth must be 0 (no limit) or more.
+
+  - id: api
+    title: API and events
+    description: The search and source API, the events manager, and who can reach them.
+    docs: "#api-and-events"
+    sections:
+      - title: API
+        fields:
+          - path: api.replicas
+            type: integer
+            label: API replicas
+            min: 1
+            required: true
+            suggestions: [1, 2, 3]
+          - path: api.enableConsole
+            type: boolean
+            label: Source management endpoints
+            description: "`/v1/source/add` and `/v1/source/statuses`, where sites to crawl are added."
+          - path: api.enableApiDocs
+            type: boolean
+            label: API docs
+            description: "`/v1/openapi.json` and `/v1/docs`."
+          - path: api.resources
+            type: resources
+            label: API resources
+            required: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+            description: Per API replica.
+          - path: images.api
+            type: string
+            format: image
+            label: API image
+            required: true
+            advanced: true
+        rules:
+          - rule: self.api.replicas >= 1
+            mirrors: crowler.validate
+            paths: [api.replicas]
+            message: Run at least one API replica.
+      - title: Events manager
+        fields:
+          - path: events.replicas
+            type: integer
+            label: Events manager replicas
+            min: 1
+            required: true
+            suggestions: [1, 2, 3]
+            description: Replica 0 runs the scheduled housekeeping.
+          - path: events.enableApiDocs
+            type: boolean
+            label: Events API docs
+            description: "`/v1/openapi.json` and `/v1/docs`."
+          - path: events.resources
+            type: resources
+            label: Events manager resources
+            required: true
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+            description: Per events manager replica.
+          - path: images.events
+            type: string
+            format: image
+            label: Events manager image
+            required: true
+            advanced: true
+        rules:
+          - rule: self.events.replicas >= 1
+            mirrors: crowler.validate
+            paths: [events.replicas]
+            message: Run at least one events manager replica.
+      - title: Public access
+        description: >-
+          The API has no authentication at this version: anyone who can reach it can add sources and read
+          everything crawled. Keep it private and reach it with `cpln port-forward`.
+        docs: "#connecting"
+        fields:
+          - path: publicAccess.api
+            type: boolean
+            label: Public API endpoint
+            description: The API on its own `*.cpln.app` HTTPS endpoint.
+          - path: publicAccess.events
+            type: boolean
+            label: Public events endpoint
+            description: The events API on its own `*.cpln.app` HTTPS endpoint.
+        rules:
+          - rule: "!self.publicAccess.api"
+            severity: info
+            paths: [publicAccess.api]
+            message: >-
+              The public API has no authentication: anyone on the internet can add sources and read
+              everything crawled.
+      - title: Internal access
+        docs: /reference/workload/firewall
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can call the API and events manager
+            widget: cards
+            required: true
+            description: >-
+              Workloads inside Control Plane. Firewall changes take from 30 seconds to a few minutes to take
+              effect.
+            options:
+              - { value: none, label: Nobody, description: No workload can call them. }
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+            rules:
+              - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+                mirrors: crowler.validate
+                message: Choose none, same-gvc, same-org or workload-list.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            required: true
+            when: self.internalAccess.type == 'workload-list'
+            widget: tags
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+            rules:
+              - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+                mirrors: crowler.validate
+                message: List at least one workload, or choose another setting.
+
+  - id: telemetry
+    title: Telemetry
+    description: Optional crawl metrics and browser traces, on top of the platform's built-in metrics and tracing.
+    docs: "#telemetry-and-access"
+    sections:
+      - id: pushgateway
+        title: Crawl metrics (Pushgateway)
+        toggle: pushgateway.enabled
+        description: >-
+          The engines push crawl counters to a Pushgateway, which the platform scrapes into its built-in
+          metrics.
+        fields:
+          - path: images.pushgateway
+            type: string
+            format: image
+            label: Pushgateway image
+            required: true
+            advanced: true
+          - path: pushgateway.resources
+            type: resources
+            label: Pushgateway resources
+            required: true
+            advanced: true
+        rules:
+          - rule: self.config.existingSecretName == ''
+            severity: info
+            paths: [pushgateway.enabled]
+            message: >-
+              Your own configuration file replaces the rendered one, so the engines push to the Pushgateway
+              only if that file points them at it.
+      - id: jaeger
+        title: Browser traces (Jaeger)
+        toggle: jaeger.enabled
+        description: >-
+          Browser-session traces from the browser pool, kept in memory by a Jaeger all-in-one workload with
+          its UI on port 16686.
+        fields:
+          - path: images.jaeger
+            type: string
+            format: image
+            label: Jaeger image
+            required: true
+            advanced: true
+          - path: jaeger.resources
+            type: resources
+            label: Jaeger resources
+            required: true
+            advanced: true
+
+  - id: database
+    title: Database
+    description: The CROWler app login and the bundled PostgreSQL superuser. CROWler creates both secrets; there is nothing to create first.
+    docs: "#database-credentials-and-postgresql"
+    sections:
+      - fields:
+          - type: note
+            text: >-
+              Both passwords are applied to the database once, when it is first initialized, and the
+              `change-me-…` defaults are used as-is, so change them now.
+      - title: CROWler app login
+        fields:
+          - path: crowlerDb.username
+            type: string
+            label: App database user
+            required: true
+            immutable: The schema loader creates this role once, on the first install.
+            pattern: '^[a-z_][a-z0-9_]{0,62}$'
+            patternMessage: Use lowercase letters, digits and _, starting with a letter or _.
+            description: The non-superuser login the engine, API and events manager use.
+          - path: crowlerDb.password
+            type: string
+            label: App database password
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            pattern: '^[A-Za-z0-9_-]+$'
+            patternMessage: Use only letters, digits, _ and -.
+          - path: images.db
+            type: string
+            format: image
+            label: Schema loader image
+            required: true
+            advanced: true
+            description: Used only for its psql and the CROWler schema.
+        rules:
+          - rule: self.crowlerDb.username != self.postgres.credentials.username
+            mirrors: crowler.validate
+            paths: [crowlerDb.username]
+            message: The app database user must differ from the PostgreSQL superuser; it is a separate login.
+          - rule: oldSelf == null || self.crowlerDb.password == oldSelf.crowlerDb.password
+            severity: info
+            paths: [crowlerDb.password]
+            message: >-
+              The database keeps the app password it was initialized with. Change it inside PostgreSQL
+              first, or the CROWler tiers stop starting after this upgrade.
+      - title: Bundled PostgreSQL superuser
+        fields:
+          - path: postgres.credentials.username
+            type: string
+            label: Superuser
+            required: true
+            immutable: PostgreSQL creates this user once, when its data directory is initialized.
+          - path: postgres.credentials.password
+            type: string
+            label: Superuser password
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            pattern: '^[A-Za-z0-9_-]+$'
+            patternMessage: Use only letters, digits, _ and -.
+          - path: postgres.credentials.database
+            type: string
+            label: Database name
+            required: true
+            immutable: PostgreSQL creates this database once, when its data directory is initialized.
+            pattern: '^[a-z_][a-z0-9_]{0,62}$'
+            patternMessage: Use lowercase letters, digits and _, starting with a letter or _.
+            description: CROWler's schema is loaded here.
+          - path: postgres.config.credentialsSecretName
+            type: string
+            label: Credentials secret name
+            required: true
+            description: The dictionary secret CROWler creates and PostgreSQL reads. Secret names are org-wide.
+        rules:
+          - rule: self.postgres.credentials.username != ''
+            mirrors: crowler.validate
+            paths: [postgres.credentials.username]
+            message: The PostgreSQL superuser is required.
+          - rule: self.postgres.config.credentialsSecretName != ''
+            mirrors: crowler.validate
+            paths: [postgres.config.credentialsSecretName]
+            message: Name the credentials secret CROWler creates for the bundled PostgreSQL.
+          - rule: oldSelf == null || self.postgres.credentials.password == oldSelf.postgres.credentials.password
+            severity: info
+            paths: [postgres.credentials.password]
+            message: >-
+              PostgreSQL keeps the superuser password it was initialized with. Run ALTER ROLE first, or the
+              schema loader cannot log in after this upgrade.
+          - rule: self.postgres.config.credentialsSecretName != 'my-crowler-db-credentials'
+            severity: info
+            paths: [postgres.config.credentialsSecretName]
+            messageExpression: >-
+              'Secret names are org-wide: a release on this name is refused while another release manages
+              that secret. Give each CROWler release its own name, for example ' + context.releaseName +
+              '-crowler-db-credentials.'
+            message: >-
+              Secret names are org-wide: a release on this name is refused while another release manages
+              that secret. Give each CROWler release its own name.
+          - rule: >-
+              !has(self.postgres.config.username) && !has(self.postgres.config.password) &&
+              !has(self.postgres.config.database)
+            paths: [postgres.config.credentialsSecretName]
+            message: >-
+              The bundled PostgreSQL refuses postgres.config.username, postgres.config.password and
+              postgres.config.database. Set them under postgres.credentials, from which CROWler creates the
+              secret, and remove them from postgres.config.
+
+# Rules over the imported values: their issues show on the imported fields' steps.
+rules:
+  - rule: self.postgres.image.startsWith('postgres:17')
+    mirrors: crowler.validate
+    paths: [postgres.image]
+    message: >-
+      Keep the Postgres image on a postgres:17 tag: CROWler's schema loader runs psql 17 against it.
+  - rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"Nobody" also blocks the CROWler engine, API and events manager, which connect to the database like any other workload.'
+  - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: >-
+      ['engine', 'api', 'events'].all(n,
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-crowler-' + n) in
+      self.postgres.internalAccess.workloads)
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: >-
+      'Add ' + ['engine', 'api', 'events'].filter(n,
+      !(('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-crowler-' + n) in
+      self.postgres.internalAccess.workloads)).map(n,
+      '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-crowler-' + n).join(', ') +
+      ', or the CROWler tiers cannot reach their database.'
+    message: >-
+      Add the CROWler engine, API and events manager workloads to the list, or they cannot reach their
+      database.
+
+yamlOnly:
+  - path: postgres.pgbouncer
+    reason: The CROWler tiers connect to <release>-postgres directly, so a PgBouncer in front of it would sit unused.

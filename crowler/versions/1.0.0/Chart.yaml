@@ -8,7 +8,6 @@ appVersion: "2.1.8"
 annotations:
   created: "2026-10-01"
   lastModified: "2026-10-05"
-  category: "automation"
   createsGvc: false
 
 dependencies:

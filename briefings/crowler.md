@@ -3,7 +3,7 @@
 
 ## What it is
 - The CROWler: a self-hosted web crawling and content-discovery platform that drives real Chromium browsers (Selenium) to crawl, index and search sites. Apache-2.0 (permissive open-source license: free, nothing to register or buy).
-- Template `crowler` 1.0.0 → upstream 2.1.8; category `automation`.
+- Template `crowler` 1.0.0 → upstream 2.1.8; catalog category `search` (set in `crowler/catalog.yaml`; Chart.yaml no longer carries a category).
 
 ## Common use cases
 - A private search index over a chosen set of sites (research, market monitoring).

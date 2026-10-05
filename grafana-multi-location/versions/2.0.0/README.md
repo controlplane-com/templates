@@ -49,7 +49,7 @@ live in the shared database. There is no volume, no session affinity and nothing
      --entry database=grafana
    ```
 
-   Read any of them back with `cpln secret reveal <name> -o json` (without `-o json` the output is a table containing no secret data). Use plain identifiers for `username` and
+   Read any of them back with `cpln secret reveal SECRET_NAME -o yaml` (without `-o yaml` the output is a table containing no secret data). Use plain identifiers for `username` and
    `database` — they are used unquoted when the database is created.
 
 3. **Optional secrets**, if you use those features: a `dictionary` secret per entry in
@@ -603,7 +603,7 @@ time; with HA on, `alerting.location` and `alerting.resources` are ignored.
 | App database | `{release}-postgres-proxy.{gvc}.cpln.local:5432` — always the current primary |
 | Alerting Redis (internal only) | `replica-0.{release}-redis.{location}.{gvc}.cpln.local:6379` — alerting HA only |
 | Alerting Sentinel (internal only) | `replica-0.{release}-sentinel.{location}.{gvc}.cpln.local:26379`, master name `mymaster` — alerting HA only |
-| Admin login | `admin.user`, and the password in the secret named by `admin.passwordSecretName` — `cpln secret reveal <name> -o json` |
+| Admin login | `admin.user`, and the password in the secret named by `admin.passwordSecretName` — `cpln secret reveal SECRET_NAME -o yaml` |
 
 ## Important Notes
 

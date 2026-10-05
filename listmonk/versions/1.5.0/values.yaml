@@ -44,8 +44,11 @@ postgres:
   enabled: true
   image: postgres:18 # listmonk requires Postgres 12+
   # Credentials for the bundled database — internal plumbing no human types elsewhere.
-  # Listmonk CREATES the dictionary secret named by config.credentialsSecretName below
-  # out of these three values, so there is nothing for you to create before installing.
+  # Used in BOTH store modes: Listmonk CREATES the dictionary secret named by
+  # config.credentialsSecretName below (default) or postgresHA.config.credentialsSecretName
+  # (HA) out of these three values, so there is nothing for you to create before
+  # installing. Set them before install — changing the password later does not change
+  # it in an existing database.
   credentials:
     username: listmonk
     password: change-me-listmonk-db # change before installing

@@ -10,7 +10,7 @@
 - **PostgreSQL** — the `postgres` template (single instance, PostgreSQL 18) by default, or the `postgres-highly-available` template (3 Patroni replicas, 3 etcd replicas, HAProxy leader endpoint, PostgreSQL 17) as an opt-in.
 - **Volume sets** — Redis AOF at `/data`; local attachment storage at `/app/packages/twenty-server/.local-storage` (*only* in `storage.type: local`).
 - **Identity + policy** — one identity shared by the three workloads, granted `reveal` on exactly the secrets they mount.
-- **Secrets** — template-created dictionary secrets for the bundled Redis password and (single-instance path) the database credentials; the app key and any S3 static keys come from user-created secrets.
+- **Secrets** — template-created dictionary secrets for the bundled Redis password and the database credentials (built from `postgres.credentials.*` in both database modes); the app key and any S3 static keys come from user-created secrets.
 
 ## Prerequisites
 
@@ -24,7 +24,7 @@
 - **(Only for S3 attachment storage)** a bucket on AWS S3 (keyless via a cloud account + IAM policy — static keys are not accepted for AWS) or a MinIO/S3-compatible server with a static-key dictionary secret — see Storage setup.
 - **(Only during a key rotation)** a second opaque secret holding the *previous* app key, referenced via `secrets.fallbackName`.
 - **(Only for database backups)** a bucket on AWS S3, Google Cloud Storage or a MinIO/S3-compatible server, plus a Control Plane cloud account — see Storage setup.
-- The database password is **not** a prerequisite — it is bundled plumbing no human types elsewhere, so this template creates that secret for you from `postgres.credentials.*` (single-instance path) or hands it to `postgres-highly-available` (HA path).
+- The database password is **not** a prerequisite — it is bundled plumbing no human types elsewhere, so this template creates that secret for you from `postgres.credentials.*` in either database mode and hands its name to the active Postgres template.
 
 ## Configuration
 
@@ -125,7 +125,7 @@ redis:
 postgres:
   enabled: true
   image: postgres:18          # PostgreSQL 18 (the HA path below runs 17 — the majors differ)
-  credentials:                # this template builds the DB credential secret from these
+  credentials:                # this template builds the DB credential secret from these — used in BOTH modes
     username: twenty
     password: change-me-twenty-db     # change before install; letters/digits/-/_ only (it is embedded in a URL)
     database: twenty
@@ -152,7 +152,7 @@ Set `postgres.enabled: false` and `postgresHA.enabled: true`. Exactly one databa
 postgresHA:
   enabled: false
   config:
-    credentialsSecretName: my-twenty-db-credentials # see Prerequisites — must exist before install
+    credentialsSecretName: my-twenty-db-credentials # name of the secret this template CREATES from postgres.credentials.*; org-wide, unique per release
   replicas: 3
   resources:
     minCpu: 500m
@@ -200,7 +200,7 @@ Needed for `storage.type: s3` (required when `twenty.replicas > 1`) and for data
 
 ### MinIO / S3-compatible (static keys)
 
-1. Create the bucket on your server (for the in-catalog `minio` template in the same GVC: `http://WORKLOAD_NAME:9000`).
+1. Create the bucket on your server (for the in-catalog `minio` template in the same GVC: `http://WORKLOAD_NAME.GVC_NAME.cpln.local:9000`).
 2. Set `storage.s3.endpoint` to the S3 API address, with scheme and port.
 3. Create a static-key dictionary secret with the server's access/secret keys (for the MinIO template: its `admin.username` / `admin.password`) and set `storage.s3.auth.secretName` to its name:
 
@@ -238,12 +238,12 @@ The backing database template's own README carries the full per-provider walkthr
 
 | What | Where |
 |---|---|
-| Web UI + REST + GraphQL (public) | the workload's canonical `cpln.app` HTTPS endpoint — read it from `status.canonicalEndpoint` in `cpln workload get {release}-twenty -o yaml` |
+| Web UI + REST + GraphQL (public) | the workload's canonical `cpln.app` HTTPS endpoint — read it from `status.canonicalEndpoint` in `cpln workload get {release}-twenty --gvc {gvc} -o yaml` |
 | Health check | `GET /healthz` on the same endpoint |
 | From another workload in the GVC | `http://{release}-twenty.{gvc}.cpln.local:3000` |
 | Redis (internal only) | `{release}-twenty-redis.{gvc}.cpln.local:6379`, password from `redis.auth.password` |
 | Database (internal only) | `{release}-postgres.{gvc}.cpln.local:5432`, or `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432` in HA mode |
-| Database credentials | `username` / `password` / `database` keys of the secret named by `postgres.config.credentialsSecretName` (HA mode: `{release}-postgres-config`) |
+| Database credentials | `username` / `password` / `database` keys of the secret named by `postgres.config.credentialsSecretName` (HA mode: `postgresHA.config.credentialsSecretName`) — `cpln secret reveal SECRET_NAME -o yaml` |
 | First login | there is no seeded account — **the first person to sign up becomes the workspace admin** |
 
 ## Upgrading from 1.0.x
@@ -262,8 +262,23 @@ renames on the single-instance path:
 
 Carrying an old credentials key forward fails the render with the **Postgres template's**
 message, which tells you to create a dictionary secret yourself. Ignore that advice for the
-three credentials keys — this template creates that secret. The `postgresHA` path is
-completely unchanged, including its MinIO backup keys.
+three credentials keys — this template creates that secret. The `postgresHA` path changed in
+1.2.0 — see the next section.
+
+## Upgrading from 1.1.x (highly available path)
+
+1.2.0 moved the HA database to `postgres-highly-available` 2.5.0, which no longer takes
+credentials or MinIO backup keys as values:
+
+| Removed key | Replacement |
+|---|---|
+| `postgresHA.postgres.username` / `.password` / `.database` | `postgres.credentials.username` / `.password` / `.database` — carry your existing values over **unchanged** |
+| `postgresHA.backup.minio.accessKey` / `.secretKey` | `postgresHA.backup.minio.credentialsSecretName` (a dictionary secret you create; MinIO backups only) |
+
+This template builds the HA credentials secret from `postgres.credentials.*`, named by
+`postgresHA.config.credentialsSecretName`. Carrying the old block fails the render with
+`the postgres block was REMOVED in 2.5.0`, which tells you to create the secret yourself —
+ignore that advice; this template creates it.
 
 ## Important Notes
 
@@ -272,7 +287,8 @@ completely unchanged, including its MinIO backup keys.
 - **`local` storage uses a shared (read-write-many) volume mounted by both the server and the worker**, so attachments are visible to background jobs. Shared volumes support expansion only — **no snapshots** — and exist in a single location, so `storage.type: s3` remains the durable choice for production and is required for `twenty.replicas > 1`.
 
 - **Create the app-key secret before installing.** Without it the deployment sits waiting on a missing secret and looks broken.
-- **Give each twenty release its own `postgres.config.credentialsSecretName`** (single-instance path). Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected.
+- **Changing `postgres.credentials.password` on an existing release does not change the database password** — it only rewrites the secret, so the new value no longer matches the database and logins fail. The password is set once, when the database volume is first initialised.
+- **Give each twenty release its own `postgres.config.credentialsSecretName` (single-instance) or `postgresHA.config.credentialsSecretName` (HA).** Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected.
 - **On a public endpoint, whoever reaches the URL first owns the CRM.** Sign up immediately after install, or set `publicAccess.enabled: false` until you are ready.
 - **Treat the app key as write-once.** Changing `secrets.name` without pointing `secrets.fallbackName` at the old key makes stored OAuth tokens, TOTP secrets and app variables undecryptable and logs everyone out.
 - **`twenty.replicas > 1` requires `storage.type: s3`**, and moves boot migrations to the worker — on a *fresh* multi-replica install the servers may serve errors for a minute or two until the worker finishes migrating.

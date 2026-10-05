@@ -8,7 +8,7 @@ Multi-replica [TimescaleDB](https://www.timescale.com/) (the time-series databas
 - **etcd** — distributed consensus store (DCS) for Patroni, from the `etcd` subchart dependency.
 - **HAProxy leader endpoint** — routes all writes to the current primary via Patroni's REST health check; on by default.
 - **PgBouncer** (optional) — connection pooler in front of the proxy; off by default.
-- **Scheduled backup** (optional) — cron `pg_dump` logical backup to S3, GCS, or an S3-compatible endpoint, routed through the proxy; off by default.
+- **Scheduled backup** (optional) — cron `pg_dumpall` logical backup to S3, GCS, or an S3-compatible endpoint, routed through the proxy; off by default.
 - **Volumeset, secrets, identity, policy** — per-replica storage; credentials and start scripts; least-privilege `reveal` on exactly those secrets.
 
 ## Prerequisites
@@ -109,7 +109,7 @@ raises a `NOSPACE` alarm and goes **read-only**: Patroni replicas can no longer 
 restart-loop with `exitCode: 0`, which looks healthy. Compaction is what prevents that.
 
 **Already running 1.0.0?** Upgrading turns compaction on, but it cannot shrink a backend that has
-already grown. Check with `cpln workload exec {release}-etcd -- etcdctl endpoint status --cluster` and
+already grown. Check with `cpln workload exec RELEASE_NAME-etcd --gvc GVC_NAME -- etcdctl endpoint status --cluster` and
 `etcdctl alarm list`; a cluster that is already alarmed needs an operator, not an upgrade.
 
 ### PgBouncer (optional)
@@ -298,7 +298,7 @@ upgrading</b>; if it already matches, no action is needed. Nothing else changes.
 - **`proxy.enabled` must stay true for backups** — the logical backup dumps the leader through the proxy endpoint.
 - **`replicas: 1` has no HA** — it renders a single-member Patroni cluster with no failover; use ≥ 3 for production, and an odd `etcd.replicas` (3, 5, 7) for quorum.
 - **etcd is a hard dependency** — if the etcd members are unhealthy, Patroni loses its DCS and the cluster goes read-only; check `{release}-etcd` first if writes fail.
-- **Backups are logical-only** — a nightly `pg_dump`; continuous WAL archiving / point-in-time restore is a planned follow-up.
+- **Backups are logical-only** — a nightly `pg_dumpall` (every database plus roles); continuous WAL archiving / point-in-time restore is a planned follow-up.
 - **Restoring a TimescaleDB dump** requires the same extension version and `timescaledb_pre_restore()` / `timescaledb_post_restore()` around the replay — not the vanilla PostgreSQL procedure.
 
 ## Links

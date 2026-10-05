@@ -1,0 +1,107 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Langfuse
+category: ai
+topology: stateless
+
+summary: >-
+  The Langfuse LLM observability platform: the web app and a background worker, a bundled
+  PostgreSQL for users, projects, prompts and datasets, plus Redis and ClickHouse workloads, with
+  trace data stored in an S3 or GCS bucket you provide. Sign-up is closed and the first admin is
+  created from your secret. Pick it to trace, evaluate and debug LLM applications and manage
+  prompts, sending traces from its SDKs or OpenTelemetry.
+
+keywords:
+  - llm observability
+  - llm tracing
+  - llm monitoring
+  - prompt management
+  - llm evaluation
+  - evals
+  - llm-as-a-judge
+  - prompt playground
+  - agent tracing
+  - rag tracing
+  - token usage
+  - llm cost tracking
+  - datasets
+  - opentelemetry
+  - clickhouse
+
+useCases:
+  - Trace LLM calls, agent steps and retrieval in production
+  - Version and manage prompts outside application code
+  - Evaluate model outputs with datasets, scores and LLM-as-a-judge
+  - Track token usage, latency and cost per user, session or feature
+  - Debug a RAG or agent pipeline from its traces
+
+alternativeTo:
+  - LangSmith
+  - Langfuse Cloud
+  - Helicone
+  - Arize Phoenix
+  - W&B Weave
+  - Braintrust
+  - Datadog LLM Observability
+
+compatibleWith: [otlp]
+
+pickInsteadIf:
+  - need: one OpenAI-compatible gateway with virtual keys, budgets and spend limits per key
+    template: litellm
+  - need: metrics dashboards and alerting for services and infrastructure
+    template: grafana
+  - need: error tracking for application exceptions
+    template: glitchtip
+  - need: collect and forward OpenTelemetry traces and metrics from services
+    template: otel-collector
+
+related:
+  - template: litellm
+    relation: companion
+    note: LLM gateway whose requests can be traced in Langfuse
+  - template: ollama
+    relation: companion
+    note: Local models behind the LLM applications Langfuse traces
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [nextAuthSecret, encryptionKey, salt, adminEmail, adminPassword]
+    valuesPath: langfuse.auth.secretName
+    required: true
+    description: Session, encryption and hashing keys plus the first admin's login. Create it before installing; when it is missing the workloads wait. encryptionKey can never change.
+  - kind: bucket
+    valuesPath: [objectStore.aws.bucket, objectStore.gcp.bucket]
+    required: true
+    description: One S3 or GCS bucket shared by ClickHouse data and Langfuse events and media.
+  - kind: cloud-account
+    valuesPath: objectStore.aws.cloudAccountName
+    required: true
+    description: Control Plane cloud account for the AWS account holding the bucket. Needed with objectStore.provider aws, the default.
+  - kind: other
+    valuesPath: objectStore.aws.policyName
+    required: true
+    description: AWS IAM policy scoped to the bucket (bucket and bucket/* ARNs), referenced by name. Needed with objectStore.provider aws, the default.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKeyId, secretAccessKey]
+    valuesPath: objectStore.gcp.credentialsSecretName
+    required: false
+    when: objectStore.provider gcp
+    description: GCS HMAC key pair for a service account with roles/storage.objectAdmin on the bucket.
+  - kind: domain
+    valuesPath: langfuse.publicUrl
+    required: false
+    when: langfuse.publicUrl is set to your own hostname
+    description: A Control Plane domain you create for that hostname; the chart only uses the URL for auth redirects and cookies.
+  - kind: bucket
+    required: false
+    when: postgres.backup.enabled (backups of the bundled PostgreSQL)
+    description: S3, GCS or MinIO bucket for scheduled dumps of the bundled database, set under postgres.backup. MinIO also needs an accessKey/secretKey dictionary secret.
+  - kind: cloud-account
+    required: false
+    when: postgres.backup.enabled with postgres.backup.provider aws or gcp
+    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy named in postgres.backup.aws.policyName on AWS.

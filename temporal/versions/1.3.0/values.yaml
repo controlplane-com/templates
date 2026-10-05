@@ -81,8 +81,10 @@ postgresHA:
 postgres:
   enabled: false
   # Credentials for the bundled database — internal plumbing no human types elsewhere.
-  # Temporal CREATES the dictionary secret named by config.credentialsSecretName below
-  # out of these three values, so there is nothing for you to create before installing.
+  # Used in BOTH database modes: Temporal CREATES the dictionary secret named by
+  # postgresHA.config.credentialsSecretName (HA) or config.credentialsSecretName below
+  # (single-instance) out of these three values, so there is nothing for you to create
+  # before installing. Changing the password later does not change it in the database.
   # `database` MUST stay `temporal`. Temporal's server reads DBNAME as the literal
   # `temporal` and auto-setup does NOT create it — it only creates the visibility
   # store. Measured 2026-08-19: setting anything else wedges the install permanently

@@ -1,4 +1,4 @@
-# Alternatives: llava, gemmma, mistral, etc.
+# Alternatives: llava, gemma, mistral, etc.
 defaultModel: llama3
 
 workload:

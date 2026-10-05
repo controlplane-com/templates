@@ -1,0 +1,80 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: ToolJet
+category: apps
+topology: stateless
+
+summary: >-
+  ToolJet low-code platform for internal tools: a visual app builder with datasource
+  connectors, workflows and the built-in ToolJet Database, deployed as a stateless server with
+  PostgREST inside the image, on a bundled PostgreSQL. A bundled Redis is optional and is
+  required to run more than one server replica; SMTP for invites and password reset is
+  optional. Pick it to build admin panels, dashboards and CRUD apps over your own databases
+  and APIs.
+
+keywords:
+  - low-code
+  - internal tools
+  - internal tool builder
+  - app builder
+  - admin panel
+  - crud apps
+  - back office
+  - drag and drop
+  - ui builder
+  - datasource connectors
+  - postgrest
+
+useCases:
+  - Build internal admin panels and CRUD apps on top of existing databases and APIs
+  - Give operations or support teams custom back-office tools without writing a frontend
+  - Create dashboards and forms that read and write business data
+  - Store simple app data in a built-in database without provisioning another one
+
+alternativeTo:
+  - Retool
+  - Appsmith
+  - Budibase
+  - Superblocks
+  - Microsoft Power Apps
+
+pickInsteadIf:
+  - need: a spreadsheet-style shared database with grid and kanban views
+    template: nocodb
+  - need: automating multi-step workflows between apps on triggers and schedules
+    template: n8n
+  - need: BI dashboards and scheduled reports from SQL queries
+    template: metabase
+  - need: a browser SQL client to query and administer databases directly
+    template: dbeaver
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [SECRET_KEY_BASE, LOCKBOX_MASTER_KEY, PGRST_JWT_SECRET]
+    valuesPath: secrets.name
+    required: true
+    description: ToolJet's root keys; SECRET_KEY_BASE and LOCKBOX_MASTER_KEY are write-once. When it is missing the deployment waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [SMTP_USERNAME, SMTP_PASSWORD]
+    valuesPath: smtp.auth.secretName
+    required: false
+    when: smtp.enabled at initial install with an authenticating SMTP relay
+    description: SMTP login for invites and password reset. SMTP settings take effect only when set at the first install.
+  - kind: bucket
+    required: false
+    when: postgres.backup.enabled (pass-through to the bundled postgres template)
+    description: AWS S3, GCS or MinIO bucket that receives scheduled pg_dumpall backups, set under postgres.backup.aws, .gcp or .minio.
+  - kind: cloud-account
+    required: false
+    when: postgres.backup.enabled with postgres.backup.provider aws or gcp
+    description: Control Plane cloud account for the backup bucket (postgres.backup.<provider>.cloudAccountName), plus a bucket-scoped IAM policy on AWS.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    required: false
+    when: postgres.backup.enabled with postgres.backup.provider minio
+    description: Access keys for the MinIO backup endpoint, named in postgres.backup.minio.credentialsSecretName.

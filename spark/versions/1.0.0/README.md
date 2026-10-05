@@ -11,7 +11,7 @@ Deploys an Apache Spark standalone cluster — a master (cluster manager + Web U
 - **identity + policy** — shared by all workloads; carries the cloud-account binding (keyless) when the History Server is on, and `reveal` on the rendered config secret.
 - **config secret** — a rendered `spark-defaults.conf` (reverse proxy, pinned RPC ports, event-log + S3A config).
 
-No GVC and no persistent volume are created. The S3/GCS bucket and cloud account are **user-created prerequisites** when the History Server is enabled.
+No GVC and no persistent volume are created. Every workload runs in each location of the GVC, and the template was validated in a single-location GVC, so install it into one. The S3/GCS bucket and cloud account are **user-created prerequisites** when the History Server is enabled.
 
 ## Prerequisites
 
@@ -103,10 +103,10 @@ publicAccess:
 Submit from the master container or any client workload in the GVC. **A driver must advertise its pod IP** — set `spark.driver.host`, or executors cannot connect back to it and the job stalls relaunching executors:
 
 ```bash
-cpln workload exec RELEASE-spark-master --gvc GVC --container spark-master -- bash -c '
+cpln workload exec RELEASE_NAME-spark-master --gvc GVC_NAME --container spark-master -- bash -c '
   export SPARK_LOCAL_IP=$(hostname -i | awk "{print \$1}")
   /opt/spark/bin/spark-submit \
-    --master spark://RELEASE-spark-master.GVC.cpln.local:7077 \
+    --master spark://RELEASE_NAME-spark-master.GVC_NAME.cpln.local:7077 \
     --conf spark.driver.host=$SPARK_LOCAL_IP \
     --class org.apache.spark.examples.SparkPi \
     /opt/spark/examples/jars/spark-examples_2.13-4.0.4.jar 20'
@@ -116,12 +116,12 @@ cpln workload exec RELEASE-spark-master --gvc GVC --container spark-master -- ba
 
 | Target | Endpoint | Notes |
 |---|---|---|
-| Cluster RPC (submit) | `RELEASE-spark-master.GVC.cpln.local:7077` | `spark://…:7077`; internal |
-| Master Web UI | `RELEASE-spark-master.GVC.cpln.local:8080` | worker + app UIs proxied behind it |
-| Spark Connect | `sc://RELEASE-spark-connect.GVC.cpln.local:15002` | when `connect.enabled` |
-| History Server | `RELEASE-spark-history.GVC.cpln.local:18080` | when `historyServer.enabled` |
+| Cluster RPC (submit) | `RELEASE_NAME-spark-master.GVC_NAME.cpln.local:7077` | `spark://…:7077`; internal |
+| Master Web UI | `RELEASE_NAME-spark-master.GVC_NAME.cpln.local:8080` | worker + app UIs proxied behind it |
+| Spark Connect | `sc://RELEASE_NAME-spark-connect.GVC_NAME.cpln.local:15002` | when `connect.enabled` |
+| History Server | `RELEASE_NAME-spark-history.GVC_NAME.cpln.local:18080` | when `historyServer.enabled` |
 
-Reach a private UI in a browser with `cpln port-forward RELEASE-spark-master 8080:8080 --gvc GVC` (and `RELEASE-spark-history 18080:18080`). There are no credentials — Spark's Web UIs and cluster port are unauthenticated.
+Reach a private UI in a browser with `cpln port-forward RELEASE_NAME-spark-master 8080:8080 --gvc GVC_NAME` (and `RELEASE_NAME-spark-history 18080:18080`). There are no credentials — Spark's Web UIs and cluster port are unauthenticated.
 
 ## Storage setup
 
@@ -162,7 +162,7 @@ The History Server reads completed applications' event logs from a bucket that t
 
 1. Create your bucket; set `storage.bucket` and `storage.provider: gcp`.
 2. Create a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) for GCP; set `storage.cloudAccountName`.
-3. Grant the created GCP service account the **Storage Admin** (`roles/storage.objectAdmin`) role on the bucket. `policyName` and `region` are not used for GCP.
+3. Grant the cloud account's GCP service account the **Storage Admin** (`roles/storage.admin`) role, so Control Plane can create the bucket binding. The template then binds the workload identity to **Storage Object Admin** (`roles/storage.objectAdmin`) on exactly `storage.bucket`. `policyName` and `region` are not used for GCP.
 
 ## Important Notes
 
@@ -172,6 +172,7 @@ The History Server reads completed applications' event logs from a bucket that t
 - **Spark Connect clients need their own dependencies** — the `apache/spark` image does not ship the client-side `pandas`, `pyarrow`, and `grpcio` that a PySpark Connect client requires. Install `pyspark[connect]` (or those packages) in the client environment.
 - **Provider switch (aws↔gcp) needs a fresh install**, not an upgrade — cloud-binding blocks on an identity are never cleared on update.
 - **`internalAccess.type: workload-list` must include the cluster's own workloads** — the master, workers, and Connect address each other over the GVC network. `same-gvc` (the default) avoids this.
+- **Install into a single-location GVC** — every workload, including the single-replica master, runs in each location the GVC has.
 - **Worker spill is ephemeral** and `workers.memory` is Spark's offer to executors, not the container limit — keep it below `workers.maxMemory`. Master loss is minutes of downtime, not data loss (no HA in v1).
 
 ## Links

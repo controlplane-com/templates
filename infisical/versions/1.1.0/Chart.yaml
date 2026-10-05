@@ -7,8 +7,7 @@ appVersion: "0.162.14"
 
 annotations:
   created: "2026-07-28"
-  lastModified: "2026-08-24"
-  category: "secrets-management"
+  lastModified: "2026-10-01"
   createsGvc: false
 
 dependencies:

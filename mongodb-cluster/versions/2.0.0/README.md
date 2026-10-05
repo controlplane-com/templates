@@ -64,6 +64,8 @@ Every member this chart creates is a **voting** member, so the total across all 
 | 5 | 3 | 2 members | |
 | 7 | 4 | 3 members | **The maximum.** MongoDB allows at most 7 voting members |
 
+**Seven members do not fit in one location on a default org quota.** A `replicaDirect` workload is capped at 6 replicas per location by the `replicas-per-replica-direct-workload` quota, and the install is rejected at apply with `One or more containers exceed the autoscaling.maxScale of 6 (quota: replicas-per-replica-direct-workload)`. Reach 7 by splitting across locations — 4 + 3 is proven — or request a quota increase. Six in one location is fine.
+
 Totals above 7 are refused at render time: MongoDB rejects the 8th voting member, and every member past it would run a mongod that is not in the replica set while still reporting `ready: true`.
 
 Spreading members across **locations** buys survival of a whole location, at the cost of cross-region replication traffic, which is billed. Size it against the same table — 3 locations × 1 member survives losing one location; 2 locations × 2 members does not survive losing either, because 2 of 4 is not a majority.

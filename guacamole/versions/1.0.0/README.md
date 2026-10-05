@@ -102,7 +102,7 @@ A fresh install is empty and looks broken until an admin adds a connection: log 
 | Target | Address | Credentials |
 |---|---|---|
 | UI (default, private) | port-forward the workload, then `http://localhost:8080/` — see below | the `username` / `password` of your admin secret |
-| UI (public, opt-in) | `https://<canonical>.cpln.app` after enabling `publicAccess` | same |
+| UI (public, opt-in) | the canonical endpoint — read `status.canonicalEndpoint` (below) after enabling `publicAccess` | same |
 | Internal (same GVC) | `http://{release}-guacamole.{gvc}.cpln.local:8080` | same |
 | PostgreSQL (same GVC) | `{release}-postgres.{gvc}.cpln.local:5432` | the keys of the secret named by `postgres.config.credentialsSecretName` |
 
@@ -112,7 +112,7 @@ With the default private install, reach the UI in your browser through a tunnel:
 cpln port-forward {release}-guacamole 8080:8080 --gvc {gvc}
 ```
 
-**To put the UI on the internet**, install privately, port-forward, confirm you can log in, then upgrade the release with `publicAccess.enabled=true`. The canonical `*.cpln.app` hostname then appears under `status.canonicalEndpoint` (`cpln workload get {release}-guacamole -o yaml`). Allow up to a few minutes for the firewall change to take effect before deciding it did not work.
+**To put the UI on the internet**, install privately, port-forward, confirm you can log in, then upgrade the release with `publicAccess.enabled=true`. The canonical `*.cpln.app` hostname then appears under `status.canonicalEndpoint` (`cpln workload get {release}-guacamole --gvc {gvc} -o yaml`). Allow up to a few minutes for the firewall change to take effect before deciding it did not work.
 
 ## Backing up the bundled database
 
@@ -132,12 +132,12 @@ postgres:
       prefix: postgres/backups
 ```
 
-For the bucket, [cloud account](https://docs.controlplane.com/guides/create-cloud-account) and IAM policy setup — including the exact policy JSON per provider — follow the Storage setup section of the [`postgres` template README](../../../postgres).
+For the bucket, [cloud account](https://docs.controlplane.com/guides/create-cloud-account) and IAM policy setup — including the exact policy JSON per provider — follow the Backup Prerequisites section of the [`postgres` template docs](https://docs.controlplane.com/template-catalog/templates/postgres#backup-prerequisites).
 
 ## Important Notes
 
 - **An upgrade does not drop the endpoint, but it does drop sessions.** A rolling upgrade served 112/112 requests with no failures, and a replica-down test served 204/204 — so the gateway itself stays reachable. Existing logins do not survive it: auth tokens are rejected afterwards and users must sign in again, and any open remote session ends. Reconnecting re-establishes it.
-- **The admin secret must exist before install.** A missing one wedges the deployment *silently*: `cpln logs` returns zero lines because no container ever starts. The only diagnostic is `status.versions[].message` from `cpln workload get-deployments {release}-guacamole -o yaml`. It recovers on its own within about ten minutes of creating the secret (measured: 9 min 46 s), or immediately with a forced redeployment.
+- **The admin secret must exist before install.** A missing one wedges the deployment *silently*: `cpln logs` returns zero lines because no container ever starts. The only diagnostic is `status.versions[].message` from `cpln workload get-deployments {release}-guacamole --gvc {gvc} -o yaml`. It recovers on its own within about ten minutes of creating the secret (measured: 9 min 46 s), or immediately with a forced redeployment.
 - **The admin password is applied on FIRST BOOT ONLY.** It seeds the database once, so rotating the secret afterwards does not change your login — verified by rotating it, forcing a redeployment, and confirming the original password still worked. Change the password in the Guacamole UI instead.
 - **`guacadmin`/`guacadmin` is never valid here** — the stock account is renamed and re-hashed before Tomcat binds a port.
 - **Single replica by design.** Guacamole keeps auth tokens in each Tomcat's memory with no cross-instance sharing, and the platform offers no session affinity, so a second replica would randomly log users out. Any restart — an upgrade, a replica reschedule, or rotating any referenced secret — **drops active desktop sessions and logs everyone out**. Nothing persisted is lost.

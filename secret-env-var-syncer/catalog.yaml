@@ -1,0 +1,51 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Secret Env Var Syncer (SEVS)
+category: secrets
+topology: stateless
+
+summary: >-
+  Secret Env Var Syncer: a cron job that, on a schedule (every five minutes by default), reads Control
+  Plane dictionary secrets and writes each key as an environment variable on a target GVC or on one
+  container of a workload, overwriting variables with the same name. Pick it when apps expect plain
+  environment variables and you want them kept in step with dictionary secrets without editing every
+  workload by hand.
+
+keywords:
+  - environment variables
+  - env vars
+  - dictionary secret
+  - secret to env
+  - env sync
+  - gvc environment variables
+  - workload env
+  - configuration sync
+
+useCases:
+  - Keep workload environment variables in step with a dictionary secret
+  - Apply the same set of environment variables to every workload in a GVC
+  - Push secret keys into a container's env for apps that cannot read secret references
+  - Refresh environment variables on a schedule after a secret changes
+
+pickInsteadIf:
+  - need: pull secrets from Vault, AWS, GCP, Doppler, 1Password or Infisical into Control Plane secrets
+    template: ess
+
+related:
+  - template: ess
+    relation: companion
+    note: Fills dictionary secrets from external secrets managers that this syncer then turns into env vars
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: ["*"]
+    valuesPath: sevsConfig.entries
+    required: true
+    description: Source dictionary secrets named in each entry's secret field; every key becomes an env var. Opaque secrets are not supported. The syncer never creates them.
+  - kind: other
+    valuesPath: sevsConfig.entries
+    required: true
+    description: Target GVCs and workloads (with the container name) listed in each entry's target. They must already exist; the syncer only edits them.

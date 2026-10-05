@@ -1,0 +1,50 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: NGINX Reverse Proxy
+category: networking
+topology: stateless
+
+summary: >-
+  An NGINX reverse proxy on a public HTTPS endpoint that routes requests by URL path, with prefix or
+  regex matching, to workloads in the same GVC; one replica by default, with CPU autoscaling you can
+  raise. The nginx.conf is generated from a list of path, workload and port entries, plus built-in
+  /health and /fail routes, and an example backend is deployed by default for testing. Pick it to put
+  several internal services behind one public URL.
+
+keywords:
+  - path-based routing
+  - url routing
+  - http proxy
+  - ingress
+  - single entry point
+  - proxy_pass
+  - nginx.conf
+
+useCases:
+  - Expose several internal workloads behind one public URL by path
+  - Route /api to a backend and / to a frontend
+  - Replace an ingress controller's path rules for workloads in one GVC
+  - Put a single public entry point in front of services that stay internal
+
+alternativeTo:
+  - Traefik Proxy
+  - HAProxy
+  - Caddy
+  - Envoy
+  - AWS Application Load Balancer
+  - NGINX Ingress Controller
+
+pickInsteadIf:
+  - need: API keys, rate limiting and quotas for API consumers
+    template: tyk
+  - need: inspect requests against the OWASP Core Rule Set to block attacks
+    template: coraza
+
+prerequisites:
+  - kind: other
+    valuesPath: locations
+    required: false
+    when: locations is set (with enableExample false) to proxy your own services
+    description: The workloads to route to, by bare workload name and port, in the same GVC. They must exist and allow internal traffic from the proxy.

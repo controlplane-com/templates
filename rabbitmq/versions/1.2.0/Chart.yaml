@@ -9,7 +9,6 @@ appVersion: "3-management"
 annotations:
   created: "2024-01-23"
   lastModified: "2026-08-19"
-  category: "queue"
   createsGvc: false
 
 dependencies:

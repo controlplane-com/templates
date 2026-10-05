@@ -7,7 +7,7 @@ OpenBao is the Linux Foundation's open-source (MPL-2.0) fork of HashiCorp Vault 
 - **OpenBao server** — a `stateful` workload (`{release}-openbao`, HTTP API + web UI on port 8200) with integrated raft storage; auto-unseals itself on every boot.
 - **Volumeset** — persistent raft data (`/openbao/data`): all secrets, auth config, and cluster state. A final snapshot is kept 7 days on uninstall.
 - **Config secret** — the rendered HCL server config, file-mounted.
-- **Identity + policy** — `reveal` on exactly the secrets the server mounts; in the KMS seal modes the identity carries keyless (credential-free) cloud access scoped to the one KMS key.
+- **Identity + policy** — `reveal` on exactly the secrets the server mounts; in the KMS seal modes the identity carries keyless (credential-free) cloud access — in `awskms` scoped by your key-scoped IAM policy (`seal.aws.policyName`), in `gcpckms` with no permissions of its own until you grant it access on the one key after install (see Auto-unseal setup).
 
 ## Prerequisites
 
@@ -122,7 +122,7 @@ done
 
 Both roles are required: `cryptoKeyEncrypterDecrypter` performs the seal/unseal, and `cloudkms.viewer` supplies the `cloudkms.cryptoKeys.get` call OpenBao makes at startup. Grant them on the key, never project-wide.
 
-**Until the grant exists the workload crash-loops** with `PermissionDenied … cloudkms.cryptoKeys.get`; it heals itself within about 30 seconds of the grant — no redeploy needed.
+**Until the grant exists the workload crash-loops** with `PermissionDenied … cloudkms.cryptoKeys.get`; it heals itself shortly after the grant takes effect — no redeploy needed.
 
 ## First run — initialize once
 
@@ -139,17 +139,17 @@ cpln workload exec {release}-openbao --gvc {gvc} --container openbao -- bao oper
 | Target | Address | Credentials |
 |---|---|---|
 | Internal (same GVC) | `http://{release}-openbao.{gvc}.cpln.local:8200` | OpenBao token / auth method |
-| Public API + UI (if enabled) | `https://<canonical>.cpln.app` (UI at `/ui/`) | OpenBao token / auth method |
+| Public API + UI (if enabled) | the canonical endpoint — read `status.canonicalEndpoint` (UI at `/ui/`) | OpenBao token / auth method |
 | Health | `GET /v1/sys/health` | none |
 
-External clients use `https://` (the platform edge terminates TLS); same-GVC clients use plain `http://` over the mesh's mTLS. The canonical hostname appears under `status.canonicalEndpoint` (`cpln workload get {release}-openbao -o yaml`).
+External clients use `https://` (the platform edge terminates TLS); same-GVC clients use plain `http://` over the mesh's mTLS. The canonical hostname appears under `status.canonicalEndpoint` (`cpln workload get {release}-openbao --gvc {gvc} -o yaml`).
 
 ## Important Notes
 
 - **Static mode: the unseal-key secret must exist before install and is WRITE-ONCE** — a missing secret wedges the deployment; a lost or changed key makes all stored data unrecoverable. Back the key up securely.
 - **Run `bao operator init` once after install and save the output** — recovery keys and the root token are printed once, to your terminal only.
 - **Do not switch `seal.type` after initialization** — the seal wraps the existing data; changing modes requires an OpenBao seal migration, not a values change.
-- **`gcpckms` needs its key grant applied after install** (see the setup steps) — the workload crash-loops on `cloudkms.cryptoKeys.get` until then, and `cpln identity get … -o json` shows `status.gcp.usable` for diagnosis.
+- **`gcpckms` needs its key grant applied after install** (see the setup steps) — the workload crash-loops on `cloudkms.cryptoKeys.get` until then, and `cpln identity get {release}-openbao-identity --gvc {gvc} -o json` shows `status.gcp.usable` for diagnosis.
 - **Data survives restarts and upgrades; uninstall deletes the volumeset** (final snapshot kept 7 days). A reinstall starts uninitialized.
 - **Private by default** — set `publicAccess.enabled: true` to expose the API + web UI on the canonical endpoint.
 

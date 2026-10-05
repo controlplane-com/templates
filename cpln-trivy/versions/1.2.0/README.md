@@ -35,7 +35,17 @@ Trivy authenticates against the Control Plane image registry with a service acco
 printf '%s' 'your-service-account-key' | cpln secret create-opaque --name trivy-credentials --encoding plain -f -
 ```
 
-**If either secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments web-server --gvc <gvc> -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own in roughly 6–10 minutes — poll rather than time-boxing — or clear it immediately with `cpln workload force-redeployment web-server --gvc <gvc>` (~90 s).
+**If either secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message`:
+
+```bash
+cpln workload get-deployments web-server --gvc GVC_NAME -o yaml
+```
+
+Use **`get-deployments`** — plain `cpln workload get` has no `versions` key. Create the missing secret and the workload recovers on its own after several minutes, or immediately with:
+
+```bash
+cpln workload force-redeployment web-server --gvc GVC_NAME
+```
 
 ### 3. Report storage
 
@@ -119,7 +129,8 @@ webServer:
 | What | Value |
 |---|---|
 | A report | the `cpln/trivy-scan` tag on the scanned image, in the console or via `cpln image get` |
-| Web-server (public) | the canonical endpoint of the `web-server` workload |
+| Web-server (public) | `status.canonicalEndpoint` from `cpln workload get web-server --gvc GVC_NAME -o yaml` |
+| Web-server (internal) | not reachable inside the GVC (internal access is closed; the daemon uses the public endpoint) |
 | Report upload | `POST /URL` on the web-server with `Authorization: Bearer <token>`, the token being your `postToken.secretName` secret's payload |
 | Report storage | your S3 bucket, or the Azure file share mounted at `/app/data` |
 | Registry auth | the service account key in your `trivyAuth.secretName` secret |
@@ -166,27 +177,58 @@ Complete the steps for your chosen backend before installing.
 Open any scanned image in the Control Plane console; its `cpln/trivy-scan` tag is a direct link to the HTML report. To list every scanned image from the CLI:
 
 ```bash
-cpln image query --tag cpln/trivy-scan -o json | jq '.items[].name'
+cpln image query --tag cpln/trivy-scan --max 0 -o json | jq -r '.items[].name'
 ```
 
 ## Maintenance
 
-To clear all scan tags and force a full re-scan on the next run:
+To rescan one image on the next run, remove its scan tags so the daemon treats it as unscanned:
 
 ```bash
-cpln image query --tag cpln/trivy-scan -o json | jq -r '.items[].name' | \
-  xargs -I{} cpln image tag {} --remove cpln/trivy-scan --remove cpln/trivy-scan-time
+cpln image tag IMAGE_NAME:TAG --remove-tag cpln/trivy-scan --remove-tag cpln/trivy-scan-time
+```
+
+To clear every scan tag and force a full re-scan (`--max 0` lists all images; the default stops at 50):
+
+```bash
+cpln image query --tag cpln/trivy-scan --max 0 -o json | jq -r '.items[].name' | \
+  xargs -I{} cpln image tag {} --remove-tag cpln/trivy-scan --remove-tag cpln/trivy-scan-time
+```
+
+### Rotating secrets
+
+Both prerequisite secrets are opaque. Rotate one by applying the whole secret with the new value (`cpln secret update` changes only description and tags). Save this as `rotate.yaml`:
+
+```yaml
+kind: secret
+name: SECRET_NAME
+type: opaque
+data:
+  encoding: plain
+  payload: NEW-VALUE
+```
+
+```bash
+cpln apply -f rotate.yaml
+cpln secret reveal SECRET_NAME -o yaml
+```
+
+A running workload keeps the old value until it is redeployed. For the post token, redeploy **both** workloads together:
+
+```bash
+cpln workload force-redeployment daemon --gvc GVC_NAME
+cpln workload force-redeployment web-server --gvc GVC_NAME
 ```
 
 ## Important Notes
 
 - **Reports are readable by anyone with the URL.** The URLs contain an unguessable SHA-256 hash but there is no authentication on reads — narrow `webServer.firewall.inboundAllowCIDR` to your own network if reports must stay private. Narrowing it also blocks the daemon, so add the daemon's egress range when you do.
 - **Upgrading from 1.1.0**: `postToken` is no longer a value, and the render fails naming the replacement if it is still set. Put **the same token your install already uses** into the opaque secret — a different one makes the daemon's uploads start returning 401 while everything still looks healthy.
-- **Rotate the post token by editing the secret**, then restarting both workloads together. The daemon and the web-server must agree; a rotation that reaches only one of them fails uploads with 401.
-- **Scans take roughly 15–20 seconds per image** — about 30 minutes for 100 images on the first run. Overlapping runs are prevented (`concurrencyPolicy: Forbid`), so a long run simply delays the next scheduled one.
+- **After rotating the post token, force-redeploy both workloads** (see [Rotating secrets](#rotating-secrets)). Updating the secret alone redeploys nothing, and the daemon and the web-server must agree; a rotation that reaches only one of them fails uploads with 401.
+- **A run covers every image in the organization**, not only images this install created, so the first run over a large registry is long. Overlapping runs are prevented (`concurrencyPolicy: Forbid`), so a long run simply delays the next scheduled one.
 - **Rescans overwrite in place** — the report keeps its URL and `cpln/trivy-scan-time` is refreshed, so links saved from the console stay valid.
 - **Images deleted mid-run log a 404 tagging error** and the run continues. This is harmless.
-- **Rotating the service account key**: add a new key to the service account, update the opaque secret's payload, delete the old key. No reinstall needed.
+- **Rotating the service account key**: add a new key to the service account, put it in the `trivyAuth.secretName` secret, force-redeploy `daemon`, then delete the old key. No reinstall needed.
 - **The workloads are named `daemon` and `web-server` regardless of release name** — install this template only once per GVC.
 
 ## Links

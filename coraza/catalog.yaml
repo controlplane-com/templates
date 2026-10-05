@@ -1,0 +1,58 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Coraza WAF
+category: security
+topology: stateless
+
+summary: >-
+  Coraza web application firewall with the OWASP Core Rule Set, running on Caddy as a reverse proxy in
+  front of one workload you already run. Every request is inspected against CRS and your own seclang
+  rules before it is forwarded; blocked requests never reach the app. It autoscales on CPU, and custom
+  rules live in a secret you edit. Pick it to filter SQL injection, XSS and other OWASP Top 10 attacks
+  for an HTTP app or API.
+
+keywords:
+  - web application firewall
+  - owasp crs
+  - core rule set
+  - modsecurity
+  - seclang
+  - sql injection protection
+  - xss protection
+  - owasp top 10
+  - request inspection
+  - http filtering
+  - caddy
+  - reverse proxy
+  - virtual patching
+
+useCases:
+  - Put a web application firewall in front of a public web app or API
+  - Block SQL injection, XSS and other OWASP Top 10 attacks
+  - Replace a ModSecurity setup with the OWASP Core Rule Set
+  - Add custom rules to block specific paths, headers or payloads
+  - Virtually patch a vulnerable app until a code fix ships
+
+alternativeTo:
+  - AWS WAF
+  - Cloudflare WAF
+  - Azure Web Application Firewall
+  - Google Cloud Armor
+  - ModSecurity
+  - Imperva WAF
+
+pickInsteadIf:
+  - need: API keys, rate limiting and quotas for API consumers
+    template: tyk
+  - need: a plain reverse proxy routing URL paths to several workloads
+    template: nginx
+  - need: scan container images in the registry for known vulnerabilities
+    template: cpln-trivy
+
+prerequisites:
+  - kind: other
+    valuesPath: targetWorkload
+    required: true
+    description: The workload to protect, set as WORKLOAD.GVC.cpln.local with targetPort. It must exist and allow internal traffic from the WAF; remove its own public access to stop bypass.

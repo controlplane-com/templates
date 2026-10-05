@@ -51,9 +51,9 @@ Both ClickHouse and Langfuse use one bucket with separate key prefixes (`clickho
 ### AWS S3
 
 
-<b>Upgrading from 1.2.0:</b> this version removes <code>aws::ReadOnlyAccess</code> from the backup identity.
+<b>Upgrading from 1.2.0:</b> this version removes <code>aws::ReadOnlyAccess</code> from the Langfuse identity — the one that reaches your object-store bucket when <code>objectStore.provider</code> is <code>aws</code>.
 That managed policy granted read access to every bucket in your AWS account and contained no write actions,
-so it was never carrying the backup itself — but it <i>was</i> silently supplying any read action your
+so it was never carrying the object-store writes itself — but it <i>was</i> silently supplying any read action your
 bucket-scoped policy happened to omit. <b>Update your IAM policy to the full action list in this section before
 upgrading</b>; if it already matches, no action is needed. Nothing else changes.
 

@@ -1,0 +1,107 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Keycloak
+category: identity
+topology: stateless
+
+summary: >-
+  Keycloak identity and access management: two clustered Keycloak replicas by default (Infinispan
+  over the shared database) in front of a bundled highly available PostgreSQL with Patroni failover,
+  or a single-instance PostgreSQL for development. Optional scheduled database backups to S3, GCS or
+  an S3-compatible endpoint. Pick it to add single sign-on, OIDC and SAML login, user federation and
+  fine-grained authorization to your own apps.
+
+keywords:
+  - sso
+  - single sign-on
+  - oidc
+  - openid connect
+  - saml
+  - oauth2
+  - identity provider
+  - idp
+  - iam
+  - authentication server
+  - user federation
+  - ldap
+  - active directory
+  - social login
+  - identity brokering
+  - mfa
+  - two-factor authentication
+  - user management
+  - access tokens
+  - jwt
+
+useCases:
+  - Add single sign-on across several internal or customer-facing apps
+  - Issue OIDC and OAuth2 tokens for web apps, mobile apps and APIs
+  - Act as a SAML identity provider for SaaS tools and legacy apps
+  - Federate users from LDAP or Active Directory into one login
+  - Offer social login and identity brokering through Google, GitHub or other providers
+  - Manage users, roles, groups and multi-factor authentication in one place
+
+alternativeTo:
+  - Auth0
+  - Okta
+  - Microsoft Entra ID
+  - Amazon Cognito
+  - Firebase Authentication
+  - Google Cloud Identity Platform
+  - Ping Identity
+  - OneLogin
+
+compatibleWith: [oidc, saml]
+
+pickInsteadIf:
+  - need: a full app backend with Postgres, auth, REST API, realtime and file storage in one
+    template: supabase
+  - need: a small app backend in one binary with built-in auth, SQLite and a REST API
+    template: pocketbase
+
+related:
+  - template: fusionauth
+    relation: alternative
+    note: FusionAuth identity server with OAuth2, OIDC and SAML on a bundled single PostgreSQL
+  - template: tyk
+    relation: companion
+    note: API gateway that can validate Keycloak-issued JWTs in front of your APIs
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    valuesPath: admin.secretName
+    required: true
+    description: Bootstrap admin login for the public admin console. Create it before installing; when it is missing the workload waits with no logs.
+  - kind: bucket
+    valuesPath:
+      - postgresHA.backup.aws.bucket
+      - postgresHA.backup.gcp.bucket
+      - postgresHA.backup.minio.bucket
+      - postgres.backup.aws.bucket
+      - postgres.backup.gcp.bucket
+      - postgres.backup.minio.bucket
+    required: false
+    when: postgresHA.backup.enabled or postgres.backup.enabled
+    description: Object storage bucket that receives the scheduled database backups.
+  - kind: cloud-account
+    valuesPath:
+      - postgresHA.backup.aws.cloudAccountName
+      - postgresHA.backup.gcp.cloudAccountName
+      - postgres.backup.aws.cloudAccountName
+      - postgres.backup.gcp.cloudAccountName
+    required: false
+    when: database backup enabled with provider aws or gcp
+    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy on AWS (backup.aws.policyName).
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath:
+      - postgresHA.backup.minio.credentialsSecretName
+      - postgres.backup.minio.credentialsSecretName
+    required: false
+    when: database backup enabled with provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

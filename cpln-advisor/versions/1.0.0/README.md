@@ -30,7 +30,7 @@ It comes from the catalog's `postgres` template rather than being hand-written h
 
 **Two `dictionary` secrets must exist BEFORE you install.** Neither the chart nor its values ever hold a credential.
 
-If either secret is missing the deployment **fails silently**.
+If either secret is missing the deployment **waits silently**: no container starts, so `cpln logs` returns nothing. `status.versions[].message` from `cpln workload get-deployments RELEASE_NAME-api --gvc GVC_NAME -o yaml` names the missing secret.
 
 ### 1. The database's credentials
 
@@ -39,7 +39,7 @@ From version 3.4.0 the bundled `postgres` template reads its credentials from a 
 ```bash
 DB_PASS="$(openssl rand -hex 32)"
 
-cpln secret create-dictionary --name advisor-db-credentials --org YOUR_ORG \
+cpln secret create-dictionary --name advisor-db-credentials \
   --entry username=advisor \
   --entry password="$DB_PASS" \
   --entry database=advisor
@@ -52,16 +52,16 @@ cpln secret create-dictionary --name advisor-db-credentials --org YOUR_ORG \
 Keys are the app's own environment-variable names, so a secret built for a hand-applied deployment works here unchanged.
 
 ```bash
-cpln secret create-dictionary --name advisor-config --org YOUR_ORG \
+cpln secret create-dictionary --name advisor-config \
   --entry ADVISOR_API_TOKEN="$(openssl rand -hex 32)" \
   --entry ADVISOR_SECRET_KEY="$(openssl rand -hex 32)" \
   --entry ADVISOR_SESSION_SECRET="$(openssl rand -hex 32)" \
   --entry ADVISOR_USERNAME=admin \
   --entry ADVISOR_PASSWORD='YOUR-STRONG-PASSPHRASE' \
-  --entry DATABASE_URL="postgresql+asyncpg://advisor:$DB_PASS@RELEASE-postgres.GVC.cpln.local:5432/advisor"
+  --entry DATABASE_URL="postgresql+asyncpg://advisor:$DB_PASS@RELEASE_NAME-postgres.GVC_NAME.cpln.local:5432/advisor"
 ```
 
-Substitute `RELEASE` with your Helm release name and `GVC` with the GVC you install into — the bundled database workload is named `{release}-postgres` and resolves on internal DNS inside that GVC. Installing release `advisor` into GVC `platform` gives `advisor-postgres.platform.cpln.local`.
+Substitute `RELEASE_NAME` with your Helm release name and `GVC_NAME` with the GVC you install into — the bundled database workload is named `{release}-postgres` and resolves on internal DNS inside that GVC. Installing release `advisor` into GVC `platform` gives `advisor-postgres.platform.cpln.local`.
 
 | Key | What it is |
 |---|---|
@@ -71,7 +71,7 @@ Substitute `RELEASE` with your Helm release name and `GVC` with the GVC you inst
 | `ADVISOR_USERNAME` / `ADVISOR_PASSWORD` | The web-UI login. A human types the password, so prefer a long passphrase. |
 | `DATABASE_URL` | `postgresql+asyncpg://` — **not** `postgres://`: SQLAlchemy needs the driver named. Host is `{release}-postgres.{gvc}.cpln.local:5432`. |
 
-Then install. The only values either secret name appears in are names:
+Then install. Both secrets are referenced only by name, through `auth.secretName` and `postgres.config.credentialsSecretName`.
 
 ### A Control Plane service-account token — *after* install, not before
 
@@ -144,7 +144,7 @@ To narrow the dashboard to an office or VPN range, edit `inboundAllowCIDR` on th
 appUrl: ""          # e.g. https://advisor.example.com
 ```
 
-**Leave this empty unless you use a custom domain.** The app derives its own public URL from Control Plane's built-in environment variables as `https://{web workload}-{gvc alias}.cpln.app`, and the chart passes it this release's actual dashboard workload name (`ADVISOR_WEB_WORKLOAD`) so the derivation resolves to the right workload. Both the Slack "View in Advisor" links and the CORS allowlist come from it.
+**Leave this empty unless you use a custom domain.** The app derives its own public URL from Control Plane's built-in environment variables as `https://{web workload}-{gvc alias}.cpln.app`, and the chart passes it this release's actual dashboard workload name (`ADVISOR_WEB_WORKLOAD`) so the derivation resolves to the right workload. That derived host does not always match the dashboard's real canonical endpoint (some GVCs serve `*.{org alias}.cpln.app`); if Slack links or CORS point at the wrong host, set `appUrl` to the `status.canonicalEndpoint` of `RELEASE_NAME-web`. Both the Slack "View in Advisor" links and the CORS allowlist come from it.
 
 Note that the derivation is deliberately **not** `CPLN_GLOBAL_ENDPOINT`: that variable is the host of whichever workload reads it, which here is the API — internal, and not where any browser goes. Setting `appUrl` overrides the derivation, which is the only way to point at a custom domain.
 
@@ -239,9 +239,9 @@ The API, worker and scheduler are each pinned to one replica.
 
 | Path | Address | Notes |
 |---|---|---|
-| Dashboard | `https://<canonical-endpoint>` | Always public. Read it from `status.canonicalEndpoint` in `cpln workload get <release>-web -o yaml` — never hand-build it. |
-| API | `http://<release>-api.<gvc>.cpln.local:8000` | Internal, and reachable only from the dashboard. Plain `http` is correct — the sidecar adds mTLS. |
-| Database | `<release>-postgres.<gvc>.cpln.local:5432` | Internal, same GVC. Credentials are in your database secret. |
+| Dashboard | `status.canonicalEndpoint` of `RELEASE_NAME-web` | Always public. Read it with `cpln workload get RELEASE_NAME-web --gvc GVC_NAME -o yaml` — never hand-build it. |
+| API | `http://RELEASE_NAME-api.GVC_NAME.cpln.local:8000` | Internal, and reachable only from the dashboard. Plain `http` is correct — the sidecar adds mTLS. |
+| Database | `RELEASE_NAME-postgres.GVC_NAME.cpln.local:5432` | Internal, same GVC. Credentials are in your database secret. |
 
 ## After the first deploy
 
@@ -249,7 +249,11 @@ The API, worker and scheduler are each pinned to one replica.
 2. Go to **Configuration → Control Plane**, paste the service-account token, and press **Test connection**.
 3. Add an Anthropic or OpenAI key on the same page, and a Slack bot token if you want digests. These are stored encrypted in the database using `ADVISOR_SECRET_KEY` — which is why losing that key loses them.
 4. Enable **Scan** on the workloads you want watched, then **Scan now**.
-5. Confirm the scheduler is alive — `cpln workload logs <release>-scheduler` should show it firing `run_scan`.
+5. Confirm the scheduler is alive — its logs should show it firing `run_scan`:
+
+```bash
+cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-scheduler"}' --limit 50 --since 10m
+```
 
 ## Important Notes
 
@@ -257,16 +261,17 @@ The API, worker and scheduler are each pinned to one replica.
 - **No credential passes through this chart.** It creates no secret and takes none as a value, so nothing sensitive reaches the Helm release. 
 - **`DATABASE_URL` and the database credentials secret must agree, and nothing cross-checks them.** A mismatch installs cleanly and then fails to authenticate at runtime.
 - **Losing `ADVISOR_SECRET_KEY` loses every credential entered in the UI.** They are unrecoverable and must be re-entered. 
-- **The dashboard is public.** Narrow `inboundAllowCIDR` on the `{release}-web` workload after installing if you want it tighter.
+- **The dashboard is public.** Narrow `inboundAllowCIDR` on the `RELEASE_NAME-web` workload after installing if you want it tighter.
 - **Install into a GVC that already exists and has exactly one location.**
 - **`uninstall` leaves the GVC alone.** It removes only what this release created; both prerequisite secrets survive too, since neither is release-managed.
 - **Backups are OFF by default and you should turn them on.** They need a bucket and a cloud account you create first. A volume is not a backup — see [Database](#database).
 - **A Postgres password is first-boot only.** It is read when the data directory initializes. Rotating it in the secret afterwards does not change the running server — you must also change it in Postgres itself, and update `DATABASE_URL` to match.
-- **Rotating a credential means updating the secret and redeploying.** The workloads read `cpln://secret/…` references at start, so a changed secret reaches them on the next deployment, not immediately.
+- **Rotating a credential means re-applying the secret and forcing a redeployment.** The workloads read `cpln://secret/…` references at start and updating a secret does not redeploy them; run `cpln workload force-redeployment WORKLOAD_NAME --gvc GVC_NAME` for each of `RELEASE_NAME-api`, `-web`, `-worker` and `-scheduler`. Never change `ADVISOR_SECRET_KEY`.
 - **Redis is not persistent and not authenticated.** Everything in it is derived or transient, so a restart at worst skips one scan and repeats one digest. Its firewall admits exactly the three workloads that use it, and that is the whole access control — do not widen it.
 - **Autopilot redeploys your workloads.** Each applied suggestion patches a live workload and restarts it. It is per-workload and off until you enable it, every change is recorded in Activity, and every change has a one-click revert — but the redeploy itself is real.
 - **The advisor's token is as powerful as you make it.** Grant `workload: edit` only if you want Autopilot and one-click apply; without it the advisor runs read-only.
 - **`uninstall` deletes the database volume set**, taking all scan history with it. Back up first if you care about it.
+- **There is no chart knob to stop the API, worker and scheduler for a restore**, and the restore path has not been verified end to end for this template — test it on a scratch install first.
 
 ## Links
 

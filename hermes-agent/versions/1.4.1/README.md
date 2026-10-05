@@ -41,7 +41,7 @@ Single replica is by design: memory is a single-writer SQLite database and upstr
 
   Pass the secret's name as `secret.name` at install (and override `secret.keys` if your key names differ).
 
-  **A missing prerequisite secret wedges the deployment silently** — `cpln logs` returns nothing because the container never starts. If the workload never becomes ready, check `cpln workload get-deployments RELEASE-hermes-agent --gvc GVC -o yaml` and read `status.versions[].message`; it names the missing secret. Recovery is automatic once the secret exists (up to ~6 minutes), or force it with `cpln workload force-redeployment`.
+  **A missing prerequisite secret wedges the deployment silently** — `cpln logs` returns nothing because the container never starts. If the workload never becomes ready, check `cpln workload get-deployments RELEASE-hermes-agent --gvc GVC -o yaml` and read `status.versions[].message`; it names the missing secret. Recovery is automatic once the secret exists (up to about ten minutes), or force it with `cpln workload force-redeployment RELEASE-hermes-agent --gvc GVC`.
 
 - **A Control Plane `domain`** — only if you want external webhooks reachable by outside services over a custom hostname. You create the domain and point it at the workload's webhook port; see **Webhooks** below for the full steps. (Not needed for the canonical-endpoint webhook path, `publicAccess.expose: webhooks`.)
 
@@ -190,7 +190,7 @@ internalAccess:
 
 | Interface | Where | Auth |
 |---|---|---|
-| Web dashboard | Public on the canonical HTTPS endpoint with `publicAccess.enabled: true` (default `expose: dashboard`) — find it in `status.canonicalEndpoint` (`cpln workload get RELEASE-hermes-agent -o yaml`). Otherwise internal-only | Basic auth (`dashboard.username` + the dashboard password from your secret) |
+| Web dashboard | Public on the canonical HTTPS endpoint with `publicAccess.enabled: true` (default `expose: dashboard`) — find it in `status.canonicalEndpoint` (`cpln workload get RELEASE-hermes-agent --gvc GVC -o yaml`). Otherwise internal-only | Basic auth (`dashboard.username` + the dashboard password from your secret) |
 | Gateway API (OpenAI-compatible) | From another workload by default. Public on the canonical endpoint with `publicAccess.enabled: true` and `expose: api` | Bearer `API_SERVER_KEY` |
 | Webhook listener | From another workload at `RELEASE-hermes-agent.GVC.cpln.local:8644`. Public via `expose: webhooks` (HTTPS, takes the canonical) or a **custom domain** routing `443 → :8644` (HTTPS, coexists with a public dashboard/API — recommended) | HMAC signature (webhook secret) |
 | From another workload | `RELEASE-hermes-agent.GVC.cpln.local:8642` | Bearer `API_SERVER_KEY` |

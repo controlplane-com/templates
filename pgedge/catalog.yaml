@@ -1,0 +1,86 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: pgEdge
+category: database
+topology: multi-location
+
+summary: >-
+  An active-active PostgreSQL cluster using pgEdge's Spock multi-master logical replication:
+  nodes in several locations of an existing GVC all accept reads and writes and replicate row
+  changes to each other, with last-update-wins conflict resolution. Each location gets a PgBouncer
+  connection pooler and an HAProxy tier that fails over to another local or remote node, plus
+  optional scheduled backups to S3 or GCS with a one-command restore into every node. Pick it for low-latency writes in several
+  regions; DDL does not replicate and every table needs a primary key.
+
+keywords:
+  - distributed postgresql
+  - postgresql
+  - pg
+  - sql
+  - multi-master
+  - active-active
+  - spock
+  - logical replication
+  - bidirectional replication
+  - multi-region
+  - geo-distributed database
+  - global database
+  - conflict resolution
+  - region failover
+  - pgbouncer
+  - connection pooling
+  - haproxy
+  - database backups
+
+useCases:
+  - Accept database writes in several regions with low latency for nearby users
+  - Globally distributed Postgres with no single primary
+  - Keep a Postgres app writable when a whole region goes down
+  - Multi-region SaaS backend that writes locally in each region
+
+alternativeTo:
+  - EDB Postgres Distributed
+  - pgEdge Cloud
+  - Amazon Aurora DSQL
+  - Amazon Aurora Global Database
+
+compatibleWith: [postgres-wire]
+
+pickInsteadIf:
+  - need: one primary with automatic cross-region failover and replicated schema changes
+    template: postgres-multi-location
+  - need: strongly consistent distributed SQL instead of last-update-wins conflict resolution
+    template: cockroach
+  - need: automatic failover inside one location
+    template: postgres-highly-available
+  - need: a single Postgres server in one location
+    template: postgres
+
+prerequisites:
+  - kind: other
+    valuesPath: locations
+    required: true
+    description: An existing GVC that contains every location listed in locations; a missing one makes the pgEdge nodes refuse to initialise.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: postgres.credentialsSecretName
+    required: true
+    description: Database credentials, also used for the PgBouncer admin console. Create it before installing; when it is missing the workload waits with no logs.
+  - kind: bucket
+    valuesPath: [backup.aws.bucket, backup.gcp.bucket]
+    required: false
+    when: backup.enabled
+    description: S3 or GCS bucket that receives the scheduled backups.
+  - kind: cloud-account
+    valuesPath: [backup.aws.cloudAccountName, backup.gcp.cloudAccountName]
+    required: false
+    when: backup.enabled
+    description: Control Plane cloud account for the backup bucket's AWS account or GCP project; on GCP grant its service account the Storage Admin role.
+  - kind: other
+    valuesPath: backup.aws.policyName
+    required: false
+    when: backup.enabled with backup.provider aws
+    description: AWS IAM policy scoped to the backup bucket (object read, write, delete and list actions); the README has the JSON.

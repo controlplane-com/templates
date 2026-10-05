@@ -56,7 +56,7 @@ storage:
   # Any S3-compatible server (MinIO, R2, Wasabi, …) — static keys only, since
   # these cannot federate with a cloud account.
   minio:
-    endpoint: http://my-minio-workload:9000 # e.g. an internal MinIO template deployment
+    endpoint: http://my-minio-workload:9000 # in-GVC MinIO: http://WORKLOAD_NAME.GVC_NAME.cpln.local:9000
     bucket: my-sftp-bucket # bucket must already exist
     region: us-east-1
     keyPrefix: "" # optional bucket-wide folder prefix, e.g. sftp/
@@ -86,5 +86,5 @@ internalAccess: # internal firewall scope of the SFTPGo workload
   #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
 webAdmin:
-  enabled: false # declare SFTPGo's web admin/REST API port 8080 (public via the canonical
-                 # endpoint in always_warm mode when publicAccess is enabled)
+  enabled: false # declare SFTPGo's web admin/REST API port 8080 (reach it with cpln port-forward;
+                 # the public endpoint serves raw TCP 2022 only, never the web admin)

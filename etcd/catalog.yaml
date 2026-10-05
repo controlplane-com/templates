@@ -1,0 +1,47 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: etcd
+category: database
+topology: distributed
+
+summary: >-
+  An etcd cluster in one location, three members by default and always an odd number, forming a
+  Raft quorum with a persistent volume per member and automatic compaction that keeps the backend
+  under its quota. Clients reach the API on port 2379 inside the GVC, without TLS or
+  authentication, so the internal firewall decides who has access. Pick it as the strongly
+  consistent store for leader election, distributed locks, service discovery or configuration.
+
+keywords:
+  - distributed key-value store
+  - key-value store
+  - raft
+  - consensus
+  - quorum
+  - strongly consistent
+  - leader election
+  - distributed locks
+  - service discovery
+  - configuration store
+  - coordination service
+  - patroni dcs
+  - etcdctl
+
+useCases:
+  - Strongly consistent key-value store for leader election and distributed locks
+  - Configuration store that clients watch for changes
+  - Consensus store (DCS) for Patroni or another high-availability controller
+  - Service discovery registry for services in one location
+
+alternativeTo:
+  - Apache ZooKeeper
+  - HashiCorp Consul
+
+pickInsteadIf:
+  - need: one etcd cluster spread across locations that survives losing a location
+    template: etcd-multi-location
+  - need: a cache or general-purpose key-value store for application data
+    template: redis
+
+prerequisites: []

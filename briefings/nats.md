@@ -38,7 +38,7 @@ durable streams via JetStream where a full Kafka deployment is more than the wor
 | `image` | `nats:2.11.6-alpine` | Pinned. **No curl in this image** — the boot GVC check uses busybox wget |
 | `resources` | `100m` / `256Mi` | Small; raise for real throughput |
 | `nats_defaults.*.port` | 4222 / 6222 / 7222 / 8080 | Validated at render against reserved ports and collisions |
-| `allowCIDR` | `0.0.0.0/0` | Public WebSocket exposure. See the security note below |
+| `allowCIDR` | `[]` | Closed by default — no public WebSocket exposure until ranges are added. See the security note below |
 | `jetstream.enabled` | `false` | Off means in-flight only; an unsubscribed message is gone |
 | `volumeset.capacity` | `10` GiB per replica | Only used when JetStream is on |
 | `nats_extra_config` | `""` | Injected verbatim into the generated config |
@@ -69,16 +69,17 @@ durable streams via JetStream where a full Kafka deployment is more than the wor
   location and an *initialised* one only warns. With JetStream OFF it only ever warns — a stateless server
   is rescheduled routinely, and exiting would take a live, working bus offline the next time a replica
   moved. Check A (running in a location that is not configured at all) always exits.
-- **No authentication is configured, and `allowCIDR` defaults to `0.0.0.0/0`.** With WebSocket enabled
-  that publishes an unauthenticated message bus to the internet. This is inherited from 2.x and was left
-  alone in the conversion; see the open question below.
+- **No authentication is configured, and `allowCIDR` defaults to `[]`.** A default install is therefore
+  closed. Adding ranges with WebSocket enabled publishes an unauthenticated message bus to the internet —
+  measured handing an anonymous client the cluster name, every server name and their private IPs — so add
+  them only alongside an `authorization { … }` block in `nats_extra_config`. Reach a closed deployment with
+  `cpln port-forward`.
 - **`nats_extra_config` is injected verbatim.** A syntax error there is a container that will not start,
   not a render failure, so it is easy to mistake for an infrastructure problem.
 - **Cross-region gateway traffic is billed.** A single-location install is the default for that reason.
 
-## Open question for the maintainer
+## Resolved: the public-access default
 
-`allowCIDR: 0.0.0.0/0` plus no NATS authentication means a default install publishes an open message bus.
-3.0.0 documents this loudly in `values.yaml` and the README but does **not** change the default, because
-it is pre-existing behaviour rather than part of the GVC conversion. A closed default (`allowCIDR: []`)
-would be a one-line change in the same major version if you want it.
+2.x shipped `allowCIDR: [0.0.0.0/0]` with no NATS authentication, so a default install published an open
+message bus. 3.0.0 ships `allowCIDR: []` (the shipped `values.yaml`); the README and the `values.yaml`
+comment tell users to add ranges only together with an `authorization` block in `nats_extra_config`.

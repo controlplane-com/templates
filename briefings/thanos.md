@@ -15,7 +15,7 @@
 | workload `{release}-thanos` (standard) | Query — UI + PromQL API :10902, fan-out over `stores:` list |
 | identity `{release}-thanos-identity` | shared identity; gets bucket access only when storage tier is on |
 | workload `{release}-thanos-store` (stateful, optional) | Store Gateway — serves historical bucket blocks to Query |
-| workload `{release}-thanos-compact` (stateful, optional) | Compactor — merges and downsamples bucket blocks (keeps low-resolution copies for fast long-range queries); strict singleton |
+| workload `{release}-thanos-compact` (stateful, optional) | Compactor — merges and downsamples bucket blocks (keeps low-resolution copies for fast long-range queries); min/maxScale 1 per location |
 | secret + policy (optional) | rendered `objstore.yml` bucket config + reveal grant |
 | 2 volumesets (optional) | Store Gateway cache (safe to lose) + Compactor scratch space |
 
@@ -31,13 +31,15 @@
 
 ## Troubleshooting / considerations
 - **Query UI/API has NO authentication.** That is why `publicAccess` defaults to off. If a user turns it on, anyone with the URL can run queries. Front it with nginx/tyk for auth.
-- **Compactor must be the ONLY one on the bucket — across every install and region.** Two compactors corrupt block layout (manual repair). Multi-region users enable it in exactly one install.
+- **Compactor must be the ONLY one on the bucket — across every install and region.** Two compactors corrupt block layout (manual repair). Multi-region users enable it in exactly one install. **Suspected chart defect:** the compact workload pins scale 1 with no `localOptions`, so a multi-location GVC runs one Compactor per location against the same bucket — the README/docs tell users to enable it only in a single-location GVC until the chart is fixed.
 - **"Store shows as down" is almost always the target's firewall.** Cross-GVC endpoints require the *Prometheus side* to allow inbound `same-org` (or a workload list). Endpoint format: `{workload}.{gvc}.cpln.local:10901` (service-level DNS — most reliable; replica-direct is only for multi-replica targets and can 503).
 - Cross-location internal traffic (Query → remote sidecars) **incurs egress charges** — expected, not a bug.
 - Changing `stores:` requires `helm upgrade` (it changes workload args and safely redeploys). This is by design so replicas never run a stale list.
 - **No dedup happening?** The `queryReplicaLabels` value must exactly match the external label name the Prometheus pair sets (`replica` by default on both templates).
 - Store Gateway slow to become ready on a big bucket = normal (it builds a local index cache first). Its volumeset is a cache — deleting it costs a rebuild, never data.
 - A halted Compactor (critical error) stays running but stops working — check its logs for `halt`; liveness intentionally does not restart it.
+- **1.1.0 renamed `cpu`/`memory` → `maxCpu`/`maxMemory`** in all three resources blocks with no render guard — old keys are silently ignored.
+- **MinIO endpoint default `my-minio:9000` is a short-name placeholder** — users must supply the FQDN `{workload}.{gvc}.cpln.local:9000`.
 - Old data missing from queries? Long-term reads need BOTH the sidecar uploading blocks (prometheus template) and `storeGateway.enabled` here, on the same bucket.
 
 - **MinIO object-storage credentials are a prerequisite secret from 1.2.0.** They are passed as

@@ -40,7 +40,7 @@ Then set `gitea.auth.secretName` to that name. Read it back later with `cpln sec
 
 **The three key material entries cannot be rotated.** Changing `secretKey` makes every existing 2FA secret, access token and mirror credential permanently unreadable; changing `jwtSecret` invalidates issued OAuth2 tokens. Set them once and keep them for the life of the install.
 
-**If the secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments <release>-gitea --gvc <gvc> -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own in roughly 6–8 minutes, or clear it immediately with `cpln workload force-redeployment <release>-gitea --gvc <gvc>` (~90 s).
+**If the secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-gitea --gvc GVC_NAME -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own after several minutes, or skip the wait with `cpln workload force-redeployment RELEASE_NAME-gitea --gvc GVC_NAME`.
 
 **The database password is not a prerequisite** — it is bundled plumbing no human types elsewhere, so this template creates that secret for you from `postgres.credentials.*`.
 
@@ -95,7 +95,7 @@ internalAccess: # internal firewall scope
     #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
 ```
 
-Public access is **on** by default: Git-over-HTTPS clone and push from laptops and CI is the point of the service, and the admin login is a credential you created, not a published default. Set `publicAccess.enabled: false` to keep Gitea inside the GVC; reach the UI with `cpln port-forward {release}-gitea 3000:3000 --gvc {gvc}`. A firewall change takes 30 s to a few minutes to propagate, so re-test rather than trusting the first response.
+Public access is **on** by default: Git-over-HTTPS clone and push from laptops and CI is the point of the service, and the admin login is a credential you created, not a published default. Set `publicAccess.enabled: false` to keep Gitea inside the GVC; reach the UI with `cpln port-forward RELEASE_NAME-gitea 3000:3000 --gvc GVC_NAME`. A firewall change takes 30 s to a few minutes to propagate, so re-test rather than trusting the first response.
 
 ### Backing database
 
@@ -132,10 +132,10 @@ postgres:
 
 | Access | Endpoint | Notes |
 |---|---|---|
-| Web UI + Git-over-HTTPS + registry | `https://<canonical>.cpln.app` | Auto-assigned when `publicAccess.enabled`; find it under `status.canonicalEndpoint` (`cpln workload get <release>-gitea -o yaml`). |
-| Local access (public access off) | `cpln port-forward <release>-gitea 3000:3000 --gvc <gvc>` then open `http://localhost:3000` | Tunnels through Control Plane; independent of the firewall. |
+| Web UI + Git-over-HTTPS + registry | the canonical endpoint | Auto-assigned when `publicAccess.enabled`; read `status.canonicalEndpoint` from `cpln workload get RELEASE_NAME-gitea --gvc GVC_NAME -o yaml`. |
+| Local access (public access off) | `cpln port-forward RELEASE_NAME-gitea 3000:3000 --gvc GVC_NAME` then open `http://localhost:3000` | Tunnels through Control Plane; independent of the firewall. |
 | Git-over-SSH | direct-LB address on `ssh.externalPort` | Only when `ssh.enabled`; the reachable host is the `loadBalancer.direct` address from the workload status, not the web URL. |
-| Internal (in-GVC) | `<release>-gitea.<gvc>.cpln.local:3000` | Reachable from other workloads per `internalAccess.type`. |
+| Internal (in-GVC) | `RELEASE_NAME-gitea.GVC_NAME.cpln.local:3000` | Reachable from other workloads per `internalAccess.type`. |
 | Admin login | `adminUsername` / `adminPassword` | From your `gitea.auth.secretName` secret — `cpln secret reveal my-gitea-auth -o yaml`. |
 | Database credentials | `username` / `password` / `database` | Keys of the secret named by `postgres.config.credentialsSecretName`, created by this template. |
 
@@ -214,6 +214,6 @@ Check the object size before restoring from one.
 
 - [Gitea documentation](https://docs.gitea.com/)
 - [Configuration cheat sheet](https://docs.gitea.com/administration/config-cheat-sheet)
-- [Install with Docker](https://docs.gitea.com/installation/install-with-docker)
+- [Install with Docker (rootless)](https://docs.gitea.com/installation/install-with-docker-rootless)
 - [Package registry](https://docs.gitea.com/usage/packages/overview)
 - [Gitea on GitHub](https://github.com/go-gitea/gitea)

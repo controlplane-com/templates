@@ -15,7 +15,7 @@ relational database.
 | `postgres-highly-available` | dependency, pinned **2.5.0** | the CDC source, with automatic failover |
 | `kafka` | dependency, pinned **4.0.1** | the transport |
 | `debezium-server` | dependency, pinned **1.1.1** | reads the replication stream, writes to Kafka |
-| `secret-db` | this chart | the database credentials the subchart reads by name |
+| `secret-db` | this chart | the database credentials the subchart reads by name (`my-cdc-pipeline-db-credentials`, not release-prefixed) |
 | `validation.yaml` | this chart | cross-component checks at render time |
 
 This chart contributes only glue: one secret and the validation. Each component's own README is the
@@ -27,14 +27,27 @@ reference for its knobs, storage and backups.
 |---|---|---|
 | `database.username` / `.name` | `cdc_user` / `cdcdb` | must match what Debezium is configured to read |
 | `database.password` | `change-me-cdc-pipeline-postgres` | see the note below — correctly a value |
-| `database.walLevel` | `logical` | **required**; `replica` produces a pipeline that emits nothing |
+| `database.walLevel` | `logical` | only validated at render; **not applied** — pgHA 2.5.0 hardcodes `wal_level: replica` |
+| `postgres-highly-available.config.credentialsSecretName` | `my-cdc-pipeline-db-credentials` | org-wide name; give each release its own |
+| `kafka.kafbat_ui.configuration_secret` | `kafka-kafbat-ui-config` | prerequisite opaque secret nothing creates; Kafbat UI is on and public by default |
+| `kafka.kafka.secrets.kraft_cluster_id` | `change-me-cdc-pipeline-kraft-cluster-id` | placeholder, not a valid `random-uuid`; must be replaced |
 | dependency pins | in `Chart.yaml` | do not follow the components' latest releases |
 
 ## Troubleshooting traps
 
-- **`walLevel: logical` is not optional.** Debezium's `pgoutput` decoding requires it. A cluster left on
-  `replica` starts, connects, and then never emits a change — which is exactly how this failed when it was
-  investigated: the connector looked healthy and the topic stayed empty.
+- **1.0.4 delivers no change events with its defaults.** Debezium's `pgoutput` decoding needs
+  `wal_level = logical`; the bundled pgHA 2.5.0 renders `wal_level: replica` and `database.walLevel` is only
+  validated, never applied. Kafka also runs with `allowEveryoneIfNoAclFound: false` and the `debezium` user is
+  neither a super user nor granted ACLs. The connector looks healthy and the topic stays empty.
+- **Kafbat UI wedges silently without its config secret.** `kafka.kafbat_ui.enabled` defaults to true and mounts
+  `kafka-kafbat-ui-config`, which nothing creates; `cpln logs` is empty and only `status.versions[].message`
+  names it.
+- **Validation error text is stale.** The credential-mismatch messages still name
+  `postgres-highly-available.postgres.*` (pre-1.0.4 keys); the Kafka check compares only the user name, not the
+  password.
+- **Debezium's startup step creates the heartbeat table and the slot.** It calls
+  `pg_create_logical_replication_slot(slot, plugin, false, true)`; on PG 14-16 the fourth argument is `twophase`,
+  not `failover`, so the "failover slot" it logs is suspect (see the debezium-server briefing).
 - **The database password stays a plain value, deliberately.** postgres-highly-available 2.5.0 stopped
   creating that secret and now takes only its *name*, so this chart creates it. No human types this password
   — it exists solely so Debezium can read the pipeline's own Postgres — so the bundled-plumbing exception
@@ -46,5 +59,6 @@ reference for its knobs, storage and backups.
   `kafka` and `debezium-server` templates.
 - **A replication slot is left on the source when the connector goes away.** Postgres retains WAL for an
   inactive slot indefinitely, so an abandoned slot eventually fills the source's disk. Drop it explicitly.
-- **Status: parked.** An HA-config investigation proved `wal_level` was the blocker and a fix was written,
-  but a further unexplained failure remained, so the work was stopped rather than half-shipped.
+- **Open maintainer decision.** Because of the `wal_level` and ACL gaps above, the 1.0.4 docs page carries a
+  warning that events are not delivered by default; pulling the template or fixing it in a new version is
+  pending a ruling.

@@ -1,0 +1,76 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Ghost
+category: apps
+topology: single
+
+summary: >-
+  Ghost publishing platform for blogs, newsletters and paid memberships: one Ghost server
+  with a persistent content volume for images and themes, backed by a bundled MySQL
+  database. SMTP for member sign-in links and staff email is optional, as are scheduled MySQL
+  backups to AWS S3 or Google Cloud Storage. Pick it for a self-hosted blog, publication or
+  membership site with a built-in editor and Content and Admin APIs.
+
+keywords:
+  - blog
+  - blogging platform
+  - publishing platform
+  - cms
+  - headless cms
+  - content management
+  - newsletter
+  - paid memberships
+  - paid subscriptions
+  - membership site
+  - online publication
+  - mysql
+
+useCases:
+  - Run a blog or online publication with a built-in editor and themes
+  - Publish posts to a website and to members as an email newsletter
+  - Sell paid memberships or subscriptions to premium content
+  - Serve posts to a separate frontend through Ghost's Content API
+
+alternativeTo:
+  - Substack
+  - Medium
+  - WordPress.com
+  - beehiiv
+  - Ghost(Pro)
+  - Squarespace
+
+pickInsteadIf:
+  - need: newsletters and campaigns to large mailing lists without a blog
+    template: listmonk
+  - need: an internal team wiki rather than a public site
+    template: docmost
+
+related:
+  - template: umami
+    relation: companion
+    note: Cookieless visitor analytics for the publication
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [user, password]
+    valuesPath: mail.secretName
+    required: false
+    when: mail.secretName set (email on)
+    description: SMTP login for member sign-in links and staff email. Leaving mail.secretName empty keeps email off.
+  - kind: other
+    required: false
+    when: sending posts as newsletters to members (set in Ghost Admin, not in values)
+    description: A Mailgun account; Ghost sends bulk newsletter email only through Mailgun, configured in Ghost Admin after install.
+  - kind: bucket
+    valuesPath: [mysql.backup.aws.bucket, mysql.backup.gcp.bucket]
+    required: false
+    when: mysql.backup.enabled
+    description: AWS S3 or Google Cloud Storage bucket that receives the scheduled MySQL backups.
+  - kind: cloud-account
+    valuesPath: [mysql.backup.aws.cloudAccountName, mysql.backup.gcp.cloudAccountName]
+    required: false
+    when: mysql.backup.enabled
+    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy on AWS or Storage Object Admin on GCS.

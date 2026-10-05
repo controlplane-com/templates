@@ -21,7 +21,7 @@ api:
   # authenticating proxy of your own.
   public:
     enabled: false
-    # Path prefix for public endpoint (empty for root)
+    # Not used for routing by this chart version (it does not change the endpoint path)
     pathPrefix: ""
   # ─── Admin API authentication (REQUIRED prerequisite secret) ─────────────────
   # /admin/* creates, edits and deletes clients and rate-limit tiers. It is guarded

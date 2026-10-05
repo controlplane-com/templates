@@ -17,15 +17,15 @@
 | volumeset `{release}-uptime-kuma-data` (10 GiB) | SQLite database + uploads at `/app/data`; final snapshot kept 7 days on delete |
 | identity | Attached but grants nothing — the app has zero secrets (no policy, no secret resources) |
 
-- Public by default on the canonical `*.cpln.app` endpoint (dashboard has built-in login; status pages are meant to be public).
+- **Private by default** (`publicAccess.enabled: false`, since the 1.2.0 security audit, PR #481): the admin account is unclaimed until someone completes the setup wizard, so the user claims it over `cpln port-forward {release}-uptime-kuma 3001:3001 --gvc {gvc}` first, then `helm upgrade`s with `publicAccess.enabled=true` for the canonical `*.cpln.app` endpoint (status pages are meant to be public).
 - No database dependency chart — SQLite is upstream's default and the honest v1 shape.
 
 ## Key knobs
-`image` | `resources` (500m/512Mi, min 125m/256Mi) | `volumeset.capacity` (10 GiB min) | `publicAccess.enabled` (default true) | `internalAccess.type` (default same-gvc)
+`image` | `resources` (500m/512Mi, min 125m/256Mi) | `volumeset.capacity` (10 GiB min) | `publicAccess.enabled` (default **false**) | `internalAccess.type` (default same-gvc)
 
 ## Troubleshooting / considerations
 - **No HA, ever:** upstream supports exactly one instance — no clustering (feature request open since 2021, issues #18/#6394). There is deliberately no replicas knob; a restart means a brief monitoring gap, then monitors resume on their own.
-- **First-visit setup window:** the FIRST person to open the URL creates the admin account — upstream has no way to preset credentials. Users must open the endpoint and finish setup right after install; once one account exists the wizard is dead (test-verified: window closes hard after claim). Maintainer-accepted deviation from the metabase/n8n pre-provisioned posture.
+- **First-visit setup window:** the FIRST person to open the URL creates the admin account — upstream has no way to preset credentials. Users must finish setup right after install — over port-forward, before enabling public access; once one account exists the wizard is dead (test-verified: window closes hard after claim). Maintainer-accepted deviation from the metabase/n8n pre-provisioned posture.
 - **Dashboard runs on WebSockets** (a persistent browser connection used for live updates, via socket.io): if a user says "page loads but is blank/never updates," suspect the websocket path, not the app. Status pages are plain HTTP and would still work.
 - **Ping monitors work** (test-proven): ICMP ping succeeded in-container on the platform — no caveat needed. All monitor types tested green: HTTP, TCP, DNS, ping; webhook notifications e2e; websocket setup flow worked on the public endpoint with no platform interference.
 - **Health = HTTP 302:** the app's own healthcheck treats a redirect (302) on `/` as healthy — a 200 is actually a failure signal for probes; the template execs upstream's bundled healthcheck binary to avoid getting this wrong.

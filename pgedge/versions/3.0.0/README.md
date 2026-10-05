@@ -244,6 +244,8 @@ PgBouncer admin console, or wait up to 5 minutes).
 
 ## Connecting
 
+> **Your application must retry — build it in from the start.** Restarts, upgrades and failovers are routine, and each one fails a few connections or statements for a few seconds even though the database stays up. Retry a failed connection with a short backoff (about 0.5–1 s) for 10–15 s, and retry a failed statement, making retried writes idempotent. Connection pools usually replace a broken connection but do not re-run the failed query for you. Details: [Resiliency](#resiliency).
+
 Connect through PgBouncer for all application traffic. Nothing in this template is exposed publicly.
 
 | | |
@@ -498,13 +500,13 @@ cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-pgedge-backup", container="ba
 
 ## Important Notes
 
+- **Your application must retry failed connections and statements** — without it, every upgrade and replica restart shows up as errors in your app. Retry with a short backoff for 10–15 s and make retried writes idempotent; see [Resiliency](#resiliency)
 - **3.0.0 changes the client endpoint** to `RELEASE_NAME-pgbouncer`, and backups change format — see [Upgrading from 2.x](#upgrading-from-2x)
 - **Never `helm upgrade` a 1.x release onto 2.0.0** — it deletes the GVC the 1.x chart created and everything in it. See [Migrating from 1.x](#migrating-from-1x)
 - **The GVC must contain every location you list** (it may contain more). A missing one is not caught at install — the pgEdge container exits with `FATAL: locations declared in values are not in GVC …`
 - **Use at least 3 replicas per location** in production, to survive a node loss within a location
 - **Surviving a location loss needs your application in at least 2 locations** — clients reach only their own location's PgBouncer. See [Resiliency](#resiliency)
 - **Conflict resolution is last-update-wins** — concurrent writes to the same row from different nodes resolve by commit timestamp. For stronger consistency, route a given entity's writes to one node in your application
-- **Retry failed statements, and make retried writes idempotent** — a rolling restart of PgBouncer or the failover tier can fail a statement that is in flight, occasionally after it committed
 - **Run at least 2 nodes per location for zero-downtime upgrades.** An upgrade restarts the nodes one at a time within each location, and the failover tier carries traffic; with a single node per location every location loses its node together — plan a write interruption of about a minute
 - **Release names must be unique per organization** (secrets are org-wide)
 

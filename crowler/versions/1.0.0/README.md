@@ -68,7 +68,7 @@ crawler:
   queryTimer: 30                # seconds between polls for new sources (>= 5)
   crawlingInterval: 3 days      # re-crawl cadence for a successful source
   crawlingIfError: 15 minutes   # retry delay after a failed crawl
-  processingTimeout: 30 minutes # a source stuck 'processing' after an engine restart is crawled again after this
+  processingTimeout: 1 day      # max length of one crawl, and how long a crawl interrupted by an engine restart waits before retry
   maxDepth: 3                   # link-following depth (0 = unlimited)
   maxLinks: 0                   # links followed per page (0 = unlimited)
   debugLevel: 1
@@ -147,6 +147,7 @@ The database is the `postgres` template, so its scheduled backups work here unch
 - **Keep the API private.** It has no authentication at this version, and anyone who can reach it can add sources. `publicAccess.api` exposes it to the internet. Access changes take from about 30 seconds to a few minutes to apply.
 - **Do not change either database password after install.** Both are applied to the database once. A changed value reaches the containers on their next restart while the database keeps the old one, so the CROWler tiers stop starting. To rotate one, change it inside PostgreSQL first, then upgrade with the matching value.
 - **Upgrading the CROWler images can need a manual schema migration.** The schema loader never re-runs the schema on an existing database. If the new release expects a newer schema, it logs a `WARNING` and the apps start anyway; apply the matching upstream `db_migrations` script.
+- **`crawler.processingTimeout` is both the longest a crawl may run and the wait before an interrupted crawl is retried.** An upgrade that changes crawler settings restarts the engines, so a crawl in flight is retried only after this time (1 day by default). Lower it only if your crawls are always shorter, since longer ones are cut off and marked as errors.
 - **The first upgrade after install can restart the database.** With the default single replicas, crawling and the API may pause for a minute or two.
 - **Network reconnaissance is unavailable.** CROWler's nmap-based DNS, WHOIS and service scans need Linux capabilities the platform does not grant, so they are switched off.
 - **Uninstalling deletes all crawl data.** The database volumeset is removed with the release, so a reinstall starts empty. Back up first if you need the data.

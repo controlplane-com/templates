@@ -27,7 +27,7 @@
 - Nothing is public by default. Reach the API with `cpln port-forward {r}-crowler-api 8080:8080`.
 
 ## Key knobs
-`engine.replicas` 1 · `vdi.replicas` 1 (= crawl concurrency, ≥ engine) · `api.replicas` / `events.replicas` 1 · `crowlerDb.password` and `postgres.credentials.password` (`change-me-…`, change before install) · `crawler.{queryTimer 30, crawlingInterval "3 days", crawlingIfError "15 minutes", processingTimeout "30 minutes", maxDepth 3, maxLinks 0, debugLevel 1}` · `vdi.vncSecretName` "" (VNC/noVNC off; naming an opaque prerequisite secret turns it on) · `config.existingSecretName` "" · `publicAccess.{api,events}` false · `pushgateway`/`jaeger` false · `postgres.*` (full postgres-template pass-through, backups included).
+`engine.replicas` 1 · `vdi.replicas` 1 (= crawl concurrency, ≥ engine) · `api.replicas` / `events.replicas` 1 · `crowlerDb.password` and `postgres.credentials.password` (`change-me-…`, change before install) · `crawler.{queryTimer 30, crawlingInterval "3 days", crawlingIfError "15 minutes", processingTimeout "1 day", maxDepth 3, maxLinks 0, debugLevel 1}` · `vdi.vncSecretName` "" (VNC/noVNC off; naming an opaque prerequisite secret turns it on) · `config.existingSecretName` "" · `publicAccess.{api,events}` false · `pushgateway`/`jaeger` false · `postgres.*` (full postgres-template pass-through, backups included).
 
 ## Availability posture
 - Engines, VDIs, API and events scale horizontally (there is only one, free edition).
@@ -47,3 +47,4 @@
 - **Network recon is unavailable** (no `NET_RAW`/`NET_ADMIN` on the platform). The Pushgateway listens on 9092 because 9091 is a reserved port; a hand-written config must point there.
 - Firewall changes take 30 s–10 min to apply. Re-poll before calling an access knob broken.
 - **VNC is off by default** (`SE_START_VNC=false`, no 5900/7900 ports declared). It guards a human-facing viewer, so its password is an optional prerequisite secret (`vdi.vncSecretName`), never a value. The image reads `SE_VNC_PASSWORD`; `SEL_PASSWD` (used by upstream's own charts) is ignored and leaves the public default `secret` active.
+- **`crawler.processingTimeout` has two effects** (upstream: crawl timeout = processing_timeout - 1). It caps every crawl's duration AND sets how long a source left `processing` by an engine restart waits before reclaim. Default 1 day (upstream's); a 30-minute default was tested and truncated every longer crawl, so it was rejected.

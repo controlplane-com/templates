@@ -17,8 +17,9 @@ steps:
         when: context.mode == 'upgrade'
         text: >-
           An upgrade that changes the pgEdge nodes (their image, resources, locations or replicas, or a new
-          chart version) restarts all of them at once, in every location. Plan a write interruption of about
-          one to two minutes; the data is kept and replication catches up afterwards.
+          chart version) restarts them one at a time within each location, and the failover tier carries
+          traffic. With a single node per location every location loses its node together: plan a write
+          interruption of about a minute. The data is kept and replication catches up afterwards.
       - type: note
         when: >-
           context.gvcLocations != null &&

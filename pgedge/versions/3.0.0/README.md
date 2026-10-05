@@ -75,8 +75,9 @@ The pgEdge nodes, their volumes and their data are kept.
    `RELEASE_NAME-pgedge-proxy.GVC_NAME.cpln.local:5432` first. That is HAProxy, present on any 2.2.0
    install with the default `proxy.enabled: true`. It is unpooled, so stay well under ~97
    connections per node.
-3. `helm upgrade` to 3.0.0. Every pgEdge node restarts once (a ~1–2 minute write interruption), and
-   the `-pgcat` workload is replaced by `-pgbouncer`.
+3. `helm upgrade` to 3.0.0. Every pgEdge node restarts once, one at a time within each location (with
+   a single node per location, that is a write interruption of about a minute), and the `-pgcat`
+   workload is replaced by `-pgbouncer`.
 4. Point applications at `RELEASE_NAME-pgbouncer.GVC_NAME.cpln.local:5432`.
 
 `pgcat.routing: single-writer` has no equivalent: every location now writes to its own node, which
@@ -268,6 +269,7 @@ PgBouncer in its own location.
 |---|---|---|
 | A pgEdge node | The template (HAProxy moves to another local node, or to a remote location if every local node is down) | `replicas: 3` per location in production. New connections fail for about 3 seconds while HAProxy switches |
 | A PgBouncer or HAProxy replica | The template | 2 replicas of each per location (the default) |
+| An upgrade or restart of the nodes | The template (nodes restart one at a time within a location; HAProxy carries traffic) | At least 2 nodes per location. New connections fail for a few seconds when a location's node-0 restarts; with 1 node per location, writes stop for about a minute |
 | A whole location | The template for the database; **your application** for its clients | At least 2 locations, and **your application running in at least 2 of them** behind a public endpoint that spans them. A workload's [canonical endpoint](https://docs.controlplane.com/reference/workload/general#canonical-endpoint-global) already sends each request to the nearest healthy location |
 
 As with any database, a statement that was running when a process failed returns an error: use a
@@ -494,7 +496,8 @@ cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-pgedge-backup", container="ba
 - **Surviving a location loss needs your application in at least 2 locations** — clients reach only their own location's PgBouncer. See [Resiliency](#resiliency)
 - **Conflict resolution is last-update-wins** — concurrent writes to the same row from different nodes resolve by commit timestamp. For stronger consistency, route a given entity's writes to one node in your application
 - **Retry failed statements, and make retried writes idempotent** — a rolling restart of PgBouncer or the failover tier can fail a statement that is in flight, occasionally after it committed
-- **An upgrade that changes the pgEdge nodes restarts all of them at once** (image, resources, locations or replicas, or a new chart version) — treat it as a planned write interruption (~1–2 min). Release names must be unique per organization (secrets are org-wide)
+- **Run at least 2 nodes per location for zero-downtime upgrades.** An upgrade restarts the nodes one at a time within each location, and the failover tier carries traffic; with a single node per location every location loses its node together — plan a write interruption of about a minute
+- **Release names must be unique per organization** (secrets are org-wide)
 
 ## Links
 

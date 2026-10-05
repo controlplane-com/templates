@@ -26,6 +26,14 @@ transaction · `defaultPoolSize` 20 · `maxClientConn` 1000 · `pgbouncer.min/ma
   failed ~60 s after an HAProxy rollout (1/1888), possibly after commit — README says make retries idempotent.
 - Local node-0 down: ~3 s of fast connect failures, then local node-1. All local down → remote; GCP → AWS: 0 failures.
   Failback within `server_lifetime` (300 s).
+- **Node upgrades are ROLLING, not all-at-once (measured 2026-10-05, chart unchanged).** The stateful node workload
+  restarts one replica at a time within a location (node-2 → 1 → 0, ~110 s apart); locations roll in parallel.
+  1 location × 3: force-redeploy and a real `helm upgrade` (minCpu change) each cost **1 failed write** (~6.5 s, at
+  node-0's restart; HAProxy → node-1, back to node-0 after). 3 locations × 3 (east/west/gcp, live writes everywhere):
+  **2 / 2 / 0** failed writes (~7 s gap each); all 72 subscriptions `replicating`, new rows replicate every
+  direction. The old "every node restarts at once (~65 s)" was measured on **1 node per location**, where locations
+  rolling together really is a full outage. No `rolloutOptions` needed (`maxUnavailableReplicas` is dropped on
+  stateful anyway); the lever is ≥2 nodes per location.
 - Whole-location outage (+ HAProxy redeploy during it): other locations 0 failures. Clients *in* the dead location
   fail fast — service DNS is location-pinned, never cross-location.
 - Three locations' pools on one node: 0 `too many clients` (20 × 4 × 3 = 240 < 300).
@@ -34,7 +42,7 @@ transaction · `defaultPoolSize` 20 · `maxClientConn` 1000 · `pgbouncer.min/ma
 
 ## Traps
 - **2.x → 3.0.0:** client hostname changes (`-pgcat` → `-pgbouncer`); render refuses leftover `pgcat`,
-  `proxy.enabled: false`, `pgbouncer.routing` or a pgcat image. Data tier kept; every node restarts (~65 s). Old
+  `proxy.enabled: false`, `pgbouncer.routing` or a pgcat image. Data tier kept; every node restarts once, rolling within a location (~65 s outage only with 1 node/location). Old
   `.sql.gz` backups are not restorable by the job — take a backup after upgrading.
 - **Start scripts are inline container args, NOT secrets (`pgedge.inlineScript`, doubles every `$`).** With them in new
   secrets, 2.x → 3.0.0 upgrades stalled the new tiers ~10 min (3/3 on 2.0.1: reveal refused though the policy was

@@ -301,20 +301,20 @@ tables, and each step crosses the network between locations.
 
 ## Resiliency
 
-The template handles failures inside a location. Surviving the loss of a whole location also needs
-your application running in more than one location.
+Your application needs no failover logic for anything inside a location: the template and TiDB
+handle it. The one thing they cannot handle is the loss of a whole location, because a client
+reaches only the database in its own location.
 
-| Failure | What keeps the database serving | What your application needs |
+| Failure | Handled by | What it needs |
 |---|---|---|
-| A TiDB server | The other servers in that location: `serverReplicas: 2` or more. Add ProxySQL for zero failed queries | Retry the statement that failed (about 10 s of failures with `serverReplicas: 1`) |
-| A ProxySQL replica | The other replicas in that location (`proxysql.replicas: 2` by default) | Retry a statement that was in flight |
-| A TiKV or PD node | Raft elects a new leader: at least 3 TiKV nodes and `pdReplicas: 3` (the default) | A client timeout of 30 s or more, or retry — writes pause briefly |
-| A whole location | The other locations keep reading and writing. Needs the [three-location layout](#example-surviving-the-loss-of-a-location-with-zero-downtime) | **Run in at least 2 of the listed locations**, behind a public endpoint that spans them |
+| A TiDB server | The template | `serverReplicas: 2` or more per location. With [ProxySQL](#connection-pooling-proxysql) no queries fail; without it, new connections fail for about 5 seconds |
+| A ProxySQL replica | The template | `proxysql.replicas: 2` (the default) |
+| A TiKV or PD node | TiDB (Raft elects a new leader) | At least 3 TiKV nodes and `pdReplicas: 3` (the default) |
+| A whole location | The template for the database; **your application** for its clients | The [three-location layout](#example-surviving-the-loss-of-a-location-with-zero-downtime), and **your application running in at least 2 of the listed locations** behind a public endpoint that spans them. A workload's [canonical endpoint](https://docs.controlplane.com/reference/workload/general#canonical-endpoint-global) already sends each request to the nearest healthy location |
 
-A client reaches only the TiDB servers and ProxySQL in its own location, so clients in a lost
-location cannot fail over to another one; your application's other locations take over instead. A
-workload's [canonical endpoint](https://docs.controlplane.com/reference/workload/general#canonical-endpoint-global)
-already sends each request to the nearest healthy location.
+As with any database, a statement that was running on a process that fails returns an error: use a
+driver or pool that reconnects, retry the statement, and set a client timeout of 30 s or more so a
+brief write pause during a leader election is a delay rather than an error.
 
 ## Backing Up
 

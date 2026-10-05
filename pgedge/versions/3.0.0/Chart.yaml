@@ -1,13 +1,13 @@
 apiVersion: v2
-name: tidb
-description: TiDB distributed SQL database with MySQL compatibility, separate TiKV storage and PD components
+name: pgedge
+description: Active-active distributed PostgreSQL with Spock multi-master replication across global locations
 
 type: application
-version: 2.1.0
-appVersion: "8.5.7"
+version: 3.0.0
+appVersion: "17-spock5-standard"
 
 annotations:
-  created: "2025-09-04"
+  created: "2026-04-03"
   lastModified: "2026-10-05"
   createsGvc: false
 

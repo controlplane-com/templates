@@ -9,9 +9,9 @@ topology: multi-location
 summary: >-
   An active-active PostgreSQL cluster using pgEdge's Spock multi-master logical replication:
   nodes in several locations of an existing GVC all accept reads and writes and replicate row
-  changes to each other, with last-update-wins conflict resolution. Each location gets a pgcat
+  changes to each other, with last-update-wins conflict resolution. Each location gets a PgBouncer
   connection pooler and an HAProxy tier that fails over to another local or remote node, plus
-  optional scheduled pg_dump backups to S3 or GCS. Pick it for low-latency writes in several
+  optional scheduled backups to S3 or GCS with a one-command restore into every node. Pick it for low-latency writes in several
   regions; DDL does not replicate and every table needs a primary key.
 
 keywords:
@@ -29,7 +29,7 @@ keywords:
   - global database
   - conflict resolution
   - region failover
-  - pgcat
+  - pgbouncer
   - connection pooling
   - haproxy
   - database backups
@@ -68,7 +68,7 @@ prerequisites:
     keys: [username, password, database]
     valuesPath: postgres.credentialsSecretName
     required: true
-    description: Database credentials, also used as the pgcat admin password. Create it before installing; when it is missing the workload waits with no logs.
+    description: Database credentials, also used for the PgBouncer admin console. Create it before installing; when it is missing the workload waits with no logs.
   - kind: bucket
     valuesPath: [backup.aws.bucket, backup.gcp.bucket]
     required: false

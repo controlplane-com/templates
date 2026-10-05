@@ -138,7 +138,7 @@ steps:
             label: Credentials secret
             required: true
             description: A dictionary secret with the keys `rootPassword`, `user`, `password` and `db`.
-            docs: "#database-credentials"
+            docs: "#prerequisites"
             ref:
               kind: secret
               format: name
@@ -444,7 +444,7 @@ steps:
             message: Choose AWS S3 or Google Cloud Storage.
       - title: AWS S3
         when: self.backup.enabled && self.backup.provider == 'aws'
-        docs: "#aws-s3"
+        docs: "#backing-up"
         fields:
           - path: backup.aws.bucket
             type: string
@@ -481,8 +481,13 @@ steps:
             patternMessage: Leave out the leading /.
       - title: Google Cloud Storage
         when: self.backup.enabled && self.backup.provider == 'gcp'
-        docs: "#gcs"
+        docs: "#backing-up"
         fields:
+          - type: note
+            severity: warning
+            text: >-
+              No Google Cloud Storage backup has completed a verified run on this template. Use AWS S3
+              for data you need to restore.
           - path: backup.gcp.bucket
             type: string
             label: Bucket

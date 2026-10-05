@@ -261,9 +261,10 @@ from every workload type.
 
 ## Resiliency
 
-Your application needs no failover logic for anything inside a location: the template handles it.
-The one thing it cannot handle is the loss of a whole location, because a client reaches only the
-PgBouncer in its own location.
+Your application never has to pick another node for anything inside a location: the template
+handles that, and the application needs only the ordinary retry described below. The one thing it
+cannot handle is the loss of a whole location, because a client reaches only the PgBouncer in its own
+location.
 
 | Failure | Handled by | What it needs |
 |---|---|---|
@@ -272,9 +273,17 @@ PgBouncer in its own location.
 | An upgrade or restart of the nodes | The template (nodes restart one at a time within a location; HAProxy carries traffic) | At least 2 nodes per location. New connections fail for a few seconds when a location's node-0 restarts; with 1 node per location, writes stop for about a minute |
 | A whole location | The template for the database; **your application** for its clients | At least 2 locations, and **your application running in at least 2 of them** behind a public endpoint that spans them. A workload's [canonical endpoint](https://docs.controlplane.com/reference/workload/general#canonical-endpoint-global) already sends each request to the nearest healthy location |
 
-As with any database, a statement that was running when a process failed returns an error: use a
-driver or pool that reconnects, and retry the statement. Spock replicates asynchronously, so writes
-a lost location had not yet replicated reach the others when it returns.
+**Retry logic your application needs.** Every row above can still fail a connection or a statement
+for a moment:
+
+- **Retry failed connections** with a short backoff (about 0.5–1 s) for 10–15 s. New connections fail
+  for a few seconds while HAProxy moves off a node, and a PgBouncer replica that dies drops the
+  connections going through it (new connections go to the other replica straight away).
+- **Retry a failed statement**, and make retried writes idempotent: a statement running on a process
+  that fails returns an error, and may already have committed.
+
+Spock replicates asynchronously, so writes a lost location had not yet replicated reach the others
+when it returns.
 
 ## Schema Changes (DDL)
 

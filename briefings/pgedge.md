@@ -31,7 +31,7 @@ transaction · `defaultPoolSize` 20 · `maxClientConn` 1000 · `pgbouncer.min/ma
   1 location × 3: force-redeploy and a real `helm upgrade` (minCpu change) each cost **1 failed write** (~6.5 s, at
   node-0's restart; HAProxy → node-1, back to node-0 after). 3 locations × 3 (east/west/gcp, live writes everywhere):
   **2 / 2 / 0** failed writes (~7 s gap each); all 72 subscriptions `replicating`, new rows replicate every
-  direction. The old "every node restarts at once (~65 s)" was measured on **1 node per location**, where locations
+  direction. 1 location × **2**: same shape (node-1 → node-0, ~100 s apart), 2 failed writes (~6.9 s), subs `replicating`. The old "every node restarts at once (~65 s)" was measured on **1 node per location**, where locations
   rolling together really is a full outage. No `rolloutOptions` needed (`maxUnavailableReplicas` is dropped on
   stateful anyway); the lever is ≥2 nodes per location.
 - Whole-location outage (+ HAProxy redeploy during it): other locations 0 failures. Clients *in* the dead location

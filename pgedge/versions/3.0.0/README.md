@@ -258,6 +258,23 @@ PgBouncer does not offer TLS — use `sslmode=disable` or `prefer` (traffic stay
 the fully-qualified `.GVC_NAME.cpln.local` form — the bare workload name does not resolve reliably
 from every workload type.
 
+## Resiliency
+
+The template handles failures inside a location. Surviving the loss of a whole location also needs
+your application running in more than one location.
+
+| Failure | What keeps the database serving | What your application needs |
+|---|---|---|
+| A pgEdge node | HAProxy moves to another local node, or to a remote location if every local node is down. Use `replicas: 3` per location in production | Retry the statement that failed (a few seconds of failed connects) |
+| A PgBouncer or HAProxy replica | The other replicas in that location (2 of each by default) | Retry a statement that was in flight |
+| A whole location | The other locations keep reading and writing. Needs at least 2 locations | **Run in at least 2 of the listed locations**, behind a public endpoint that spans them |
+
+A client reaches only the PgBouncer in its own location, so clients in a lost location cannot fail
+over to another one; your application's other locations take over instead. A workload's
+[canonical endpoint](https://docs.controlplane.com/reference/workload/general#canonical-endpoint-global)
+already sends each request to the nearest healthy location. Spock replicates asynchronously, so
+writes the lost location had not yet replicated reach the others when it returns.
+
 ## Schema Changes (DDL)
 
 Spock replicates row-level changes (`INSERT`, `UPDATE`, `DELETE`) automatically. **DDL does not
@@ -475,6 +492,7 @@ cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-pgedge-backup", container="ba
 - **Never `helm upgrade` a 1.x release onto 2.0.0** — it deletes the GVC the 1.x chart created and everything in it. See [Migrating from 1.x](#migrating-from-1x)
 - **The GVC must contain every location you list** (it may contain more). A missing one is not caught at install — the pgEdge container exits with `FATAL: locations declared in values are not in GVC …`
 - **Use at least 3 replicas per location** in production, to survive a node loss within a location
+- **Surviving a location loss needs your application in at least 2 locations** — clients reach only their own location's PgBouncer. See [Resiliency](#resiliency)
 - **Conflict resolution is last-update-wins** — concurrent writes to the same row from different nodes resolve by commit timestamp. For stronger consistency, route a given entity's writes to one node in your application
 - **Retry failed statements, and make retried writes idempotent** — a rolling restart of PgBouncer or the failover tier can fail a statement that is in flight, occasionally after it committed
 - **An upgrade that changes the pgEdge nodes restarts all of them at once** (image, resources, locations or replicas, or a new chart version) — treat it as a planned write interruption (~1–2 min). Release names must be unique per organization (secrets are org-wide)

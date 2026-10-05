@@ -301,9 +301,10 @@ tables, and each step crosses the network between locations.
 
 ## Resiliency
 
-Your application needs no failover logic for anything inside a location: the template and TiDB
-handle it. The one thing they cannot handle is the loss of a whole location, because a client
-reaches only the database in its own location.
+Your application never has to pick another server for anything inside a location: the template and
+TiDB handle that, and the application needs only the ordinary retry described below. The one thing
+they cannot handle is the loss of a whole location, because a client reaches only the database in
+its own location.
 
 | Failure | Handled by | What it needs |
 |---|---|---|
@@ -312,9 +313,17 @@ reaches only the database in its own location.
 | A TiKV or PD node | TiDB (Raft elects a new leader) | At least 3 TiKV nodes and `pdReplicas: 3` (the default) |
 | A whole location | The template for the database; **your application** for its clients | The [three-location layout](#example-surviving-the-loss-of-a-location-with-zero-downtime), and **your application running in at least 2 of the listed locations** behind a public endpoint that spans them. A workload's [canonical endpoint](https://docs.controlplane.com/reference/workload/general#canonical-endpoint-global) already sends each request to the nearest healthy location |
 
-As with any database, a statement that was running on a process that fails returns an error: use a
-driver or pool that reconnects, retry the statement, and set a client timeout of 30 s or more so a
-brief write pause during a leader election is a delay rather than an error.
+**Retry logic your application needs, with or without ProxySQL.** Every row above can still fail a
+connection or a statement for a moment:
+
+- **Retry failed connections** with a short backoff (about 0.5–1 s) for 10–15 s. Without ProxySQL,
+  this is what covers a TiDB server crash: for several seconds new connections can still reach the
+  server that died. ProxySQL retries those for you, but a ProxySQL replica that dies still drops the
+  connections going through it.
+- **Retry a failed statement**, and make retried writes idempotent: a statement running on a process
+  that fails returns an error, and may already have committed.
+- **Set a client timeout of 30 s or more**, so a brief write pause during a leader election is a
+  delay rather than an error.
 
 ## Backing Up
 

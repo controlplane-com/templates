@@ -76,13 +76,7 @@ The pgEdge nodes, their volumes and their data are kept.
    install with the default `proxy.enabled: true`. It is unpooled, so stay well under ~97
    connections per node.
 3. `helm upgrade` to 3.0.0. Every pgEdge node restarts once (a ~1–2 minute write interruption), and
-   the `-pgcat` workload is replaced by `-pgbouncer`. If `-pgbouncer` or `-pgedge-proxy` then stays not
-   ready and `cpln workload get-deployments` reports that the identity *is not allowed to reveal* its
-   startup secret, the new permission has not reached it yet. It clears by itself in about 10 minutes, or
-   wait about 5 minutes after the upgrade and run
-   `cpln workload force-redeployment RELEASE_NAME-pgbouncer --gvc GVC_NAME` (and the same for
-   `RELEASE_NAME-pgedge-proxy`) — it is ready within about a minute. A redeploy sooner than that can hit
-   the same refusal.
+   the `-pgcat` workload is replaced by `-pgbouncer`.
 4. Point applications at `RELEASE_NAME-pgbouncer.GVC_NAME.cpln.local:5432`.
 
 `pgcat.routing: single-writer` has no equivalent: every location now writes to its own node, which

@@ -9,7 +9,7 @@ HAProxy failover tier is always on, and backups gained a one-command restore.**
 ## Architecture (`app → PgBouncer → local HAProxy → pgEdge node`, one set per location)
 | Resource | Notes |
 |---|---|
-| `-pgbouncer` (standard, 2–4/location) | Client endpoint `RELEASE-pgbouncer.GVC.cpln.local:5432`. CNPG image at an immutable dated tag; `start.sh` writes ini + SCRAM userlist at boot. Serves only the configured database |
+| `-pgbouncer` (standard, 2–4/location) | Client endpoint `RELEASE-pgbouncer.GVC.cpln.local:5432`. CNPG image at an immutable dated tag; inline start script writes ini + SCRAM userlist at boot. Serves only the configured database |
 | `-pgedge-proxy` (standard, 2/location) | HAProxy: local node-0 active → local nodes → remote nodes. Runtime DNS (`resolvers`), probes on :8405 |
 | `-pgedge` (stateful) | PG + Spock, full mesh, `replicaDirect`, `max_connections=300` on the command line |
 | `-pgedge-backup` (cron, optional) | Chart script in the stock backup image: backup by default, restore with `--env PGEDGE_ACTION=restore`. Runs in `locations[0]` only |
@@ -30,15 +30,15 @@ transaction · `defaultPoolSize` 20 · `maxClientConn` 1000 · `pgbouncer.min/ma
   fail fast — service DNS is location-pinned, never cross-location.
 - Three locations' pools on one node: 0 `too many clients` (20 × 4 × 3 = 240 < 300).
 - Hung PgBouncer replaced in ~90 s: platform exec liveness acts after ~60 s regardless of 5 s × 3 (proven with a
-  bare probe workload); `start.sh` escalates INT → KILL 30 s after SIGTERM.
+  bare probe workload); the start script escalates INT → KILL 30 s after SIGTERM.
 
 ## Traps
 - **2.x → 3.0.0:** client hostname changes (`-pgcat` → `-pgbouncer`); render refuses leftover `pgcat`,
   `proxy.enabled: false`, `pgbouncer.routing` or a pgcat image. Data tier kept; every node restarts (~65 s). Old
   `.sql.gz` backups are not restorable by the job — take a backup after upgrading.
-- **2.0.x/2.1.0 → 3.0.0 reveal stall (reproduced 3/3 on 2.0.1):** the new tiers are refused their startup secrets
-  for ~10 min although the policy is already correct (authorization edge cache). README remedy, measured: wait ~5 min,
-  then force-redeploy `-pgbouncer` and `-pgedge-proxy` → ready in ~40 s; sooner can hit the same refusal.
+- **Start scripts are inline container args, NOT secrets (`pgedge.inlineScript`, doubles every `$`).** With them in new
+  secrets, 2.x → 3.0.0 upgrades stalled the new tiers ~10 min (3/3 on 2.0.1: reveal refused though the policy was
+  correct — authorization edge cache). Inline: 0/3 stalls, ready in ~42 s. Don't move them back into secrets.
 - **Volume snapshots never ran before 3.0.0** (no schedule rendered; README claimed daily). Now scheduled; the
   platform rejects anything more frequent than hourly at apply, so the chart and wizard refuse it at render.
 - **Never `helm upgrade` 1.x → 2.x+:** it deletes the GVC 1.x created (proven, 6 s, "upgraded successfully").

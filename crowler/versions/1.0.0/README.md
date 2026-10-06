@@ -131,7 +131,7 @@ curl -X POST http://localhost:8080/v1/source/add -H 'Content-Type: application/j
 curl 'http://localhost:8080/v1/search/general?q=example'
 ```
 
-`restricted: 2` lets the crawl follow links within the same site; without it only the page you added is crawled. CROWler 2.1.8 follows absolute and root-relative links (`/docs/a.html`) but not bare relative ones (`a.html`). The API's OpenAPI document is at `http://localhost:8080/v1/openapi.json`. Re-run the port-forward after any upgrade that restarts the API, because the tunnel closes with the old replica.
+`restricted: 2` lets the crawl follow links within the same site; without it only the page you added is crawled. CROWler 2.1.8 follows absolute and root-relative links (`/docs/a.html`) but not bare relative ones (`a.html`). The API's OpenAPI document is at `http://localhost:8080/v1/openapi.json`. An open port-forward drops requests for up to a minute while an upgrade restarts the API, then reconnects; re-run it if it does not.
 
 ## Watching the browser (optional)
 

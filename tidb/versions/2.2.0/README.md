@@ -55,7 +55,8 @@ cpln secret create-dictionary --name my-tidb-credentials \
 ```
 
 Set `autoCreateDatabase.credentialsSecretName` to the name you used. Secret names are
-organization-wide, so give each release its own.
+organization-wide, so give each release its own. `user` must be 1–32 characters and `db` 1–64
+characters (not ending in a space); the TiDB servers refuse to start otherwise, naming the key.
 
 **If the secret does not exist at install time, the deployment wedges silently.** `cpln logs`
 returns **zero lines** — the container never starts, so it has nothing to log. Read
@@ -71,6 +72,19 @@ skip the wait.
 
 Backups additionally need a bucket and a Control Plane
 [cloud account](https://docs.controlplane.com/guides/create-cloud-account) — see [Backing Up](#backing-up).
+
+## Upgrading from 2.1.0
+
+An in-place `helm upgrade` with your existing values. PD, TiKV and the TiDB servers are unchanged, so
+they keep running; nothing about how clients connect changes. Two things do change:
+
+- **Volume snapshots start.** Every PD and TiKV volume is snapshotted daily at 03:00 UTC and kept for
+  7 days (2.1.0 declared the retention but never scheduled a snapshot). Set
+  `volumeset.tikv.snapshots.schedule` and `volumeset.pd.snapshots.schedule` to `""` to keep them off.
+- **The ProxySQL tier, if enabled, restarts once** (its start script moved out of a secret).
+
+Root's password is now set by the first TiDB server at bootstrap; that only affects new clusters —
+an existing cluster keeps the password it has, and the init job still checks it.
 
 ## Upgrading from 2.0.0
 
@@ -93,8 +107,9 @@ cpln workload exec RELEASE_NAME-pd --gvc GVC_NAME --location LOCATION --replica 
 ```
 
 Every store must say `"Up"`. If one is `"Down"` and the cluster has never served queries, it holds
-no data: uninstall it and install 2.1.0 fresh. If it has been serving with a store down, back it up
-and restore into a fresh 2.1.0 install (see [Backing Up](#backing-up)).
+no data: uninstall it and install the current version fresh. If it has been serving with a store
+down, back it up and restore into a fresh install of the current version (see
+[Backing Up](#backing-up)).
 
 ## Migrating from 1.x
 
@@ -415,7 +430,7 @@ Backups land at `BUCKET/PREFIX/tidb-TIMESTAMP/`. Restore with `br restore full`,
 **AWS S3**
 ```sh
 br restore full \
-  --pd="RELEASE_NAME-pd.GVC_NAME.cpln.local:2379" \
+  --pd="replica-0.RELEASE_NAME-pd.LOCATION_1.GVC_NAME.cpln.local:2379,replica-0.RELEASE_NAME-pd.LOCATION_2.GVC_NAME.cpln.local:2379,replica-0.RELEASE_NAME-pd.LOCATION_3.GVC_NAME.cpln.local:2379" \
   --storage="s3://BUCKET_NAME/PREFIX/tidb-TIMESTAMP" \
   --s3.region="BUCKET_REGION"
 ```
@@ -423,9 +438,13 @@ br restore full \
 **GCS**
 ```sh
 br restore full \
-  --pd="RELEASE_NAME-pd.GVC_NAME.cpln.local:2379" \
+  --pd="replica-0.RELEASE_NAME-pd.LOCATION_1.GVC_NAME.cpln.local:2379,replica-0.RELEASE_NAME-pd.LOCATION_2.GVC_NAME.cpln.local:2379,replica-0.RELEASE_NAME-pd.LOCATION_3.GVC_NAME.cpln.local:2379" \
   --storage="gcs://BUCKET_NAME/PREFIX/tidb-TIMESTAMP"
 ```
+
+List one PD member per location, `replica-0.RELEASE_NAME-pd.LOCATION.GVC_NAME.cpln.local:2379` —
+`br` needs one that answers and finds the rest. The plain `RELEASE_NAME-pd.GVC_NAME.cpln.local` name
+only reaches PD in the caller's own location, which may have no PD member.
 
 `br` must be the same version as the cluster. **This restore path is the upstream procedure and has
 not been exercised end to end against a backup produced by this template** — in particular the SST
@@ -435,7 +454,6 @@ into a scratch release before you need one.
 ## Important Notes
 
 - **Root has a password from the first moment** when `autoCreateDatabase.enabled` (the default): the first TiDB server sets it while the cluster bootstraps. With `autoCreateDatabase.enabled: false`, root starts with **no password** — set one with `ALTER USER` before exposing the cluster.
-
 - **Your application must retry failed connections and statements** — without it, every upgrade and replica restart shows up as errors in your app. Retry with a short backoff for 10–15 s and make retried writes idempotent; see [Resiliency](#resiliency).
 - **Never `helm upgrade` a 1.x release onto 2.0.0** — it deletes the GVC the 1.x release created and everything inside it. Install a new release instead; see [Migrating from 1.x](#migrating-from-1x).
 - **Every location in `locations` must already exist in the GVC.** A location the GVC lacks is accepted silently by the platform; PD refuses to bootstrap and says so in its logs. A GVC location you did *not* list simply runs nothing.

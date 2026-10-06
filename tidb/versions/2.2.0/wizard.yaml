@@ -13,6 +13,14 @@ steps:
     docs: "#locations"
     fields:
       - type: note
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '2.2.0') < 0
+        text: >-
+          2.2.0 starts daily volume snapshots of every PD and TiKV volume (billed per snapshot; set a
+          schedule of "" to turn them off), and the ProxySQL tier, if enabled, restarts once. PD, TiKV
+          and the TiDB servers are otherwise unchanged.
+      - type: note
         severity: warning
         when: >-
           context.mode == 'upgrade' && context.fromVersion != null &&
@@ -152,8 +160,9 @@ steps:
             type: boolean
             label: Run the initialization job
             description: >-
-              Turn it off after the first install has finished to remove the one-time job; the
-              credentials stay available to the TiDB servers.
+              A backstop that sets the root password and creates the application database and user if
+              they are missing. A fresh install already does this while the cluster bootstraps; the job
+              matters for clusters created before 2.2.0. Turn it off once the database is initialized.
           - path: autoCreateDatabase.schedule
             type: string
             format: cron

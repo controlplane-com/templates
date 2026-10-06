@@ -14,13 +14,13 @@
 | Resource | Purpose |
 |---|---|
 | workload `{release}-pd` (stateful) | PD quorum, `pdReplicas` members spread across `locations`, `replicaDirect` |
-| workload `{release}-tikv` (stateful) | Storage nodes, `locations[].replicas` per location |
+| workload `{release}-tikv` (stateful) | Storage nodes, `locations[].tikvReplicas` per location (SQL servers: `serverReplicas`) |
 | workload `{release}-server` (standard) | MySQL front door :4000, status :10080 |
-| workload `{release}-tidb-db-init` | One-shot database/user bootstrap when `autoCreateDatabase.deployInitWorkload` |
+| workload `{release}-tidb-db-init` | Backstop that sets root's password and creates the app db/user if missing (2.2.0: the bootstrapping server does it first); when `autoCreateDatabase.deployInitWorkload` |
 | workload `{release}-tidb-backup` (cron) | Optional `br` backup to S3 or GCS, unsuspended in one location |
 | volumesets, secrets (startup scripts), identity, 2 policies | Per-tier config, secret reveal, and `view` on the ONE install GVC |
 
-## Key knobs (shipped defaults, 2.0.0)
+## Key knobs (shipped defaults, 2.2.0)
 | Knob | Default | Meaning |
 |---|---|---|
 | `locations` | one entry: `aws-us-east-1`, `tikvReplicas: 3`, `serverReplicas: 3` | Must already exist in the install GVC. 2.1.0 split 2.0.0's `replicas` into independent TiKV / SQL-server counts; a leftover `replicas` key is refused at render (silently ignoring it would re-size a live cluster) |
@@ -29,6 +29,7 @@
 | `resources.{pd,server,tikv}` | 2 cpu / 4-2-4 Gi | Single-value blocks, so bare `cpu`/`memory` |
 | `autoCreateDatabase.*` | on, `deployInitWorkload: true`, `credentialsSecretName: my-tidb-credentials` | Prerequisite `dictionary` secret with `rootPassword`, `user`, `password`, `db` |
 | `volumeset.{tikv,pd}.capacity` | `10` GiB | TiKV supports autoscaling; PD does not |
+| `volumeset.{tikv,pd}.snapshots.*` (2.2.0) | `schedule: "0 3 * * *"`, `retentionDuration: 7d` | `""` turns snapshots off; more often than hourly is refused at render |
 | `external_access.*_outboundAllowCIDR` | `[]` | Per-tier egress; backups force `0.0.0.0/0` on TiKV |
 | `internal_access.{server,tikv,pd}.type` | `same-gvc` | Who may reach each tier. This release's own workloads are ALWAYS included |
 | `backup.*` | off, `provider: aws`, `location: aws-us-east-1` | `location` must be one of `locations` — refused at render otherwise |
@@ -56,7 +57,7 @@
 - **PD restart path no longer overrides election timing.** The existing-data config set `election-interval 20s` / `lease 15` while first boot used PD defaults (3 s), so any cluster that had ever restarted (every upgrade) failed over its PD leader several times slower. Both paths now use the defaults, which ran without a spurious election in every multi-region test.
 
 ## What 2.2.0 changed (fixes only — architecture unchanged)
-- **Root is never passwordless:** the server start script writes `/tmp/tidb-init.sql` (0600) from the credentials env and starts
+- **Root is never passwordless (when `autoCreateDatabase.enabled`, the default):** the server start script writes `/tmp/tidb-init.sql` (0600) from the credentials env and starts
   tidb-server with `--initialize-sql-file`; the bootstrapping server runs it once, **before** opening :4000 (measured v8.5.7).
   Escaping: `'`→`''`, `\`→`\\` in strings, backtick doubled in identifiers. **Trap:** a file TiDB cannot parse is FATAL and is
   NOT re-run on restart (root stays passwordless) — escaping makes that unreachable, and db-init stays on as the backstop
@@ -68,7 +69,11 @@
 - **Backup reaches PD by every member's per-replica address** (comma list): the service name only reaches PD in the backup's
   own location, which may have none.
 - **Upgrade 2.1.0 → 2.2.0:** PD, TiKV and server workloads render identically to 2.1.0 apart from tags; volume sets gain only
-  `snapshots.schedule`.
+  `snapshots.schedule`. The server startup secret's content changes, but running servers pick it up only on their next restart
+  — harmless, since `--initialize-sql-file` is ignored on an already-bootstrapped cluster.
+- **Init-file failure modes are refused up front:** a `user` > 32 or `db` > 64 characters (or ending in a space) would fail at
+  execution, also fatally — the start script exits with a named FATAL before TiDB starts, so nothing bootstraps passwordless.
+  The db-init backstop now escapes its SQL the same way.
 - **Cross-location SQL failover is deferred** to the platform's internal-endpoint locality failover (est. Oct 2026): when it
   ships, re-run the resilience matrix (TCP :4000, readiness-driven, new connections only, failback). A stateful/replicaDirect
   tidb-server + HAProxy design was specced and set aside (spec "Superseded design").

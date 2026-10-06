@@ -17,9 +17,10 @@ steps:
           context.mode == 'upgrade' && context.fromVersion != null &&
           semverCompare(context.fromVersion, '2.2.0') < 0
         text: >-
-          2.2.0 starts daily volume snapshots of every PD and TiKV volume (billed per snapshot; set a
-          schedule of "" to turn them off), and the ProxySQL tier, if enabled, restarts once. PD, TiKV
-          and the TiDB servers are otherwise unchanged.
+          Every workload restarts once during this upgrade; with one PD member and one TiKV node per
+          location, writes pause for about 75 s, so upgrade in a quiet period with clients that retry.
+          2.2.0 also starts daily volume snapshots of every PD and TiKV volume (billed per snapshot; set
+          a schedule of "" to turn them off).
       - type: note
         severity: warning
         when: >-

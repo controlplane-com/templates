@@ -55,6 +55,9 @@ spec:
             - >-
               curl -sf --max-time 4 http://localhost:10080/status
               | grep -q '"version"'
+              {{- if .Values.autoCreateDatabase.enabled }}
+              && /tmp/root-guard.sh
+              {{- end }}
         {{- /*
           The platform derives a STARTUP probe from this one: a container that has
           never been ready is killed after about initialDelaySeconds + 30 x
@@ -70,7 +73,7 @@ spec:
         initialDelaySeconds: 15
         periodSeconds: 30
         successThreshold: 1
-        timeoutSeconds: 5
+        timeoutSeconds: 8   # /status (up to 4 s) plus the root guard (up to 3 s)
       volumes:
         - path: /scripts/server-startup.sh
           recoveryPolicy: retain   # API backfill, declared so rendered == stored

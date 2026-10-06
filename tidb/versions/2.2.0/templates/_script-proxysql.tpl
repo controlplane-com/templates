@@ -9,8 +9,11 @@ set -euo pipefail
 
 # The config FILE cannot hold cpln://secret references (nothing expands them
 # inside a file body), so it is written here at start from env vars, which the
-# platform resolves. Values are escaped for libconfig double-quoted strings.
-esc() { local s=${1//\\/\\\\}; s=${s//\"/\\\"}; printf '%s' "$s"; }
+# platform resolves. Values are escaped for libconfig double-quoted strings, and
+# ' is doubled because ProxySQL copies each value into a single-quoted SQLite
+# literal when it loads users: an undoubled ' loaded NO users and logged the
+# passwords in the error (measured on proxysql 3.0.11).
+esc() { local s=${1//\\/\\\\}; s=${s//\"/\\\"}; s=${s//\'/\'\'}; printf '%s' "$s"; }
 
 # The stock image binds the admin interface on 0.0.0.0:6032 as admin:admin.
 # Bind it to loopback only, with a random per-boot password the readiness

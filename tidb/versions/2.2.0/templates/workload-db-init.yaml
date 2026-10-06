@@ -45,15 +45,16 @@ spec:
       target: 100
     capacityAI: false
     debug: false
-    suspend: false
+    suspend: true   # a cron's schedule ignores 0/0 autoscaling: unsuspended only below
     timeoutSeconds: 10
   {{- /*
     One entry, for the first configured location. 1.x rendered an entry for
-    EVERY location and set `suspend: true` on all but the first; with
-    defaultOptions pinned to 0/0 those entries are unnecessary, and dropping them
-    removes this chart's last use of localOptions[].suspend — a field that
-    permanently withdraws a workload's endpoints from other locations' service
-    discovery, with no way back short of recreating the workload.
+    EVERY location and set `suspend: true` on all but the first. 2.0.0-2.1.0
+    relied on defaultOptions 0/0 instead, but a cron's schedule ignores
+    autoscaling, so the job ran in every GVC location (measured 2026-10-06).
+    defaultOptions now suspends it and this one entry unsuspends it, exactly like
+    the backup cron. A cron has no inbound endpoints, so the localOptions[].suspend
+    reachability trap does not apply.
 
     The entry carries every field defaultOptions carries: the API completes a
     partial localOptions entry from PLATFORM defaults, not from this workload's

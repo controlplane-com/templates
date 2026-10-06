@@ -75,13 +75,17 @@ Backups additionally need a bucket and a Control Plane
 
 ## Upgrading from 2.1.0
 
-An in-place `helm upgrade` with your existing values. PD, TiKV and the TiDB servers are unchanged, so
-they keep running; nothing about how clients connect changes. Two things do change:
+An in-place `helm upgrade` with your existing values; nothing about how clients connect changes.
+**Every workload restarts once** — any chart version upgrade does, because the platform restarts a
+workload when its template-version tag changes. Stateful tiers restart one replica at a time within
+a location but every location at once, so with one PD member and one TiKV node per location, writes
+pause for about 75 s (measured): run the upgrade in a quiet period, with clients that retry. Also:
 
 - **Volume snapshots start.** Every PD and TiKV volume is snapshotted daily at 03:00 UTC and kept for
   7 days (2.1.0 declared the retention but never scheduled a snapshot). Set
   `volumeset.tikv.snapshots.schedule` and `volumeset.pd.snapshots.schedule` to `""` to keep them off.
-- **The ProxySQL tier, if enabled, restarts once** (its start script moved out of a secret).
+- **ProxySQL accepts credentials containing `'`.** 2.1.0 silently loaded no users from them.
+- **The db-init job runs in one location only** (2.1.0 ran it in every GVC location).
 
 Root's password is now set by the first TiDB server at bootstrap; that only affects new clusters —
 an existing cluster keeps the password it has, and the init job still checks it.
@@ -181,8 +185,9 @@ away, and TiKV spreads each region's three copies one per location. Every locati
 
 Measured with one location fully dark (servers, ProxySQL, PD leader and TiKV all gone): clients in
 the other locations kept connecting with no interruption, and writes paused about 15 seconds while
-new leaders were elected, then ran normally — no failed queries with a 60 s client timeout. Use a
-client timeout of 30 s or more (or retry) so that pause is a delay, not an error.
+new leaders were elected, then ran normally — no failed queries with a 60 s client timeout. A
+rolling restart of PD or TiKV pauses writes for about 45 s. Use a client timeout of 60 s (or retry)
+so those pauses are a delay, not an error.
 
 Two SQL servers per location behind [ProxySQL](#connection-pooling-proxysql) keep a location serving
 through a server crash with zero failed queries; with `serverReplicas: 1` that location's clients
@@ -347,8 +352,8 @@ connection or a statement for a moment:
   connections going through it.
 - **Retry a failed statement**, and make retried writes idempotent: a statement running on a process
   that fails returns an error, and may already have committed.
-- **Set a client timeout of 30 s or more**, so a brief write pause during a leader election is a
-  delay rather than an error.
+- **Set a client timeout of 60 s**, so a write pause during a leader election or a PD/TiKV restart
+  (15–75 s measured) is a delay rather than an error.
 
 ## Backing Up
 
@@ -446,10 +451,12 @@ List one PD member per location, `replica-0.RELEASE_NAME-pd.LOCATION.GVC_NAME.cp
 `br` needs one that answers and finds the rest. The plain `RELEASE_NAME-pd.GVC_NAME.cpln.local` name
 only reaches PD in the caller's own location, which may have no PD member.
 
-`br` must be the same version as the cluster. **This restore path is the upstream procedure and has
-not been exercised end to end against a backup produced by this template** — in particular the SST
-object layout differs between the S3 (`1/<name>`) and GCS (`1_<name>`) backends. Rehearse a restore
-into a scratch release before you need one.
+`br` must be the same version as the cluster, and the target must be empty. Restoring an S3 backup
+this way into a fresh release was verified end to end (identical `ADMIN CHECKSUM`); the GCS path is
+the same command but has not been exercised. **A full restore also restores the source cluster's
+users** — root's password and the application user become the ones the backup was taken with, not
+the target release's credentials secret. Rehearse a restore into a scratch release before you need
+one.
 
 ## Important Notes
 

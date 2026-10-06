@@ -225,6 +225,28 @@ steps:
             required: true
             suggestions: [10, 20, 50]
             description: Per PD member. PD holds only cluster metadata.
+          - path: volumeset.tikv.snapshots.schedule
+            type: string
+            format: cron
+            label: TiKV snapshot schedule (UTC)
+            description: Volume snapshots of every TiKV node. Leave empty to turn them off.
+          - path: volumeset.tikv.snapshots.retentionDuration
+            type: string
+            format: duration
+            label: Keep TiKV snapshots for
+            required: true
+            placeholder: 7d
+          - path: volumeset.pd.snapshots.schedule
+            type: string
+            format: cron
+            label: PD snapshot schedule (UTC)
+            description: Volume snapshots of every PD member. Leave empty to turn them off.
+          - path: volumeset.pd.snapshots.retentionDuration
+            type: string
+            format: duration
+            label: Keep PD snapshots for
+            required: true
+            placeholder: 7d
       - id: tikv-autoscaling
         title: Grow TiKV storage automatically
         toggle: volumeset.tikv.autoscaling.enabled
@@ -267,6 +289,22 @@ steps:
       - rule: oldSelf == null || self.volumeset.pd.capacity >= oldSelf.volumeset.pd.capacity
         paths: [volumeset.pd.capacity]
         message: A volume set cannot shrink. Keep the PD capacity at or above the installed size.
+      - rule: >-
+          self.volumeset.tikv.snapshots.schedule == null || self.volumeset.tikv.snapshots.schedule == '' ||
+          self.volumeset.tikv.snapshots.schedule.trim().matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$')
+        mirrors: tidb.validateSnapshots
+        paths: [volumeset.tikv.snapshots.schedule]
+        message: >-
+          Snapshots cannot run more often than hourly: use a single fixed minute, for example
+          "0 3 * * *" for daily at 03:00 UTC.
+      - rule: >-
+          self.volumeset.pd.snapshots.schedule == null || self.volumeset.pd.snapshots.schedule == '' ||
+          self.volumeset.pd.snapshots.schedule.trim().matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$')
+        mirrors: tidb.validateSnapshots
+        paths: [volumeset.pd.snapshots.schedule]
+        message: >-
+          Snapshots cannot run more often than hourly: use a single fixed minute, for example
+          "0 3 * * *" for daily at 03:00 UTC.
 
   - id: access
     title: Access and pooling

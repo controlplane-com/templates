@@ -12,7 +12,8 @@ spec:
       image: {{ .Values.proxysql.image }}
       command: "/bin/bash"
       args:
-        - "/scripts/proxysql-startup.sh"
+        - "-c"
+        - {{- include "tidb.inlineScript" (include "tidb.script.proxysql" .) | nindent 10 }}
       inheritEnv: false
       env:
         - name: BACKEND_HOST
@@ -47,10 +48,6 @@ spec:
         periodSeconds: 10
         successThreshold: 1
         timeoutSeconds: 5
-      volumes:
-        - path: /scripts/proxysql-startup.sh
-          recoveryPolicy: retain   # API backfill, declared so rendered == stored
-          uri: cpln://secret/{{ include "tidb.proxysqlSecret.name" . }}.payload
   identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "tidb.identity.name" . }}
   defaultOptions:
     autoscaling:

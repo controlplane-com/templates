@@ -10,8 +10,8 @@ From 2.0.0 the chart deploys into the GVC you install into and creates none of i
 - **Stateful PD workload** (`RELEASE_NAME-pd`) — the placement driver quorum, `pdReplicas` members spread across `locations`, each individually addressable via `replicaDirect`.
 - **Stateful TiKV workload** (`RELEASE_NAME-tikv`) — the storage nodes; `locations[].tikvReplicas` per location, each with its own persistent volume.
 - **TiDB server workload** (`RELEASE_NAME-server`) — the MySQL-compatible SQL layer on port 4000; `locations[].serverReplicas` per location.
-- **DB init workload** *(optional, on by default)* — a one-time job that sets the root password and creates the application database and user. Turn it off after the first deploy.
-- **Volume sets** — PD and TiKV storage, each with 7-day snapshot retention.
+- **DB init workload** *(optional, on by default)* — a backstop job that sets the root password and creates the application database and user if they are missing. On a fresh 2.2.0 install the first TiDB server already does this while the cluster bootstraps, before it accepts any connection, so root is never reachable without a password. Turn the job off after the first deploy.
+- **Volume sets** — PD and TiKV storage, snapshotted daily (03:00 UTC) and kept for 7 days by default.
 - **Secrets** — the PD, TiKV and tidb-server startup scripts, plus the init job's script.
 - **Identity and two policies** — `reveal` on this release's secrets and the credentials secret you create, `view` on the one GVC you install into so PD can confirm at boot that the GVC really has every location you listed, and cloud storage access when backups are on.
 - **Backup cron workload** *(optional)* — TiDB's `br` writing a full cluster snapshot to S3 or GCS, unsuspended in exactly one location.
@@ -236,6 +236,9 @@ CLI needs `--default-character-set=utf8mb4`) — see Important Notes.
 volumeset:
   tikv:
     capacity: 10 # initial capacity in GiB (minimum is 10)
+    snapshots:
+      schedule: "0 3 * * *"    # volume snapshots of every TiKV node, daily at 3am UTC; at most hourly; "" turns them off
+      retentionDuration: 7d    # how long each snapshot is kept
     autoscaling:
       enabled: false
       maxCapacity: 100       # maximum capacity in GiB
@@ -243,9 +246,14 @@ volumeset:
       scalingFactor: 1.2     # multiply current capacity by this factor when scaling
   pd:
     capacity: 10 # initial capacity in GiB
+    snapshots:
+      schedule: "0 3 * * *"    # volume snapshots of every PD member, daily at 3am UTC; at most hourly; "" turns them off
+      retentionDuration: 7d    # how long each snapshot is kept
 ```
 
-PD only holds cluster metadata, so it has no autoscaling knob.
+PD only holds cluster metadata, so it has no autoscaling knob. Volume snapshots are per volume and
+crash-consistent — they protect against losing a single volume; restore a whole cluster from a `br`
+backup (see Backing Up).
 
 ### Access
 
@@ -425,6 +433,8 @@ object layout differs between the S3 (`1/<name>`) and GCS (`1_<name>`) backends.
 into a scratch release before you need one.
 
 ## Important Notes
+
+- **Root has a password from the first moment** when `autoCreateDatabase.enabled` (the default): the first TiDB server sets it while the cluster bootstraps. With `autoCreateDatabase.enabled: false`, root starts with **no password** — set one with `ALTER USER` before exposing the cluster.
 
 - **Your application must retry failed connections and statements** — without it, every upgrade and replica restart shows up as errors in your app. Retry with a short backoff for 10–15 s and make retried writes idempotent; see [Resiliency](#resiliency).
 - **Never `helm upgrade` a 1.x release onto 2.0.0** — it deletes the GVC the 1.x release created and everything inside it. Install a new release instead; see [Migrating from 1.x](#migrating-from-1x).

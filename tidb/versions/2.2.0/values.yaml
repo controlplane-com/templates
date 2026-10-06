@@ -64,6 +64,9 @@ proxysql:
 volumeset:
   tikv:
     capacity: 10 # initial capacity in GiB (minimum is 10)
+    snapshots:
+      schedule: "0 3 * * *"    # volume snapshots of every TiKV node, daily at 3am UTC; at most hourly; "" turns them off
+      retentionDuration: 7d    # how long each snapshot is kept
     autoscaling:
       enabled: false # Set to true to enable autoscaling
       maxCapacity: 100 # Maximum capacity in GiB
@@ -71,6 +74,9 @@ volumeset:
       scalingFactor: 1.2 # Multiplier applied to current capacity when scaling
   pd:
     capacity: 10 # initial capacity in GiB (minimum is 10)
+    snapshots:
+      schedule: "0 3 * * *"    # volume snapshots of every PD member, daily at 3am UTC; at most hourly; "" turns them off
+      retentionDuration: 7d    # how long each snapshot is kept
 
 external_access: # Set if client is outside the GVC or in another location
   server_outboundAllowCIDR: []

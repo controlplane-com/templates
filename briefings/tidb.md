@@ -55,6 +55,24 @@
 - **Optional ProxySQL pooler** (`proxysql.enabled`, default off) — see Troubleshooting for the design and the latin1 trap.
 - **PD restart path no longer overrides election timing.** The existing-data config set `election-interval 20s` / `lease 15` while first boot used PD defaults (3 s), so any cluster that had ever restarted (every upgrade) failed over its PD leader several times slower. Both paths now use the defaults, which ran without a spurious election in every multi-region test.
 
+## What 2.2.0 changed (fixes only — architecture unchanged)
+- **Root is never passwordless:** the server start script writes `/tmp/tidb-init.sql` (0600) from the credentials env and starts
+  tidb-server with `--initialize-sql-file`; the bootstrapping server runs it once, **before** opening :4000 (measured v8.5.7).
+  Escaping: `'`→`''`, `\`→`\\` in strings, backtick doubled in identifiers. **Trap:** a file TiDB cannot parse is FATAL and is
+  NOT re-run on restart (root stays passwordless) — escaping makes that unreachable, and db-init stays on as the backstop
+  (also covers clusters bootstrapped by 2.1.0). `autoCreateDatabase.enabled: false` → no file → passwordless root, as before.
+- **Volume snapshots actually run:** `volumeset.{pd,tikv}.snapshots.schedule` (daily 03:00 UTC; render + wizard refuse
+  more-frequent-than-hourly — the API rejects it only at apply). 2.1.0 had retention but no schedule → no snapshots ever.
+- **ProxySQL start script inline** (`tidb.inlineScript`, every `$` doubled): no secret, so enabling ProxySQL on an existing
+  release no longer stalls ~10 min on a new reveal grant. The ProxySQL secret is the only resource 2.2.0 removes.
+- **Backup reaches PD by every member's per-replica address** (comma list): the service name only reaches PD in the backup's
+  own location, which may have none.
+- **Upgrade 2.1.0 → 2.2.0:** PD, TiKV and server workloads render identically to 2.1.0 apart from tags; volume sets gain only
+  `snapshots.schedule`.
+- **Cross-location SQL failover is deferred** to the platform's internal-endpoint locality failover (est. Oct 2026): when it
+  ships, re-run the resilience matrix (TCP :4000, readiness-driven, new connections only, failback). A stateful/replicaDirect
+  tidb-server + HAProxy design was specced and set aside (spec "Superseded design").
+
 ## Availability posture
 - Default is **one location, 3 TiKV + 3 PD**: survives a node loss, not a location loss.
 - Location survival needs **≥3 locations with PD spread one per location**. Verified on 1.x: converged in 2 m 51 s, query-ready ~5 min, 66 regions replicated one per location.

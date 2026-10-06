@@ -28,7 +28,9 @@ spec:
           value: {{ .Values.backup.gcp.prefix | quote }}
       {{- end }}
         - name: TIDB_PD_ADDR
-          value: {{ include "tidb.pd.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:2379
+          # Every PD member by its per-replica address: the service name only reaches
+          # PD in the backup's own location, which may have no PD member at all.
+          value: {{ include "tidb.pdEndpointList" . | replace " " "," | quote }}
       image: {{ .Values.backup.image }}
       inheritEnv: false
   defaultOptions:

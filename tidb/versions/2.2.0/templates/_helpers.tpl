@@ -102,9 +102,16 @@ ProxySQL connection pooler (optional) Workload and Secret Name
 {{- printf "%s-proxysql" .Release.Name }}
 {{- end }}
 
-{{- define "tidb.proxysqlSecret.name" -}}
-{{- printf "%s-tidb-proxysql-startup" .Release.Name }}
-{{- end }}
+{{/*
+Render a script for a container arg. The platform, like Kubernetes, expands
+$(VAR) and turns $$ into $ inside container args (measured 2026-10-04, even
+inside single quotes). Doubling every $ makes the shell receive the script byte
+for byte. A |- block scalar keeps heredoc terminators at column 0.
+*/}}
+{{- define "tidb.inlineScript" -}}
+|-
+{{ . | replace "$" "$$" | indent 2 }}
+{{- end -}}
 
 
 {{/* Topology */}}
@@ -406,7 +413,22 @@ rather than silently ignoring a key someone set on purpose.
 {{- end -}}
 {{- end -}}
 
+{{/*
+The platform rejects volume snapshot schedules more frequent than hourly, at
+apply time only -- the release would be left half-installed. A schedule runs at
+most hourly when its minute field is a single fixed minute.
+*/}}
+{{- define "tidb.validateSnapshots" -}}
+{{- range $tier := list "pd" "tikv" -}}
+{{- $s := toString (index $.Values.volumeset $tier).snapshots.schedule -}}
+{{- if and $s (not (regexMatch "^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$" (trim $s))) -}}
+{{- fail (printf "tidb: volumeset.%s.snapshots.schedule %q must be a 5-field cron with a single fixed minute (snapshots cannot run more often than hourly), e.g. \"0 3 * * *\"; use \"\" to turn snapshots off" $tier $s) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "tidb.validate" -}}
+{{- include "tidb.validateSnapshots" . -}}
 {{- include "tidb.validateNoExposeServer" . -}}
 {{- include "tidb.validateNoLegacyGvc" . -}}
 {{- include "tidb.validateNoDevMode" . -}}

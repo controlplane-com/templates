@@ -19,6 +19,4 @@ targetLinks:
 {{- if and .Values.autoCreateDatabase.enabled .Values.autoCreateDatabase.deployInitWorkload }}
   - //secret/{{ include "tidb.dbInit.name" . }}
 {{- end }}
-{{- if .Values.proxysql.enabled }}
-  - //secret/{{ include "tidb.proxysqlSecret.name" . }}
-{{- end }}
+

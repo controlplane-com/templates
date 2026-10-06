@@ -10,7 +10,10 @@ spec:
   performanceClass: general-purpose-ssd
   snapshots:
     createFinalSnapshot: true
-    retentionDuration: 7d
+    retentionDuration: {{ .Values.volumeset.pd.snapshots.retentionDuration | quote }}
+    {{- if .Values.volumeset.pd.snapshots.schedule }}
+    schedule: {{ .Values.volumeset.pd.snapshots.schedule | quote }}
+    {{- end }}
     
 ---
 kind: volumeset
@@ -31,4 +34,7 @@ spec:
   performanceClass: general-purpose-ssd
   snapshots:
     createFinalSnapshot: true
-    retentionDuration: 7d
+    retentionDuration: {{ .Values.volumeset.tikv.snapshots.retentionDuration | quote }}
+    {{- if .Values.volumeset.tikv.snapshots.schedule }}
+    schedule: {{ .Values.volumeset.tikv.snapshots.schedule | quote }}
+    {{- end }}

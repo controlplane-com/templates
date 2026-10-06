@@ -76,7 +76,7 @@ steps:
             min: 1
             required: true
             suggestions: [1, 2, 3, 5]
-            description: One Chromium per replica, so this is the crawl concurrency.
+            description: One Chromium per replica, each running one crawl at a time. An engine only uses its own browsers, so add engines and browsers together.
           - path: vdi.resources
             type: resources
             label: Browser node resources

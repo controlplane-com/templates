@@ -17,7 +17,13 @@ The CROWler is an open-source, self-hosted platform for web crawling, scraping a
 
 - **None for a default install.** Every credential is internal plumbing that this template creates from the values below. Change the `change-me-…` passwords before installing.
 - **A single-location GVC.** Each location would get its own, separate database.
-- **Optional:** an opaque VNC-password secret, only if you want to watch the browser (see below). If `vdi.vncSecretName` names a secret that does not exist, the browser pool never starts and `cpln logs` shows nothing; read `status.versions[].message` from `cpln workload get-deployments {release}-crowler-vdi -o yaml`.
+- **Optional:** an opaque VNC-password secret, only if you want to watch the browser (see below). If `vdi.vncSecretName` names a secret that does not exist, the browser pool never starts and `cpln logs` shows nothing. The cause appears in `status.versions[].message`:
+
+  ```bash
+  cpln workload get-deployments {release}-crowler-vdi --gvc {gvc} -o yaml
+  ```
+
+  After you create the secret the pool starts on its own, which can take over 10 minutes; `cpln workload force-redeployment {release}-crowler-vdi --gvc {gvc}` starts it at once.
 
 ## Configuration
 
@@ -42,7 +48,7 @@ engine:
   replicas: 1          # engine i uses browser nodes j where j mod engine.replicas == i
   resources: { minCpu: 500m, maxCpu: 2000m, minMemory: 1Gi, maxMemory: 2Gi }
 vdi:
-  replicas: 1          # one browser per replica = crawl concurrency; must be >= engine.replicas
+  replicas: 1          # one crawl at a time per browser; must be >= engine.replicas — scale both together
   vncSecretName: ""   # optional opaque secret with a VNC password; "" = VNC/noVNC off
   resources: { minCpu: 500m, maxCpu: 2000m, minMemory: 2Gi, maxMemory: 4Gi }
 ```
@@ -125,7 +131,7 @@ curl -X POST http://localhost:8080/v1/source/add -H 'Content-Type: application/j
 curl 'http://localhost:8080/v1/search/general?q=example'
 ```
 
-`restricted: 2` lets the crawl follow links within the same site; without it only the page you added is crawled. CROWler 2.1.8 follows absolute and root-relative links (`/docs/a.html`) but not bare relative ones (`a.html`). The full API is described at `http://localhost:8080/v1/docs`.
+`restricted: 2` lets the crawl follow links within the same site; without it only the page you added is crawled. CROWler 2.1.8 follows absolute and root-relative links (`/docs/a.html`) but not bare relative ones (`a.html`). The API's OpenAPI document is at `http://localhost:8080/v1/openapi.json`. Re-run the port-forward after any upgrade that restarts the API, because the tunnel closes with the old replica.
 
 ## Watching the browser (optional)
 
@@ -138,9 +144,37 @@ cpln port-forward {release}-crowler-vdi 7900:7900 --gvc {gvc}
 
 VNC uses only the first 8 characters of the password. The browser nodes are never public; only the engine and your tunnel can reach them.
 
+With `jaeger.enabled`, open the trace UI the same way:
+
+```bash
+cpln port-forward {release}-crowler-jaeger 16686:16686 --gvc {gvc}
+```
+
 ## Backing up the database
 
 The database is the `postgres` template, so its scheduled backups work here unchanged. Enable `postgres.backup.*` and follow the Storage setup section of the [`postgres` template README](../../../postgres) for the bucket, [cloud account](https://docs.controlplane.com/guides/create-cloud-account) and IAM policy. Keep `postgres.backup.image` on the `17.1.0` tag, which matches Postgres 17.
+
+## Restoring a backup
+
+Use these steps rather than the `postgres` template's restore. CROWler's schema loader has already created every table, so replaying a backup into the existing database silently drops the rows of several index tables.
+
+1. Install the release to restore into with the **same `crowlerDb.password` and `postgres.credentials.password`** as the backed-up release. The backup carries both passwords and resets the server to them.
+2. Open a tunnel to the database, from a machine with `psql` 17.6 or newer and the AWS CLI:
+
+   ```bash
+   cpln port-forward {release}-postgres 5432:5432 --gvc {gvc}
+   ```
+
+3. In a second terminal, drop the CROWler database, then replay the backup file:
+
+   ```bash
+   export PGPASSWORD='<postgres.credentials.password>'
+   psql --host=127.0.0.1 --port=5432 --username=postgres --dbname=postgres -c 'DROP DATABASE crowler WITH (FORCE)'
+   aws s3 cp "s3://<bucket>/<prefix>/<backup-file>.sql.gz" - | gunzip | psql --host=127.0.0.1 --port=5432 --username=postgres --dbname=postgres
+   unset PGPASSWORD
+   ```
+
+   Two `role … already exists` errors are expected. The engine, API and events tiers reconnect on their own.
 
 ## Important Notes
 
@@ -148,6 +182,7 @@ The database is the `postgres` template, so its scheduled backups work here unch
 - **Do not change either database password after install.** Both are applied to the database once. A changed value reaches the containers on their next restart while the database keeps the old one, so the CROWler tiers stop starting. To rotate one, change it inside PostgreSQL first, then upgrade with the matching value.
 - **Upgrading the CROWler images can need a manual schema migration.** The schema loader never re-runs the schema on an existing database. If the new release expects a newer schema, it logs a `WARNING` and the apps start anyway; apply the matching upstream `db_migrations` script.
 - **`crawler.processingTimeout` is both the longest a crawl may run and the wait before an interrupted crawl is retried.** An upgrade that changes crawler settings restarts the engines, so a crawl in flight is retried only after this time (1 day by default). Lower it only if your crawls are always shorter, since longer ones are cut off and marked as errors.
+- **Changing any `vdi.*` value restarts the browsers.** A crawl in progress then fails and is retried after `crawler.crawlingIfError` (15 minutes by default).
 - **The first upgrade after install can restart the database.** With the default single replicas, crawling and the API may pause for a minute or two.
 - **Network reconnaissance is unavailable.** CROWler's nmap-based DNS, WHOIS and service scans need Linux capabilities the platform does not grant, so they are switched off.
 - **Uninstalling deletes all crawl data.** The database volumeset is removed with the release, so a reinstall starts empty. Back up first if you need the data.

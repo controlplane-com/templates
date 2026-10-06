@@ -13,7 +13,8 @@ timezone: UTC                                    # TZ on every CROWler container
 
 # ─── Crawl engine ───────────────────────────────────────────────────
 # Engine i uses browser node j for every j where j mod engine.replicas == i,
-# so vdi.replicas is the crawl concurrency and must be >= engine.replicas.
+# so vdi.replicas must be >= engine.replicas. Each browser runs one crawl at a time and an
+# engine only uses its own browsers: scale engines and browsers together (e.g. 2 and 4).
 engine:
   replicas: 1
   resources:
@@ -87,7 +88,7 @@ pushgateway:
     cpu: 200m
     memory: 256Mi
 jaeger:
-  enabled: false                                 # browser-session traces from the VDI tier (in-memory, UI :16686)
+  enabled: false                                 # browser-session traces from the VDI tier (in-memory; UI on :16686 via port-forward)
   resources:
     cpu: 500m
     memory: 1Gi

@@ -66,6 +66,9 @@
   passwordless root on 2 of 6 servers, 2026-10-06). Closed by a readiness gate, `/tmp/root-guard.sh` (written by the start
   script): a raw handshake for root with an empty password must be refused, else not ready. After 120 s of open root it
   passes with a log WARNING, so a pre-2.2.0 cluster whose root really is passwordless keeps its SQL tier and db-init repairs it.
+  Verified round 2: 0 passwordless-root connections through the service on two fresh 3-location installs; the 120 s fallback
+  + db-init repair measured on a passwordless 2.1.0 → 2.2.0 upgrade. The guard protects FIRST BOOT only: root made
+  passwordless on an already-ready server stays routed (~90 s observed) — it is not a runtime monitor.
 - **Volume snapshots actually run:** `volumeset.{pd,tikv}.snapshots.schedule` (daily 03:00 UTC; render + wizard refuse
   more-frequent-than-hourly — the API rejects it only at apply). 2.1.0 had retention but no schedule → no snapshots ever.
 - **ProxySQL start script inline** (`tidb.inlineScript`, every `$` doubled): no secret, so enabling ProxySQL on an existing
@@ -78,7 +81,8 @@
   0 acknowledged writes lost, same volumes/cluster id/store ids, identical checksum. README and wizard say so.
 - **db-init cron now runs in ONE location** (`defaultOptions.suspend: true` + one unsuspended `localOptions` entry): a cron's
   schedule ignores 0/0 autoscaling, so 2.0.0–2.1.0 ran it in every GVC location. Its wait loop now tries the real root
-  password first — on 2.2.0 root is never passwordless, so the old loop failed every fresh install's first run.
+  password first — on 2.2.0 root is never passwordless, so the old loop failed every fresh install's first run. The wait
+  is ~550 s (inside `activeDeadlineSeconds: 600`): a fresh 3-location install took up to ~7.5 min before any server served.
 - **ProxySQL `esc()` doubles `'`:** an undoubled `'` in any credential loaded NO users (ProxySQL still ready) and logged the
   plaintext passwords in its SQLite error. Present since 2.1.0.
 - **Init-file failure modes are refused up front:** a `user` > 32 or `db` > 64 characters (or ending in a space) would fail at

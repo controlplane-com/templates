@@ -14,13 +14,13 @@
 | Resource | Purpose |
 |---|---|
 | workload `{release}-pd` (stateful) | PD quorum, `pdReplicas` members spread across `locations`, `replicaDirect` |
-| workload `{release}-tikv` (stateful) | Storage nodes, `locations[].replicas` per location |
+| workload `{release}-tikv` (stateful) | Storage nodes, `locations[].tikvReplicas` per location (SQL servers: `serverReplicas`) |
 | workload `{release}-server` (standard) | MySQL front door :4000, status :10080 |
-| workload `{release}-tidb-db-init` | One-shot database/user bootstrap when `autoCreateDatabase.deployInitWorkload` |
+| workload `{release}-tidb-db-init` | Backstop that sets root's password and creates the app db/user if missing (2.2.0: the bootstrapping server does it first); when `autoCreateDatabase.deployInitWorkload` |
 | workload `{release}-tidb-backup` (cron) | Optional `br` backup to S3 or GCS, unsuspended in one location |
 | volumesets, secrets (startup scripts), identity, 2 policies | Per-tier config, secret reveal, and `view` on the ONE install GVC |
 
-## Key knobs (shipped defaults, 2.0.0)
+## Key knobs (shipped defaults, 2.2.0)
 | Knob | Default | Meaning |
 |---|---|---|
 | `locations` | one entry: `aws-us-east-1`, `tikvReplicas: 3`, `serverReplicas: 3` | Must already exist in the install GVC. 2.1.0 split 2.0.0's `replicas` into independent TiKV / SQL-server counts; a leftover `replicas` key is refused at render (silently ignoring it would re-size a live cluster) |
@@ -29,6 +29,7 @@
 | `resources.{pd,server,tikv}` | 2 cpu / 4-2-4 Gi | Single-value blocks, so bare `cpu`/`memory` |
 | `autoCreateDatabase.*` | on, `deployInitWorkload: true`, `credentialsSecretName: my-tidb-credentials` | Prerequisite `dictionary` secret with `rootPassword`, `user`, `password`, `db` |
 | `volumeset.{tikv,pd}.capacity` | `10` GiB | TiKV supports autoscaling; PD does not |
+| `volumeset.{tikv,pd}.snapshots.*` (2.2.0) | `schedule: "0 3 * * *"`, `retentionDuration: 7d` | `""` turns snapshots off; more often than hourly is refused at render |
 | `external_access.*_outboundAllowCIDR` | `[]` | Per-tier egress; backups force `0.0.0.0/0` on TiKV |
 | `internal_access.{server,tikv,pd}.type` | `same-gvc` | Who may reach each tier. This release's own workloads are ALWAYS included |
 | `backup.*` | off, `provider: aws`, `location: aws-us-east-1` | `location` must be one of `locations` — refused at render otherwise |
@@ -54,6 +55,49 @@
 - **`locations[].replicas` split into `tikvReplicas` + `serverReplicas`.** Clients only reach SQL servers in their own location (the mesh is location-pinned), so zero downtime needs ≥2 servers per location — and coupling made that double TiKV too. `tidb.totalTikvReplicas` (renamed from `totalReplicas`) feeds PD `max-replicas` from TiKV ONLY: counting servers would ask for 3 copies on a 1-store install and leave it permanently under-replicated. Dead `tidb.readyStores` helper removed (only the old server probe used it).
 - **Optional ProxySQL pooler** (`proxysql.enabled`, default off) — see Troubleshooting for the design and the latin1 trap.
 - **PD restart path no longer overrides election timing.** The existing-data config set `election-interval 20s` / `lease 15` while first boot used PD defaults (3 s), so any cluster that had ever restarted (every upgrade) failed over its PD leader several times slower. Both paths now use the defaults, which ran without a spurious election in every multi-region test.
+
+## What 2.2.0 changed (fixes only — architecture unchanged)
+- **Root is never passwordless (when `autoCreateDatabase.enabled`, the default):** the server start script writes `/tmp/tidb-init.sql` (0600) from the credentials env and starts
+  tidb-server with `--initialize-sql-file`; the bootstrapping server runs it once, **before** opening :4000 (measured v8.5.7).
+  Escaping: `'`→`''`, `\`→`\\` in strings, backtick doubled in identifiers. **Trap:** a file TiDB cannot parse is FATAL and is
+  NOT re-run on restart (root stays passwordless) — escaping makes that unreachable, and db-init stays on as the backstop
+  (also covers clusters bootstrapped by 2.1.0). `autoCreateDatabase.enabled: false` → no file → passwordless root, as before.
+  **Trap found in test:** the OTHER servers can open :4000 before the bootstrapper's `ALTER USER` reaches them (~2 s of
+  passwordless root on 2 of 6 servers, 2026-10-06). Closed by a readiness gate, `/tmp/root-guard.sh` (written by the start
+  script): a raw handshake for root with an empty password must be refused, else not ready. After 120 s of open root it
+  passes with a log WARNING, so a pre-2.2.0 cluster whose root really is passwordless keeps its SQL tier and db-init repairs it.
+  Verified round 2: 0 passwordless-root connections through the service on two fresh 3-location installs; the 120 s fallback
+  + db-init repair measured on a passwordless 2.1.0 → 2.2.0 upgrade. The guard protects FIRST BOOT only: root made
+  passwordless on an already-ready server stays routed (~90 s observed) — it is not a runtime monitor. After its first
+  DENIED the guard stops probing (`/tmp/root-guard-ok`): each refused probe is a failed root login, so probing every 30 s
+  would lock a root that has `FAILED_LOGIN_ATTEMPTS` (measured v8.5.7). Auth-switch replies (root on caching_sha2) are
+  completed with an empty password rather than misread as open.
+  **Round 4 trap (fixed):** reading a packet with `od -N1` killed `dd` early, so the rest of the greeting was parsed as the
+  login reply → false OPEN/OTHER, no marker, probing forever, root auto-locked 31 s after `FAILED_LOGIN_ATTEMPTS 2`. Packets are
+  now read whole, and a `flock` keeps the platform's two concurrent probe runs to one: 30 runs incl. 10 concurrent pairs = 1
+  refused login (`tidb_server_handshake_error_total` delta 1). WARNING for a genuinely passwordless root logs once per start.
+- **Volume snapshots actually run:** `volumeset.{pd,tikv}.snapshots.schedule` (daily 03:00 UTC; render + wizard refuse
+  more-frequent-than-hourly — the API rejects it only at apply). 2.1.0 had retention but no schedule → no snapshots ever.
+- **ProxySQL start script inline** (`tidb.inlineScript`, every `$` doubled): no secret, so enabling ProxySQL on an existing
+  release no longer stalls ~10 min on a new reveal grant. The ProxySQL secret is the only resource 2.2.0 removes.
+- **Backup reaches PD by every member's per-replica address** (comma list): the service name only reaches PD in the backup's
+  own location, which may have none.
+- **Upgrade 2.1.0 → 2.2.0 restarts EVERY workload (catalog-wide, not tidb):** the `cpln/marketplace-template-version` tag alone
+  rolls a workload (isolated 2026-10-06; `helm.sh/chart`, other tags, identity/secret/policy changes do not). Stateful tiers
+  roll one replica per location but all locations at once, so one PD + one TiKV per location = **~75 s global write stall**,
+  0 acknowledged writes lost, same volumes/cluster id/store ids, identical checksum. README and wizard say so.
+- **db-init cron now runs in ONE location** (`defaultOptions.suspend: true` + one unsuspended `localOptions` entry): a cron's
+  schedule ignores 0/0 autoscaling, so 2.0.0–2.1.0 ran it in every GVC location. Its wait loop now tries the real root
+  password first — on 2.2.0 root is never passwordless, so the old loop failed every fresh install's first run. The wait
+  is ~550 s (inside `activeDeadlineSeconds: 600`): a fresh 3-location install took up to ~7.5 min before any server served.
+- **ProxySQL `esc()` doubles `'`:** an undoubled `'` in any credential loaded NO users (ProxySQL still ready) and logged the
+  plaintext passwords in its SQLite error. Present since 2.1.0.
+- **Init-file failure modes are refused up front:** a `user` > 32 or `db` > 64 characters (or ending in a space) would fail at
+  execution, also fatally — the start script exits with a named FATAL before TiDB starts, so nothing bootstraps passwordless.
+  The db-init backstop now escapes its SQL the same way.
+- **Cross-location SQL failover is deferred** to the platform's internal-endpoint locality failover (est. Oct 2026): when it
+  ships, re-run the resilience matrix (TCP :4000, readiness-driven, new connections only, failback). A stateful/replicaDirect
+  tidb-server + HAProxy design was specced and set aside (spec "Superseded design").
 
 ## Availability posture
 - Default is **one location, 3 TiKV + 3 PD**: survives a node loss, not a location loss.
@@ -87,10 +131,12 @@
 - **db-init is a `cron`, not a `standard` workload** (2.0.0). As a standard workload it completed, was restarted, and completed again — reporting `ready: false` and `Deployment does not have minimum availability` permanently while the cluster was healthy. Re-running is harmless: the script fast-exits when the database exists, before the non-idempotent `CREATE USER`.
 - **GCS backups did not work before 1.7.0.** Two causes, both fixed: `backup.sh` never passed `--send-credentials-to-tikv=false`, and TiKV's legacy GCS backend could not use the metadata server. v8.5.7 enables `gcp_v2`, which supports ADC. AWS S3 was unaffected.
 - **The backup image version must match the cluster.** From v8.5.7 `br` enforces the check even with `--check-requirements=false`.
-- **The restore path has never been exercised** against a backup this template produced, and SST object naming differs between the S3 (`1/<name>`) and GCS (`1_<name>`) backends. The README says so rather than implying a rehearsed procedure.
+- **Restore verified on S3 AND GCS (2.2.0, 2026-10-06):** README-form `br restore full` into an empty release → identical `ADMIN CHECKSUM`. GCS needs `--send-credentials-to-tikv=false` (else `You should provide '--gcs.credentials-file'`); TiKV reads the backup with the target release's identity, so the target's `backup` must point at the same bucket/cloud account. A full restore brings the SOURCE cluster's `mysql.user` — root and app passwords become the backup's, not the target's secret.
+- **Write stalls to size client timeouts against:** PD/TiKV rolling restart ~45 s, version upgrade ~75 s (one node per location), location loss ~15 s. README advises 60 s.
+- **`KILL` across tidb-servers silently does nothing** (accepted, query runs to completion) — connections are per-server.
+- **A `helm upgrade` after `cpln workload force-redeployment` restarts that workload again** (it strips the `cpln/deployTimestamp` tag) — a second ~45 s stall for PD/TiKV.
 - **Region-aware placement was broken before 1.7.0** — store labels went to a top-level `[labels]` table TiKV ignores, under the key `zone`, which no `location-labels` entry referenced. Fixed there (`[server] labels`, key `region`) and verified: each store reports `region=<its location>`. 2.0.0 does not change the mechanism; it only extends `location-labels` to single-location installs so the option stays open later.
 - **PD reads `[replication]` only at bootstrap**, then persists it to etcd and ignores the file forever. Always check the PD API, not `pd.toml`. This is also why `max-replicas` is fixed for the life of the cluster.
-- **`db-init` completes then restarts forever** (it exits 0 and is restarted), so a healthy install never shows all-green. Known, not fixed. Set `autoCreateDatabase.deployInitWorkload: false` after first boot.
 - **The `tidb-server` image has no mysql client** — connect from another workload in the GVC.
 - **ProxySQL (2.1.0, opt-in) — why no HAProxy tier like pgEdge/postgres-multi-location.** Their HAProxy picks a specific node (Patroni primary / local node-0). TiDB's SQL tier is symmetric — any tidb-server serves any read/write and itself routes to region leaders via PD — so ProxySQL has ONE backend, the tidb-server mesh VIP, and the mesh spreads across servers. Consequences baked into the config: monitor OFF and shunning effectively OFF (shunning the single VIP after a few failed connects would black-hole everything with nowhere to fail over), connect retries ON (the mesh lands the retry on a healthy server), pooled backend connections age out at 5 min (rebalance after recovery), admin on loopback only with a random per-boot password (stock image ships `admin:admin` on `0.0.0.0:6032`), `--no-version-check` (no phone-home).
 - **ProxySQL + latin1 clients = intermittent `ERROR 1273 ... latin1_swedish_ci`.** TiDB tolerates an unsupported collation in the HANDSHAKE (silently swaps to utf8mb4_bin) but rejects it in an explicit `SET NAMES`, which is exactly how ProxySQL honours a client's charset. ~50% of a latin1 client's queries fail (depends which pooled backend connection it lands on); utf8mb4 clients measured 70/70. The usual latin1 client is the `mysql` CLI under a POSIX locale (`default-character-set=auto`) — pass `--default-character-set=utf8mb4`. Direct-to-server is unaffected, so "works direct, flaky via pooler" points straight here.

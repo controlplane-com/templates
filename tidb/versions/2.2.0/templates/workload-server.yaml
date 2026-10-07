@@ -1,0 +1,129 @@
+---
+kind: workload
+name: {{ include "tidb.server.name" . }}
+description: TiDB server
+tags: {{- include "tidb.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: tidb-server
+      cpu: {{ .Values.resources.server.cpu | quote }}
+      image: {{ .Values.images.server }}
+      command: "/bin/bash"
+      args:
+        - "/scripts/server-startup.sh"
+      inheritEnv: false
+      env:
+        - name: PD_ENDPOINTS
+          value: {{ include "tidb.pdEndpointList" . | quote }}
+        {{- if .Values.autoCreateDatabase.enabled }}
+        - name: ROOT_PW
+          value: cpln://secret/{{ .Values.autoCreateDatabase.credentialsSecretName }}.rootPassword
+        - name: APP_DB
+          value: cpln://secret/{{ .Values.autoCreateDatabase.credentialsSecretName }}.db
+        - name: APP_USER
+          value: cpln://secret/{{ .Values.autoCreateDatabase.credentialsSecretName }}.user
+        - name: APP_PW
+          value: cpln://secret/{{ .Values.autoCreateDatabase.credentialsSecretName }}.password
+        {{- end }}
+      memory: {{ .Values.resources.server.memory | quote }}
+      ports:
+        - number: 10080
+          protocol: http
+        - number: 4000
+          protocol: tcp
+      readinessProbe:
+        {{- /*
+          Gate on THIS server's OWN health (TiDB's /status on :10080), not on
+          cluster-wide TiKV store count. The old probe keyed every tidb-server
+          off the same global PD `/stores` view, so a sustained sub-quorum TiKV
+          shortfall would fail readiness on ALL servers at once and restart the
+          entire SQL tier across every location simultaneously — a correlated
+          multi-region outage from a single-tier problem. A tidb-server that is
+          up and serving /status can accept SQL connections and routes to
+          whatever TiKV is available; transient or partial TiKV loss surfaces as
+          query-time errors on individual statements, not by pulling the whole
+          SQL tier out of rotation (and the server recovers the instant TiKV
+          returns, with no restart). /status also only becomes 200 once the
+          server has bootstrapped against the cluster, so first-boot ordering is
+          preserved. This matches TiDB-Operator's own readiness probe.
+        */}}
+        exec:
+          command:
+            - /bin/sh
+            - '-c'
+            - >-
+              curl -sf --max-time 4 http://localhost:10080/status
+              | grep -q '"version"'
+              {{- if .Values.autoCreateDatabase.enabled }}
+              && /tmp/root-guard.sh
+              {{- end }}
+        {{- /*
+          The platform derives a STARTUP probe from this one: a container that has
+          never been ready is killed after about initialDelaySeconds + 30 x
+          periodSeconds, whatever failureThreshold says (measured 2026-10-03:
+          failureThreshold 1 and 20 were killed at the same time). A first boot
+          waits up to 600 s for TiKV in the startup script and then bootstraps the
+          system tables, which took ~4.5 min on a cross-cloud install, so 10 s
+          periods (315 s) killed the server mid-bootstrap with exit code 2.
+          30 s periods give 915 s; failureThreshold 3 keeps a server that stops
+          answering out of rotation after ~90 s.
+        */}}
+        failureThreshold: 3
+        initialDelaySeconds: 15
+        periodSeconds: 30
+        successThreshold: 1
+        timeoutSeconds: 12   # /status (up to 4 s) plus the root guard (up to 6 s, first boot only)
+      volumes:
+        - path: /scripts/server-startup.sh
+          recoveryPolicy: retain   # API backfill, declared so rendered == stored
+          uri: cpln://secret/{{ include "tidb.serverSecret.name" . }}.payload
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "tidb.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 0   # a GVC location this release did not ask for runs NOTHING
+      metric: disabled
+      minScale: 0   # localOptions below supplies the real count for each configured location
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 10
+  {{- /*
+    A full override: every field defaultOptions carries is repeated here, because
+    the API completes a partial localOptions entry from PLATFORM defaults rather
+    than from this workload's own defaultOptions.
+  */}}
+  localOptions:
+    {{- range $location := .Values.locations }}
+    - autoscaling:
+        maxConcurrency: 0
+        maxScale: {{ $location.serverReplicas | int }}
+        metric: disabled
+        minScale: {{ $location.serverReplicas | int }}
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      location: //location/{{ $location.name }}
+      suspend: false
+      timeoutSeconds: 10
+    {{- end }}
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: {{ .Values.external_access.server_outboundAllowCIDR }}
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      {{- include "tidb.internalFirewall" (dict "root" . "access" .Values.internal_access.server) | nindent 6 }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

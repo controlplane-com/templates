@@ -29,9 +29,20 @@ cpln secret create-dictionary --name my-openclaw-secret \
   --entry llm-api-key=YOUR-LLM-API-KEY
 ```
 
-Add channel keys later with `cpln secret edit my-openclaw-secret`. **A missing secret wedges the install silently** — `cpln logs` shows nothing. Read `status.versions[].message` from `cpln workload get-deployments RELEASE-openclaw --gvc GVC -o yaml`; it names the missing secret. Install into a **single-location GVC**.
+Add channel keys later with `cpln secret edit my-openclaw-secret`, which opens the secret as YAML in your editor. **A missing secret wedges the install silently** — `cpln logs` shows nothing. Read `status.versions[].message` from `cpln workload get-deployments RELEASE-openclaw --gvc GVC -o yaml`; it names the missing secret.
+
+**A single-location GVC.** Every location would run its own assistant, each fighting over the same bot tokens.
+
+**Optional: a custom domain** for the public Control UI (see Connecting).
 
 ## Configuration
+
+### Secret
+
+```yaml
+secret:
+  name: my-openclaw-secret   # the prerequisite dictionary secret above — must exist before install
+```
 
 ### Model
 
@@ -84,7 +95,7 @@ volumeset:
     minFreePercentage: 10
     scalingFactor: 1.2
 backup:
-  enabled: true # scheduled snapshots of the data volume (they contain channel sessions and tokens)
+  enabled: true # scheduled snapshots of the data volume (they contain channel sessions and tokens — treat them as secrets)
   schedule: "0 3 * * *" # cron, UTC
   retention: 7d # how long each snapshot is kept
 ```
@@ -137,9 +148,10 @@ curl http://RELEASE-openclaw.GVC.cpln.local:18789/v1/chat/completions \
 - **Security:** with `publicAccess.enabled` an agent with a shell sits on the internet behind one token. Keep the token long and secret, keep DM pairing on, and vet third-party skills.
 - **New chat contacts get a pairing code**; approve them in **Settings → Channels → DM access requests** (or `pairing approve`).
 - **Rotating a key in your secret does not reach the running Gateway** — run `cpln workload force-redeployment RELEASE-openclaw --gvc GVC` afterwards.
-- **Image upgrades run one-way migrations.** If the Gateway crash-loops after a tag bump, repair with `… node openclaw.mjs doctor --fix`, or restore the pre-upgrade volume snapshot.
+- **Image upgrades run one-way state migrations.** Take a volume snapshot before bumping the tag; a downgrade cannot read migrated state.
+- **The assistant spends model tokens on its own.** OpenClaw runs a heartbeat turn every 30 minutes by default; change or turn it off in the Control UI.
 - **After a hard kill (e.g. out of memory) the Gateway refuses to start for up to 5 minutes** while its previous state lease expires; it then recovers by itself. Raise `maxMemory` if it recurs.
-- Access-knob changes take up to a few minutes to propagate; uninstall deletes the volume (a final snapshot is kept).
+- Access-knob changes take from about 30 seconds to 10 minutes to propagate; uninstall deletes the volume (a final snapshot is kept).
 
 ## Links
 

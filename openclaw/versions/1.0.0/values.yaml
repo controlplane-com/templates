@@ -55,7 +55,7 @@ volumeset:
 # Platform-managed snapshots of the state volume (no bucket needed). They contain
 # your WhatsApp session and OAuth tokens — treat them as secrets.
 backup:
-  enabled: true # scheduled snapshots of the data volume
+  enabled: true # scheduled snapshots of the data volume (they contain channel sessions and tokens — treat them as secrets)
   schedule: "0 3 * * *" # cron, UTC
   retention: 7d # how long each snapshot is kept
 

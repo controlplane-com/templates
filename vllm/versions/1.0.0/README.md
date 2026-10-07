@@ -1,0 +1,140 @@
+# vLLM
+
+This template deploys [vLLM](https://github.com/vllm-project/vllm), a high-throughput LLM inference server, serving one Hugging Face model through an OpenAI-compatible API (`/v1/chat/completions`, `/v1/completions`, `/v1/models`, …) on an NVIDIA GPU. The GPU is either one of Control Plane's built-in A10G or T4 cards, or your own GPU cluster registered as a BYOK location. The API is protected by an API key you create first, and the model is cached on a persistent volume so restarts do not re-download it.
+
+## Architecture
+
+- **vLLM server**: stateful workload on port 8000, one GPU set per replica (`replicas: 1` by default); replicas are independent servers behind the workload's load-balanced endpoint and are replaced one at a time.
+- **Model cache volume set**: one volume per replica at `/models` holding the downloaded weights and vLLM's compile cache. It is a re-downloadable cache, so no snapshots are kept.
+- **Identity + policy**: `reveal` on exactly your API key secret, plus your Hugging Face token secret when set.
+- **Metrics**: vLLM's `/metrics` (queue depth, KV-cache usage, token throughput) is scraped into the platform's built-in metrics.
+
+## Prerequisites
+
+1. **API key secret — must exist BEFORE you install.** An opaque secret clients send as a Bearer token. If it is missing the deployment waits silently and `cpln logs` shows nothing:
+
+   ```bash
+   printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name my-vllm-api-key --encoding plain -f -
+   ```
+
+2. **A GPU.** With `gpu.type: builtin` (default): GPU quota for your org (one NVIDIA A10G by default, with 6 vCPU and 16 GiB) in a location that offers it — ask Control Plane support. With `gpu.type: byok`: a BYOK location backed by NVIDIA GPU nodes (see below).
+3. **Optional — Hugging Face token** for gated models such as Llama or Gemma: accept the model's license on huggingface.co, then store your token as an opaque secret (`encoding: plain`) and set `huggingFace.tokenSecretName`.
+4. **A GVC with exactly one location.** Every location of the GVC runs its own copy, with its own GPUs.
+
+## Configuration
+
+### Image
+
+```yaml
+image: vllm/vllm-openai:v0.31.0-cu129 # CUDA 12.9 build: runs on older NVIDIA drivers than the default CUDA 13 tag
+```
+
+### Model
+
+```yaml
+model:
+  name: Qwen/Qwen2.5-1.5B-Instruct # Hugging Face model id; downloaded into the volume on first start
+  servedModelName: "" # name clients send as "model"; empty = the model id
+  maxModelLen: 8192 # max tokens per request (prompt + output)
+  gpuMemoryUtilization: 0.90 # share of GPU memory vLLM may use for weights and KV cache
+  dtype: auto # options: auto, half, bfloat16, float32 (bfloat16 is not supported on t4)
+  extraArgs: [] # extra `vllm serve` flags, e.g. ["--max-num-seqs", "32"]
+```
+
+### Credentials
+
+```yaml
+apiKey:
+  secretName: my-vllm-api-key # REQUIRED opaque secret (encoding: plain); must EXIST BEFORE INSTALL
+huggingFace:
+  tokenSecretName: "" # opaque secret with a Hugging Face token, needed for gated models (e.g. my-vllm-hf-token); empty = anonymous
+```
+
+### GPU
+
+```yaml
+gpu:
+  type: builtin # options: builtin (Control Plane GPU locations), byok (your own GPU cluster on a BYOK location)
+  model: a10g # builtin only. options: a10g (24 GB), t4 (16 GB)
+  quantity: 1 # GPUs per replica. a10g: 1, t4: 1-4, byok: 1-8; more than 1 enables tensor parallelism
+```
+
+### Resources and Scaling
+
+```yaml
+# builtin a10g: cpu 6000m-8000m, memory 8Gi-62Gi. t4: cpu 2000m-8000m and memory 7Gi-31Gi per GPU (4000m per GPU with 2+ GPUs or from 14Gi).
+# Any type: memory below 8 MiB per millicore of cpu (e.g. under 16Gi at 2000m).
+# byok: fit your GPU node, e.g. cpu 2000m / memory 8Gi on a 4-vCPU g5.xlarge or g6.xlarge.
+resources:
+  cpu: 6000m
+  memory: 16Gi
+
+replicas: 1 # each replica runs its own GPU(s) and model cache; 2+ keeps serving through restarts and upgrades
+startupTimeoutSeconds: 900 # seconds from container start to ready (download + load) before the platform restarts it; 300-1830
+```
+
+### Model Cache
+
+```yaml
+volumeset:
+  capacity: 50 # GiB per replica; at least 2x the model's weights plus 5 (minimum 10, can only grow)
+```
+
+### Access
+
+```yaml
+publicAccess:
+  enabled: false # true = the API is reachable from the internet (the API key still applies to /v1)
+
+internalAccess:
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # used with workload-list, e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME
+```
+
+## Bring Your Own GPU Cluster (MK8s or BYOK)
+
+Set `gpu.type: byok` to run on your own NVIDIA nodes. The chart then requests `nvidia.com/gpu` with runtime class `nvidia`; the built-in form cannot target BYOK nodes. The cluster needs:
+
+- **NVIDIA add-on with `taintGPUNodes: false`** — Control Plane workloads do not tolerate the GPU taint, so with it on nothing can use the GPU.
+- **GPU node pool label `cpln.io/gpuUsageAutoDrain: ignore`** — otherwise BYOK drains a GPU node that has had no GPU pod for 5 minutes, including one where vLLM is still starting.
+- **An x86 NVIDIA-driver node image on AWS, plus the label `mk8s.cpln.io/accelerator: nvidia`** — the recommended `+nvidia` images currently resolve to arm64 and cannot boot GPU instances; with a custom image the device plugin only runs on nodes carrying that label.
+- **A GPU node boot disk of at least 200 GB** — the driver image, the ~10 GB vLLM image and the model otherwise fill the disk and the node evicts vLLM.
+- **One instance type per GPU node pool.**
+- **Size `resources` to the node:** a 4-vCPU / 16 GiB GPU node (g5.xlarge, g6.xlarge) cannot fit the built-in default of 6 CPU, so the replica stays pending. Use about `cpu: 2000m`, `memory: 8Gi`.
+
+Use a GVC whose only location is the BYOK location: on a Control Plane location the GPU request is ignored and vLLM cannot start.
+
+## Connecting
+
+| What | Value |
+|---|---|
+| Internal API | `http://{release}-vllm.{gvc}.cpln.local:8000/v1` — from workloads `internalAccess.type` allows |
+| Public API | `https://<canonical>/v1` — only with `publicAccess.enabled: true`; read it from `status.canonicalEndpoint` of `{release}-vllm` |
+| From your machine | `cpln port-forward {release}-vllm 8000:8000 --gvc {gvc}`, then `http://localhost:8000/v1` |
+| API key | The payload of your `apiKey.secretName` secret: `cpln secret reveal my-vllm-api-key` |
+| Model name | `model.servedModelName`, or the model id when it is empty |
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Authorization: Bearer $VLLM_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"model":"Qwen/Qwen2.5-1.5B-Instruct","messages":[{"role":"user","content":"Hello"}]}'
+```
+
+Any OpenAI SDK works with `base_url` set to the `/v1` address and `api_key` set to the key. The `open-webui` and `litellm` templates can use it as an OpenAI-compatible backend.
+
+## Important Notes
+
+- **The API key protects only `/v1`.** vLLM leaves `/health`, `/metrics`, `/tokenize` and `/detokenize` unauthenticated, so with public access on anyone can read metrics and use the tokenizer.
+- **A missing secret stalls the install with no logs.** Run `cpln workload get-deployments {release}-vllm --gvc {gvc} -o yaml` and read `status.versions[].message`, which names the missing secret; the deployment recovers by itself within ~10 minutes of the secret being created.
+- **The first start is slow:** a ~12 GB image pull, then the model download and load (3-5 minutes for the default model). A replica not ready within `startupTimeoutSeconds` is restarted, so raise it (up to 1830) for large models and keep it for slow first downloads.
+- **With one replica the API is down while it restarts** (any upgrade or setting change); set `replicas: 2` for zero-downtime restarts and upgrades — each replica needs its own GPU.
+- **Rotating the API key:** update the secret's payload, then run `cpln workload force-redeployment {release}-vllm --gvc {gvc}`; the running server keeps the old key until it restarts.
+- **Switching models leaves the old weights on the volume.** Delete them with `cpln workload exec {release}-vllm --gvc {gvc} --container vllm -- rm -rf /models/hf/hub/models--ORG--NAME`, or raise `volumeset.capacity`.
+
+## Links
+
+- [vLLM on GitHub](https://github.com/vllm-project/vllm)
+- [OpenAI-compatible server](https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html)
+- [Engine arguments (`extraArgs`)](https://docs.vllm.ai/en/latest/configuration/engine_args.html)
+- [Using Docker](https://docs.vllm.ai/en/latest/deployment/docker.html)
+- [Supported models](https://docs.vllm.ai/en/latest/models/supported_models.html)

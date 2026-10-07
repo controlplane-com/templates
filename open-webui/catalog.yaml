@@ -43,6 +43,8 @@ alternativeTo:
   - TypingMind
 
 pickInsteadIf:
+  - need: high-throughput serving of a Hugging Face model to many concurrent API clients
+    template: vllm
   - need: run open-weight models on your own GPU, with a chat UI in the same workload
     template: ollama
   - need: an OpenAI-compatible gateway with virtual keys, budgets and rate limits
@@ -51,6 +53,9 @@ pickInsteadIf:
     template: hermes-agent
 
 related:
+  - template: vllm
+    relation: companion
+    note: OpenAI-compatible model server Open WebUI can chat through
   - template: ollama
     relation: companion
     note: Runs the local models that Open WebUI chats with

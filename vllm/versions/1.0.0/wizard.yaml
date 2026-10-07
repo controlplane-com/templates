@@ -1,0 +1,380 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: vLLM
+# One stateful workload with no location handling: every GVC location would run its own copy with its
+# own GPUs, and a BYOK GVC that also has a Control Plane location runs a GPU-less copy there.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: credentials
+    title: API access
+    description: The prerequisite secrets that protect the API and authorize model downloads.
+    docs: "#prerequisites"
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          The API key secret must exist **before** you install. If it is missing, the deployment
+          waits and `cpln logs` shows nothing at all.
+      - path: apiKey.secretName
+        type: ref
+        label: API key secret
+        required: true
+        description: >-
+          An opaque secret (encoding plain) holding the key clients send as a Bearer token. It
+          protects `/v1` only; `/health`, `/metrics` and `/tokenize` stay open.
+        help: >-
+          To rotate the key, update the secret's payload, then run
+          `cpln workload force-redeployment <release>-vllm`: the running server keeps the old key
+          until it restarts.
+        docs: "#credentials"
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [opaque] }
+          mustExist: error
+          allowCreate: true
+          create:
+            encoding: plain
+            suggestName: "context.releaseName + '-vllm-api-key'"
+            hint: "Generate the content with: openssl rand -hex 32"
+      - path: huggingFace.tokenSecretName
+        type: ref
+        label: Hugging Face token secret
+        description: >-
+          An opaque secret (encoding plain) holding a Hugging Face token, needed only for gated
+          models such as Llama or Gemma. Empty downloads anonymously.
+        help: >-
+          Accept the model's license on huggingface.co with the account that owns the token first,
+          or the download is refused and the server never becomes ready.
+        docs: "#credentials"
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [opaque] }
+          mustExist: error
+          allowCreate: true
+          create:
+            encoding: plain
+            suggestName: "context.releaseName + '-vllm-hf-token'"
+    rules:
+      - rule: self.apiKey.secretName != null && self.apiKey.secretName != ''
+        mirrors: vllm.validateCredentials
+        paths: [apiKey.secretName]
+        message: The API key secret is required.
+
+  - id: model
+    title: Model
+    description: The Hugging Face model the server loads and how much of the GPU it may use.
+    docs: "#model"
+    fields:
+      - type: note
+        severity: warning
+        when: context.mode == 'upgrade'
+        text: >-
+          Changing the model, the GPU or any server flag restarts every replica. With one replica
+          the API is down until the server is ready again, longer when a new model downloads.
+      - path: model.name
+        type: string
+        label: Model
+        required: true
+        placeholder: meta-llama/Llama-3.1-8B-Instruct
+        description: >-
+          A Hugging Face model id. It is downloaded into the model cache on the first start of
+          each replica.
+      - path: model.servedModelName
+        type: string
+        label: Served model name
+        description: The name clients send as `model`. Empty uses the model id.
+      - path: model.maxModelLen
+        type: integer
+        label: Maximum tokens per request
+        unit: tokens
+        min: 256
+        required: true
+        description: Prompt and output together. Longer contexts need more GPU memory for the KV cache.
+        suggestions: [4096, 8192, 16384, 32768]
+      - path: model.gpuMemoryUtilization
+        type: number
+        label: GPU memory share
+        max: 1
+        step: 0.05
+        required: true
+        description: The share of GPU memory vLLM claims for the weights and the KV cache.
+        suggestions: [0.8, 0.85, 0.9, 0.95]
+      - path: model.dtype
+        type: enum
+        label: Weight precision
+        widget: segmented
+        required: true
+        description: "`auto` uses the model's own precision, or half precision where the GPU cannot run it."
+        options:
+          - { value: auto, label: Auto }
+          - { value: half, label: Half }
+          - { value: bfloat16, label: bfloat16 }
+          - { value: float32, label: float32 }
+      - path: model.extraArgs
+        type: list
+        label: Extra server flags
+        advanced: true
+        widget: tags
+        description: "Passed to `vllm serve` as they are, one flag or value per entry, e.g. `--max-num-seqs`, `32`."
+        docs: "#model"
+        item:
+          type: string
+          label: Flag or value
+    rules:
+      - rule: self.model.gpuMemoryUtilization > 0.0
+        mirrors: vllm.validateModel
+        paths: [model.gpuMemoryUtilization]
+        message: The GPU memory share must be above 0.
+      - rule: "!(self.gpu.type == 'builtin' && self.gpu.model == 't4' && self.model.dtype == 'bfloat16')"
+        mirrors: vllm.validateModel
+        paths: [model.dtype]
+        message: A T4 cannot run bfloat16. Choose Auto or Half.
+      - rule: >-
+          self.model.extraArgs.all(a, !(['--port', '--host', '--model', '--api-key', '--served-model-name',
+          '--max-model-len', '--gpu-memory-utilization', '--dtype', '--tensor-parallel-size', '-tp'].exists(f,
+          a == f || a.startsWith(f + '='))))
+        mirrors: vllm.validateModel
+        paths: [model.extraArgs]
+        message: >-
+          The extra flags may not set --port, --host, --model, --api-key, --served-model-name,
+          --max-model-len, --gpu-memory-utilization, --dtype or --tensor-parallel-size; the chart sets
+          them from its own settings.
+
+  - id: gpu
+    title: GPU and compute
+    description: Where the GPU comes from, how many each replica gets, and how many replicas run.
+    docs: "#gpu"
+    sections:
+      - fields:
+          - path: gpu.type
+            type: enum
+            label: GPU source
+            widget: cards
+            required: true
+            options:
+              - value: builtin
+                label: Control Plane GPU
+                description: An NVIDIA A10G or T4 in a Control Plane location. Needs GPU quota for the org.
+              - value: byok
+                label: Your own GPU cluster (BYOK)
+                description: NVIDIA nodes in your own cluster, registered as a BYOK location.
+          - path: gpu.model
+            type: enum
+            label: GPU model
+            widget: cards
+            required: true
+            when: self.gpu.type == 'builtin'
+            options:
+              - value: a10g
+                label: NVIDIA A10G
+                description: 24 GB. Fits a 7-8B model in 16-bit precision.
+              - value: t4
+                label: NVIDIA T4
+                description: 16 GB, no bfloat16 and no FlashAttention. Fits models up to about 3B in 16-bit precision.
+          - path: gpu.quantity
+            type: integer
+            label: GPUs per replica
+            min: 1
+            max: 8
+            required: true
+            description: More than one splits the model across the GPUs (tensor parallelism).
+          - type: note
+            when: self.gpu.type == 'byok'
+            text: >-
+              The cluster needs the NVIDIA add-on with GPU taints off and the GPU node pool labelled
+              `cpln.io/gpuUsageAutoDrain: ignore`. Use a GVC whose only location is the BYOK location.
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            docs: "#resources-and-scaling"
+            description: Per replica. A Control Plane GPU raises the CPU and memory it needs; on BYOK, fit your GPU node.
+            cpu: { min: 250m }
+            memory: { min: 1Gi }
+          - path: replicas
+            type: integer
+            label: Replicas
+            min: 1
+            required: true
+            description: >-
+              Independent servers behind one endpoint, each with its own GPUs and model cache. Two or
+              more keep serving through restarts and upgrades.
+            suggestions: [1, 2, 3]
+          - path: startupTimeoutSeconds
+            type: integer
+            label: Startup timeout
+            unit: seconds
+            min: 300
+            max: 1830
+            required: true
+            advanced: true
+            description: >-
+              Time from container start to ready, model download and load included, before the
+              platform restarts the replica. Raise it for large models.
+            suggestions: [600, 900, 1200, 1800]
+          - path: image
+            type: string
+            format: image
+            label: vLLM image
+            required: true
+            advanced: true
+            description: A CUDA build of `vllm/vllm-openai`.
+    rules:
+      - rule: self.gpu.type in ['builtin', 'byok']
+        mirrors: vllm.validateGpu
+        paths: [gpu.type]
+        message: The GPU source must be builtin or byok.
+      - when: self.gpu.type == 'builtin' && self.gpu.model == 'a10g'
+        rule: self.gpu.quantity == 1
+        mirrors: vllm.validateGpu
+        paths: [gpu.quantity]
+        message: An A10G replica takes exactly 1 GPU.
+      - when: self.gpu.type == 'builtin' && self.gpu.model == 't4'
+        rule: self.gpu.quantity <= 4
+        mirrors: vllm.validateGpu
+        paths: [gpu.quantity]
+        message: A T4 replica takes 1 to 4 GPUs.
+      - when: self.gpu.type == 'builtin' && self.gpu.model == 'a10g'
+        rule: cpuMillicores(self.resources.cpu) >= 6000 && cpuMillicores(self.resources.cpu) <= 8000
+        mirrors: vllm.validateGpu
+        paths: [resources]
+        message: With an A10G the CPU must be 6000m to 8000m.
+      - when: self.gpu.type == 'builtin' && self.gpu.model == 'a10g'
+        rule: >-
+          memoryBytes(self.resources.memory) >= memoryBytes('8Gi') &&
+          memoryBytes(self.resources.memory) <= memoryBytes('62Gi')
+        mirrors: vllm.validateGpu
+        paths: [resources]
+        message: With an A10G the memory must be 8Gi to 62Gi.
+      - when: self.gpu.type == 'builtin' && self.gpu.model == 't4' && self.gpu.quantity <= 4
+        rule: >-
+          cpuMillicores(self.resources.cpu) >= (self.gpu.quantity > 1 ||
+          memoryBytes(self.resources.memory) >= memoryBytes('14Gi') ? 4000 : 2000) * self.gpu.quantity &&
+          cpuMillicores(self.resources.cpu) <= 8000 * self.gpu.quantity
+        mirrors: vllm.validateGpu
+        paths: [resources]
+        messageExpression: >-
+          'With ' + string(self.gpu.quantity) + ' T4 GPU(s) and this memory the CPU must be ' +
+          string((self.gpu.quantity > 1 || memoryBytes(self.resources.memory) >= memoryBytes('14Gi') ? 4000 : 2000)
+          * self.gpu.quantity) + 'm to ' + string(8000 * self.gpu.quantity) + 'm.'
+        message: >-
+          With a T4 the CPU must be 2000m to 8000m per GPU, and 4000m per GPU with more than one GPU
+          or from 14Gi of memory.
+      - when: self.gpu.type == 'builtin' && self.gpu.model == 't4' && self.gpu.quantity <= 4
+        rule: >-
+          memoryBytes(self.resources.memory) >= memoryBytes('7Gi') * self.gpu.quantity &&
+          memoryBytes(self.resources.memory) <= memoryBytes('31Gi') * self.gpu.quantity
+        mirrors: vllm.validateGpu
+        paths: [resources]
+        messageExpression: >-
+          'With ' + string(self.gpu.quantity) + ' T4 GPU(s) the memory must be ' +
+          string(7 * self.gpu.quantity) + 'Gi to ' + string(31 * self.gpu.quantity) + 'Gi.'
+        message: With a T4 the memory must be 7Gi to 31Gi per GPU.
+      - rule: memoryBytes(self.resources.memory) > 0
+        mirrors: vllm.memoryMi
+        paths: [resources]
+        message: The memory must be a quantity such as 16Gi.
+      - rule: memoryBytes(self.resources.memory) < 8 * 1048576 * cpuMillicores(self.resources.cpu)
+        mirrors: vllm.validateGpu
+        paths: [resources]
+        message: The memory must stay below 8 MiB per millicore of CPU; raise the CPU or lower the memory.
+      - when: self.gpu.type == 'byok'
+        rule: cpuMillicores(self.resources.cpu) <= 3500
+        severity: info
+        paths: [resources]
+        message: >-
+          A 4-vCPU GPU node such as g5.xlarge or g6.xlarge cannot fit this much CPU, and the replica
+          stays pending. Use about 2000m and 8Gi there.
+      - rule: self.replicas >= 1
+        mirrors: vllm.validateScale
+        paths: [replicas]
+        message: At least 1 replica is required.
+      - rule: self.startupTimeoutSeconds >= 300 && self.startupTimeoutSeconds <= 1830
+        mirrors: vllm.validateScale
+        paths: [startupTimeoutSeconds]
+        message: The startup timeout must be 300 to 1830 seconds.
+      - rule: self.replicas <= 1
+        severity: info
+        paths: [replicas]
+        messageExpression: >-
+          'Each replica needs its own GPU(s): ' + string(self.replicas) + ' replicas run ' +
+          string(self.replicas * self.gpu.quantity) + ' GPUs.'
+        message: Each replica needs its own GPU(s), so the GPU cost grows with the replica count.
+
+  - id: storage
+    title: Model cache
+    description: The per-replica volume that keeps downloaded weights across restarts.
+    docs: "#model-cache"
+    fields:
+      - path: volumeset.capacity
+        type: integer
+        label: Capacity per replica
+        unit: GiB
+        min: 10
+        required: true
+        description: >-
+          At least twice the model's weights plus 5 GiB, so a model switch can download beside the
+          old weights.
+        suggestions: [20, 50, 100, 250, 500]
+        docs: "/reference/volumeset#capacity-and-billing"
+    rules:
+      - rule: self.volumeset.capacity >= 10
+        mirrors: vllm.validateStorage
+        paths: [volumeset.capacity]
+        message: The capacity must be at least 10 GiB.
+      - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+
+  - id: access
+    title: Access
+    description: Who can reach the API, from the internet and from other workloads.
+    docs: "#access"
+    fields:
+      - path: publicAccess.enabled
+        type: boolean
+        label: Reachable from the internet
+        description: >-
+          The API key still guards `/v1`, but `/metrics`, `/health` and `/tokenize` are open to
+          anyone. Firewall changes take up to a few minutes.
+      - path: internalAccess.type
+        type: enum
+        label: Workloads that can connect
+        widget: cards
+        required: true
+        options:
+          - value: none
+            label: Nobody
+            description: No workload can connect.
+          - value: same-gvc
+            label: Same GVC
+            description: Any workload in this GVC.
+          - value: same-org
+            label: Same org
+            description: Any workload in this org.
+          - value: workload-list
+            label: Specific workloads
+            description: Only the workloads listed below.
+      - path: internalAccess.workloads
+        type: list
+        label: Allowed workloads
+        when: self.internalAccess.type == 'workload-list'
+        widget: tags
+        item:
+          type: ref
+          ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+    rules:
+      - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+        mirrors: vllm.validateAccess
+        paths: [internalAccess.type]
+        message: Choose who can connect.
+      - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+        severity: warning
+        paths: [internalAccess.workloads]
+        message: With "Specific workloads" and an empty list, no workload can connect.

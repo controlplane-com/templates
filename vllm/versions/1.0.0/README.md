@@ -125,7 +125,7 @@ Any OpenAI SDK works with `base_url` set to the `/v1` address and `api_key` set 
 ## Important Notes
 
 - **The API key protects only `/v1`.** vLLM leaves `/health`, `/metrics`, `/tokenize` and `/detokenize` unauthenticated, so with public access on anyone can read metrics and use the tokenizer.
-- **A missing secret stalls the install with no logs.** Run `cpln workload get-deployments {release}-vllm --gvc {gvc} -o yaml` and read `status.versions[].message`, which names the missing secret; the deployment recovers by itself within ~10 minutes of the secret being created.
+- **A missing secret stalls the install with no logs.** Run `cpln workload get-deployments {release}-vllm --gvc {gvc} -o yaml` and read `status.versions[].message`, which names the missing secret; once the secret exists the deployment recovers by itself, which can take up to ~10 minutes; keep polling.
 - **The first start is slow:** a ~12 GB image pull, then the model download and load (3-5 minutes for the default model). A replica not ready within `startupTimeoutSeconds` is restarted, so raise it (up to 1830) for large models and keep it for slow first downloads.
 - **With one replica the API is down while it restarts** (any upgrade or setting change); set `replicas: 2` for zero-downtime restarts and upgrades — each replica needs its own GPU.
 - **Rotating the API key:** update the secret's payload, then run `cpln workload force-redeployment {release}-vllm --gvc {gvc}`; the running server keeps the old key until it restarts.

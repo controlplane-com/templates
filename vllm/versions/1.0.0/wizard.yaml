@@ -143,7 +143,7 @@ steps:
         paths: [model.extraArgs]
         message: >-
           The extra flags may not set --port, --host, --model, --api-key, --served-model-name,
-          --max-model-len, --gpu-memory-utilization, --dtype or --tensor-parallel-size; the chart sets
+          --max-model-len, --gpu-memory-utilization, --dtype or --tensor-parallel-size (-tp); the chart sets
           them from its own settings.
 
   - id: gpu

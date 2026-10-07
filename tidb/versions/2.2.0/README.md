@@ -390,6 +390,13 @@ backup:
 The backup image version must match the cluster version. From v8.5.7 `br` enforces the check even
 with `--check-requirements=false`, so bump `backup.image` and `images.*` together.
 
+To take a backup now instead of waiting for the schedule, start the cron in `backup.location`
+(without `--location` it runs in every location):
+
+```sh
+cpln workload cron start RELEASE_NAME-tidb-backup --gvc GVC_NAME --location LOCATION_NAME
+```
+
 ### AWS S3
 
 1. Create your bucket. Set `aws.bucket` to its name and `aws.region` to its region.
@@ -431,37 +438,44 @@ with `--check-requirements=false`, so bump `backup.image` and `images.*` togethe
 
 ### Restoring a Backup
 
-Backups land at `BUCKET/PREFIX/tidb-TIMESTAMP/`. Restore with `br restore full`, run from a workload
-**inside the GVC** — `*.cpln.local` names do not resolve from anywhere else, and the
-`ghcr.io/controlplane-com/backup-images/tidb-backup` image is the one that carries a matching `br`.
+Backups land at `BUCKET/PREFIX/tidb-TIMESTAMP/`. Restore into a **new, empty release**:
+
+1. Install a release with a different name, `autoCreateDatabase.enabled: false` (so it holds no data
+   before the restore), and its `backup` section pointing at the **same provider, bucket and cloud
+   account** as the backup. TiKV reads the backup with that release's own cloud identity, and its
+   backup cron carries a `br` that matches the cluster version.
+2. Run `br restore full` from that release's backup cron, in its `backup.location`. List one PD
+   member per location — `br` needs one that answers and finds the rest.
 
 **AWS S3**
 ```sh
-br restore full \
-  --pd="replica-0.RELEASE_NAME-pd.LOCATION_1.GVC_NAME.cpln.local:2379,replica-0.RELEASE_NAME-pd.LOCATION_2.GVC_NAME.cpln.local:2379,replica-0.RELEASE_NAME-pd.LOCATION_3.GVC_NAME.cpln.local:2379" \
-  --storage="s3://BUCKET_NAME/PREFIX/tidb-TIMESTAMP" \
-  --s3.region="BUCKET_REGION"
+cpln workload cron start RELEASE_NAME-tidb-backup --gvc GVC_NAME --location LOCATION_NAME \
+  --command /usr/local/bin/br --arg restore --arg full \
+  --arg "--pd=replica-0.RELEASE_NAME-pd.LOCATION_1.GVC_NAME.cpln.local:2379,replica-0.RELEASE_NAME-pd.LOCATION_2.GVC_NAME.cpln.local:2379,replica-0.RELEASE_NAME-pd.LOCATION_3.GVC_NAME.cpln.local:2379" \
+  --arg "--storage=s3://BUCKET_NAME/PREFIX/tidb-TIMESTAMP" \
+  --arg "--s3.region=BUCKET_REGION"
 ```
 
-**GCS**
+**GCS** (`--send-credentials-to-tikv=false` is required, or `br` fails asking for `--gcs.credentials-file`)
 ```sh
-br restore full \
-  --pd="replica-0.RELEASE_NAME-pd.LOCATION_1.GVC_NAME.cpln.local:2379,replica-0.RELEASE_NAME-pd.LOCATION_2.GVC_NAME.cpln.local:2379,replica-0.RELEASE_NAME-pd.LOCATION_3.GVC_NAME.cpln.local:2379" \
-  --storage="gcs://BUCKET_NAME/PREFIX/tidb-TIMESTAMP" \
-  --send-credentials-to-tikv=false
+cpln workload cron start RELEASE_NAME-tidb-backup --gvc GVC_NAME --location LOCATION_NAME \
+  --command /usr/local/bin/br --arg restore --arg full \
+  --arg "--pd=replica-0.RELEASE_NAME-pd.LOCATION_1.GVC_NAME.cpln.local:2379,replica-0.RELEASE_NAME-pd.LOCATION_2.GVC_NAME.cpln.local:2379,replica-0.RELEASE_NAME-pd.LOCATION_3.GVC_NAME.cpln.local:2379" \
+  --arg "--storage=gcs://BUCKET_NAME/PREFIX/tidb-TIMESTAMP" \
+  --arg "--send-credentials-to-tikv=false"
 ```
 
-List one PD member per location, `replica-0.RELEASE_NAME-pd.LOCATION.GVC_NAME.cpln.local:2379` —
-`br` needs one that answers and finds the rest. The plain `RELEASE_NAME-pd.GVC_NAME.cpln.local` name
-only reaches PD in the caller's own location, which may have no PD member.
+3. Confirm: the run shows `Successful` in `cpln workload cron get RELEASE_NAME-tidb-backup --gvc GVC_NAME`,
+   and its log contains `Full Restore success summary`:
 
-`br` must be the same version as the cluster, and the target must be empty. TiKV reads the backup
-with the target release's own cloud identity, so set the target's `backup` section to the same
-provider, bucket and cloud account. Restoring into a fresh release was verified end to end on S3 and
-GCS (identical `ADMIN CHECKSUM`). **A full restore also restores the source cluster's
-users** — root's password and the application user become the ones the backup was taken with, not
-the target release's credentials secret. Rehearse a restore into a scratch release before you need
-one.
+```sh
+cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-tidb-backup"} |= "Full Restore success summary"' --limit 50 --since 1h
+```
+
+Restoring into a fresh release was verified end to end on S3 and GCS (identical `ADMIN CHECKSUM`).
+**A full restore also restores the source cluster's users** — root's password and the application
+user become the ones the backup was taken with, not any credentials you configured for the target.
+Rehearse a restore into a scratch release before you need one.
 
 ## Important Notes
 

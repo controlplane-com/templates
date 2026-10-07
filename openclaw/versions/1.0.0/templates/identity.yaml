@@ -1,0 +1,5 @@
+kind: identity
+name: {{ include "openclaw.identity.name" . }}
+description: OpenClaw gateway workload identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "openclaw.tags" . | nindent 4 }}

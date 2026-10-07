@@ -1,0 +1,131 @@
+{{- include "openclaw.validate" . }}
+{{- $secret := .Values.secret.name -}}
+kind: workload
+name: {{ include "openclaw.name" . }}
+description: OpenClaw gateway — Control UI, chat channels and agent tools
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "openclaw.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "openclaw.identity.name" . }}
+  containers:
+    - name: openclaw
+      image: {{ include "openclaw.image" . }}
+      command: sh
+      args:
+        - -c
+        - |
+          {{- include "openclaw.wrapper" . | nindent 10 }}
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      env:
+        # State lives in /data/.openclaw — the volume is mounted at /data, never at the
+        # state dir itself (doctor chmods its state dir every boot; a root-owned mount
+        # root crash-loops with EPERM — measured).
+        - name: OPENCLAW_HOME
+          value: /data
+        - name: OPENCLAW_DISABLE_BONJOUR
+          value: "1"
+        # The image tag is the version of record; no in-place self-update.
+        - name: OPENCLAW_NO_AUTO_UPDATE
+          value: "1"
+        - name: NODE_ENV
+          value: production
+        # Browser origin the Control UI accepts; referenced from openclaw.json.
+        - name: TEMPLATE_PUBLIC_ORIGIN
+          {{- if .Values.publicAccess.origin }}
+          value: {{ .Values.publicAccess.origin | quote }}
+          {{- else }}
+          value: $(CPLN_GLOBAL_ENDPOINT)
+          {{- end }}
+        - name: OPENCLAW_GATEWAY_TOKEN
+          value: cpln://secret/{{ $secret }}.gateway-token
+        - name: {{ include "openclaw.apiKeyEnv" . }}
+          value: cpln://secret/{{ $secret }}.llm-api-key
+        {{- if .Values.channels.telegram.enabled }}
+        - name: TELEGRAM_BOT_TOKEN
+          value: cpln://secret/{{ $secret }}.telegram-bot-token
+        {{- end }}
+        {{- if .Values.channels.slack.enabled }}
+        - name: SLACK_BOT_TOKEN
+          value: cpln://secret/{{ $secret }}.slack-bot-token
+        - name: SLACK_APP_TOKEN
+          value: cpln://secret/{{ $secret }}.slack-app-token
+        {{- end }}
+        {{- if .Values.channels.discord.enabled }}
+        - name: DISCORD_BOT_TOKEN
+          value: cpln://secret/{{ $secret }}.discord-bot-token
+        {{- end }}
+      ports:
+        # Control UI, WebSocket protocol, health and the optional /v1 API share this port.
+        - number: 18789
+          protocol: http
+      volumes:
+        - path: /data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "openclaw.volume.name" . }}
+        - path: /seed/openclaw.json
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "openclaw.secret.seed.name" . }}.payload
+        # Chromium needs more than the default 64 MB of shared memory.
+        - path: /dev/shm
+          recoveryPolicy: retain
+          uri: scratch://dev-shm
+      # /startupz is 503 until the gateway has started (the real gate); /healthz is
+      # 200 even while starting, so it is liveness only. Never probe another path —
+      # the SPA answers 200 to any unknown path.
+      readinessProbe:
+        httpGet:
+          path: /startupz
+          port: 18789
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 15
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 3
+      livenessProbe:
+        httpGet:
+          path: /healthz
+          port: 18789
+          scheme: HTTP
+        initialDelaySeconds: 300
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  securityOptions:
+    filesystemGroupId: 1000
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}

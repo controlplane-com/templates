@@ -1,0 +1,13 @@
+kind: policy
+name: {{ include "openclaw.policy.name" . }}
+description: OpenClaw secret access (prerequisite secret + first-boot seed)
+tags: {{- include "openclaw.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "openclaw.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ .Values.secret.name }}
+  - //secret/{{ include "openclaw.secret.seed.name" . }}

@@ -1,0 +1,80 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: OpenClaw
+category: ai
+topology: single
+
+summary: >-
+  OpenClaw, an always-on personal AI assistant, as one Gateway workload keeping its config, memory
+  and chat sessions on a snapshotted volume. It connects an Anthropic, OpenAI or OpenAI-compatible
+  model to Telegram, Slack, Discord and WhatsApp, gives it tools including a shell, a headless
+  browser, scheduled jobs, memory and MCP servers, and serves a browser Control UI and an optional
+  OpenAI-compatible API. Private by default. Pick it for an assistant you reach from your chat apps.
+
+keywords:
+  - ai assistant
+  - personal assistant
+  - ai agent
+  - llm agent
+  - chat bot
+  - whatsapp bot
+  - telegram bot
+  - slack bot
+  - discord bot
+  - browser automation
+  - headless chromium
+  - mcp
+  - model context protocol
+  - scheduled tasks
+  - agent memory
+  - tool use
+  - clawdbot
+  - moltbot
+  - openai-compatible api
+
+useCases:
+  - Always-on assistant you message from WhatsApp or Telegram
+  - Slack or Discord bot that answers with a real model and tools
+  - Scheduled routines such as daily briefings and reminders
+  - Web research by an agent driving a real headless browser
+  - A separate assistant per person or team, each with its own state
+
+alternativeTo:
+  - Manus
+  - ChatGPT agent
+  - Lindy
+
+compatibleWith: [openai-api]
+
+pickInsteadIf:
+  - need: a chat UI where people talk to models, with user accounts and document RAG
+    template: open-webui
+  - need: run the language model itself on your own GPU
+    template: ollama
+  - need: visual workflow automation with AI steps and many app integrations
+    template: n8n
+
+related:
+  - template: hermes-agent
+    relation: alternative
+    note: Another self-hosted assistant agent, with persistent memory and a webhook listener
+  - template: litellm
+    relation: companion
+    note: OpenAI-compatible gateway OpenClaw can use as its custom model provider
+  - template: ollama
+    relation: companion
+    note: Local models OpenClaw can use, configured from its Control UI
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [gateway-token, llm-api-key]
+    valuesPath: secret.name
+    required: true
+    description: Gateway token (24+ chars, your login) and LLM key; add telegram/slack/discord token keys for enabled channels. A missing secret wedges the install silently.
+  - kind: domain
+    required: false
+    when: publicAccess.origin set
+    description: A Control Plane domain you create and route to port 18789 of the workload. The chart never creates it.

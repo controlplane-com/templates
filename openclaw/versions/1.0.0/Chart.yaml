@@ -1,0 +1,16 @@
+apiVersion: v2
+name: openclaw
+description: Always-on personal AI assistant across your chat apps, with tools and a browser
+type: application
+version: 1.0.0
+appVersion: "2026.9.8"
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+
+annotations:
+  created: "2026-10-07"
+  lastModified: "2026-10-07"
+  createsGvc: false

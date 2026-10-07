@@ -1,0 +1,69 @@
+# ─── Image ────────────────────────────────────────────────────────────────────
+image:
+  repository: ghcr.io/openclaw/openclaw
+  tag: "2026.9.8" # exact release; "-browser" is appended automatically when browser.enabled
+
+# ─── Prerequisite secret (REQUIRED — create it BEFORE installing) ─────────────
+# Dictionary secret. Keys: gateway-token (>= 24 chars; your Control UI login and full-admin
+# token) and llm-api-key; add telegram-bot-token / slack-bot-token + slack-app-token /
+# discord-bot-token for the channels you enable. Missing secret = the install waits silently.
+secret:
+  name: my-openclaw-secret
+
+# ─── Model ────────────────────────────────────────────────────────────────────
+model:
+  provider: anthropic # anthropic | openai | custom (any OpenAI-compatible endpoint, e.g. OpenRouter, LiteLLM)
+  name: claude-opus-5-5 # model ID from your provider; no "anthropic/" or "openai/" prefix
+  baseUrl: "" # OpenAI-compatible base URL (usually ending in /v1), required only when provider is custom
+
+# ─── Chat channels (all connect outbound; no public URL needed) ───────────────
+channels:
+  telegram:
+    enabled: false # needs secret key telegram-bot-token (from @BotFather)
+  slack:
+    enabled: false # Socket Mode; needs secret keys slack-bot-token and slack-app-token
+  discord:
+    enabled: false # needs secret key discord-bot-token (enable the Message Content intent)
+  whatsapp:
+    enabled: false # link your phone after install: Control UI → Settings → Channels → WhatsApp → Show QR
+
+# ─── Browser tool ─────────────────────────────────────────────────────────────
+browser:
+  enabled: true # headless Chromium for the agent's browser tool (uses the -browser image)
+
+# ─── OpenAI-compatible HTTP API ───────────────────────────────────────────────
+httpApi:
+  enabled: false # /v1/chat/completions and /v1/responses; bearer = gateway token; in-GVC callers must also send X-Forwarded-For
+
+# ─── Resources ────────────────────────────────────────────────────────────────
+resources:
+  minCpu: 500m # keep maxCpu <= 4x minCpu (stateful workload)
+  minMemory: 1Gi
+  maxCpu: 2000m
+  maxMemory: 3Gi # 2Gi is enough with browser.enabled: false
+
+# ─── Storage ──────────────────────────────────────────────────────────────────
+volumeset:
+  capacity: 10 # initial capacity in GiB (minimum 10)
+  autoscaling:
+    enabled: false
+    maxCapacity: 100 # GiB
+    minFreePercentage: 10
+    scalingFactor: 1.2
+
+# ─── Snapshots ────────────────────────────────────────────────────────────────
+# Platform-managed snapshots of the state volume (no bucket needed). They contain
+# your WhatsApp session and OAuth tokens — treat them as secrets.
+backup:
+  enabled: true # scheduled snapshots of the data volume
+  schedule: "0 3 * * *" # cron, UTC
+  retention: 7d # how long each snapshot is kept
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: false # expose the Control UI on the public canonical HTTPS endpoint — read the README security note first
+  origin: "" # custom domain, e.g. https://assistant.example.com (no path). Empty = canonical endpoint
+
+internalAccess:
+  type: same-gvc # none | same-gvc | same-org | workload-list
+  workloads: [] # used with workload-list, e.g. //gvc/GVC/workload/NAME

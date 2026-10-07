@@ -466,7 +466,7 @@ one.
 ## Important Notes
 
 - **Root has a password from the first moment** when `autoCreateDatabase.enabled` (the default): the first TiDB server sets it while the cluster bootstraps. With `autoCreateDatabase.enabled: false`, root starts with **no password** — set one with `ALTER USER` before exposing the cluster.
-- **Each TiDB server start makes one root login attempt with an empty password** (to confirm root is protected before serving). If you set `FAILED_LOGIN_ATTEMPTS` on root, allow for one failure per server start.
+- **Each TiDB server start makes one root login attempt with an empty password** (to confirm root is protected before serving). If you set `FAILED_LOGIN_ATTEMPTS` on root, set it above your total number of TiDB servers, since restarting them all counts one failure each.
 - **Your application must retry failed connections and statements** — without it, every upgrade and replica restart shows up as errors in your app. Retry with a short backoff for 10–15 s and make retried writes idempotent; see [Resiliency](#resiliency).
 - **Never `helm upgrade` a 1.x release onto 2.0.0** — it deletes the GVC the 1.x release created and everything inside it. Install a new release instead; see [Migrating from 1.x](#migrating-from-1x).
 - **Every location in `locations` must already exist in the GVC.** A location the GVC lacks is accepted silently by the platform; PD refuses to bootstrap and says so in its logs. A GVC location you did *not* list simply runs nothing.

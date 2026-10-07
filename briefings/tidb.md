@@ -72,6 +72,10 @@
   DENIED the guard stops probing (`/tmp/root-guard-ok`): each refused probe is a failed root login, so probing every 30 s
   would lock a root that has `FAILED_LOGIN_ATTEMPTS` (measured v8.5.7). Auth-switch replies (root on caching_sha2) are
   completed with an empty password rather than misread as open.
+  **Round 4 trap (fixed):** reading a packet with `od -N1` killed `dd` early, so the rest of the greeting was parsed as the
+  login reply → false OPEN/OTHER, no marker, probing forever, root auto-locked 31 s after `FAILED_LOGIN_ATTEMPTS 2`. Packets are
+  now read whole, and a `flock` keeps the platform's two concurrent probe runs to one: 30 runs incl. 10 concurrent pairs = 1
+  refused login (`tidb_server_handshake_error_total` delta 1). WARNING for a genuinely passwordless root logs once per start.
 - **Volume snapshots actually run:** `volumeset.{pd,tikv}.snapshots.schedule` (daily 03:00 UTC; render + wizard refuse
   more-frequent-than-hourly — the API rejects it only at apply). 2.1.0 had retention but no schedule → no snapshots ever.
 - **ProxySQL start script inline** (`tidb.inlineScript`, every `$` doubled): no secret, so enabling ProxySQL on an existing

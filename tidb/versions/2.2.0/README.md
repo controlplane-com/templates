@@ -88,7 +88,10 @@ pause for about 75 s (measured): run the upgrade in a quiet period, with clients
 - **The db-init job runs in one location only** (2.1.0 ran it in every GVC location).
 
 Root's password is now set by the first TiDB server at bootstrap; that only affects new clusters —
-an existing cluster keeps the password it has, and the init job still checks it.
+an existing cluster keeps the password it has. Before upgrading, check that root refuses an empty
+password (`mysql -u root` with no password must fail). If it connects, keep
+`autoCreateDatabase.deployInitWorkload: true` for the upgrade: each new TiDB server waits about
+2 minutes before serving, logs a warning, and the init job then sets the password.
 
 ## Upgrading from 2.0.0
 
@@ -444,16 +447,18 @@ br restore full \
 ```sh
 br restore full \
   --pd="replica-0.RELEASE_NAME-pd.LOCATION_1.GVC_NAME.cpln.local:2379,replica-0.RELEASE_NAME-pd.LOCATION_2.GVC_NAME.cpln.local:2379,replica-0.RELEASE_NAME-pd.LOCATION_3.GVC_NAME.cpln.local:2379" \
-  --storage="gcs://BUCKET_NAME/PREFIX/tidb-TIMESTAMP"
+  --storage="gcs://BUCKET_NAME/PREFIX/tidb-TIMESTAMP" \
+  --send-credentials-to-tikv=false
 ```
 
 List one PD member per location, `replica-0.RELEASE_NAME-pd.LOCATION.GVC_NAME.cpln.local:2379` —
 `br` needs one that answers and finds the rest. The plain `RELEASE_NAME-pd.GVC_NAME.cpln.local` name
 only reaches PD in the caller's own location, which may have no PD member.
 
-`br` must be the same version as the cluster, and the target must be empty. Restoring an S3 backup
-this way into a fresh release was verified end to end (identical `ADMIN CHECKSUM`); the GCS path is
-the same command but has not been exercised. **A full restore also restores the source cluster's
+`br` must be the same version as the cluster, and the target must be empty. TiKV reads the backup
+with the target release's own cloud identity, so set the target's `backup` section to the same
+provider, bucket and cloud account. Restoring into a fresh release was verified end to end on S3 and
+GCS (identical `ADMIN CHECKSUM`). **A full restore also restores the source cluster's
 users** — root's password and the application user become the ones the backup was taken with, not
 the target release's credentials secret. Rehearse a restore into a scratch release before you need
 one.
@@ -461,6 +466,7 @@ one.
 ## Important Notes
 
 - **Root has a password from the first moment** when `autoCreateDatabase.enabled` (the default): the first TiDB server sets it while the cluster bootstraps. With `autoCreateDatabase.enabled: false`, root starts with **no password** — set one with `ALTER USER` before exposing the cluster.
+- **Each TiDB server start makes one root login attempt with an empty password** (to confirm root is protected before serving). If you set `FAILED_LOGIN_ATTEMPTS` on root, allow for one failure per server start.
 - **Your application must retry failed connections and statements** — without it, every upgrade and replica restart shows up as errors in your app. Retry with a short backoff for 10–15 s and make retried writes idempotent; see [Resiliency](#resiliency).
 - **Never `helm upgrade` a 1.x release onto 2.0.0** — it deletes the GVC the 1.x release created and everything inside it. Install a new release instead; see [Migrating from 1.x](#migrating-from-1x).
 - **Every location in `locations` must already exist in the GVC.** A location the GVC lacks is accepted silently by the platform; PD refuses to bootstrap and says so in its logs. A GVC location you did *not* list simply runs nothing.

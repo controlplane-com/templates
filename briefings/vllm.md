@@ -2,7 +2,7 @@
 
 ## What it is
 - vLLM: high-throughput LLM inference server (PagedAttention, continuous batching) with an OpenAI-compatible API. **Apache-2.0** (permissive open-source license; nothing for us or users to do).
-- Official image `vllm/vllm-openai:v0.31.0-cu129`. The CUDA 12.9 build, not the default CUDA 13 tag, because CUDA 13 needs NVIDIA driver ≥ 580 and the driver on Control Plane's built-in A10G/T4 nodes is not documented (unmeasured; T1 reads it). The image runs as root, so no `filesystemGroupId`.
+- Official image `vllm/vllm-openai:v0.31.0` (CUDA 13, needs NVIDIA driver ≥ 580). Measured 2026-10-07: built-in A10G and T4 in aws-us-west-2 run driver 580.159.03; the MK8s DLAMI node 595.91.07. **Do NOT use `-cu129`:** at v0.31.0 it bundles a CUDA-13 torchcodec and crashes on import (`libnvrtc.so.13`, upstream vllm#60406) — every install crash-loops. The image runs as root, so no `filesystemGroupId`.
 - API-only: no browser UI. Chat UIs are the `open-webui` template; a key-and-budget gateway is `litellm`.
 
 ## Common use cases
@@ -21,14 +21,14 @@
 
 - `gpu.type: builtin` → `gpu.nvidia {a10g|t4}`; `byok` → `gpu.custom {nvidia.com/gpu, runtimeClass nvidia}`. The built-in form CANNOT target BYOK nodes (it needs a `cpln.io/gpu=nvidia-a10g` node label).
 - **Why stateful:** the only proven way to mount the block-storage cache, and it replaces replicas one at a time. A `standard` workload deadlocks on one GPU (the new pod waits for the GPU the old one holds) — spike-proven 2026-10-07.
-- Availability: `replicas: 1` (default, per the simple-shape ruling; GPU cost dominates) = the API is down for every restart/upgrade boot. `replicas: N` = N independent servers, each with its own GPU and cache, rolled one at a time. No clustering needed.
+- Availability: `replicas: 1` (default, per the simple-shape ruling; GPU cost dominates) = the API is down for every restart/upgrade boot (~2.5 min measured). `replicas: 2` measured zero failed requests on built-in A10G×2 through scale-up (401/401), a rolling restart (376/376) and one replica stopped (325/325). No clustering needed.
 - `gvc` limited to exactly one location (wizard): N locations = N copies × N GPUs, and a BYOK GVC with a Control Plane location runs a GPU-less copy that crash-loops.
 
 ## Key knobs (shipped defaults)
 `model.name` Qwen/Qwen2.5-1.5B-Instruct · `model.maxModelLen` 8192 · `model.gpuMemoryUtilization` 0.90 · `model.dtype` auto · `model.extraArgs` [] · `gpu.type`/`model`/`quantity` builtin/a10g/1 · `resources.cpu`/`memory` 6000m/16Gi · `replicas` 1 · `startupTimeoutSeconds` 900 · `volumeset.capacity` 50 · `apiKey.secretName` my-vllm-api-key (required) · `huggingFace.tokenSecretName` "" · `publicAccess.enabled` false · `internalAccess.type` same-gvc
 
 ## Probe design
-- Startup window ≈ `initialDelaySeconds + 30 × periodSeconds`; `failureThreshold` does not count. The chart derives `periodSeconds = ceil((startupTimeoutSeconds − 30) / 30)` (29 at the default, 300-1830 allowed → 9-60) with `failureThreshold: 3`, so a hung server leaves rotation after ~90 s. Liveness uses the same numbers and relies on the derived startup probe holding it off during boot (default boot 175-280 s > 117 s; T1 proves it).
+- Startup window ≈ `initialDelaySeconds + 30 × periodSeconds`; `failureThreshold` does not count. The chart derives `periodSeconds = ceil((startupTimeoutSeconds − 30) / 30)` (29 at the default, 300-1830 allowed → 9-60) with `failureThreshold: 3`, so a hung server leaves rotation after ~90 s. Liveness uses the same numbers; the platform's derived startup probe holds it off during boot — measured: 164 s and 340 s boots with zero restarts, and `startupTimeoutSeconds: 300` with a cold 7B was killed at ~338 s.
 - **There is no vLLM boot gate inside the window.** `VLLM_ENGINE_READY_TIMEOUT_S` only bounds the engine's post-load ZMQ handshake at v0.31.0 (`wait_for_engine_startup` has no timeout), so a slow download is bounded only by the platform restart. The env var is not set.
 
 ## Validation the API enforces (probed 2026-10-07, mirrored in `vllm.validateGpu`)
@@ -43,6 +43,12 @@
 - BYOK replica Pending → `resources.cpu` still 6000m; a g5/g6.xlarge has 4 vCPU. Use ~2000m/8Gi.
 - BYOK cluster requirements: NVIDIA add-on `taintGPUNodes: false`; GPU pool label `cpln.io/gpuUsageAutoDrain: ignore` (else BYOK drains a GPU node idle 5 min, even one whose GPU pod just landed); x86 driver AMI + label `mk8s.cpln.io/accelerator: nvidia` while the `+nvidia` images resolve to arm64; GPU boot disk ≥ 200 GB (a 100 GB disk hit 91% and the kubelet evicted vLLM); one instance type per GPU pool; on AWS `awsWorkloadIdentity` + `awsELB` and core nodes ≥ 4 vCPU/16 GB. Working spec: `mk8s-clusters/vllm-gpu.yaml`.
 - The API stores container `env` sorted by name, so the chart renders it sorted (rendered == stored).
-- API key rotation needs a restart; the platform does not re-resolve `cpln://` on a running replica. The spike saw `force-redeployment` NOT restart the stateful GPU pod within 40 s; T19 measures it.
+- API key rotation needs a restart; the platform does not re-resolve `cpln://` on a running replica. `cpln workload force-redeployment` DOES restart the stateful GPU pod (T19): old container gone after 60-90 s, new key live ~4 min after the call, API down ~2.5 min at 1 replica. (The 2026-10-07 spike's 40 s observation was just too short.) `cpln workload replica stop` also works.
 - The API key guards `/v1` only; `/health`, `/metrics`, `/tokenize`, `/detokenize` are open upstream at v0.31.0.
 - T4: no bfloat16, no FlashAttention; `dtype: auto` falls back to fp16 with a warning (read in source); the chart refuses `bfloat16` with t4.
+- `gpu.quantity > 1` (tensor parallel) needs more than the 64 MiB `/dev/shm` every tested location gives; the chart mounts `scratch://shm` at `/dev/shm` only then. TP=2 on 2× T4 served (aws-us-east-1 — no 2-GPU T4 node came up in aws-us-west-2 in 23 min); throughput under load not measured.
+- A single T4 at 4000m/16Gi never scheduled in aws-us-west-2 although the API accepts it; 3000m/12Gi was ready in ~8 min. The README and wizard (info rule) say so; the chart does not block it (capacity, not a validated limit).
+- `volumeset.capacity` only sizes NEW volumes; a live volume is grown online with `cpln volumeset expand {release}-vllm-models --location L --volume-index N --new-size X` (no restart, weights kept).
+- Freeing an old model: `hf cache rm model/ORG/NAME -y` (freed 15.2 G); `rm -rf .../hub/models--ORG--NAME` frees nothing because the weights live in the shared `hub/blobs/` store.
+- BYOK only: `cpln port-forward` returns `502 Unable to connect to upstream workload` with `internalAccess: none` (works with `same-gvc`, and on built-in with `none`). Unexplained; README tells users.
+- Public access works on both targets; on BYOK the traffic goes through the cluster's own Istio ingress load balancer.

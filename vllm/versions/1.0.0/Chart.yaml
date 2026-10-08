@@ -3,7 +3,7 @@ name: vllm
 description: vLLM OpenAI-compatible LLM inference server on an NVIDIA GPU, built-in or your own cluster
 type: application
 version: 1.0.0
-appVersion: "0.31.0-cu129"
+appVersion: "0.31.0"
 
 dependencies:
   - name: cpln-common

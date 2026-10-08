@@ -26,7 +26,7 @@ This template deploys [vLLM](https://github.com/vllm-project/vllm), a high-throu
 ### Image
 
 ```yaml
-image: vllm/vllm-openai:v0.31.0-cu129 # CUDA 12.9 build: runs on older NVIDIA drivers than the default CUDA 13 tag
+image: vllm/vllm-openai:v0.31.0 # CUDA 13 build; needs NVIDIA driver 580 or newer (Control Plane GPUs run 580)
 ```
 
 ### Model
@@ -77,7 +77,7 @@ startupTimeoutSeconds: 900 # seconds from container start to ready (download + l
 
 ```yaml
 volumeset:
-  capacity: 50 # GiB per replica; at least 2x the model's weights plus 5 (minimum 10, can only grow)
+  capacity: 50 # GiB per replica for new volumes; at least 2x the model's weights plus 5 (minimum 10)
 ```
 
 ### Access
@@ -128,8 +128,11 @@ Any OpenAI SDK works with `base_url` set to the `/v1` address and `api_key` set 
 - **A missing secret stalls the install with no logs.** Run `cpln workload get-deployments {release}-vllm --gvc {gvc} -o yaml` and read `status.versions[].message`, which names the missing secret; once the secret exists the deployment recovers by itself, which can take up to ~10 minutes; keep polling.
 - **The first start is slow:** a ~12 GB image pull, then the model download and load (3-5 minutes for the default model). A replica not ready within `startupTimeoutSeconds` is restarted, so raise it (up to 1830) for large models and keep it for slow first downloads.
 - **With one replica the API is down while it restarts** (any upgrade or setting change); set `replicas: 2` for zero-downtime restarts and upgrades — each replica needs its own GPU.
-- **Rotating the API key:** update the secret's payload, then run `cpln workload force-redeployment {release}-vllm --gvc {gvc}`; the running server keeps the old key until it restarts.
-- **Switching models leaves the old weights on the volume.** Delete them with `cpln workload exec {release}-vllm --gvc {gvc} --container vllm -- rm -rf /models/hf/hub/models--ORG--NAME`, or raise `volumeset.capacity`.
+- **Rotating the API key:** update the secret's payload, then run `cpln workload force-redeployment {release}-vllm --gvc {gvc}`; the running server keeps the old key until it restarts (about 4 minutes, with the API down for ~2.5 of them at one replica).
+- **On a T4, size the replica at about `cpu: 3000m` / `memory: 12Gi`.** Larger requests the chart accepts (e.g. the 6000m / 16Gi default) did not schedule on Control Plane's T4 nodes in testing.
+- **On a BYOK location, `cpln port-forward` needs `internalAccess` other than `none`**; with `none` it returns `502 Unable to connect to upstream workload` there.
+- **Switching models leaves the old weights on the volume.** Delete them with `cpln workload exec {release}-vllm --gvc {gvc} --container vllm -- hf cache rm model/ORG/NAME -y` (deleting the model's folder frees nothing: the weights live in a shared blob store).
+- **Changing `volumeset.capacity` does not resize an existing volume** — it only sizes new ones. Grow a live volume with `cpln volumeset expand {release}-vllm-models --gvc {gvc} --location LOCATION --volume-index 0 --new-size 100` (online, no restart; one index per replica).
 
 ## Links
 

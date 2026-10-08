@@ -1,5 +1,5 @@
 # ─── Image ────────────────────────────────────────────────────────────────────
-image: vllm/vllm-openai:v0.31.0-cu129 # CUDA 12.9 build: runs on older NVIDIA drivers than the default CUDA 13 tag
+image: vllm/vllm-openai:v0.31.0 # CUDA 13 build; needs NVIDIA driver 580 or newer (Control Plane GPUs run 580)
 
 # ─── Model ────────────────────────────────────────────────────────────────────
 model:
@@ -38,7 +38,7 @@ startupTimeoutSeconds: 900 # seconds from container start to ready (download + l
 
 # ─── Model cache ──────────────────────────────────────────────────────────────
 volumeset:
-  capacity: 50 # GiB per replica; at least 2x the model's weights plus 5 (minimum 10, can only grow)
+  capacity: 50 # GiB per replica for new volumes; at least 2x the model's weights plus 5 (minimum 10)
 
 # ─── Access ───────────────────────────────────────────────────────────────────
 publicAccess:

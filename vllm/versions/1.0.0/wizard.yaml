@@ -240,6 +240,13 @@ steps:
         mirrors: vllm.validateGpu
         paths: [gpu.quantity]
         message: A T4 replica takes 1 to 4 GPUs.
+      - when: self.gpu.type == 'builtin' && self.gpu.model == 't4' && self.gpu.quantity == 1
+        rule: memoryBytes(self.resources.memory) <= memoryBytes('12Gi')
+        severity: info
+        paths: [resources]
+        message: >-
+          On a single T4, about 3000m CPU and 12Gi memory is what scheduled in testing; larger requests
+          the API accepts may wait for a node that never comes.
       - when: self.gpu.type == 'builtin' && self.gpu.model == 'a10g'
         rule: cpuMillicores(self.resources.cpu) >= 6000 && cpuMillicores(self.resources.cpu) <= 8000
         mirrors: vllm.validateGpu
@@ -331,6 +338,12 @@ steps:
       - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
         paths: [volumeset.capacity]
         message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+      - rule: oldSelf == null || self.volumeset.capacity <= oldSelf.volumeset.capacity
+        severity: info
+        paths: [volumeset.capacity]
+        message: >-
+          A new capacity only sizes volumes created from now on; existing replicas keep their size. Grow a
+          running volume with `cpln volumeset expand` (see the README's Important Notes).
 
   - id: access
     title: Access

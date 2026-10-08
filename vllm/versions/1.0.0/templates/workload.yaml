@@ -103,6 +103,13 @@ spec:
         successThreshold: 1
         timeoutSeconds: 5
       volumes:
+        {{- if gt (int .Values.gpu.quantity) 1 }}
+        {{- /* Tensor parallelism passes data between GPU workers through /dev/shm, which is 64 MiB
+               on every tested location; vLLM needs more and exits "Insufficient space in /dev/shm".
+               A scratch volume there is sized by the node (measured: TP=2 on 2x T4 started and served). */}}
+        - path: /dev/shm
+          uri: scratch://shm
+        {{- end }}
         - path: /models
           recoveryPolicy: retain
           uri: cpln://volumeset/{{ include "vllm.volume.name" . }}

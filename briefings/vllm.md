@@ -39,7 +39,7 @@
 ## Troubleshooting / traps
 - Deployment waiting with zero logs → API key (or HF token) secret missing; `cpln workload get-deployments … -o yaml` → `status.versions[].message`.
 - Crash-loop "Connection reset by peer" at start → egress blocked; the chart always opens outbound (huggingface.co + CDNs).
-- Gated model never ready → token missing or the license not accepted on huggingface.co.
+- Gated model crash-loops (exit 1; deployment message says nothing about HF) → `cpln logs` shows `GatedRepoError`: 401 = no token, 403 "not in the authorized list" = the license was not accepted by the account that owns the token. Proven 2026-10-08 with gemma-2-2b-it on built-in A10G (43 s download, ready ~5 min from container start).
 - BYOK replica Pending → `resources.cpu` still 6000m; a g5/g6.xlarge has 4 vCPU. Use ~2000m/8Gi.
 - BYOK cluster requirements: NVIDIA add-on `taintGPUNodes: false`; GPU pool label `cpln.io/gpuUsageAutoDrain: ignore` (else BYOK drains a GPU node idle 5 min, even one whose GPU pod just landed); x86 driver AMI + label `mk8s.cpln.io/accelerator: nvidia` while the `+nvidia` images resolve to arm64; GPU boot disk ≥ 200 GB (a 100 GB disk hit 91% and the kubelet evicted vLLM); one instance type per GPU pool; on AWS `awsWorkloadIdentity` + `awsELB` and core nodes ≥ 4 vCPU/16 GB. Working spec: `mk8s-clusters/vllm-gpu.yaml`.
 - The API stores container `env` sorted by name, so the chart renders it sorted (rendered == stored).

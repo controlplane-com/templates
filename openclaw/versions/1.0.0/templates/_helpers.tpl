@@ -63,8 +63,11 @@ Values-owned config, as `openclaw config patch` fragments keyed by item. The boo
 wrapper applies an item only when it differs from the last value it applied
 (markers in /data/.openclaw/.cpln), so a helm upgrade takes effect while a setting
 changed later in the Control UI survives restarts until the values change again.
-A channel set to null is "off in values": it is switched off only if the template
-had turned it on. Channel tokens are env SecretRefs — no token is written to disk.
+An item set to null is "off in values": its `off` patch is applied only if the
+template had turned it on. Channel tokens are env SecretRefs — no token is written
+to disk. Each channel also sets plugins.entries.<id>.enabled: a channel whose plugin
+entry is absent lists as "installed, not configured, disabled" and the Control UI
+offers to download the plugin again (measured).
 Rendered into the workload spec (not the seed secret) so a change restarts the replica.
 */}}
 {{- define "openclaw.desired" -}}
@@ -78,16 +81,26 @@ Rendered into the workload spec (not the seed secret) so a change restarts the r
 {{- $on := .Values.httpApi.enabled -}}
 {{- $http := dict "gateway" (dict "http" (dict "endpoints" (dict "chatCompletions" (dict "enabled" $on) "responses" (dict "enabled" $on)))) -}}
 {{- $ref := dict "source" "env" "provider" "default" -}}
-{{- $tg := dict "channels" (dict "telegram" (dict "enabled" true "botToken" (merge (dict "id" "TELEGRAM_BOT_TOKEN") $ref))) -}}
-{{- $sl := dict "channels" (dict "slack" (dict "enabled" true "mode" "socket" "botToken" (merge (dict "id" "SLACK_BOT_TOKEN") $ref) "appToken" (merge (dict "id" "SLACK_APP_TOKEN") $ref))) -}}
-{{- $dc := dict "channels" (dict "discord" (dict "enabled" true "token" (merge (dict "id" "DISCORD_BOT_TOKEN") $ref))) -}}
-{{- $wa := dict "channels" (dict "whatsapp" (dict "enabled" true)) -}}
-{{- $out := dict "model" $model "httpApi" $http -}}
-{{- $_ := set $out "channel-telegram" (ternary $tg nil .Values.channels.telegram.enabled) -}}
-{{- $_ := set $out "channel-slack" (ternary $sl nil .Values.channels.slack.enabled) -}}
-{{- $_ := set $out "channel-discord" (ternary $dc nil .Values.channels.discord.enabled) -}}
-{{- $_ := set $out "channel-whatsapp" (ternary $wa nil .Values.channels.whatsapp.enabled) -}}
-{{- toJson $out -}}
+{{- $chans := dict
+      "telegram" (dict "enabled" true "botToken" (merge (dict "id" "TELEGRAM_BOT_TOKEN") $ref))
+      "slack" (dict "enabled" true "mode" "socket" "botToken" (merge (dict "id" "SLACK_BOT_TOKEN") $ref) "appToken" (merge (dict "id" "SLACK_APP_TOKEN") $ref))
+      "discord" (dict "enabled" true "token" (merge (dict "id" "DISCORD_BOT_TOKEN") $ref))
+      "whatsapp" (dict "enabled" true) -}}
+{{- $items := dict "model" $model "httpApi" $http -}}
+{{- $off := dict -}}
+{{- range $id := list "telegram" "slack" "discord" "whatsapp" -}}
+{{- $frag := dict "channels" (dict $id (get $chans $id)) "plugins" (dict "entries" (dict $id (dict "enabled" true))) -}}
+{{- $_ := set $items (printf "channel-%s" $id) (ternary $frag nil (get $.Values.channels $id).enabled) -}}
+{{- $_ := set $off (printf "channel-%s" $id) (dict "channels" (dict $id (dict "enabled" false)) "plugins" (dict "entries" (dict $id (dict "enabled" false)))) -}}
+{{- end -}}
+{{- /* Control Plane MCP. Per-requester OAuth sends each chat sender a sign-in link that
+       completes on <gateway.publicOrigin>/oauth/mcp/callback, so it needs the public
+       endpoint; a private install registers shared operator OAuth (`mcp login cpln`). */ -}}
+{{- $oauth := ternary (dict "identity" "per-requester") nil .Values.publicAccess.enabled -}}
+{{- $mcp := dict "mcp" (dict "servers" (dict "cpln" (dict "url" "https://mcp.cpln.io/mcp" "transport" "streamable-http" "auth" "oauth" "oauth" $oauth))) -}}
+{{- $_ := set $items "mcp-cpln" (ternary $mcp nil .Values.cplnMcp.enabled) -}}
+{{- $_ := set $off "mcp-cpln" (dict "mcp" (dict "servers" (dict "cpln" nil))) -}}
+{{- toJson (dict "items" $items "off" $off) -}}
 {{- end }}
 
 
@@ -162,6 +175,9 @@ Rendered into the workload spec (not the seed secret) so a change restarts the r
 {{- if gt $max (mulf $min 4) -}}
 {{- fail (printf "openclaw: resources.maxCpu (%v) must be at most 4x resources.minCpu (%v) — the platform rejects a wider ratio on a stateful workload" .Values.resources.maxCpu .Values.resources.minCpu) -}}
 {{- end -}}
+{{- if not .Values.backup.retention -}}
+{{- fail "openclaw: backup.retention is required (e.g. 7d) — it also sets how long the final snapshot taken at uninstall is kept" -}}
+{{- end -}}
 {{- if and .Values.backup.enabled (not .Values.backup.schedule) -}}
 {{- fail "openclaw: backup.schedule is required when backup.enabled is true (cron, UTC, e.g. \"0 3 * * *\")" -}}
 {{- end -}}
@@ -206,16 +222,16 @@ cat > /tmp/openclaw-reconcile.mjs <<'CPLN_RECONCILE'
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 const M = "/data/.openclaw/.cpln";
-const desired = JSON.parse(fs.readFileSync("/tmp/openclaw-desired.json", "utf8"));
+const { items, off } = JSON.parse(fs.readFileSync("/tmp/openclaw-desired.json", "utf8"));
 const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 const merge = (a, b) => { for (const [k, v] of Object.entries(b)) { if (isObj(v) && isObj(a[k])) merge(a[k], v); else a[k] = v; } return a; };
 const patch = {}; const commit = [];
-for (const [item, frag] of Object.entries(desired)) {
+for (const [item, frag] of Object.entries(items)) {
   const f = `${M}/last-${item}`;
   const prev = fs.existsSync(f) ? fs.readFileSync(f, "utf8") : null;
   if (frag === null) {
-    if (prev !== null && item.startsWith("channel-")) {
-      merge(patch, { channels: { [item.slice(8)]: { enabled: false } } });
+    if (prev !== null && off[item]) {
+      merge(patch, off[item]);
       commit.push([f, null]);
       console.log(`openclaw: reconcile ${item}: disabled in values; switching it off`);
     }

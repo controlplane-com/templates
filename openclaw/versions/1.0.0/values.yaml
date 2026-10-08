@@ -31,6 +31,10 @@ channels:
 browser:
   enabled: true # headless Chromium for the agent's browser tool (uses the -browser image)
 
+# ─── Control Plane MCP ────────────────────────────────────────────────────────
+cplnMcp:
+  enabled: true # pre-register the Control Plane MCP server; each chat user signs in from chat (public install) or the operator signs in once (private)
+
 # ─── OpenAI-compatible HTTP API ───────────────────────────────────────────────
 httpApi:
   enabled: false # /v1/chat/completions and /v1/responses; bearer = gateway token; in-GVC callers must also send X-Forwarded-For

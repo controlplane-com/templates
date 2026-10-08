@@ -18,7 +18,13 @@ This template deploys [vLLM](https://github.com/vllm-project/vllm), a high-throu
    ```
 
 2. **A GPU.** With `gpu.type: builtin` (default): GPU quota for your org (one NVIDIA A10G by default, with 6 vCPU and 16 GiB) in a location that offers it — ask Control Plane support. With `gpu.type: byok`: a BYOK location backed by NVIDIA GPU nodes (see below).
-3. **Optional — Hugging Face token** for gated models such as Llama or Gemma: accept the model's license on huggingface.co, then store your token as an opaque secret (`encoding: plain`) and set `huggingFace.tokenSecretName`.
+3. **Optional — Hugging Face token** for gated models such as Llama or Gemma. Accept the model's license on its huggingface.co page **with the account that owns the token**, and wait until the page shows access granted (some, like Llama, are reviewed by hand). Create a read token (a fine-grained one needs read access to public gated repos), store it, and set `huggingFace.tokenSecretName: my-vllm-hf-token`:
+
+   ```bash
+   printf '%s' "$HF_TOKEN" | cpln secret create-opaque --name my-vllm-hf-token --encoding plain -f -
+   ```
+
+   Without access the replica restarts with exit code 1; `cpln logs` shows `GatedRepoError` (401 with no token, 403 "not in the authorized list" without license access).
 4. **A GVC with exactly one location.** Every location of the GVC runs its own copy, with its own GPUs.
 
 ## Configuration

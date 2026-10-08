@@ -37,7 +37,7 @@ Add channel keys later with `cpln secret edit my-openclaw-secret`. **A missing s
 
 ```yaml
 secret:
-  name: my-openclaw-secret   # the prerequisite dictionary secret above — must exist before install
+  name: my-openclaw-secret # the prerequisite dictionary secret — must exist before install
 ```
 
 ### Model
@@ -99,7 +99,7 @@ volumeset:
     scalingFactor: 1.2
 backup:
   enabled: true # scheduled snapshots of the data volume (they contain channel sessions and tokens — treat them as secrets)
-  schedule: "0 3 * * *" # cron, UTC
+  schedule: "0 3 * * *" # cron, UTC; at most hourly (a single fixed minute)
   retention: 7d # how long each snapshot is kept
 ```
 
@@ -107,7 +107,7 @@ backup:
 
 ```yaml
 publicAccess:
-  enabled: false # expose the Control UI on the public canonical HTTPS endpoint — read the security note below
+  enabled: false # expose the Control UI on the public canonical HTTPS endpoint — read the README security note first
   origin: "" # custom domain, e.g. https://assistant.example.com (no path). Empty = canonical endpoint
 internalAccess:
   type: same-gvc # none | same-gvc | same-org | workload-list
@@ -122,7 +122,7 @@ Values seed the config on first boot. Afterwards a `helm upgrade` re-applies `mo
 |---|---|---|
 | Control UI (setup, recovery) | `cpln port-forward RELEASE-openclaw 18789:18789 --gvc GVC`, then `http://localhost:18789` | `gateway-token`; the browser is approved automatically |
 | Control UI (daily use) | Canonical HTTPS endpoint with `publicAccess.enabled: true` (`status.canonicalEndpoint` of `cpln workload get RELEASE-openclaw --gvc GVC -o yaml`), or your custom domain | `gateway-token`, then a one-time browser approval |
-| HTTP API (`httpApi.enabled`) | `http://RELEASE-openclaw.GVC.cpln.local:18789/v1/chat/completions` | `Authorization: Bearer <gateway-token>` **plus** an `X-Forwarded-For` header |
+| HTTP API (`httpApi.enabled`) | `http://RELEASE-openclaw.GVC.cpln.local:18789/v1/chat/completions` | `Authorization: Bearer <gateway-token>` **plus** `X-Forwarded-For` with a non-loopback address (e.g. `X-Forwarded-For: 10.0.0.1`; `127.0.0.1` is refused), else `403 proxy_attribution_required` |
 | CLI | `cpln workload exec RELEASE-openclaw --gvc GVC --container openclaw -- sh -c 'cd /app && node openclaw.mjs <command>'` | — |
 
 **Approve a new browser on the public endpoint.** After you enter the token the page shows "pairing required". Run:
@@ -133,8 +133,6 @@ cpln workload exec RELEASE-openclaw --gvc GVC --container openclaw -- sh -c 'cd 
 ```
 
 The waiting page connects by itself within seconds. Port-forward is fine for setup, but browser tabs through the tunnel can freeze — use the public endpoint or a custom domain day to day.
-
-**Callers inside the GVC** must send an `X-Forwarded-For` header (any value, e.g. `X-Forwarded-For: 10.0.0.1`) with the bearer token, or the Gateway answers `403 proxy_attribution_required`.
 
 **Link WhatsApp** (`channels.whatsapp.enabled: true`): open the Control UI over the public endpoint → **Settings → Channels → WhatsApp → Show QR**, then on the phone *Settings → Linked devices → Link a device*. The image does not refresh — click **Show QR** again after ~60 s. Do not abandon a half-done setup tab; it blocks a new one for ~5 minutes. For a private install, print the QR in a terminal instead: `… sh -c 'cd /app && node openclaw.mjs channels login --channel whatsapp'`. Use a dedicated number: this is unofficial WhatsApp Web, and accounts can be banned.
 
@@ -158,8 +156,9 @@ The browser then fails to load `http://127.0.0.1:8989/oauth/callback?code=…`; 
 ```bash
 # Gateway, in place (~15 s): the container keeps running, WhatsApp reconnects, open Control UI tabs reconnect
 cpln workload exec RELEASE-openclaw --gvc GVC --container openclaw -- sh -c 'cd /app && node openclaw.mjs gateway restart'
-# One channel
+# One channel, then confirm with channels status: "started": true is returned even if the channel fails moments later (e.g. a bad token)
 cpln workload exec RELEASE-openclaw --gvc GVC --container openclaw -- sh -c 'cd /app && node openclaw.mjs gateway call channels.start --params "{\"channel\":\"whatsapp\"}"'
+cpln workload exec RELEASE-openclaw --gvc GVC --container openclaw -- sh -c 'cd /app && node openclaw.mjs channels status'
 ```
 
 Use `cpln workload force-redeployment RELEASE-openclaw --gvc GVC` only as a last resort — and after rotating a key in your secret, since a new key reaches only a new replica.
@@ -170,8 +169,9 @@ Use `cpln workload force-redeployment RELEASE-openclaw --gvc GVC` only as a last
 - **New chat contacts get a pairing code**; approve them in **Settings → Channels → DM access requests** (or `pairing approve`).
 - **Image upgrades run one-way state migrations.** Take a volume snapshot before bumping the tag; a downgrade cannot read migrated state.
 - **The assistant spends model tokens on its own.** OpenClaw runs a heartbeat turn every 30 minutes by default; change or turn it off in the Control UI.
-- **After a hard kill (e.g. out of memory) the Gateway refuses to start for up to 5 minutes** while its previous state lease expires; it then recovers by itself. Raise `maxMemory` if it recurs.
-- Access-knob changes take from about 30 seconds to 10 minutes to propagate; uninstall deletes the volume (a final snapshot is kept).
+- **"You've reached your Codex subscription usage limit" with `model.provider: openai` most likely means your OpenAI API account is out of credit or quota.** The image runs `openai/*` models on its Codex runtime, which words billing errors that way; pinning the model to the `openclaw` runtime (`agents.defaults.models["openai/MODEL"].agentRuntime.id`) shows the provider's real error (e.g. `credit_balance_exhausted`).
+- Access-knob changes take from about 30 seconds to 10 minutes to propagate.
+- **Uninstall deletes the volume and all state** — the WhatsApp link, MCP sign-ins, sessions and workspace — with no tested way to restore it into a new install. Copy out anything you need first.
 
 ## Links
 

@@ -181,6 +181,10 @@ Rendered into the workload spec (not the seed secret) so a change restarts the r
 {{- if and .Values.backup.enabled (not .Values.backup.schedule) -}}
 {{- fail "openclaw: backup.schedule is required when backup.enabled is true (cron, UTC, e.g. \"0 3 * * *\")" -}}
 {{- end -}}
+{{- /* The platform rejects snapshot schedules more frequent than hourly, at apply time only (measured: an every-10-minutes schedule refused, "55 * * * *" accepted). A schedule runs at most hourly when its minute field is a single fixed minute. */ -}}
+{{- if and .Values.backup.enabled .Values.backup.schedule (not (regexMatch "^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$" (trim (toString .Values.backup.schedule)))) -}}
+{{- fail (printf "openclaw: backup.schedule %q must be a 5-field cron with a single fixed minute (snapshots cannot run more often than hourly), e.g. \"0 3 * * *\"" (toString .Values.backup.schedule)) -}}
+{{- end -}}
 {{- end }}
 
 

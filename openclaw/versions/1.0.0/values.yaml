@@ -8,7 +8,7 @@ image:
 # token) and llm-api-key; add telegram-bot-token / slack-bot-token + slack-app-token /
 # discord-bot-token for the channels you enable. Missing secret = the install waits silently.
 secret:
-  name: my-openclaw-secret
+  name: my-openclaw-secret # the prerequisite dictionary secret — must exist before install
 
 # ─── Model ────────────────────────────────────────────────────────────────────
 model:
@@ -60,7 +60,7 @@ volumeset:
 # your WhatsApp session and OAuth tokens — treat them as secrets.
 backup:
   enabled: true # scheduled snapshots of the data volume (they contain channel sessions and tokens — treat them as secrets)
-  schedule: "0 3 * * *" # cron, UTC
+  schedule: "0 3 * * *" # cron, UTC; at most hourly (a single fixed minute)
   retention: 7d # how long each snapshot is kept
 
 # ─── Access ───────────────────────────────────────────────────────────────────

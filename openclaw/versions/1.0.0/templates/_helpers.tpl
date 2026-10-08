@@ -93,10 +93,11 @@ Rendered into the workload spec (not the seed secret) so a change restarts the r
 {{- $_ := set $items (printf "channel-%s" $id) (ternary $frag nil (get $.Values.channels $id).enabled) -}}
 {{- $_ := set $off (printf "channel-%s" $id) (dict "channels" (dict $id (dict "enabled" false)) "plugins" (dict "entries" (dict $id (dict "enabled" false)))) -}}
 {{- end -}}
-{{- /* Control Plane MCP. Per-requester OAuth sends each chat sender a sign-in link that
-       completes on <gateway.publicOrigin>/oauth/mcp/callback, so it needs the public
-       endpoint; a private install registers shared operator OAuth (`mcp login cpln`). */ -}}
-{{- $oauth := ternary (dict "identity" "per-requester") nil .Values.publicAccess.enabled -}}
+{{- /* Control Plane MCP. shared = operator OAuth (`mcp login cpln` from a terminal), used by
+       every chat. per-requester = each chat sender gets a sign-in link that completes on
+       <gateway.publicOrigin>/oauth/mcp/callback, so it needs the public endpoint. A null
+       oauth removes the key, so switching back to shared clears per-requester. */ -}}
+{{- $oauth := ternary (dict "identity" "per-requester") nil (eq .Values.cplnMcp.signIn "per-requester") -}}
 {{- $mcp := dict "mcp" (dict "servers" (dict "cpln" (dict "url" "https://mcp.cpln.io/mcp" "transport" "streamable-http" "auth" "oauth" "oauth" $oauth))) -}}
 {{- $_ := set $items "mcp-cpln" (ternary $mcp nil .Values.cplnMcp.enabled) -}}
 {{- $_ := set $off "mcp-cpln" (dict "mcp" (dict "servers" (dict "cpln" nil))) -}}
@@ -151,6 +152,12 @@ Rendered into the workload spec (not the seed secret) so a change restarts the r
 {{- end -}}
 {{- if and .Values.model.baseUrl (not (regexMatch "^https?://[^\\s]+$" .Values.model.baseUrl)) -}}
 {{- fail (printf "openclaw: model.baseUrl must start with http:// or https:// — got '%s'" .Values.model.baseUrl) -}}
+{{- end -}}
+{{- if not (has .Values.cplnMcp.signIn (list "shared" "per-requester")) -}}
+{{- fail (printf "openclaw: cplnMcp.signIn must be shared or per-requester — got '%s'" (toString .Values.cplnMcp.signIn)) -}}
+{{- end -}}
+{{- if and .Values.cplnMcp.enabled (eq .Values.cplnMcp.signIn "per-requester") (not .Values.publicAccess.enabled) -}}
+{{- fail "openclaw: cplnMcp.signIn 'per-requester' requires publicAccess.enabled: true — each chat user's sign-in returns to the Gateway's public address. Use 'shared' on a private install." -}}
 {{- end -}}
 {{- if and .Values.publicAccess.origin (not .Values.publicAccess.enabled) -}}
 {{- fail "openclaw: publicAccess.origin requires publicAccess.enabled: true — the custom domain reaches the workload through its public endpoint" -}}

@@ -76,7 +76,8 @@ httpApi:
 
 ```yaml
 cplnMcp:
-  enabled: true # pre-register the Control Plane MCP server; each chat user signs in from chat (public install) or the operator signs in once (private)
+  enabled: true # pre-register the Control Plane MCP server; nobody is signed in at install
+  signIn: shared # shared: you sign in once from a terminal and every chat uses your account | per-requester: each chat user signs in from a chat channel (needs publicAccess.enabled)
 ```
 
 ### Resources and storage
@@ -114,7 +115,7 @@ internalAccess:
   workloads: [] # used with workload-list, e.g. //gvc/GVC/workload/NAME
 ```
 
-Values seed the config on first boot. Afterwards a `helm upgrade` re-applies `model`, `channels`, `httpApi` and `cplnMcp` (its sign-in mode follows `publicAccess.enabled`) only when those values change; settings you change in the Control UI persist otherwise.
+Values seed the config on first boot. Afterwards a `helm upgrade` re-applies `model`, `channels`, `httpApi` and `cplnMcp` only when those values change; settings you change in the Control UI persist otherwise.
 
 ## Connecting
 
@@ -146,16 +147,25 @@ The waiting page connects by itself within seconds. Approvals live on the volume
 
 ## Connecting Control Plane tools (MCP)
 
-With `cplnMcp.enabled` the [Control Plane MCP server](https://docs.controlplane.com/ai/mcp) is registered as `cpln`; nobody is signed in yet.
+With `cplnMcp.enabled` the [Control Plane MCP server](https://docs.controlplane.com/ai/mcp) is registered as `cpln`; nobody is signed in at install. `cplnMcp.signIn` picks one of two modes:
 
-- **Public install:** ask the assistant to use Control Plane (e.g. "list my GVCs"). It replies with a sign-in link; open it, approve with your Control Plane account, then ask again. Each chat identity (your WhatsApp number, the web chat, a Slack user…) signs in once and acts with its own permissions. Links are single-use bearer links — whoever opens one connects their account — so do not request them in group chats.
-- **Private install:** the operator signs in once for every chat. Run the login, open the printed URL and approve:
+| `signIn` | Who signs in, and where | Tools act as |
+|---|---|---|
+| `shared` (default) | You, once, from a terminal | Your account, for every chat — including the Control UI chat |
+| `per-requester` | Each chat user, from a link in a chat channel | Each user's own account; the Control UI chat cannot sign in |
+
+**Shared.** Everyone who can message the assistant acts with your Control Plane permissions, so sign in with an account whose access you are comfortable sharing. Run these in two terminals — the tunnel carries the browser's return to the Gateway:
 
 ```bash
+cpln port-forward RELEASE-openclaw 8989:8989 --gvc GVC
 cpln workload exec RELEASE-openclaw --gvc GVC --container openclaw -- sh -c 'cd /app && node openclaw.mjs mcp login cpln'
 ```
 
-The browser then fails to load `http://127.0.0.1:8989/oauth/callback?code=…`; pass that `code` value back with `… node openclaw.mjs mcp login cpln --code CODE`. Alternatively, keep `cpln port-forward RELEASE-openclaw 8989:8989 --gvc GVC` running during the login and the callback completes by itself. `… node openclaw.mjs mcp status --verbose` shows the result.
+Open the printed URL and approve; the login command reports success and you can stop the tunnel. Without the tunnel the browser fails to load `http://127.0.0.1:8989/oauth/callback?code=…` — pass that `code` back within a few minutes with `… node openclaw.mjs mcp login cpln --code CODE`. The Control UI's MCP page shows only this command: its **Sign in** button appears only on a localhost connection, which does not work through `cpln port-forward`.
+
+**Per-requester** (needs `publicAccess.enabled`). In a chat channel such as WhatsApp or Slack, ask the assistant to use Control Plane (e.g. "list my GVCs"). It replies with a sign-in link; open it, approve with your own Control Plane account, then ask again. Each chat identity (your WhatsApp number, a Slack user…) signs in once. Links are single-use bearer links — whoever opens one connects their account — so do not request them in group chats.
+
+Check either mode with `… node openclaw.mjs mcp status --verbose`: `oauth: authorized` for shared, the number of connected principals for per-requester.
 
 ## Restarting the gateway or a channel
 

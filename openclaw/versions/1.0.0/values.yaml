@@ -33,7 +33,8 @@ browser:
 
 # ─── Control Plane MCP ────────────────────────────────────────────────────────
 cplnMcp:
-  enabled: true # pre-register the Control Plane MCP server; each chat user signs in from chat (public install) or the operator signs in once (private)
+  enabled: true # pre-register the Control Plane MCP server; nobody is signed in at install
+  signIn: shared # shared: you sign in once from a terminal and every chat uses your account | per-requester: each chat user signs in from a chat channel (needs publicAccess.enabled)
 
 # ─── OpenAI-compatible HTTP API ───────────────────────────────────────────────
 httpApi:

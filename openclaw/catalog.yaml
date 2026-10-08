@@ -10,8 +10,9 @@ summary: >-
   OpenClaw, an always-on personal AI assistant, as one Gateway workload keeping its config, memory
   and chat sessions on a snapshotted volume. It connects an Anthropic, OpenAI or OpenAI-compatible
   model to Telegram, Slack, Discord and WhatsApp, gives it tools including a shell, a headless
-  browser, scheduled jobs, memory and MCP servers, and serves a browser Control UI and an optional
-  OpenAI-compatible API. Private by default. Pick it for an assistant you reach from your chat apps.
+  browser, scheduled jobs, memory and MCP servers, with the Control Plane MCP server pre-registered
+  so each user signs in from chat, and serves a browser Control UI and an optional OpenAI-compatible
+  API. Private by default. Pick it for an assistant you reach from your chat apps.
 
 keywords:
   - ai assistant
@@ -27,6 +28,7 @@ keywords:
   - headless chromium
   - mcp
   - model context protocol
+  - control plane mcp
   - scheduled tasks
   - agent memory
   - tool use
@@ -39,6 +41,7 @@ useCases:
   - Slack or Discord bot that answers with a real model and tools
   - Scheduled routines such as daily briefings and reminders
   - Web research by an agent driving a real headless browser
+  - Manage Control Plane resources by chatting, through the pre-registered Control Plane MCP server
   - A separate assistant per person or team, each with its own state
 
 alternativeTo:

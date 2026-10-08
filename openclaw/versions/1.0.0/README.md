@@ -4,12 +4,10 @@
 
 ## Architecture
 
-- **Gateway** — stateful workload, one replica, port `18789` (Control UI, WebSocket, health and the optional OpenAI-compatible API). Uses the `-browser` image (headless Chromium) when `browser.enabled`.
+- **Gateway** — stateful workload, one replica, port `18789` (Control UI, WebSocket, health and the optional OpenAI-compatible API). Uses the `-browser` image (headless Chromium) when `browser.enabled`. One replica by design: upstream supports a single Gateway per state directory; for more isolation, install another release.
 - **Volumeset** — mounted at `/data`; all state lives in `/data/.openclaw`: config, SQLite, channel sessions, plugins, workspace and memory. Daily snapshots (optional).
 - **Seed secret** — the first-boot `openclaw.json`, copied only when none exists. Contains no credentials.
 - **Identity + policy** — `reveal` on exactly your prerequisite secret and the seed secret.
-
-One replica by design: upstream supports a single Gateway per state directory (state lock, single-writer SQLite, one connection per bot token). A restart resumes on the same volume; for more isolation, install another release.
 
 ## Prerequisites
 
@@ -29,11 +27,9 @@ cpln secret create-dictionary --name my-openclaw-secret \
   --entry llm-api-key=YOUR-LLM-API-KEY
 ```
 
-Add channel keys later with `cpln secret edit my-openclaw-secret`, which opens the secret as YAML in your editor. **A missing secret wedges the install silently** — `cpln logs` shows nothing. Read `status.versions[].message` from `cpln workload get-deployments RELEASE-openclaw --gvc GVC -o yaml`; it names the missing secret.
+Add channel keys later with `cpln secret edit my-openclaw-secret`. **A missing secret wedges the install silently** — `cpln logs` shows nothing. Read `status.versions[].message` from `cpln workload get-deployments RELEASE-openclaw --gvc GVC -o yaml`; it names the missing secret.
 
-**A single-location GVC.** Every location would run its own assistant, each fighting over the same bot tokens.
-
-**Optional: a custom domain** for the public Control UI (see Connecting).
+**A single-location GVC.** Every location would run its own assistant, each fighting over the same bot tokens. Optional: a custom domain for the public Control UI.
 
 ## Configuration
 
@@ -76,7 +72,14 @@ httpApi:
   enabled: false # /v1/chat/completions and /v1/responses; bearer = gateway token; in-GVC callers must also send X-Forwarded-For
 ```
 
-### Image, resources, storage and snapshots
+### Control Plane MCP
+
+```yaml
+cplnMcp:
+  enabled: true # pre-register the Control Plane MCP server; each chat user signs in from chat (public install) or the operator signs in once (private)
+```
+
+### Resources and storage
 
 ```yaml
 image:
@@ -111,7 +114,7 @@ internalAccess:
   workloads: [] # used with workload-list, e.g. //gvc/GVC/workload/NAME
 ```
 
-Values seed the config on first boot. Afterwards a `helm upgrade` re-applies `model`, `channels` and `httpApi` only when those values change; settings you change in the Control UI persist otherwise.
+Values seed the config on first boot. Afterwards a `helm upgrade` re-applies `model`, `channels`, `httpApi` and `cplnMcp` (its sign-in mode follows `publicAccess.enabled`) only when those values change; settings you change in the Control UI persist otherwise.
 
 ## Connecting
 
@@ -131,23 +134,40 @@ cpln workload exec RELEASE-openclaw --gvc GVC --container openclaw -- sh -c 'cd 
 
 The waiting page connects by itself within seconds. Port-forward is fine for setup, but browser tabs through the tunnel can freeze — use the public endpoint or a custom domain day to day.
 
-**Callers inside the GVC** must send an `X-Forwarded-For` header (any value) with the bearer token, or the Gateway answers `403 proxy_attribution_required`:
-
-```bash
-curl http://RELEASE-openclaw.GVC.cpln.local:18789/v1/chat/completions \
-  -H "Authorization: Bearer $GATEWAY_TOKEN" -H "X-Forwarded-For: 10.0.0.1" \
-  -H "Content-Type: application/json" -d '{"model":"openclaw","messages":[{"role":"user","content":"hello"}]}'
-```
+**Callers inside the GVC** must send an `X-Forwarded-For` header (any value, e.g. `X-Forwarded-For: 10.0.0.1`) with the bearer token, or the Gateway answers `403 proxy_attribution_required`.
 
 **Link WhatsApp** (`channels.whatsapp.enabled: true`): open the Control UI over the public endpoint → **Settings → Channels → WhatsApp → Show QR**, then on the phone *Settings → Linked devices → Link a device*. The image does not refresh — click **Show QR** again after ~60 s. Do not abandon a half-done setup tab; it blocks a new one for ~5 minutes. For a private install, print the QR in a terminal instead: `… sh -c 'cd /app && node openclaw.mjs channels login --channel whatsapp'`. Use a dedicated number: this is unofficial WhatsApp Web, and accounts can be banned.
 
 **Custom domain:** create a Control Plane domain routed to port `18789` of `RELEASE-openclaw`, then set `publicAccess.origin` to its https origin (e.g. `https://assistant.example.com`). The canonical endpoint is then refused by the origin check.
 
+## Connecting Control Plane tools (MCP)
+
+With `cplnMcp.enabled` the [Control Plane MCP server](https://docs.controlplane.com/ai/mcp) is registered as `cpln`; nobody is signed in yet.
+
+- **Public install:** ask the assistant to use Control Plane (e.g. "list my GVCs"). It replies with a sign-in link; open it, approve with your Control Plane account, then ask again. Each chat identity (your WhatsApp number, the web chat, a Slack user…) signs in once and acts with its own permissions. Links are single-use bearer links — whoever opens one connects their account — so do not request them in group chats.
+- **Private install:** the operator signs in once for every chat. Run the login, open the printed URL and approve:
+
+```bash
+cpln workload exec RELEASE-openclaw --gvc GVC --container openclaw -- sh -c 'cd /app && node openclaw.mjs mcp login cpln'
+```
+
+The browser then fails to load `http://127.0.0.1:8989/oauth/callback?code=…`; pass that `code` value back with `… node openclaw.mjs mcp login cpln --code CODE`. Alternatively, keep `cpln port-forward RELEASE-openclaw 8989:8989 --gvc GVC` running during the login and the callback completes by itself. `… node openclaw.mjs mcp status --verbose` shows the result.
+
+## Restarting the gateway or a channel
+
+```bash
+# Gateway, in place (~15 s): the container keeps running, WhatsApp reconnects, open Control UI tabs reconnect
+cpln workload exec RELEASE-openclaw --gvc GVC --container openclaw -- sh -c 'cd /app && node openclaw.mjs gateway restart'
+# One channel
+cpln workload exec RELEASE-openclaw --gvc GVC --container openclaw -- sh -c 'cd /app && node openclaw.mjs gateway call channels.start --params "{\"channel\":\"whatsapp\"}"'
+```
+
+Use `cpln workload force-redeployment RELEASE-openclaw --gvc GVC` only as a last resort — and after rotating a key in your secret, since a new key reaches only a new replica.
+
 ## Important Notes
 
 - **Security:** with `publicAccess.enabled` an agent with a shell sits on the internet behind one token. Keep the token long and secret, keep DM pairing on, and vet third-party skills.
 - **New chat contacts get a pairing code**; approve them in **Settings → Channels → DM access requests** (or `pairing approve`).
-- **Rotating a key in your secret does not reach the running Gateway** — run `cpln workload force-redeployment RELEASE-openclaw --gvc GVC` afterwards.
 - **Image upgrades run one-way state migrations.** Take a volume snapshot before bumping the tag; a downgrade cannot read migrated state.
 - **The assistant spends model tokens on its own.** OpenClaw runs a heartbeat turn every 30 minutes by default; change or turn it off in the Control UI.
 - **After a hard kill (e.g. out of memory) the Gateway refuses to start for up to 5 minutes** while its previous state lease expires; it then recovers by itself. Raise `maxMemory` if it recurs.

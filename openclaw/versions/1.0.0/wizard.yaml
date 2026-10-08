@@ -180,12 +180,38 @@ steps:
         title: Control Plane MCP
         toggle: cplnMcp.enabled
         description: >-
-          Registers the Control Plane MCP server, so the assistant can read and manage your Control
-          Plane resources with your own permissions. Nobody is signed in at install. With the public
-          Control UI, each chat user signs in from chat with a link the assistant sends; without it,
-          you sign in once from the CLI for every chat.
+          Registers the Control Plane MCP server, so the assistant can read and manage Control Plane
+          resources. Nobody is signed in at install; choose how sign-in works below.
         docs: "#connecting-control-plane-tools-mcp"
-        fields: []
+        fields:
+          - path: cplnMcp.signIn
+            type: enum
+            label: Sign-in
+            widget: cards
+            required: true
+            options:
+              - value: shared
+                label: Shared
+                description: >-
+                  You sign in once from a terminal after install. Every chat, including the Control UI
+                  chat, then acts as your Control Plane account.
+              - value: per-requester
+                label: Per chat user
+                description: >-
+                  Each person signs in with a link the assistant sends in a chat channel and acts as
+                  themselves. Needs the public Control UI; the Control UI chat cannot sign in.
+        rules:
+          - rule: self.cplnMcp.signIn in ['shared', 'per-requester']
+            mirrors: openclaw.validate
+            paths: [cplnMcp.signIn]
+            message: Choose how users sign in.
+          - when: self.cplnMcp.enabled && self.cplnMcp.signIn == 'per-requester'
+            rule: self.publicAccess.enabled
+            mirrors: openclaw.validate
+            paths: [cplnMcp.signIn]
+            message: >-
+              Per-chat-user sign-in needs the public Control UI, because each sign-in returns to the
+              Gateway's public address. Turn on public access, or choose Shared.
       - id: http-api
         title: OpenAI-compatible HTTP API
         toggle: httpApi.enabled

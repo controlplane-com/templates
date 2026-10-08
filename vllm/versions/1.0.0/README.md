@@ -91,9 +91,11 @@ internalAccess:
   workloads: [] # used with workload-list, e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME
 ```
 
-## Bring Your Own GPU Cluster (MK8s or BYOK)
+## Bring Your Own GPU Cluster (BYOK)
 
-Set `gpu.type: byok` to run on your own NVIDIA nodes. The chart then requests `nvidia.com/gpu` with runtime class `nvidia`; the built-in form cannot target BYOK nodes. The cluster needs:
+Set `gpu.type: byok` to run on your own NVIDIA nodes. This works on any Kubernetes cluster registered as a Control Plane [BYOK location](https://docs.controlplane.com/byok/overview) — an MK8s cluster with the [BYOK add-on](https://docs.controlplane.com/mk8s/add-ons/byok) enabled, or a cluster you already run (EKS, GKE, AKS, on-premises). A cluster that is not registered as a location cannot run this template. The chart requests `nvidia.com/gpu` with runtime class `nvidia`; the built-in form cannot target BYOK nodes.
+
+Any cluster needs NVIDIA GPU nodes, a device plugin that exposes `nvidia.com/gpu`, a `nvidia` runtime class, and no taint on the GPU nodes (Control Plane workloads do not tolerate it). Only MK8s has been tested; on an MK8s cluster that means:
 
 - **NVIDIA add-on with `taintGPUNodes: false`** — Control Plane workloads do not tolerate the GPU taint, so with it on nothing can use the GPU.
 - **GPU node pool label `cpln.io/gpuUsageAutoDrain: ignore`** — otherwise BYOK drains a GPU node that has had no GPU pod for 5 minutes, including one where vLLM is still starting.

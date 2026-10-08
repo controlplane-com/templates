@@ -163,8 +163,10 @@ steps:
               `cpln workload exec <release>-openclaw --gvc <gvc> --container openclaw -- sh -c 'cd /app && node openclaw.mjs channels login --channel whatsapp'`.
 
   - id: tools
-    title: Browser and API
-    description: The agent's headless browser and an OpenAI-compatible HTTP API on the Gateway.
+    title: Tools and API
+    description: >-
+      The agent's headless browser, the Control Plane MCP server and an OpenAI-compatible HTTP API on
+      the Gateway.
     docs: "#browser-tool-and-http-api"
     sections:
       - id: browser
@@ -173,6 +175,16 @@ steps:
         description: >-
           Headless Chromium for the agent's browser tool. It runs the `-browser` variant of the image,
           which needs about 1 GiB more memory.
+        fields: []
+      - id: cpln-mcp
+        title: Control Plane MCP
+        toggle: cplnMcp.enabled
+        description: >-
+          Registers the Control Plane MCP server, so the assistant can read and manage your Control
+          Plane resources with your own permissions. Nobody is signed in at install. With the public
+          Control UI, each chat user signs in from chat with a link the assistant sends; without it,
+          you sign in once from the CLI for every chat.
+        docs: "#connecting-control-plane-tools-mcp"
         fields: []
       - id: http-api
         title: OpenAI-compatible HTTP API
@@ -189,7 +201,7 @@ steps:
   - id: storage
     title: Resources and storage
     description: The Gateway's compute, its state volume and that volume's snapshots.
-    docs: "#image-resources-storage-and-snapshots"
+    docs: "#resources-and-storage"
     sections:
       - fields:
           - path: volumeset.capacity
@@ -230,6 +242,10 @@ steps:
             advanced: true
             description: An exact OpenClaw release. `-browser` is appended while the browser tool is on.
         rules:
+          - rule: self.backup.retention != null && self.backup.retention != ''
+            mirrors: openclaw.validate
+            paths: [backup.retention]
+            message: The snapshot retention is required.
           - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
             paths: [volumeset.capacity]
             message: A volume set cannot shrink. Keep the capacity at or above the installed size.

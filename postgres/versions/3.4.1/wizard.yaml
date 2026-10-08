@@ -29,7 +29,7 @@ steps:
         type: resources
         label: Resources
         required: true
-        docs: "#resources"
+        docs: "#server-and-resources"
         maxRatio: 4
         cpu: { min: 25m }
         memory: { min: 32Mi }
@@ -158,7 +158,7 @@ steps:
             description: Firewall changes take 30 to 150 seconds to take effect.
             options:
               - value: none
-                label: Nobody
+                label: None
                 description: No workload can connect.
               - value: same-gvc
                 label: Same GVC
@@ -177,12 +177,17 @@ steps:
             widget: tags
             item:
               type: ref
-              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internalAccess.type == 'same-gvc'
       - id: pgbouncer
         title: Connection pooler (PgBouncer)
         toggle: pgbouncer.enabled
         description: When on, PgBouncer becomes the endpoint your applications connect to.
-        docs: "#pgbouncer-connection-pooling"
+        docs: "#pgbouncer"
         fields:
           - type: note
             text: >-
@@ -194,12 +199,15 @@ steps:
             widget: segmented
             required: true
             help: >-
-              **transaction** holds a connection for one transaction: best for most web and API
+              **Transaction** holds a connection for one transaction: best for most web and API
               workloads, but not compatible with `SET` variables, temporary tables or advisory
-              locks. **session** holds it for the whole client session: compatible with
-              everything, less reuse. **statement** returns it after every statement:
+              locks. **Session** holds it for the whole client session: compatible with
+              everything, less reuse. **Statement** returns it after every statement:
               transactions are not supported.
-            options: [session, transaction, statement]
+            options:
+              - { value: session, label: Session }
+              - { value: transaction, label: Transaction }
+              - { value: statement, label: Statement }
           - path: pgbouncer.defaultPoolSize
             type: integer
             label: Server connections per pool
@@ -235,11 +243,20 @@ steps:
             paths: [pgbouncer.defaultPoolSize]
             message: The pool is larger than the number of client connections PgBouncer accepts.
     rules:
+      - when: self.internalAccess.type == 'same-gvc' && context.gvc != null
+        rule: "!self.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+        severity: info
+        paths: [internalAccess.workloads]
+        messageExpression: >-
+          'Same GVC already allows every workload in this GVC: ' +
+          self.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+          ' can be removed from the list.'
+        message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
       - rule: "!(self.internalAccess.type == 'none' && (self.pgbouncer.enabled || self.backup.enabled))"
         severity: warning
         paths: [internalAccess.type]
         message: >-
-          "Nobody" also blocks PgBouncer and the backup job, which connect to Postgres like any
+          "None" also blocks PgBouncer and the backup job, which connect to Postgres like any
           other workload.
       - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
         severity: warning
@@ -259,6 +276,11 @@ steps:
           (self.pgbouncer.enabled && self.backup.enabled ? ' and ' : '') +
           (self.backup.enabled ? '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-backup' : '') +
           ', or they cannot connect.'
+        fix:
+          path: internalAccess.workloads
+          items: >-
+            (self.pgbouncer.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgbouncer'] : []) +
+            (self.backup.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-backup'] : [])
         message: >-
           The chart does not add its own workloads to the list; add the PgBouncer and backup
           workloads, or they cannot connect.

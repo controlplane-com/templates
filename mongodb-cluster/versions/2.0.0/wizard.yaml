@@ -9,7 +9,7 @@ steps:
   - id: topology
     title: Locations
     description: Where the replica set members run. Every member votes.
-    docs: "#locations-and-sizing"
+    docs: "#locations"
     fields:
       - type: note
         textExpression: >-
@@ -18,7 +18,7 @@ steps:
           string((sum(self.locations.map(l, l.replicas)) - 1) / 2) + '.'
       - type: note
         when: >-
-          context.gvcLocations != null &&
+          context.gvcLocations != null && self.locations.exists(l, l.name != '') &&
           context.gvcLocations.exists(g, !(g in self.locations.map(l, l.name)))
         textExpression: >-
           'GVC locations not listed here run nothing: ' +
@@ -228,7 +228,7 @@ steps:
     description: Who can connect, and the HAProxy endpoint that routes to the primary.
     sections:
       - title: Access
-        docs: "#firewall"
+        docs: "#access"
         fields:
           - path: firewall.internalAllowType
             type: enum
@@ -253,7 +253,7 @@ steps:
         title: HAProxy primary endpoint
         toggle: proxy.enabled
         description: One stable address that always routes to the current primary. Backups do not use it.
-        docs: "#haproxy-proxy"
+        docs: "#haproxy"
         fields:
           - path: proxy.minReplicas
             type: integer
@@ -343,7 +343,7 @@ steps:
             message: The backup location must be one of the configured locations, or the job never runs.
       - title: AWS S3
         when: self.backup.enabled && self.backup.provider == 'aws'
-        docs: "#aws-s3"
+        docs: "#backups"
         fields:
           - path: backup.aws.bucket
             type: string
@@ -380,7 +380,7 @@ steps:
             patternMessage: Leave out the leading /.
       - title: Google Cloud Storage
         when: self.backup.enabled && self.backup.provider == 'gcp'
-        docs: "#gcs"
+        docs: "#backups"
         fields:
           - path: backup.gcp.bucket
             type: string

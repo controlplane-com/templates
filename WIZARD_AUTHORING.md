@@ -1,6 +1,8 @@
 # Authoring template wizard descriptors (`wizard.yaml`)
 
-> **Keep this guide in sync.** Update this guide and `.claude/skills/wizard-authoring/SKILL.md` in the same commit as any change to the wizard spec, the core engine behaviour or the console rendering.
+> **Keep this guide in sync.** Update this guide, `.claude/skills/wizard-authoring/SKILL.md` and `.claude/skills/create-wizard/SKILL.md` in the same commit as any change to the wizard spec, the core engine behaviour or the console rendering.
+
+> **Authoring a new or rewritten descriptor?** Run `/create-wizard <template> [version]`. It is a fixed procedure over this guide: it builds the chart inventory (Appendix C), writes the descriptor, runs the gates and ends with the checklist in §18. Edits and reviews of an existing descriptor use the `wizard-authoring` skill.
 
 This guide is the complete manual for writing and reviewing a `wizard.yaml` descriptor for any template version in this repo. A person or an agent should be able to create, copy forward, review or fix a descriptor from this document alone. It covers descriptor spec v1 (`apiVersion: template-wizard.controlplane.com/v1`) as of Round 2 and the Round 2 review (2026-09-30).
 
@@ -40,6 +42,7 @@ Examples marked "not in a pilot" were written for this guide and checked with `t
 - [19. Common mistakes](#19-common-mistakes)
 - [20. Appendix A: property reference](#20-appendix-a-property-reference)
 - [21. Appendix B: issue, diagnostic and lint codes](#21-appendix-b-issue-diagnostic-and-lint-codes)
+- [22. Appendix C: chart inventory format](#22-appendix-c-chart-inventory-format)
 
 ---
 
@@ -54,7 +57,7 @@ Paths are relative to this repo's root, with a checkout of the Console repo as t
 | Core engine and CLI | `../console/template-wizard` (`@controlplane/template-wizard`, a private package in the Console repo). CLI: `../console/template-wizard/dist/cli.cjs` (bin `template-wizard`) |
 | Core decisions log | `../console/template-wizard/README.md`, section "Decisions": the behaviour details behind every rule in this guide |
 | Public API types | `../console/template-wizard/dist/index.d.ts` |
-| Spec and design | `../console/docs/template-wizard/`: `SPEC.md` (spec v1), `core.md`, `console.md`, `pilots.md` (per-pilot inventories), `PROGRESS.md` |
+| Spec and design | `../console/docs/template-wizard/`: `SPEC.md` (spec v1), `core.md`, `console.md`, `pilots.md` (per-pilot inventories) |
 | Console renderer | `../console/src/pages/marketplace/wizard/` (shown in test and staging only) |
 | Docs site | the template pages are `/template-catalog/templates/<template>` on docs.controlplane.com |
 
@@ -114,12 +117,12 @@ tw render --descriptor <dir>/wizard.yaml --values <dir>/values.yaml --answers an
 | Part | What it is | Descriptor input |
 |---|---|---|
 | Header | Template name, icon, category, app version, and an always-visible "Template docs" link to `/template-catalog/templates/<template>`, on every step of install and upgrade | none (automatic) |
-| Release step (install) | Release name, target GVC and template version. The GVC picker shows each GVC's location count and disables the GVCs that do not fit, with the reason ("Has 3 locations; this template needs exactly 1"). "Create GVC" opens an embedded create limited the same way (a single-choice location list when the maximum is 1; it cannot be created with fewer than the minimum). Versions without a descriptor are marked "YAML only" | `gvc` limits (§14) |
+| Release step (install) | Release name, target GVC and template version. The GVC picker shows each GVC's location count and disables the GVCs that do not fit, with the reason ("Has 3 locations; this template needs exactly 1"). A + button attached to the picker (tooltip "Create GVC") opens an embedded create limited the same way (a single-location select when the maximum is 1; it cannot be created with fewer than the minimum). Versions are listed latest first, with "(Latest)" on the newest; those without a descriptor are marked "YAML only" | `gvc` limits (§14) |
 | Config steps | One per visible descriptor step, in order, on a rail | `steps` |
-| Sections | Untitled sections are a plain column; titled ones a box with the title, description and docs link. A toggle section has its switch as the box's header title; while it is off, the box shows only its description. The toggle's own `help` (an import override) is the switch's "?", and its own `description` follows the section's under the header. Fields marked `advanced` are collected into a collapsed "Advanced" group at the end of their section | sections, `toggle` (§5.3), `advanced` (§5.5) |
-| Fields | One control per field type and widget. A switch sits right next to its label. A field with `suggestions` is a text input with a dropdown of the suggested values beside free typing, the unit written next to it (§15). A secret reference with required keys gets a "Check keys" button (§13.3). "Create" appears next to a reference only with `allowCreate: true` (§13.2). In a table (a list of objects), the message line under a row leads each message with its column's header ("Location: Required.") | field properties |
+| Sections | Untitled sections are a plain column; titled ones a box with the title, description and docs link. A toggle section has its switch as the box's header title, with its "Docs" link right after the title; clicking a collapsible box's title folds it, clicking the switch only flips the switch; while it is off, the box shows only its description. The toggle's own `help` (an import override) is the switch's "?", and its own `description` follows the section's under the header. Fields marked `advanced` are collected into a collapsed "Advanced" group at the end of their section | sections, `toggle` (§5.3), `advanced` (§5.5) |
+| Fields | One control per field type and widget. A switch sits right next to its label, with the field's "Docs" link right after the label. A field with `suggestions` is a text input with a dropdown of the suggested values beside free typing, the unit written inside the input at its end (§15). A CPU quantity is a number and a unit select ("millicores" or "cores") joined into one control. A required choice starts on its first option. A secret reference with required keys gets a "Check keys" button (§13.3). A reference gets an attached + button (tooltip "Create <kind>") only with `allowCreate: true` (§13.2). In a table (a list of objects), the message line under a row leads each message with its column's header ("Location: Required.") | field properties |
 | YAML mode | The whole values document in an editor; the Wizard mode is disabled while the text does not parse | none |
-| Review | Outstanding issues and advice above two tabs, each as "<label>: <message>" (§10.1). **Visual**: every visible setting with its formatted value (option labels, On/Off, reference names, masked sensitive values), grouped by step and section, each step with an "Edit" link. A titled section's toggle is folded into the section's heading ("Scheduled backups: Off") and not repeated as a row, and a section switched off shows only that heading; on upgrade, changed rows are tagged "Changed" and a "Changes since last applied" list follows, each tagged "Edited", "New default" or "Placeholder cleared" (§12.1); changes that share a label lead with their section's title, else their step's ("AWS S3 › Cloud account", "Google Cloud Storage › Cloud account"). **YAML**: the values document; on upgrade, also a diff against the installed values. Install has no "changes from the chart defaults" list | labels, option labels, `sensitive` |
+| Review | Outstanding issues and advice above two tabs, each as "<label>: <message>" (§10.1). **Visual**: every visible setting with its formatted value (option labels, On/Off, reference names, masked sensitive values), grouped by step and section, each step with an "Edit" link. A titled section's toggle is folded into the section's heading ("Scheduled backups: Off") and not repeated as a row, and a section switched off shows only that heading; on upgrade, changed rows are tagged "Changed" and a "Changes since last applied" list follows, each tagged "Edited", "New default", "Default selected" (a required choice took its first option) or "Placeholder cleared" (§12.1); changes that share a label lead with their section's title, else their step's ("AWS S3 › Cloud account", "Google Cloud Storage › Cloud account"). **YAML**: the values document; on upgrade, also a diff against the installed values. Install has no "changes from the chart defaults" list | labels, option labels, `sensitive` |
 | Install / Upgrade | Enabled only while no error or warning remains. A failed install, upgrade or preview shows an alert above the review titled "Install failed", "Upgrade failed" or "Preview failed", with the API's message verbatim under it, line breaks kept, and nothing summarised from it | severities |
 
 Behaviour that shapes descriptors:
@@ -217,14 +220,14 @@ The pilots order them: modeline, `apiVersion`, `kind`, `title`, `gvc`, `steps`, 
 
 ## 3. Procedures
 
-Every procedure ends with the same gate: `tw lint` clean (0 errors, 0 warnings, full coverage), `tw check-docs` clean, `tw render` works, and the review checklist (§18) passes. Commit messages in this repo are one lowercase line with no body and no attribution, and every file is added by explicit path (`git add <template>/versions/<version>/wizard.yaml`). Nothing is pushed.
+Every procedure ends with the same gate: the review checklist (§18), the one done-checklist of this guide. It includes `tw lint` clean (0 errors, 0 warnings, full coverage), `tw check-docs` clean, `tw carry` clean and `tw render` working. Write the chart inventory (Appendix C) before the descriptor in every procedure that writes or rewrites one; `/create-wizard` runs these steps as a fixed procedure. Commit messages in this repo are one lowercase line with no body and no attribution, and every file is added by explicit path (`git add <template>/versions/<version>/wizard.yaml`). Nothing is pushed.
 
 ### 3.1 A new template version with no descriptor
 
 Use this when no earlier version of the template has a descriptor either. When one does, copy it forward (§3.2) instead.
 
 1. **Check the chart renders.** `helm dependency update <dir>` (pulls `cpln-common` and any subcharts from the OCI registry), then `helm template validation <dir> --set global.cpln.gvc=validation-gvc`. A chart that does not render with its own defaults is not ready for a descriptor.
-2. **Read the chart** (§4) and fill in the inventory worksheet (§4.7): every values leaf, what reads it, what gates it, every `fail`, every prerequisite, the location handling, the dependencies.
+2. **Read the chart** (§4) and write the inventory (§4.7, Appendix C): every values leaf, what reads it, what gates it, every `fail`, every prerequisite, every README and CHANGELOG hazard and budget, the location handling, the dependencies.
 3. **Create the skeleton:**
 
    ```yaml
@@ -244,8 +247,8 @@ Use this when no earlier version of the template has a descriptor either. When o
 9. **Migrations** from the previous version (§9). Even when the previous version has no descriptor, `lint` compares its `values.yaml` with this one and reports removed keys (`KEY_REMOVED`).
 10. **Lint until clean:** `tw lint <dir>`. Fix every error and warning. An uncovered leaf gets a field, or a `yamlOnly` entry with a real reason.
 11. **Docs:** `tw check-docs <dir>`.
-12. **Render** the main paths with answers files (§17.3): the defaults, each provider branch, each optional feature on. Run `helm template` on each output.
-13. **Preview** in the local console (§17.7), in light and dark.
+12. **Render** the main paths with answers files (§17.3): the defaults, each provider branch, each optional feature on. Run `helm template` on each output, then probe the free-form fields with edge values (§17.3.1).
+13. **Preview** in the local console (§17.7), in light and dark (an agent only when it can start the dev server itself, otherwise "preview not run" with the reason).
 14. **Review** with the checklist (§18).
 15. **Commit:** `git add <dir>/wizard.yaml && git commit -m "add wizard descriptor for <template> <version>"`.
 
@@ -331,7 +334,7 @@ Adding a descriptor to an older, already published version lets installs of that
    - `override` presentation only (labels, descriptions, help, bounds, a toggle's help); each override key replaces the child's value whole;
    - place the imported steps with `after` or `before`, and rename them with `steps` so they read as part of this template ("Database server");
    - write `when` exactly as `self.<condition>` (`condition: postgres.enabled` → `when: self.postgres.enabled`), and declare the condition as a parent boolean field.
-5. **Write parent root rules** for facts only the parent knows: its workloads must pass the child's firewall, a "Nobody" setting breaks the app.
+5. **Write parent root rules** for facts only the parent knows: its workloads must pass the child's firewall, a "None" setting breaks the app.
 6. **GVC limits:** the parent's own `gvc` block for its own workloads; the limits of every import that is on are intersected with it.
 7. **Migrations:** parent renames under the child's key; they beat the child's own migrations on the same paths.
 8. **Lint:** `tw lint <parent-dir>` reads each import from the templates root (inferred from `<root>/<t>/versions/<v>`, or `--templates-root .`), reads `Chart.yaml` of this version and the previous one, and checks the dependency's name, version, alias and condition. The child's own findings are not repeated in the parent's report.
@@ -440,11 +443,15 @@ grep -rn 'if .Values\|eq .Values\|ne .Values\|hasKey\|default \|required ' <dir>
 
 Also note what restarts the workload, what is one-way (a data format written by a newer major), and what only takes effect at first initialization (database credentials). Those become `oldSelf` rules and help text (§8.8).
 
-### 4.4 README
+### 4.4 README and CHANGELOG
+
+Read the README and the changelog of the version directory (a `CHANGELOG.md`, or the README's own changelog, release-notes or upgrade section) for the entries for **this exact version** (and every version since the previous descriptor) before writing any text, rule or note. Both can describe a different version than the one you are writing for; the templates still win when they disagree (§4).
 
 - **Prerequisites** list what must exist before install: secrets (with their keys), cloud accounts, IAM policies, DNS records, a dedicated load balancer. Each becomes a `ref` (§13), a note or a `context.gvcSpec` rule.
-- **"Upgrading from …" sections** become migrations, `oldSelf` rules, upgrade notes and blocked-upgrade rules (§9).
+- **"Upgrading from …" sections and CHANGELOG entries** become migrations, `oldSelf` rules, upgrade notes and blocked-upgrade rules (§9). **Every upgrade hazard they name gets a version-gated note** in the section it concerns (§9.6): a restart, a one-way data format, a switched endpoint, a changed default that the release keeps running on, a setting that only takes effect at first initialization.
 - **Warnings** ("do not scale past one replica", "cannot be turned on for a running release") become rules or help.
+- **Budgets and limits** ("connections per proxy times replicas must stay under the server's maximum", a member cap, a minimum free-space ratio) become rules (§8.11), not only help text.
+- **Verified and unverified claims.** A statement such as "no verified run" or "billed per snapshot" is written only while the README or CHANGELOG of this version says it. Re-read them at the end, after the descriptor is written, and delete every text they no longer back (§10.3).
 - **README headings are not docs anchors.** The docs site is a separate rewrite with different headings (§11).
 
 ### 4.5 `Chart.yaml`
@@ -465,15 +472,9 @@ grep -rn 'localOptions\|staticPlacement\|defaultOptions\|location' <dir>/templat
 
 The decision table is in §14.2.
 
-### 4.7 The inventory worksheet
+### 4.7 The inventory
 
-For anything bigger than a handful of values, write the inventory first (`pilots.md` has one per pilot). One row per leaf:
-
-| Values path | Default | Comment says | Read by | Gated by | `fail` checks | Type | Step / section | Notes |
-|---|---|---|---|---|---|---|---|---|
-| `backup.aws.bucket` | `my-postgres-bucket` | placeholder | `workload-backup.yaml` | `backup.enabled`, provider `aws` | `pg.validateBackupConfig` (required) | string, S3 name pattern, `example` | Backups / AWS S3 | |
-
-Then list the cross-field hazards, the prerequisites, the own workload names, the location handling and the upgrade history. The descriptor follows from the table.
+Write the inventory before the descriptor, in the format of Appendix C (§22): the leaves, the planned fields per step, the rules, the coupled behaviour and the upgrade table. It is a working file for the author and the reviewer; keep it outside the repo (a scratch directory) and never commit it. The descriptor follows from it, and the review (§18) checks the descriptor against it row by row.
 
 ---
 
@@ -567,7 +568,10 @@ Round 2 (postgres 3.4.1):
       label: Pool mode
       widget: segmented
       required: true
-      options: [session, transaction, statement]
+      options:
+        - { value: session, label: Session }
+        - { value: transaction, label: Transaction }
+        - { value: statement, label: Statement }
     - path: pgbouncer.defaultPoolSize
       type: integer
       label: Server connections per pool
@@ -760,7 +764,7 @@ A note is a display-only item among a section's `fields`:
   ```
 
 - `severity: warning` for a prerequisite that must be in place before install (the credentials secret), or an upgrade hazard. Anything that must block is a rule, not a note.
-- Upgrade-only notes: `when: context.mode == 'upgrade'`, narrowed by version with `context.fromVersion != null && semverCompare(context.fromVersion, '3.5.0') < 0`.
+- **Upgrade-only notes are gated on the version, not only on the mode.** `context.mode == 'upgrade'` alone shows the note on every upgrade, including from a version that already has the behaviour. Narrow it with `context.fromVersion != null && semverCompare(context.fromVersion, '3.5.0') < 0`, bounded by the first version that no longer needs it. The note sits in the section of the setting it concerns (§9.6), and every upgrade hazard of the README and CHANGELOG has one.
 - Notes are not allowed inside object fields (`NOT_ALLOWED`).
 - A note is not a description: text about one field belongs in that field's `description` or `help`.
 
@@ -795,6 +799,8 @@ Each entry says when to use the type or property, how it is written, a pilot exa
 | `virtual`, `init` | Session-only fields (§6.14). |
 
 **When to set `required: true`.** Whenever an empty value breaks the chart or the release: the chart `fail`s, a template renders an invalid manifest, or the workload cannot start. The pilots mark nearly every visible field that has a default `required` (images, resources, counts, schedules), so that clearing it shows `REQUIRED` instead of silently writing `""` or `null`. Leave it off only where empty is a meaningful choice (a folder prefix, a sender name, an optional domain).
+
+**Never `required: true` on a field that only matters under a condition.** A required field is checked whenever it is visible, so a retention duration marked required blocks the user while the schedule next to it is empty and nothing would run. Give the field a `when` for the condition that makes it relevant (the section toggle, a mode, the sibling being set) and keep `required: true` inside that condition; when the condition is not a visibility condition, leave `required` off and write a rule with the same `when` (§8.5). Test each required field with the question: "with this feature unused, would the user still have to fill it?" If yes, it is gated wrongly. Check the template before gating: a value the chart renders regardless of the condition stays required (tidb renders a volume set's snapshot `retentionDuration` even with an empty schedule, because it also keeps the final snapshot).
 
 ### 6.2 `string`
 
@@ -882,7 +888,7 @@ When: counts, sizes in fixed units, ports, timeouts (`integer`); ratios and fact
 |---|---|
 | `min`, `max` | Bounds; integers for `integer` (the schema enforces it). Failures are `MIN` / `MAX` with messages like "Must be at least 10 GiB." (the `unit` is added). |
 | `step` | The input's step. |
-| `unit` | Free text shown next to the input: `GiB`, `%`, `seconds`, `days`. Lower case except for unit symbols. |
+| `unit` | Free text shown inside the input, at its end: `GiB`, `%`, `seconds`, `days`. Lower case except for unit symbols. |
 | `widget` | `input` (default), `stepper` (small counts, 1 to 7 members), `slider` (a bounded range with no suggestions). |
 | `suggestions` | §15. |
 
@@ -907,7 +913,7 @@ When: a setting that is on or off and gates nothing, or gates only a field in th
   description: Also applies to HAProxy. Confirm that your locations support multiple zones.
 ```
 
-- `widget: switch` (default) or `checkbox`. The console puts the switch right next to its label.
+- `widget: switch` (default) or `checkbox`. The console puts the switch right next to its label, and the field's "Docs" link right after it.
 - The label says what "on" means ("Disable sign-ups" for `auth.disableSignup`). Keep the chart's polarity; never invert a key in the wizard.
 - The description gives the consequence, not the mechanics ("Prevents new user registration.").
 
@@ -925,7 +931,7 @@ When: one value out of a fixed or computed set.
   description: Firewall changes take 30 to 150 seconds to take effect.
   options:
     - value: none
-      label: Nobody
+      label: None
       description: No workload can connect.
     - value: same-gvc
       label: Same GVC
@@ -940,7 +946,7 @@ When: one value out of a fixed or computed set.
 
 | Property | Meaning |
 |---|---|
-| `options` | Static options: the value itself (`- transaction`, label = value) or `{value, label, description}`. Values are strings, numbers or booleans, typed as the chart expects. |
+| `options` | Static options: the value itself (`- Standard`, label = value) or `{value, label, description}`. Values are strings, numbers or booleans, typed as the chart expects. The shorthand is only for values whose label should equal the value and does not start with a lowercase letter (a number, or `Standard`); any lowercase value, prose or identifier, gets the object form with an explicit label (`{ value: xfs, label: XFS }`, see the label rule below). |
 | `optionsFrom` | CEL returning `list<string>` or `list<{value, label, description}>`; not together with `options`. |
 | `allowCustom` | A value outside the options is allowed (a combobox). |
 | `widget` | `select` (default; up to 4 options render segmented), `segmented`, `radio`, `cards` (shows option descriptions; good for 2 to 4 consequential choices). |
@@ -948,6 +954,8 @@ When: one value out of a fixed or computed set.
 - A value outside the options is `NOT_IN_OPTIONS`, whose message lists the valid values. A chart default outside the options is the lint error `DEFAULT_NOT_IN_OPTIONS`.
 - An option listed twice is a `DUPLICATE_VALUE` warning.
 - Keep the chart's `# options:` order.
+- **Option labels are written, not derived.** A shorthand option shows its value as its label, so `- session` renders as "session". Write prose values in the object form with a sentence-case label: `{ value: session, label: Session }`, `{ value: workload-list, label: Specific workloads }`. Lint warns `OPTION_LABEL_FROM_VALUE` for every shorthand string option whose value starts with a lowercase letter. An object-form option with an explicit `label` is accepted as written, so an identifier that is meant to read in lowercase keeps it deliberately: `{ value: ext4, label: ext4 }`. Fix the warning by writing the label, never by suppressing it. A set of identifiers that users know by their exact tokens (Envoy's `connect-failure`) keeps them as labels, written out the same way for every option of the set.
+- **A required choice never starts empty.** A `required` enum without `allowCustom` that is visible, empty and has options takes its first option, when the session is created, after a visual edit and after the GVC context arrives. This includes an `optionsFrom` enum the moment its first option appears (mongodb-cluster's backup location after a location is added). It never replaces a non-empty value (even one that is no longer among the options, which still shows `NOT_IN_OPTIONS`), never runs after an edit in the YAML tab, and an upgrade fills only values that are empty. Expect the first option to be what a fresh user gets, and **order the options so the first is a safe one**. When another value is the right default, give the chart a `values.yaml` default instead: a non-empty default is never touched. An optional enum, an `allowCustom` combobox and a hidden enum are left alone.
 
 Computed options (mongodb-cluster 2.0.0):
 
@@ -979,7 +987,7 @@ A value that cannot change but should be visible is a read-only enum with one op
 
 Pitfalls:
 
-- **Every option description must be true in every configuration.** Round 1's postgres "Nobody: No workload can connect, including PgBouncer and the backup job" named optional components as if they were always on (§10.5).
+- **Every option description must be true in every configuration.** Round 1's postgres "None: No workload can connect, including PgBouncer and the backup job" named optional components as if they were always on (§10.5).
 - Offer only options the chart supports. supabase's `auth.providers` keys are `github` and `google` only, because only those two are wired.
 - A free-text field with common values is a `string` with `suggestions` (§15), not an enum with `allowCustom`, unless the value set is closed in practice.
 
@@ -1082,11 +1090,48 @@ When: the value names a Control Plane object: a secret, cloud account, location,
 | `scope` | `kind: location`: `org` (default, every org location) or `gvc` (the target GVC's locations only). |
 | `filter` | `secretType: [dictionary]`, `provider: [aws]` (cloud accounts), `tags: {k: v}`. A picked object of another type or provider is `REF_NOT_FOUND`. |
 | `mustExist` | `error`, `warning` (default) or `off`: the severity of `REF_NOT_FOUND` (§13.4). |
+| `excludeTargetGvcWhen` | `gvc: any` refs of gvc-scoped kinds: a CEL bool. While it is true, the picker offers no object of the release's GVC. Values already held are never removed. Any other ref is `NOT_APPLICABLE` (warning). See "Workload lists next to Same GVC" below. |
 | `allowCreate` | Offer "Create" in the picker (default false, §13.2). |
 | `requiredKeys` / `requiredKeysFrom` | Dictionary secrets: the keys the chart reads, for the "Check keys" button (§13.3). |
 | `create` | Prefills for the inline create form: `secretType` (default: the one type in `filter.secretType`), `keys` (default: `requiredKeys`), `encoding` (`plain` for opaque secrets), `provider`, `suggestName` (CEL string), `hint` (a command to generate the value). Used only with `allowCreate: true`; often not needed at all (§13.2). |
 
 A list of references is a `list` whose `item` is a ref (§6.9).
+
+**Option labels.** A ref with `gvc: any` always labels its options `gvc/name`, also for the release's own GVC, so the user never has to guess the GVC; a ref limited to the target GVC (`gvc: target`, the default) shows bare names. A stored value that is not among the loaded options shows as `gvc/name` too. The stored value is unchanged (`format`). Nothing to write in the descriptor.
+
+**Workload lists next to Same GVC.** A firewall "Who can connect" enum with `same-gvc` and a list of extra workloads that is also visible under `same-gvc` (for other GVCs) offers workloads that are already allowed. Close that gap with `excludeTargetGvcWhen` on the list's ref, and tell the user when a value is redundant with an `info` rule on the list:
+
+```yaml
+# postgres 3.4.1, step network
+- path: internalAccess.workloads
+  type: list
+  label: Allowed workloads
+  description: Extra workloads allowed to connect, for example from another GVC.
+  when: self.internalAccess.type in ['same-gvc', 'workload-list']
+  widget: tags
+  item:
+    type: ref
+    ref:
+      kind: workload
+      gvc: any
+      format: relativeLink
+      mustExist: warning
+      excludeTargetGvcWhen: self.internalAccess.type == 'same-gvc'
+  rules:
+    - when: self.internalAccess.type == 'same-gvc' && context.gvc != null
+      rule: "!self.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+      severity: info
+      messageExpression: >-
+        'Same GVC already allows every workload in this GVC: ' +
+        self.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+        ' can be removed from the list.'
+      message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+```
+
+- The expression is evaluated in the field's scope (`self`, `oldSelf`, `context`, `ui`; inside a list item also `item` and `index`) and re-evaluated when its inputs change. In an import, the child's own rules run in the child's scope, so write it in the child's own paths (§16): gitea imports postgres 3.4.1 and gets its lists and rules unchanged.
+- The picker leaves out the target GVC's objects with the backend query term `gvc != <target>`. Values the user or the YAML already holds stay, which is why the `info` rule exists.
+- Use the pattern only where the chart passes the type straight to the workload firewall's `inboundAllowType`, so `same-gvc` really means every workload of the GVC. Read the chart's firewall template before you add it. A list shown only under `workload-list` needs neither the key nor the rule.
+- The `info` rule has a `when` that guards `context.gvc != null`, because without a target GVC nothing can be compared.
 
 Pitfalls:
 
@@ -1114,6 +1159,8 @@ When: a sequence. Four shapes:
 | `newItem` | What "Add" inserts. Without it, a skeleton of the item schema (`""` for text, `null` for numbers). |
 | `itemLabel` | CEL string per item, with `item` and `index`: the row title and the review label. |
 | `serialize` | `csv`: the YAML value is one string, split on `,` for reading and joined for writing. Scalar lists only. |
+
+**Picked values are not offered again.** A ref list with `unique: true`, and an object list whose `uniqueBy` is the single ref key of its rows (`uniqueBy: [name]` over `locations[].name`), hide the values other rows already hold from each row's picker. A row keeps its own value. Authors get this by declaring `unique` or `uniqueBy`; there is nothing else to write.
 
 Object list (mongodb-cluster 2.0.0):
 
@@ -1404,6 +1451,8 @@ When: the chart reads a key that `values.yaml` does not have (commented out, or 
 
 **`immutable`** is for values that cannot change after install without breaking the release: an engine, a keyfile, a volume set's performance class, file system and encryption, a database user created once.
 
+**Values the chart fixes at creation get `immutable` with a reason.** When the README, the CHANGELOG, `values.yaml` comments or a template says a count or factor cannot change after the first install (a placement-driver or metadata replica count, a replication factor, a shard count, a partition count), mark the field `immutable` with the reason as a fact ("The replica count is fixed when the cluster is bootstrapped."). A field that is only editable on install and left plain lets the user change it on upgrade and break the release. A value the chart can legitimately change, with a consequence, is an `info` rule over `oldSelf` instead (§8.8).
+
 ```yaml
 # mongodb-cluster 2.0.0
 - path: mongodb.keyfileSecretName
@@ -1633,6 +1682,22 @@ Expression failures never block a user. `lint` treats them as errors, which is h
 | an unquoted expression starting with `!` | YAML parse error or a YAML tag | quote it |
 | comparing a reference with the chart placeholder name | never true on install (refs start empty) | test `!= ''` |
 | `ui.x` for a virtual field in another import | `CEL_UNKNOWN_UI` | a parent rule over the values (§16) |
+| `[self.proxy].all(p, …)` to bind a name | works, but hides the intent | write the expression on `self.proxy` directly, and move the condition into `when` (§7.11) |
+
+### 7.11 Idioms to avoid
+
+Write the plain expression. Do not use CEL macros as a local-variable trick.
+
+| Hacky | Plain |
+|---|---|
+| `[self.proxy].all(p, !p.enabled \|\| p.replicas <= 10)` | `!self.proxy.enabled \|\| self.proxy.replicas <= 10`, or a rule with `when: self.proxy.enabled` and `rule: self.proxy.replicas <= 10` |
+| `[self.a, self.b].all(x, x > 0)` over unrelated fields | one comparison per field, each a rule on its own field (or `min`) |
+| `size(self.items.filter(i, i.on)) > 0` just to test membership | `self.items.exists(i, i.on)` |
+| `self.xs.map(x, x.name)[0]` to read a name | `self.xs[0].name`, guarded by `size(self.xs) > 0` |
+| a ternary that returns `true`/`false` (`c ? true : false`) | the condition `c` |
+| `!(a == b)` | `a != b` |
+
+(Not in a pilot.) `all`, `exists`, `map` and `filter` are for lists and maps of unknown length (§7.6, §7.7); a one-element list is a sign that the rule needs a `when`.
 
 ---
 
@@ -1648,6 +1713,9 @@ Expression failures never block a user. `lint` treats them as errors, which is h
   paths: [locations, backup.location]
   when: <CEL bool>                  # optional gate
   mirrors: pg.validateBackupConfig  # optional: the _helpers.tpl define this rule mirrors
+  fix:                              # optional: a one-click fix that appends string items to a list (§8.13)
+    path: internalAccess.workloads
+    items: <CEL list<string>>
 ```
 
 Rules live on a field, a section, a step, a list item schema (`item.rules`), or at the top level (root rules). Rules inside hidden steps, sections, fields and toggles-off sections are not evaluated.
@@ -1773,7 +1841,7 @@ Every rule over `oldSelf` starts with `oldSelf == null ||`, so it is true on ins
 
 - **Install-time-only settings** that break a running release are errors (redis: persistence cannot be turned on for a running release, the rollout stalls).
 - **Changes with a known consequence** are `info` (a new image restarts every member; another credentials secret does not change the existing user) or `warning` when they break the running release but a path exists (redis: changing the password in values deadlocks the rollout).
-- **Per-version upgrade advice** is a note with `when: context.mode == 'upgrade'` (§9.6).
+- **Per-version upgrade advice** is a note gated on `context.mode == 'upgrade'` **and** `context.fromVersion` (§9.6).
 - For a rule that needs a value added in this version, add an `assume` migration so `oldSelf` has it (§9.2).
 
 ### 8.9 Rules over `context`
@@ -1805,6 +1873,75 @@ Every rule over `oldSelf` starts with `oldSelf == null ||`, so it is true on ins
 
 The chart renders with its defaults, so every error-severity rule must hold on them (`DEFAULT_RULE_FAILED`), and every visible default must pass its own field checks (`DEFAULT_INVALID`, except `REQUIRED` and `MIN_ITEMS`). A default of the wrong type is `DEFAULT_TYPE_MISMATCH`. These checks run without reference clearing, so a rule may see the chart's placeholder names in lint and empty strings in the console; write rules that hold in both.
 
+### 8.11 Rules that must not exist
+
+A rule earns its place only when no field check says the same thing. Before writing one, ask what else already reports it.
+
+| Do not write a rule that | Because | The check that already does it |
+|---|---|---|
+| restricts a value to the enum's options (`self.pgbouncer.poolMode in ['session', 'transaction', 'statement']`) | `NOT_IN_OPTIONS` already lists the valid values | `type: enum` with `options` |
+| says a field is not empty (`self.x != ''`, `size(self.x) > 0`) | `REQUIRED` already says it | `required: true` (or `minItems`) |
+| bounds a number or a length (`self.replicas >= 1`) | `MIN` / `MAX` / `MIN_LENGTH` / `MAX_LENGTH` already say it | `min`, `max`, `minLength`, `maxLength` |
+| matches a string's shape (`self.x.matches(…)`) | `PATTERN` / `FORMAT` already say it | `pattern` with `patternMessage`, or `format` |
+| checks a declared type (`int`, `string`) | `TYPE_MISMATCH` already says it | the field's `type` |
+| compares resources `min <= max` or the stateful 4:1 ratio | `RESOURCES_MIN_GT_MAX` and `RESOURCES_RATIO` already say it | `resources` with `maxRatio: 4` |
+
+A duplicate adds a second message for one mistake, and drifts when the field changes. The single exception is the one rule a define that has only `required` or `options` checks needs for its `mirrors` (§8.6); it is suppressed while the field check shows (§8.7). Rules are for what no field can express: relations between fields, totals, budgets (§8.12), upgrade hazards (§8.8) and consequences.
+
+### 8.12 README budgets and limits are rules
+
+A budget or limit in the README, the CHANGELOG, a `values.yaml` comment or a template (a connection budget that proxy connections times replicas must stay under, a maximum member count, a minimum free-space ratio, a pool that must not exceed the server) becomes a rule that computes it from the field values, with the numbers in a `messageExpression`. Help text alone does not stop a user, and it drifts from the formula.
+
+- Use the chart's own formula and constants, and quote their source in a YAML comment (`# README: Connection budget`). Do not invent a threshold the chart does not state.
+- Severity follows §8.2: `error` when the chart or the platform refuses the configuration, `warning` when it is almost certainly wrong, `info` when the user may legitimately accept it (an over-provisioned pool that merely wastes connections).
+- Put the rule on the section or step that holds the fields the user changes, with `paths` on those fields, and a `when` for the feature that makes the budget apply.
+
+```yaml
+# not in a pilot
+- when: self.pgbouncer.enabled
+  rule: self.pgbouncer.maxClientConn * self.pgbouncer.replicas <= self.config.maxConnections
+  severity: info
+  paths: [pgbouncer.maxClientConn, pgbouncer.replicas]
+  # README: Connection budget
+  messageExpression: >-
+    'The pooler accepts up to ' + string(self.pgbouncer.maxClientConn * self.pgbouncer.replicas) +
+    ' client connections, above the server maximum of ' + string(self.config.maxConnections) + '.'
+  message: The pooler accepts more client connections than the server allows.
+```
+
+### 8.13 `fix`: a one-click append for rules that name entries to add
+
+A rule whose message tells the user to add exact string entries to a list (the workload links the chart does not add to a firewall list) declares a `fix`. The console then shows a **Fix** button next to the issue; a click appends the missing entries to the list.
+
+```yaml
+# postgres 3.4.1
+- when: self.internalAccess.type == 'workload-list' && context.gvc != null
+  rule: >-
+    (!self.pgbouncer.enabled ||
+    ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgbouncer') in self.internalAccess.workloads) &&
+    (!self.backup.enabled ||
+    ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-backup') in self.internalAccess.workloads)
+  severity: warning
+  paths: [internalAccess.workloads]
+  messageExpression: …
+  message: …
+  fix:
+    path: internalAccess.workloads
+    items: >-
+      (self.pgbouncer.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgbouncer'] : []) +
+      (self.backup.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-backup'] : [])
+```
+
+- **`fix.path`** is a declared `list` field whose items are `string` or `ref` (their values are strings). In a list item rule it is relative to the item, like `paths`. In a parent rule over an import it carries the import prefix (`postgres.internalAccess.workloads`, as in §16.7). Anything else is `FIX_PATH_NOT_LIST` (lint error).
+- **`fix.items`** is a CEL `list<string>` in the rule's scope (`self`, `oldSelf`, `context`, plus `item` and `index` in item rules). List every entry the message names, not only the missing ones: the session adds the entries the list does not have yet (deduped, order kept). Reuse the expression pieces of the rule itself, and gate each entry on the same condition the rule uses (`self.pgbouncer.enabled ? [...] : []`).
+- The issue carries a fix only when the rule fails, the expression returns a list of strings, at least one entry is missing and the list is visible, not `readOnly` and not locked by `immutable`. Otherwise the user sees the message alone, with no error for the fix.
+- The button text is always "Fix". It appears in the visual editor only (the YAML tab shows the issue without a button); the click is one normal visual edit that shows in the changes list. Nothing is applied on its own.
+- It only appends string entries to a list. There is no set-value action and no removal; a rule that asks for a changed value or a removed entry has no `fix`.
+- `fix` does not change `severity`, `message` or when the rule fires. Keep `messageExpression` naming the same entries.
+- An entry that a `fix.items` produces is a resource the chart creates at install (`<release>-pgbouncer`), so it does not exist yet: the list's `ref.mustExist` check skips any value equal to an entry some rule's `fix.items` produces in the current state, whether Fix added it or the user typed it. Keep `mustExist` on the list for the user's own entries.
+
+**A rule that names exact string entries to add to a list must declare `fix`.** `lint` (§17.1) checks the path and evaluates `fix.items` against the defaults.
+
 ---
 
 ## 9. Upgrades
@@ -1816,7 +1953,7 @@ The chart renders with its defaults, so every error-severity rule must hold on t
 - **The report** (shown on the first step and on Review) lists `dropped` (with migration notes), `renamed`, `pinned` (immutable values kept), `conflicts` (the user changed a value whose default changed too), `unverified` (user-added keys the new version does not know, carried as they are) and counts of `carried` and `defaultChanged`.
 - **The install page's version switch** uses the same carry-over in install mode: nothing is pinned and `assume` is skipped. The previous session's emptied references are not carried: a reference the user left empty where the old chart had a placeholder gets the new version's placeholder, which the new session empties again (§12.1).
 - **References new in the target version start empty** in the upgrade session, and so do references in a branch hidden at load that still hold the old version's placeholder; references the running release uses are kept (§12.1). A GVC outside the `gvc` limits is only `info` on upgrade, since the release cannot move (§14.1).
-- **Upgrade mode** in the console opens every step for free navigation (a step not opened yet shows as waiting); the Review's Visual tab tags changed rows and lists the changes since the last apply, each as "Edited", "New default" or "Placeholder cleared" (a reference the clearing emptied, §12.1); changes that share a label lead with their section's title ("AWS S3 › Cloud account"). A subtree the installed values lack is listed per setting (postgres 3.3.0 → 3.4.1 lists `config.credentialsSecretName`), not as one changed block.
+- **Upgrade mode** in the console opens every step for free navigation (a step not opened yet shows as waiting); the Review's Visual tab tags changed rows and lists the changes since the last apply, each as "Edited", "New default", "Default selected" or "Placeholder cleared" (a reference the clearing emptied, §12.1); changes that share a label lead with their section's title ("AWS S3 › Cloud account"). A subtree the installed values lack is listed per setting (postgres 3.3.0 → 3.4.1 lists `config.credentialsSecretName`), not as one changed block.
 
 ### 9.2 Migrations
 
@@ -1867,6 +2004,7 @@ Rules:
 - **A note says where the value went and what to do**, in the user's terms: "choose it under Credentials", "mint new ones instead of copying the old values". A drop without a note leaves the user guessing.
 - A plaintext value that moved into a secret is a drop, never a rename: the value cannot follow (postgres 3.3.0 → 3.4.x, supabase 1.0.0 → 1.1.x). When the old values were public demo values, say so in the note (supabase JWT keys: "1.0.0 shipped public demo keys: mint new ones").
 - `valueExpr` sees the old values: use the old paths (`self.gvc.locations[0].name`). A failing expression is a `MIGRATION_EVAL_ERROR` warning in the carry-over report and computes nothing; lint reports it as an error when the migration applies to the previous version.
+- **A migration lints clean.** Lint evaluates a migration's old-side paths (`from`, and what `valueExpr`, `assume` and note expressions read) against a version inside its `fromVersions` range: the greatest available version older than the target that the range admits, not blindly the previous version. A migration whose range excludes the previous version is therefore not checked against the previous version's values and no longer warns `CEL_UNKNOWN_PATH` because of them. A `valueExpr`, rule or note expression that reads a path the version it is checked against lacks is still `CEL_UNKNOWN_PATH`, and a `valueExpr` that fails on those values is `MIGRATION_EVAL_ERROR`. Gate every computed migration with `fromVersions` to the versions that have the key it reads (the default for the key in an older version is not the previous one's); a migration that applies to the previous version reads only keys that version has (a computed migration from the old key, a rename, or a drop with a note). Never silence a warning with `has()` on a declared path, and never leave it in the report. A migration of a key the old chart only shows as a comment (users set it themselves) is not `UNUSED_MIGRATION` when its `from` or `to` lies under an `absent: true` field (§6.15); the range must still admit an older version.
 - `assume` cannot be combined with `from`, `to` or `valueExpr` (`CONFLICT`).
 - Migration paths have no wildcards. A map declared as a field is atomic and carried whole; surface a change inside it with a same-path note migration, and let the map's value schema require the new key (supabase's `clientSecretName` shows an error until the user picks the secret).
 
@@ -1897,7 +2035,7 @@ Lint checks on migrations:
 | `MIGRATION_KEY_PRESENT` | warning | a drop or rename of a key this version still has (it would discard the value on every upgrade) |
 | `MIGRATION_TARGET_UNKNOWN` | error | a `to` that nothing declares |
 | `ASSUME_PATH_UNKNOWN` | error | an `assume` key that nothing declares |
-| `MIGRATION_EVAL_ERROR` | error / warning | a `valueExpr` fails on the previous version's values (error when it applies to the previous version) |
+| `MIGRATION_EVAL_ERROR` | error / warning | a `valueExpr` fails on the values of the version in its `fromVersions` range that it is checked against (error when that is the previous version) |
 
 ### 9.3 `fromVersions`
 
@@ -1951,7 +2089,12 @@ For advice that applies only when coming from certain versions, use a note:
     if you need a way back.
 ```
 
-Place the note in the section it concerns (the AWS S3 section for an IAM policy change), so it shows only when that section is visible.
+Rules for upgrade notes:
+
+- **Gate on the version.** `context.mode == 'upgrade'` alone is not enough: it also shows the note to releases that already run the new behaviour. Combine it with `context.fromVersion != null && semverCompare(context.fromVersion, '<first version without the problem>') < 0` (or a range of versions), as above.
+- **Live in the step and section they concern.** A note about the backup destination sits in the backups section, one about the replica count in the cluster step (the AWS S3 section for an IAM policy change), so it shows only when that section is visible. A single note at the top of the first step, or one catch-all note, hides the advice from the place where the user acts.
+- **Every upgrade hazard of the README and CHANGELOG gets one.** Walk the "Upgrading from …" text and the CHANGELOG entries from the previous descriptor's version to this one, and give each hazard (a restart, a one-way data format, an init workload that runs again, an endpoint users must switch, a default that changed under a running release) its own note, with the action the user takes. A hazard the wizard can detect from the values is a rule over `oldSelf` (§8.8) as well.
+- **Say what to do**, not only what happens, and make no claim the README or CHANGELOG of this version does not back (§10.3). Re-read them before the final pass, and delete a note whose hazard the current version no longer has.
 
 ### 9.7 What to check on every upgrade path
 
@@ -2025,12 +2168,14 @@ Rules of thumb:
 
 ### 10.3 No claims the chart does not back
 
-Every sentence must be true for this chart version. Check it in the templates, not in the README or the docs page (both can be stale). Typical traps:
+Every sentence must be true for this chart version. Check it in the templates, not in the README or the docs page (both can be stale), and **cite it to a place in the chart**: a template, a `values.yaml` comment, a README section or a CHANGELOG entry of this exact version. A sentence you cannot cite is deleted. Typical traps:
 
 - the docs page or README describing an older or newer version (supabase's docs page still showed 1.0.0 plaintext keys);
 - a limit from another template or from general knowledge ("Gitea needs PostgreSQL 12 or later" is not in the gitea chart or README; do not write it);
 - a behaviour the chart does not implement (OAuth providers the chart does not wire);
-- workload names (take them from `_helpers.tpl`).
+- workload names (take them from `_helpers.tpl`);
+- a price, billing or performance statement the chart does not make ("billed per snapshot", "faster with …"): do not write it;
+- **a stale warning**: "no verified run on …", "not tested with …", "experimental", "known issue" copied from an earlier version or another template. Before writing any such warning, re-read the README and CHANGELOG of this exact version; if they now say the opposite or say nothing, the warning does not exist. The same goes for warnings an older descriptor of the same template carried forward (§3.2 step 10).
 
 ### 10.4 Markdown-lite
 
@@ -2042,7 +2187,7 @@ Round 1 made PgBouncer look always on through texts outside its toggle:
 
 | Round 1 text | Round 2 text |
 |---|---|
-| option "Nobody": "No workload can connect, including PgBouncer and the backup job." | "No workload can connect." (plus a warning rule that names PgBouncer and the backup job only when they are on) |
+| option "None": "No workload can connect, including PgBouncer and the backup job." | "No workload can connect." (plus a warning rule that names PgBouncer and the backup job only when they are on) |
 | Advanced step: "Images and resources of the pooler and the backup job." | "Images and resources of the optional connection pooler and backup job." |
 
 The Round 2 review then moved those images and resources into the toggle sections (§5.5), so no text outside the toggles names the components at all.
@@ -2222,7 +2367,7 @@ Put a warning note before prerequisite secrets that must exist first:
 
 ### 13.2 `allowCreate`
 
-`allowCreate: true` offers "Create" next to the picker, which opens the console's embedded create form, prefilled. Default false; without it there is no Create button, whatever `create` says.
+`allowCreate: true` offers an attached + button (tooltip "Create <kind>") on the picker, which opens the console's embedded create form, prefilled. Default false; without it there is no Create button, whatever `create` says.
 
 - **Set it only on prerequisite secrets the user must bring for this release**: database credentials, keyfiles, JWT keys, dashboard and SMTP passwords, object storage keys, provider client secrets.
 - **Never on workload lists** (firewall `internalAccess.workloads`, `inboundAllowWorkload`): the user picks existing clients; creating a workload from a firewall field is never the task. This was the owner's Round 2 finding on postgres's Network step.
@@ -2318,7 +2463,7 @@ Non-negative integers, `minLocations` ≤ `maxLocations`, either may be left out
 - **On upgrade** the same check is **info**, because the release's GVC cannot change during an upgrade and an error would strand every release installed before the limits existed: "This release already runs in 3 locations (claude-dev); this upgrade does not change that." (With no locations: "This release's GVC claude-dev has no locations; this upgrade does not change that.") The note states the count only: whether that means one copy per location depends on the template.
 - Nothing is reported while the GVC's locations are unknown.
 - The console's GVC picker shows each GVC's location count and disables the GVCs that do not fit, with the reason ("Has 3 locations; this template needs exactly 1"). It judges a GVC by its static location links, so a GVC placed by a location query is never disabled there; `GVC_LOCATIONS` reports it once its locations are known.
-- "Create GVC" opens an embedded create limited the same way: a single-choice location list when the maximum is 1, and it cannot be created with fewer locations than the minimum.
+- "Create GVC" opens an embedded create limited the same way: a single-location select when the maximum is 1, and it cannot be created with fewer locations than the minimum.
 - With imports, the limits of the parent and of every enabled import are intersected: the largest minimum and the smallest maximum (§16).
 
 ### 14.2 Deciding the limits
@@ -2383,7 +2528,7 @@ Why this belongs in the descriptor: in a 3-location GVC, postgres silently runs 
 ```
 
 - Allowed on `string`, `integer`, `number` and `quantity` fields, and on list item and map value schemas of those types. On other types it is `NOT_APPLICABLE`.
-- The console shows a text input with a dropdown of the suggestions beside free typing (in list rows too). A number's `unit` is written next to the input; a quantity's suggestions replace its number-and-unit pair with whole quantity strings. A typed value is parsed like any other, and a value outside `min`/`max` shows the field's own `MIN`/`MAX` issue.
+- The console shows a text input with a dropdown of the suggestions beside free typing (in list rows too). A number's `unit` is written inside the input, at its end; a quantity's suggestions replace its number-and-unit pair with whole quantity strings. A typed value is parsed like any other, and a value outside `min`/`max` shows the field's own `MIN`/`MAX` issue.
 - A value, or `{ value, label, description }`. Labels default to the value.
 - **Every suggestion must be valid for the field:** within `min`/`max` (`INVALID_VALUE`: "Suggestion 5 is below "min" (10)"), of the field's type (`INVALID_TYPE`), and valid quantity grammar for quantities. An empty list is an error, a duplicate a warning.
 - For quantities, use full quantity strings: `["250m", "500m", "1", "2"]`, `[128Mi, 256Mi, 512Mi, 1Gi]`.
@@ -2419,6 +2564,8 @@ The standard lists from the pilots:
 ---
 
 ## 16. Subchart imports
+
+**Notes over picked entries wait for a pick.** A note or rule that compares what the user picked with the GVC ("GVC locations not listed here run nothing: …") starts with `self.locations.exists(l, l.name != '') &&` in its `when`, so it doesn't fire on an empty table before anything is picked (mongodb-cluster 2.0.0).
 
 ### 16.1 What imports are for
 
@@ -2565,14 +2712,19 @@ Parent rules can name imported fields in `paths`; the issues show on them, and a
 rules:
   - rule: self.postgres.internalAccess.type != 'none'
     paths: [postgres.internalAccess.type]
-    message: '"Nobody" also blocks Gitea, which connects to its database like any other workload.'
+    message: '"None" also blocks Gitea, which connects to its database like any other workload.'
   - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
     rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-gitea') in self.postgres.internalAccess.workloads
     severity: warning
     paths: [postgres.internalAccess.workloads]
     messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-gitea, or Gitea cannot reach its database.'"
     message: Add the Gitea workload to the list, or Gitea cannot reach its database.
+    fix:
+      path: postgres.internalAccess.workloads
+      items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-gitea']"
 ```
+
+A rule that asks the user to add entries to an imported list declares a `fix` whose `path` carries the import prefix (§8.13).
 
 ### 16.8 GVC limits
 
@@ -2929,6 +3081,18 @@ helm template r <dir> -f /tmp/out.yaml --set global.cpln.gvc=test-gvc > /tmp/man
 
 Render at least: the defaults (with every placeholder answered), every provider branch, every optional feature on, and for imports the child's features on.
 
+#### 17.3.1 Edge-value render probe
+
+A render that passes with the defaults proves little about the free-form fields: the chart interpolates them into YAML, and some values break the result. Before finishing, render once more with edge values for each free-form field the chart interpolates, through `tw render` and `helm template` as above:
+
+- lists with more than one item (a second outbound CIDR, a second location, a second entry of any list the chart joins or loops over);
+- IPv6 CIDRs such as `::/0`;
+- cron strings that start with `*` or `@` (`*/15 * * * *`, `@daily`);
+- null or empty optional schedules and other optional strings the wizard can leave empty;
+- names and buckets with characters YAML treats specially (leading digits, `:`, `#`, a value like `true`, `null` or `1e3`).
+
+Read the template to know which fields are interpolated and how (quoted or not). When the chart breaks (a render error, a value that comes out as another type, two items merged into one), constrain the field in the descriptor so the wizard cannot produce the broken render: a `pattern` (with a `patternMessage`), `maxItems`, or `required: true`. List each such chart bug in the report with the command that reproduces it, and never edit the chart: a chart change needs its own version.
+
 ### 17.4 `carry`
 
 ```sh
@@ -2966,7 +3130,7 @@ With the YAML language server (VS Code's YAML extension), the modeline gives hov
 
 ### 17.7 Preview in the local console
 
-The console's dev server can serve local descriptors from this checkout:
+The console's dev server can serve local descriptors from this checkout. A human author runs this preview for every descriptor. An agent runs it only when it can start the dev server itself: port 4026 is free and the credentials for a console session are available locally. Otherwise the agent does not run it and reports "preview not run" with the reason (port busy, no credentials, no console checkout); the preview is not a gate for an agent run, and the other checks stand in for it.
 
 ```sh
 cd ../console
@@ -2997,152 +3161,163 @@ See §3.5: `node scripts/sync-fixtures.mjs` and `--check` in `../console/templat
 
 ### 17.9 The gate
 
-A descriptor is done when:
-
-1. `tw lint <dir>` prints `0 errors, 0 warnings, N/N leaves covered`;
-2. `tw check-docs <dir>` prints `ok`;
-3. `tw render` of the main paths exits 0 and `helm template` accepts each output;
-4. the local console preview works;
-5. the review checklist (§18) passes.
+A descriptor is done when every item of the review checklist (§18) holds. That list is the one gate: its first section holds the commands (lint with 0 errors and 0 warnings, `check-docs`, `carry`, `render`, the edge-value probe, the preview where it can be run).
 
 ---
 
 ## 18. Review checklist
 
-Use it for your own descriptor before committing, and for reviewing someone else's. Every item is a yes/no check.
+This is the one done-checklist of this guide. Use it for your own descriptor before committing, and for reviewing someone else's; the `wizard-authoring` and `create-wizard` skills point here and do not repeat it. Every item is a yes/no check, answered with evidence (a command output, a line of the descriptor, a row of the inventory). A descriptor is done only when every item is yes.
 
 **Gate**
 
 1. The first line is the modeline `# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json`.
 2. `apiVersion: template-wizard.controlplane.com/v1` and `kind: TemplateWizard`; `title` is the product name.
-3. `tw lint <dir>` prints `0 errors, 0 warnings, N/N leaves covered`.
+3. `tw lint <dir>` prints `0 errors, 0 warnings, N/N leaves covered`. Warnings are never suppressed, ignored or left in the report: each is fixed in the descriptor (a missing option label, `mirrors`, migration, `CEL_UNKNOWN_PATH`, an unused migration).
 4. Every `yamlOnly` entry has a reason a user would accept.
 5. `tw check-docs <dir>` prints `ok`.
-6. `tw render` of the defaults (placeholders answered), every provider branch and every optional feature exits 0, and `helm template` accepts each output.
-7. The console preview works in light and dark mode.
-8. The commit contains only this version's `wizard.yaml` (and, for a pilot, nothing else in this repo); `.schema/` is untouched.
+6. `tw carry` from the previous version (and from a release that kept every old default) reports no error, and every `dropped` entry is explained by a note or a migration.
+7. `tw render` of the defaults (placeholders answered), every provider branch and every optional feature exits 0, and `helm template` accepts each output.
+8. The console preview works in light and dark mode. An agent that cannot start the console dev server itself (port busy, no local credentials) answers "N/A for agent: preview not run" with the reason; that is not a failure. Human authors answer yes or no.
+9. The chart inventory (Appendix C) was written before the descriptor, and every row of it has a place in the descriptor (a field, a rule, a note, a migration, `yamlOnly` with a reason) or a stated reason why not.
+10. The change contains only this version's `wizard.yaml` (and, for a pilot, nothing else in this repo); `.schema/` is untouched, and the inventory is not committed.
 
 **Reading the chart**
 
-9. Every `fail` in `_helpers.tpl` is enforced by `required`, `options`, `min`/`max`, a format or a rule.
-10. Every define that calls `fail` is named by at least one rule's `mirrors`, spelled exactly.
-11. Every removed key the chart refuses has a `!has()` rule and a migration.
-12. Every README prerequisite is modelled: a reference with `mustExist: error`, and a warning note when it must exist before install.
-13. The chart's own workload names in firewall rules come from `_helpers.tpl` (`context.releaseName + '-<suffix>'`).
-14. The location handling was read and the `gvc` limits follow §14.
-15. Every stateful workload's resources, and those of sidecars in it, have `maxRatio: 4`.
-16. Every non-library dependency is imported or deliberately bound as parent fields.
+11. Every `fail` in `_helpers.tpl` is enforced by `required`, `options`, `min`/`max`, a format or a rule.
+12. Every define that calls `fail` is named by at least one rule's `mirrors`, spelled exactly.
+13. Every removed key the chart refuses has a `!has()` rule and a migration.
+14. Every README prerequisite is modelled: a reference with `mustExist: error`, and a warning note when it must exist before install.
+15. The chart's own workload names in firewall rules come from `_helpers.tpl` (`context.releaseName + '-<suffix>'`).
+16. The location handling was read and the `gvc` limits follow §14.
+17. Every stateful workload's resources, and those of sidecars in it, have `maxRatio: 4`.
+18. Every non-library dependency is imported or deliberately bound as parent fields.
+19. The README and CHANGELOG of this exact version were read, and every budget or limit they state (a connection budget, a member cap) is a rule with the chart's formula (§8.12), not only help text.
 
 **Structure**
 
-17. Steps follow real dependencies: prerequisites early, an Advanced step (if any) last, four to seven steps.
-18. No step has the id `release` (reserved for the renderer's release step).
-19. Step titles are short and in sentence case; each step description is one sentence.
-20. Every switch that enables a feature is the `toggle` of the section that holds the feature's settings.
-21. No section's `when` reads its own toggle.
-22. Every other section that depends on a toggled feature repeats the flag in its `when` (provider sections).
-23. Every toggle section has a `title` and an `id`.
-24. Branch sections' `when`s include every condition above them.
-25. An optional component's image, resources and other expert settings are `advanced: true` fields of its toggle section, never an Advanced step section; each toggle gates exactly what the chart's `if` gates; no Advanced step is left empty.
-26. Advice on whether to turn a feature on is in the toggle section's `description`, not in a note inside it.
-27. A note is used only for display; anything that must block is a rule.
+20. Steps follow real dependencies: prerequisites early, an Advanced step (if any) last, four to seven steps.
+21. No step has the id `release` (reserved for the renderer's release step).
+22. Step titles are short and in sentence case; each step description is one sentence.
+23. Every switch that enables a feature is the `toggle` of the section that holds the feature's settings.
+24. No section's `when` reads its own toggle.
+25. Every other section that depends on a toggled feature repeats the flag in its `when` (provider sections).
+26. Every toggle section has a `title` and an `id`.
+27. Branch sections' `when`s include every condition above them.
+28. An optional component's image, resources and other expert settings are `advanced: true` fields of its toggle section, never an Advanced step section; each toggle gates exactly what the chart's `if` gates; no Advanced step is left empty.
+29. Advice on whether to turn a feature on is in the toggle section's `description`, not in a note inside it.
+30. A note is used only for display; anything that must block is a rule.
+31. No field is `required: true` only because of a condition that is not its visibility: a field that matters under a condition has a `when` for it (§6.1).
 
 **Fields**
 
-28. Each field's type matches the chart value (`integer` vs `number`; strings with patterns for Redis-style sizes; `resources` for resource blocks).
-29. `required: true` is set wherever an empty value breaks the chart or the release.
-30. Units are in `unit`, not in labels or descriptions.
-31. `min`/`max` come from the chart, the platform or the README, not from taste (a direct load balancer port is 22 to 32768, not 1 to 65535).
-32. Enum options are exactly what the chart supports, in the chart's order; an `optionsFrom` over names that may be empty filters them out.
-33. Every option description is true in every configuration.
-34. Images use `format: image`, URLs `format: url`, host names `format: hostname`, schedules `format: cron`.
-35. Patterns are single-quoted and anchored; where the regex would be the only explanation, a `patternMessage` says what to do.
-36. Object lists have `uniqueBy`, a sensible `newItem` and an `itemLabel`; scalar lists that must be unique have `unique`.
-37. List labels are plural nouns whose singular reads well on the "Add" button.
-38. Optional blocks have a valid `newValue`, and rules guard them with `self.<block> == null ||`.
-39. Virtual fields: `init` returns an option for every document (including `null` values), each `set` patch round-trips through `init`, and rules check the real values.
-40. `absent: true` only on keys `values.yaml` lacks; `default` only with `absent`.
-41. `immutable` (with a reason) wherever a change breaks the running release; `assume` for immutable keys added in this version.
-42. `sensitive` only on passwords stored in values, with `widget: password`.
-43. `suggestions` are valid for the field (within `min`/`max`), short, ascending, and not combined with `widget: slider` or `widget: stepper`.
+32. Each field's type matches the chart value (`integer` vs `number`; strings with patterns for Redis-style sizes; `resources` for resource blocks).
+33. `required: true` is set wherever an empty value breaks the chart or the release.
+34. Units are in `unit`, not in labels or descriptions.
+35. `min`/`max` come from the chart, the platform or the README, not from taste (a direct load balancer port is 22 to 32768, not 1 to 65535).
+36. Enum options are exactly what the chart supports, in the chart's order; an `optionsFrom` over names that may be empty filters them out.
+    Option labels for prose values are in the object form with an explicit label ("Session", not `session`); shorthand options only where the label should equal the value; lint shows no `OPTION_LABEL_FROM_VALUE` (§6.5).
+37. Every option description is true in every configuration.
+38. Images use `format: image`, URLs `format: url`, host names `format: hostname`, schedules `format: cron`.
+39. Patterns are single-quoted and anchored; where the regex would be the only explanation, a `patternMessage` says what to do.
+40. Object lists have `uniqueBy`, a sensible `newItem` and an `itemLabel`; scalar lists that must be unique have `unique`.
+41. List labels are plural nouns whose singular reads well on the "Add" button.
+42. Optional blocks have a valid `newValue`, and rules guard them with `self.<block> == null ||`.
+43. Virtual fields: `init` returns an option for every document (including `null` values), each `set` patch round-trips through `init`, and rules check the real values.
+44. `absent: true` only on keys `values.yaml` lacks; `default` only with `absent`.
+45. `immutable` (with a reason) wherever a change breaks the running release, and on every value the chart, README or CHANGELOG says is fixed at creation (replica and replication counts); `assume` for immutable keys added in this version (§6.16).
+46. `sensitive` only on passwords stored in values, with `widget: password`.
+47. `suggestions` are valid for the field (within `min`/`max`), short, ascending, and not combined with `widget: slider` or `widget: stepper`.
 
 **References**
 
-44. `kind` and `format` match how the chart uses the value; firewall workload lists use `gvc: any` with `format: relativeLink`.
-45. Secrets have `filter.secretType`; cloud accounts have `filter.provider`.
-46. `mustExist: error` on prerequisites; `warning` on workload lists.
-47. `allowCreate: true` only on prerequisite secrets; never on workload lists or cloud accounts.
-48. A `create` block holds only what the defaults cannot give (a `suggestName` built from `context.releaseName`, `encoding: plain` for opaque secrets, a `hint` for generated content, a `secretType` when the filter does not name exactly one); there is no `create` without `allowCreate`.
-49. `requiredKeys` lists exactly the keys the chart reads; `requiredKeysFrom` where the key name is configurable; only on dictionary secrets.
-50. No reference has `example: true`.
-51. Rules and `when`s hold when a reference is empty.
+48. `kind` and `format` match how the chart uses the value; firewall workload lists use `gvc: any` with `format: relativeLink`.
+49. Secrets have `filter.secretType`; cloud accounts have `filter.provider`.
+50. `mustExist: error` on prerequisites; `warning` on workload lists.
+51. `allowCreate: true` only on prerequisite secrets; never on workload lists or cloud accounts.
+52. A `create` block holds only what the defaults cannot give (a `suggestName` built from `context.releaseName`, `encoding: plain` for opaque secrets, a `hint` for generated content, a `secretType` when the filter does not name exactly one); there is no `create` without `allowCreate`.
+53. `requiredKeys` lists exactly the keys the chart reads; `requiredKeysFrom` where the key name is configurable; only on dictionary secrets.
+54. No reference has `example: true`.
+55. Rules and `when`s hold when a reference is empty.
+55a. Every workload list that is visible next to a `same-gvc` option uses `excludeTargetGvcWhen` and the redundancy `info` rule (§6.8).
 
 **Text**
 
-52. Labels are sentence case and at most 60 characters.
-53. No description restates a validation: no ratio, bound, pattern, requiredness or option list that a check already enforces.
-54. Every claim is backed by the chart's templates for this version.
-55. No optional component is mentioned as always on, in option descriptions, step descriptions, notes or titles.
-56. Markdown-lite only; keys, values and commands in `code`.
-57. `example: true` on every plain-string placeholder that must be replaced; working defaults that may collide are `info` rules instead, gated on the value rather than the mode when upgrades can carry the same default.
+56. Labels are sentence case and at most 60 characters.
+57. No description restates a validation: no ratio, bound, pattern, requiredness or option list that a check already enforces.
+58. Every claim is backed by the chart's templates, README or CHANGELOG for this exact version, and can be cited; no stale warning (a "no verified run", "not tested" or "known issue" that the current README or CHANGELOG contradicts) and no unbacked price or performance statement (§10.3).
+59. No optional component is mentioned as always on, in option descriptions, step descriptions, notes or titles.
+60. Markdown-lite only; keys, values and commands in `code`.
+61. `example: true` on every plain-string placeholder that must be replaced; working defaults that may collide are `info` rules instead, gated on the value rather than the mode when upgrades can carry the same default.
 
 **Docs**
 
-58. Every `docs` value and markdown link to the docs site is relative, and `#anchor` values are quoted.
-59. Every anchor is a heading id on the docs site (not taken from the README, not a page-chrome id such as `#content`).
-60. Links point at the section that explains the setting, not just at the top of the template's page.
+62. Every `docs` value and markdown link to the docs site is relative, and `#anchor` values are quoted.
+63. Every anchor is a heading id on the docs site (not taken from the README, not a page-chrome id such as `#content`).
+64. Links point at the section that explains the setting, not just at the top of the template's page.
 
 **Rules**
 
-61. Each severity follows the policy (§8.2): advisory and legitimate-consequence rules are `info`.
-62. `paths` name the field the user should change, and the rule sits on the step where it is fixed.
-63. Every rule over `oldSelf` starts with `oldSelf == null ||`.
-64. Every use of `context.gvcLocations`, `context.gvcSpec` and `context.gvc` is guarded.
-65. Every `messageExpression` has a `message` fallback that says the same in general terms.
-66. No `has()` on declared paths; map keys are tested with `in`.
-67. `int` and `double` are not mixed in arithmetic.
-68. The chart defaults pass every error-severity rule.
+65. Each severity follows the policy (§8.2): advisory and legitimate-consequence rules are `info`.
+66. `paths` name the field the user should change, and the rule sits on the step where it is fixed.
+67. Every rule over `oldSelf` starts with `oldSelf == null ||`.
+68. Every use of `context.gvcLocations`, `context.gvcSpec` and `context.gvc` is guarded.
+69. Every `messageExpression` has a `message` fallback that says the same in general terms.
+70. No `has()` on declared paths; map keys are tested with `in`; no CEL macro used as a local variable (`[x].all(…)`, §7.11).
+71. `int` and `double` are not mixed in arithmetic.
+72. The chart defaults pass every error-severity rule.
+73. No rule duplicates an enum's options, `required`, `min`/`max`, a pattern or format, a type or the resources checks (§8.11); the only such rule is the one a `mirrors` needs.
 
 **Upgrades**
 
-69. `tw paths-diff` against the previous version (and older supported versions) is fully explained by fields and migrations.
-70. Every drop migration has a note that says where the value went and what to do.
-71. `fromVersions` ranges are quoted and bounded by the first version without the old key.
-72. The `tw carry` report of a realistic old release reads correctly, and a release that kept the old defaults keeps every value it runs with (a renamed key whose default changed has a computed migration, or an `immutable` pin when it can never change).
-73. An in-place upgrade that destroys data is blocked by a root rule on `semverCompare(context.fromVersion, …)`.
-74. Version-specific upgrade notes sit in the section they concern, with `context.mode == 'upgrade'` and a `fromVersion` guard.
-75. Grow-only values (volume set capacity) have an error rule over `oldSelf`.
+74. `tw paths-diff` against the previous version (and older supported versions) is fully explained by fields and migrations.
+75. Every drop migration has a note that says where the value went and what to do.
+76. `fromVersions` ranges are quoted and bounded by the first version without the old key.
+77. The `tw carry` report of a realistic old release reads correctly, and a release that kept the old defaults keeps every value it runs with (a renamed key whose default changed has a computed migration, or an `immutable` pin when it can never change).
+78. An in-place upgrade that destroys data is blocked by a root rule on `semverCompare(context.fromVersion, …)`.
+79. Version-specific upgrade notes sit in the section they concern and are gated on `context.fromVersion` with `semverCompare`, not only on `context.mode == 'upgrade'` (§9.6).
+80. Every upgrade hazard in the README and CHANGELOG between the previous descriptor's version and this one has a version-gated note in the step it concerns, with the action to take.
+81. Every migration lints clean against the previous version's values (no `CEL_UNKNOWN_PATH`, no `MIGRATION_EVAL_ERROR`); a migration that reads a key only some older versions have is gated by `fromVersions`, which lint respects when it picks the version to check against (§9.2).
+82. Grow-only values (volume set capacity) have an error rule over `oldSelf`.
 
 **Imports** (§16)
 
-76. `template`, `version` and `alias` equal the `Chart.yaml` dependency; `when` is exactly `self.<condition>`, and the condition is a parent boolean field.
-77. The child version has its own descriptor, lints clean on its own, and imports nothing itself.
-78. Secrets the parent creates are excluded from the child and bound as parent `string` fields.
-79. Child subtrees the bundle never uses are excluded and listed under `yamlOnly`.
-80. Imported steps whose child description names an excluded part get their own `description` in `imports[].steps`, with no `#anchor` link.
-81. Every chart check the exclusions dropped (a child rule on an excluded path, `mirrors` included) that the chart still performs is restated as a parent rule.
-82. Overrides change presentation only, make no unbacked claims, repeat every bound they keep (`cpu` and `memory` are replaced whole), and link with `/template-catalog/templates/<parent>#…`.
-83. Parent rules check that the parent's workloads can reach the child.
-84. Imported steps sit after the parent step that configures the connection and are renamed to read as part of the template.
-85. Parent migrations rename the keys the parent moved under the child's key, and `tw carry` from the previous parent version reads correctly.
-86. The parent declares `gvc` limits for its own workloads.
+83. `template`, `version` and `alias` equal the `Chart.yaml` dependency; `when` is exactly `self.<condition>`, and the condition is a parent boolean field.
+84. The child version has its own descriptor, lints clean on its own, and imports nothing itself.
+85. Secrets the parent creates are excluded from the child and bound as parent `string` fields.
+86. Child subtrees the bundle never uses are excluded and listed under `yamlOnly`.
+87. Imported steps whose child description names an excluded part get their own `description` in `imports[].steps`, with no `#anchor` link.
+88. Every chart check the exclusions dropped (a child rule on an excluded path, `mirrors` included) that the chart still performs is restated as a parent rule.
+89. Overrides change presentation only, make no unbacked claims, repeat every bound they keep (`cpu` and `memory` are replaced whole), and link with `/template-catalog/templates/<parent>#…`.
+90. Parent rules check that the parent's workloads can reach the child.
+91. Imported steps sit after the parent step that configures the connection and are renamed to read as part of the template.
+92. Parent migrations rename the keys the parent moved under the child's key, and `tw carry` from the previous parent version reads correctly.
+93. The parent declares `gvc` limits for its own workloads.
 
 **Pilots**
 
-87. After the commit, `node scripts/sync-fixtures.mjs` and `--check` in the core pass, and the core tests pass.
+94. After the commit, `node scripts/sync-fixtures.mjs` and `--check` in the core pass, and the core tests pass.
+
+**Edge values**
+
+95. The edge-value render probe (§17.3.1) ran for every free-form field the chart interpolates (multi-item lists, IPv6 CIDRs, cron strings starting with `*` or `@`, null or empty optional schedules, names with YAML-special characters); each field the chart breaks on is constrained in the descriptor (`pattern`, `maxItems`, `required`) so the wizard cannot produce the broken render, and each chart bug is listed in the report with its reproducing command.
+
+**Fixes**
+
+96. Every rule whose message tells the user to add exact string entries to a list declares `fix` (§8.13): `path` is a declared list of strings or refs (prefixed for an import), `items` computes exactly the entries the message names, and `lint` reports no `FIX_PATH_NOT_LIST` or failing `fix.items`.
 
 ---
 
 ## 19. Common mistakes
 
-Every finding from the Round 1 reviews, the Round 2 owner testing and the Round 2 review, generalised. The "Round" column says where it was found.
+Every finding from the Round 1 reviews, the Round 2 owner testing, the Round 2 review and the review of descriptors authored from scratch (Round 3), generalised. The "Round" column says where it was found.
 
 | # | Mistake | Round | Why it is wrong | Do instead |
 |---|---|---|---|---|
 | 1 | Docs anchors taken from the chart README | 2 | The docs site has different headings; 32 of 67 anchor uses were broken | Take anchors from the docs site; run `tw check-docs` (§11) |
 | 2 | Descriptions that restate a validation ("at most 4 times their minimum", "Needs Postgres 17", "Without a leading /", "At least 1000 GiB", "Must be one of the configured locations") | 2 | The check says it when it matters; the text adds noise and drifts | Descriptions give context only (§10.2) |
 | 3 | A feature's switch in one section or step and its settings in another (postgres pooler, autoscaling, backups; supabase's Components step) | 2 | The settings look always on | A section `toggle` (§5.3) |
-| 4 | Optional components mentioned as always on (the "Nobody" option naming PgBouncer, an Advanced step "Images of the pooler and the backup job") | 2 | Users think the component is installed | Say "optional", or move the text behind the flag (§10.5) |
+| 4 | Optional components mentioned as always on (the "None" option naming PgBouncer, an Advanced step "Images of the pooler and the backup job") | 2 | Users think the component is installed | Say "optional", or move the text behind the flag (§10.5) |
 | 5 | "Create" offered on workload lists | 2 | Creating a workload from a firewall field is never the task | `allowCreate` only on prerequisite secrets (§13.2) |
 | 6 | References prefilled with chart placeholders (`my-postgres-credentials` shown as chosen; mongodb's `aws-us-east-1` preselected as the backup location) | 1, 2 | Looks valid, installs against nothing | Install sessions clear them; never `example: true` on refs; `required: true` (§12.1) |
 | 7 | Single-location stateful charts accepting multi-location GVCs | 2 | Each location runs an independent copy with its own data | `gvc: { minLocations: 1, maxLocations: 1 }` (§14) |
@@ -3152,7 +3327,7 @@ Every finding from the Round 1 reviews, the Round 2 owner testing and the Round 
 | 11 | The stateful 4:1 limit applied to CPU only | 1 | The platform limits memory too | `maxRatio: 4` (checks both) (§6.7) |
 | 12 | Advisory rules as warnings (odd member count, single member, scale-down, Sentinel parity, credentials secret change, pool size, shared bucket, direct-access CIDRs) | 1 | Warnings block; users have legitimate reasons | `info` (§8.2) |
 | 13 | An over-strict rule (backup image major equal to the server major) | 1 | Blocked a working setup (a newer `pg_dump` works) | Encode the real constraint (`>=`) |
-| 14 | "Nobody" and "Specific workloads" hazards not modelled, or the chart's own workloads missing from the list | 1 | The release's own components cannot connect | A warning for "Nobody" and a rule that lists the missing own workload links in its `messageExpression` (§8.9) |
+| 14 | "None" and "Specific workloads" hazards not modelled, or the chart's own workloads missing from the list | 1 | The release's own components cannot connect | A warning for "None" and a rule that lists the missing own workload links in its `messageExpression` (§8.9) |
 | 15 | A leftover plaintext key hidden inside an atomic map (supabase `clientSecret`) | 1 | It stays in the release values in plain text, invisible in the editor | An error rule over the map with `in` (§7.6) |
 | 16 | `null` and `''` treated differently (supabase's S3 endpoint) | 1 | A `null` from YAML picked the wrong mode | Treat both: `x == null \|\| x == ''` (§6.14) |
 | 17 | An option description that is wrong about what it does (Studio "None") | 1 | Misleads | Exact option text plus an `info` rule for the consequence |
@@ -3186,6 +3361,19 @@ Every finding from the Round 1 reviews, the Round 2 owner testing and the Round 
 | 45 | An `info` rule about a shared default limited to install (gitea's database secret name) | 2 (review) | Upgrades from a version without the key receive the same default | Gate on the value, not the mode (§12.2) |
 | 46 | A port bounded by the protocol range (1 to 65535) where the platform allows less | 2 (review) | A direct load balancer port must be 22 to 32768 | Bounds from the platform docs (`/reference/workload/load-balancing`) |
 | 47 | A `#anchor` in an imported step's description | 2 (review) | It resolves to the child's page (`IMPORT_OVERRIDE_ANCHOR`) | `/template-catalog/templates/<parent>#…` (§16.2) |
+| 48 | A warning that the current README or CHANGELOG contradicts ("no verified run" on a provider the version now verifies) | 3 (authoring review) | Users distrust a working path, and the claim has no source | Re-read the README and CHANGELOG of this exact version before writing a warning; cite it (§10.3, §4.4) |
+| 49 | An unbacked statement ("billed per snapshot") | 3 | The chart makes no such claim; it may be false | Delete it; only what a template, README or CHANGELOG backs (§10.3) |
+| 50 | An upgrade note gated only on `context.mode == 'upgrade'` | 3 | It shows to releases that already run the new behaviour | Add `context.fromVersion != null && semverCompare(…)` (§5.7, §9.6) |
+| 51 | Upgrade notes collected in one step, away from the setting they concern | 3 | The user reads the advice where it cannot be acted on | The note lives in the step and section it concerns (§9.6) |
+| 52 | An upgrade hazard from the README or CHANGELOG with no note (an init workload that runs again, an endpoint switch) | 3 | The user learns after the upgrade | A version-gated note per hazard, with the action to take (§4.4, §9.6) |
+| 53 | A README budget (connections per proxy times replicas under the server limit) left as help text | 3 | Nothing stops a configuration the README calls invalid | A rule with the chart's formula and a `messageExpression` with the numbers (§8.12) |
+| 54 | A rule that restates an enum's options, `required`, a bound, a pattern or a type | 3 | Two messages for one mistake, and drift | Remove it; the field check says it (§8.11) |
+| 55 | `[self.x].all(…)` to bind a name | 3 | A hacky idiom that hides the condition | The plain expression, with the condition in `when` (§7.11) |
+| 56 | A migration that reads a key the previous version lacks (`CEL_UNKNOWN_PATH`) | 3 | It cannot evaluate on those releases and leaves a lint finding | Gate by `fromVersions`, or read only existing keys (§9.2) |
+| 57 | A field `required: true` that only matters under a condition (a value the template ignores while a sibling is empty or a feature is off) | 3 | Blocks the user for a setting that is unused | `when` for the condition, `required` inside it, or a rule with `when` (§6.1) |
+| 58 | A count fixed at creation (replicas, replication factor) editable on upgrade | 3 | A change breaks the running release | `immutable` with a reason (§6.16) |
+| 59 | Lowercase shorthand labels for prose values (`session`) | 3 | The UI shows "session"; lint warns `OPTION_LABEL_FROM_VALUE` | Object form with an explicit label (§6.5) |
+| 60 | A rule that says "add X to the list" with no `fix` | general | The user has to type a long workload link by hand | A `fix` whose `items` computes the entries the message names (§8.13) |
 
 ---
 
@@ -3284,7 +3472,7 @@ Not allowed on a virtual field: `path`, `absent`, `default`, `immutable`, `examp
 | `multiline` | string | bool | textarea; block literal |
 | `min`, `max` | integer, number, quantity | number (integer for `integer`) or quantity string | bounds |
 | `step` | integer, number | number | input step |
-| `unit` | integer, number | string | shown next to the input |
+| `unit` | integer, number | string | shown inside the input, at its end |
 | `suggestions` | string, integer, number, quantity | array of values or `{value, label?, description?}` | §15 |
 | `options` | enum | array of values or `{value, label?, description?, set?}` | static options; `set` only on virtual fields |
 | `optionsFrom` | enum | CEL list | computed options; not with `options` |
@@ -3327,6 +3515,7 @@ No `path` or `id`. Types: `string`, `integer`, `number`, `boolean`, `yaml`, `obj
 | `scope` | | `org`, `gvc` | `org` | `location` only |
 | `filter` | | `{ secretType?: [..], provider?: [..], tags?: {k: v} }` | | type, provider and tag filters |
 | `mustExist` | | `error`, `warning`, `off` | `warning` | severity of `REF_NOT_FOUND` |
+| `excludeTargetGvcWhen` | | CEL bool | | `gvc: any` refs of gvc-scoped kinds: while true, objects of the release's GVC are not offered (`NOT_APPLICABLE` otherwise) |
 | `allowCreate` | | bool | false | offer inline creation |
 | `requiredKeys` | | array of strings | | dictionary secret keys the chart reads |
 | `requiredKeysFrom` | | CEL `list<string>` | | computed required keys; not with `requiredKeys` |
@@ -3354,6 +3543,7 @@ No `path` or `id`. Types: `string`, `integer`, `number`, `boolean`, `yaml`, `obj
 | `paths` | | array of paths | owning field | where the issue shows |
 | `when` | | CEL bool | | gate |
 | `mirrors` | | string | | the `_helpers.tpl` define mirrored |
+| `fix` | | object `{ path, items }` | | a one-click fix that appends string entries to a list (§8.13). `path`: a declared list of strings or refs (item-relative in item rules, import-prefixed in parent rules). `items`: CEL `list<string>` in the rule's scope. The button text is always "Fix"; visual tab only |
 
 ### A.12 Migration
 
@@ -3475,7 +3665,7 @@ Field check messages never contain the field's label ("Required.", "Must be at l
 | `YAML_PARSE`, `YAML_ROOT`, `YAML_MULTI_DOC` | error | wizard.yaml is not a single YAML map |
 | `API_VERSION`, `KIND` | error | unknown `apiVersion` / `kind` |
 | `UNKNOWN_KEY` | error | a key no descriptor object has (a typo) |
-| `NOT_APPLICABLE` | warning | a property of another type, a widget that does not fit, `ref.gvc` on an org-level kind, `requiredKeys` on a non-dictionary secret, `suggestions` on another type |
+| `NOT_APPLICABLE` | warning | a property of another type, a widget that does not fit, `ref.gvc` or `ref.excludeTargetGvcWhen` on an org-level kind or a `gvc: target` ref, `requiredKeys` on a non-dictionary secret, `suggestions` on another type |
 | `NOT_ALLOWED` | error | a property not allowed here (`path` in an item schema, `set` on a non-virtual option, `virtual` on a nested field, notes inside objects) |
 | `MISSING_KEY` | error | a required key (`type`, `label`, `path`, a virtual field's `id`/`init`, a toggle section's `title`, `optional: true` on an object, `valueExpr` without `to`, …) |
 | `INVALID_TYPE`, `INVALID_VALUE`, `INVALID_PATH` | error (a label over 60 characters is an `INVALID_VALUE` warning) | wrong YAML type, a value outside the allowed set (bad regex, id, range, suggestion out of bounds), bad path syntax |
@@ -3485,6 +3675,7 @@ Field check messages never contain the field's label ("Required.", "Must be at l
 | `IMPORT_DUPLICATE`, `IMPORT_ANCHOR_UNKNOWN`, `IMPORT_OVERRIDE_NOT_ALLOWED`, `IMPORT_OVERRIDE_ANCHOR` | error | imports: two with one key, an unknown `after`/`before` step, a disallowed override key, a `#anchor` in an override or an imported step's description (§16.14) |
 | `DUPLICATE_VALUE` | warning | an option or suggestion listed twice |
 | `DOCS_ABSOLUTE`, `DOCS_INVALID` | error | `docs` is not `/path#anchor` or `#anchor` |
+| `FIX_PATH_NOT_LIST` | error | a rule `fix.path` that is not a declared list of strings or refs (for a parent rule into an import, `lint` checks it) |
 | `DEFAULT_ON_PRESENT_PATH` | error | `default` without `absent: true` |
 | `DEFAULT_NOT_IN_OPTIONS` | error | an enum `default` outside its options |
 | `EMPTY_STEP` | error | a step without fields |
@@ -3506,7 +3697,7 @@ Lint reports every parser diagnostic, plus:
 | `DEFAULT_RULE_FAILED` | error | the chart defaults fail an error-severity rule |
 | `SESSION_FAILED` | error | a session on the chart defaults could not be created |
 | `DOCS_ABSOLUTE` | error | an absolute docs.controlplane.com link in `help`, `description` or note text |
-| `MIGRATION_EVAL_ERROR` | error / warning | a `valueExpr` fails on the previous version's values (error when it applies to the previous version) |
+| `MIGRATION_EVAL_ERROR` | error / warning | a `valueExpr` fails on the values of the version in its `fromVersions` range that it is checked against (error when that is the previous version) |
 | `TOGGLE_NOT_BOOLEAN` | error | a section `toggle` that is not a boolean in values.yaml |
 | `TOGGLE_WHEN_DUPLICATE` | error | a section `when` that reads its own toggle |
 | `MIRRORS_MISSING`, `MIRRORS_UNKNOWN` | warning | a `fail` define no rule mirrors; a `mirrors` naming no define |
@@ -3522,6 +3713,7 @@ Lint reports every parser diagnostic, plus:
 | `CREATE_WITHOUT_ALLOW_CREATE` | warning | a ref `create` without `allowCreate: true` (once the descriptor uses `allowCreate`) |
 | `EXAMPLE_ON_REF` | warning | `example: true` on a ref or a list of refs (install sessions clear example refs) |
 | `SUGGESTIONS_WIDGET` | warning | `suggestions` with `widget: slider` or `widget: stepper` (the combobox replaces the widget) |
+| `OPTION_LABEL_FROM_VALUE` | warning | a shorthand string option whose value starts with a lowercase letter, so its label would be the raw value; write the object form with a `label` (§6.5) |
 | `IMPORT_STEP_UNKNOWN`, `IMPORT_EXCLUDE_UNKNOWN`, `IMPORT_OVERRIDE_UNKNOWN`, `IMPORT_TOGGLE_EXCLUDED`, `IMPORT_NESTED`, `IMPORT_UNRESOLVED`, `IMPORT_MISMATCH`, `IMPORT_INVALID` | error | composing the imports failed (§16.14) |
 | `IMPORT_OVERRIDE_LOOSENS` | warning | an override loosens a bound, `required`, `readOnly` or `immutable` |
 | `IMPORT_NOT_A_DEPENDENCY`, `IMPORT_VERSION_MISMATCH`, `IMPORT_CONDITION_MISMATCH` | error | an import does not match its `Chart.yaml` dependency |
@@ -3554,3 +3746,74 @@ Values texts (the YAML tab, carry-over inputs) can also carry `YAML_WARNING`, a 
 ### B.7 `WizardError` (programmer errors, thrown)
 
 `DESCRIPTOR_INVALID`, `DEFAULTS_INVALID` (the template's values.yaml does not parse), `UNKNOWN_FIELD` (a ref from code that names no field), and with imports `IMPORT_MISSING` and `IMPORT_INVALID`.
+
+---
+
+## 22. Appendix C: chart inventory format
+
+The inventory is the author's written reading of the chart (§4), made before the descriptor and checked against it after. It has six parts. Write them as markdown tables in a scratch file outside the repo; it is never committed. A part with nothing to list says "none", so a reviewer can tell it was checked.
+
+### C.1 Sources
+
+List what was read, with the version: the `values.yaml` leaf count, each file of `templates/`, `_helpers.tpl`, the README sections (prerequisites, configuration, upgrading, limits), the CHANGELOG entries for this version and every version since the previous descriptor, `Chart.yaml` dependencies and annotations. Then list the facts the chart creates:
+
+| Created resource | Name (from `_helpers.tpl`) | Gated by | Notes |
+|---|---|---|---|
+| workload | `<release>-proxy` | `proxy.enabled` | stateful or not; what connects to it |
+| volume set, secret, identity, policy, domain, cron job | | | |
+
+### C.2 Leaves
+
+One row per `values.yaml` leaf (a value that is not a non-empty map; lists are leaves):
+
+| Values path | Default | Comment says | Read by | Gated by | `fail` checks | Step / section | Notes |
+|---|---|---|---|---|---|---|---|
+| `backup.aws.bucket` | `my-bucket` | placeholder | `workload-backup.yaml` | `backup.enabled`, provider `aws` | `pg.validateBackupConfig` (required) | Backups / AWS S3 | `example: true` |
+
+A leaf left to `yamlOnly` says why in Notes.
+
+### C.3 Fields
+
+One table per step, in the order of the wizard. Columns: path, type, widget, label, required, `when`, options or constraints, immutable, notes.
+
+| Path | Type | Widget | Label | Req | When | Options / constraints | Imm | Notes |
+|---|---|---|---|---|---|---|---|---|
+| `replication.mode` | enum | segmented | Replication mode | Y | | `{sync: Synchronous}`, `{async: Asynchronous}` | | label written, not derived |
+| `backup.retention` | string `duration` | | Retention | Y | `self.backup.enabled` | | | required only under the toggle |
+| `cluster.pdReplicas` | integer | stepper | Placement driver replicas | Y | | `min: 1` | fixed at creation: "…" | README: Limits |
+
+`Req`: `Y` = `required: true`; `W` = `required: true` plus a `when`; `N` = optional. `Imm`: the reason string, or `soft` for an `info` rule over `oldSelf`, or `grow` for a grow-only error rule. Option labels are listed with their value, since prose values need an explicit label (§6.5).
+
+### C.4 Rules
+
+| Id | Mirrors | When | Rule | Message | Severity | Source |
+|---|---|---|---|---|---|---|
+| R1 | `app.validateBackupConfig` | `self.backup.enabled` | `self.backup.schedule != ''` | … | error | `_helpers.tpl:80` |
+| R2 | | `self.proxy.enabled` | `self.proxy.maxClients * self.proxy.replicas <= self.db.maxConnections` | … | warning | README: Connection budget |
+
+Every `fail` define, every README budget or limit, every platform limit (the stateful ratio, a minimum) and every hazard the wizard can detect from the values has a row; the Source column is the proof. List a field check (`required`, `options`, `min`) as its own row with the field in Mirrors and no rule text, so §8.11 is visible: no row repeats a field check as a rule.
+
+### C.5 Coupled and implicit behaviour
+
+Bullets, each with its source: what restarts the workload, what is one-way, what only takes effect at first initialization, which toggle gates which workload, which settings share a secret or an identity, which values the chart derives from others, which names depend on the release name, and what the location handling is (§4.6).
+
+### C.6 Upgrade table
+
+First the diff from the previous version, then one row per hazard:
+
+| Key | Change | Default (old → new) | Handling |
+|---|---|---|---|
+| `config.legacyKey` | removed | | drop migration `<2.0.0` with note "…"; `!has()` rule `mirrors: app.validateKeys` |
+| `config.newKey` | added | | field in step Server |
+| `old.path` → `new.path` | renamed | `a → b` | rename; computed migration `<1.1.0` keeps the old default's value |
+| `engine.image` | default changed | `x:7 → x:8` | field; one-way note gated `<3.5.0` |
+
+| Hazard (README / CHANGELOG) | Applies from → to | Where the note lives | Gate | Action the user takes |
+|---|---|---|---|---|
+| the init workload runs again | `<2.2.0` → `2.2.0` | step Cluster, section Initialization | `semverCompare(context.fromVersion, '2.2.0') < 0` | "…" |
+
+`tw paths-diff` and `tw carry` produce the key rows; the README and CHANGELOG produce the hazard rows. A key in the diff with no row, or a hazard with no note, is a gap.
+
+### C.7 Coverage check
+
+After writing the descriptor, answer for every row of C.2 to C.6 where it landed (field id, rule id, note, migration index, `yamlOnly` entry), and list the rows that did not land with the reason. The final report carries this table.

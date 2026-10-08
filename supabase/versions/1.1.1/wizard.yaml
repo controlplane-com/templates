@@ -28,7 +28,7 @@ steps:
           `anonKey` and `serviceRoleKey` must be HS256 JWTs signed by `secret`, or every service
           returns `bad_jwt`; the README has a snippet that mints all four consistently.
           `serviceRoleKey` bypasses row-level security: keep it server-side.
-        docs: "#jwt-keys"
+        docs: "#jwt"
         ref:
           kind: secret
           format: name
@@ -140,7 +140,7 @@ steps:
             required: true
             options:
               - value: none
-                label: Nobody
+                label: None
                 description: No workload can connect.
               - value: same-gvc
                 label: Same GVC
@@ -155,7 +155,7 @@ steps:
               - rule: self.postgres.internalAccess.type != 'none'
                 severity: warning
                 message: >-
-                  "Nobody" cuts off every Supabase service: Auth, PostgREST, Realtime, Storage, Studio's
+                  "None" cuts off every Supabase service: Auth, PostgREST, Realtime, Storage, Studio's
                   pg_meta, PgBouncer and the backup job all connect to Postgres directly. Use Same GVC or
                   Same org.
           - path: postgres.internalAccess.workloads
@@ -168,7 +168,21 @@ steps:
             widget: tags
             item:
               type: ref
-              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.postgres.internalAccess.type == 'same-gvc'
+            rules:
+              - when: self.postgres.internalAccess.type == 'same-gvc' && context.gvc != null
+                rule: "!self.postgres.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+                severity: info
+                messageExpression: >-
+                  'Same GVC already allows every workload in this GVC: ' +
+                  self.postgres.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+                  ' can be removed from the list.'
+                message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
         rules:
           - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
             rule: >-
@@ -191,6 +205,14 @@ steps:
               self.postgres.internalAccess.workloads)).map(n,
               '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-' + n).join(', ') +
               ', or they cannot connect.'
+            fix:
+              path: postgres.internalAccess.workloads
+              items: >-
+                (['auth', 'postgrest'] + (self.realtime.enabled ? ['realtime'] : []) +
+                (self.storage.enabled ? ['storage'] : []) + (self.studio.enabled ? ['studio'] : []) +
+                (self.pgbouncer.enabled ? ['pgbouncer'] : []) +
+                (self.backup.enabled && self.backup.mode == 'logical' ? ['backup'] : [])).map(n,
+                '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-' + n)
             message: >-
               The chart does not add its own workloads to the list, and each of them connects to
               Postgres directly: add Auth, PostgREST and every enabled service (Realtime, Storage,
@@ -211,11 +233,14 @@ steps:
             widget: segmented
             required: true
             help: >-
-              **transaction** suits most web and API workloads but breaks session-level features (`SET`
-              variables, temporary tables, advisory locks); use **session** if you need those.
-              **statement** returns the connection after every statement; transactions are not
+              **Transaction** suits most web and API workloads but breaks session-level features (`SET`
+              variables, temporary tables, advisory locks); use **Session** if you need those.
+              **Statement** returns the connection after every statement; transactions are not
               supported.
-            options: [session, transaction, statement]
+            options:
+              - { value: session, label: Session }
+              - { value: transaction, label: Transaction }
+              - { value: statement, label: Statement }
           - path: pgbouncer.defaultPoolSize
             type: integer
             label: Server connections per pool
@@ -293,7 +318,7 @@ steps:
             required: true
             advanced: true
       - title: Auth
-        docs: "#auth-gotrue"
+        docs: "#auth"
         fields:
           - path: auth.disableSignup
             type: boolean
@@ -406,7 +431,7 @@ steps:
         title: Studio dashboard
         toggle: studio.enabled
         description: The web dashboard, served by Kong at `/` behind a username and password.
-        docs: "#studio-web-dashboard"
+        docs: "#studio"
         fields:
           - path: studio.username
             type: string
@@ -489,7 +514,21 @@ steps:
             widget: tags
             item:
               type: ref
-              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.studio.internalAccess.type == 'same-gvc'
+            rules:
+              - when: self.studio.internalAccess.type == 'same-gvc' && context.gvc != null
+                rule: "!self.studio.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+                severity: info
+                messageExpression: >-
+                  'Same GVC already allows every workload in this GVC: ' +
+                  self.studio.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+                  ' can be removed from the list.'
+                message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
           - path: studio.image
             type: string
             format: image
@@ -859,7 +898,7 @@ steps:
               apply to the logical backup job.
       - title: AWS S3
         when: self.backup.enabled && self.backup.provider == 'aws'
-        docs: "#aws-s3"
+        docs: "#backup"
         fields:
           - type: note
             severity: warning
@@ -905,7 +944,7 @@ steps:
             patternMessage: Leave out the leading /.
       - title: Google Cloud Storage
         when: self.backup.enabled && self.backup.provider == 'gcp'
-        docs: "#gcs"
+        docs: "#backup"
         fields:
           - path: backup.gcp.bucket
             type: string

@@ -1,13 +1,15 @@
 ---
 name: wizard-authoring
-description: Create, update or review a template's wizard.yaml descriptor (the install wizard of one template version in this repo). Use when adding a wizard.yaml to a template version, copying one forward to a new version, changing one, adding subchart imports, or reviewing one.
+description: Update, copy forward or review a template's wizard.yaml descriptor (the install wizard of one template version in this repo), and the reference for the rules every descriptor follows. Use when changing an existing wizard.yaml, copying one forward to a new version, adding subchart imports, or reviewing one. To author a new or rewritten descriptor from the chart, use /create-wizard.
 ---
 
 # Wizard descriptor authoring
 
-**Read `WIZARD_AUTHORING.md` (repo root) first.** Read all of it before writing a new descriptor; for an update or a review, read at least §3 (procedures), §5 (structure and the toggle rule), §10 to §15 (text, docs, placeholders, references, GVC limits, suggestions), §18 (checklist) and §19 (common mistakes). The guide is the source of truth; this skill is the checklist.
+**Authoring a new descriptor, or rewriting one from the chart? Run `/create-wizard <template> [version]` instead.** It is a fixed procedure (inventory, descriptor, gates, independent review, final report). This skill is the reference for edits, copy-forwards and reviews.
 
-**Keep in sync.** Update `WIZARD_AUTHORING.md` and this skill in the same commit as any change to the wizard spec, the core engine behaviour or the console rendering.
+**Read `WIZARD_AUTHORING.md` (repo root) first.** For an update or a review, read at least §3 (procedures), §4.4 (README and CHANGELOG), §5 (structure and the toggle rule), §6.1, §6.5 and §6.16 (required, option labels, immutable), §8.11 and §8.12 (rules that must not exist, README budgets), §9.2 and §9.6 (migrations, upgrade notes), §10 to §15 (text, docs, placeholders, references, GVC limits, suggestions), §18 (the one done-checklist), §19 (common mistakes) and Appendix C (inventory format). The guide is the source of truth; this skill is the shortlist.
+
+**Keep in sync.** Update `WIZARD_AUTHORING.md`, this skill and `create-wizard` in the same commit as any change to the wizard spec, the core engine behaviour or the console rendering.
 
 ## Setup
 
@@ -32,7 +34,7 @@ tw() { node ../console/template-wizard/dist/cli.cjs "$@"; }          # zsh does 
    ```sh
    helm dependency update $D && helm template validation $D --set global.cpln.gvc=validation-gvc > /dev/null
    ```
-3. **Read the chart** (§4) and write the inventory (§4.7):
+3. **Read the chart** (§4, including the README and the version's CHANGELOG) and write the inventory (§4.7, Appendix C):
    ```sh
    grep -n 'define\|fail' $D/templates/_helpers.tpl                              # every fail → required/options/min/max/rule; every fail define → a rule with mirrors
    grep -rn 'if .Values\|eq .Values\|ne .Values\|hasKey\|default ' $D/templates/  # gates → toggles, branch sections, absent fields
@@ -41,7 +43,7 @@ tw() { node ../console/template-wizard/dist/cli.cjs "$@"; }          # zsh does 
    grep -rn 'cpln://secret' $D/templates/                                        # the keys for requiredKeys
    sed -n '/^dependencies:/,$p' $D/Chart.yaml                                    # imports (skip cpln-common); each child needs its own descriptor
    ```
-   Read `values.yaml` comments and the README prerequisites and upgrade sections. The chart wins over the README and the docs page.
+   Read `values.yaml` comments, the README prerequisites, budgets and upgrade sections, and the CHANGELOG entries for the version. The chart wins over the README and the docs page.
 4. **Copy forward** (when the previous version has a descriptor):
    ```sh
    cp <template>/versions/<old>/wizard.yaml $D/wizard.yaml
@@ -60,7 +62,7 @@ tw() { node ../console/template-wizard/dist/cli.cjs "$@"; }          # zsh does 
    tw check-docs $D
    ```
    Required result: `ok … links on … pages`. Anchors come from the docs site, never from README headings, and only heading ids (`<h1>`–`<h6>`) count; links in rule messages are checked too.
-8. **Render** the defaults, every provider branch and every optional feature, then render the chart with each output:
+8. **Render** the defaults, every provider branch and every optional feature, then render the chart with each output, then probe the free-form fields with edge values (§17.3.1, §18 item 95):
    ```sh
    tw render --descriptor $D/wizard.yaml --values $D/values.yaml --answers answers.json > /tmp/out.yaml   # exit 0 required
    helm dependency update $D                                                                              # once, for cpln-common and subcharts
@@ -72,15 +74,15 @@ tw() { node ../console/template-wizard/dist/cli.cjs "$@"; }          # zsh does 
    tw carry --old-defaults <template>/versions/<old>/values.yaml --old-values release-values.yaml \
      --new-defaults $D/values.yaml --from <old> --to <version> --descriptor $D/wizard.yaml > /tmp/carried.yaml
    ```
-   Read every `dropped` note as the user will. Carry a release that kept the old defaults too (`--old-values` = the old `values.yaml`), from every earlier version whose defaults differ: a rename moves changed values only, so a renamed key whose default changed needs a computed migration to keep the value the release runs with (guide §9.2, gitea 1.0.0's database password). With imports, the installed child versions come from the old version's `Chart.yaml`, or `--old-import <prefix>=<version>`.
-10. **Preview in the console** (§17.7), light and dark:
+   Read every `dropped` note as the user will; each dropped key needs a note or a migration. Carry a release that kept the old defaults too (`--old-values` = the old `values.yaml`), from every earlier version whose defaults differ: a rename moves changed values only, so a renamed key whose default changed needs a computed migration to keep the value the release runs with (guide §9.2, gitea 1.0.0's database password). With imports, the installed child versions come from the old version's `Chart.yaml`, or `--old-import <prefix>=<version>`.
+10. **Preview in the console** (§17.7), light and dark. Humans always; an agent only when it can start the dev server itself (port 4026 free, credentials available locally), otherwise it reports "preview not run" with the reason and answers §18 item 8 N/A for agent:
     ```sh
     cd ../console && TEMPLATE_WIZARD_DIR=../templates node_modules/.bin/vite --port 4026 --mode development
     curl -si http://localhost:4026/__template-wizard/<template>/<version>/wizard.yaml | head -3   # 200, x-template-wizard: dev
     # open http://localhost:4026/console/org/<org>/marketplace/template/<template>/install?version=<version>
     ```
-    Reload after each save. Open each toggle section's collapsed "Advanced" group, check the review's section headings (toggles are folded into them: "Scheduled backups: Off"), and on an upgrade the rail's waiting (unvisited) steps and the review's "Changes since last applied": a same-version upgrade without edits lists only "Placeholder cleared" rows, the unused placeholder references the wizard emptied (guide §12.1), and changes that share a label lead with their section's title ("AWS S3 › Cloud account"). A number typed out of range stays as typed and shows its `MIN` / `MAX` message (the input never clamps; guide §6.3). Stop the dev server when done. With `imports`, the dev endpoint serves the child's `wizard.yaml` too, but the child version must be published in the marketplace (its values come from there); walk the imported steps: their place in the rail, the "From the <title> template <version> · Docs" caption, the child's `#anchor` links, the review's "<title> › <step>" headings and the YAML note (guide §16.13).
-11. **Walk the review checklist** (§18), every item.
+    Reload after each save. Open each toggle section's collapsed "Advanced" group, check the review's section headings (toggles are folded into them: "Scheduled backups: Off"), and on an upgrade the rail's waiting (unvisited) steps and the review's "Changes since last applied": a same-version upgrade without edits lists only "Placeholder cleared" rows (and "Default selected" for a required choice that was empty), the unused placeholder references the wizard emptied (guide §12.1), and changes that share a label lead with their section's title ("AWS S3 › Cloud account"). A number typed out of range stays as typed and shows its `MIN` / `MAX` message (the input never clamps; guide §6.3). Stop the dev server when done. With `imports`, the dev endpoint serves the child's `wizard.yaml` too, but the child version must be published in the marketplace (its values come from there); walk the imported steps: their place in the rail, the "From the <title> template <version> · Docs" caption, the child's `#anchor` links, the review's "<title> › <step>" headings and the YAML note (guide §16.13).
+11. **Walk the review checklist** (§18), every item, with evidence.
 12. **Commit** the descriptor only, by explicit path, with one lowercase line and no body and no attribution; never push:
     ```sh
     git add $D/wizard.yaml && git commit -m "add wizard descriptor for <template> <version>"
@@ -92,13 +94,7 @@ tw() { node ../console/template-wizard/dist/cli.cjs "$@"; }          # zsh does 
 
 ## The gate
 
-A descriptor is done only when all of these hold:
-
-- `tw lint $D`: 0 errors, 0 warnings, full coverage (or `yamlOnly` with a reason);
-- `tw check-docs $D`: ok;
-- `tw render` exits 0 on the main paths, and `helm template` accepts each output;
-- the console preview works;
-- the §18 checklist passes.
+A descriptor is done only when every item of the checklist in guide §18 holds. It is the one done-checklist; this skill does not repeat it. In short: `tw lint $D` with 0 errors and 0 warnings and full coverage (never suppress a warning), `tw check-docs $D` ok, `tw carry` clean with every drop explained, `tw render` exit 0 with `helm template` accepting each output, the edge-value render probe done, and the console preview working (an agent that cannot start the dev server itself reports "preview not run" instead).
 
 ## The rules most often broken
 
@@ -122,10 +118,18 @@ A descriptor is done only when all of these hold:
 - No step id `release` (reserved: `RESERVED_STEP_ID`) (§2.4).
 - Imports: exclude child refs to secrets the parent creates and bind parent `string` fields; `when` is exactly `self.<condition>`; overrides replace a key's whole value and never use `#anchor` links; parent migrations for keys moved under the child's key (§16).
 - Imports: give a renamed step its own `description` when the child's names an excluded part, with no `#anchor` in it (`IMPORT_OVERRIDE_ANCHOR`); restate as a parent rule every chart check an exclusion dropped (the child's mirrored rule on an excluded path); excluding a virtual field uncovers the leaves its options `set` (§16.2, §16.4).
+- Read the README and CHANGELOG of this exact version before writing any warning or upgrade note; no claim without a source, no stale "no verified run" (§10.3, §4.4).
+- Upgrade notes are gated on `context.fromVersion` (`semverCompare`), not only on `context.mode == 'upgrade'`, sit in the step and section they concern, and exist for every README and CHANGELOG hazard (§9.6).
+- A rule whose message tells the user to add exact string entries to a list (workload links in a firewall list) declares `fix: { path, items }` (`items` a CEL `list<string>` computing the entries the message names; `path` a declared list, import-prefixed in a parent rule). The button is always "Fix", visual tab only; a bad path is `FIX_PATH_NOT_LIST` (§8.13, §18 item 96).
+- README budgets and limits become rules with the chart's formula, not help text (§8.12).
+- No rule duplicates an enum's options, `required`, a bound, a pattern, a format or a type (§8.11); no `[x].all(…)` idioms (§7.11).
+- A migration lints clean: lint checks its old-side paths against a version inside its `fromVersions` range (the greatest available one older than the target), so `CEL_UNKNOWN_PATH` means it reads a key that version lacks; gate computed migrations by `fromVersions` or restructure (§9.2).
+- Edge-value render probe: multi-item lists, `::/0`, cron strings starting with `*` or `@`, null or empty optional schedules, YAML-special names, through `tw render` and `helm template`; constrain a field the chart breaks on (`pattern`, `maxItems`, `required`) and report the chart bug, never edit the chart (§17.3.1).
+- No `required: true` on a field that only matters under a condition: give it a `when` (§6.1). Values fixed at creation (replica or replication counts) are `immutable` with a reason (§6.16).
+- Prose option values get the object form with a written label (`{ value: session, label: Session }`); shorthand only where the label should equal the value. Lint warns `OPTION_LABEL_FROM_VALUE` (§6.5).
+- Option labels use the object form for every lowercase value, prose or identifier (`{ value: xfs, label: XFS }`); a set of tokens users know exactly (`connect-failure`) keeps them as labels, for every option of the set (§6.5).
+- A required single choice (no `allowCustom`) starts with its first option when empty, also when an `optionsFrom` gets its first option; it never replaces a value and never runs after a YAML edit. Order options so the first is safe, or give the chart a default (§6.5).
+- A `gvc: any` ref labels options `gvc/name`; a target-only ref shows bare names (§6.8).
+- A workload list visible next to a `same-gvc` option sets `excludeTargetGvcWhen: self.<type path> == 'same-gvc'` on the ref and has an `info` rule when a picked workload is in the target GVC (prefix `'//gvc/' + context.gvc + '/workload/'`, guarded by `context.gvc != null`; the message lists `gvc/name`, not the raw link: `.map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/')))`). Only where the chart passes the type straight to the firewall; read its template first. The key on another kind or a `gvc: target` ref is `NOT_APPLICABLE` (§6.8).
+- Lists with `unique: true` over refs, and `uniqueBy: [refKey]`, hide the values other rows hold; declare them and nothing else is needed (§6.9).
 - Never edit `.schema/wizard.v1.schema.json` by hand; it is copied byte for byte from the core.
-
-## Owner's local test setup
-
-- Console: `../console` (the wizard UI in `src/pages/marketplace/wizard/`, the core in `template-wizard/`). The wizard is shown in test and staging only.
-- Test org `efe`. GVC `claude-dev-single` has one location (aws-us-west-2) for single-location templates; `claude-dev` has three for multi-location templates (mongodb-cluster) and for checking that single-location templates disable it. New test GVCs are prefixed `claude-dev-`.
-- The console repo's `verify` skill describes logging in and driving the app.

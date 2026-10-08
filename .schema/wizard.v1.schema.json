@@ -2408,6 +2408,10 @@
           "$ref": "#/definitions/cel",
           "markdownDescription": "CEL `list<string>` of the required keys, in the field's scope, instead of `requiredKeys` (e.g. `[self.auth.passwordKey]`)."
         },
+        "excludeTargetGvcWhen": {
+          "$ref": "#/definitions/cel",
+          "markdownDescription": "CEL bool in the field's scope, for `gvc: any` refs. While true, the picker does not offer objects of the target GVC (query term `rel gvc != <target>`); values already picked stay. Use it when another setting already covers the target GVC (e.g. `self.type == 'same-gvc'`)."
+        },
         "create": {
           "markdownDescription": "Prefills of the inline create form; used only with `allowCreate: true`.",
           "type": "object",
@@ -2513,6 +2517,9 @@
         "mirrors": {
           "type": "string",
           "markdownDescription": "The `_helpers.tpl` define this rule mirrors (lint coverage)."
+        },
+        "fix": {
+          "$ref": "#/definitions/ruleFix"
         }
       },
       "anyOf": [
@@ -2535,6 +2542,21 @@
           }
         }
       ]
+    },
+    "ruleFix": {
+      "type": "object",
+      "required": ["path", "items"],
+      "additionalProperties": false,
+      "markdownDescription": "A one-click fix shown with the rule's issue: appends the strings of `items` that the list at `path` lacks. The user applies it in the visual editor; nothing applies it automatically.",
+      "properties": {
+        "path": {
+          "$ref": "#/definitions/path"
+        },
+        "items": {
+          "$ref": "#/definitions/cel",
+          "markdownDescription": "CEL list of strings, in the rule's scope."
+        }
+      }
     },
     "migration": {
       "type": "object",

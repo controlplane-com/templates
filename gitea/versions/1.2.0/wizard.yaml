@@ -159,7 +159,7 @@ steps:
     description: Who reaches the web UI and Git, from the internet and from inside the GVC.
     sections:
       - title: Public access
-        docs: "#access"
+        docs: "#public-access"
         fields:
           - path: publicAccess.enabled
             type: boolean
@@ -172,7 +172,7 @@ steps:
           Public SSH takes over the workload's only public endpoint, so the web UI and Git over HTTPS are no
           longer served there. Turn it on only if you serve the web UI through a custom domain, or only need
           Git over SSH.
-        docs: "#the-ssh-and-https-endpoint-trade-off"
+        docs: "#git-over-ssh"
         fields:
           - path: ssh.externalPort
             type: integer
@@ -194,7 +194,7 @@ steps:
             widget: cards
             required: true
             options:
-              - { value: none, label: Nobody, description: No workload can reach Gitea internally. }
+              - { value: none, label: None, description: No workload can reach Gitea internally. }
               - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
               - { value: same-org, label: Same org, description: Any workload in this org. }
               - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
@@ -209,12 +209,26 @@ steps:
             widget: tags
             item:
               type: ref
-              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internalAccess.type == 'same-gvc'
+            rules:
+              - when: self.internalAccess.type == 'same-gvc' && context.gvc != null
+                rule: "!self.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+                severity: info
+                messageExpression: >-
+                  'Same GVC already allows every workload in this GVC: ' +
+                  self.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+                  ' can be removed from the list.'
+                message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
 
   - id: database
     title: Database
     description: The bundled PostgreSQL's credentials. Gitea creates the secret from them; there is nothing to create first.
-    docs: "#backing-database"
+    docs: "#bundled-database"
     fields:
       - type: note
         text: >-
@@ -278,12 +292,15 @@ rules:
       from the values.
   - rule: self.postgres.internalAccess.type != 'none'
     paths: [postgres.internalAccess.type]
-    message: '"Nobody" also blocks Gitea, which connects to its database like any other workload.'
+    message: '"None" also blocks Gitea, which connects to its database like any other workload.'
   - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
     rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-gitea') in self.postgres.internalAccess.workloads
     severity: warning
     paths: [postgres.internalAccess.workloads]
     messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-gitea, or Gitea cannot reach its database.'"
+    fix:
+      path: postgres.internalAccess.workloads
+      items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-gitea']"
     message: Add the Gitea workload to the list, or Gitea cannot reach its database.
 
 yamlOnly:

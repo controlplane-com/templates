@@ -2,151 +2,263 @@
 apiVersion: template-wizard.controlplane.com/v1
 kind: TemplateWizard
 title: TiDB
-# The chart lists its locations and runs nothing in the GVC's other locations.
+# The chart lists its locations (localOptions per entry) and scales every other GVC location to 0.
 gvc:
   minLocations: 1
 
 steps:
-  - id: topology
-    title: Locations
-    description: Where PD, TiKV and the TiDB servers run.
+  - id: cluster
+    title: Cluster
+    description: Where the PD, TiKV and TiDB server tiers run, how many of each, and their compute.
     docs: "#locations"
-    fields:
-      - type: note
-        when: >-
-          context.mode == 'upgrade' && context.fromVersion != null &&
-          semverCompare(context.fromVersion, '2.2.0') < 0
-        text: >-
-          Every workload restarts once during this upgrade; with one PD member and one TiKV node per
-          location, writes pause for about 75 s, so upgrade in a quiet period with clients that retry.
-          2.2.0 also starts daily volume snapshots of every PD and TiKV volume (billed per snapshot; set
-          a schedule of "" to turn them off).
-      - type: note
-        severity: warning
-        when: >-
-          context.mode == 'upgrade' && context.fromVersion != null &&
-          semverCompare(context.fromVersion, '2.1.0') < 0
-        text: >-
-          This upgrade restarts PD, TiKV and the TiDB servers. Separate locations restart at the same
-          time, so writes pause for up to about a minute while PD re-forms. A 2.0.0 install can be left
-          with a TiKV store that never came up, which an upgrade does not repair: check that every store
-          is `Up` first (see the README's "Upgrading from 2.0.0").
-      - type: note
-        when: >-
-          context.gvcLocations != null &&
-          context.gvcLocations.exists(g, !(g in self.locations.map(l, l.name)))
-        textExpression: >-
-          'GVC locations not listed here run nothing, and clients in them cannot reach this cluster: ' +
-          context.gvcLocations.filter(g, !(g in self.locations.map(l, l.name))).join(', ') + '.'
-      - path: locations
-        type: list
-        label: Locations
-        required: true
-        minItems: 1
-        uniqueBy: [name]
-        widget: table
-        newItem: { name: "", tikvReplicas: 1, serverReplicas: 2 }
-        itemLabel: "item.name + ': ' + string(item.tikvReplicas) + ' TiKV, ' + string(item.serverReplicas) + ' TiDB'"
-        description: >-
-          One entry per location. Clients reach only the TiDB servers in their own location, so run
-          them in a listed location.
-        help: >-
-          Surviving the loss of a whole location needs at least three locations. Two or more TiDB
-          servers per location, with the ProxySQL pooler on, keep a location serving through a server
-          failure.
-        item:
-          type: object
-          fields:
-            - path: name
-              type: ref
-              label: Location
-              required: true
-              ref: { kind: location, scope: gvc, format: name, mustExist: error }
-            - path: tikvReplicas
-              type: integer
-              label: TiKV nodes
-              required: true
-              min: 1
-              widget: stepper
-            - path: serverReplicas
-              type: integer
-              label: TiDB servers
-              required: true
-              min: 1
-              widget: stepper
-          rules:
-            - rule: context.gvcLocations == null || item.name == '' || item.name in context.gvcLocations
-              paths: [name]
-              message: This location is not enabled on the target GVC; PD refuses to bootstrap.
-            - rule: "!has(item.replicas)"
-              mirrors: tidb.validateLocations
-              paths: [name]
-              message: >-
-                replicas was split into tikvReplicas and serverReplicas in 2.1.0. Set both to the old
-                value to keep the same shape, and remove replicas.
-      - path: pdReplicas
-        type: enum
-        label: PD members
-        widget: segmented
-        required: true
-        description: The total, spread evenly across the locations; the first locations take any remainder.
-        options:
-          - { value: 1, label: "1" }
-          - { value: 3, label: "3" }
-          - { value: 5, label: "5" }
-          - { value: 7, label: "7" }
-    rules:
-      - rule: size(self.locations) > 0 && self.locations.all(l, l.name != null && l.name != '')
-        mirrors: tidb.validateLocations
-        paths: [locations]
-        message: Every entry in the locations list needs a location name.
-      - rule: >-
-          self.locations.all(l, (l.tikvReplicas == null || l.tikvReplicas >= 1) &&
-          (l.serverReplicas == null || l.serverReplicas >= 1))
-        mirrors: tidb.validateLocations
-        paths: [locations]
-        message: >-
-          Every location needs at least 1 TiKV node and 1 TiDB server; to stop running in a location,
-          remove it.
-      - rule: self.pdReplicas in [1, 3, 5, 7]
-        mirrors: tidb.validatePdReplicas
-        paths: [pdReplicas]
-        message: PD members must be 1, 3, 5 or 7.
-      - rule: self.pdReplicas != 1
-        severity: info
-        paths: [pdReplicas]
-        message: A single PD member is a single point of failure; use it for testing only.
-      - rule: >-
-          sum(self.locations.map(l, l.tikvReplicas == null ? 0 : l.tikvReplicas)) >= 3
-        severity: info
-        paths: [locations]
-        message: >-
-          With fewer than 3 TiKV nodes in total, PD keeps fewer than 3 copies of each region, and that
-          replication factor is fixed when the cluster is first created: adding nodes later does not
-          raise it.
+    sections:
+      - id: locations
+        fields:
+          # README: Upgrading from 2.1.0 ("any chart version upgrade does").
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.2.0') < 0
+            text: >-
+              Every workload restarts once. Stateful tiers restart one replica at a time within a location but
+              every location at once, so with one PD member and one TiKV node per location, writes pause for
+              about 75 seconds. Upgrade in a quiet period, with clients that retry.
+          # README: Upgrading from 2.0.0.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.0.0') >= 0 && semverCompare(context.fromVersion, '2.1.0') < 0
+            text: >-
+              A 2.0.0 bootstrap can leave a TiKV store that never comes up, and upgrading does not repair it.
+              Before you upgrade, check that every store reports `"Up"` (see
+              [Upgrading from 2.0.0](#upgrading-from-2-0-0)). If one is `"Down"`, install this version fresh
+              instead, restoring a backup when the cluster holds data.
+          - type: note
+            when: >-
+              context.gvcLocations != null && self.locations.exists(l, l.name != '') &&
+              context.gvcLocations.exists(g, !(g in self.locations.map(l, l.name)))
+            text: GVC locations not listed here run nothing, and clients there cannot reach this cluster.
+            textExpression: >-
+              'GVC locations not listed here run nothing, and clients there cannot reach this cluster: ' +
+              context.gvcLocations.filter(g, !(g in self.locations.map(l, l.name))).join(', ') + '.'
+          - path: locations
+            type: list
+            label: Locations
+            required: true
+            minItems: 1
+            uniqueBy: [name]
+            widget: table
+            newItem: { name: "", tikvReplicas: 1, serverReplicas: 2 }
+            itemLabel: >-
+              item.name + ' (' + (item.tikvReplicas == null ? '?' : string(item.tikvReplicas)) + ' TiKV, ' +
+              (item.serverReplicas == null ? '?' : string(item.serverReplicas)) + ' TiDB)'
+            description: >-
+              Each location runs its own TiKV nodes and TiDB servers. Clients reach only the TiDB servers in
+              their own location.
+            help: >-
+              With three TiKV nodes and three PD members, one location survives the loss of a node, but not the
+              loss of the location. Surviving the loss of a location needs at least three locations, and your
+              application running in at least two of them.
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: ref
+                  label: Location
+                  required: true
+                  ref: { kind: location, scope: gvc, format: name, mustExist: error }
+                - path: tikvReplicas
+                  type: integer
+                  label: TiKV nodes
+                  required: true
+                  min: 1
+                  suggestions: [1, 2, 3, 5]
+                - path: serverReplicas
+                  type: integer
+                  label: TiDB servers
+                  required: true
+                  min: 1
+                  suggestions: [1, 2, 3, 5]
+              rules:
+                # README: Prerequisites; PD's GVC location check in secret-pd-config.yaml.
+                - rule: context.gvcLocations == null || item.name == '' || item.name in context.gvcLocations
+                  paths: [name]
+                  message: >-
+                    This location is not in the target GVC. PD refuses to bootstrap a new cluster while a listed
+                    location is missing from the GVC.
+                # values.yaml comment and README: Locations ("serverReplicas: 1 ... lose about 10 seconds").
+                - rule: item.serverReplicas == null || item.serverReplicas >= 2
+                  severity: info
+                  paths: [serverReplicas]
+                  message: >-
+                    With one TiDB server, this location's clients lose about 10 seconds when it fails; 2 or more
+                    keep the location serving.
+          - path: pdReplicas
+            type: enum
+            label: PD members
+            widget: segmented
+            required: true
+            description: >-
+              The placement driver quorum, spread evenly across the locations with any remainder in the first
+              ones.
+            options: [1, 3, 5, 7]
+        rules:
+          - rule: self.locations.all(l, !has(l.replicas))
+            mirrors: tidb.validateLocations
+            paths: [locations]
+            message: >-
+              A location still sets replicas, which 2.1.0 split into tikvReplicas (TiKV nodes) and
+              serverReplicas (TiDB servers). Replace it with both keys in the YAML.
+          - rule: self.pdReplicas in [1, 3, 5, 7]
+            mirrors: tidb.validatePdReplicas
+            paths: [pdReplicas]
+            message: PD is Raft based, so it needs 1, 3, 5 or 7 members.
+          # values.yaml: "1 is a single point of failure and is for testing only."
+          - rule: self.pdReplicas != 1
+            severity: info
+            paths: [pdReplicas]
+            message: A single PD member is a single point of failure; use it for testing only.
+          # README: Important Notes; _helpers.tpl tidb.maxReplicas (total TiKV nodes capped at 3, fixed at bootstrap).
+          - when: context.mode == 'install' && self.locations.all(l, l.tikvReplicas != null)
+            rule: sum(self.locations.map(l, l.tikvReplicas)) >= 3
+            severity: info
+            paths: [locations]
+            messageExpression: >-
+              'PD fixes the replication factor at the TiKV node count when the cluster first bootstraps (' +
+              string(sum(self.locations.map(l, l.tikvReplicas))) +
+              ' here, capped at 3), and adding TiKV nodes later does not raise it. Start with at least 3 TiKV
+              nodes for 3-way replication.'
+            message: >-
+              PD fixes the replication factor when the cluster first bootstraps, at the number of TiKV nodes
+              (capped at 3), and adding TiKV nodes later does not raise it. Start with at least 3 TiKV nodes for
+              3-way replication.
+          - when: >-
+              self.locations.all(l, l.tikvReplicas != null) &&
+              (oldSelf == null || oldSelf.locations.all(l, l.tikvReplicas != null))
+            rule: >-
+              oldSelf == null || sum(oldSelf.locations.map(l, l.tikvReplicas)) >= 3 ||
+              sum(self.locations.map(l, l.tikvReplicas)) <= sum(oldSelf.locations.map(l, l.tikvReplicas))
+            severity: info
+            paths: [locations]
+            message: >-
+              Adding TiKV nodes does not raise the replication factor: PD fixed it when the cluster first
+              bootstrapped, at the number of TiKV nodes then (capped at 3).
+          # secret-pd-config.yaml: the first PD member of the FIRST location starts the cluster, and with no PD data
+          # of its own it runs --force-new-cluster, so a first location without PD data starts a new, empty cluster.
+          - when: >-
+              oldSelf != null && size(oldSelf.locations) > 0 && size(self.locations) > 0 &&
+              self.locations[0].name != ''
+            rule: oldSelf == null || oldSelf.locations.exists(l, l.name == self.locations[0].name)
+            severity: warning
+            paths: [locations]
+            message: >-
+              The first location's first PD member starts the cluster, and one with no PD data starts a new, empty
+              cluster. Keep a location this release already runs in first.
+          - when: >-
+              oldSelf != null && size(oldSelf.locations) > 0 && size(self.locations) > 0 &&
+              self.locations[0].name != ''
+            rule: >-
+              oldSelf == null || oldSelf.locations[0].name == self.locations[0].name ||
+              !oldSelf.locations.exists(l, l.name == self.locations[0].name)
+            severity: info
+            paths: [locations]
+            message: >-
+              The first location changed. Its first PD member starts the cluster when it has no PD data of its
+              own, so the new first location must already run a PD member, or PD starts a new, empty cluster.
+      - id: compute
+        title: Compute
+        description: The defaults are sized for testing.
+        docs: "#images-and-resources"
+        fields:
+          # PD and TiKV are stateful, so maxRatio 4 (§6.7); the check needs the four-key shape and is inert on
+          # these {cpu, memory} limit blocks.
+          - path: resources.pd
+            type: resources
+            label: PD resources
+            required: true
+            description: Per PD member. For production, PD wants 4 to 8 CPU and 8 to 16Gi.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: resources.tikv
+            type: resources
+            label: TiKV resources
+            required: true
+            description: Per TiKV node. For production, TiKV wants 8 to 16 CPU and 32 to 64Gi, memory for caching.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: resources.server
+            type: resources
+            label: TiDB server resources
+            required: true
+            description: >-
+              Per TiDB server. For production, 8 to 16 CPU and 16 to 32Gi; it scales with concurrent
+              connections.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
 
   - id: database
     title: Database
-    description: The prerequisite credentials secret and the database created from it.
-    docs: "#database-initialization"
+    description: The prerequisite credentials secret, and whether TiDB sets root's password and creates the database.
+    docs: "#prerequisites"
     sections:
-      - id: db-init
-        title: Create the database and user
+      - id: auto-create
+        title: Set the root password and create the database
         toggle: autoCreateDatabase.enabled
         description: >-
-          Sets the root password and creates the database and application user from a secret you
-          create first.
+          The first TiDB server sets root's password while the cluster bootstraps, and creates the application
+          database and user, from a dictionary secret you create first. Off, root starts with no password: set
+          one with `ALTER USER` before any client can reach the cluster.
+        docs: "#database-initialization"
         fields:
           - type: note
             severity: warning
             text: >-
-              The credentials secret must exist **before** you install. If it is missing, the
-              deployment waits and `cpln logs` shows nothing at all.
+              The credentials secret must exist **before** you install. If it is missing, the deployment waits
+              silently and `cpln logs` shows nothing; `cpln workload get-deployments` on the TiDB server workload
+              shows the reason. Creating the secret repairs the deployment in about 5.5 to 10.5 minutes, or force
+              a redeployment to skip the wait.
+          # README: Upgrading from 2.1.0.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.2.0') < 0
+            text: >-
+              From 2.2.0 the first TiDB server sets root's password at bootstrap, so an existing cluster keeps
+              the password it has. Before you upgrade, check that root refuses an empty password (`mysql -u root`
+              without a password must fail). If it connects, keep the init job on for this upgrade: each new TiDB
+              server waits about 2 minutes before serving, logs a warning, and the job then sets the password.
+          - type: note
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.2.0') < 0 && self.autoCreateDatabase.deployInitWorkload
+            text: The init job now runs only in the first listed location; 2.0.0 and 2.1.0 ran it in every GVC location.
+          # README: Important Notes (the root guard in secret-server-config.yaml, called only with autoCreateDatabase).
+          - type: note
+            text: >-
+              Each TiDB server start makes one root login attempt with an empty password, to confirm root is
+              protected. If you set `FAILED_LOGIN_ATTEMPTS` on root, set it above your total number of TiDB
+              servers.
+            textExpression: >-
+              'Each TiDB server start makes one root login attempt with an empty password, to confirm root is
+              protected. If you set `FAILED_LOGIN_ATTEMPTS` on root, set it above ' +
+              string(sum(self.locations.map(l, l.serverReplicas == null ? 0 : l.serverReplicas))) +
+              ', your total number of TiDB servers.'
           - path: autoCreateDatabase.credentialsSecretName
             type: ref
             label: Credentials secret
             required: true
             description: A dictionary secret with the keys `rootPassword`, `user`, `password` and `db`.
+            help: >-
+              `user` must be 1 to 32 characters and `db` 1 to 64 characters, not ending in a space; otherwise
+              the TiDB servers refuse to start and name the key. Secret names are org-wide, so give each release
+              its own. The values apply when the cluster is first initialized only: to rotate a password, run
+              `ALTER USER` first, then update the secret and force a redeployment of the TiDB servers (and of
+              ProxySQL when it is on).
             docs: "#prerequisites"
             ref:
               kind: secret
@@ -159,102 +271,86 @@ steps:
                 suggestName: "context.releaseName + '-tidb-credentials'"
           - path: autoCreateDatabase.deployInitWorkload
             type: boolean
-            label: Run the initialization job
+            label: Deploy the init backstop job
             description: >-
-              A backstop that sets the root password and creates the application database and user if
-              they are missing. A fresh install already does this while the cluster bootstraps; the job
-              matters for clusters created before 2.2.0. Turn it off once the database is initialized.
+              A cron job in the first listed location that sets the root password and creates the database and
+              user if they are missing. A fresh install finds the work done; turn it off once the cluster is
+              initialized.
           - path: autoCreateDatabase.schedule
             type: string
             format: cron
-            label: Initialization job schedule (UTC)
+            label: Init job schedule (UTC)
             required: true
-            advanced: true
             when: self.autoCreateDatabase.deployInitWorkload
-            description: How soon after install the database appears; later runs exit at once.
+            description: >-
+              The job exits at once when the database exists, so this only sets how soon after install it
+              checks.
         rules:
-          - rule: >-
-              self.autoCreateDatabase.credentialsSecretName != null &&
-              self.autoCreateDatabase.credentialsSecretName != ''
-            mirrors: tidb.validate
-            paths: [autoCreateDatabase.credentialsSecretName]
-            message: The credentials secret is required.
           - rule: "!has(self.autoCreateDatabase.database)"
             mirrors: tidb.validate
             paths: [autoCreateDatabase.credentialsSecretName]
             message: >-
-              autoCreateDatabase.database was removed in 2.0.0. Put rootPassword, user, password and db
-              in the dictionary secret, and remove the block from the values.
+              autoCreateDatabase.database was removed in 1.8.0. Put rootPassword, user, password and db in the
+              dictionary secret and remove the block from the values.
+          # README: Important Notes ("Credentials apply on first initialization only").
           - rule: >-
-              oldSelf == null ||
+              oldSelf == null || !oldSelf.autoCreateDatabase.enabled ||
               self.autoCreateDatabase.credentialsSecretName == oldSelf.autoCreateDatabase.credentialsSecretName
             severity: info
             paths: [autoCreateDatabase.credentialsSecretName]
             message: >-
-              The database and users are created once; pointing at another secret does not change the
-              existing passwords.
+              The credentials apply when the cluster is first initialized only; another secret does not change
+              the existing users or passwords. Change them with `ALTER USER` first so they match the secret.
+          # README: Upgrading from 2.1.0.
+          - when: context.fromVersion != null && semverCompare(context.fromVersion, '2.2.0') < 0
+            rule: self.autoCreateDatabase.deployInitWorkload
+            severity: info
+            paths: [autoCreateDatabase.deployInitWorkload]
+            message: >-
+              Keep the init job on for this upgrade unless root already refuses an empty password: on a cluster
+              whose root has no password, the job is what sets it.
 
-  - id: resources
-    title: Resources and storage
-    description: Compute per replica of each tier, and the volumes of PD and TiKV.
-    docs: "#images-and-resources"
+  - id: storage
+    title: Storage
+    description: The TiKV and PD volume sets, their snapshots, and optional TiKV autoscaling.
+    docs: "#storage"
     sections:
-      - fields:
-          - path: resources.pd
-            type: resources
-            label: PD resources
-            required: true
-            description: Per PD member.
-          - path: resources.tikv
-            type: resources
-            label: TiKV resources
-            required: true
-            description: Per TiKV node. TiKV caches heavily, so memory matters most.
-          - path: resources.server
-            type: resources
-            label: TiDB server resources
-            required: true
-            description: Per TiDB server; it scales with concurrent connections.
-      - title: Storage
-        docs: "#storage"
+      - id: tikv-storage
+        title: TiKV volumes
+        description: One volume per TiKV node.
         fields:
+          # README: Upgrading from 2.1.0 ("Volume snapshots start").
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.2.0') < 0
+            text: >-
+              Volume snapshots start with this version: every TiKV and PD volume is snapshotted daily at 03:00
+              UTC and kept for 7 days. Clear both snapshot schedules to keep them off.
           - path: volumeset.tikv.capacity
             type: integer
             label: TiKV initial capacity
+            required: true
+            docs: "/reference/volumeset#capacity-and-billing"
             unit: GiB
             min: 10
-            required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
-            description: Per TiKV node.
-            help: Uninstalling the release deletes the volume sets with the data.
-          - path: volumeset.pd.capacity
-            type: integer
-            label: PD capacity
-            unit: GiB
-            min: 10
-            required: true
-            suggestions: [10, 20, 50]
-            description: Per PD member. PD holds only cluster metadata.
           - path: volumeset.tikv.snapshots.schedule
             type: string
             format: cron
             label: TiKV snapshot schedule (UTC)
-            description: Volume snapshots of every TiKV node. Leave empty to turn them off.
+            description: Leave empty to turn snapshots off.
+            help: >-
+              Snapshots are per volume and crash-consistent: they protect against losing a single volume. Restore
+              a whole cluster from a backup instead.
+            docs: "/reference/volumeset#snapshots"
+            pattern: '^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$'
+            patternMessage: Use 5 fields with one fixed minute, such as `0 3 * * *`; snapshots run at most hourly.
           - path: volumeset.tikv.snapshots.retentionDuration
             type: string
             format: duration
             label: Keep TiKV snapshots for
-            required: true
-            placeholder: 7d
-          - path: volumeset.pd.snapshots.schedule
-            type: string
-            format: cron
-            label: PD snapshot schedule (UTC)
-            description: Volume snapshots of every PD member. Leave empty to turn them off.
-          - path: volumeset.pd.snapshots.retentionDuration
-            type: string
-            format: duration
-            label: Keep PD snapshots for
             required: true
             placeholder: 7d
       - id: tikv-autoscaling
@@ -265,24 +361,24 @@ steps:
           - path: volumeset.tikv.autoscaling.maxCapacity
             type: integer
             label: Maximum capacity
+            required: true
             unit: GiB
             min: 10
-            required: true
             suggestions: [50, 100, 250, 500, 1000, 2000]
           - path: volumeset.tikv.autoscaling.minFreePercentage
             type: integer
             label: Scale up below this free space
+            required: true
             unit: "%"
             min: 1
             max: 100
-            required: true
             suggestions: [10, 20, 30]
           - path: volumeset.tikv.autoscaling.scalingFactor
             type: number
             label: Scaling factor
+            required: true
             min: 1.1
             step: 0.1
-            required: true
             suggestions:
               - { value: 1.1, label: "1.1×" }
               - { value: 1.2, label: "1.2× (default)" }
@@ -292,6 +388,35 @@ steps:
           - rule: self.volumeset.tikv.autoscaling.maxCapacity >= self.volumeset.tikv.capacity
             paths: [volumeset.tikv.autoscaling.maxCapacity]
             message: The maximum capacity must be at least the TiKV initial capacity.
+      - id: pd-storage
+        title: PD volumes
+        description: One volume per PD member. PD holds only cluster metadata, so it has no autoscaling.
+        fields:
+          - path: volumeset.pd.capacity
+            type: integer
+            label: PD initial capacity
+            required: true
+            docs: "/reference/volumeset#capacity-and-billing"
+            unit: GiB
+            min: 10
+            suggestions: [10, 20, 50, 100]
+          - path: volumeset.pd.snapshots.schedule
+            type: string
+            format: cron
+            label: PD snapshot schedule (UTC)
+            description: Leave empty to turn snapshots off.
+            help: >-
+              Snapshots are per volume and crash-consistent: they protect against losing a single volume. Restore
+              a whole cluster from a backup instead.
+            docs: "/reference/volumeset#snapshots"
+            pattern: '^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$'
+            patternMessage: Use 5 fields with one fixed minute, such as `0 3 * * *`; snapshots run at most hourly.
+          - path: volumeset.pd.snapshots.retentionDuration
+            type: string
+            format: duration
+            label: Keep PD snapshots for
+            required: true
+            placeholder: 7d
     rules:
       - rule: oldSelf == null || self.volumeset.tikv.capacity >= oldSelf.volumeset.tikv.capacity
         paths: [volumeset.tikv.capacity]
@@ -300,72 +425,168 @@ steps:
         paths: [volumeset.pd.capacity]
         message: A volume set cannot shrink. Keep the PD capacity at or above the installed size.
       - rule: >-
-          self.volumeset.tikv.snapshots.schedule == null || self.volumeset.tikv.snapshots.schedule == '' ||
-          self.volumeset.tikv.snapshots.schedule.trim().matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$')
+          self.volumeset.tikv.snapshots.schedule != null && (self.volumeset.tikv.snapshots.schedule == '' ||
+          self.volumeset.tikv.snapshots.schedule.matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$'))
         mirrors: tidb.validateSnapshots
         paths: [volumeset.tikv.snapshots.schedule]
+        # The chart reads a null schedule as the text "<nil>" and fails, so null is refused as well.
         message: >-
-          Snapshots cannot run more often than hourly: use a single fixed minute, for example
-          "0 3 * * *" for daily at 03:00 UTC.
+          The TiKV snapshot schedule must be a 5-field cron with one fixed minute (snapshots run at most
+          hourly), or "" to turn snapshots off.
       - rule: >-
-          self.volumeset.pd.snapshots.schedule == null || self.volumeset.pd.snapshots.schedule == '' ||
-          self.volumeset.pd.snapshots.schedule.trim().matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$')
+          self.volumeset.pd.snapshots.schedule != null && (self.volumeset.pd.snapshots.schedule == '' ||
+          self.volumeset.pd.snapshots.schedule.matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$'))
         mirrors: tidb.validateSnapshots
         paths: [volumeset.pd.snapshots.schedule]
         message: >-
-          Snapshots cannot run more often than hourly: use a single fixed minute, for example
-          "0 3 * * *" for daily at 03:00 UTC.
+          The PD snapshot schedule must be a 5-field cron with one fixed minute (snapshots run at most hourly),
+          or "" to turn snapshots off.
 
   - id: access
     title: Access and pooling
-    description: Who can reach each tier, and an optional connection pooler.
+    description: Who can reach each tier, outbound internet access, and an optional ProxySQL pooler.
     docs: "#access"
     sections:
-      - title: TiDB servers
+      - fields:
+          - type: note
+            text: >-
+              Every workload this release creates can always reach every tier; these settings are for your
+              clients. Access changes take up to about 10 minutes to apply.
+      - id: server-access
+        title: TiDB servers
         description: >-
-          The SQL endpoint. This release's own workloads are always allowed; firewall changes take 30
-          seconds to a few minutes to take effect.
+          The MySQL endpoint on port 4000. It takes no public inbound traffic: reach it over internal GVC DNS or
+          `cpln port-forward`.
+        docs: "/reference/workload/firewall"
         fields:
           - path: internal_access.server.type
             type: enum
-            label: Who can connect to the TiDB servers
+            label: Who can reach the TiDB servers
+            widget: cards
+            required: true
+            description: Also applies to the optional ProxySQL pooler.
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: "The workloads listed below, plus this release's own." }
+          - path: internal_access.server.workloads
+            type: list
+            label: TiDB server client workloads
+            widget: tags
+            unique: true
+            required: true
+            when: self.internal_access.server.type == 'workload-list'
+            description: List your clients only; this release's own workloads are always allowed.
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+          # Chart bug (workload-server.yaml prints the list with Go formatting): two entries merge into one
+          # string, and a leading ":" breaks the YAML. maxItems and the item pattern keep the render valid.
+          - path: external_access.server_outboundAllowCIDR
+            type: list
+            label: TiDB server outbound CIDRs
+            widget: tags
+            description: Internet addresses the TiDB servers may connect to, such as `0.0.0.0/0`.
+            maxItems: 1
+            item:
+              type: string
+              format: cidr
+              pattern: '^[^:]'
+              patternMessage: Write a leading `::` with a zero, such as `0::/0`.
+      - id: tikv-access
+        title: TiKV
+        docs: "/reference/workload/firewall"
+        fields:
+          - path: internal_access.tikv.type
+            type: enum
+            label: Who can reach TiKV
             widget: cards
             required: true
             options:
               - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
               - { value: same-org, label: Same org, description: Any workload in this org. }
-              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
-          - path: internal_access.server.workloads
+              - { value: workload-list, label: Specific workloads, description: "The workloads listed below, plus this release's own." }
+          - path: internal_access.tikv.workloads
             type: list
-            label: Client workloads
-            when: self.internal_access.server.type == 'workload-list'
+            label: TiKV client workloads
             widget: tags
-            description: List your clients only.
+            unique: true
+            when: self.internal_access.tikv.type == 'workload-list'
+            description: Leave empty to allow only this release's own workloads.
             item:
               type: ref
               ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
-          - path: external_access.server_outboundAllowCIDR
+          - path: external_access.tikv_outboundAllowCIDR
             type: list
-            label: TiDB server outbound CIDRs
-            advanced: true
-            description: Internet addresses the TiDB servers may reach. None by default.
-            item: { type: string, format: cidr }
+            label: TiKV outbound CIDRs
+            widget: tags
+            description: >-
+              Internet addresses TiKV may connect to. Ignored while backups are on: TiKV then gets `0.0.0.0/0` to
+              upload to the bucket.
+            maxItems: 1
+            item:
+              type: string
+              format: cidr
+              pattern: '^[^:]'
+              patternMessage: Write a leading `::` with a zero, such as `0::/0`.
+      - id: pd-access
+        title: PD
+        docs: "/reference/workload/firewall"
+        fields:
+          - path: internal_access.pd.type
+            type: enum
+            label: Who can reach PD
+            widget: cards
+            required: true
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: "The workloads listed below, plus this release's own." }
+          - path: internal_access.pd.workloads
+            type: list
+            label: PD client workloads
+            widget: tags
+            unique: true
+            when: self.internal_access.pd.type == 'workload-list'
+            description: Leave empty to allow only this release's own workloads.
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+          - path: external_access.pd_outboundAllowCIDR
+            type: list
+            label: PD outbound CIDRs
+            widget: tags
+            description: Internet addresses PD may connect to.
+            maxItems: 1
+            item:
+              type: string
+              format: cidr
+              pattern: '^[^:]'
+              patternMessage: Write a leading `::` with a zero, such as `0::/0`.
       - id: proxysql
         title: Connection pooler (ProxySQL)
         toggle: proxysql.enabled
-        # The docs page gains this heading with the 2.1.0 docs update ("Connection Pooling (ProxySQL)").
-        docs: "#connection-pooling-proxysql"
         description: >-
-          A pooling tier in every location, at `RELEASE-proxysql` on port 4000. With two or more TiDB
-          servers per location it keeps clients connected through a server failure. It uses the
-          credentials secret and the TiDB servers' access settings, and clients must use the utf8mb4
-          character set.
+          A ProxySQL pooler in every location, in front of that location's TiDB servers. Clients connect to
+          `<release>-proxysql` on port 4000 instead of `<release>-server`, with the same users. With 2 or more
+          TiDB servers per location, a server crash then fails no queries.
+        docs: "#connection-pooling-proxysql"
         fields:
+          - type: note
+            text: >-
+              Through ProxySQL, clients must connect with a utf8mb4 charset. Modern drivers default to it; pass
+              `--default-character-set=utf8mb4` to the `mysql` CLI.
+          # README: Upgrading from 2.1.0.
+          - type: note
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.1.0') >= 0 && semverCompare(context.fromVersion, '2.2.0') < 0
+            text: ProxySQL now accepts credentials containing `'`; 2.1.0 silently loaded no users from them.
           - path: proxysql.replicas
             type: integer
-            label: Pooler replicas per location
-            min: 1
+            label: ProxySQL replicas per location
             required: true
+            min: 1
             suggestions: [1, 2, 3]
           - path: proxysql.image
             type: string
@@ -373,133 +594,131 @@ steps:
             label: ProxySQL image
             required: true
             advanced: true
+            pattern: '^.*[/:@].*$'
+            patternMessage: Include a repository path or a tag, such as `proxysql/proxysql:3.0.11`.
           - path: proxysql.resources
             type: resources
             label: ProxySQL resources
             required: true
             advanced: true
-            description: Per pooler replica.
         rules:
           - rule: self.autoCreateDatabase.enabled
             mirrors: tidb.validate
             paths: [proxysql.enabled]
             message: >-
-              ProxySQL authenticates clients with the credentials secret. Turn on "Create the database
-              and user" in the Database step.
-      - title: TiKV and PD
-        description: The storage and placement tiers. Applications connect to the TiDB servers, not to these.
-        fields:
-          - path: internal_access.tikv.type
-            type: enum
-            label: Who can reach TiKV
-            required: true
-            options:
-              - { value: same-gvc, label: Same GVC }
-              - { value: same-org, label: Same org }
-              - { value: workload-list, label: Specific workloads }
-          - path: internal_access.tikv.workloads
-            type: list
-            label: TiKV client workloads
-            when: self.internal_access.tikv.type == 'workload-list'
-            widget: tags
-            item:
-              type: ref
-              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
-          - path: internal_access.pd.type
-            type: enum
-            label: Who can reach PD
-            required: true
-            options:
-              - { value: same-gvc, label: Same GVC }
-              - { value: same-org, label: Same org }
-              - { value: workload-list, label: Specific workloads }
-          - path: internal_access.pd.workloads
-            type: list
-            label: PD client workloads
-            when: self.internal_access.pd.type == 'workload-list'
-            widget: tags
-            item:
-              type: ref
-              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
-          - path: external_access.tikv_outboundAllowCIDR
-            type: list
-            label: TiKV outbound CIDRs
-            advanced: true
-            description: Ignored while backups are on, because TiKV then uploads to the bucket and may reach any address.
-            item: { type: string, format: cidr }
-          - path: external_access.pd_outboundAllowCIDR
-            type: list
-            label: PD outbound CIDRs
-            advanced: true
-            item: { type: string, format: cidr }
+              ProxySQL authenticates clients with the credentials secret. Turn on "Set the root password and
+              create the database" under Database, or turn ProxySQL off.
+          # README: Resiliency ("A ProxySQL replica | proxysql.replicas: 2").
+          - rule: self.proxysql.replicas >= 2
+            severity: info
+            paths: [proxysql.replicas]
+            message: >-
+              With one ProxySQL replica per location, that location has no pooler while the replica restarts;
+              2 or more keep it serving.
 
   - id: backup
     title: Backups
-    description: Scheduled full backups (br) to object storage.
-    docs: "#backup"
+    description: Scheduled full-cluster backups with `br` to object storage.
+    docs: "#backing-up"
     sections:
       - id: backup
         title: Scheduled backups
         toggle: backup.enabled
+        description: >-
+          A cron job in one location runs `br backup full` and writes a full cluster snapshot to S3 or GCS.
+          While it is on, TiKV gets outbound access to `0.0.0.0/0`, because it uploads to the bucket directly.
+        docs: "#backup"
         fields:
           - path: backup.provider
             type: enum
             label: Destination
-            widget: segmented
+            widget: cards
             required: true
             options:
               - { value: aws, label: AWS S3 }
               - { value: gcp, label: Google Cloud Storage }
+          # Chart bug: workload-backup.yaml writes the schedule unquoted, so a value starting with * or @ breaks
+          # the YAML. The pattern keeps the first character a digit.
           - path: backup.schedule
             type: string
             format: cron
             label: Schedule (UTC)
             required: true
+            pattern: '^[0-9]'
+            patternMessage: Start with the minute as a number, such as `0 2 * * *`; write `*/15` as `0-59/15`.
           - path: backup.location
             type: enum
             label: Run the backup job in
             required: true
+            description: The job runs only there. Put it near your bucket to keep transfer costs down.
             optionsFrom: self.locations.filter(l, l.name != '').map(l, l.name)
-            description: The one location the job runs in; put it near your bucket.
-          - path: backup.activeDeadlineSeconds
-            type: integer
-            label: Time limit per backup
-            unit: s
-            min: 1
-            required: true
-            advanced: true
-            suggestions: [3600, 14400, 43200]
           - path: backup.image
             type: string
             format: image
             label: Backup image
             required: true
             advanced: true
-            description: Its version must match the cluster's; update it together with the images.
+            pattern: '^.*[/:@].*$'
+            patternMessage: Include a repository path or a tag, such as `ghcr.io/controlplane-com/backup-images/tidb-backup:8.5.7`.
           - path: backup.resources
             type: resources
             label: Backup job resources
             required: true
             advanced: true
+          - path: backup.activeDeadlineSeconds
+            type: integer
+            label: Backup job time limit
+            required: true
+            advanced: true
+            description: The job is stopped when a run takes longer.
+            unit: seconds
+            min: 1
+            suggestions: [3600, 7200, 14400, 28800]
         rules:
-          - rule: self.backup.location != null && self.backup.location in self.locations.map(l, l.name)
+          - rule: self.backup.location in self.locations.map(l, l.name)
             mirrors: tidb.validateBackupLocation
             paths: [backup.location]
             message: The backup location must be one of the configured locations, or the job never runs.
           - rule: self.backup.provider in ['aws', 'gcp']
             mirrors: tidb.validateBackupConfig
             paths: [backup.provider]
-            message: Choose AWS S3 or Google Cloud Storage.
-      - title: AWS S3
+            message: Choose AWS S3 or Google Cloud Storage as the destination.
+          # README: Backing Up ("The backup image version must match the cluster version"). The backup tag's
+          # version is compared without a packaging suffix (8.5.7-1 counts as 8.5.7).
+          - when: >-
+              self.backup.image != null && self.images.server != null && self.images.tikv != null &&
+              self.images.pd != null && self.backup.image.matches('^[^@]*:v?[0-9][0-9A-Za-z.-]*$')
+            rule: >-
+              (self.images.server.contains('@') ||
+              self.images.server.endsWith(':' + self.backup.image.split(':')[size(self.backup.image.split(':')) - 1].split('-')[0]) ||
+              self.images.server.endsWith(':v' + self.backup.image.split(':')[size(self.backup.image.split(':')) - 1].split('-')[0])) &&
+              (self.images.tikv.contains('@') ||
+              self.images.tikv.endsWith(':' + self.backup.image.split(':')[size(self.backup.image.split(':')) - 1].split('-')[0]) ||
+              self.images.tikv.endsWith(':v' + self.backup.image.split(':')[size(self.backup.image.split(':')) - 1].split('-')[0])) &&
+              (self.images.pd.contains('@') ||
+              self.images.pd.endsWith(':' + self.backup.image.split(':')[size(self.backup.image.split(':')) - 1].split('-')[0]) ||
+              self.images.pd.endsWith(':v' + self.backup.image.split(':')[size(self.backup.image.split(':')) - 1].split('-')[0]))
+            severity: warning
+            paths: [backup.image]
+            message: >-
+              The backup image's version must match the PD, TiKV and TiDB server images: from v8.5.7, `br` refuses
+              a cluster of another version. Change them together.
+      - id: aws
+        title: AWS S3
         when: self.backup.enabled && self.backup.provider == 'aws'
         docs: "#backing-up"
         fields:
+          # Chart bug: the bucket is an unquoted env value, so a name YAML reads as a number, date, boolean or
+          # null (123, 1e3, 2024-01-01, true, null) comes out as another type. The pattern rejects those.
           - path: backup.aws.bucket
             type: string
             label: Bucket
             required: true
             example: true
-            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+            pattern: '^(?!(yes|off|true|false|null)$)(?!0x[0-9a-f]+$)(?!0o[0-7]+$)(?!0b[01]+$)(?![0-9][0-9.]*e-?[0-9]+$)(?=.*[a-z])[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+            patternMessage: >-
+              Use 3 to 63 lowercase letters, digits, dots and dashes, including a letter; a name YAML reads as a
+              number, boolean or null (such as `1e3` or `true`) breaks the chart.
           - path: backup.aws.region
             type: string
             label: Bucket region
@@ -510,7 +729,9 @@ steps:
             type: ref
             label: Cloud account
             required: true
-            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            help: >-
+              An AWS [cloud account](/guides/create-cloud-account). The release's identity uses it with the IAM
+              policy below to reach the bucket.
             ref:
               kind: cloudaccount
               format: name
@@ -522,32 +743,40 @@ steps:
             required: true
             example: true
             description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            help: >-
+              Allow `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket`, `s3:GetObjectVersion`,
+              `s3:DeleteObjectVersion`, `s3:GetBucketLocation`, `s3:AbortMultipartUpload`,
+              `s3:ListBucketMultipartUploads` and `s3:ListMultipartUploadParts` on the bucket and its objects.
+              The full policy is under [Backing up](#backing-up).
           - path: backup.aws.prefix
             type: string
             label: Folder prefix
-            pattern: "^(?!/)"
+            description: Backups land at `<bucket>/<prefix>/tidb-<timestamp>/`.
+            pattern: '^(?!/)'
             patternMessage: Leave out the leading /.
-      - title: Google Cloud Storage
+      - id: gcs
+        title: Google Cloud Storage
         when: self.backup.enabled && self.backup.provider == 'gcp'
         docs: "#backing-up"
         fields:
-          - type: note
-            severity: warning
-            text: >-
-              No Google Cloud Storage backup has completed a verified run on this template. Use AWS S3
-              for data you need to restore.
+          # Chart bug: as for the S3 bucket.
           - path: backup.gcp.bucket
             type: string
             label: Bucket
             required: true
             example: true
+            pattern: '^(?!(yes|off|true|false|null)$)(?!0x[0-9a-f_]+$)(?!0o[0-7_]+$)(?!0b[01_]+$)(?![0-9][0-9._]*e-?[0-9]+$)(?=.*[a-z])[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
+            patternMessage: >-
+              Use lowercase letters, digits, dots, dashes and underscores, including a letter; a name YAML reads as
+              a number, boolean or null (such as `1e3` or `true`) breaks the chart.
           - path: backup.gcp.cloudAccountName
             type: ref
             label: Cloud account
             required: true
             help: >-
-              A GCP [cloud account](/guides/create-cloud-account) whose service account has the
-              Storage Admin role on the bucket.
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the Storage Admin
+              (`roles/storage.admin`) role on the bucket. The chart also binds `roles/storage.objectAdmin` on the
+              bucket to the release's identity.
             ref:
               kind: cloudaccount
               format: name
@@ -556,54 +785,55 @@ steps:
           - path: backup.gcp.prefix
             type: string
             label: Folder prefix
-            pattern: "^(?!/)"
+            description: Backups land at `<bucket>/<prefix>/tidb-<timestamp>/`.
+            pattern: '^(?!/)'
             patternMessage: Leave out the leading /.
 
   - id: advanced
     title: Advanced
-    description: The TiDB, TiKV and PD images.
+    description: The PD, TiKV and TiDB server images.
     docs: "#images-and-resources"
-    sections:
-      - fields:
-          - path: images.server
-            type: string
-            format: image
-            label: TiDB server image
-            required: true
-          - path: images.tikv
-            type: string
-            format: image
-            label: TiKV image
-            required: true
-          - path: images.pd
-            type: string
-            format: image
-            label: PD image
-            required: true
-        rules:
-          - rule: >-
-              oldSelf == null || (self.images.server == oldSelf.images.server &&
-              self.images.tikv == oldSelf.images.tikv && self.images.pd == oldSelf.images.pd)
-            severity: info
-            paths: [images.server]
-            message: >-
-              Changing an image restarts that tier. Keep the three images on one TiDB version, and the
-              backup image on the same version when backups are on.
+    # Chart bug: every image is written unquoted, so a value YAML reads as null, a boolean or a number (null,
+    # true, 1e3) comes out as another type. The patterns require a repository path, a tag or a digest.
+    fields:
+      - path: images.server
+        type: string
+        format: image
+        label: TiDB server image
+        required: true
+        pattern: '^.*[/:@].*$'
+        patternMessage: Include a repository path or a tag, such as `pingcap/tidb:v8.5.7`.
+      - path: images.tikv
+        type: string
+        format: image
+        label: TiKV image
+        required: true
+        pattern: '^.*[/:@].*$'
+        patternMessage: Include a repository path or a tag, such as `pingcap/tikv:v8.5.7`.
+      - path: images.pd
+        type: string
+        format: image
+        label: PD image
+        required: true
+        pattern: '^.*[/:@].*$'
+        patternMessage: Include a repository path or a tag, such as `pingcap/pd:v8.5.7`.
 
 rules:
+  # README: Migrating from 1.x.
   - rule: context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '2.0.0') >= 0
     message: >-
-      Do not upgrade a 1.x release to 2.x: the upgrade deletes the GVC that the 1.x chart created,
-      with all its data. Install this version as a new release, restore your data with br, then
-      uninstall the old release.
+      Do not upgrade a 1.x release in place: 1.x created its own GVC, and the upgrade deletes it with every
+      workload, volume set and identity inside, including your data. Install this version as a new release
+      with another name, restore a `br` backup into it, then uninstall the old release.
   - rule: "!has(self.gvc)"
     mirrors: tidb.validateNoLegacyGvc
     message: >-
-      The gvc key was removed in 2.0.0: the chart deploys into the GVC you install into, and
-      gvc.locations and gvc.pdReplicas moved to locations and pdReplicas. Remove gvc from the values.
+      The gvc key was removed in 2.0.0: the chart deploys into the GVC you install into, and gvc.locations and
+      gvc.pdReplicas moved to locations and pdReplicas. Remove gvc from the values.
   - rule: "!has(self.devMode)"
     mirrors: tidb.validateNoDevMode
-    message: devMode was removed in 2.0.0; a single location is allowed without it. Remove devMode from the values.
+    message: >-
+      devMode was removed in 2.0.0: a single location needs no waiver any more. Remove devMode from the values.
   - rule: "!has(self.exposeServer)"
     mirrors: tidb.validateNoExposeServer
     message: >-
@@ -611,12 +841,39 @@ rules:
       internal GVC DNS or `cpln port-forward`, and remove exposeServer from the values.
 
 migrations:
-  # 2.1.0 split each location's `replicas` into tikvReplicas and serverReplicas, and the chart refuses
-  # the old key. Carry the installed shape exactly, whatever the release set.
+  # README: Upgrading from 2.0.0 (replace replicas: N with tikvReplicas: N and serverReplicas: N).
+  # replicas is not an item field of this version, so has() tells a 2.0.0 entry from one already split.
   - fromVersions: ">=2.0.0 <2.1.0"
     to: locations
     valueExpr: >-
-      self.locations.map(l, {'name': l.name,
-      'tikvReplicas': has(l.replicas) ? l.replicas : 3,
-      'serverReplicas': has(l.replicas) ? l.replicas : 3})
-    note: Each location's replicas became tikvReplicas and serverReplicas, both set to the installed count.
+      self.locations.map(l, has(l.replicas) ?
+      {'name': l.name, 'tikvReplicas': l.replicas, 'serverReplicas': l.replicas} : l)
+    note: 2.1.0 split each location's replicas into TiKV nodes and TiDB servers; both keep the installed count.
+  # 1.x releases cannot upgrade in place (root rule above); these say where each 1.x key went.
+  - fromVersions: "<2.0.0"
+    from: gvc.locations
+    note: >-
+      gvc.locations moved to locations in 2.0.0, and 2.1.0 split each location's replicas into TiKV nodes
+      and TiDB servers; set them under Cluster.
+  - { fromVersions: "<2.0.0", from: gvc.pdReplicas, to: pdReplicas }
+  - fromVersions: "<2.0.0"
+    from: gvc.name
+    note: 2.0.0 deploys into the GVC you install into and no longer creates one.
+  - fromVersions: "<2.0.0"
+    from: devMode
+    note: devMode was removed in 2.0.0; a single location needs no waiver any more.
+  - fromVersions: "<2.0.0"
+    from: exposeServer
+    note: exposeServer was removed in 2.0.0; reach the TiDB servers over internal GVC DNS or cpln port-forward.
+  - fromVersions: "<1.8.0"
+    from: autoCreateDatabase.database
+    note: The credentials moved to a dictionary secret with the keys rootPassword, user, password and db; choose it under Database.
+  - fromVersions: "<1.2.0"
+    from: database
+    note: The credentials moved to a dictionary secret with the keys rootPassword, user, password and db; choose it under Database.
+  - fromVersions: "<1.2.0"
+    from: internal_access.type
+    note: Access is now set per tier; choose it for the TiDB servers, TiKV and PD under Access and pooling.
+  - fromVersions: "<1.2.0"
+    from: internal_access.workloads
+    note: Access is now set per tier; list the client workloads for each tier under Access and pooling.

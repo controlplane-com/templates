@@ -12,7 +12,7 @@ steps:
     description: Which server both tiers run, and how many Redis nodes and Sentinels.
     sections:
       - title: Engine
-        docs: "#redis-or-valkey-engine"
+        docs: "#engine"
         fields:
           - type: note
             severity: warning
@@ -324,7 +324,9 @@ steps:
             required: true
             immutable: true
             advanced: true
-            options: [ext4, xfs]
+            options:
+              - { value: ext4, label: ext4 }
+              - { value: xfs, label: XFS }
           - path: redis.persistence.volumes.data.snapshots
             type: object
             optional: true
@@ -456,7 +458,9 @@ steps:
             required: true
             immutable: true
             advanced: true
-            options: [ext4, xfs]
+            options:
+              - { value: ext4, label: ext4 }
+              - { value: xfs, label: XFS }
           - path: sentinel.persistence.volumes.data.snapshots
             type: object
             optional: true
@@ -565,7 +569,21 @@ steps:
             widget: tags
             item:
               type: ref
-              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.redis.firewall.internal_inboundAllowType == 'same-gvc'
+            rules:
+              - when: self.redis.firewall.internal_inboundAllowType == 'same-gvc' && context.gvc != null && has(self.redis.firewall.inboundAllowWorkload)
+                rule: "!self.redis.firewall.inboundAllowWorkload.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+                severity: info
+                messageExpression: >-
+                  'Same GVC already allows every workload in this GVC: ' +
+                  self.redis.firewall.inboundAllowWorkload.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+                  ' can be removed from the list.'
+                message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
           - path: redis.firewall.external_inboundAllowCIDR
             type: list
             absent: true
@@ -590,7 +608,7 @@ steps:
         title: Public TCP access to Redis
         toggle: redis.publicAccess.enabled
         description: Publishes one port per Redis node, from 6380, and forces per-replica endpoints.
-        docs: "#public-access"
+        docs: "#public-access-and-firewall"
         fields:
           - path: redis.publicAccess.address
             type: string
@@ -624,7 +642,21 @@ steps:
             widget: tags
             item:
               type: ref
-              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.sentinel.firewall.internal_inboundAllowType == 'same-gvc'
+            rules:
+              - when: self.sentinel.firewall.internal_inboundAllowType == 'same-gvc' && context.gvc != null && has(self.sentinel.firewall.inboundAllowWorkload)
+                rule: "!self.sentinel.firewall.inboundAllowWorkload.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+                severity: info
+                messageExpression: >-
+                  'Same GVC already allows every workload in this GVC: ' +
+                  self.sentinel.firewall.inboundAllowWorkload.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+                  ' can be removed from the list.'
+                message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
           - path: sentinel.firewall.external_inboundAllowCIDR
             type: list
             absent: true
@@ -649,7 +681,7 @@ steps:
         title: Public TCP access to Sentinel
         toggle: sentinel.publicAccess.enabled
         description: Publishes one port per Sentinel, from 26380, and forces per-replica endpoints.
-        docs: "#public-access"
+        docs: "#public-access-and-firewall"
         fields:
           - path: sentinel.publicAccess.address
             type: string
@@ -675,6 +707,12 @@ steps:
           context.releaseName + '-redis, //gvc/' + context.gvc + '/workload/' + context.releaseName + '-sentinel' +
           (self.backup.enabled ? ' and //gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis-backup' : '') +
           ', or replication, failover and backups cannot reach Redis.'
+        fix:
+          path: redis.firewall.inboundAllowWorkload
+          items: >-
+            ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis',
+            '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-sentinel'] +
+            (self.backup.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis-backup'] : [])
         message: >-
           The chart does not add its own workloads to the list. Add the Redis, Sentinel and (with backups)
           backup workloads, or they cannot reach Redis.
@@ -688,6 +726,11 @@ steps:
           'The chart does not add its own workloads to the list. Add //gvc/' + context.gvc + '/workload/' +
           context.releaseName + '-sentinel and //gvc/' + context.gvc + '/workload/' + context.releaseName +
           '-redis, or Sentinels and Redis nodes cannot reach Sentinel.'
+        fix:
+          path: sentinel.firewall.inboundAllowWorkload
+          items: >-
+            ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-sentinel',
+            '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis']
         message: >-
           The chart does not add its own workloads to the list. Add the Sentinel and Redis workloads, or they
           cannot reach Sentinel.
@@ -847,7 +890,7 @@ steps:
         description: >-
           Adds a redis_exporter sidecar; metrics are scraped from :9121/metrics. Authentication is wired
           automatically.
-        docs: "#metrics"
+        docs: "#metrics-exporter"
         fields:
           - path: redis.exporter.dropMetrics
             type: list
@@ -1057,7 +1100,12 @@ steps:
                 item:
                   type: enum
                   options:
-                    [connect-failure, refused-stream, unavailable, cancelled, resource-exhausted, retriable-status-codes]
+                    - { value: connect-failure, label: connect-failure }
+                    - { value: refused-stream, label: refused-stream }
+                    - { value: unavailable, label: unavailable }
+                    - { value: cancelled, label: cancelled }
+                    - { value: resource-exhausted, label: resource-exhausted }
+                    - { value: retriable-status-codes, label: retriable-status-codes }
         rules:
           - rule: >-
               self.engine != 'valkey' || self.redis.extraArgs == null ||
@@ -1117,7 +1165,12 @@ steps:
                 item:
                   type: enum
                   options:
-                    [connect-failure, refused-stream, unavailable, cancelled, resource-exhausted, retriable-status-codes]
+                    - { value: connect-failure, label: connect-failure }
+                    - { value: refused-stream, label: refused-stream }
+                    - { value: unavailable, label: unavailable }
+                    - { value: cancelled, label: cancelled }
+                    - { value: resource-exhausted, label: resource-exhausted }
+                    - { value: retriable-status-codes, label: retriable-status-codes }
 
 yamlOnly:
   - path: grafana

@@ -125,18 +125,24 @@ Values seed the config on first boot. Afterwards a `helm upgrade` re-applies `mo
 | HTTP API (`httpApi.enabled`) | `http://RELEASE-openclaw.GVC.cpln.local:18789/v1/chat/completions` | `Authorization: Bearer <gateway-token>` **plus** `X-Forwarded-For` with a non-loopback address (e.g. `X-Forwarded-For: 10.0.0.1`; `127.0.0.1` is refused), else `403 proxy_attribution_required` |
 | CLI | `cpln workload exec RELEASE-openclaw --gvc GVC --container openclaw -- sh -c 'cd /app && node openclaw.mjs <command>'` | — |
 
-**Approve a new browser on the public endpoint.** After you enter the token the page shows "pairing required". Run:
+**First login on the public endpoint.** Read your token back, open the Control UI and paste it in:
+
+```bash
+cpln secret reveal SECRET-NAME -o json | jq -r '.data["gateway-token"]'
+```
+
+The page then shows **Approve this browser** with a request ID. Approve it (`devices list` shows the pending request if you need to check it):
 
 ```bash
 cpln workload exec RELEASE-openclaw --gvc GVC --container openclaw -- sh -c 'cd /app && node openclaw.mjs devices list'
 cpln workload exec RELEASE-openclaw --gvc GVC --container openclaw -- sh -c 'cd /app && node openclaw.mjs devices approve REQUEST-ID'
 ```
 
-The waiting page connects by itself within seconds. Port-forward is fine for setup, but browser tabs through the tunnel can freeze — use the public endpoint or a custom domain day to day.
+The waiting page connects by itself within seconds. Approvals live on the volume: they survive restarts and upgrades, but a reinstall asks again. Port-forward is fine for setup, but browser tabs through the tunnel can freeze — use the public endpoint or a custom domain day to day.
 
 **Link WhatsApp** (`channels.whatsapp.enabled: true`): open the Control UI over the public endpoint → **Settings → Channels → WhatsApp → Show QR**, then on the phone *Settings → Linked devices → Link a device*. The image does not refresh — click **Show QR** again after ~60 s. Do not abandon a half-done setup tab; it blocks a new one for ~5 minutes. For a private install, print the QR in a terminal instead: `… sh -c 'cd /app && node openclaw.mjs channels login --channel whatsapp'`. Use a dedicated number: this is unofficial WhatsApp Web, and accounts can be banned.
 
-**Custom domain:** create a Control Plane domain routed to port `18789` of `RELEASE-openclaw`, then set `publicAccess.origin` to its https origin (e.g. `https://assistant.example.com`). The canonical endpoint is then refused by the origin check.
+**Custom domain:** create a Control Plane domain routed to port `18789` of `RELEASE-openclaw`, then set `publicAccess.origin` to its https origin (e.g. `https://assistant.example.com`). The canonical endpoint is then refused by the origin check. After an uninstall and reinstall, delete and recreate the domain: it does not rebind to the new workload by itself.
 
 ## Connecting Control Plane tools (MCP)
 

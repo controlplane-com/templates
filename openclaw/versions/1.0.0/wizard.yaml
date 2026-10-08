@@ -195,8 +195,9 @@ steps:
         fields:
           - type: note
             text: >-
-              Callers inside the GVC must also send an `X-Forwarded-For` header (any value), or the
-              Gateway answers `403 proxy_attribution_required`.
+              Callers inside the GVC must also send an `X-Forwarded-For` header with a non-loopback
+              address (e.g. `10.0.0.1`; `127.0.0.1` is refused), or the Gateway answers
+              `403 proxy_attribution_required`.
 
   - id: storage
     title: Resources and storage
@@ -211,7 +212,7 @@ steps:
             min: 10
             required: true
             description: Config, chat sessions, plugins, memory and the agent's workspace.
-            help: Uninstalling the release deletes the volume set; a final snapshot is kept.
+            help: Uninstalling the release deletes the volume set and all of the assistant's state.
             docs: "/reference/volumeset#capacity-and-billing"
             suggestions: [10, 20, 50, 100, 250]
           - path: backup.retention
@@ -219,7 +220,7 @@ steps:
             format: duration
             label: Snapshot retention
             required: true
-            description: How long each snapshot is kept, the final snapshot taken at uninstall included.
+            description: How long each snapshot is kept.
             suggestions: [7d, 14d, 30d]
           - path: resources
             type: resources
@@ -317,6 +318,14 @@ steps:
             mirrors: openclaw.validate
             paths: [backup.schedule]
             message: The snapshot schedule is required.
+          - rule: >-
+              self.backup.schedule == null || self.backup.schedule == '' ||
+              self.backup.schedule.trim().matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$')
+            mirrors: openclaw.validate
+            paths: [backup.schedule]
+            message: >-
+              Snapshots cannot run more often than hourly: use a single fixed minute, for example
+              "0 3 * * *" for daily at 03:00 UTC.
 
   - id: access
     title: Access

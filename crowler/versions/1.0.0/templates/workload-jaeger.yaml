@@ -1,0 +1,47 @@
+{{- if .Values.jaeger.enabled }}
+---
+kind: workload
+name: {{ include "crowler.jaeger.name" . }}
+description: CROWler browser-session tracing — Jaeger all-in-one, in-memory
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "crowler.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: jaeger
+      image: {{ .Values.images.jaeger }}
+      inheritEnv: false
+      cpu: {{ .Values.jaeger.resources.cpu | quote }}
+      memory: {{ .Values.jaeger.resources.memory | quote }}
+      env:
+        - name: SPAN_STORAGE_TYPE
+          value: memory
+      ports:
+        - number: 4317
+          protocol: grpc
+        - number: 16686
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /
+          port: 16686
+          scheme: HTTP
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        failureThreshold: 12
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions: {{- include "crowler.fixedScale" 1 | nindent 4 }}
+  firewallConfig:
+    {{- include "crowler.firewall.external" (list . false) | nindent 4 }}
+    internal:
+      # Only the browser nodes export traces.
+      inboundAllowType: workload-list
+      inboundAllowWorkload:
+        - {{ include "crowler.workloadLink" (list . (include "crowler.vdi.name" .)) }}
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  supportDynamicTags: false
+{{- end }}

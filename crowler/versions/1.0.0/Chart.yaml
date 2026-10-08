@@ -1,0 +1,19 @@
+apiVersion: v2
+name: crowler
+description: Real-browser web crawling, scraping and content-discovery platform
+type: application
+version: 1.0.0
+appVersion: "2.1.8"
+
+annotations:
+  created: "2026-10-01"
+  lastModified: "2026-10-06"
+  createsGvc: false
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+  - name: postgres
+    version: 3.4.1
+    repository: "oci://ghcr.io/controlplane-com/templates"

@@ -1,0 +1,26 @@
+---
+{{- /*
+  One identity is shared by the CROWler workloads (chatwoot precedent): their
+  secret needs overlap almost entirely. Note all containers in a workload share
+  the identity, so it can reveal the superuser secret even though only the
+  schema-loader sidecar receives those values in its environment.
+*/}}
+kind: policy
+name: {{ include "crowler.policy.name" . }}
+description: CROWler secret access
+tags: {{- include "crowler.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "crowler.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "crowler.secret.creds.name" . }}
+  - //secret/{{ include "crowler.secret.db.name" . }}
+  - //secret/{{ include "crowler.secret.start.name" . }}
+  - //secret/{{ include "crowler.secret.schema.name" . }}
+  - //secret/{{ include "crowler.secret.configMounted.name" . }}
+  {{- if .Values.vdi.vncSecretName }}
+  - //secret/{{ .Values.vdi.vncSecretName }}
+  {{- end }}

@@ -895,14 +895,14 @@ steps:
                   label: Downloader image
                   advanced: true
                   placeholder: busybox:1.37.0-musl
-                  description: Needs busybox `sh`, `wget`, `nc` (with `-e`), `ssl_client`, `unzip`, `tar`, `sha256sum`, `sed`, `base64`, `tr`, `head` and `mktemp`.
+                  description: Needs busybox `sh`, `wget`, `nc` (with `-e`), `ssl_client`, `setsid`, `stat`, `unzip`, `tar`, `sha256sum`, `sed`, `base64`, `tr`, `head` and `mktemp`.
                 - path: downloader_cpu
                   type: quantity
                   quantity: cpu
                   label: Downloader CPU
                   advanced: true
                   placeholder: 80m
-                  description: Downloads are CPU-bound at the default 80m; raise it for large artifacts.
+                  description: Downloads are CPU-bound at the default 80m. Set 250m for artifacts of 50 MB or more (about 3x faster).
                 - path: verbose
                   type: boolean
                   label: Verbose logs

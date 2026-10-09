@@ -57,15 +57,38 @@ non-working `your-…` placeholders.
 - **Degraded start is sticky per replica**: the marker is cleared only by a new replica, so a Connect-only
   restart starts at once (no second timeout) and still loads old and new copies of a changed plugin; a
   `force-redeployment` loads the late plugin and lets cleanup run. REST restart never rescans.
-- **First start after ≤ 4.2.x re-downloads every plugin once per replica** with Connect waiting.
+- **First start after ≤ 4.2.x re-downloads every plugin once per replica** with Connect waiting. Measured
+  (Snowflake 3 jars + 4 small, 80m): ~80 s wait per replica, replicas roll one at a time, ~7 min for 3
+  replicas, well inside the 900 s default. Later restarts wait 0-5 s, then ~40 s JVM to REST.
+- **`downloader_cpu`: 80m is the default only to keep 4.2.0's footprint**; recommend 250m for artifacts
+  ≥ 50 MB. Fetch + verify of a 183 MB jar: 73 s at 80m, 25 s at 250m, 13 s at 500m (60 MB https: 24/8/4 s).
 - **`ready: true` while Connect waits** (no probe by design). Read the `kafka-connect` log.
 - **busybox wget skips TLS validation** (`sha256` is the control) and forwards URL credentials to every redirect
   target, so URLs with credentials bypass it: one raw request (`nc`, plus `ssl_client` for https) to the URL's own
   host, same-host redirects keep the credentials, any other host is fetched by wget without them. The request
-  file (it holds the Authorization header) lives in a mode-700 `/tmp` dir, never on the volume; the de-chunker
-  relies on busybox `head -c` reading exactly N bytes from a shared descriptor.
+  file (it holds the Authorization header) lives in a mode-700 `/tmp` dir, never on the volume. nc runs a
+  small `sh` program on the socket (`-e`, never a half-close) that splits off the head and streams the body
+  straight to the staging file (one write; only a chunked body is copied, by the de-chunker, which relies on
+  busybox `head -c` reading exactly N bytes from a shared descriptor). The request runs under `setsid`, and
+  the 60 s idle watchdog (real seconds, size via `stat`) kills the whole process group.
+- **History of that path (fixed before release):** D1, credentialed `http://` never downloaded on the
+  platform: busybox nc half-closes at stdin EOF, and the sidecar on an `http` port then drops the response
+  (0 B; plain and https URLs were fine). D2, credentialed https ran ~2.2x slower than wget at 80m: the
+  watchdog ran `wc -c` (reads the whole file, ~20 s at 183 MB) every second and counted iterations, so
+  "60 s" stretched to minutes, and the body was copied once more after download. D3, a timeout inside the
+  first pass printed `unknown`; `pending` now names the artifact being downloaded and how many are unchecked.
 - **Logs are credential-free**: URLs redacted, connector configs logged as key names only, `verbose` adds
   downloader detail only. URLs remain readable in the `-download` secret and `ps`.
 - **Connect scans `.cpln-downloads` as a plugin location**; harmless unless started degraded mid-extraction.
-- **Plugin or chart changes restart every Connect replica**; a chart bump rolls the brokers too. Task
-  reassignment after a lost worker waits 5 min. Not measured yet: data gaps, `downloader_cpu` timings, rollback.
+- **Plugin or chart changes restart every Connect replica**; a chart bump rolls the brokers too (single test
+  broker: 144 s gap). A rolling Connect restart costs a task ~4 s when it migrates, and up to several minutes
+  (208 s measured) when its own worker is the one restarting (Kafka's delayed reassignment); that depends on
+  task placement, not chart version. A hung (SIGSTOPped) worker's task moved in ~10 s, not 5 min; after
+  resume both owners committed offsets once, so duplicates are possible.
+- **SIGTERM:** the downloader stops at once (exit 143); replica turnaround 60-65 s vs 64-70 s on 4.2.0. The
+  `replica stop` API delivers TERM ~45 s after the call.
+- **Rollback to 4.2.x works** (connectors stay RUNNING), but 4.2.x writes `<plugin>/<plugin>.jar` again
+  beside the 4.3.0 `<plugin>/<key>/` dirs (one classloader), re-extracts archives at the folder root, and its
+  60 s startup race returns. Re-upgrading retires those files again.
+- **Stock `apache/kafka:3.9.1` ships `connect-file-3.9.1.jar` in `/opt/kafka/libs`**, so FileStream always
+  resolves from the classpath; test plugin loading with another connector (e.g. Datagen).

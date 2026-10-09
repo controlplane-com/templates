@@ -268,8 +268,8 @@ kafka_connectors:
     plugins_wait_timeout_seconds: 900 # How long Kafka Connect waits for plugin downloads; 0 = wait forever
     plugins_wait_timeout_action: start # start = start without the missing plugins (logged as WARNING) / restart = exit and wait again
     plugins_redownload_token: "" # Change to any new value to download every plugin again on the next restart
-    downloader_image: busybox:1.37.0-musl # Needs busybox sh, wget, nc (-e), ssl_client, unzip, tar, sha256sum, sed, base64, tr, head and mktemp
-    downloader_cpu: 80m # Raise for large artifacts: downloads are CPU-bound at 80m
+    downloader_image: busybox:1.37.0-musl # Needs busybox sh, wget, nc (-e), ssl_client, setsid, stat, unzip, tar, sha256sum, sed, base64, tr, head and mktemp
+    downloader_cpu: 80m # Set 250m for artifacts of 50 MB or more: about 3x faster than 80m
     plugins:
       - name: snowflake-sink
         enabled: true # Required for a download; without it the connector is still created
@@ -287,7 +287,7 @@ kafka_connectors:
 - **If an artifact is still missing at the timeout**, `start` starts Kafka Connect without it and the `kafka-connect` log shows `WARNING: connector plugins not ready … WITHOUT:` with the list. When the download later succeeds, the downloader logs that the worker must be restarted: run `cpln workload force-redeployment`. Until then, a restart of only the `kafka-connect` container starts at once without waiting, and still loads both the old and the new copy of a changed plugin, because cleanup waits for a new replica.
 - **Volume space:** every installed artifact, plus room to download and unpack the largest one. When an artifact URL changes, the old and new copies both stay until the pass succeeds.
 - **Credentials in an artifact URL are sent only to that URL's host.** A redirect to another host (such as a presigned storage URL) is followed without them. TLS certificates are not validated, so the credentials are only as private as the network path: use `sha256` and trusted networks.
-- **A custom `downloader_image`** must provide the busybox applets listed above, including `nc` with `-e` and `ssl_client` (used for URLs with credentials), and a `head -c` that reads exactly the requested bytes from a shared descriptor, as busybox's does.
+- **A custom `downloader_image`** must provide the busybox applets listed above, including `nc` with `-e`, `ssl_client` and `setsid` (used for URLs with credentials), and a `head -c` that reads exactly the requested bytes from a shared descriptor, as busybox's does.
 - **Credentials in artifact URLs are redacted in the logs** (`***@`, `?<redacted>`). They are still readable in the `-download` secret. Connector configs are never logged, only their key names; `verbose: true` adds downloader detail (skips, keys, sizes) and nothing secret.
 
 #### Upgrading from 4.2.x or earlier
@@ -300,7 +300,7 @@ kafka_connectors:
   cpln workload exec RELEASE_NAME-connect-CONNECTOR_NAME --gvc GVC_NAME --location LOCATION --replica REPLICA_NAME --container plugins-downloader -- rm -rf /opt/kafka/plugins/OLD_DIRECTORY
   cpln workload force-redeployment RELEASE_NAME-connect-CONNECTOR_NAME --gvc GVC_NAME
   ```
-- Rolling back to 4.2.x has not been verified.
+- Rolling back to 4.2.x works and connectors keep running, but 4.2.x writes its `<plugin>/<plugin>.jar` files again beside the 4.3.0 directories (both load in one classloader) and its 60-second startup race returns. Upgrading to 4.3.0 again retires those files.
 
 ### Broker Logs
 

@@ -320,6 +320,8 @@ without losing acked writes); with replicas=2 it gives 1; with replicas=1 it giv
 
 {{- define "kafka.connectors.download.script" -}}
 {{- $c := .connector | default dict -}}
+{{- $total := 0 -}}
+{{- range .plugins }}{{- if eq .enabled true }}{{- $total = add $total (len (.artifacts | default list)) -}}{{- end }}{{- end }}
 #!/bin/sh
 # Kafka Connect plugin downloader (chart 4.3.0).
 # Each artifact is downloaded to a staging dir on the plugin volume, verified, and renamed into
@@ -351,13 +353,19 @@ lower() { printf '%s' "$1" | tr 'A-Z' 'a-z'; }
 exec 3>&1
 on_term() {
   log "SIGTERM: stopping" >&3
-  if [ -n "$CHILD" ]; then kill "$CHILD" 2>/dev/null; fi
+  stop_child
   if [ -n "${FETCH_TMP:-}" ]; then rm -rf "$FETCH_TMP"; fi
   exit 143
 }
+# A credentialed request runs in its own process group (setsid), so stopping it stops every process in it.
+CHILD_PG=0
+stop_child() {
+  if [ -z "$CHILD" ]; then return 0; fi
+  if [ "$CHILD_PG" = 1 ]; then kill -TERM -- "-$CHILD" 2>/dev/null; else kill "$CHILD" 2>/dev/null; fi
+}
 trap on_term TERM INT
 # Long operations run in the background and are waited on, so a SIGTERM is handled at once.
-bg() { "$@" & CHILD=$!; wait "$CHILD"; _rc=$?; CHILD=""; return $_rc; }
+bg() { CHILD_PG=0; "$@" & CHILD=$!; wait "$CHILD"; _rc=$?; CHILD=""; return $_rc; }
 
 plugin_name_ok() {
   case "$1" in ''|.*|*/*|lost+found) return 1 ;; esac
@@ -417,23 +425,27 @@ resolve_location() {
 
 pct_decode() { printf '%b' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/%\([0-9A-Fa-f][0-9A-Fa-f]\)/\\x\1/g')"; }
 
-# Like bg, but stops the command when FILE ($1) has not grown for SECS ($2) seconds. The command
-# must exec its final program (as raw_get's do), so killing CHILD stops nc or ssl_client itself.
+# Like bg, but runs the command in its own process group and stops the whole group when FILE ($1)
+# has not grown for SECS ($2) seconds of real time. The size is read with stat (wc -c would read the
+# whole file on every check).
 bg_idle() {
   _f=$1; _idle=$2; shift 2
-  "$@" & CHILD=$!
-  _last=-1; _still=0
+  CHILD_PG=1
+  setsid "$@" & CHILD=$!
+  _last=-1; _since=$(date +%s)
   while kill -0 "$CHILD" 2>/dev/null; do
     sleep 1 & wait $!
-    if [ -f "$_f" ]; then _size=$(wc -c < "$_f"); else _size=0; fi
-    if [ "$_size" = "$_last" ]; then _still=$((_still+1)); else _still=0; _last=$_size; fi
-    if [ "$_still" -ge "$_idle" ]; then
-      kill "$CHILD" 2>/dev/null; wait "$CHILD" 2>/dev/null; CHILD=""
+    _size=$(stat -c %s "$_f" 2>/dev/null) || _size=0
+    _now=$(date +%s)
+    if [ "$_size" != "$_last" ]; then
+      _last=$_size; _since=$_now
+    elif [ $((_now-_since)) -ge "$_idle" ]; then
+      stop_child; wait "$CHILD" 2>/dev/null; CHILD=""; CHILD_PG=0
       echo "download timed out" >&2
       return 124
     fi
   done
-  wait "$CHILD"; _rc=$?; CHILD=""; return $_rc
+  wait "$CHILD"; _rc=$?; CHILD=""; CHILD_PG=0; return $_rc
 }
 
 # Container-local scratch for a credentialed request (the request holds the Authorization header).
@@ -441,9 +453,28 @@ bg_idle() {
 FETCH_TMP=""
 fetch_tmp_cleanup() { if [ -n "$FETCH_TMP" ]; then rm -rf "$FETCH_TMP"; FETCH_TMP=""; fi; }
 
-# One HTTP(S) request to the URL's own host; redirects are never followed. Writes the raw response
-# to $2 (on the volume: it can be large and holds no credential). Used for http(s) URLs with
-# credentials, because busybox wget sends URL credentials to every redirect target.
+# Programs for a credentialed request, written to FETCH_TMP and run with "sh". nc runs HTTP_PROG or
+# TLS_PROG on the connected socket (stdin and stdout), and never half-closes it.
+# RECV_PROG HEAD BODY reads the response head into HEAD (skipping 1xx interim responses), then
+# streams the body straight into BODY, so the body is written once and never copied.
+RECV_PROG='CR=$(printf "\r")
+while :; do
+  : > "$1"
+  while IFS= read -r l; do l=${l%"$CR"}; [ -z "$l" ] && break; printf "%s\n" "$l" >> "$1"; done
+  case "$(sed -n "1s/^HTTP\/[0-9.]* \([0-9]\).*/\1/p" "$1")" in 1) continue ;; esac
+  break
+done
+exec cat > "$2"'
+# HTTP_PROG REQ RECV HEAD BODY
+HTTP_PROG='cat "$1"; exec sh "$2" "$3" "$4"'
+# TLS_PROG REQ RECV HEAD BODY SNI RC: ssl_client speaks TLS on fd 3; its exit status goes to RC.
+TLS_PROG='exec 3<&0 <"$1"
+{ ssl_client -s 3 -n "$5"; echo $? > "$6"; } | sh "$2" "$3" "$4" 3<&-'
+
+# One HTTP(S) request to the URL's own host; redirects are never followed. Writes the response head
+# to $2 and the body to $3 (on the volume: the body can be large, and neither holds a credential).
+# Used for http(s) URLs with credentials, because busybox wget sends URL credentials to every
+# redirect target.
 raw_get() {
   url_parts "$1"
   FETCH_TMP=$(umask 077; mktemp -d /tmp/cpln-fetch.XXXXXX) || { echo "cannot create a temporary directory" >&2; return 1; }
@@ -456,18 +487,21 @@ raw_get() {
       fi
       printf 'Connection: close\r\n\r\n'
     } > "$FETCH_TMP/req"
+    printf '%s\n' "$RECV_PROG" > "$FETCH_TMP/recv"
+    printf '%s\n' "$HTTP_PROG" > "$FETCH_TMP/http"
+    printf '%s\n' "$TLS_PROG" > "$FETCH_TMP/tls"
   )
-  : > "$2"
+  : > "$2"; : > "$3"
   case "$U_SCHEME" in
     http)
-      bg_idle "$2" 60 sh -c 'exec nc -w 60 "$1" "$2" <"$3" >"$4" 2>"$5"' \
-        sh "$U_HOST" "$U_PORT" "$FETCH_TMP/req" "$2" "$FETCH_TMP/err" ;;
+      bg_idle "$3" 60 sh -c 'exec 2>"$1"; shift; exec nc "$@"' sh "$FETCH_TMP/err" \
+        -w 60 "$U_HOST" "$U_PORT" -e sh "$FETCH_TMP/http" "$FETCH_TMP/req" "$FETCH_TMP/recv" "$2" "$3" ;;
     https)
-      # nc connects, then runs "sh -c" with the socket as stdin/stdout; it execs ssl_client for the TLS.
-      bg_idle "$2" 60 sh -c 'exec nc -w 60 "$1" "$2" -e sh -c '\''exec 3<&0 <"$1" >"$2" 2>"$3"; exec ssl_client -s 3 -n "$4"'\'' tls "$3" "$4" "$5" "$1" 2>"$5"' \
-        sh "$U_HOST" "$U_PORT" "$FETCH_TMP/req" "$2" "$FETCH_TMP/err" ;;
+      bg_idle "$3" 60 sh -c 'exec 2>"$1"; shift; exec nc "$@"' sh "$FETCH_TMP/err" \
+        -w 60 "$U_HOST" "$U_PORT" -e sh "$FETCH_TMP/tls" "$FETCH_TMP/req" "$FETCH_TMP/recv" "$2" "$3" "$U_HOST" "$FETCH_TMP/rc" ;;
   esac
   _rc=$?
+  if [ "$_rc" -eq 0 ] && [ "$U_SCHEME" = https ] && [ "$(cat "$FETCH_TMP/rc" 2>/dev/null)" != 0 ]; then _rc=1; fi
   if [ "$_rc" -ne 0 ]; then
     if [ -s "$FETCH_TMP/err" ]; then head -n 1 "$FETCH_TMP/err" >&2
     elif [ "$_rc" -ne 124 ]; then echo "connection to $U_HOST:$U_PORT failed" >&2; fi
@@ -476,38 +510,27 @@ raw_get() {
   return "$_rc"
 }
 
-# Split a raw response ($1) into its head ($3) and body ($2), skipping 1xx interim responses and
-# de-chunking when needed. Fails when the body is shorter than Content-Length or a chunked body
-# has no final chunk. (Relies on busybox "head -c" reading exactly N bytes from a shared descriptor.)
-split_response() {
-  exec 5<"$1"
-  while :; do
-    : > "$3"
-    while IFS= read -r _l <&5; do
-      _l=${_l%"$CR"}
-      [ -z "$_l" ] && break
-      printf '%s\n' "$_l" >> "$3"
-    done
-    case "$(sed -n '1s/^HTTP\/[0-9.]* \([0-9]\).*/\1/p' "$3")" in 1) continue ;; esac
-    break
-  done
-  if grep -qi '^transfer-encoding:.*chunked' "$3"; then
-    : > "$2"
+# Check a received body ($2, its head in $1): de-chunk it when the response is chunked (the only case
+# that copies the body), and fail when it is shorter than Content-Length or a chunked body has no
+# final chunk. (De-chunking relies on busybox "head -c" reading exactly N bytes from a shared descriptor.)
+finish_response() {
+  if grep -qi '^transfer-encoding:.*chunked' "$1"; then
+    exec 5<"$2"
+    : > "$2.d"
     while IFS= read -r _l <&5; do
       _l=${_l%"$CR"}; _s=${_l%%;*}
-      case "$_s" in ''|*[!0-9A-Fa-f]*) exec 5<&-; return 1 ;; esac
+      case "$_s" in ''|*[!0-9A-Fa-f]*) exec 5<&-; rm -f "$2.d"; return 1 ;; esac
       _n=$((0x$_s))
-      if [ "$_n" -eq 0 ]; then exec 5<&-; return 0; fi
-      head -c "$_n" <&5 >> "$2"
+      if [ "$_n" -eq 0 ]; then exec 5<&-; mv -f "$2.d" "$2"; return; fi
+      head -c "$_n" <&5 >> "$2.d"
       IFS= read -r _l <&5
     done
     exec 5<&-
+    rm -f "$2.d"
     return 1
   fi
-  cat <&5 > "$2"
-  exec 5<&-
-  _cl=$(sed -n 's/^[Cc][Oo][Nn][Tt][Ee][Nn][Tt]-[Ll][Ee][Nn][Gg][Tt][Hh]:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$3" | head -n 1)
-  if [ -n "$_cl" ] && [ "$(wc -c < "$2")" -ne "$_cl" ]; then return 1; fi
+  _cl=$(sed -n 's/^[Cc][Oo][Nn][Tt][Ee][Nn][Tt]-[Ll][Ee][Nn][Gg][Tt][Hh]:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$1" | head -n 1)
+  if [ -n "$_cl" ] && [ "$(stat -c %s "$2")" -ne "$_cl" ]; then return 1; fi
   return 0
 }
 
@@ -525,12 +548,11 @@ fetch() {
   _url=$1; _hops=0
   : > "$3"
   while [ "$_hops" -lt 5 ]; do
-    rm -f "$2" "$2.raw" "$2.head"
-    if ! raw_get "$_url" "$2.raw" 2>>"$3"; then rm -f "$2.raw"; return 1; fi
-    if ! bg split_response "$2.raw" "$2" "$2.head"; then
-      echo "incomplete response" >> "$3"; rm -f "$2.raw"; return 1
+    rm -f "$2" "$2.head" "$2.d"
+    if ! raw_get "$_url" "$2.head" "$2" 2>>"$3"; then rm -f "$2" "$2.head"; return 1; fi
+    if ! bg finish_response "$2.head" "$2"; then
+      echo "incomplete response" >> "$3"; rm -f "$2" "$2.head"; return 1
     fi
-    rm -f "$2.raw"
     _status=$(sed -n '1s/^HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*/\1/p' "$2.head")
     case "$_status" in
       2??) rm -f "$2.head"; return 0 ;;
@@ -602,6 +624,7 @@ install_artifact() {
     log "ERROR cannot create the staging dir $st"
     fail_artifact "staging dir"; return 1
   fi
+  report_progress
   log "download $plugin $type $rurl"
   vlog "  key $key, staging $st"
   if ! fetch "$url" "$st/file" "$st/err"; then
@@ -609,7 +632,7 @@ install_artifact() {
     log "ERROR download failed: $rurl: $(redact "$err")"
     fail_artifact "download failed"; return 1
   fi
-  vlog "  downloaded $(wc -c < "$st/file") bytes"
+  vlog "  downloaded $(stat -c %s "$st/file") bytes"
   if [ -n "$sha" ]; then
     if ! bg sha256sum "$st/file" > "$st/sum"; then
       log "ERROR cannot checksum $rurl"; fail_artifact "checksum"; return 1
@@ -678,13 +701,27 @@ not_enabled_plugins() {
   :
 }
 
+# Until the first pass ends, $SYNC/pending says what is known so far (failures, config skips, the
+# artifact being downloaded now and how many are not checked yet), so a wait timeout inside the first
+# pass can name it. Later passes leave the previous pass's list in place until they end.
+FIRST_PASS=1
+report_progress() {
+  if [ "$FIRST_PASS" != 1 ]; then return 0; fi
+  {
+    printf '%s%s' "$FAILED" "$CONFIG_SKIPPED"
+    printf '%s: %s (downloading now; the first download pass has not finished)\n' "$plugin" "$rurl"
+    if [ "$ART_LEFT" -gt 0 ]; then printf '%s more configured artifact(s) not checked yet\n' "$ART_LEFT"; fi
+  } > "$SYNC/pending.tmp" && mv -f "$SYNC/pending.tmp" "$SYNC/pending"
+}
+
 # One pass over every wanted artifact, in values order. Returns 1 if any retryable failure.
 run_all() {
-  KEEP=""; JARP=""; FAILED=""; CONFIG_SKIPPED=""; prc=0
+  KEEP=""; JARP=""; FAILED=""; CONFIG_SKIPPED=""; prc=0; ART_LEFT={{ $total }}
 {{- range .plugins }}
 {{- if eq .enabled true }}
   P='{{ replace "'" "'\\''" (toString .name) }}'
 {{- range .artifacts }}
+  ART_LEFT=$((ART_LEFT-1))
   install_artifact "$P" '{{ replace "'" "'\\''" (toString (.type | default "")) }}' '{{ replace "'" "'\\''" (toString (.url | default "")) }}' '{{ replace "'" "'\\''" (toString (.sha256 | default "")) }}' || prc=1
 {{- end }}
 {{- end }}
@@ -768,6 +805,7 @@ retire_legacy() {
 log "Kafka Connect plugin downloader starting (plugins folder $PLUGINS)"
 mkdir -p "$SYNC"
 rm -f "$SYNC/downloads-done" "$SYNC/pending"
+printf 'the first download pass has not started yet ({{ $total }} configured artifact(s))\n' > "$SYNC/pending.tmp" && mv -f "$SYNC/pending.tmp" "$SYNC/pending"
 if ! mkdir -p "$STATE"; then
   log "FATAL: cannot create $STATE; plugins_folder must be on the plugin volume"
   exit 1
@@ -784,10 +822,12 @@ collision_check
 attempt=0
 INSTALLED=0
 until run_all; do
+  FIRST_PASS=0
   attempt=$((attempt+1)); delay=$((attempt*10)); if [ $delay -gt 60 ]; then delay=60; fi
   log "pass $attempt: some artifacts failed; retrying in ${delay}s. Kafka Connect keeps waiting."
   bg sleep "$delay"
 done
+FIRST_PASS=0
 log "all artifacts present ($INSTALLED downloaded by this run)"
 
 if [ -f "$SYNC/connect-started-degraded" ]; then
@@ -1386,7 +1426,7 @@ print_pending_plugins() {
   if [[ -s "$PLUGIN_SYNC/pending" ]]; then
     sed 's/^/  - /' "$PLUGIN_SYNC/pending"
   else
-    echo "  - unknown: the downloader has not reported yet"
+    echo "  - (no report yet: the plugin downloader has not started)"
   fi
 }
 plugins_waited=0

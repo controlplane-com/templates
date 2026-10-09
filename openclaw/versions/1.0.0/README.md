@@ -141,31 +141,51 @@ cpln workload exec RELEASE-openclaw --gvc GVC --container openclaw -- sh -c 'cd 
 
 The waiting page connects by itself within seconds. Approvals live on the volume: they survive restarts and upgrades, but a reinstall asks again. Port-forward is fine for setup, but browser tabs through the tunnel can freeze — use the public endpoint or a custom domain day to day.
 
-**Link WhatsApp** (`channels.whatsapp.enabled: true`): open the Control UI over the public endpoint → **Settings → Channels → WhatsApp → Show QR**, then on the phone *Settings → Linked devices → Link a device*. The image does not refresh — click **Show QR** again after ~60 s. Do not abandon a half-done setup tab; it blocks a new one for ~5 minutes. For a private install, print the QR in a terminal instead: `… sh -c 'cd /app && node openclaw.mjs channels login --channel whatsapp'`. Use a dedicated number: this is unofficial WhatsApp Web, and accounts can be banned.
-
 **Custom domain:** create a Control Plane domain routed to port `18789` of `RELEASE-openclaw`, then set `publicAccess.origin` to its https origin (e.g. `https://assistant.example.com`). The canonical endpoint is then refused by the origin check. After an uninstall and reinstall, delete and recreate the domain: it does not rebind to the new workload by itself.
+
+## Connecting chat channels
+
+Telegram, Slack and Discord connect outbound, so they work on a private install too. For each one:
+
+1. **Create the bot** (below) and add its token(s) to your secret **before** enabling the channel — `cpln secret edit SECRET-NAME`. A channel enabled without its key wedges the deployment silently (see Prerequisites).
+2. **Enable it** with `channels.<name>.enabled: true` and `cpln helm upgrade`. The Gateway restarts (~2 minutes) and connects; `channels status` (see [Restarting](#restarting-the-gateway-or-a-channel)) should read `running, connected`. A token changed later needs `cpln workload force-redeployment`.
+3. **DM the bot.** It replies with a pairing code. Approve it:
+   ```bash
+   cpln workload exec RELEASE-openclaw --gvc GVC --container openclaw -- sh -c 'cd /app && node openclaw.mjs pairing approve telegram CODE'
+   ```
+   (`slack` or `discord` instead of `telegram`.) Then DM again — the reply comes from the model. The first approved sender becomes the assistant's owner.
+
+**Only DMs are answered at first.** Messages in a Slack channel or a Discord server are ignored until that channel or server is allowlisted — Slack logs `channel-not-allowed` and the Control UI shows Discord as *needs attention*. See the upstream [Slack](https://docs.openclaw.ai/channels/slack/access-control) and [Discord](https://docs.openclaw.ai/channels/discord/setup) access docs.
+
+| Channel | Create the bot | Secret keys |
+|---|---|---|
+| Telegram | Message **@BotFather**, send `/newbot`, copy the token | `telegram-bot-token` |
+| Slack | [api.slack.com/apps](https://api.slack.com/apps) → **Create New App → From a manifest**, paste the Socket Mode manifest from the [OpenClaw Slack setup](https://docs.openclaw.ai/channels/slack/setup). **Basic Information → App-Level Tokens** → generate with `connections:write` (`xapp-…`). **Install App** → copy the Bot User OAuth Token (`xoxb-…`). If a DM says *Sending messages to this app has been turned off*: **App Home → Messages Tab** → allow messages, then reload Slack | `slack-app-token`, `slack-bot-token` |
+| Discord | [Developer Portal](https://discord.com/developers/applications) → **New Application → Bot**: turn on **Message Content Intent**, **Reset Token** and copy it. **OAuth2 → URL Generator**: scopes `bot` + `applications.commands`, permissions View Channels, Send Messages, Read Message History; open the URL to add the bot to your server. Turn on the server's **Privacy Settings → Direct Messages** so the bot can DM you its pairing code | `discord-bot-token` |
+
+**WhatsApp** needs no token: with `channels.whatsapp.enabled: true`, open the Control UI over the public endpoint → **Settings → Channels → WhatsApp → Show QR**, then on the phone *Settings → Linked devices → Link a device*. The image does not refresh — click **Show QR** again after ~60 s. Do not abandon a half-done setup tab; it blocks a new one for ~5 minutes. For a private install, print the QR in a terminal instead: `… sh -c 'cd /app && node openclaw.mjs channels login --channel whatsapp'`. Use a dedicated number: this is unofficial WhatsApp Web, and accounts can be banned.
 
 ## Connecting Control Plane tools (MCP)
 
-With `cplnMcp.enabled` the [Control Plane MCP server](https://docs.controlplane.com/ai/mcp) is registered as `cpln`; nobody is signed in at install. `cplnMcp.signIn` picks one of two modes:
+With `cplnMcp.enabled` the [Control Plane MCP server](https://docs.controlplane.com/ai/mcp) is registered as `cpln`; nobody is signed in at install. **Pick the mode by where you want to sign in** — the two are not interchangeable:
 
-| `signIn` | Who signs in, and where | Tools act as |
+| `signIn` | Sign in from | Tools act as |
 |---|---|---|
-| `shared` (default) | You, once, from a terminal | Your account, for every chat — including the Control UI chat |
-| `per-requester` | Each chat user, from a link in a chat channel | Each user's own account; the Control UI chat cannot sign in |
+| `shared` (default) | A terminal, once | Your account, for every chat and the Control UI chat |
+| `per-requester` | A link the bot sends in Telegram, Slack, Discord or WhatsApp | Each chat user's own account |
 
-**Shared.** Everyone who can message the assistant acts with your Control Plane permissions, so sign in with an account whose access you are comfortable sharing. Run these in two terminals — the tunnel carries the browser's return to the Gateway:
+**Shared — sign in from a terminal.** Asking the bot to sign in from a chat does **not** work in this mode: it hands you a link whose callback goes to `127.0.0.1:8989` and fails with *connection refused*. Instead run these in two terminals — the tunnel carries the browser's return to the Gateway:
 
 ```bash
 cpln port-forward RELEASE-openclaw 8989:8989 --gvc GVC
 cpln workload exec RELEASE-openclaw --gvc GVC --container openclaw -- sh -c 'cd /app && node openclaw.mjs mcp login cpln'
 ```
 
-Open the printed URL and approve; the login command reports success and you can stop the tunnel. Without the tunnel the browser fails to load `http://127.0.0.1:8989/oauth/callback?code=…` — pass that `code` back within a few minutes with `… node openclaw.mjs mcp login cpln --code CODE`. The Control UI's MCP page shows only this command: its **Sign in** button appears only on a localhost connection, which does not work through `cpln port-forward`.
+Open the printed URL and approve; the login command reports success and you can stop the tunnel. Everyone who can message the assistant then acts with your Control Plane permissions. The Control UI's MCP page shows only this command (its **Sign in** button appears only on a localhost connection, which does not work through `cpln port-forward`).
 
-**Per-requester** (needs `publicAccess.enabled`). In a chat channel such as WhatsApp or Slack, ask the assistant to use Control Plane (e.g. "list my GVCs"). It replies with a sign-in link; open it, approve with your own Control Plane account, then ask again. Each chat identity (your WhatsApp number, a Slack user…) signs in once. Links are single-use bearer links — whoever opens one connects their account — so do not request them in group chats.
+**Per-requester — sign in from a chat** (needs `publicAccess.enabled`; the link returns to the Gateway's public address). Connect a chat channel first, then in a DM ask the assistant to use Control Plane (e.g. "list my GVCs"). It replies with a sign-in link; open it, approve with your own Control Plane account, and ask again. Each chat identity signs in once — your Slack and Discord accounts each get their own link. Links are single-use — whoever opens one connects their account — so do not request them in group chats. The Control UI chat cannot sign in in this mode. To switch an existing install, set `cplnMcp.signIn` and `helm upgrade`; ask for a new link afterwards, since links issued in the old mode do not work.
 
-Check either mode with `… node openclaw.mjs mcp status --verbose`: `oauth: authorized` for shared, the number of connected principals for per-requester.
+Check either mode with `… node openclaw.mjs mcp status --verbose`: `oauth: authorized` for shared, `connected principals: N` for per-requester.
 
 ## Restarting the gateway or a channel
 
@@ -182,7 +202,7 @@ Use `cpln workload force-redeployment RELEASE-openclaw --gvc GVC` only as a last
 ## Important Notes
 
 - **Security:** with `publicAccess.enabled` an agent with a shell sits on the internet behind one token. Keep the token long and secret, keep DM pairing on, and vet third-party skills.
-- **New chat contacts get a pairing code**; approve them in **Settings → Channels → DM access requests** (or `pairing approve`).
+- **Every new chat contact gets a pairing code** and is ignored until you approve it (`pairing approve CHANNEL CODE`, see [Connecting chat channels](#connecting-chat-channels)).
 - **Image upgrades run one-way state migrations.** Take a volume snapshot before bumping the tag; a downgrade cannot read migrated state.
 - **The assistant spends model tokens on its own.** OpenClaw runs a heartbeat turn every 30 minutes by default; change or turn it off in the Control UI.
 - **"You've reached your Codex subscription usage limit" with `model.provider: openai` most likely means your OpenAI API account is out of credit or quota.** The image runs `openai/*` models on its Codex runtime, which words billing errors that way; pinning the model to the `openclaw` runtime (`agents.defaults.models["openai/MODEL"].agentRuntime.id`) shows the provider's real error (e.g. `credit_balance_exhausted`).

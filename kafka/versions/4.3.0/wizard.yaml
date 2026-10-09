@@ -1,0 +1,1200 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Apache Kafka
+# Brokers and Kafka Connect are stateful with no location handling: KRaft peers address each
+# other as <workload>-N.<workload>, so every extra location would run an unrelated copy.
+gvc: { minLocations: 1, maxLocations: 1 }
+steps:
+  - id: cluster
+    title: Cluster
+    description: The Kafka brokers in KRaft mode, their image and compute.
+    docs: "#kafka-cluster"
+    sections:
+      - fields:
+          - path: kafka.name
+            type: string
+            label: Broker workload name
+            required: true
+            immutable: The brokers address each other by this name, so it cannot change on a running cluster.
+            pattern: '^[a-z][a-z0-9-]*$'
+            patternMessage: Use lowercase letters, digits and hyphens, starting with a letter.
+            description: The broker workload is named `<release>-<name>`.
+          - path: kafka.image
+            type: string
+            format: image
+            label: Kafka image
+            required: true
+            rules:
+              - rule: "!self.kafka.image.contains('bitnami')"
+                mirrors: kafka.validateKafkaImage
+                message: Bitnami images are not supported; use an Apache Kafka image such as apache/kafka:3.9.1.
+          - path: kafka.replicas
+            type: integer
+            label: Brokers
+            required: true
+            min: 1
+            max: 5
+            suggestions: [1, 3, 5]
+            description: The first brokers also act as KRaft controllers.
+            rules:
+              - rule: self.kafka.replicas <= 5 && self.kafka.replicas != 2
+                mirrors: kafka.validateReplicas
+                message: Kafka needs 1 or 3 to 5 brokers; 2 brokers cannot form a controller quorum.
+              - rule: oldSelf == null || self.kafka.replicas >= oldSelf.kafka.replicas
+                severity: info
+                message: >-
+                  Fewer brokers than installed. Move partition replicas off the brokers being removed
+                  first, and never go below the controller quorum.
+          - path: kafka.multiZone
+            type: boolean
+            label: Spread brokers across zones
+            description: Also enable multi-zone on the GVC's dedicated load balancer to reduce cross-zone traffic.
+          - path: kafka.rackAwareness.enabled
+            type: boolean
+            label: Fetch from the closest replica
+            description: >-
+              AWS locations only. Consumers that set `client.rack` to their zone ID read from a
+              replica in their zone.
+      - title: Resources
+        description: Per broker.
+        fields:
+          - path: kafka.cpu
+            type: quantity
+            quantity: cpu
+            label: Broker CPU limit
+            required: true
+            min: 25m
+            suggestions: ["500m", "1000m", "2000m", "4000m"]
+          - path: kafka.minCpu
+            type: quantity
+            quantity: cpu
+            label: Broker CPU reservation
+            required: true
+            min: 25m
+          - path: kafka.memory
+            type: quantity
+            quantity: memory
+            label: Broker memory limit
+            required: true
+            min: 512Mi
+            suggestions: [1000Mi, 2000Mi, 4000Mi, 8000Mi]
+            description: The broker heap is set to 60% of this.
+          - path: kafka.minMemory
+            type: quantity
+            quantity: memory
+            label: Broker memory reservation
+            required: true
+            min: 128Mi
+        rules:
+          - rule: cpuMillicores(self.kafka.minCpu) <= cpuMillicores(self.kafka.cpu)
+            paths: [kafka.minCpu]
+            message: The broker CPU reservation must not exceed the CPU limit.
+          - rule: memoryBytes(self.kafka.minMemory) <= memoryBytes(self.kafka.memory)
+            paths: [kafka.minMemory]
+            message: The broker memory reservation must not exceed the memory limit.
+          - rule: cpuMillicores(self.kafka.cpu) <= 4 * cpuMillicores(self.kafka.minCpu)
+            paths: [kafka.minCpu]
+            message: The brokers are stateful, so the CPU limit can be at most 4 times the CPU reservation.
+      - title: Network access
+        docs: "#firewall"
+        fields:
+          - path: kafka.firewall.internal_inboundAllowType
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: Firewall changes take up to a few minutes to take effect.
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+              - { value: none, label: Nobody, description: No workload can connect. }
+          - path: kafka.firewall.inboundAllowWorkload
+            type: list
+            absent: true
+            label: Allowed workloads
+            when: self.kafka.firewall.internal_inboundAllowType in ['same-gvc', 'workload-list']
+            widget: tags
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+          - path: kafka.firewall.external_inboundAllowCIDR
+            type: list
+            absent: true
+            serialize: csv
+            label: Public inbound CIDRs
+            item: { type: string, format: cidr }
+          - path: kafka.firewall.external_outboundAllowCIDR
+            type: list
+            absent: true
+            serialize: csv
+            label: Outbound CIDRs
+            item: { type: string, format: cidr }
+      - title: Broker configuration
+        docs: "#extra-configurations"
+        fields:
+          - path: kafka.extra_configurations
+            type: yaml
+            yamlType: map
+            label: Extra broker properties
+            description: >-
+              Written to `server.properties`. `default.replication.factor` and `min.insync.replicas`
+              are derived from the broker count unless you set them here.
+          - path: kafka.env
+            type: yaml
+            yamlType: list
+            label: Extra environment variables
+            advanced: true
+          - path: kafka.overrideHeapOpts
+            type: string
+            absent: true
+            label: Heap options
+            advanced: true
+            placeholder: -Xmx1024m -Xms1024m
+          - path: kafka.terminationGracePeriodSeconds
+            type: integer
+            label: Shutdown grace period
+            unit: seconds
+            required: true
+            min: 0
+            advanced: true
+            suggestions: [120, 300, 600, 1200]
+          - path: kafka.minReadySeconds
+            type: integer
+            label: Minimum ready time
+            unit: seconds
+            required: true
+            min: 0
+            advanced: true
+          - path: kafka.deletionProtection
+            type: boolean
+            label: Protect the broker workload from deletion
+            advanced: true
+          - path: kafka.suspend
+            type: boolean
+            label: Suspend the brokers
+            advanced: true
+          - path: kafka.debug
+            type: boolean
+            label: Debug mode
+            advanced: true
+
+  - id: listeners
+    title: Listeners and security
+    description: How clients reach the brokers, their SASL users, ACLs and the cluster secrets.
+    docs: "#listeners"
+    sections:
+      - fields:
+          - path: kafka.listeners
+            type: map
+            label: Listeners
+            widget: kv
+            required: true
+            description: >-
+              `client` is the in-GVC listener. A public listener needs a domain you control and a
+              dedicated load balancer on the GVC.
+            keys:
+              label: Listener key
+              pattern: '^[a-z][a-z0-9_-]*$'
+            values:
+              type: object
+              fields:
+                - path: name
+                  type: string
+                  label: Listener name
+                  required: true
+                  placeholder: CLIENT
+                - path: protocol
+                  type: enum
+                  label: Protocol
+                  required: true
+                  options:
+                    - { value: PLAINTEXT, label: PLAINTEXT }
+                    - { value: SASL_PLAINTEXT, label: SASL_PLAINTEXT }
+                - path: containerPort
+                  type: integer
+                  label: Container port
+                  min: 1
+                  max: 65535
+                - path: publicAddress
+                  type: string
+                  format: hostname
+                  label: Public address (legacy)
+                - path: directReplicaRouting
+                  type: object
+                  optional: true
+                  label: Public replica endpoints
+                  newValue: { enabled: true, containerPort: 9095, publicAddress: "" }
+                  fields:
+                    - path: enabled
+                      type: boolean
+                      label: Route to each replica
+                    - path: containerPort
+                      type: integer
+                      label: Container port
+                      required: true
+                      min: 1
+                      max: 65535
+                    - path: publicAddress
+                      type: string
+                      format: hostname
+                      label: Public address
+                      required: true
+                      placeholder: kafka.example.com
+                - path: sasl
+                  type: object
+                  optional: true
+                  label: SASL users
+                  newValue: { users: "", passwords: "" }
+                  fields:
+                    - path: admin
+                      type: object
+                      optional: true
+                      label: Admin user
+                      newValue: { username: admin, password: "" }
+                      fields:
+                        - path: username
+                          type: string
+                          label: Admin username
+                          required: true
+                        - path: password
+                          type: string
+                          label: Admin password
+                          widget: password
+                          sensitive: true
+                          required: true
+                    - path: users
+                      type: string
+                      label: Usernames
+                      required: true
+                      description: Comma-separated.
+                    - path: passwords
+                      type: string
+                      label: Passwords
+                      widget: password
+                      sensitive: true
+                      required: true
+                      description: Comma-separated, in the same order as the usernames.
+            rules:
+              - rule: >-
+                  self.kafka.listeners.all(k, self.kafka.listeners[k].name != null && self.kafka.listeners[k].name != '' &&
+                  self.kafka.listeners[k].protocol != null && self.kafka.listeners[k].protocol != '')
+                mirrors: kafka.validateListenerConfig
+                message: Every listener needs a name and a protocol.
+              - rule: >-
+                  self.kafka.listeners.all(k,
+                  (self.kafka.listeners[k].publicAddress != null && self.kafka.listeners[k].publicAddress != '') ||
+                  self.kafka.listeners[k].containerPort != null ||
+                  (self.kafka.listeners[k].directReplicaRouting != null && self.kafka.listeners[k].directReplicaRouting.enabled == true))
+                mirrors: kafka.validateListenerConfig
+                message: Every listener needs a container port, a public address or public replica endpoints.
+              - rule: >-
+                  self.kafka.listeners.all(k, self.kafka.listeners[k].publicAddress == null ||
+                  self.kafka.listeners[k].publicAddress == '' || self.kafka.listeners[k].containerPort == null)
+                mirrors: kafka.validateListenerConfig
+                message: A listener with a legacy public address takes ports 3000 to 3004; remove its container port.
+              - rule: >-
+                  self.kafka.listeners.all(k,
+                  !(self.kafka.listeners[k].containerPort in [9091, 9093, 9094]) &&
+                  (self.kafka.listeners[k].directReplicaRouting == null ||
+                  !(self.kafka.listeners[k].directReplicaRouting.containerPort in [9091, 9093, 9094])))
+                mirrors: kafka.validateListenerConfig
+                message: Ports 9091, 9093 and 9094 are reserved for the controller and inter-broker listeners.
+              - rule: >-
+                  !self.kafka.listeners.exists(k, self.kafka.listeners[k].protocol == 'SASL_PLAINTEXT') ||
+                  self.kafka.listeners.exists(k, self.kafka.listeners[k].protocol == 'SASL_PLAINTEXT' &&
+                  self.kafka.listeners[k].sasl != null && self.kafka.listeners[k].sasl.admin != null)
+                mirrors: kafka.validateAdminExists
+                message: At least one SASL_PLAINTEXT listener needs an admin user.
+              - rule: >-
+                  self.kafka.listeners.all(k, self.kafka.listeners[k].protocol != 'SASL_PLAINTEXT' ||
+                  (self.kafka.listeners[k].sasl != null && self.kafka.listeners[k].sasl.users != null &&
+                  self.kafka.listeners[k].sasl.users != '' && self.kafka.listeners[k].sasl.passwords != null &&
+                  self.kafka.listeners[k].sasl.passwords != '' &&
+                  size(self.kafka.listeners[k].sasl.users.split(',')) == size(self.kafka.listeners[k].sasl.passwords.split(','))))
+                mirrors: kafka.validateAuthConfig
+                message: A SASL_PLAINTEXT listener needs SASL users with one password per username.
+              - rule: >-
+                  size(self.kafka.listeners.filter(k, self.kafka.listeners[k].publicAddress != null &&
+                  self.kafka.listeners[k].publicAddress != '')) +
+                  size(self.kafka.listeners.filter(k, self.kafka.listeners[k].directReplicaRouting != null &&
+                  self.kafka.listeners[k].directReplicaRouting.enabled == true &&
+                  self.kafka.listeners[k].directReplicaRouting.publicAddress != null &&
+                  self.kafka.listeners[k].directReplicaRouting.publicAddress != '')) <= 1
+                mirrors: kafka.validateOnePublicAddress
+                message: At most one listener can have a public address.
+              - rule: >-
+                  self.kafka.listeners.all(k, self.kafka.listeners[k].directReplicaRouting == null ||
+                  self.kafka.listeners[k].directReplicaRouting.enabled != true ||
+                  ((self.kafka.listeners[k].publicAddress == null || self.kafka.listeners[k].publicAddress == '') &&
+                  self.kafka.listeners[k].directReplicaRouting.publicAddress != null &&
+                  self.kafka.listeners[k].directReplicaRouting.publicAddress != '' &&
+                  self.kafka.listeners[k].directReplicaRouting.containerPort != null))
+                mirrors: kafka.validatedirectReplicaRoutingConfig
+                message: >-
+                  Public replica endpoints need a public address and a container port, and replace the
+                  listener's legacy public address.
+      - title: Access control
+        docs: "#acl-and-cluster-secrets"
+        fields:
+          - path: kafka.acl.superUsers
+            type: string
+            label: Super users
+            placeholder: User:admin;User:connectors
+            description: Separate principals with `;`.
+          - path: kafka.acl.allowEveryoneIfNoAclFound
+            type: boolean
+            label: Allow everyone on resources without ACLs
+      - title: Cluster secrets
+        docs: "#acl-and-cluster-secrets"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              These values are stored in the release values. The cluster ID and the controller and
+              inter-broker passwords are fixed when the cluster is first formatted.
+          - path: kafka.secrets.kraft_cluster_id
+            type: string
+            label: KRaft cluster ID
+            required: true
+            example: true
+            immutable: The cluster ID is written into every broker's log directories when they are formatted.
+            placeholder: bkdDtS1Rsf536si7BGM0JY
+          - path: kafka.secrets.inter_broker_password
+            type: string
+            label: Inter-broker password
+            widget: password
+            sensitive: true
+            required: true
+            example: true
+          - path: kafka.secrets.controller_password
+            type: string
+            label: Controller password
+            widget: password
+            sensitive: true
+            required: true
+            example: true
+
+  - id: storage
+    title: Storage
+    description: The volume sets that hold each broker's log directories.
+    docs: "#storage"
+    sections:
+      - fields:
+          - path: kafka.logDirs
+            type: string
+            label: Log directories
+            required: true
+            immutable: Each log directory has its own volume set; changing the list moves data out of reach.
+            description: Comma-separated; one volume set is created per directory.
+          - path: kafka.volumes.logs.initialCapacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            docs: "/reference/volumeset#capacity-and-billing"
+            rules:
+              - rule: oldSelf == null || self.kafka.volumes.logs.initialCapacity >= oldSelf.kafka.volumes.logs.initialCapacity
+                message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+          - path: kafka.volumes.logs.performanceClass
+            type: enum
+            label: Disk class
+            widget: segmented
+            required: true
+            immutable: true
+            options:
+              - { value: general-purpose-ssd, label: General purpose SSD }
+              - { value: high-throughput-ssd, label: High throughput SSD }
+          - path: kafka.volumes.logs.fileSystemType
+            type: enum
+            label: File system
+            widget: segmented
+            required: true
+            immutable: true
+            advanced: true
+            options: [ext4, xfs]
+          - path: kafka.volumes.logs.externalVolumeSets
+            type: list
+            label: Existing volume sets to mount
+            advanced: true
+            description: >-
+              One entry per log directory, in order; an empty entry keeps that directory on a volume
+              set the chart creates. The chart never changes or deletes the volume sets named here.
+            item: { type: string, label: Volume set name }
+            rules:
+              - rule: >-
+                  size(self.kafka.volumes.logs.externalVolumeSets) == 0 ||
+                  size(self.kafka.volumes.logs.externalVolumeSets) == size(self.kafka.logDirs.split(','))
+                mirrors: kafka.validateExternalVolumeSets
+                message: List exactly one volume set per log directory, in the same order (an empty entry keeps that directory chart-managed).
+      - title: Grow the volumes automatically
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: kafka.volumes.logs.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: kafka.volumes.logs.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: kafka.volumes.logs.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+      - title: Snapshots and encryption
+        advanced: true
+        fields:
+          - path: kafka.volumes.logs.snapshots
+            type: object
+            optional: true
+            label: Scheduled snapshots
+            docs: "/reference/volumeset#snapshots"
+            newValue: { createFinalSnapshot: true, retentionDuration: 7d, schedule: "0 0 * * *" }
+            fields:
+              - path: createFinalSnapshot
+                type: boolean
+                label: Snapshot before deletion
+              - path: retentionDuration
+                type: string
+                format: duration
+                label: Keep snapshots for
+                required: true
+                placeholder: 7d
+              - path: schedule
+                type: string
+                format: cron
+                label: Schedule (UTC)
+                required: true
+          - path: kafka.volumes.logs.customEncryption
+            type: object
+            optional: true
+            absent: true
+            label: Encrypt with your own KMS key
+            immutable: Encryption is chosen when the volume set is created.
+            newValue: { enabled: true, region: "", keyId: "" }
+            fields:
+              - path: enabled
+                type: boolean
+                label: Use the KMS key
+              - path: region
+                type: ref
+                label: Location
+                required: true
+                help: AWS locations only; the key must be in the same region.
+                ref: { kind: location, scope: gvc, format: name, mustExist: error }
+              - path: keyId
+                type: string
+                label: KMS key ARN
+                required: true
+                placeholder: arn:aws:kms:us-east-1:123456789012:key/…
+    rules:
+      - rule: >-
+          self.kafka.volumes.logs.performanceClass != 'high-throughput-ssd' ||
+          self.kafka.volumes.logs.initialCapacity >= 1000
+        paths: [kafka.volumes.logs.initialCapacity]
+        message: A high throughput SSD needs an initial capacity of at least 1000 GiB.
+      - rule: self.kafka.volumes.logs.autoscaling.maxCapacity >= self.kafka.volumes.logs.initialCapacity
+        paths: [kafka.volumes.logs.autoscaling.maxCapacity]
+        message: The maximum capacity must be at least the initial capacity.
+
+  - id: ui
+    title: UI and REST Proxy
+    description: An optional web console and an optional HTTP proxy for producing and consuming.
+    sections:
+      - id: kafbat-ui
+        title: Kafbat UI
+        toggle: kafbat_ui.enabled
+        description: A web console for topics, consumer groups and messages. It waits until its configuration secret exists.
+        docs: "#kafbat-ui"
+        fields:
+          - path: kafbat_ui.configuration_secret
+            type: ref
+            label: Configuration secret
+            required: true
+            description: An opaque secret (encoding plain) holding the Kafbat UI configuration file; the README has an example.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-kafbat-ui-config'"
+          - path: kafbat_ui.domain
+            type: string
+            format: hostname
+            absent: true
+            label: Custom domain
+            placeholder: kafbat-ui.example.com
+            description: Create the DNS records for it first.
+          - path: kafbat_ui.firewall.external_inboundAllowCIDR
+            type: list
+            serialize: csv
+            label: Public inbound CIDRs
+            item: { type: string, format: cidr }
+          - path: kafbat_ui.firewall.external_outboundAllowCIDR
+            type: list
+            serialize: csv
+            label: Outbound CIDRs
+            advanced: true
+            item: { type: string, format: cidr }
+          - path: kafbat_ui.firewall.internal_inboundAllowType
+            type: enum
+            absent: true
+            label: Who can connect inside the org
+            advanced: true
+            options: [same-gvc, same-org]
+          - path: kafbat_ui.name
+            type: string
+            label: Kafbat UI workload name
+            required: true
+            advanced: true
+          - path: kafbat_ui.image
+            type: string
+            format: image
+            label: Kafbat UI image
+            required: true
+            advanced: true
+          - path: kafbat_ui.cpu
+            type: quantity
+            quantity: cpu
+            label: Kafbat UI CPU limit
+            required: true
+            advanced: true
+          - path: kafbat_ui.minCpu
+            type: quantity
+            quantity: cpu
+            label: Kafbat UI CPU reservation
+            advanced: true
+          - path: kafbat_ui.memory
+            type: quantity
+            quantity: memory
+            label: Kafbat UI memory limit
+            required: true
+            advanced: true
+          - path: kafbat_ui.minMemory
+            type: quantity
+            quantity: memory
+            label: Kafbat UI memory reservation
+            advanced: true
+          - path: kafbat_ui.replicas
+            type: integer
+            label: Kafbat UI replicas
+            required: true
+            min: 1
+            advanced: true
+            suggestions: [1, 2, 3]
+          - path: kafbat_ui.timeoutSeconds
+            type: integer
+            label: Kafbat UI request timeout
+            unit: seconds
+            required: true
+            min: 1
+            advanced: true
+          - path: kafbat_ui.deletionProtection
+            type: boolean
+            label: Protect the Kafbat UI workload from deletion
+            advanced: true
+      - id: rest-proxy
+        title: REST Proxy
+        toggle: kafka_rest_proxy.enabled
+        description: Produce and consume over HTTP, for clients that have no Kafka driver.
+        docs: "#kafka-rest-proxy"
+        fields:
+          - path: kafka_rest_proxy.properties
+            type: yaml
+            yamlType: map
+            label: REST Proxy properties
+            description: Set `bootstrap.servers` to your broker workload, for example `SASL_PLAINTEXT://<release>-cluster:9092`.
+          - path: kafka_rest_proxy.jaas_conf
+            type: string
+            label: JAAS configuration
+            multiline: true
+            sensitive: true
+            required: true
+            example: true
+            description: Its `KafkaClient` password must match a SASL user on the brokers.
+          - path: kafka_rest_proxy.password_properties
+            type: yaml
+            yamlType: map
+            absent: true
+            label: Basic auth users
+            description: "`user: password,role` entries, used when `authentication.method` is `BASIC`."
+          - path: kafka_rest_proxy.domain
+            type: string
+            format: hostname
+            absent: true
+            label: Custom domain
+            placeholder: kafka-rest.example.com
+          - path: kafka_rest_proxy.firewall.external_inboundAllowCIDR
+            type: list
+            serialize: csv
+            label: Public inbound CIDRs
+            item: { type: string, format: cidr }
+          - path: kafka_rest_proxy.firewall.external_outboundAllowCIDR
+            type: list
+            serialize: csv
+            label: Outbound CIDRs
+            advanced: true
+            item: { type: string, format: cidr }
+          - path: kafka_rest_proxy.firewall.internal_inboundAllowType
+            type: enum
+            absent: true
+            label: Who can connect inside the org
+            advanced: true
+            options: [same-gvc, same-org, workload-list]
+          - path: kafka_rest_proxy.firewall.inboundAllowWorkload
+            type: list
+            absent: true
+            label: Allowed workloads
+            advanced: true
+            widget: tags
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+          - path: kafka_rest_proxy.name
+            type: string
+            label: REST Proxy workload name
+            required: true
+            advanced: true
+          - path: kafka_rest_proxy.image
+            type: string
+            format: image
+            label: REST Proxy image
+            required: true
+            advanced: true
+          - path: kafka_rest_proxy.cpu
+            type: quantity
+            quantity: cpu
+            label: REST Proxy CPU limit
+            required: true
+            advanced: true
+          - path: kafka_rest_proxy.memory
+            type: quantity
+            quantity: memory
+            label: REST Proxy memory limit
+            required: true
+            advanced: true
+          - path: kafka_rest_proxy.capacityAI.enabled
+            type: boolean
+            label: REST Proxy Capacity AI
+            advanced: true
+          - path: kafka_rest_proxy.capacityAI.minCpu
+            type: quantity
+            quantity: cpu
+            label: REST Proxy CPU floor
+            advanced: true
+            when: self.kafka_rest_proxy.capacityAI.enabled
+          - path: kafka_rest_proxy.capacityAI.minMemory
+            type: quantity
+            quantity: memory
+            label: REST Proxy memory floor
+            advanced: true
+            when: self.kafka_rest_proxy.capacityAI.enabled
+          - path: kafka_rest_proxy.replicas
+            type: integer
+            label: REST Proxy replicas
+            required: true
+            min: 1
+            advanced: true
+            suggestions: [1, 2, 3]
+          - path: kafka_rest_proxy.timeoutSeconds
+            type: integer
+            label: REST Proxy request timeout
+            unit: seconds
+            required: true
+            min: 1
+            advanced: true
+          - path: kafka_rest_proxy.deletionProtection
+            type: boolean
+            label: Protect the REST Proxy workload from deletion
+            advanced: true
+      - id: kafka-ui
+        title: Kafka UI (deprecated)
+        toggle: kafka_ui.enabled
+        description: The older Provectus Kafka UI, no longer maintained upstream. Use Kafbat UI instead.
+        fields:
+          - path: kafka_ui.listener
+            type: string
+            label: Kafka UI listener
+            required: true
+            advanced: true
+          - path: kafka_ui.firewall
+            type: yaml
+            yamlType: map
+            label: Kafka UI firewall
+            advanced: true
+          - path: kafka_ui.name
+            type: string
+            label: Kafka UI workload name
+            required: true
+            advanced: true
+          - path: kafka_ui.image
+            type: string
+            format: image
+            label: Kafka UI image
+            required: true
+            advanced: true
+          - path: kafka_ui.cpu
+            type: quantity
+            quantity: cpu
+            label: Kafka UI CPU limit
+            required: true
+            advanced: true
+          - path: kafka_ui.memory
+            type: quantity
+            quantity: memory
+            label: Kafka UI memory limit
+            required: true
+            advanced: true
+
+  - id: connect
+    title: Kafka Connect
+    description: Optional Kafka Connect worker groups, each with its own connector plugins.
+    docs: "#kafka-connect"
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '4.3.0') < 0 && size(self.kafka_connectors) > 0
+            text: >-
+              The first start after this upgrade downloads every connector plugin again, once per
+              replica, while Kafka Connect waits. Files the chart did not download are never deleted;
+              the chart's old `<plugin>/<plugin>.jar` files are moved to `.cpln-downloads/retired/`.
+          - path: kafka_connectors
+            type: list
+            absent: true
+            label: Kafka Connect groups
+            uniqueBy: [name]
+            itemLabel: item.name
+            newItem:
+              name: connect
+              image: apache/kafka:3.9.1
+              replicas: 1
+              cpu: 1000m
+              memory: 2000Mi
+              minCpu: 250m
+              minMemory: 500Mi
+              timeoutSeconds: 15
+              listener: client
+              plugins_folder: /opt/kafka/plugins
+              connector_properties:
+                group.id: connect-cluster
+                plugin.path: /opt/kafka/plugins
+              plugins: []
+            item:
+              type: object
+              label: Kafka Connect group
+              fields:
+                - path: name
+                  type: string
+                  label: Name
+                  required: true
+                  pattern: '^[a-z][a-z0-9-]*$'
+                  patternMessage: Use lowercase letters, digits and hyphens, starting with a letter.
+                - path: image
+                  type: string
+                  format: image
+                  label: Image
+                  required: true
+                - path: replicas
+                  type: integer
+                  label: Workers
+                  required: true
+                  min: 1
+                  suggestions: [1, 2, 3]
+                - path: cpu
+                  type: quantity
+                  quantity: cpu
+                  label: CPU limit
+                  required: true
+                - path: minCpu
+                  type: quantity
+                  quantity: cpu
+                  label: CPU reservation
+                - path: memory
+                  type: quantity
+                  quantity: memory
+                  label: Memory limit
+                  required: true
+                - path: minMemory
+                  type: quantity
+                  quantity: memory
+                  label: Memory reservation
+                - path: listener
+                  type: string
+                  label: Broker listener
+                  description: The key of an entry under Listeners; it sets `bootstrap.servers` unless the worker properties do.
+                - path: connector_properties
+                  type: map
+                  label: Worker properties
+                  description: Written to `connect-distributed.properties`.
+                  values: { type: string }
+                - path: plugins
+                  type: yaml
+                  yamlType: list
+                  label: Connector plugins
+                  help: >-
+                    Each plugin has a `name`, `enabled`, a connector `config` map and `artifacts`, each
+                    with a `type` (`jar`, `zip`, `tar`, `tgz` or `tar.gz`), a `url` and an optional
+                    `sha256`. Only plugins with `enabled: true` are downloaded; a plugin without the
+                    `enabled` key is not downloaded, but its connector is still created.
+                  docs: "#kafka-connect-plugins"
+                - path: plugins_folder
+                  type: string
+                  label: Plugins folder
+                  placeholder: /opt/kafka/plugins
+                  description: Keep it the plugin volume mount.
+                - path: plugins_wait_timeout_seconds
+                  type: integer
+                  label: Wait for plugin downloads
+                  unit: seconds
+                  min: 0
+                  description: How long Kafka Connect waits for the plugin downloads before it starts.
+                  suggestions:
+                    - { value: 300, label: "300" }
+                    - { value: 900, label: "900 (default)" }
+                    - { value: 1800, label: "1800" }
+                    - { value: 0, label: "0 (wait forever)" }
+                - path: plugins_wait_timeout_action
+                  type: enum
+                  label: When the wait times out
+                  widget: segmented
+                  options:
+                    - { value: start, label: Start without them, description: Kafka Connect starts and logs a warning naming the missing plugins. }
+                    - { value: restart, label: Restart and wait, description: The container exits and waits again. }
+                - path: plugins_redownload_token
+                  type: string
+                  label: Redownload token
+                  advanced: true
+                  description: Change it to download every plugin again on the next restart.
+                - path: downloader_image
+                  type: string
+                  format: image
+                  label: Downloader image
+                  advanced: true
+                  placeholder: busybox:1.37.0-musl
+                  description: Needs busybox `sh`, `wget`, `nc` (with `-e`), `ssl_client`, `setsid`, `stat`, `unzip`, `tar`, `sha256sum`, `sed`, `base64`, `tr`, `head`, `mktemp` and the standard busybox tools (`grep`, `cut`, `cat`, `date`, `mv`, `touch`, `sleep`).
+                - path: downloader_cpu
+                  type: quantity
+                  quantity: cpu
+                  label: Downloader CPU
+                  advanced: true
+                  placeholder: 80m
+                  description: Downloads are CPU-bound at the default 80m. Set 250m for artifacts of 50 MB or more (about 3x faster).
+                - path: verbose
+                  type: boolean
+                  label: Verbose logs
+                  advanced: true
+                  description: Extra downloader log lines (skips, keys, sizes). URLs stay redacted and connector configs are never logged.
+                - path: multiZone
+                  type: boolean
+                  label: Spread workers across zones
+                  advanced: true
+                - path: timeoutSeconds
+                  type: integer
+                  label: Request timeout
+                  unit: seconds
+                  min: 1
+                  advanced: true
+                - path: deletionProtection
+                  type: boolean
+                  label: Protect from deletion
+                  advanced: true
+                - path: env
+                  type: yaml
+                  yamlType: list
+                  label: Environment variables
+                  advanced: true
+                - path: extraVolumes
+                  type: yaml
+                  yamlType: list
+                  label: Extra volumes
+                  advanced: true
+                - path: volumes
+                  type: yaml
+                  yamlType: map
+                  label: Plugin volume settings
+                  advanced: true
+                - path: firewall
+                  type: yaml
+                  yamlType: map
+                  label: Firewall
+                  advanced: true
+                - path: ssl_truststore
+                  type: yaml
+                  yamlType: map
+                  label: Truststore secrets
+                  advanced: true
+                - path: tags
+                  type: map
+                  label: Workload tags
+                  advanced: true
+                  values: { type: string }
+              rules:
+                - rule: item.image == null || !item.image.contains('bitnami')
+                  mirrors: kafka.validateImage
+                  paths: [image]
+                  message: Bitnami images are not supported; use an Apache Kafka image such as apache/kafka:3.9.1.
+                - rule: >-
+                    item.plugins_wait_timeout_action == null || item.plugins_wait_timeout_action == '' ||
+                    item.plugins_wait_timeout_action in ['start', 'restart']
+                  mirrors: kafka.validateConnectorDownloads
+                  paths: [plugins_wait_timeout_action]
+                  message: The timeout action must be start or restart.
+                - rule: >-
+                    item.plugins.all(p, type(p) != map || !('artifacts' in p) || type(p.artifacts) != list ||
+                    p.artifacts.all(a, type(a) != map || !('sha256' in a) || a.sha256 == null || string(a.sha256) == '' ||
+                    string(a.sha256).matches('^[0-9A-Fa-f]{64}$')))
+                  mirrors: kafka.validateConnectorDownloads
+                  paths: [plugins]
+                  message: Every artifact `sha256` must be 64 hexadecimal characters.
+                - rule: >-
+                    item.minCpu == null || item.minCpu == '' || item.cpu == null || item.cpu == '' ||
+                    cpuMillicores(item.cpu) <= 4 * cpuMillicores(item.minCpu)
+                  paths: [minCpu]
+                  message: Kafka Connect is stateful, so the CPU limit can be at most 4 times the CPU reservation.
+                - rule: >-
+                    (item.listener != null && item.listener != '') ||
+                    'bootstrap.servers' in item.connector_properties
+                  paths: [listener]
+                  message: Set a broker listener, or `bootstrap.servers` in the worker properties.
+                - rule: item.listener == null || item.listener == '' || item.listener in self.kafka.listeners
+                  paths: [listener]
+                  message: The broker listener must be one of the keys under Listeners.
+
+  - id: advanced
+    title: Advanced
+    description: The health sidecar, the metrics exporters and the optional client workload.
+    docs: "#health-sidecar-and-exporters"
+    sections:
+      - title: Health sidecar
+        fields:
+          - path: kafka_orchestrator
+            type: object
+            optional: true
+            label: Health and metrics sidecar
+            description: Runs next to each broker. Turn it off to remove the sidecar.
+            newValue:
+              image: ghcr.io/controlplane-com/kafka-orchestrator:v0.1.0
+              cpu: 100m
+              memory: 128Mi
+              minCpu: 50m
+              minMemory: 64Mi
+              listener: client
+              logLevel: info
+              checkTimeout: 10s
+              env: []
+            fields:
+              - path: image
+                type: string
+                format: image
+                label: Sidecar image
+                required: true
+              - path: listener
+                type: string
+                label: Listener
+                required: true
+                description: The key of the entry under Listeners the sidecar uses for its checks.
+              - path: logLevel
+                type: enum
+                label: Log level
+                options: [debug, info, warn, error]
+              - path: checkTimeout
+                type: string
+                format: duration
+                label: Check timeout
+              - path: cpu
+                type: quantity
+                quantity: cpu
+                label: Sidecar CPU limit
+                required: true
+              - path: minCpu
+                type: quantity
+                quantity: cpu
+                label: Sidecar CPU reservation
+              - path: memory
+                type: quantity
+                quantity: memory
+                label: Sidecar memory limit
+                required: true
+              - path: minMemory
+                type: quantity
+                quantity: memory
+                label: Sidecar memory reservation
+              - path: env
+                type: yaml
+                yamlType: list
+                label: Sidecar environment variables
+        rules:
+          - rule: self.kafka_orchestrator == null || self.kafka_orchestrator.listener in self.kafka.listeners
+            paths: [kafka_orchestrator.listener]
+            message: The sidecar's listener must be one of the keys under Listeners.
+          - rule: >-
+              self.kafka_orchestrator == null || self.kafka_orchestrator.minCpu == null || self.kafka_orchestrator.minCpu == '' ||
+              cpuMillicores(self.kafka_orchestrator.cpu) <= 4 * cpuMillicores(self.kafka_orchestrator.minCpu)
+            paths: [kafka_orchestrator.minCpu]
+            message: The sidecar runs in the stateful broker workload, so its CPU limit can be at most 4 times its reservation.
+      - title: Kafka exporter
+        collapsible: true
+        fields:
+          - path: kafka_exporter.name
+            type: string
+            label: Kafka exporter container name
+            required: true
+          - path: kafka_exporter.image
+            type: string
+            format: image
+            label: Kafka exporter image
+            required: true
+          - path: kafka_exporter.listener
+            type: string
+            label: Kafka exporter listener
+            required: true
+          - path: kafka_exporter.cpu
+            type: quantity
+            quantity: cpu
+            label: Kafka exporter CPU limit
+            required: true
+          - path: kafka_exporter.memory
+            type: quantity
+            quantity: memory
+            label: Kafka exporter memory limit
+            required: true
+          - path: kafka_exporter.dropMetrics
+            type: list
+            label: Kafka exporter metrics to drop
+            item: { type: string, label: Metric pattern }
+          - path: kafka_exporter.env
+            type: yaml
+            yamlType: list
+            label: Kafka exporter environment variables
+          - path: kafka_exporter.debug
+            type: boolean
+            label: Kafka exporter debug mode
+      - title: JMX exporter
+        collapsible: true
+        fields:
+          - path: jmx_exporter.name
+            type: string
+            label: JMX exporter container name
+            required: true
+          - path: jmx_exporter.image
+            type: string
+            format: image
+            label: JMX exporter image
+            required: true
+          - path: jmx_exporter.listener
+            type: string
+            label: JMX exporter listener
+            required: true
+          - path: jmx_exporter.kafkaJmxPort
+            type: integer
+            label: Broker JMX port
+            required: true
+            min: 1
+            max: 65535
+            description: Must match the port in the exporter's `jmxUrl`.
+          - path: jmx_exporter.exporterPort
+            type: integer
+            label: Exporter port
+            required: true
+            min: 1
+            max: 65535
+          - path: jmx_exporter.cpu
+            type: quantity
+            quantity: cpu
+            label: JMX exporter CPU limit
+            required: true
+          - path: jmx_exporter.minCpu
+            type: quantity
+            quantity: cpu
+            label: JMX exporter CPU reservation
+          - path: jmx_exporter.memory
+            type: quantity
+            quantity: memory
+            label: JMX exporter memory limit
+            required: true
+          - path: jmx_exporter.minMemory
+            type: quantity
+            quantity: memory
+            label: JMX exporter memory reservation
+          - path: jmx_exporter.dropMetrics
+            type: list
+            label: JMX exporter metrics to drop
+            item: { type: string, label: Metric pattern }
+          - path: jmx_exporter.debug
+            type: boolean
+            label: JMX exporter debug mode
+        rules:
+          - rule: >-
+              self.jmx_exporter.minCpu == null || self.jmx_exporter.minCpu == '' ||
+              cpuMillicores(self.jmx_exporter.cpu) <= 4 * cpuMillicores(self.jmx_exporter.minCpu)
+            paths: [jmx_exporter.minCpu]
+            message: The JMX exporter runs in the stateful broker workload, so its CPU limit can be at most 4 times its reservation.
+      - title: Kafka client
+        fields:
+          - path: kafka_client
+            type: object
+            optional: true
+            label: Kafka client workload
+            description: A workload with the Kafka command-line tools, for testing the cluster from inside the GVC.
+            newValue:
+              name: client
+              image: apache/kafka:3.9.1
+              cpu: 500m
+              memory: 1000Mi
+              firewall:
+                external_outboundAllowCIDR: "0.0.0.0/0"
+            docs: "#kafka-client"
+            fields:
+              - path: name
+                type: string
+                label: Client workload name
+                required: true
+              - path: image
+                type: string
+                format: image
+                label: Client image
+                required: true
+              - path: cpu
+                type: quantity
+                quantity: cpu
+                label: Client CPU limit
+                required: true
+              - path: memory
+                type: quantity
+                quantity: memory
+                label: Client memory limit
+                required: true
+              - path: firewall
+                type: yaml
+                yamlType: map
+                label: Client firewall
+
+yamlOnly:
+  - path: jmx_exporter.config
+    reason: >-
+      The JMX exporter rule set. The shipped rules cover the broker metrics, and a wrong pattern
+      silently drops metrics.

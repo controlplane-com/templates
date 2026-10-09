@@ -1,3 +1,17 @@
+# Release Notes - Version 4.3.0
+
+## What's New
+
+- **Kafka Connect waits for its plugins**: the fixed 60-second sleep is replaced by a wait for the plugin downloader to finish, so a slow download no longer leaves a connector missing or FAILED. Configure with `plugins_wait_timeout_seconds` (default 900; 0 waits forever) and `plugins_wait_timeout_action` (`start`, the default, starts without the missing plugins and logs a WARNING naming them; `restart` exits and waits again).
+- **Atomic, idempotent plugin downloads**: artifacts are staged on the plugin volume, verified and renamed into place, so a restart never truncates a working plugin and skips everything already installed. Large archives no longer use the container's ephemeral storage.
+- **Every artifact keeps its own file**: each artifact installs to `<plugin>/<key>/<file name>`, so a plugin with several `jar` artifacts gets all of them (earlier versions kept only the last one).
+- **Files you placed yourself are never touched**: the chart removes only artifacts it downloaded and recorded. On the first start after upgrading, earlier `<plugin>/<plugin>.jar` files are moved to `.cpln-downloads/retired/`; directories extracted from archives by earlier versions are left in place and listed in the log.
+- **Optional `sha256` per artifact**, verified before install.
+- **New per-connector keys**: `plugins_redownload_token` (change it to download everything again), `downloader_image` (pinned to `busybox:1.37.0-musl`), `downloader_cpu` (default `80m`).
+- **Credentials are no longer logged**: userinfo and query strings in artifact URLs are redacted, and the connector setup no longer prints connector configs or generated truststore passwords (it logs the config key names only).
+- **Fixes**: the connector setup no longer reports "created successfully" when the create request failed (it now retries), and the downloader exits promptly on shutdown.
+- Upgrading restarts the Kafka Connect replicas (and, as with any chart version change, the brokers). The first start downloads every plugin again while Kafka Connect waits.
+
 # Release Notes - Version 4.2.0
 
 ## What's New

@@ -38,7 +38,7 @@ You can connect to Kafka from the same GVC in which it's deployed using the foll
 
 1. To activate the Kafka client, make sure `kafka_client` is uncommented in your values file, then upgrade the release with it:
    ```bash
-   cpln helm upgrade RELEASE_NAME ./kafka/versions/4.2.0 --gvc GVC_NAME --dependency-update -f values.yaml
+   cpln helm upgrade RELEASE_NAME ./kafka/versions/4.3.0 --gvc GVC_NAME --dependency-update -f values.yaml
    ```
 
 2. To connect to the `kafka-client` workload, navigate through the UI to the appropriate GVC and select the `kafka-client` workload. In the workload details, find and use the **Connect** feature to establish a connection, which can be done either via the UI or by utilizing the CLI command provided there.
@@ -258,6 +258,47 @@ kafka_connectors:
 
 These tags are applied to the connector **workload** resource only. Other connector-related resources (secrets, identity, volumeset, policy) continue to use the common chart tags.
 
+### Kafka Connect plugins
+
+The `plugins-downloader` container downloads every artifact of each plugin that has `enabled: true`. It stages each artifact on the plugin volume, verifies it, and then moves it into `<plugins_folder>/<plugin>/<key>/` in one step, so Kafka Connect never sees a half-written file. Kafka Connect scans the plugins folder only once per start, so it waits until every artifact is in place before it starts. An installed artifact is never downloaded again, so a restart takes seconds.
+
+```yaml
+kafka_connectors:
+  - name: cluster
+    plugins_wait_timeout_seconds: 900 # How long Kafka Connect waits for plugin downloads; 0 = wait forever
+    plugins_wait_timeout_action: start # start = start without the missing plugins (logged as WARNING) / restart = exit and wait again
+    plugins_redownload_token: "" # Change to any new value to download every plugin again on the next restart
+    downloader_image: busybox:1.37.0-musl # Needs busybox-compatible sh, wget, unzip, tar, sha256sum and sed
+    downloader_cpu: 80m # Raise for large artifacts: downloads are CPU-bound at 80m
+    plugins:
+      - name: snowflake-sink
+        enabled: true # Required for a download; without it the connector is still created
+        artifacts:
+          - type: jar # jar, zip, tar, tgz or tar.gz
+            url: https://repo1.maven.org/maven2/com/snowflake/snowflake-kafka-connector/3.1.1/snowflake-kafka-connector-3.1.1.jar
+            sha256: <64 hex characters> # Optional: verified before install
+```
+
+- **`enabled: true` is required for a download.** A plugin without it is not downloaded, but its connector is still created. That is how you use a plugin you placed in the plugins folder yourself.
+- **Set `sha256` on every artifact.** The downloader does not verify TLS certificates, so the checksum is the integrity check. On a mismatch the artifact is not installed and the download is retried.
+- **Each artifact gets its own directory**, so a plugin with several `jar` artifacts keeps all of them, and they load in one classloader.
+- **The chart removes only artifacts it downloaded.** After you change an artifact URL, remove a plugin or set `enabled: false`, those artifacts are deleted once the next download pass succeeds. Files you placed in the plugins folder yourself are never touched; the downloader lists them at each start (`left untouched`).
+- **If an artifact is still missing at the timeout**, `start` starts Kafka Connect without it and the `kafka-connect` log shows `WARNING: connector plugins not ready … WITHOUT:` with the list. When the download later succeeds, the downloader logs that the worker must be restarted: run `cpln workload force-redeployment`.
+- **Volume space:** every installed artifact, plus room to download and unpack the largest one. When an artifact URL changes, the old and new copies both stay until the pass succeeds.
+- **Credentials in artifact URLs are redacted in the logs** (`***@`, `?<redacted>`). They are still readable in the `-download` secret. `verbose: true` also traces the connector setup script, which prints connector configs including credentials, so leave it off outside debugging.
+
+#### Upgrading from 4.2.x or earlier
+
+- The first start after the upgrade downloads every plugin again, once per replica, while Kafka Connect waits. Expect connectors to be down for about one full download. Later restarts take seconds.
+- Files that earlier versions wrote as `<plugin>/<plugin>.jar` are moved to `.cpln-downloads/retired/` in the plugins folder, for plugins that still have a `jar` artifact.
+- Directories that earlier versions extracted from `zip`, `tar` or `tgz` artifacts stay in place, and Kafka Connect still loads them beside the new copy. Once your connectors are `RUNNING`, remove them on each replica (named `RELEASE_NAME-connect-CONNECTOR_NAME-0`, `-1`, …) and restart the workload:
+  ```bash
+  cpln workload exec RELEASE_NAME-connect-CONNECTOR_NAME --gvc GVC_NAME --location LOCATION --replica REPLICA_NAME --container plugins-downloader -- ls -A /opt/kafka/plugins
+  cpln workload exec RELEASE_NAME-connect-CONNECTOR_NAME --gvc GVC_NAME --location LOCATION --replica REPLICA_NAME --container plugins-downloader -- rm -rf /opt/kafka/plugins/OLD_DIRECTORY
+  cpln workload force-redeployment RELEASE_NAME-connect-CONNECTOR_NAME --gvc GVC_NAME
+  ```
+- Rolling back to 4.2.x has not been verified.
+
 ### Broker Logs
 
 For official `apache/kafka:3.x.y` images the chart sets `KAFKA_LOG4J_ROOT_LOGLEVEL=INFO`. The main broker log then goes to stdout only (`cpln logs`), instead of also to `/opt/kafka/logs/server.log`. That copy was never deleted and eventually filled the container's ephemeral storage. The small controller, state-change, request, log-cleaner and authorizer logs and the size-capped GC log still go to `/opt/kafka/logs`, as before. To use a different level, set a non-empty `KAFKA_LOG4J_ROOT_LOGLEVEL` in `kafka.env`, on 3.x images only: on a 4.x image this variable removes every output from the root logger, including stdout.
@@ -278,3 +319,5 @@ See [RELEASES.md](https://github.com/controlplane-com/templates/blob/main/kafka/
 - **The Kafbat UI and REST Proxy images are unpinned** (`:latest`), so a redeploy may pick up newer builds of either.
 - **Replication factor is derived from `kafka.replicas`** unless you override it in `extra_configurations`. A single-broker cluster cannot replicate, so topics created there survive nothing.
 - **Uninstalling deletes the volume sets**, and with them every topic's log.
+- **A connector that is `FAILED` with "Failed to find any class" after its plugin arrived late needs a worker restart** (`cpln workload force-redeployment`). A REST restart does not rescan the plugins folder.
+- **The Kafka Connect workload reports ready while it waits for plugins.** Read the `kafka-connect` container log for `Waiting for plugin downloads` or `WARNING: connector plugins not ready`.

@@ -1,6 +1,7 @@
 {{- if .Values.kafka_connectors }}
 {{- range .Values.kafka_connectors }}
 {{- include "kafka.validateImage" . -}}
+{{- include "kafka.validateConnectorDownloads" . -}}
 kind: policy
 name: {{ include "kafka.name" $ }}-connect-{{ .name }}
 description: {{ include "kafka.name" $ }}-connect-{{ .name }}
@@ -58,7 +59,7 @@ type: opaque
 data:
   encoding: plain
   payload: |
-    {{- include "kafka.connectors.download.script" (dict "plugins" .plugins "plugins_folder" .plugins_folder "verbose" .verbose) | nindent 4 }}
+    {{- include "kafka.connectors.download.script" (dict "plugins" .plugins "plugins_folder" .plugins_folder "verbose" .verbose "connector" .) | nindent 4 }}
 ---
 kind: secret
 name: {{ include "kafka.name" $ }}-connect-{{ .name }}-init
@@ -67,7 +68,7 @@ type: opaque
 data:
   encoding: plain
   payload: |
-    {{- include "kafka.connectors.run.script" (dict "plugins" .plugins "plugins_folder" .plugins_folder "verbose" .verbose) | nindent 4 }}
+    {{- include "kafka.connectors.run.script" (dict "plugins" .plugins "plugins_folder" .plugins_folder "verbose" .verbose "connector" .) | nindent 4 }}
 ---
 kind: secret
 name: {{ include "kafka.name" $ }}-connect-{{ .name }}-props
@@ -141,7 +142,7 @@ spec:
       {{- end }}
       args:
         - '-c'
-        - sleep 60 && cp /opt/kafka/init.sh /opt/kafka/init-run.sh && chmod +x /opt/kafka/init-run.sh && /opt/kafka/init-run.sh
+        - cp /opt/kafka/init.sh /opt/kafka/init-run.sh && chmod +x /opt/kafka/init-run.sh && /opt/kafka/init-run.sh
       command: /bin/bash
       cpu: {{ .cpu }}
       {{- if .minCpu }}
@@ -166,16 +167,18 @@ spec:
         - path: /opt/kafka/init.sh
           recoveryPolicy: retain
           uri: cpln://secret/{{ include "kafka.name" $ }}-connect-{{ .name }}-init
+        - path: /opt/kafka/sync
+          uri: scratch://plugin-sync
         {{- if .extraVolumes }}
         {{- toYaml .extraVolumes | nindent 8 }}
         {{- end }}
     - name: plugins-downloader
       args:
         - '-c'
-        - cp /opt/kafka/download.sh /opt/kafka/download-run.sh && chmod +x /opt/kafka/download-run.sh && /opt/kafka/download-run.sh 
+        - cp /opt/kafka/download.sh /opt/kafka/download-run.sh && chmod +x /opt/kafka/download-run.sh && exec /opt/kafka/download-run.sh
       command: /bin/sh
-      cpu: 80m
-      image: busybox:musl
+      cpu: {{ .downloader_cpu | default "80m" }}
+      image: {{ .downloader_image | default "busybox:1.37.0-musl" }}
       inheritEnv: false
       memory: 120Mi
       ports: []
@@ -186,6 +189,8 @@ spec:
         - path: /opt/kafka/download.sh
           recoveryPolicy: retain
           uri: cpln://secret/{{ include "kafka.name" $ }}-connect-{{ .name }}-download
+        - path: /opt/kafka/sync
+          uri: scratch://plugin-sync
   defaultOptions:
     autoscaling:
       maxConcurrency: 0

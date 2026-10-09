@@ -239,10 +239,16 @@ kafbat_ui:
 #     memory: 1500Mi
 #     minCpu: 100m
 #     minMemory: 375Mi
-#     plugins_folder: /opt/kafka/plugins
+#     plugins_folder: /opt/kafka/plugins # Where plugins are installed; keep it the volume mount (default /opt/kafka/plugins)
 #     timeoutSeconds: 15
 #     replicas: 1
-#     verbose: false
+#     verbose: false # Extra downloader log lines (URLs are always redacted)
+#     # ─── Plugin downloads (4.3.0+) ─────────────────────────────
+#     plugins_wait_timeout_seconds: 900 # How long Kafka Connect waits for plugin downloads; 0 = wait forever
+#     plugins_wait_timeout_action: start # start = start without the missing plugins (logged as WARNING) / restart = exit and wait again
+#     plugins_redownload_token: "" # Change to any new value to download every plugin again on the next restart
+#     downloader_image: busybox:1.37.0-musl # Needs busybox-compatible sh, wget, unzip, tar, sha256sum and sed
+#     downloader_cpu: 80m # Raise for large artifacts: downloads are CPU-bound at 80m
 #     extraVolumes: []
 #     # Volume configuration for Kafka Connect (Optional - defaults shown below)
 #     volumes:
@@ -295,6 +301,7 @@ kafbat_ui:
 #       key.converter: "org.apache.kafka.connect.storage.StringConverter"
 #       value.converter: "org.apache.kafka.connect.converters.ByteArrayConverter"
 #     plugins:
+#       # A plugin is downloaded only when it has "enabled: true"; without the key its connector is still created.
 #       - name: kafka-mirror-test-1
 #         enabled: true
 #         config:
@@ -412,6 +419,7 @@ kafbat_ui:
 #         artifacts:
 #           - type: jar
 #             url: https://repo1.maven.org/maven2/com/snowflake/snowflake-kafka-connector/3.1.1/snowflake-kafka-connector-3.1.1.jar
+#             # sha256: <64 hex characters> # Optional: verified before install (recommended; the downloader does not verify TLS certificates)
 #           - type: jar
 #             url: https://repo1.maven.org/maven2/org/bouncycastle/bc-fips/2.1.0/bc-fips-2.1.0.jar
 #           - type: jar

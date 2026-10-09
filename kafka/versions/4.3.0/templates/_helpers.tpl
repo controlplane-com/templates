@@ -242,6 +242,40 @@ without losing acked writes); with replicas=2 it gives 1; with replicas=1 it giv
 {{- end -}}
 {{- end -}}
 
+{{- /* Validates only the plugin-download keys added in 4.3.0; an entry using 4.2.0 keys renders unchanged. */ -}}
+{{- define "kafka.validateConnectorDownloads" -}}
+{{- $c := . -}}
+{{- if and (hasKey $c "plugins_wait_timeout_action") (not (kindIs "invalid" $c.plugins_wait_timeout_action)) -}}
+  {{- if not (has (toString $c.plugins_wait_timeout_action) (list "start" "restart")) -}}
+    {{- fail (printf "Error in kafka_connectors '%s': plugins_wait_timeout_action must be 'start' or 'restart', got '%v'" (toString $c.name) $c.plugins_wait_timeout_action) -}}
+  {{- end -}}
+{{- end -}}
+{{- if and (hasKey $c "plugins_wait_timeout_seconds") (not (kindIs "invalid" $c.plugins_wait_timeout_seconds)) -}}
+  {{- $t := $c.plugins_wait_timeout_seconds -}}
+  {{- $ok := false -}}
+  {{- if or (kindIs "int" $t) (kindIs "int64" $t) -}}
+    {{- $ok = ge (int64 $t) 0 -}}
+  {{- else if kindIs "float64" $t -}}
+    {{- $ok = and (ge $t 0.0) (eq $t (floor $t)) -}}
+  {{- else if kindIs "string" $t -}}
+    {{- $ok = regexMatch "^[0-9]+$" $t -}}
+  {{- end -}}
+  {{- if not $ok -}}
+    {{- fail (printf "Error in kafka_connectors '%s': plugins_wait_timeout_seconds must be a whole number of seconds, 0 or more (0 = wait forever), got '%v'" (toString $c.name) $t) -}}
+  {{- end -}}
+{{- end -}}
+{{- range $c.plugins -}}
+  {{- $p := . -}}
+  {{- range .artifacts -}}
+    {{- if and (hasKey . "sha256") (not (kindIs "invalid" .sha256)) (ne (toString .sha256) "") -}}
+      {{- if not (regexMatch "^[0-9A-Fa-f]{64}$" (toString .sha256)) -}}
+        {{- fail (printf "Error in kafka_connectors '%s', plugin '%s': artifact sha256 must be 64 hexadecimal characters, got '%v'" (toString $c.name) (toString $p.name) .sha256) -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "kafka.clientBootstrapAddress" -}}
 {{- $clusterName := include "kafka.clusterName" . -}}
 {{- $bootstrapAddress := "" -}}
@@ -285,94 +319,340 @@ without losing acked writes); with replicas=2 it gives 1; with replicas=1 it giv
 
 
 {{- define "kafka.connectors.download.script" -}}
+{{- $c := .connector | default dict -}}
 #!/bin/sh
-set -e{{- if .verbose }}x{{- end }}
+# Kafka Connect plugin downloader (chart 4.3.0).
+# Each artifact is downloaded to a staging dir on the plugin volume, verified, and renamed into
+# <plugins>/<plugin>/<key>/ (same filesystem, so the rename is atomic). An installed artifact is never
+# rewritten, so a restart skips it. Only artifacts recorded in .cpln-downloads/manifest are ever
+# deleted; files this chart did not download are never touched.
+# Kafka Connect waits for $SYNC/downloads-done before it scans plugin.path.
+set -u
+PLUGINS='{{ replace "'" "'\\''" (toString (.plugins_folder | default "/opt/kafka/plugins")) }}'
+STATE="$PLUGINS/.cpln-downloads"
+MANIFEST="$STATE/manifest"
+STAGING="$STATE/staging"
+RETIRED="$STATE/retired"
+SYNC=/opt/kafka/sync
+TOKEN='{{ replace "'" "'\\''" (toString ($c.plugins_redownload_token | default "")) }}'
+VERBOSE={{ if .verbose }}1{{ else }}0{{ end }}
+NL='
+'
+CHILD=""
 
-download_file() {
-  local url=$1
-  local output_file=$2
-  
-  if echo "$url" | grep -q "@.*jfrog"; then
-    echo "Handling JFrog redirect for: $url"
-    local redirect_url=$(wget -S --spider "$url" 2>&1 | grep 'Location:' | awk '{print $2}')
+log() { echo "[plugins $(date -u +%H:%M:%S)] $*"; }
+vlog() { if [ "$VERBOSE" = 1 ]; then log "$@"; fi; return 0; }
+# Credentials never reach the log: userinfo becomes ***@ and a query string becomes ?<redacted>.
+redact() { printf '%s\n' "$1" | sed -e 's#\([A-Za-z][A-Za-z0-9+.-]*://\)[^/]*@#\1***@#g' -e 's#?.*#?<redacted>#'; }
+strip_userinfo() { printf '%s\n' "$1" | sed 's#^\([A-Za-z][A-Za-z0-9+.-]*://\)[^/]*@#\1#'; }
+lower() { printf '%s' "$1" | tr 'A-Z' 'a-z'; }
+
+on_term() {
+  log "SIGTERM: stopping"
+  if [ -n "$CHILD" ]; then kill "$CHILD" 2>/dev/null; fi
+  exit 143
+}
+trap on_term TERM INT
+# Long operations run in the background and are waited on, so a SIGTERM is handled at once.
+bg() { "$@" & CHILD=$!; wait "$CHILD"; _rc=$?; CHILD=""; return $_rc; }
+
+plugin_name_ok() {
+  case "$1" in ''|.*|*/*|lost+found) return 1 ;; esac
+  case "$1" in *"$NL"*) return 1 ;; esac
+  return 0
+}
+
+# Add an entry (<plugin>/<key>) to the manifest of artifact dirs this chart created.
+record() {
+  if [ -f "$MANIFEST" ] && grep -qxF -- "$1" "$MANIFEST"; then return 0; fi
+  { if [ -f "$MANIFEST" ]; then cat "$MANIFEST"; fi; printf '%s\n' "$1"; } > "$MANIFEST.tmp" && mv -f "$MANIFEST.tmp" "$MANIFEST"
+}
+
+# File name for a jar artifact: the last segment of the URL path, with .jar appended if missing.
+jar_name() {
+  u=$(strip_userinfo "$1"); u=${u%%#*}; u=${u%%\?*}; u=${u#*://}
+  case "$u" in */*) p=${u#*/} ;; *) p="" ;; esac
+  n=${p##*/}
+  if [ -z "$n" ]; then n=artifact; fi
+  case "$n" in *.jar) ;; *) n="$n.jar" ;; esac
+  printf '%s' "$n"
+}
+
+# fetch URL FILE ERRFILE. A URL with credentials on a JFrog host is resolved to its redirect first
+# (unchanged from earlier chart versions); the redirect URL is presigned and is never logged.
+fetch() {
+  if echo "$1" | grep -q "@.*jfrog"; then
+    log "Handling JFrog redirect for: $(redact "$1")"
+    bg wget -S --spider -T 60 "$1" >"$3.spider" 2>&1
+    redirect_url=$(grep 'Location:' "$3.spider" | awk '{print $2}')
+    rm -f "$3.spider"
     if [ -n "$redirect_url" ]; then
-      echo "Downloading from redirect URL..."
-      wget -q "$redirect_url" -O "$output_file"
+      log "Downloading from redirect URL..."
+      bg wget -q -T 60 -O "$2" "$redirect_url" 2>"$3"
     else
-      echo "Failed to get redirect URL, trying direct download..."
-      wget -q "$url" -O "$output_file"
+      log "Failed to get redirect URL, trying direct download..."
+      bg wget -q -T 60 -O "$2" "$1" 2>"$3"
     fi
   else
-    wget -q "$url" -O "$output_file"
+    bg wget -q -T 60 -O "$2" "$1" 2>"$3"
   fi
 }
 
-# Function to download and extract artifacts
-download_and_extract() {
-  local artifact_type=$1
-  local artifact_url=$2
-  local plugin_path=$3
-  local plugin_name=$4
-  local temp_dir=$(mktemp -d)
-  
-  echo "Downloading artifact from $artifact_url"
-  
-  if [ "$artifact_type" == "jar" ]; then
-    # For jar files, create a directory for the plugin if it doesn't exist
-    local plugin_dir="$plugin_path/$plugin_name"
-    mkdir -p "$plugin_dir"
-    
-    # Download jar file to the plugin-specific directory
-    download_file "$artifact_url" "$plugin_dir/${plugin_name}.jar"
-    echo "Downloaded JAR file to $plugin_dir/${plugin_name}.jar"
-  else
-    # For archives, download to temp dir and extract
-    local archive_file="$temp_dir/archive.${artifact_type}"
-    download_file "$artifact_url" "$archive_file"
-    
-    echo "Extracting $artifact_type archive to $plugin_path"
-    case "$artifact_type" in
-      "tgz"|"tar.gz")
-        tar -xzf "$archive_file" -C "$plugin_path"
-        ;;
-      "tar")
-        tar -xf "$archive_file" -C "$plugin_path"
-        ;;
-      "zip")
-        unzip -o "$archive_file" -d "$plugin_path"
-        ;;
-      *)
-        echo "Unsupported archive type: $artifact_type"
-        ;;
-    esac
-    
-    rm -rf "$temp_dir"
-  fi
+config_skip() {
+  log "ERROR $1"
+  CONFIG_SKIPPED="${CONFIG_SKIPPED}$2${NL}"
 }
-# Process each Kafka connector
-echo "Setting up Kafka connector plugins"
 
-# Download and extract artifacts for each enabled plugin
+fail_artifact() {
+  FAILED="${FAILED}${plugin}: ${rurl} ($1)${NL}"
+  rm -rf "$st"
+}
+
+# install_artifact PLUGIN TYPE URL SHA256. Returns 1 only for a failure worth retrying.
+install_artifact() {
+  plugin=$1; type=$2; url=$3; sha=$(lower "$4")
+  rurl=$(redact "$url")
+  if ! plugin_name_ok "$plugin"; then
+    config_skip "invalid plugin name '$plugin' (empty, starts with '.', contains '/' or is lost+found): skipped $rurl" "${plugin}: $rurl (invalid plugin name)"
+    return 0
+  fi
+  if [ -z "$url" ]; then
+    config_skip "plugin $plugin: an artifact has no url: skipped" "${plugin}: (artifact without a url)"
+    return 0
+  fi
+  case "$type" in
+    jar|zip|tar|tgz|tar.gz) ;;
+    *)
+      config_skip "plugin $plugin: unsupported artifact type '$type' for $rurl (supported: jar, zip, tar, tgz, tar.gz): skipped" "${plugin}: $rurl (unsupported type '$type')"
+      return 0 ;;
+  esac
+  if [ "$type" = jar ]; then JARP="${JARP}${plugin}${NL}"; fi
+  key=$(printf 'v2\n%s\n%s\n%s\n%s\n' "$type" "$(strip_userinfo "$url")" "$sha" "$TOKEN" | sha256sum | cut -c1-16)
+  KEEP="${KEEP}${plugin}/${key}${NL}"
+  dest="$PLUGINS/$plugin/$key"
+  st="$STAGING/$key"
+  if [ -d "$dest" ]; then
+    record "$plugin/$key"
+    vlog "skip $plugin $type $rurl (installed as $plugin/$key)"
+    return 0
+  fi
+  rm -rf "$st"
+  if ! mkdir -p "$st/x"; then
+    log "ERROR cannot create the staging dir $st"
+    fail_artifact "staging dir"; return 1
+  fi
+  log "download $plugin $type $rurl"
+  vlog "  key $key, staging $st"
+  if ! fetch "$url" "$st/file" "$st/err"; then
+    err=$(tail -n 3 "$st/err" 2>/dev/null | tr '\n' ' ')
+    log "ERROR download failed: $rurl: $(redact "$err")"
+    fail_artifact "download failed"; return 1
+  fi
+  vlog "  downloaded $(wc -c < "$st/file") bytes"
+  if [ -n "$sha" ]; then
+    got=$(sha256sum "$st/file" | cut -d' ' -f1)
+    if [ "$got" != "$sha" ]; then
+      log "ERROR sha256 mismatch for $plugin $rurl: expected $sha, got $got"
+      fail_artifact "sha256 mismatch"; return 1
+    fi
+    vlog "  sha256 verified"
+  fi
+  case "$type" in
+    jar)
+      if ! unzip -l "$st/file" >/dev/null 2>&1; then
+        log "ERROR not a valid jar: $rurl"; fail_artifact "not a valid jar"; return 1
+      fi
+      mv "$st/file" "$st/x/$(jar_name "$url")" ;;
+    zip)
+      if ! unzip -l "$st/file" >/dev/null 2>&1 || ! bg unzip -q -o "$st/file" -d "$st/x" >/dev/null 2>&1; then
+        log "ERROR not a valid zip: $rurl"; fail_artifact "not a valid zip"; return 1
+      fi ;;
+    tgz|tar.gz)
+      if ! tar -tzf "$st/file" >/dev/null 2>&1 || ! bg tar -xzf "$st/file" -C "$st/x" 2>/dev/null; then
+        log "ERROR not a valid $type: $rurl"; fail_artifact "not a valid $type"; return 1
+      fi ;;
+    tar)
+      if ! tar -tf "$st/file" >/dev/null 2>&1 || ! bg tar -xf "$st/file" -C "$st/x" 2>/dev/null; then
+        log "ERROR not a valid tar: $rurl"; fail_artifact "not a valid tar"; return 1
+      fi ;;
+  esac
+  rm -f "$st/file" "$st/err"
+  if ! mkdir -p "$PLUGINS/$plugin"; then
+    log "ERROR cannot create $PLUGINS/$plugin"; fail_artifact "plugin dir"; return 1
+  fi
+  if ! record "$plugin/$key"; then
+    log "ERROR cannot write $MANIFEST"; fail_artifact "manifest"; return 1
+  fi
+  if ! mv "$st/x" "$dest"; then
+    log "ERROR cannot move $plugin/$key into place"; fail_artifact "rename"; return 1
+  fi
+  rm -rf "$st"
+  INSTALLED=$((INSTALLED+1))
+  log "installed $plugin $type $rurl as $plugin/$key"
+  return 0
+}
+
+# Plugins with "enabled: true" (the only ones downloaded, as in earlier chart versions).
+enabled_plugins() {
 {{- range .plugins }}
 {{- if eq .enabled true }}
-echo "Processing plugin: {{ .name }}"
-{{- $pluginName := .name }}
-{{- range .artifacts }}
-download_and_extract "{{ .type }}" "{{ .url }}" "{{ $.plugins_folder }}" "{{ $pluginName }}"
-{{- end }}
-{{- else }}
-echo "Skipping disabled plugin: {{ .name }}"
+  printf '%s\n' '{{ replace "'" "'\\''" (toString .name) }}'
 {{- end }}
 {{- end }}
+  :
+}
 
-echo "All Kafka connector plugins have been downloaded and extracted."
-echo "Sleeping..."
-sleep infinity
+not_enabled_plugins() {
+{{- range .plugins }}
+{{- if eq .enabled true }}
+{{- else }}
+  printf '%s\n' '{{ replace "'" "'\\''" (toString .name) }}'
+{{- end }}
+{{- end }}
+  :
+}
+
+# One pass over every wanted artifact, in values order. Returns 1 if any retryable failure.
+run_all() {
+  KEEP=""; JARP=""; FAILED=""; CONFIG_SKIPPED=""; prc=0
+{{- range .plugins }}
+{{- if eq .enabled true }}
+  P='{{ replace "'" "'\\''" (toString .name) }}'
+{{- range .artifacts }}
+  install_artifact "$P" '{{ replace "'" "'\\''" (toString (.type | default "")) }}' '{{ replace "'" "'\\''" (toString (.url | default "")) }}' '{{ replace "'" "'\\''" (toString (.sha256 | default "")) }}' || prc=1
+{{- end }}
+{{- end }}
+{{- end }}
+  printf '%s%s' "$FAILED" "$CONFIG_SKIPPED" > "$SYNC/pending.tmp" && mv -f "$SYNC/pending.tmp" "$SYNC/pending"
+  return $prc
+}
+
+# Top-level entries this chart does not manage. Listed so they are visible; never touched.
+report_unmanaged() {
+  list=""
+  for e in "$PLUGINS"/* "$PLUGINS"/.[!.]* "$PLUGINS"/..?*; do
+    if [ ! -e "$e" ] && [ ! -L "$e" ]; then continue; fi
+    n=${e##*/}
+    case "$n" in .cpln-downloads|lost+found) continue ;; esac
+    if enabled_plugins | grep -qxF -- "$n"; then continue; fi
+    if [ -f "$MANIFEST" ] && grep -q "^$n/" "$MANIFEST" 2>/dev/null; then continue; fi
+    list="$list $n"
+  done
+  if [ -n "$list" ]; then log "left untouched (not downloaded by this chart):$list"; fi
+}
+
+# A configured plugin dir that also holds files this chart did not download shares their classloader.
+collision_check() {
+  enabled_plugins | while IFS= read -r p; do
+    if ! plugin_name_ok "$p" || [ ! -d "$PLUGINS/$p" ]; then continue; fi
+    for e in "$PLUGINS/$p"/* "$PLUGINS/$p"/.[!.]* "$PLUGINS/$p"/..?*; do
+      if [ ! -e "$e" ] && [ ! -L "$e" ]; then continue; fi
+      n=${e##*/}
+      if [ "$n" = "$p.jar" ]; then continue; fi
+      if [ -f "$MANIFEST" ] && grep -qxF -- "$p/$n" "$MANIFEST"; then continue; fi
+      log "WARNING: $p/ also contains files this chart did not download; they load in the same classloader as its artifacts"
+      break
+    done
+  done
+}
+
+manifest_entry_ok() {
+  case "$1" in [!./]*/*) ;; *) return 1 ;; esac
+  p=${1%/*}; k=${1#*/}
+  case "$p" in */*|lost+found) return 1 ;; esac
+  case "$k" in *[!0-9a-f]*) return 1 ;; esac
+  [ ${#k} -eq 16 ]
+}
+
+# Remove artifact dirs this chart created that are no longer wanted (URL changed, plugin removed or
+# not enabled). Only manifest entries are ever deleted.
+prune_manifest() {
+  if [ ! -f "$MANIFEST" ]; then return 0; fi
+  : > "$MANIFEST.new"
+  while IFS= read -r entry; do
+    if [ -z "$entry" ]; then continue; fi
+    case "$NL$KEEP" in *"$NL$entry$NL"*) printf '%s\n' "$entry" >> "$MANIFEST.new"; continue ;; esac
+    if ! manifest_entry_ok "$entry"; then
+      log "WARNING: dropping an unexpected manifest entry; nothing deleted"
+      continue
+    fi
+    if [ -e "$PLUGINS/$entry" ] || [ -L "$PLUGINS/$entry" ]; then
+      log "removing $entry (no longer configured)"
+      if ! rm -rf "${PLUGINS:?}/$entry"; then printf '%s\n' "$entry" >> "$MANIFEST.new"; continue; fi
+    fi
+    if rmdir "$PLUGINS/${entry%/*}" 2>/dev/null; then log "removed empty plugin dir ${entry%/*}"; fi
+  done < "$MANIFEST"
+  mv -f "$MANIFEST.new" "$MANIFEST"
+}
+
+# Chart <= 4.2.x wrote every jar artifact of plugin P to P/P.jar (possibly partial). For each enabled
+# plugin that has a jar artifact now, move that file out of the plugin path (reversible).
+retire_legacy() {
+  printf '%s' "$JARP" | while IFS= read -r p; do
+    if [ -z "$p" ]; then continue; fi
+    f="$PLUGINS/$p/$p.jar"
+    if [ ! -f "$f" ] || [ -L "$f" ]; then continue; fi
+    mkdir -p "$RETIRED"
+    if mv "$f" "$RETIRED/$p.jar.$(date +%s).retired"; then
+      log "retired $p/$p.jar (written by chart 4.2.x or earlier) to .cpln-downloads/retired/"
+    fi
+  done
+}
+
+log "Kafka Connect plugin downloader starting (plugins folder $PLUGINS)"
+mkdir -p "$SYNC"
+rm -f "$SYNC/downloads-done" "$SYNC/pending"
+if ! mkdir -p "$STATE"; then
+  log "FATAL: cannot create $STATE; plugins_folder must be on the plugin volume"
+  exit 1
+fi
+rm -rf "$STAGING"
+mkdir -p "$STAGING"
+printf '2\n' > "$STATE/layout"
+not_enabled_plugins | while IFS= read -r p; do
+  log "skipping plugin $p: not downloaded because it has no \"enabled: true\""
+done
+report_unmanaged
+collision_check
+
+attempt=0
+INSTALLED=0
+until run_all; do
+  attempt=$((attempt+1)); delay=$((attempt*10)); if [ $delay -gt 60 ]; then delay=60; fi
+  log "pass $attempt: some artifacts failed; retrying in ${delay}s. Kafka Connect keeps waiting."
+  bg sleep "$delay"
+done
+log "all artifacts present ($INSTALLED downloaded by this run)"
+
+if [ -f "$SYNC/connect-started-degraded" ]; then
+  log "all artifacts are now installed; Kafka Connect started without some of them, so restart the worker (cpln workload force-redeployment) to load them. Cleanup deferred until then."
+else
+  prune_manifest
+  retire_legacy
+fi
+printf '%s' "$CONFIG_SKIPPED" > "$SYNC/pending.tmp" && mv -f "$SYNC/pending.tmp" "$SYNC/pending"
+touch "$SYNC/downloads-done"
+log "all plugins ready; signalled kafka-connect"
+while :; do bg sleep 2147483647; done
 {{- end }}
 
 {{- define "kafka.connectors.run.script" -}}
+{{- $c := .connector | default dict -}}
+{{- $waitTimeout := 900 -}}
+{{- if and (hasKey $c "plugins_wait_timeout_seconds") (not (kindIs "invalid" $c.plugins_wait_timeout_seconds)) -}}
+{{- $waitTimeout = int $c.plugins_wait_timeout_seconds -}}
+{{- end -}}
+{{- $waitAction := "start" -}}
+{{- if and (hasKey $c "plugins_wait_timeout_action") (not (kindIs "invalid" $c.plugins_wait_timeout_action)) -}}
+{{- $waitAction = toString $c.plugins_wait_timeout_action -}}
+{{- end -}}
 #!/bin/bash
 set -e{{- if .verbose }}x{{- end }}
+
+# Names of the keys in a connector config. Values are never logged: they often hold credentials.
+config_keys() {
+  echo "$1" | sed -n 's/^[[:space:],{]*"\([^"]*\)":[[:space:]]*".*/\1/p' | grep -v '^name$' | tr '\n' ' '
+}
 
 # Function to create or update a connector
 create_or_update_connector() {
@@ -399,8 +679,7 @@ create_or_update_connector() {
     local config_content=$(echo "$config" | sed '/^[[:space:]]*"name":/d' | sed '1,/^[[:space:]]*"config":[[:space:]]*{/d' | sed '$d' | sed '$d')
     local update_config="{${config_content}}"
     
-    echo "Updating connector $connector_name with config:"
-    echo "$update_config"
+    echo "Updating connector $connector_name (config keys: $(config_keys "$update_config"))"
     
     # Update the connector using PUT with nc (BusyBox wget doesn't support PUT)
     local content_length=$(echo -n "$update_config" | wc -c | xargs)
@@ -415,13 +694,15 @@ create_or_update_connector() {
   else
     echo "Connector $connector_name does not exist. Creating..."
     
-    echo "Creating connector $connector_name with config:"
-    echo "$config"
+    echo "Creating connector $connector_name (config keys: $(config_keys "$config"))"
     
-    # Create the connector using POST (this may also update if connector exists)
-    wget -q -O /dev/null "http://localhost:8083/connectors" \
-      --header="Content-Type: application/json" \
-      --post-data="$config"
+    # Create the connector using POST; a failed request returns non-zero so the caller retries
+    local post_err
+    if ! post_err=$(wget -q -O /dev/null "http://localhost:8083/connectors" \
+          --header="Content-Type: application/json" --post-data="$config" 2>&1); then
+      echo "ERROR: Failed to create connector $connector_name: ${post_err}. The Kafka Connect log has the reason."
+      return 1
+    fi
     
     echo "Connector $connector_name created successfully"
     
@@ -475,7 +756,7 @@ truststore_init() {
     # Generate random password if not specified
     truststore_password=$(openssl rand -base64 12)
     export SSL_TRUSTSTORE_PASSWORD="${truststore_password}"
-    echo "Generated random ssl.truststore.password: ${truststore_password}"
+    echo "Generated random ssl.truststore.password"
   fi
   
   # Create certs directory if it doesn't exist
@@ -556,7 +837,7 @@ setup_multi_domain_truststore() {
     # Generate random password
     local truststore_password=$(openssl rand -base64 12)
     export "$password_env"="$truststore_password"
-    echo "Generated random password for $password_env: $truststore_password"
+    echo "Generated random password for $password_env"
   fi
   
   # Create truststore directory if it doesn't exist
@@ -802,12 +1083,9 @@ fi
   # Replace plugin-specific truststore password if it exists
   PLUGIN_PASSWORD_VAR="{{ .ssl_truststore.truststore_password_env }}"
   echo "DEBUG: Looking for password in environment variable: $PLUGIN_PASSWORD_VAR"
-  echo "DEBUG: Password value: ${!PLUGIN_PASSWORD_VAR}"
   if [[ -n "${!PLUGIN_PASSWORD_VAR}" ]]; then
     echo "DEBUG: Replacing \${${PLUGIN_PASSWORD_VAR}} with password in config"
     CONFIG=$(echo "$CONFIG" | sed "s|\${${PLUGIN_PASSWORD_VAR}}|${!PLUGIN_PASSWORD_VAR}|g")
-    echo "DEBUG: Config after replacement:"
-    echo "$CONFIG"
   else
     echo "DEBUG: No password found in $PLUGIN_PASSWORD_VAR"
   fi
@@ -879,12 +1157,9 @@ EOF
 # Replace plugin-specific truststore password if it exists
 PLUGIN_PASSWORD_VAR="{{ .ssl_truststore.truststore_password_env }}"
 echo "DEBUG: Looking for password in environment variable: $PLUGIN_PASSWORD_VAR"
-echo "DEBUG: Password value: ${!PLUGIN_PASSWORD_VAR}"
 if [[ -n "${!PLUGIN_PASSWORD_VAR}" ]]; then
   echo "DEBUG: Replacing \${${PLUGIN_PASSWORD_VAR}} with password in config"
   CONFIG=$(echo "$CONFIG" | sed "s|\${${PLUGIN_PASSWORD_VAR}}|${!PLUGIN_PASSWORD_VAR}|g")
-  echo "DEBUG: Config after replacement:"
-  echo "$CONFIG"
 else
   echo "DEBUG: No password found in $PLUGIN_PASSWORD_VAR"
 fi
@@ -929,6 +1204,47 @@ cleanup() {
 
 # Set up signal handlers
 trap cleanup SIGTERM SIGINT
+
+# Wait for the plugins-downloader to finish (replaces the fixed 60 s sleep of chart 4.2.x and earlier):
+# plugin.path is scanned once per JVM, so a plugin that is still downloading would never be loaded.
+PLUGIN_SYNC=/opt/kafka/sync
+PLUGIN_WAIT_TIMEOUT={{ $waitTimeout }}
+PLUGIN_WAIT_ACTION={{ $waitAction }}
+print_pending_plugins() {
+  if [[ -s "$PLUGIN_SYNC/pending" ]]; then
+    sed 's/^/  - /' "$PLUGIN_SYNC/pending"
+  else
+    echo "  - unknown: the downloader has not reported yet"
+  fi
+}
+plugins_waited=0
+while [[ ! -f "$PLUGIN_SYNC/downloads-done" ]]; do
+  if [[ "$PLUGIN_WAIT_TIMEOUT" -gt 0 && "$plugins_waited" -ge "$PLUGIN_WAIT_TIMEOUT" ]]; then
+    if [[ "$PLUGIN_WAIT_ACTION" == "restart" ]]; then
+      echo "FATAL: connector plugins not ready after ${PLUGIN_WAIT_TIMEOUT}s; exiting so the container restarts and waits again. Missing:"
+      print_pending_plugins
+      exit 1
+    fi
+    echo "WARNING: connector plugins not ready after ${PLUGIN_WAIT_TIMEOUT}s; starting Kafka Connect WITHOUT:"
+    print_pending_plugins
+    touch "$PLUGIN_SYNC/connect-started-degraded"
+    break
+  fi
+  if (( plugins_waited % 30 == 0 )); then
+    echo "Waiting for plugin downloads (${plugins_waited}s, timeout ${PLUGIN_WAIT_TIMEOUT}s, 0 = none)..."
+  fi
+  sleep 5 &
+  wait $!
+  plugins_waited=$((plugins_waited+5))
+done
+if [[ -f "$PLUGIN_SYNC/downloads-done" ]]; then
+  rm -f "$PLUGIN_SYNC/connect-started-degraded"
+  echo "Plugins ready after ${plugins_waited}s"
+  if [[ -s "$PLUGIN_SYNC/pending" ]]; then
+    echo "WARNING: these plugin artifacts were skipped because of a configuration error and are not installed:"
+    print_pending_plugins
+  fi
+fi
 
 echo "Starting Kafka Connect distributed worker..."
 

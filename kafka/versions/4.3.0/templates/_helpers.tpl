@@ -334,7 +334,7 @@ MANIFEST="$STATE/manifest"
 STAGING="$STATE/staging"
 RETIRED="$STATE/retired"
 SYNC=/opt/kafka/sync
-TOKEN='{{ replace "'" "'\\''" (toString ($c.plugins_redownload_token | default "")) }}'
+TOKEN='{{ if and (hasKey $c "plugins_redownload_token") (not (kindIs "invalid" $c.plugins_redownload_token)) }}{{ replace "'" "'\\''" (toString $c.plugins_redownload_token) }}{{ end }}'
 VERBOSE={{ if .verbose }}1{{ else }}0{{ end }}
 NL='
 '
@@ -347,8 +347,10 @@ redact() { printf '%s\n' "$1" | sed -e 's#\([A-Za-z][A-Za-z0-9+.-]*://\)[^/]*@#\
 strip_userinfo() { printf '%s\n' "$1" | sed 's#^\([A-Za-z][A-Za-z0-9+.-]*://\)[^/]*@#\1#'; }
 lower() { printf '%s' "$1" | tr 'A-Z' 'a-z'; }
 
+# fd 3 keeps the original stdout, so the trap's message is not lost inside a redirected call.
+exec 3>&1
 on_term() {
-  log "SIGTERM: stopping"
+  log "SIGTERM: stopping" >&3
   if [ -n "$CHILD" ]; then kill "$CHILD" 2>/dev/null; fi
   exit 143
 }
@@ -450,7 +452,10 @@ install_artifact() {
   fi
   vlog "  downloaded $(wc -c < "$st/file") bytes"
   if [ -n "$sha" ]; then
-    got=$(sha256sum "$st/file" | cut -d' ' -f1)
+    if ! bg sha256sum "$st/file" > "$st/sum"; then
+      log "ERROR cannot checksum $rurl"; fail_artifact "checksum"; return 1
+    fi
+    got=$(cut -d' ' -f1 "$st/sum")
     if [ "$got" != "$sha" ]; then
       log "ERROR sha256 mismatch for $plugin $rurl: expected $sha, got $got"
       fail_artifact "sha256 mismatch"; return 1
@@ -459,24 +464,26 @@ install_artifact() {
   fi
   case "$type" in
     jar)
-      if ! unzip -l "$st/file" >/dev/null 2>&1; then
+      if ! bg unzip -l "$st/file" >/dev/null 2>&1; then
         log "ERROR not a valid jar: $rurl"; fail_artifact "not a valid jar"; return 1
       fi
-      mv "$st/file" "$st/x/$(jar_name "$url")" ;;
+      if ! mv "$st/file" "$st/x/$(jar_name "$url")"; then
+        log "ERROR cannot stage $rurl"; fail_artifact "staging"; return 1
+      fi ;;
     zip)
-      if ! unzip -l "$st/file" >/dev/null 2>&1 || ! bg unzip -q -o "$st/file" -d "$st/x" >/dev/null 2>&1; then
+      if ! bg unzip -l "$st/file" >/dev/null 2>&1 || ! bg unzip -q -o "$st/file" -d "$st/x" >/dev/null 2>&1; then
         log "ERROR not a valid zip: $rurl"; fail_artifact "not a valid zip"; return 1
       fi ;;
     tgz|tar.gz)
-      if ! tar -tzf "$st/file" >/dev/null 2>&1 || ! bg tar -xzf "$st/file" -C "$st/x" 2>/dev/null; then
+      if ! bg tar -tzf "$st/file" >/dev/null 2>&1 || ! bg tar -xzf "$st/file" -C "$st/x" 2>/dev/null; then
         log "ERROR not a valid $type: $rurl"; fail_artifact "not a valid $type"; return 1
       fi ;;
     tar)
-      if ! tar -tf "$st/file" >/dev/null 2>&1 || ! bg tar -xf "$st/file" -C "$st/x" 2>/dev/null; then
+      if ! bg tar -tf "$st/file" >/dev/null 2>&1 || ! bg tar -xf "$st/file" -C "$st/x" 2>/dev/null; then
         log "ERROR not a valid tar: $rurl"; fail_artifact "not a valid tar"; return 1
       fi ;;
   esac
-  rm -f "$st/file" "$st/err"
+  rm -f "$st/file" "$st/err" "$st/sum"
   if ! mkdir -p "$PLUGINS/$plugin"; then
     log "ERROR cannot create $PLUGINS/$plugin"; fail_artifact "plugin dir"; return 1
   fi
@@ -535,7 +542,7 @@ report_unmanaged() {
     n=${e##*/}
     case "$n" in .cpln-downloads|lost+found) continue ;; esac
     if enabled_plugins | grep -qxF -- "$n"; then continue; fi
-    if [ -f "$MANIFEST" ] && grep -q "^$n/" "$MANIFEST" 2>/dev/null; then continue; fi
+    if [ -f "$MANIFEST" ] && cut -d/ -f1 "$MANIFEST" | grep -qxF -- "$n"; then continue; fi
     list="$list $n"
   done
   if [ -n "$list" ]; then log "left untouched (not downloaded by this chart):$list"; fi
@@ -626,6 +633,8 @@ log "all artifacts present ($INSTALLED downloaded by this run)"
 
 if [ -f "$SYNC/connect-started-degraded" ]; then
   log "all artifacts are now installed; Kafka Connect started without some of them, so restart the worker (cpln workload force-redeployment) to load them. Cleanup deferred until then."
+elif [ -n "$CONFIG_SKIPPED" ]; then
+  log "cleanup skipped: some artifacts were skipped because of a configuration error, so nothing is removed or retired until the configuration is fixed"
 else
   prune_manifest
   retire_legacy
@@ -640,14 +649,18 @@ while :; do bg sleep 2147483647; done
 {{- $c := .connector | default dict -}}
 {{- $waitTimeout := 900 -}}
 {{- if and (hasKey $c "plugins_wait_timeout_seconds") (not (kindIs "invalid" $c.plugins_wait_timeout_seconds)) -}}
+{{- if kindIs "string" $c.plugins_wait_timeout_seconds -}}
+{{- $waitTimeout = atoi $c.plugins_wait_timeout_seconds -}}
+{{- else -}}
 {{- $waitTimeout = int $c.plugins_wait_timeout_seconds -}}
+{{- end -}}
 {{- end -}}
 {{- $waitAction := "start" -}}
 {{- if and (hasKey $c "plugins_wait_timeout_action") (not (kindIs "invalid" $c.plugins_wait_timeout_action)) -}}
 {{- $waitAction = toString $c.plugins_wait_timeout_action -}}
 {{- end -}}
 #!/bin/bash
-set -e{{- if .verbose }}x{{- end }}
+set -e
 
 # Names of the keys in a connector config. Values are never logged: they often hold credentials.
 config_keys() {
@@ -687,7 +700,7 @@ create_or_update_connector() {
     response=$(echo -e "PUT /connectors/$connector_name/config HTTP/1.1\r\nHost: localhost:8083\r\nContent-Type: application/json\r\nContent-Length: $content_length\r\nConnection: close\r\n\r\n$update_config" | nc localhost 8083 2>&1)
     echo "HTTP response for $connector_name update: $(echo "$response" | head -1)"
     if ! echo "$response" | grep -q "HTTP/1\.. 2"; then
-      echo "ERROR: Failed to update connector $connector_name. Response: $(echo "$response" | head -5)"
+      echo "ERROR: Failed to update connector $connector_name. HTTP status: $(echo "$response" | head -1). The Kafka Connect log has the reason."
     else
       echo "Connector $connector_name updated successfully"
     fi
@@ -1218,7 +1231,15 @@ print_pending_plugins() {
   fi
 }
 plugins_waited=0
-while [[ ! -f "$PLUGIN_SYNC/downloads-done" ]]; do
+if [[ -f "$PLUGIN_SYNC/connect-started-degraded" && ! -f "$PLUGIN_SYNC/downloads-done" ]]; then
+  # This replica already started Kafka Connect without some plugins; waiting again would only repeat the timeout.
+  echo "WARNING: Kafka Connect already started without some plugins on this replica; starting at once WITHOUT:"
+  print_pending_plugins
+  plugins_skip_wait=1
+else
+  plugins_skip_wait=0
+fi
+while [[ "$plugins_skip_wait" == 0 && ! -f "$PLUGIN_SYNC/downloads-done" ]]; do
   if [[ "$PLUGIN_WAIT_TIMEOUT" -gt 0 && "$plugins_waited" -ge "$PLUGIN_WAIT_TIMEOUT" ]]; then
     if [[ "$PLUGIN_WAIT_ACTION" == "restart" ]]; then
       echo "FATAL: connector plugins not ready after ${PLUGIN_WAIT_TIMEOUT}s; exiting so the container restarts and waits again. Missing:"
@@ -1238,7 +1259,8 @@ while [[ ! -f "$PLUGIN_SYNC/downloads-done" ]]; do
   plugins_waited=$((plugins_waited+5))
 done
 if [[ -f "$PLUGIN_SYNC/downloads-done" ]]; then
-  rm -f "$PLUGIN_SYNC/connect-started-degraded"
+  # connect-started-degraded is never cleared here: only a new replica (fresh scratch volume) clears it, so the
+  # downloader keeps deferring cleanup while a JVM that scanned the old files may still be running.
   echo "Plugins ready after ${plugins_waited}s"
   if [[ -s "$PLUGIN_SYNC/pending" ]]; then
     echo "WARNING: these plugin artifacts were skipped because of a configuration error and are not installed:"

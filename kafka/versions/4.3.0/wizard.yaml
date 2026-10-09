@@ -783,8 +783,8 @@ steps:
               semverCompare(context.fromVersion, '4.3.0') < 0 && size(self.kafka_connectors) > 0
             text: >-
               The first start after this upgrade downloads every connector plugin again, once per
-              replica, while Kafka Connect waits. Files you placed in the plugins folder yourself are
-              left untouched.
+              replica, while Kafka Connect waits. Files the chart did not download are never deleted;
+              the chart's old `<plugin>/<plugin>.jar` files are moved to `.cpln-downloads/retired/`.
           - path: kafka_connectors
             type: list
             absent: true
@@ -910,7 +910,7 @@ steps:
                   type: boolean
                   label: Verbose logs
                   advanced: true
-                  description: Also traces the connector setup script, which prints connector configs including credentials.
+                  description: Extra downloader log lines (skips, keys, sizes). URLs stay redacted and connector configs are never logged.
                 - path: multiZone
                   type: boolean
                   label: Spread workers across zones
@@ -978,11 +978,6 @@ steps:
                     cpuMillicores(item.cpu) <= 4 * cpuMillicores(item.minCpu)
                   paths: [minCpu]
                   message: Kafka Connect is stateful, so the CPU limit can be at most 4 times the CPU reservation.
-                - rule: >-
-                    item.minMemory == null || item.minMemory == '' || item.memory == null || item.memory == '' ||
-                    memoryBytes(item.memory) <= 4 * memoryBytes(item.minMemory)
-                  paths: [minMemory]
-                  message: Kafka Connect is stateful, so the memory limit can be at most 4 times the memory reservation.
                 - rule: >-
                     (item.listener != null && item.listener != '') ||
                     'bootstrap.servers' in item.connector_properties

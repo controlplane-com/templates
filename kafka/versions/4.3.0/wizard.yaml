@@ -895,7 +895,7 @@ steps:
                   label: Downloader image
                   advanced: true
                   placeholder: busybox:1.37.0-musl
-                  description: Needs busybox `sh`, `wget`, `nc` (with `-e`), `ssl_client`, `setsid`, `stat`, `unzip`, `tar`, `sha256sum`, `sed`, `base64`, `tr`, `head` and `mktemp`.
+                  description: Needs busybox `sh`, `wget`, `nc` (with `-e`), `ssl_client`, `setsid`, `stat`, `unzip`, `tar`, `sha256sum`, `sed`, `base64`, `tr`, `head`, `mktemp` and the standard busybox tools (`grep`, `cut`, `cat`, `date`, `mv`, `touch`, `sleep`).
                 - path: downloader_cpu
                   type: quantity
                   quantity: cpu

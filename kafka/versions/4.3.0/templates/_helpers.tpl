@@ -361,7 +361,7 @@ on_term() {
 CHILD_PG=0
 stop_child() {
   if [ -z "$CHILD" ]; then return 0; fi
-  if [ "$CHILD_PG" = 1 ]; then kill -TERM -- "-$CHILD" 2>/dev/null; else kill "$CHILD" 2>/dev/null; fi
+  if [ "$CHILD_PG" = 1 ]; then kill -TERM "-$CHILD" 2>/dev/null; else kill "$CHILD" 2>/dev/null; fi
 }
 trap on_term TERM INT
 # Long operations run in the background and are waited on, so a SIGTERM is handled at once.
@@ -709,7 +709,7 @@ report_progress() {
   if [ "$FIRST_PASS" != 1 ]; then return 0; fi
   {
     printf '%s%s' "$FAILED" "$CONFIG_SKIPPED"
-    printf '%s: %s (downloading now; the first download pass has not finished)\n' "$plugin" "$rurl"
+    printf '%s: %s (most recently started; the first download pass has not finished)\n' "$plugin" "$rurl"
     if [ "$ART_LEFT" -gt 0 ]; then printf '%s more configured artifact(s) not checked yet\n' "$ART_LEFT"; fi
   } > "$SYNC/pending.tmp" && mv -f "$SYNC/pending.tmp" "$SYNC/pending"
 }

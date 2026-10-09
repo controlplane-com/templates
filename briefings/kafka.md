@@ -71,14 +71,14 @@ non-working `your-…` placeholders.
   straight to the staging file (one write; only a chunked body is copied, by the de-chunker, which relies on
   busybox `head -c` reading exactly N bytes from a shared descriptor). The request runs under `setsid`, and
   the 60 s idle watchdog (real seconds, size via `stat`) kills the whole process group.
-- **History of that path (fixed before release):** D1, credentialed `http://` never downloaded on the
+- **History of that path (fixed before release, re-tested live: http and https credentialed downloads install, 183 MB at 80m in ~60 s like wget, 61 s hang timeout with no leftover processes):** D1, credentialed `http://` never downloaded on the
   platform: busybox nc half-closes at stdin EOF, and the sidecar on an `http` port then drops the response
   (0 B; plain and https URLs were fine). D2, credentialed https ran ~2.2x slower than wget at 80m: the
   watchdog ran `wc -c` (reads the whole file, ~20 s at 183 MB) every second and counted iterations, so
   "60 s" stretched to minutes, and the body was copied once more after download. D3, a timeout inside the
-  first pass printed `unknown`; `pending` now names the artifact being downloaded and how many are unchecked.
+  first pass printed `unknown`; `pending` now names the most recently started artifact and how many are unchecked.
 - **Logs are credential-free**: URLs redacted, connector configs logged as key names only, `verbose` adds
-  downloader detail only. URLs remain readable in the `-download` secret and `ps`.
+  downloader detail only. URLs remain readable in the `-download` secret; userinfo never reaches `ps`, but query-string tokens of URLs without userinfo do.
 - **Connect scans `.cpln-downloads` as a plugin location**; harmless unless started degraded mid-extraction.
 - **Plugin or chart changes restart every Connect replica**; a chart bump rolls the brokers too (single test
   broker: 144 s gap). A rolling Connect restart costs a task ~4 s when it migrates, and up to several minutes

@@ -380,24 +380,157 @@ jar_name() {
   printf '%s' "$n"
 }
 
-# fetch URL FILE ERRFILE. A URL with credentials on a JFrog host is resolved to its redirect first
-# (unchanged from earlier chart versions); the redirect URL is presigned and is never logged.
-fetch() {
-  if echo "$1" | grep -q "@.*jfrog"; then
-    log "Handling JFrog redirect for: $(redact "$1")"
-    bg wget -S --spider -T 60 "$1" >"$3.spider" 2>&1
-    redirect_url=$(grep 'Location:' "$3.spider" | awk '{print $2}')
-    rm -f "$3.spider"
-    if [ -n "$redirect_url" ]; then
-      log "Downloading from redirect URL..."
-      bg wget -q -T 60 -O "$2" "$redirect_url" 2>"$3"
-    else
-      log "Failed to get redirect URL, trying direct download..."
-      bg wget -q -T 60 -O "$2" "$1" 2>"$3"
-    fi
-  else
-    bg wget -q -T 60 -O "$2" "$1" 2>"$3"
+CR=$(printf '\r')
+
+# Parse a URL into U_SCHEME U_USERINFO U_HOSTPORT U_HOST U_PORT U_PATH (fragment dropped).
+url_parts() {
+  _u=${1%%#*}
+  U_SCHEME=$(lower "${_u%%://*}"); _r=${_u#*://}
+  case "$_r" in */*) _a=${_r%%/*}; U_PATH=/${_r#*/} ;; *) _a=$_r; U_PATH=/ ;; esac
+  case "$_a" in *@*) U_USERINFO=${_a%@*}; U_HOSTPORT=${_a##*@} ;; *) U_USERINFO=""; U_HOSTPORT=$_a ;; esac
+  case "$U_HOSTPORT" in *\?*) U_PATH="/?${U_HOSTPORT#*\?}"; U_HOSTPORT=${U_HOSTPORT%%\?*} ;; esac
+  case "$U_HOSTPORT" in
+    \[*\]:*) U_HOST=${U_HOSTPORT%%]*}; U_HOST=${U_HOST#\[}; U_PORT=${U_HOSTPORT##*]:} ;;
+    \[*\]) U_HOST=${U_HOSTPORT#\[}; U_HOST=${U_HOST%]}; U_PORT="" ;;
+    *:*) U_HOST=${U_HOSTPORT%:*}; U_PORT=${U_HOSTPORT##*:} ;;
+    *) U_HOST=$U_HOSTPORT; U_PORT="" ;;
+  esac
+  if [ -z "$U_PORT" ]; then
+    case "$U_SCHEME" in https) U_PORT=443 ;; *) U_PORT=80 ;; esac
   fi
+}
+
+# scheme://host:port of a URL, lowercased, for comparing hosts.
+origin() { url_parts "$1"; printf '%s://%s:%s' "$U_SCHEME" "$(lower "$U_HOST")" "$U_PORT"; }
+
+# Absolute form of a Location header value, relative to the URL that returned it (no userinfo).
+resolve_location() {
+  case "$2" in
+    *://*) printf '%s' "$2" ;;
+    //*) url_parts "$1"; printf '%s:%s' "$U_SCHEME" "$2" ;;
+    /*) url_parts "$1"; printf '%s://%s%s' "$U_SCHEME" "$U_HOSTPORT" "$2" ;;
+    *) url_parts "$1"; _d=${U_PATH%%\?*}; printf '%s://%s%s/%s' "$U_SCHEME" "$U_HOSTPORT" "${_d%/*}" "$2" ;;
+  esac
+}
+
+pct_decode() { printf '%b' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/%\([0-9A-Fa-f][0-9A-Fa-f]\)/\\x\1/g')"; }
+
+# One HTTP(S) request to the URL's own host; redirects are never followed. Writes the raw response
+# to $2. Used for URLs with credentials, because busybox wget sends URL credentials to every
+# redirect target, including another host.
+raw_get() {
+  url_parts "$1"
+  {
+    printf 'GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Wget\r\nAccept: */*\r\n' "$U_PATH" "$U_HOSTPORT"
+    if [ -n "$U_USERINFO" ]; then
+      printf 'Authorization: Basic %s\r\n' "$(pct_decode "$U_USERINFO" | base64 | tr -d '\n')"
+    fi
+    printf 'Connection: close\r\n\r\n'
+  } > "$2.req"
+  : > "$2"
+  case "$U_SCHEME" in
+    http) nc -w 60 "$U_HOST" "$U_PORT" < "$2.req" > "$2" ;;
+    https)
+      # nc connects and runs the helper with the socket as its stdin/stdout; ssl_client does the TLS.
+      printf '#!/bin/sh\nexec 3<&0 <"%s" >"%s" 2>/dev/null\nexec ssl_client -s 3 -n "$TLS_SNI"\n' "$2.req" "$2" > "$2.tls"
+      chmod +x "$2.tls"
+      TLS_SNI=$U_HOST nc -w 60 "$U_HOST" "$U_PORT" -e "$2.tls" ;;
+    *) echo "unsupported URL scheme for a URL with credentials" >&2; return 2 ;;
+  esac
+}
+
+# Split a raw response ($1) into its head ($3) and body ($2), de-chunking when needed.
+# Fails when the body is shorter than Content-Length or a chunked body has no final chunk.
+split_response() {
+  exec 5<"$1"
+  : > "$3"
+  while IFS= read -r _l <&5; do
+    _l=${_l%"$CR"}
+    [ -z "$_l" ] && break
+    printf '%s\n' "$_l" >> "$3"
+  done
+  if grep -qi '^transfer-encoding:.*chunked' "$3"; then
+    : > "$2"
+    while IFS= read -r _l <&5; do
+      _l=${_l%"$CR"}; _s=${_l%%;*}
+      case "$_s" in ''|*[!0-9A-Fa-f]*) exec 5<&-; return 1 ;; esac
+      _n=$((0x$_s))
+      if [ "$_n" -eq 0 ]; then exec 5<&-; return 0; fi
+      head -c "$_n" <&5 >> "$2"
+      IFS= read -r _l <&5
+    done
+    exec 5<&-
+    return 1
+  fi
+  cat <&5 > "$2"
+  exec 5<&-
+  _cl=$(sed -n 's/^[Cc][Oo][Nn][Tt][Ee][Nn][Tt]-[Ll][Ee][Nn][Gg][Tt][Hh]:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$3" | head -n 1)
+  if [ -n "$_cl" ] && [ "$(wc -c < "$2")" -ne "$_cl" ]; then return 1; fi
+  return 0
+}
+
+# Like bg, but stops the command when FILE ($1) has not grown for SECS ($2) seconds.
+bg_idle() {
+  _f=$1; _idle=$2; shift 2
+  "$@" & CHILD=$!
+  _last=-1; _still=0
+  while kill -0 "$CHILD" 2>/dev/null; do
+    sleep 1 & wait $!
+    if [ -f "$_f" ]; then _size=$(wc -c < "$_f"); else _size=0; fi
+    if [ "$_size" = "$_last" ]; then _still=$((_still+1)); else _still=0; _last=$_size; fi
+    if [ "$_still" -ge "$_idle" ]; then
+      kill "$CHILD" 2>/dev/null; wait "$CHILD" 2>/dev/null; CHILD=""
+      echo "download timed out" >&2
+      return 124
+    fi
+  done
+  wait "$CHILD"; _rc=$?; CHILD=""; return $_rc
+}
+
+# fetch URL FILE ERRFILE. A URL without credentials is fetched by busybox wget. A URL with
+# credentials is requested from its own host only: a redirect to the same host is followed with
+# the credentials, a redirect to any other host (a presigned storage URL, for example) is
+# fetched WITHOUT them. Redirect URLs are never logged.
+fetch() {
+  if [ "$(strip_userinfo "$1")" = "$1" ]; then
+    bg wget -q -T 60 -O "$2" "$1" 2>"$3"
+    return
+  fi
+  _url=$1; _hops=0
+  : > "$3"
+  while [ "$_hops" -lt 5 ]; do
+    rm -f "$2" "$2.raw" "$2.head"
+    if ! bg_idle "$2.raw" 60 raw_get "$_url" "$2.raw" 2>>"$3"; then rm -f "$2.raw" "$2.raw.req" "$2.raw.tls"; return 1; fi
+    rm -f "$2.raw.req" "$2.raw.tls"
+    if ! bg split_response "$2.raw" "$2" "$2.head"; then
+      echo "incomplete response" >> "$3"; rm -f "$2.raw"; return 1
+    fi
+    rm -f "$2.raw"
+    _status=$(sed -n '1s/^HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*/\1/p' "$2.head")
+    case "$_status" in
+      2??) rm -f "$2.head"; return 0 ;;
+      301|302|303|307|308)
+        _loc=$(sed -n 's/^[Ll][Oo][Cc][Aa][Tt][Ii][Oo][Nn]:[[:space:]]*//p' "$2.head" | head -n 1 | tr -d '\r')
+        rm -f "$2.head" "$2"
+        if [ -z "$_loc" ]; then echo "redirect without a Location header" >> "$3"; return 1; fi
+        _loc=$(strip_userinfo "$(resolve_location "$_url" "$_loc")")
+        if [ "$(origin "$_loc")" = "$(origin "$_url")" ]; then
+          url_parts "$_url"; _ui=$U_USERINFO
+          _url="${_loc%%://*}://${_ui}@${_loc#*://}"
+          _hops=$((_hops+1))
+          vlog "  redirected on the same host; following with the credentials"
+          continue
+        fi
+        vlog "  redirected to another host; following without the credentials"
+        bg wget -q -T 60 -O "$2" "$_loc" 2>>"$3"
+        return ;;
+      *)
+        echo "server returned error: $(sed -n 1p "$2.head" | tr -d '\r')" >> "$3"
+        rm -f "$2.head"; return 1 ;;
+    esac
+  done
+  echo "too many redirects" >> "$3"
+  return 1
 }
 
 config_skip() {

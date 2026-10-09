@@ -352,6 +352,7 @@ exec 3>&1
 on_term() {
   log "SIGTERM: stopping" >&3
   if [ -n "$CHILD" ]; then kill "$CHILD" 2>/dev/null; fi
+  if [ -n "${FETCH_TMP:-}" ]; then rm -rf "$FETCH_TMP"; fi
   exit 143
 }
 trap on_term TERM INT
@@ -381,14 +382,15 @@ jar_name() {
 }
 
 CR=$(printf '\r')
+TAB=$(printf '\t')
 
-# Parse a URL into U_SCHEME U_USERINFO U_HOSTPORT U_HOST U_PORT U_PATH (fragment dropped).
+# Parse a URL into U_SCHEME U_USERINFO U_HOSTPORT U_HOST U_PORT U_PATH (fragment dropped). Userinfo is
+# taken only from the authority, i.e. before the first "/", "?" or "#".
 url_parts() {
-  _u=${1%%#*}
-  U_SCHEME=$(lower "${_u%%://*}"); _r=${_u#*://}
-  case "$_r" in */*) _a=${_r%%/*}; U_PATH=/${_r#*/} ;; *) _a=$_r; U_PATH=/ ;; esac
+  U_SCHEME=$(lower "${1%%://*}"); _r=${1#*://}
+  _a=${_r%%[/?#]*}; _rest=${_r#"$_a"}; _rest=${_rest%%#*}
+  case "$_rest" in /*) U_PATH=$_rest ;; \?*) U_PATH="/$_rest" ;; *) U_PATH=/ ;; esac
   case "$_a" in *@*) U_USERINFO=${_a%@*}; U_HOSTPORT=${_a##*@} ;; *) U_USERINFO=""; U_HOSTPORT=$_a ;; esac
-  case "$U_HOSTPORT" in *\?*) U_PATH="/?${U_HOSTPORT#*\?}"; U_HOSTPORT=${U_HOSTPORT%%\?*} ;; esac
   case "$U_HOSTPORT" in
     \[*\]:*) U_HOST=${U_HOSTPORT%%]*}; U_HOST=${U_HOST#\[}; U_PORT=${U_HOSTPORT##*]:} ;;
     \[*\]) U_HOST=${U_HOSTPORT#\[}; U_HOST=${U_HOST%]}; U_PORT="" ;;
@@ -415,39 +417,79 @@ resolve_location() {
 
 pct_decode() { printf '%b' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/%\([0-9A-Fa-f][0-9A-Fa-f]\)/\\x\1/g')"; }
 
-# One HTTP(S) request to the URL's own host; redirects are never followed. Writes the raw response
-# to $2. Used for URLs with credentials, because busybox wget sends URL credentials to every
-# redirect target, including another host.
-raw_get() {
-  url_parts "$1"
-  {
-    printf 'GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Wget\r\nAccept: */*\r\n' "$U_PATH" "$U_HOSTPORT"
-    if [ -n "$U_USERINFO" ]; then
-      printf 'Authorization: Basic %s\r\n' "$(pct_decode "$U_USERINFO" | base64 | tr -d '\n')"
+# Like bg, but stops the command when FILE ($1) has not grown for SECS ($2) seconds. The command
+# must exec its final program (as raw_get's do), so killing CHILD stops nc or ssl_client itself.
+bg_idle() {
+  _f=$1; _idle=$2; shift 2
+  "$@" & CHILD=$!
+  _last=-1; _still=0
+  while kill -0 "$CHILD" 2>/dev/null; do
+    sleep 1 & wait $!
+    if [ -f "$_f" ]; then _size=$(wc -c < "$_f"); else _size=0; fi
+    if [ "$_size" = "$_last" ]; then _still=$((_still+1)); else _still=0; _last=$_size; fi
+    if [ "$_still" -ge "$_idle" ]; then
+      kill "$CHILD" 2>/dev/null; wait "$CHILD" 2>/dev/null; CHILD=""
+      echo "download timed out" >&2
+      return 124
     fi
-    printf 'Connection: close\r\n\r\n'
-  } > "$2.req"
-  : > "$2"
-  case "$U_SCHEME" in
-    http) nc -w 60 "$U_HOST" "$U_PORT" < "$2.req" > "$2" ;;
-    https)
-      # nc connects and runs the helper with the socket as its stdin/stdout; ssl_client does the TLS.
-      printf '#!/bin/sh\nexec 3<&0 <"%s" >"%s" 2>/dev/null\nexec ssl_client -s 3 -n "$TLS_SNI"\n' "$2.req" "$2" > "$2.tls"
-      chmod +x "$2.tls"
-      TLS_SNI=$U_HOST nc -w 60 "$U_HOST" "$U_PORT" -e "$2.tls" ;;
-    *) echo "unsupported URL scheme for a URL with credentials" >&2; return 2 ;;
-  esac
+  done
+  wait "$CHILD"; _rc=$?; CHILD=""; return $_rc
 }
 
-# Split a raw response ($1) into its head ($3) and body ($2), de-chunking when needed.
-# Fails when the body is shorter than Content-Length or a chunked body has no final chunk.
+# Container-local scratch for a credentialed request (the request holds the Authorization header).
+# Never on the plugin volume; removed after every request and by the SIGTERM trap.
+FETCH_TMP=""
+fetch_tmp_cleanup() { if [ -n "$FETCH_TMP" ]; then rm -rf "$FETCH_TMP"; FETCH_TMP=""; fi; }
+
+# One HTTP(S) request to the URL's own host; redirects are never followed. Writes the raw response
+# to $2 (on the volume: it can be large and holds no credential). Used for http(s) URLs with
+# credentials, because busybox wget sends URL credentials to every redirect target.
+raw_get() {
+  url_parts "$1"
+  FETCH_TMP=$(umask 077; mktemp -d /tmp/cpln-fetch.XXXXXX) || { echo "cannot create a temporary directory" >&2; return 1; }
+  (
+    umask 077
+    {
+      printf 'GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Wget\r\nAccept: */*\r\n' "$U_PATH" "$U_HOSTPORT"
+      if [ -n "$U_USERINFO" ]; then
+        printf 'Authorization: Basic %s\r\n' "$(pct_decode "$U_USERINFO" | base64 | tr -d '\n')"
+      fi
+      printf 'Connection: close\r\n\r\n'
+    } > "$FETCH_TMP/req"
+  )
+  : > "$2"
+  case "$U_SCHEME" in
+    http)
+      bg_idle "$2" 60 sh -c 'exec nc -w 60 "$1" "$2" <"$3" >"$4" 2>"$5"' \
+        sh "$U_HOST" "$U_PORT" "$FETCH_TMP/req" "$2" "$FETCH_TMP/err" ;;
+    https)
+      # nc connects, then runs "sh -c" with the socket as stdin/stdout; it execs ssl_client for the TLS.
+      bg_idle "$2" 60 sh -c 'exec nc -w 60 "$1" "$2" -e sh -c '\''exec 3<&0 <"$1" >"$2" 2>"$3"; exec ssl_client -s 3 -n "$4"'\'' tls "$3" "$4" "$5" "$1" 2>"$5"' \
+        sh "$U_HOST" "$U_PORT" "$FETCH_TMP/req" "$2" "$FETCH_TMP/err" ;;
+  esac
+  _rc=$?
+  if [ "$_rc" -ne 0 ]; then
+    if [ -s "$FETCH_TMP/err" ]; then head -n 1 "$FETCH_TMP/err" >&2
+    elif [ "$_rc" -ne 124 ]; then echo "connection to $U_HOST:$U_PORT failed" >&2; fi
+  fi
+  fetch_tmp_cleanup
+  return "$_rc"
+}
+
+# Split a raw response ($1) into its head ($3) and body ($2), skipping 1xx interim responses and
+# de-chunking when needed. Fails when the body is shorter than Content-Length or a chunked body
+# has no final chunk. (Relies on busybox "head -c" reading exactly N bytes from a shared descriptor.)
 split_response() {
   exec 5<"$1"
-  : > "$3"
-  while IFS= read -r _l <&5; do
-    _l=${_l%"$CR"}
-    [ -z "$_l" ] && break
-    printf '%s\n' "$_l" >> "$3"
+  while :; do
+    : > "$3"
+    while IFS= read -r _l <&5; do
+      _l=${_l%"$CR"}
+      [ -z "$_l" ] && break
+      printf '%s\n' "$_l" >> "$3"
+    done
+    case "$(sed -n '1s/^HTTP\/[0-9.]* \([0-9]\).*/\1/p' "$3")" in 1) continue ;; esac
+    break
   done
   if grep -qi '^transfer-encoding:.*chunked' "$3"; then
     : > "$2"
@@ -469,30 +511,14 @@ split_response() {
   return 0
 }
 
-# Like bg, but stops the command when FILE ($1) has not grown for SECS ($2) seconds.
-bg_idle() {
-  _f=$1; _idle=$2; shift 2
-  "$@" & CHILD=$!
-  _last=-1; _still=0
-  while kill -0 "$CHILD" 2>/dev/null; do
-    sleep 1 & wait $!
-    if [ -f "$_f" ]; then _size=$(wc -c < "$_f"); else _size=0; fi
-    if [ "$_size" = "$_last" ]; then _still=$((_still+1)); else _still=0; _last=$_size; fi
-    if [ "$_still" -ge "$_idle" ]; then
-      kill "$CHILD" 2>/dev/null; wait "$CHILD" 2>/dev/null; CHILD=""
-      echo "download timed out" >&2
-      return 124
-    fi
-  done
-  wait "$CHILD"; _rc=$?; CHILD=""; return $_rc
-}
-
-# fetch URL FILE ERRFILE. A URL without credentials is fetched by busybox wget. A URL with
-# credentials is requested from its own host only: a redirect to the same host is followed with
-# the credentials, a redirect to any other host (a presigned storage URL, for example) is
-# fetched WITHOUT them. Redirect URLs are never logged.
+# fetch URL FILE ERRFILE. A URL without credentials, or with a scheme other than http(s), is fetched
+# by busybox wget as before. An http(s) URL with credentials is requested from its own host only: a
+# redirect to the same host is followed with the credentials, a redirect to any other host (a
+# presigned storage URL, for example) is fetched WITHOUT them. Redirect URLs are never logged.
 fetch() {
-  if [ "$(strip_userinfo "$1")" = "$1" ]; then
+  url_parts "$1"
+  case "$U_SCHEME" in http|https) ;; *) U_USERINFO="" ;; esac
+  if [ -z "$U_USERINFO" ]; then
     bg wget -q -T 60 -O "$2" "$1" 2>"$3"
     return
   fi
@@ -500,8 +526,7 @@ fetch() {
   : > "$3"
   while [ "$_hops" -lt 5 ]; do
     rm -f "$2" "$2.raw" "$2.head"
-    if ! bg_idle "$2.raw" 60 raw_get "$_url" "$2.raw" 2>>"$3"; then rm -f "$2.raw" "$2.raw.req" "$2.raw.tls"; return 1; fi
-    rm -f "$2.raw.req" "$2.raw.tls"
+    if ! raw_get "$_url" "$2.raw" 2>>"$3"; then rm -f "$2.raw"; return 1; fi
     if ! bg split_response "$2.raw" "$2" "$2.head"; then
       echo "incomplete response" >> "$3"; rm -f "$2.raw"; return 1
     fi
@@ -510,7 +535,7 @@ fetch() {
     case "$_status" in
       2??) rm -f "$2.head"; return 0 ;;
       301|302|303|307|308)
-        _loc=$(sed -n 's/^[Ll][Oo][Cc][Aa][Tt][Ii][Oo][Nn]:[[:space:]]*//p' "$2.head" | head -n 1 | tr -d '\r')
+        _loc=$(sed -n 's/^[Ll][Oo][Cc][Aa][Tt][Ii][Oo][Nn]:[[:space:]]*//p' "$2.head" | head -n 1 | tr -d "\r$TAB" | sed 's/ *$//')
         rm -f "$2.head" "$2"
         if [ -z "$_loc" ]; then echo "redirect without a Location header" >> "$3"; return 1; fi
         _loc=$(strip_userinfo "$(resolve_location "$_url" "$_loc")")
@@ -524,6 +549,7 @@ fetch() {
         vlog "  redirected to another host; following without the credentials"
         bg wget -q -T 60 -O "$2" "$_loc" 2>>"$3"
         return ;;
+      '') echo "no HTTP response" >> "$3"; rm -f "$2.head"; return 1 ;;
       *)
         echo "server returned error: $(sed -n 1p "$2.head" | tr -d '\r')" >> "$3"
         rm -f "$2.head"; return 1 ;;

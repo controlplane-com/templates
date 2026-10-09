@@ -268,7 +268,7 @@ kafka_connectors:
     plugins_wait_timeout_seconds: 900 # How long Kafka Connect waits for plugin downloads; 0 = wait forever
     plugins_wait_timeout_action: start # start = start without the missing plugins (logged as WARNING) / restart = exit and wait again
     plugins_redownload_token: "" # Change to any new value to download every plugin again on the next restart
-    downloader_image: busybox:1.37.0-musl # Needs busybox-compatible sh, wget, unzip, tar, sha256sum and sed
+    downloader_image: busybox:1.37.0-musl # Needs busybox sh, wget, nc (-e), ssl_client, unzip, tar, sha256sum, sed, base64, tr, head and mktemp
     downloader_cpu: 80m # Raise for large artifacts: downloads are CPU-bound at 80m
     plugins:
       - name: snowflake-sink
@@ -286,7 +286,8 @@ kafka_connectors:
 - **The chart deletes only artifacts it downloaded.** After you change an artifact URL, remove a plugin or set `enabled: false`, those artifacts are deleted once the next download pass succeeds. Nothing is deleted while any artifact has a configuration error (an unsupported type, a missing URL, an invalid plugin name). Files the chart did not download are never deleted; the downloader lists them at each start (`left untouched`).
 - **If an artifact is still missing at the timeout**, `start` starts Kafka Connect without it and the `kafka-connect` log shows `WARNING: connector plugins not ready … WITHOUT:` with the list. When the download later succeeds, the downloader logs that the worker must be restarted: run `cpln workload force-redeployment`. Until then, a restart of only the `kafka-connect` container starts at once without waiting, and still loads both the old and the new copy of a changed plugin, because cleanup waits for a new replica.
 - **Volume space:** every installed artifact, plus room to download and unpack the largest one. When an artifact URL changes, the old and new copies both stay until the pass succeeds.
-- **Credentials in an artifact URL are sent only to that URL's host.** A redirect to another host (such as a presigned storage URL) is followed without them.
+- **Credentials in an artifact URL are sent only to that URL's host.** A redirect to another host (such as a presigned storage URL) is followed without them. TLS certificates are not validated, so the credentials are only as private as the network path: use `sha256` and trusted networks.
+- **A custom `downloader_image`** must provide the busybox applets listed above, including `nc` with `-e` and `ssl_client` (used for URLs with credentials), and a `head -c` that reads exactly the requested bytes from a shared descriptor, as busybox's does.
 - **Credentials in artifact URLs are redacted in the logs** (`***@`, `?<redacted>`). They are still readable in the `-download` secret. Connector configs are never logged, only their key names; `verbose: true` adds downloader detail (skips, keys, sizes) and nothing secret.
 
 #### Upgrading from 4.2.x or earlier

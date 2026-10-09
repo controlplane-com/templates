@@ -247,7 +247,7 @@ kafbat_ui:
 #     plugins_wait_timeout_seconds: 900 # How long Kafka Connect waits for plugin downloads; 0 = wait forever
 #     plugins_wait_timeout_action: start # start = start without the missing plugins (logged as WARNING) / restart = exit and wait again
 #     plugins_redownload_token: "" # Change to any new value to download every plugin again on the next restart
-#     downloader_image: busybox:1.37.0-musl # Needs busybox-compatible sh, wget, unzip, tar, sha256sum and sed
+#     downloader_image: busybox:1.37.0-musl # Needs busybox sh, wget, nc (-e), ssl_client, unzip, tar, sha256sum, sed, base64, tr, head and mktemp
 #     downloader_cpu: 80m # Raise for large artifacts: downloads are CPU-bound at 80m
 #     extraVolumes: []
 #     # Volume configuration for Kafka Connect (Optional - defaults shown below)

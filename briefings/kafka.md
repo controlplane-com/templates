@@ -61,7 +61,9 @@ non-working `your-…` placeholders.
 - **`ready: true` while Connect waits** (no probe by design). Read the `kafka-connect` log.
 - **busybox wget skips TLS validation** (`sha256` is the control) and forwards URL credentials to every redirect
   target, so URLs with credentials bypass it: one raw request (`nc`, plus `ssl_client` for https) to the URL's own
-  host, same-host redirects keep the credentials, any other host is fetched by wget without them.
+  host, same-host redirects keep the credentials, any other host is fetched by wget without them. The request
+  file (it holds the Authorization header) lives in a mode-700 `/tmp` dir, never on the volume; the de-chunker
+  relies on busybox `head -c` reading exactly N bytes from a shared descriptor.
 - **Logs are credential-free**: URLs redacted, connector configs logged as key names only, `verbose` adds
   downloader detail only. URLs remain readable in the `-download` secret and `ps`.
 - **Connect scans `.cpln-downloads` as a plugin location**; harmless unless started degraded mid-extraction.

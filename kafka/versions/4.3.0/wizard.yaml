@@ -96,9 +96,6 @@ steps:
           - rule: cpuMillicores(self.kafka.cpu) <= 4 * cpuMillicores(self.kafka.minCpu)
             paths: [kafka.minCpu]
             message: The brokers are stateful, so the CPU limit can be at most 4 times the CPU reservation.
-          - rule: memoryBytes(self.kafka.memory) <= 4 * memoryBytes(self.kafka.minMemory)
-            paths: [kafka.minMemory]
-            message: The brokers are stateful, so the memory limit can be at most 4 times the memory reservation.
       - title: Network access
         docs: "#firewall"
         fields:
@@ -1059,11 +1056,6 @@ steps:
               cpuMillicores(self.kafka_orchestrator.cpu) <= 4 * cpuMillicores(self.kafka_orchestrator.minCpu)
             paths: [kafka_orchestrator.minCpu]
             message: The sidecar runs in the stateful broker workload, so its CPU limit can be at most 4 times its reservation.
-          - rule: >-
-              self.kafka_orchestrator == null || self.kafka_orchestrator.minMemory == null || self.kafka_orchestrator.minMemory == '' ||
-              memoryBytes(self.kafka_orchestrator.memory) <= 4 * memoryBytes(self.kafka_orchestrator.minMemory)
-            paths: [kafka_orchestrator.minMemory]
-            message: The sidecar runs in the stateful broker workload, so its memory limit can be at most 4 times its reservation.
       - title: Kafka exporter
         collapsible: true
         fields:
@@ -1161,11 +1153,6 @@ steps:
               cpuMillicores(self.jmx_exporter.cpu) <= 4 * cpuMillicores(self.jmx_exporter.minCpu)
             paths: [jmx_exporter.minCpu]
             message: The JMX exporter runs in the stateful broker workload, so its CPU limit can be at most 4 times its reservation.
-          - rule: >-
-              self.jmx_exporter.minMemory == null || self.jmx_exporter.minMemory == '' ||
-              memoryBytes(self.jmx_exporter.memory) <= 4 * memoryBytes(self.jmx_exporter.minMemory)
-            paths: [jmx_exporter.minMemory]
-            message: The JMX exporter runs in the stateful broker workload, so its memory limit can be at most 4 times its reservation.
       - title: Kafka client
         fields:
           - path: kafka_client

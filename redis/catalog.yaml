@@ -49,6 +49,8 @@ alternativeTo:
 compatibleWith: [redis-protocol]
 
 pickInsteadIf:
+  - need: one Redis instance on a persistent volume without Sentinel failover
+    template: redis-standalone
   - need: shard the keyspace across several primaries for more memory or write throughput
     template: redis-cluster
   - need: one Redis spread across several locations that survives losing a location

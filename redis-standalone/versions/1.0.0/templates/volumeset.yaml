@@ -1,0 +1,14 @@
+{{- include "redis-standalone.validate" . -}}
+kind: volumeset
+name: {{ include "redis-standalone.volume" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: Durable Redis append-only files and RDB base files
+tags: {{- include "redis-standalone.tags" . | nindent 2 }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.storage.capacity }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: {{ .Values.storage.snapshots.retention | quote }}
+    schedule: {{ .Values.storage.snapshots.schedule | quote }}

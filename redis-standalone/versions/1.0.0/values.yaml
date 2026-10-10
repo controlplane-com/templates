@@ -1,0 +1,45 @@
+# Deploy this chart into an existing GVC with EXACTLY ONE location.
+# A stateful workload placed in multiple locations would have separate Redis
+# datasets, not a replicated Redis cluster.
+
+image: redis:7.4-alpine
+
+# true suspends the Redis workload in Control Plane: its replica is stopped and
+# clients cannot connect, while the VolumeSet and its data are kept. Set it back
+# to false to resume.
+suspended: false
+
+resources:
+  minCpu: 250m
+  maxCpu: 500m
+  minMemory: 512Mi
+  maxMemory: 1Gi
+
+# Password authentication (recommended). With `enabled: true`, create a Control
+# Plane dictionary secret BEFORE installation with the key `password`, containing
+# a nonempty randomly generated Redis password, and name it in `secretName`.
+# Never put a password directly into values.yaml or into the workload command.
+# With `enabled: false` Redis accepts every connection the firewall admits
+# without a password; the identity, policy and secret are not created.
+credentials:
+  enabled: true
+  secretName: my-redis-password-secret
+
+storage:
+  # Capacity is GB, 10 minimum. An ext4 SSD VolumeSet is attached at /data.
+  capacity: 10
+  snapshots:
+    # Scheduled filesystem snapshots; this is not a multi-location backup.
+    schedule: "0 2 * * *" # 02:00 UTC daily
+    retention: 7d
+
+persistence:
+  # AOF is ALWAYS enabled. `always` fsyncs each write; `everysec` trades some
+  # durability for throughput; `no` delegates syncing to the OS.
+  appendFsync: always # always | everysec | no
+
+# Redis has no public ingress. Traffic is allowed ONLY on Control Plane's
+# private service network; use same-gvc by default.
+access:
+  type: same-gvc # none | same-gvc | same-org | workload-list
+  workloads: [] # only used with workload-list; use //gvc/NAME/workload/NAME

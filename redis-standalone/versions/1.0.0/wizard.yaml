@@ -1,0 +1,138 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Redis (standalone, persistent)
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: server
+    title: Redis server
+    description: A single stateful Redis replica that keeps its data on a persistent disk.
+    fields:
+      - type: note
+        severity: warning
+        when: context.mode == 'upgrade'
+        text: Restarting or upgrading this single instance briefly interrupts clients. It does not provide HA failover.
+      - path: image
+        type: string
+        format: image
+        label: Redis image
+        required: true
+        help: Stay on a compatible Redis major version unless you have planned and tested a restore.
+      - path: resources
+        type: resources
+        label: Resources
+        required: true
+        maxRatio: 4
+      - path: suspended
+        type: boolean
+        label: Suspend the workload
+        help: >-
+          Stops the Redis replica so clients cannot connect, while the volume and its data are kept.
+          Turn it off again to resume.
+      - type: note
+        severity: warning
+        when: self.suspended
+        text: Redis stays stopped and unreachable until this is turned off.
+
+  - id: credentials
+    title: Authentication
+    description: Whether clients must present a password, and where Redis reads it from.
+    sections:
+      - id: password
+        title: Password authentication
+        toggle: credentials.enabled
+        description: >-
+          When on, Redis requires the password held in a previously created dictionary secret,
+          and only this workload's identity may read that secret. When off, every connection the
+          network step admits can read and write all keys, so keep it on unless the clients are
+          trusted workloads in a private GVC.
+        fields:
+          - type: note
+            severity: warning
+            text: The dictionary secret must exist before installation and contain a nonempty password key.
+          - path: credentials.secretName
+            type: ref
+            label: Password secret
+            required: true
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [password]
+              create:
+                secretType: dictionary
+                suggestName: "context.releaseName + '-redis-password'"
+    rules:
+      - rule: self.credentials.enabled || self.access.type != 'same-org'
+        severity: warning
+        paths: [credentials.enabled]
+        message: Password authentication is off while every workload in the organization may connect.
+
+  - id: durability
+    title: Persistent storage
+    description: Data files survive restarts and replica replacements.
+    fields:
+      - path: storage.capacity
+        type: integer
+        label: Initial capacity
+        unit: GB
+        min: 10
+        required: true
+        suggestions: [10, 20, 50, 100, 250, 500]
+        help: Uninstalling this Helm release deletes its VolumeSet, including its data.
+      - path: persistence.appendFsync
+        type: enum
+        label: AOF disk sync policy
+        widget: segmented
+        required: true
+        options:
+          - value: always
+            label: Every write
+            description: Request fsync on each write (default).
+          - value: everysec
+            label: Every second
+            description: Better throughput with a risk of recent writes being lost.
+          - value: "no"
+            label: OS-managed
+            description: Let the OS decide when to flush data.
+      - path: storage.snapshots.schedule
+        type: string
+        format: cron
+        label: Snapshot schedule (UTC)
+        required: true
+      - path: storage.snapshots.retention
+        type: string
+        label: Snapshot retention
+        required: true
+        help: Duration such as 7d or 12h. A final snapshot is always requested before volume deletion.
+
+  - id: network
+    title: Network access
+    description: Redis is private by default and listens on TCP port 6379.
+    fields:
+      - path: access.type
+        type: enum
+        label: Who can connect
+        required: true
+        options:
+          - { value: none, label: Nobody }
+          - { value: same-gvc, label: Same GVC }
+          - { value: same-org, label: Same organization }
+          - { value: workload-list, label: Specific workloads }
+      - path: access.workloads
+        type: list
+        widget: tags
+        label: Additional allowed workloads
+        when: self.access.type == 'workload-list'
+        item:
+          type: ref
+          ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+    rules:
+      - rule: self.access.type != 'workload-list' || size(self.access.workloads) > 0
+        paths: [access.workloads]
+        message: Add at least one workload when using Specific workloads.

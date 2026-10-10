@@ -1,0 +1,14 @@
+{{- if .Values.credentials.enabled }}
+kind: policy
+name: {{ include "redis-standalone.policy" . }}
+description: Permit the standalone Redis workload to read its password secret
+tags: {{- include "redis-standalone.tags" . | nindent 2 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "redis-standalone.identity" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ .Values.credentials.secretName }}
+{{- end }}

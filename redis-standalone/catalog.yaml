@@ -1,0 +1,65 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Redis (standalone, persistent)
+category: cache
+family: redis
+topology: single
+
+summary: >-
+  A single Redis server with a dedicated persistent SSD volume, append-only persistence and daily
+  volume snapshots. Password authentication from a dictionary secret is on by default and can be
+  turned off for trusted clients on the private network. AOF syncs each write by default, keeping
+  saved keys when its container restarts or the stateful replica is replaced. Choose it for a
+  durable cache, session store or key-value service in one location without Sentinel overhead.
+
+keywords:
+  - redis
+  - single redis
+  - durable redis
+  - persistent redis
+  - append-only file
+  - aof persistence
+  - appendfsync always
+  - key-value store
+  - in-memory cache
+  - persistent volume
+  - session store
+  - restart recovery
+  - optional password
+  - no password redis
+  - requirepass
+
+useCases:
+  - Keep Redis keys across a container restart with a persistent disk
+  - Redis for an app that does not need Sentinel failover
+  - Single-node cache with write-ahead durability and disk snapshots
+  - Redis-backed sessions or job queues in one location
+  - Password-free Redis for trusted workloads inside one GVC
+
+alternativeTo:
+  - Amazon ElastiCache
+  - Google Cloud Memorystore for Redis
+  - Azure Cache for Redis
+  - Redis Cloud
+  - Upstash
+
+compatibleWith: [redis-protocol]
+
+pickInsteadIf:
+  - need: automatic failover to another Redis replica within one location
+    template: redis
+  - need: several primaries that shard the keyspace for more write throughput
+    template: redis-cluster
+  - need: Redis that keeps serving after a whole location fails
+    template: redis-multi-location
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [password]
+    valuesPath: credentials.secretName
+    required: false
+    when: credentials.enabled (the default)
+    description: Existing dictionary secret with a nonempty randomly generated Redis password. Create before installing or the workload cannot start. Not needed when credentials.enabled is false.

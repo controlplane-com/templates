@@ -45,6 +45,8 @@ alternativeTo:
 compatibleWith: [redis-protocol]
 
 pickInsteadIf:
+  - need: one Redis instance in one location with persistent data and no automatic failover
+    template: redis-standalone
   - need: Redis in one location with Sentinel failover
     template: redis
   - need: shard the keyspace across several primaries for more memory or write throughput

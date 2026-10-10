@@ -1,0 +1,98 @@
+{{- include "redis-standalone.validate" . -}}
+{{- $auth := .Values.credentials.enabled -}}
+kind: workload
+name: {{ include "redis-standalone.workload" . }}
+description: Redis standalone with persistent append-only data
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "redis-standalone.tags" . | nindent 2 }}
+spec:
+  type: stateful
+  {{- if $auth }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "redis-standalone.identity" . }}
+  {{- end }}
+  containers:
+    - name: redis
+      image: {{ .Values.image | quote }}
+      inheritEnv: false
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      {{- if $auth }}
+      env:
+        - name: REDIS_PASSWORD
+          value: cpln://secret/{{ .Values.credentials.secretName }}.password
+      {{- end }}
+      # The password, when enabled, is expanded *inside* the running container,
+      # not by Helm. exec makes redis-server PID 1, so SIGTERM reaches it for
+      # clean shutdown. Without a password, protected mode must be off: since
+      # Redis 7 it rejects every non-loopback client when no password is set,
+      # whatever the bind address, so the firewall is the access control.
+      command: /bin/sh
+      args:
+        - -ec
+        - |-
+          {{- if $auth }}
+          test -n "$REDIS_PASSWORD" || { echo 'Redis password secret is empty' >&2; exit 1; }
+          {{- end }}
+          exec redis-server \
+            --bind 0.0.0.0 \
+            --port 6379 \
+            {{- if $auth }}
+            --protected-mode yes \
+            --requirepass "$REDIS_PASSWORD" \
+            {{- else }}
+            --protected-mode no \
+            {{- end }}
+            --dir /data \
+            --appendonly yes \
+            --appendfsync {{ .Values.persistence.appendFsync }}
+      ports:
+        - number: 6379
+          protocol: tcp
+      volumes:
+        - path: /data
+          uri: cpln://volumeset/{{ include "redis-standalone.volume" . }}
+          recoveryPolicy: retain
+      readinessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - -ec
+            {{- if $auth }}
+            - 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli -h 127.0.0.1 ping | grep -qx PONG'
+            {{- else }}
+            - 'redis-cli -h 127.0.0.1 ping | grep -qx PONG'
+            {{- end }}
+        initialDelaySeconds: 10
+        periodSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 12
+      livenessProbe:
+        tcpSocket:
+          port: 6379
+        initialDelaySeconds: 40
+        periodSeconds: 10
+        timeoutSeconds: 3
+        failureThreshold: 6
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+      maxConcurrency: 0
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: {{ .Values.suspended }}
+    timeoutSeconds: 15
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      outboundAllowCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.access.type }}
+      {{- if .Values.access.workloads }}
+      inboundAllowWorkload: {{- .Values.access.workloads | toYaml | nindent 8 }}
+      {{- end }}

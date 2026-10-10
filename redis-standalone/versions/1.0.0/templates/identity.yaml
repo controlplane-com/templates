@@ -1,0 +1,7 @@
+{{- if .Values.credentials.enabled }}
+kind: identity
+name: {{ include "redis-standalone.identity" . }}
+description: Identity permitted to read this Redis release's password
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "redis-standalone.tags" . | nindent 2 }}
+{{- end }}

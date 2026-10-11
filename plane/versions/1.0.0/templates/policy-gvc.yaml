@@ -1,0 +1,24 @@
+{{- include "plane.validate" . -}}
+{{- /*
+  The beat workload reads its own GVC at boot to confirm the GVC really has the
+  location this release is pinned to. The platform does not validate that
+  direction at all: a localOptions entry naming a location the GVC LACKS is
+  accepted, stored, and simply inert -- the release runs nothing, anywhere, with
+  no failed deployment to observe. Helm cannot see a live GVC at render time, so
+  the container asks the GVC itself.
+
+  Scoped to the ONE install GVC; never `target: all`, which would grant view on
+  every GVC in the org.
+*/}}
+kind: policy
+name: {{ include "plane.gvcPolicy.name" . }}
+description: Plane GVC read policy
+tags: {{- include "plane.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - view
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "plane.identity.name" . }}
+targetKind: gvc
+targetLinks:
+  - //gvc/{{ .Values.global.cpln.gvc }}

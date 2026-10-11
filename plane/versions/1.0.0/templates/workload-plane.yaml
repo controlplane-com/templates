@@ -1,0 +1,273 @@
+{{- include "plane.validate" . -}}
+{{- /*
+  THE single-origin workload: proxy + web + space + admin + live + api, six
+  containers in ONE network namespace, talking over 127.0.0.1.
+
+  THIS IS THE ARCHITECTURE, NOT AN OPTIMISATION. Plane's frontends are compiled
+  at IMAGE BUILD TIME with relative base URLs — apps/web/Dockerfile.web bakes
+  VITE_API_BASE_URL="", VITE_ADMIN_BASE_PATH="/god-mode",
+  VITE_LIVE_BASE_PATH="/live", VITE_SPACE_BASE_PATH="/spaces". Every URL the
+  browser calls is relative, so all six services MUST answer on one origin. That
+  cannot be overridden without rebuilding the images. Splitting these into
+  separate workloads fails at runtime in a way that reads like a routing bug.
+
+  What the collapse buys, beyond being required:
+    * no cross-workload hop for /api, /live, /spaces or /god-mode — no mesh
+      sidecar on the hot path and no X-Forwarded-Proto question internally;
+    * no hostname assembly anywhere: `live` reaches the API at 127.0.0.1:8000;
+    * WEB_URL and CORS_ALLOWED_ORIGINS are right BY CONSTRUCTION, because the
+      api container's own CPLN_GLOBAL_ENDPOINT *is* the public endpoint of the
+      workload the proxy serves on. That is what kills the twenty/chatwoot
+      dead-link class for the tier that matters;
+    * least privilege: api, live, web, space and admin are unreachable from
+      anywhere except through the proxy — including from the rest of the GVC.
+
+  ONLY the proxy declares a port (80). Probes work fine on undeclared ports —
+  guacamole probes guacd on 4822 the same way.
+
+  PORT DE-COLLISION. Four upstream services listen on 3000. Resolved with the
+  cheapest mechanism available per container, each verified against the pinned
+  images: web stays 3000; space and live take PORT (3001 / 3003); admin gets a
+  mounted /etc/nginx/nginx.conf with `listen 3002` because nginx has no PORT;
+  api stays 8000.
+
+  No volumeset here — these six containers are stateless. Everything Plane
+  persists lives in PostgreSQL, Redis, RabbitMQ and the object store.
+*/}}
+kind: workload
+name: {{ include "plane.name" . }}
+description: Plane — proxy, web, spaces, god-mode, live editor and API on one origin
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "plane.tags" . | nindent 4 }}
+spec:
+  # standard: no volumeset, no need for replica identity — and `standard`
+  # imposes no cpu:minCpu ratio cap (which `stateful` caps at 4:1).
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "plane.identity.name" . }}
+  containers:
+    # ── proxy: Caddy, the ONLY declared port, and the single origin ──
+    - name: proxy
+      image: makeplane/plane-proxy:{{ .Values.plane.imageTag }}
+      inheritEnv: false
+      minCpu: {{ .Values.plane.resources.proxy.minCpu | quote }}
+      cpu: {{ .Values.plane.resources.proxy.maxCpu | quote }}
+      minMemory: {{ .Values.plane.resources.proxy.minMemory | quote }}
+      memory: {{ .Values.plane.resources.proxy.maxMemory | quote }}
+      ports:
+        - number: 80
+          protocol: http
+      readinessProbe:
+        # The catch-all route is `web`, so a 200 here proves the proxy AND the
+        # web SPA. Budget 10 + 20x15 = 310s.
+        httpGet:
+          path: /
+          port: 80
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 15
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        # initialDelay deliberately >= the readiness budget, so liveness never
+        # kills a container that is legitimately still starting.
+        httpGet:
+          path: /
+          port: 80
+          scheme: HTTP
+        initialDelaySeconds: 330
+        periodSeconds: 30
+        failureThreshold: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+      volumes:
+        - path: /etc/caddy/Caddyfile
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "plane.secret.caddyfile.name" . }}.payload
+
+    # ── web: the application SPA (nginx, static) ──
+    - name: web
+      image: makeplane/plane-frontend:{{ .Values.plane.imageTag }}
+      inheritEnv: false
+      minCpu: {{ .Values.plane.resources.ui.minCpu | quote }}
+      cpu: {{ .Values.plane.resources.ui.maxCpu | quote }}
+      minMemory: {{ .Values.plane.resources.ui.minMemory | quote }}
+      memory: {{ .Values.plane.resources.ui.maxMemory | quote }}
+      readinessProbe:
+        httpGet:
+          path: /
+          port: 3000
+          scheme: HTTP
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+
+    # ── space: published/public views (Node SSR via react-router-serve) ──
+    - name: space
+      image: makeplane/plane-space:{{ .Values.plane.imageTag }}
+      inheritEnv: false
+      minCpu: {{ .Values.plane.resources.ui.minCpu | quote }}
+      cpu: {{ .Values.plane.resources.ui.maxCpu | quote }}
+      minMemory: {{ .Values.plane.resources.ui.minMemory | quote }}
+      memory: {{ .Values.plane.resources.ui.maxMemory | quote }}
+      env:
+        # react-router-serve honours PORT; verified against this tag, including
+        # that it still binds loopback with HOSTNAME set to a replica name
+        # (the Next.js standalone bind trap does NOT apply to this image).
+        - name: PORT
+          value: "3001"
+      readinessProbe:
+        httpGet:
+          path: /spaces/
+          port: 3001
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+
+    # ── admin: God Mode (nginx, static) ──
+    - name: admin
+      image: makeplane/plane-admin:{{ .Values.plane.imageTag }}
+      inheritEnv: false
+      minCpu: {{ .Values.plane.resources.ui.minCpu | quote }}
+      cpu: {{ .Values.plane.resources.ui.maxCpu | quote }}
+      minMemory: {{ .Values.plane.resources.ui.minMemory | quote }}
+      memory: {{ .Values.plane.resources.ui.maxMemory | quote }}
+      readinessProbe:
+        httpGet:
+          path: /god-mode/
+          port: 3002
+          scheme: HTTP
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      volumes:
+        # nginx has no PORT variable, so the whole config is replaced. This file
+        # is apps/admin/nginx/nginx.conf from the pinned image, differing by
+        # exactly the `listen` line.
+        - path: /etc/nginx/nginx.conf
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "plane.secret.adminNginx.name" . }}.payload
+
+    # ── live: Hocuspocus collaborative editor ──
+    - name: live
+      image: makeplane/plane-live:{{ .Values.plane.imageTag }}
+      inheritEnv: false
+      minCpu: {{ .Values.plane.resources.live.minCpu | quote }}
+      cpu: {{ .Values.plane.resources.live.maxCpu | quote }}
+      minMemory: {{ .Values.plane.resources.live.minMemory | quote }}
+      memory: {{ .Values.plane.resources.live.maxMemory | quote }}
+      env:
+        - name: PORT
+          value: "3003"
+        # Same namespace as the api container.
+        - name: API_BASE_URL
+          value: "http://127.0.0.1:8000"
+        - name: LIVE_BASE_PATH
+          value: "/live"
+        # Required — the server refuses to start without it (zod: z.string(),
+        # no default). Read ONLY by this container; the backend never reads it.
+        - name: LIVE_SERVER_SECRET_KEY
+          value: cpln://secret/{{ .Values.secrets.name }}.LIVE_SERVER_SECRET_KEY
+        # Also required in practice: with no REDIS_URL the server throws
+        # `Redis client not initialized` and exits. This is what synchronises
+        # documents across replicas, so plane.replicas > 1 needs no stickiness.
+        - name: REDIS_PASSWORD
+          value: cpln://secret/{{ include "plane.secret.creds.name" . }}.redisPassword
+        - name: REDIS_URL
+          value: redis://:$(REDIS_PASSWORD)@{{ include "plane.redis.host" . }}:6379/
+      readinessProbe:
+        httpGet:
+          path: /live/health/
+          port: 3003
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+
+    # ── api: Django + gunicorn ──
+    - name: api
+      image: makeplane/plane-backend:{{ .Values.plane.imageTag }}
+      inheritEnv: false
+      minCpu: {{ .Values.plane.resources.api.minCpu | quote }}
+      cpu: {{ .Values.plane.resources.api.maxCpu | quote }}
+      minMemory: {{ .Values.plane.resources.api.minMemory | quote }}
+      memory: {{ .Values.plane.resources.api.maxMemory | quote }}
+      env:
+        {{- include "plane.backendEnv" . | nindent 8 }}
+        - name: GUNICORN_WORKERS
+          value: {{ .Values.plane.api.gunicornWorkers | quote }}
+        {{- /*
+          Correct BY CONSTRUCTION: this container shares a workload with the
+          proxy, so its own CPLN_GLOBAL_ENDPOINT is the public endpoint the
+          proxy serves. No hostname is assembled anywhere.
+        */}}
+        - name: WEB_URL
+          value: {{ include "plane.appBaseUrl" . }}
+        - name: APP_BASE_URL
+          value: {{ include "plane.appBaseUrl" . }}
+        - name: ADMIN_BASE_URL
+          value: {{ include "plane.appBaseUrl" . }}
+        - name: SPACE_BASE_URL
+          value: {{ include "plane.appBaseUrl" . }}
+        - name: LIVE_BASE_URL
+          value: {{ include "plane.appBaseUrl" . }}
+        {{- /*
+          LOAD-BEARING, not cosmetic. common.py sets
+          CSRF_TRUSTED_ORIGINS = cors_allowed_origins, and Plane sets no
+          SECURE_PROXY_SSL_HEADER — so behind the mesh Django computes its own
+          origin as http://{host} while the browser sends https://{host}, and
+          every POST fails the CSRF origin check unless the https origin is
+          listed here. Leaving it empty (CORS_ALLOW_ALL_ORIGINS) does NOT help:
+          it leaves CSRF_TRUSTED_ORIGINS empty.
+        */}}
+        - name: CORS_ALLOWED_ORIGINS
+          value: "{{ include "plane.corsOrigins" . }}"
+      readinessProbe:
+        # plane/web/urls.py maps "" -> health_check -> {"status": "OK"}.
+        # Budget 30 + 20x15 = 330s: a fresh install waits here while the beat
+        # workload applies Plane's full migration history. failureThreshold is
+        # at the platform cap of 20 and the budget is bought with periodSeconds.
+        httpGet:
+          path: /
+          port: 8000
+          scheme: HTTP
+        initialDelaySeconds: 30
+        periodSeconds: 15
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /
+          port: 8000
+          scheme: HTTP
+        initialDelaySeconds: 360
+        periodSeconds: 30
+        failureThreshold: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    {{- include "plane.defaultOptions" (dict "timeout" 300) | nindent 4 }}
+  localOptions:
+    {{- include "plane.localOptions" (dict "root" . "replicas" (int .Values.plane.replicas) "timeout" 300) | nindent 4 }}
+  firewallConfig:
+    external:
+      {{- include "plane.externalFirewall" (dict "root" . "public" true) | nindent 6 }}
+    internal:
+      {{- include "plane.internalFirewall" . | nindent 6 }}
+  loadBalancer:
+    # Everything Plane speaks is HTTP — no direct TCP/UDP exposure anywhere.
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

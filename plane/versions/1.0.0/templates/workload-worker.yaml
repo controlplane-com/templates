@@ -1,0 +1,59 @@
+{{- include "plane.validate" . -}}
+{{- /*
+  The Celery worker — notifications, activity feeds, exports, imports, invites.
+
+  Not optional and not merged into the api tier: without it those tasks silently
+  never happen while the UI reports success. Scaling it is `worker.replicas`;
+  Celery distributes tasks across workers through the RabbitMQ queue with no
+  peer discovery.
+
+  NO PROBES, deliberately. Celery has no cheap health endpoint, and `celery
+  inspect ping` is a broker round-trip slow and flaky enough to cause false
+  restarts. This tier is supervised by exit status — which means `ready: true`
+  here says "the process is running", NOT "it is consuming". If activity feeds
+  or invite emails stop, read the logs rather than trusting the status.
+*/}}
+kind: workload
+name: {{ include "plane.worker.name" . }}
+description: Plane Celery worker — notifications, exports, imports, invites
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "plane.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "plane.identity.name" . }}
+  containers:
+    - name: worker
+      image: makeplane/plane-backend:{{ .Values.plane.imageTag }}
+      # Wrapper, not the image entrypoint: it derives the APP workload's public
+      # URL before handing off, because CPLN_GLOBAL_ENDPOINT is per-workload and
+      # this one has no inbound at all. Invoked as `bash <path>` because a
+      # secret-mounted file is not executable.
+      command: /bin/bash
+      args:
+        - /cpln/start.sh
+      inheritEnv: false
+      minCpu: {{ .Values.worker.resources.minCpu | quote }}
+      cpu: {{ .Values.worker.resources.maxCpu | quote }}
+      minMemory: {{ .Values.worker.resources.minMemory | quote }}
+      memory: {{ .Values.worker.resources.maxMemory | quote }}
+      env:
+        {{- include "plane.backendEnv" . | nindent 8 }}
+      volumes:
+        - path: /cpln/start.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "plane.secret.workerStart.name" . }}.payload
+  defaultOptions:
+    {{- include "plane.defaultOptions" (dict "timeout" 300) | nindent 4 }}
+  localOptions:
+    {{- include "plane.localOptions" (dict "root" . "replicas" (int .Values.worker.replicas) "timeout" 300) | nindent 4 }}
+  firewallConfig:
+    external:
+      {{- include "plane.externalFirewall" (dict "root" . "public" false) | nindent 6 }}
+    internal:
+      {{- include "plane.internalFirewall" . | nindent 6 }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

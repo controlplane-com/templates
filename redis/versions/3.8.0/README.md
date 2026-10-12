@@ -42,10 +42,10 @@ This version moves the default image to `redis:8`. Redis 8 reads 7.4 data direct
 
 ### Switching between dev and production
 
-A `helm upgrade` can change `mode` in either direction. Without persistence, either switch starts empty.
+A `helm upgrade` can change `mode` in either direction.
 
-- **To dev:** turn `sentinel.persistence`, `sentinel.publicAccess` and `sentinel.auth` off first (the chart refuses them in dev). Stop writes for a few seconds before upgrading. The Sentinel tier and Redis nodes 1 and up are deleted, and node 0 restarts as a master with the data it holds. After a failover node 0 may not have been the master, so it keeps only what had replicated to it. Clients configured for Sentinel must switch to the direct address.
-- **To production:** node 0 keeps its data and boots as the master, and the new replicas copy it. Redis is unavailable until the new Sentinel tier answers. If the Sentinels are still not ready after about 5 minutes, run `cpln workload force-redeployment RELEASE_NAME-sentinel --gvc GVC_NAME`.
+- **To dev:** turn `sentinel.persistence`, `sentinel.publicAccess` and `sentinel.auth` off first (the chart refuses them in dev). Stop writes before upgrading: only node 0's copy is kept, and after a failover node 0 may not be the master, so it holds only what had replicated to it. The Sentinel tier and nodes 1 and up are deleted and node 0 restarts as a master; expect a full outage of about a minute or two. Without persistence node 0 restarts empty. The volumes of nodes 1 and up are kept (and still billed); a later switch back to production reuses them and resyncs them from the master, and they are deleted with the volume set when the release is uninstalled. Clients configured for Sentinel must switch to the direct address.
+- **To production:** the new replicas copy node 0 first, with or without persistence, while the old node keeps serving. Node 0 then restarts and Sentinel fails over to one of the new nodes, so the master ends up on node 1 or 2. This failover is expected and keeps the data; Sentinel-aware clients see a write gap of a few seconds.
 
 ### Engine: Redis or Valkey
 
@@ -293,14 +293,13 @@ redis-cli -h $MASTER_HOST -p $MASTER_PORT SET my-key "value"
 The `redis-standalone` template is retired; dev mode replaces it. Existing releases keep running. Its volume set cannot be adopted and its files cannot be copied (this chart's AOF ignores a dropped-in `dump.rdb`, and `cpln workload exec` corrupts binary streams), so move the data by replication:
 
 1. Install a **new** release (a different release name) in the same GVC with `mode: dev`, `redis.persistence.enabled: true`, `redis.extraArgs: "--appendfsync always"` (redis-standalone's default), and the old sizing under `redis.resources`. If the old release had a password, set `redis.auth.fromSecret.enabled: true` and `redis.auth.fromSecret.name` to the old secret; it works as it is (dictionary, key `password`). Keep `engine: redis`: Valkey cannot load Redis 7.4 data.
-2. Let the new node reach the old one. With the old `access.type` at `same-gvc` or `same-org` nothing is needed. With `workload-list` or `none`, upgrade the old release so it allows `//gvc/GVC_NAME/workload/NEW_RELEASE-redis`. The published 1.0.0 chart can still be pulled. `cpln helm upgrade` has no `--reuse-values`, so pass the release's current values back with `-f`. `--set` replaces the whole list, so name every workload the list already holds (`APP` stands for each one); for `none`, name only the new workload:
+2. Let the new node reach the old one. With the old `access.type` at `same-gvc` or `same-org` nothing is needed. With `workload-list` or `none`, upgrade the old release (the published 1.0.0 chart can still be pulled) with **the same values file and `--set` flags you installed it with**, changing only the access settings. `--set` replaces the whole list, so name every workload it already holds (`APP` stands for each one); for `none`, name only the new workload:
    ```bash
-   cpln helm get values OLD_RELEASE --all -o yaml > old-values.yaml
    cpln helm upgrade OLD_RELEASE oci://ghcr.io/controlplane-com/templates/redis-standalone --version 1.0.0 \
-     --gvc GVC_NAME -f old-values.yaml --set access.type=workload-list \
+     --gvc GVC_NAME YOUR_ORIGINAL_VALUES_AND_FLAGS --set access.type=workload-list \
      --set 'access.workloads={//gvc/GVC_NAME/workload/APP,//gvc/GVC_NAME/workload/NEW_RELEASE-redis}'
    ```
-   Firewall changes can take a few minutes to apply.
+   **Do not leave out your original values.** If the upgrade omits `credentials.secretName`, it falls back to `my-redis-password-secret`: the old Redis stops taking updates (and the firewall never changes), or restarts with a different password if a secret of that name exists. Do not rebuild them from `cpln helm get values` either: it returns `--set` values as flat dotted keys that `-f` ignores. The change restarts the old Redis once (about a minute), and the new node can reach it within a few minutes.
 3. Make the new node a replica of the old one, and wait until `master_link_status:up` and `DBSIZE` matches the old server:
    ```bash
    rcli() { cpln workload exec NEW_RELEASE-redis --gvc GVC_NAME --container redis -- \

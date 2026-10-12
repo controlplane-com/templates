@@ -54,12 +54,12 @@ steps:
           - rule: oldSelf == null || self.mode == oldSelf.mode
             severity: info
             message: >-
-              Switching the mode replaces the topology: Redis can be unavailable while it changes, and data
-              survives only on a persistent volume.
+              Switching the mode replaces the topology. To dev: stop writes first; only node 0 is kept, and
+              without persistence it restarts empty. To production: expect one Sentinel failover.
             messageExpression: >-
               self.mode == 'dev' ?
               'Switching to dev mode deletes the Sentinel tier and Redis nodes 1 and up; the remaining node keeps only the data it holds. Stop writes first, and keep persistence on, or the data is lost. Clients that use Sentinel must connect to ' + context.releaseName + '-redis directly.' :
-              'Switching to production adds Sentinel and Redis replicas; Redis can be unavailable for several minutes while the new Sentinel tier starts.'
+              'Switching to production adds Sentinel and Redis replicas. The new replicas copy node 0, then node 0 restarts and Sentinel fails over to a new node, so the master moves to node 1 or 2; the data is kept and Sentinel clients see a write gap of a few seconds.'
       - title: Engine
         docs: "#engine"
         fields:

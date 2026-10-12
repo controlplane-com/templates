@@ -618,7 +618,7 @@ steps:
               - { value: same-gvc, label: Same GVC, description: Any workload in this GVC (recommended). }
               - { value: same-org, label: Same org, description: Any workload in this org. }
               - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
-          # workload-redis.yaml:339-340 writes any non-empty list into inboundAllowWorkload, whatever the type.
+          # workload-redis.yaml writes any non-empty list into inboundAllowWorkload, whatever the type.
           - path: redis.firewall.inboundAllowWorkload
             type: list
             absent: true
@@ -696,7 +696,7 @@ steps:
               - { value: same-gvc, label: Same GVC, description: Any workload in this GVC (recommended). }
               - { value: same-org, label: Same org, description: Any workload in this org. }
               - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
-          # workload-sentinel.yaml:208-209 writes any non-empty list into inboundAllowWorkload, whatever the type.
+          # workload-sentinel.yaml writes any non-empty list into inboundAllowWorkload, whatever the type.
           - path: sentinel.firewall.inboundAllowWorkload
             type: list
             absent: true

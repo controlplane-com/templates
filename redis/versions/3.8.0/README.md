@@ -13,7 +13,7 @@ Creates a Redis Sentinel cluster on Control Plane with automatic leader election
 - **Stateful Redis workload** — one primary plus replicas, each on its own volume set; a single node in dev mode.
 - **Stateful Sentinel workload** *(production mode only)* — monitors the primary and promotes a replica on failure; clients discover the current primary through it.
 - **Secrets** — Redis and Sentinel configuration, plus password secrets created only when auth is enabled.
-- **Identities and policies** — separate identities for Redis, Sentinel (production mode) and the backup job, each granted `reveal` on only the secrets it needs.
+- **Identities and policies** — one identity for Redis, shared by the backup job (it also carries the backup cloud binding), and one for Sentinel in production mode; each policy grants `reveal` on only the secrets its tier needs.
 - **Domains** *(optional)* — created when public access is enabled, for external TCP reach.
 - **Volume sets** *(optional)* — persistence for Redis, and for Sentinel in production mode.
 - **Backup cron workload** *(optional)* — a scheduled backup to S3 or GCS.
@@ -36,7 +36,7 @@ This version moves the default image to `redis:8`. Redis 8 reads 7.4 data direct
 ### Mode: production or dev
 
 - **`production`** (default): `redis.replicas` Redis nodes and a Sentinel quorum that fails over automatically.
-- **`dev`**: one Redis node that boots as a plain master. **No failover: a restart or reschedule means the database is down until it returns. Not for production.** `redis.replicas` and every `sentinel.*` setting are ignored; Sentinel public access, persistence and auth are refused at install.
+- **`dev`**: one Redis node that boots as a plain master. **No failover: a restart or reschedule means the database is down until it returns. Not for production.** `redis.replicas` and every `sentinel.*` setting are ignored; Sentinel public access, persistence and auth are refused at render, on install and on upgrade.
 - Turn on `redis.persistence.enabled` **at install** if dev data must survive restarts and upgrades. It cannot be turned on later.
 - In dev mode clients connect directly to `RELEASE_NAME-redis.GVC_NAME.cpln.local:6379`; there is no Sentinel to query.
 
@@ -88,7 +88,7 @@ sentinel:
   quorumAutoCalculation: true  # calculates as (replicas/2)+1
 ```
 
-**Authentication** — enable one method. Apply the same config under both `redis.auth` and `sentinel.auth`:
+**Authentication** — enable one method. In production mode apply the same config under both `redis.auth` and `sentinel.auth`; dev mode uses `redis.auth` only and refuses `sentinel.auth`:
 ```yaml
 redis:
   auth:
@@ -205,7 +205,7 @@ sentinel:
 
 ### Public Access (External TCP)
 
-Redis and Sentinel can be exposed over the internet via TCP using Control Plane's domain resource with per-replica port routing.
+Redis and Sentinel can be exposed over the internet via TCP using Control Plane's domain resource with per-replica port routing. Sentinel public access is production mode only; dev mode refuses it.
 
 #### Prerequisites
 
@@ -222,7 +222,7 @@ Your GVC alias is visible in the Control Plane console under GVC settings. The T
 
 #### Configuration
 
-Enable `publicAccess` for Redis and/or Sentinel and set a subdomain you own:
+Enable `publicAccess` for Redis and/or Sentinel (production mode only) and set a subdomain you own:
 
 ```yaml
 redis:
@@ -293,7 +293,14 @@ redis-cli -h $MASTER_HOST -p $MASTER_PORT SET my-key "value"
 The `redis-standalone` template is retired; dev mode replaces it. Existing releases keep running. Its volume set cannot be adopted and its files cannot be copied (this chart's AOF ignores a dropped-in `dump.rdb`, and `cpln workload exec` corrupts binary streams), so move the data by replication:
 
 1. Install a **new** release (a different release name) in the same GVC with `mode: dev`, `redis.persistence.enabled: true`, `redis.extraArgs: "--appendfsync always"` (redis-standalone's default), and the old sizing under `redis.resources`. If the old release had a password, set `redis.auth.fromSecret.enabled: true` and `redis.auth.fromSecret.name` to the old secret; it works as it is (dictionary, key `password`). Keep `engine: redis`: Valkey cannot load Redis 7.4 data.
-2. If the old release's access type was `workload-list`, add `//gvc/GVC_NAME/workload/NEW_RELEASE-redis` to its list.
+2. Let the new node reach the old one. With the old `access.type` at `same-gvc` or `same-org` nothing is needed. With `workload-list` or `none`, upgrade the old release so it allows `//gvc/GVC_NAME/workload/NEW_RELEASE-redis`. The published 1.0.0 chart can still be pulled. `cpln helm upgrade` has no `--reuse-values`, so pass the release's current values back with `-f`. `--set` replaces the whole list, so name every workload the list already holds (`APP` stands for each one); for `none`, name only the new workload:
+   ```bash
+   cpln helm get values OLD_RELEASE --all -o yaml > old-values.yaml
+   cpln helm upgrade OLD_RELEASE oci://ghcr.io/controlplane-com/templates/redis-standalone --version 1.0.0 \
+     --gvc GVC_NAME -f old-values.yaml --set access.type=workload-list \
+     --set 'access.workloads={//gvc/GVC_NAME/workload/APP,//gvc/GVC_NAME/workload/NEW_RELEASE-redis}'
+   ```
+   Firewall changes can take a few minutes to apply.
 3. Make the new node a replica of the old one, and wait until `master_link_status:up` and `DBSIZE` matches the old server:
    ```bash
    rcli() { cpln workload exec NEW_RELEASE-redis --gvc GVC_NAME --container redis -- \

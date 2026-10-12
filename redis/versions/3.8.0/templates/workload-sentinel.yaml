@@ -1,3 +1,4 @@
+{{- if ne (include "redis.mode" .) "dev" }}
 {{ include "redis.validateEngine" . }}{{ include "validateAuth" (dict "auth" .Values.sentinel.auth) }}
 kind: workload
 name: {{ include "redis.sentinel.name" . }}
@@ -220,4 +221,6 @@ spec:
 {{- else }}
   loadBalancer:
     replicaDirect: false
+{{- end }}
+
 {{- end }}

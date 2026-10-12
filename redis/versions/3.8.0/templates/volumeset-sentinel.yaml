@@ -1,3 +1,4 @@
+{{- if ne (include "redis.mode" .) "dev" }}
 {{- if and (hasKey .Values.sentinel "persistence") .Values.sentinel.persistence.enabled }}
 kind: volumeset
 name: {{ include "redis.sentinelVolume.name" . }}
@@ -24,4 +25,5 @@ spec:
     minFreePercentage: {{ .Values.sentinel.persistence.volumes.data.autoscaling.minFreePercentage }}
     scalingFactor: {{ .Values.sentinel.persistence.volumes.data.autoscaling.scalingFactor }}
   {{- end }}
+{{- end }}
 {{- end }}

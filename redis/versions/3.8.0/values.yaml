@@ -1,3 +1,13 @@
+# ─── Mode ─────────────────────────────────────────────────────────────────────
+# production (default): redis.replicas Redis nodes plus a Sentinel quorum that
+#   fails over automatically.
+# dev: ONE Redis node and NO Sentinel. No failover; for development and
+#   testing, not production. redis.replicas and every sentinel.* setting are
+#   ignored; Sentinel public access, persistence and auth must stay off (the
+#   chart refuses them). Turn on redis.persistence at install to keep data
+#   across restarts and upgrades.
+mode: production                  # production | dev
+
 # ─── Engine ───────────────────────────────────────────────────────────────────
 # Which server this deployment runs. `redis` is the default and changes nothing.
 # `valkey` runs BOTH the Redis and Sentinel tiers on the image below — Valkey is
@@ -19,7 +29,7 @@ redis:
     maxMemory: 256Mi
     minCpu: 80m
     minMemory: 128Mi
-  replicas: 3
+  replicas: 3                     # ignored in dev mode (always 1)
   timeoutSeconds: 15
   multiZone: false
   replicaDirect: false # https://docs.controlplane.com/reference/workload/general#internal-endpoint-formatting
@@ -112,7 +122,7 @@ redis:
         #   region: aws-us-east-1 # Replace with the appropriate region
         #   keyId: arn:aws:kms:us-east-1:1234567890:key/d411f35a-1d31-4515-9934-4f193e042d80 # Replace with your AWS KMS key ARN
 
-sentinel:
+sentinel:                         # production mode only; ignored in dev mode
   image: redis:8
   resources:
     maxCpu: 200m

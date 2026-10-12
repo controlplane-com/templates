@@ -6,16 +6,16 @@
 > refused at render. Blocks that expose only a limit keep the bare `cpu`/`memory` names.
 
 
-Creates a Redis Sentinel cluster on Control Plane with automatic leader election, failover, and an optional backup configuration.
+Creates a Redis Sentinel cluster on Control Plane with automatic leader election, failover, and an optional backup configuration. With `mode: dev` it runs a single Redis node with no Sentinel instead, for development and testing.
 
 ### Architecture
 
-- **Stateful Redis workload** — one primary plus replicas, each on its own volume set.
-- **Stateful Sentinel workload** — monitors the primary and promotes a replica on failure; clients discover the current primary through it.
+- **Stateful Redis workload** — one primary plus replicas, each on its own volume set; a single node in dev mode.
+- **Stateful Sentinel workload** *(production mode only)* — monitors the primary and promotes a replica on failure; clients discover the current primary through it.
 - **Secrets** — Redis and Sentinel configuration, plus password secrets created only when auth is enabled.
-- **Identities and policies** — separate identities for Redis, Sentinel and the backup job, each granted `reveal` on only the secrets it needs.
+- **Identities and policies** — separate identities for Redis, Sentinel (production mode) and the backup job, each granted `reveal` on only the secrets it needs.
 - **Domains** *(optional)* — created when public access is enabled, for external TCP reach.
-- **Volume sets** — persistence for Redis and Sentinel.
+- **Volume sets** *(optional)* — persistence for Redis, and for Sentinel in production mode.
 - **Backup cron workload** *(optional)* — a scheduled backup to S3 or GCS.
 - **Grafana dashboard** — shipped with the template.
 
@@ -23,6 +23,7 @@ This template does not create a GVC.
 
 ### Important Notes
 
+- **`mode: dev` has no failover and is not for production;** with persistence off its data is lost on every restart and upgrade.
 - **Do not rotate the Redis password in place.** Changing `redis.auth.password.value` on a running cluster deadlocks the rollout: the first restarted node cannot replicate from the not-yet-restarted master (`Unable to AUTH to MASTER: -WRONGPASS`), so its readiness probe never passes and the roll never advances. Re-applying the previous password recovers it. To change the password, uninstall and reinstall, or accept a brief planned outage.
 - **Turn `persistence` on at install, not on a running release.** Enabling it on a deployment that is already running stalls the rollout indefinitely: every replica sits on `Replica N will be restarted shortly (version transition: N -> N+1)`, the volume set's volumes stay `unbound`, and `/data` remains on the container overlay. Measured at 27 minutes with no progress, and a forced redeployment does not clear it. A **fresh** install with persistence enabled comes up normally (53 s), and upgrading a release that already has its volume rolls fine — so the constraint is specifically about adding the volume to a live release. This is independent of `engine`.
 - **The engine is chosen at install time and cannot be switched on a running deployment.** With persistence on, pointing an existing Redis data directory at Valkey crash-loops the pod (`# Can't handle RDB format version 15` / `Error reading the RDB base file …, AOF loading aborted`); with persistence off it silently starts empty. Migrate with dump/restore or replication, not by flipping `engine`.
@@ -31,6 +32,20 @@ This template does not create a GVC.
 ### Upgrading from a 3.4.x release (Redis 7.4 → 8)
 
 This version moves the default image to `redis:8`. Redis 8 reads 7.4 data directly, so an upgrade with persistence enabled keeps your data — but **the upgrade is one-way**: once a node has written its data file under Redis 8, a 7.4 image can no longer load it. If you need a rollback path, snapshot the volume set before upgrading, or pin `redis.image`/`sentinel.image` back to `redis:7.4` (both remain supported values).
+
+### Mode: production or dev
+
+- **`production`** (default): `redis.replicas` Redis nodes and a Sentinel quorum that fails over automatically.
+- **`dev`**: one Redis node that boots as a plain master. **No failover: a restart or reschedule means the database is down until it returns. Not for production.** `redis.replicas` and every `sentinel.*` setting are ignored; Sentinel public access, persistence and auth are refused at install.
+- Turn on `redis.persistence.enabled` **at install** if dev data must survive restarts and upgrades. It cannot be turned on later.
+- In dev mode clients connect directly to `RELEASE_NAME-redis.GVC_NAME.cpln.local:6379`; there is no Sentinel to query.
+
+### Switching between dev and production
+
+A `helm upgrade` can change `mode` in either direction. Without persistence, either switch starts empty.
+
+- **To dev:** turn `sentinel.persistence`, `sentinel.publicAccess` and `sentinel.auth` off first (the chart refuses them in dev). Stop writes for a few seconds before upgrading. The Sentinel tier and Redis nodes 1 and up are deleted, and node 0 restarts as a master with the data it holds. After a failover node 0 may not have been the master, so it keeps only what had replicated to it. Clients configured for Sentinel must switch to the direct address.
+- **To production:** node 0 keeps its data and boots as the master, and the new replicas copy it. Redis is unavailable until the new Sentinel tier answers. If the Sentinels are still not ready after about 5 minutes, run `cpln workload force-redeployment RELEASE_NAME-sentinel --gvc GVC_NAME`.
 
 ### Engine: Redis or Valkey
 
@@ -45,6 +60,11 @@ This template runs either server. `engine: redis` is the default and changes not
 
 ### Configuration
 
+**Mode** — set at the top of the values:
+```yaml
+mode: production                  # production | dev. dev = ONE Redis node, NO Sentinel, no failover: development and testing only
+```
+
 **Engine** — which server both tiers run:
 ```yaml
 engine: redis                     # redis | valkey
@@ -53,10 +73,10 @@ engine: redis                     # redis | valkey
 valkeyImage: valkey/valkey:8.1.9
 ```
 
-**Redis and Sentinel** — set replicas, resources, and timeouts for each. Sentinel replicas must be an odd number for quorum:
+**Redis and Sentinel** — set replicas, resources, and timeouts for each. Sentinel replicas must be an odd number for quorum. In dev mode `redis.replicas` and the `sentinel` block are ignored:
 ```yaml
 redis:
-  replicas: 3
+  replicas: 3                     # ignored in dev mode (always 1)
   resources:
     minCpu: 80m
     minMemory: 128Mi
@@ -255,7 +275,7 @@ Redis is accessible internally on port 6379:
 RELEASE_NAME-redis.GVC_NAME.cpln.local:6379
 ```
 
-Sentinel is accessible on port 26379:
+Sentinel (production mode) is accessible on port 26379:
 ```
 RELEASE_NAME-sentinel.GVC_NAME.cpln.local:26379
 ```
@@ -267,6 +287,23 @@ MASTER_HOST=$(echo $MASTER_INFO | cut -d' ' -f1)
 MASTER_PORT=$(echo $MASTER_INFO | cut -d' ' -f2)
 redis-cli -h $MASTER_HOST -p $MASTER_PORT SET my-key "value"
 ```
+
+### Migrating from redis-standalone
+
+The `redis-standalone` template is retired; dev mode replaces it. Existing releases keep running. Its volume set cannot be adopted and its files cannot be copied (this chart's AOF ignores a dropped-in `dump.rdb`, and `cpln workload exec` corrupts binary streams), so move the data by replication:
+
+1. Install a **new** release (a different release name) in the same GVC with `mode: dev`, `redis.persistence.enabled: true`, `redis.extraArgs: "--appendfsync always"` (redis-standalone's default), and the old sizing under `redis.resources`. If the old release had a password, set `redis.auth.fromSecret.enabled: true` and `redis.auth.fromSecret.name` to the old secret; it works as it is (dictionary, key `password`). Keep `engine: redis`: Valkey cannot load Redis 7.4 data.
+2. If the old release's access type was `workload-list`, add `//gvc/GVC_NAME/workload/NEW_RELEASE-redis` to its list.
+3. Make the new node a replica of the old one, and wait until `master_link_status:up` and `DBSIZE` matches the old server:
+   ```bash
+   rcli() { cpln workload exec NEW_RELEASE-redis --gvc GVC_NAME --container redis -- \
+     sh -c 'redis-cli ${CUSTOM_REDIS_PASSWORD:+--no-auth-warning -a "$CUSTOM_REDIS_PASSWORD"} "$@"' rcli "$@"; }
+   rcli REPLICAOF OLD_RELEASE-redis.GVC_NAME.cpln.local 6379
+   rcli INFO replication
+   rcli DBSIZE
+   ```
+4. Stop writes, point clients at `NEW_RELEASE-redis.GVC_NAME.cpln.local:6379`, and promote the new node with `rcli REPLICAOF NO ONE`. A dev-mode node always boots as a master, so the promotion survives restarts.
+5. Uninstall the old release with `cpln helm uninstall OLD_RELEASE --gvc GVC_NAME`, then confirm its volume set is gone with `cpln volumeset get OLD_RELEASE-redis-data --gvc GVC_NAME` (it should report not found).
 
 ### Backing Up
 

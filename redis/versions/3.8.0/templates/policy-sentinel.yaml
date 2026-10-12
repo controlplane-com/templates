@@ -1,3 +1,4 @@
+{{- if ne (include "redis.mode" .) "dev" }}
 kind: policy
 name: {{ include "redis.sentinelPolicy.name" . }}
 tags: {{- include "redis.tags" . | nindent 2 }}
@@ -19,3 +20,4 @@ targetLinks:
   {{- else if and (hasKey .Values.redis "auth") (hasKey .Values.redis.auth "password") .Values.redis.auth.password.enabled }}
   - //secret/{{ include "redis.secretPassword.name" . }}
   {{- end }}
+{{- end }}

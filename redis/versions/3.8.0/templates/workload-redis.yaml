@@ -1,4 +1,4 @@
-{{ include "redis.validateEngine" . }}{{ include "validateAuth" (dict "auth" .Values.redis.auth) }}
+{{ include "redis.validateEngine" . }}{{ include "redis.validateMode" . }}{{ include "validateAuth" (dict "auth" .Values.redis.auth) }}
 kind: workload
 name: {{ include "redis.name" . }}
 description: Redis
@@ -76,6 +76,14 @@ spec:
           echo "\nreplica-announce-port 6379" >> /etc/redis/redis.conf
           SELF_PORT=6379
           {{ end }}
+
+          {{- if eq (include "redis.mode" .) "dev" }}
+
+          # Dev mode: no Sentinel to ask, so this single node always boots as a
+          # plain master. exec hands SIGTERM straight to the server.
+          echo "Dev mode: booting as a standalone master (no Sentinel)"
+          exec {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }}
+          {{- else }}
 
           # Discovery: ask sentinel who the master is, retrying forever. A
           # redis cluster without reachable sentinels isn't manageable
@@ -161,6 +169,7 @@ spec:
             ) &
             exec {{ .Values.redis.serverCommand }} /etc/redis/redis.conf {{ .Values.redis.extraArgs }} --dir {{ .Values.redis.dataDir }} --replicaof "$MASTER_HOST" "$MASTER_PORT"
           fi
+          {{- end }}
       command: /bin/sh
       cpu: {{ .Values.redis.resources.maxCpu }}
       memory: {{ .Values.redis.resources.maxMemory }}
@@ -239,9 +248,9 @@ spec:
       {{- end }}
       inheritEnv: false
       ports:
-{{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled (gt (.Values.redis.replicas | int) 0) }}
+{{- if and (hasKey .Values.redis "publicAccess") .Values.redis.publicAccess.enabled (gt (include "redis.replicaCount" . | int) 0) }}
     {{- $startPort := 6380 }}
-    {{- $replicas := $.Values.redis.replicas | int }}
+    {{- $replicas := include "redis.replicaCount" $ | int }}
     {{- range $replicaIndex := until $replicas }}
         - number: {{ add $startPort $replicaIndex }}
           protocol: tcp
@@ -300,8 +309,8 @@ spec:
     autoscaling:
       maxConcurrency: 0
       metric: disabled
-      minScale: {{ .Values.redis.replicas }}
-      maxScale: {{ .Values.redis.replicas }}
+      minScale: {{ include "redis.replicaCount" . }}
+      maxScale: {{ include "redis.replicaCount" . }}
       scaleToZeroDelay: 300
       target: 100
     capacityAI: false

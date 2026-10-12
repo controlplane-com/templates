@@ -317,3 +317,49 @@ to the redis branch and silently install the wrong server.
 {{- fail "redis: valkeyImage must be set when engine is \"valkey\"" -}}
 {{- end -}}
 {{- end -}}
+
+{{/* Mode */}}
+
+{{/*
+Deployment mode. production (default) = redis.replicas Redis nodes plus a
+Sentinel quorum; dev = one Redis node booting as a plain master, no Sentinel.
+Defaults to production so a parent chart that passes no `mode` is unaffected.
+*/}}
+{{- define "redis.mode" -}}
+{{- .Values.mode | default "production" -}}
+{{- end -}}
+
+{{/*
+Effective Redis replica count: 1 in dev mode, otherwise redis.replicas emitted
+verbatim (so the production render is unchanged).
+*/}}
+{{- define "redis.replicaCount" -}}
+{{- if eq (include "redis.mode" .) "dev" -}}
+1
+{{- else -}}
+{{- .Values.redis.replicas -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Validate the mode choice, and refuse the Sentinel features a user must opt into
+when mode is dev (silently dropping them would delete a domain, volume set or
+credential on an upgrade). Sentinel sizing knobs are ignored in dev, not refused.
+*/}}
+{{- define "redis.validateMode" -}}
+{{- $m := include "redis.mode" . -}}
+{{- if not (or (eq $m "production") (eq $m "dev")) -}}
+{{- fail (printf "redis: mode must be \"production\" or \"dev\" (got %q). production runs Redis replicas with Sentinel failover; dev runs one Redis node with no Sentinel." $m) -}}
+{{- end -}}
+{{- if eq $m "dev" -}}
+{{- if ((.Values.sentinel).publicAccess).enabled -}}
+{{- fail "redis: sentinel.publicAccess.enabled cannot be true in dev mode. Dev mode runs no Sentinel, so there is nothing to expose. Set it to false, or use mode: production." -}}
+{{- end -}}
+{{- if ((.Values.sentinel).persistence).enabled -}}
+{{- fail "redis: sentinel.persistence.enabled cannot be true in dev mode. Dev mode runs no Sentinel, and switching a release to dev would delete the Sentinel volume set. Set it to false, or use mode: production." -}}
+{{- end -}}
+{{- if or (((.Values.sentinel).auth).password).enabled (((.Values.sentinel).auth).fromSecret).enabled -}}
+{{- fail "redis: sentinel.auth cannot be enabled in dev mode. Dev mode runs no Sentinel. Set sentinel.auth.password.enabled and sentinel.auth.fromSecret.enabled to false (the Redis password is redis.auth), or use mode: production." -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

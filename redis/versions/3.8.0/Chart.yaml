@@ -1,13 +1,13 @@
 apiVersion: v2
 name: redis
-description: Master-replica Redis or Valkey with Sentinel failover
+description: Redis or Valkey with Sentinel failover, or one node for development
 type: application
-version: 3.7.0
+version: 3.8.0
 appVersion: "8"
 
 annotations:
   created: "2026-05-25"
-  lastModified: "2026-10-01"
+  lastModified: "2026-10-12"
   createsGvc: false
 
 dependencies:

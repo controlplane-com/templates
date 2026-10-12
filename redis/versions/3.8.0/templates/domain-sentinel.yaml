@@ -1,3 +1,4 @@
+{{- if ne (include "redis.mode" .) "dev" }}
 {{- if and (hasKey .Values.sentinel "publicAccess") .Values.sentinel.publicAccess.enabled }}
 kind: domain
 name: {{ .Values.sentinel.publicAccess.address }}
@@ -18,4 +19,6 @@ spec:
           workloadLink: //gvc/{{ $.Values.global.cpln.gvc }}/workload/{{ include "redis.sentinel.name" $ }}
     {{- end }}
   {{- end }}
+{{- end }}
+
 {{- end }}

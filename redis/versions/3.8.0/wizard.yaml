@@ -8,9 +8,58 @@ gvc:
 
 steps:
   - id: topology
-    title: Engine and topology
-    description: Which server both tiers run, and how many Redis nodes and Sentinels.
+    title: Mode, engine and topology
+    description: Production with Sentinel failover or a single dev node, which server runs, and how many Redis nodes and Sentinels.
     sections:
+      - title: Mode
+        docs: "#mode"
+        fields:
+          - id: deploymentMode
+            virtual: true
+            type: enum
+            label: Mode
+            widget: cards
+            required: true
+            init: "self.mode == 'dev' ? 'dev' : 'production'"
+            options:
+              - value: production
+                label: Production
+                description: Redis replicas with a Sentinel quorum that fails over automatically.
+                set: { mode: production }
+              - value: dev
+                label: Dev / testing
+                description: One Redis node, no Sentinel, no failover. Not for production.
+                set:
+                  mode: dev
+                  sentinel.publicAccess.enabled: false
+                  sentinel.persistence.enabled: false
+                  sentinel.auth.password.enabled: false
+                  sentinel.auth.fromSecret.enabled: false
+        rules:
+          - rule: self.mode in ['production', 'dev']
+            mirrors: redis.validateMode
+            message: Mode must be production or dev.
+          - rule: >-
+              self.mode != 'dev' || (!self.sentinel.publicAccess.enabled && !self.sentinel.persistence.enabled &&
+              !self.sentinel.auth.password.enabled && !self.sentinel.auth.fromSecret.enabled)
+            mirrors: redis.validateMode
+            message: >-
+              Dev mode runs no Sentinel: Sentinel public access, persistence and authentication must be off.
+          - when: self.mode == 'dev'
+            rule: self.redis.persistence.enabled
+            severity: info
+            message: >-
+              Without a persistent volume, dev-mode data is lost on every restart and upgrade. Turn on the
+              Redis volume under Resources and persistence at install.
+          - rule: oldSelf == null || self.mode == oldSelf.mode
+            severity: info
+            message: >-
+              Switching the mode replaces the topology: Redis can be unavailable while it changes, and data
+              survives only on a persistent volume.
+            messageExpression: >-
+              self.mode == 'dev' ?
+              'Switching to dev mode deletes the Sentinel tier and Redis nodes 1 and up; the remaining node keeps only the data it holds. Stop writes first, and keep persistence on, or the data is lost. Clients that use Sentinel must connect to ' + context.releaseName + '-redis directly.' :
+              'Switching to production adds Sentinel and Redis replicas; Redis can be unavailable for several minutes while the new Sentinel tier starts.'
       - title: Engine
         docs: "#engine"
         fields:
@@ -63,11 +112,15 @@ steps:
               upgrade if you need a way back.
       - title: Redis
         fields:
+          - type: note
+            when: self.mode == 'dev'
+            text: Dev mode runs exactly one Redis node.
           - path: redis.replicas
             type: integer
             label: Redis nodes
             min: 1
             required: true
+            when: self.mode != 'dev'
             suggestions: [1, 2, 3, 5]
             description: One primary plus replicas, each on its own volume when persistence is on.
           - path: redis.multiZone
@@ -75,6 +128,7 @@ steps:
             label: Spread Redis nodes across zones
             description: Confirm that your locations support multiple zones.
       - title: Sentinel
+        when: self.mode != 'dev'
         fields:
           - type: note
             text: Failover needs a quorum of Sentinels to agree.
@@ -171,6 +225,7 @@ steps:
             required: true
             when: ui.redisAuth == 'secret'
       - title: Sentinel
+        when: self.mode != 'dev'
         fields:
           - id: sentinelAuth
             virtual: true
@@ -244,7 +299,8 @@ steps:
         message: >-
           Changing the Sentinel password on a running release deadlocks the rollout. Keep the installed
           password, or reinstall.
-      - rule: >-
+      - when: self.mode != 'dev'
+        rule: >-
           self.redis.auth.fromSecret.enabled == self.sentinel.auth.fromSecret.enabled &&
           self.redis.auth.password.enabled == self.sentinel.auth.password.enabled
         severity: info
@@ -386,6 +442,7 @@ steps:
             paths: [redis.persistence.volumes.data.initialCapacity]
             message: A volume set cannot shrink. Keep the capacity at or above the installed size.
       - title: Sentinel
+        when: self.mode != 'dev'
         fields:
           - path: sentinel.resources
             type: resources
@@ -396,6 +453,7 @@ steps:
       - id: sentinel-volume
         title: Persistent volume for Sentinel
         toggle: sentinel.persistence.enabled
+        when: self.mode != 'dev'
         description: >-
           Recommended in production: it keeps the post-failover primary across restarts, so replicas
           rejoin the real primary.
@@ -625,6 +683,7 @@ steps:
               Before you install, add a TXT record `_cpln-<subdomain>` with your org name and a CNAME from
               the subdomain to `<gvc-alias>.cpln.app`, with proxying off.
       - title: Sentinel
+        when: self.mode != 'dev'
         docs: "/reference/workload/firewall"
         fields:
           - path: sentinel.firewall.internal_inboundAllowType
@@ -688,6 +747,7 @@ steps:
       - id: sentinel-public
         title: Public TCP access to Sentinel
         toggle: sentinel.publicAccess.enabled
+        when: self.mode != 'dev'
         description: Publishes one port per Sentinel, from 26380, and forces per-replica endpoints.
         docs: "#public-access-and-firewall"
         fields:
@@ -705,26 +765,28 @@ steps:
       - when: self.redis.firewall.internal_inboundAllowType == 'workload-list' && context.gvc != null
         rule: >-
           ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis') in self.redis.firewall.inboundAllowWorkload &&
-          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-sentinel') in self.redis.firewall.inboundAllowWorkload &&
+          (self.mode == 'dev' ||
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-sentinel') in self.redis.firewall.inboundAllowWorkload) &&
           (!self.backup.enabled ||
           ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis-backup') in self.redis.firewall.inboundAllowWorkload)
         severity: warning
         paths: [redis.firewall.inboundAllowWorkload]
         messageExpression: >-
           'The chart does not add its own workloads to the list. Add //gvc/' + context.gvc + '/workload/' +
-          context.releaseName + '-redis, //gvc/' + context.gvc + '/workload/' + context.releaseName + '-sentinel' +
+          context.releaseName + '-redis' +
+          (self.mode == 'dev' ? '' : ', //gvc/' + context.gvc + '/workload/' + context.releaseName + '-sentinel') +
           (self.backup.enabled ? ' and //gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis-backup' : '') +
-          ', or replication, failover and backups cannot reach Redis.'
+          (self.mode == 'dev' ? ', or the node and backups cannot reach Redis.' : ', or replication, failover and backups cannot reach Redis.')
         fix:
           path: redis.firewall.inboundAllowWorkload
           items: >-
-            ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis',
-            '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-sentinel'] +
+            ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis'] +
+            (self.mode == 'dev' ? [] : ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-sentinel']) +
             (self.backup.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis-backup'] : [])
         message: >-
-          The chart does not add its own workloads to the list. Add the Redis, Sentinel and (with backups)
-          backup workloads, or they cannot reach Redis.
-      - when: self.sentinel.firewall.internal_inboundAllowType == 'workload-list' && context.gvc != null
+          The chart does not add its own workloads to the list. Add the Redis workload, the Sentinel workload
+          (production mode) and, with backups, the backup workload, or they cannot reach Redis.
+      - when: self.mode != 'dev' && self.sentinel.firewall.internal_inboundAllowType == 'workload-list' && context.gvc != null
         rule: >-
           ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-sentinel') in self.sentinel.firewall.inboundAllowWorkload &&
           ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis') in self.sentinel.firewall.inboundAllowWorkload
@@ -947,6 +1009,7 @@ steps:
             format: image
             label: Sentinel image
             required: true
+            when: self.mode != 'dev'
         rules:
           - rule: >-
               oldSelf == null || imageMajor(self.redis.image) < 0 || imageMajor(oldSelf.redis.image) < 0 ||
@@ -970,6 +1033,7 @@ steps:
             min: 1
             max: 3600
             required: true
+            when: self.mode != 'dev'
       - title: Replication tuning
         fields:
           - path: redis.replication.backlogSize
@@ -1125,6 +1189,7 @@ steps:
               defect). Remove it from the extra arguments.
       - title: Sentinel workload
         collapsible: true
+        when: self.mode != 'dev'
         fields:
           - path: sentinel.env
             type: list
@@ -1189,6 +1254,8 @@ yamlOnly:
     reason: Tied to the volume mount and the temp-file cleanup hooks; there is no reason to change it.
 
 migrations:
+  - fromVersions: "<3.8.0"
+    assume: { mode: production }
   - fromVersions: "<3.7.0"
     assume: { engine: redis }
   - fromVersions: "<3.6.0"

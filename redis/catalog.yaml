@@ -8,10 +8,11 @@ topology: highly-available
 
 summary: >-
   Redis or Valkey as one primary with replicas plus a Sentinel quorum that promotes a replica when
-  the primary fails, three of each by default, in one location. Options include password auth,
-  persistent volumes with snapshots, a redis_exporter metrics sidecar, public TCP access through
-  your own domain and scheduled RDB backups to Amazon S3 or Google Cloud Storage. The default
-  Redis for caching, sessions, job queues and pub/sub in one location.
+  the primary fails, three of each by default, in one location. A dev mode runs a single Redis node
+  with no Sentinel for development and testing. Options include password auth, persistent volumes
+  with snapshots, a redis_exporter metrics sidecar, public TCP access through your own domain and
+  scheduled RDB backups to Amazon S3 or Google Cloud Storage. The default Redis for caching,
+  sessions, job queues and pub/sub in one location.
 
 keywords:
   - valkey
@@ -29,6 +30,10 @@ keywords:
   - sidekiq
   - bullmq
   - celery broker
+  - standalone redis
+  - single-node redis
+  - redis dev mode
+  - append-only file
 
 useCases:
   - Cache in front of a database or API to cut response times
@@ -37,6 +42,7 @@ useCases:
   - Pub/sub messaging between services
   - Counters, leaderboards and rate limits kept in in-memory data structures
   - Valkey as a BSD-licensed drop-in for Redis
+  - A single Redis node without Sentinel for development and testing
 
 alternativeTo:
   - Amazon ElastiCache
@@ -49,8 +55,6 @@ alternativeTo:
 compatibleWith: [redis-protocol]
 
 pickInsteadIf:
-  - need: one Redis instance on a persistent volume without Sentinel failover
-    template: redis-standalone
   - need: shard the keyspace across several primaries for more memory or write throughput
     template: redis-cluster
   - need: one Redis spread across several locations that survives losing a location

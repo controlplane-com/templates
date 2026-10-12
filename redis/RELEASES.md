@@ -2,8 +2,7 @@
 
 ## What's New
 
-- **Dev mode**: `mode: dev` runs a single Redis node that boots as a plain master, with no Sentinel tier at all — for development and testing, with no failover and not for production. `redis.replicas` and the `sentinel` sizing settings are ignored in dev mode; Sentinel public access, persistence and authentication are refused at render. `mode: production` is the default and renders exactly what 3.7.0 rendered. Turn on `redis.persistence.enabled` at install if dev data must survive restarts. A `helm upgrade` can switch modes: to dev keeps node 0's data (stop writes first) with an outage of about a minute or two; to production keeps the data and ends with one Sentinel failover to a new node.
-- **redis-standalone retired**: dev mode replaces the `redis-standalone` template. Existing releases keep running; the README describes moving the data to a dev-mode release by replication.
+- **Dev mode**: `mode: dev` runs a single Redis node that boots as a plain master, with no Sentinel tier at all — for development and testing, with no failover and not for production. `redis.replicas` and the `sentinel` sizing settings are ignored in dev mode; Sentinel public access, persistence and authentication are refused at render. `mode: production` is the default and renders exactly what 3.7.0 rendered. Turn on `redis.persistence.enabled` at install if dev data must survive restarts. A `helm upgrade` from dev to production keeps the data and ends with one Sentinel failover to a new node.
 
 
 # Release Notes - Version 3.7.0

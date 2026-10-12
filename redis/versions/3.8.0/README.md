@@ -40,12 +40,9 @@ This version moves the default image to `redis:8`. Redis 8 reads 7.4 data direct
 - Turn on `redis.persistence.enabled` **at install** if dev data must survive restarts and upgrades. It cannot be turned on later.
 - In dev mode clients connect directly to `RELEASE_NAME-redis.GVC_NAME.cpln.local:6379`; there is no Sentinel to query.
 
-### Switching between dev and production
+### Moving from dev to production
 
-A `helm upgrade` can change `mode` in either direction.
-
-- **To dev:** turn `sentinel.persistence`, `sentinel.publicAccess` and `sentinel.auth` off first (the chart refuses them in dev). Stop writes before upgrading: only node 0's copy is kept, and after a failover node 0 may not be the master, so it holds only what had replicated to it. The Sentinel tier and nodes 1 and up are deleted and node 0 restarts as a master; expect a full outage of about a minute or two. Without persistence node 0 restarts empty. The volumes of nodes 1 and up are kept (and still billed); a later switch back to production reuses them and resyncs them from the master, and they are deleted with the volume set when the release is uninstalled. Clients configured for Sentinel must switch to the direct address.
-- **To production:** the new replicas copy node 0 first, with or without persistence, while the old node keeps serving. Node 0 then restarts and Sentinel fails over to one of the new nodes, so the master ends up on node 1 or 2. This failover is expected and keeps the data; Sentinel-aware clients see a write gap of a few seconds.
+Set `mode: production` with a `helm upgrade` on the same release. The new replicas copy node 0 first, with or without persistence, while the dev node keeps serving. Node 0 then restarts and Sentinel fails over to one of the new nodes, so the master ends up on node 1 or 2. This failover is expected and keeps the data; Sentinel-aware clients see a write gap of a few seconds. Point clients at Sentinel afterwards (see Connecting).
 
 ### Engine: Redis or Valkey
 
@@ -287,29 +284,6 @@ MASTER_HOST=$(echo $MASTER_INFO | cut -d' ' -f1)
 MASTER_PORT=$(echo $MASTER_INFO | cut -d' ' -f2)
 redis-cli -h $MASTER_HOST -p $MASTER_PORT SET my-key "value"
 ```
-
-### Migrating from redis-standalone
-
-The `redis-standalone` template is retired; dev mode replaces it. Existing releases keep running. Its volume set cannot be adopted and its files cannot be copied (this chart's AOF ignores a dropped-in `dump.rdb`, and `cpln workload exec` corrupts binary streams), so move the data by replication:
-
-1. Install a **new** release (a different release name) in the same GVC with `mode: dev`, `redis.persistence.enabled: true`, `redis.extraArgs: "--appendfsync always"` (redis-standalone's default), and the old sizing under `redis.resources`. If the old release had a password, set `redis.auth.fromSecret.enabled: true` and `redis.auth.fromSecret.name` to the old secret; it works as it is (dictionary, key `password`). Keep `engine: redis`: Valkey cannot load Redis 7.4 data.
-2. Let the new node reach the old one. With the old `access.type` at `same-gvc` or `same-org` nothing is needed. With `workload-list` or `none`, upgrade the old release (the published 1.0.0 chart can still be pulled) with **the same values file and `--set` flags you installed it with**, changing only the access settings. `--set` replaces the whole list, so name every workload it already holds (`APP` stands for each one); for `none`, name only the new workload:
-   ```bash
-   cpln helm upgrade OLD_RELEASE oci://ghcr.io/controlplane-com/templates/redis-standalone --version 1.0.0 \
-     --gvc GVC_NAME YOUR_ORIGINAL_VALUES_AND_FLAGS --set access.type=workload-list \
-     --set 'access.workloads={//gvc/GVC_NAME/workload/APP,//gvc/GVC_NAME/workload/NEW_RELEASE-redis}'
-   ```
-   **Do not leave out your original values.** If the upgrade omits `credentials.secretName`, it falls back to `my-redis-password-secret`: the old Redis stops taking updates (and the firewall never changes), or restarts with a different password if a secret of that name exists. Do not rebuild them from `cpln helm get values` either: it returns `--set` values as flat dotted keys that `-f` ignores. The change restarts the old Redis once (about a minute), and the new node can reach it within a few minutes.
-3. Make the new node a replica of the old one, and wait until `master_link_status:up` and `DBSIZE` matches the old server:
-   ```bash
-   rcli() { cpln workload exec NEW_RELEASE-redis --gvc GVC_NAME --container redis -- \
-     sh -c 'redis-cli ${CUSTOM_REDIS_PASSWORD:+--no-auth-warning -a "$CUSTOM_REDIS_PASSWORD"} "$@"' rcli "$@"; }
-   rcli REPLICAOF OLD_RELEASE-redis.GVC_NAME.cpln.local 6379
-   rcli INFO replication
-   rcli DBSIZE
-   ```
-4. Stop writes, point clients at `NEW_RELEASE-redis.GVC_NAME.cpln.local:6379`, and promote the new node with `rcli REPLICAOF NO ONE`. A dev-mode node always boots as a master, so the promotion survives restarts.
-5. Uninstall the old release with `cpln helm uninstall OLD_RELEASE --gvc GVC_NAME`, then confirm its volume set is gone with `cpln volumeset get OLD_RELEASE-redis-data --gvc GVC_NAME` (it should report not found).
 
 ### Backing Up
 

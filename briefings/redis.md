@@ -3,7 +3,7 @@
 ## What it is
 - Runs **Redis (default) or Valkey** — one `engine` knob, chosen at install. Valkey is the BSD-3-Clause (permissive: use, modify, redistribute, no strings) fork of Redis 7.2 stewarded by the Linux Foundation; no paid edition exists, so nothing in it is feature-gated.
 - Master-replica Redis with a Redis Sentinel quorum in front: automatic leader election, automatic failover, and Sentinel-based master discovery for clients. Optional persistence, metrics exporter, scheduled S3/GCS backups, and public TCP exposure.
-- **`mode: dev` (3.8.0)** is the other shape: one Redis node booting as a plain master, no Sentinel tier at all. It replaced the retired `redis-standalone` template (work item 5256).
+- **`mode: dev` (3.8.0)** is the other shape: one Redis node booting as a plain master, no Sentinel tier at all. It replaced the `redis-standalone` template (work item 5256), which was deleted in the same PR with no migration path: it was days old and had no users.
 - License: the shipped `redis:8` image is tri-licensed **RSALv2 / SSPLv1 / AGPLv3** — Redis 8 added the AGPLv3 option, which is why 3.5.0 moved the default off 7.4 (dual RSALv2/SSPL, neither OSI-approved). Free to self-host either way; no registration, no paid edition.
 - Doubles as catalog infrastructure: seven other templates take this chart as a dependency, so a change here has blast radius beyond its own installs (see the dependent-pin note below).
 
@@ -113,9 +113,5 @@ Optional prerequisite secret for `auth.fromSecret` (dictionary; the README's exa
   | production → dev, full outage | ~90 s, 0 acknowledged writes lost |
   | dev → production, Sentinel ready / write gap / settled | 30–60 s / ~7–8 s / ~3–4 min |
   | 3.7.0 → 3.8.0 (production, persistence) | every pod restarts (the chart-version tags bump the workload version), rolling, ~6 min, one Sentinel failover (master ends on node 1), 1000/1000 keys |
-  | redis-standalone firewall change → new node reaches old | ~2.5 min, includes one old-Redis restart |
-  | redis-standalone 7.4.11 → redis 8 replication | link up and 300/300 keys within 8 s of `REPLICAOF` |
 - **The byte-identity loop must run in bash.** zsh does not word-split `$set`, so helm errors, both renders are empty, and `diff` prints IDENTICAL on 0 lines. Print the line counts.
-- **The migration's firewall step must reuse the original install values.** `cpln helm get values --all -o yaml` returns `--set`-installed values as flat dotted keys (e.g. `credentials.secretName: …`) beside the nested defaults; fed back with `-f` they are ignored, the default `my-redis-password-secret` wins and the old release wedges on a missing secret (found in R1). A `-f`-installed release round-trips faithfully.
-- **redis-standalone retired** (5256, deleted in the same PR): its migration is replication into a new dev release (README procedure: `REPLICAOF` the old `{old}-redis`, compare `DBSIZE`, `REPLICAOF NO ONE`, uninstall the old release). Its password secret is reusable as `redis.auth.fromSecret` (same dictionary, key `password`); its `appendfsync always` default maps to `redis.extraArgs: "--appendfsync always"`; its `-alpine` image cannot be used (bash probes); a 7.4 dataset must stay on `engine: redis`. `suspended` and `createFinalSnapshot` were deliberately not carried over.
 - **Open item (D3):** `redis.auth.password.value` (a plaintext credential in the release values) is still offered, against the standalone-datastore ruling. Tracked as a redis 4.0.0 follow-up.

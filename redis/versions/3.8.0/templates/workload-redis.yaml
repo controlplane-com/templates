@@ -76,6 +76,12 @@ spec:
           echo "\nreplica-announce-port 6379" >> /etc/redis/redis.conf
           SELF_PORT=6379
           {{ end }}
+          {{- if and (hasKey .Values.redis "persistence") .Values.redis.persistence.enabled }}
+
+          # Remove temp files an earlier run left behind. This runs before the
+          # server starts, so it cannot race a save or AOF rewrite in progress.
+          rm -f {{ .Values.redis.dataDir }}/temp-*.rdb {{ .Values.redis.dataDir }}/temp-rewriteaof-*.aof
+          {{- end }}
 
           {{- if eq (include "redis.mode" .) "dev" }}
 
@@ -171,10 +177,10 @@ spec:
           fi
           {{- end }}
       command: /bin/sh
-      cpu: {{ .Values.redis.resources.maxCpu }}
-      memory: {{ .Values.redis.resources.maxMemory }}
-      minCpu: {{ .Values.redis.resources.minCpu }}
-      minMemory: {{ .Values.redis.resources.minMemory }}
+      cpu: {{ .Values.redis.resources.maxCpu | quote }}
+      memory: {{ .Values.redis.resources.maxMemory | quote }}
+      minCpu: {{ .Values.redis.resources.minCpu | quote }}
+      minMemory: {{ .Values.redis.resources.minMemory | quote }}
       image: {{ include "redis.serverImage" . }}
       readinessProbe:
         exec:
@@ -233,18 +239,12 @@ spec:
         timeoutSeconds: {{ .Values.redis.probes.liveness.timeoutSeconds }}
       {{- if and (hasKey .Values.redis "persistence") .Values.redis.persistence.enabled }}
       lifecycle:
-        postStart:
-          exec:
-            command:
-              - /bin/sh
-              - '-c'
-              - rm -f {{ .Values.redis.dataDir }}/temp-*.rdb {{ .Values.redis.dataDir }}/temp-rewriteaof-*.aof
         preStop:
           exec:
             command:
               - /bin/sh
               - '-c'
-              - sleep 45; rm -f {{ .Values.redis.dataDir }}/temp-*.rdb {{ .Values.redis.dataDir }}/temp-rewriteaof-*.aof
+              - sleep 45
       {{- end }}
       inheritEnv: false
       ports:
@@ -271,10 +271,10 @@ spec:
 {{- if and (hasKey .Values.redis "exporter") .Values.redis.exporter.enabled }}
     - name: redis-exporter
       image: {{ .Values.redis.exporter.image }}
-      cpu: {{ .Values.redis.exporter.resources.maxCpu }}
-      memory: {{ .Values.redis.exporter.resources.maxMemory }}
-      minCpu: {{ .Values.redis.exporter.resources.minCpu }}
-      minMemory: {{ .Values.redis.exporter.resources.minMemory }}
+      cpu: {{ .Values.redis.exporter.resources.maxCpu | quote }}
+      memory: {{ .Values.redis.exporter.resources.maxMemory | quote }}
+      minCpu: {{ .Values.redis.exporter.resources.minCpu | quote }}
+      minMemory: {{ .Values.redis.exporter.resources.minMemory | quote }}
       inheritEnv: false
       command: /bin/sh
       args:

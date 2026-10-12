@@ -2,7 +2,9 @@
 
 ## What's New
 
-- **Dev mode**: `mode: dev` runs a single Redis node that boots as a plain master, with no Sentinel tier at all — for development and testing, with no failover and not for production. `redis.replicas` and the `sentinel` sizing settings are ignored in dev mode; Sentinel public access, persistence and authentication are refused at render. `mode: production` is the default and renders exactly what 3.7.0 rendered. Turn on `redis.persistence.enabled` at install if dev data must survive restarts. A `helm upgrade` from dev to production keeps the data and ends with one Sentinel failover to a new node.
+- **Dev mode**: `mode: dev` runs a single Redis node that boots as a plain master, with no Sentinel tier at all — for development and testing, with no failover and not for production. `redis.replicas` and the `sentinel` sizing settings are ignored in dev mode; Sentinel public access, persistence and authentication are refused at render. `mode: production` is the default and deploys the same topology as 3.7.0. Turn on `redis.persistence.enabled` at install if dev data must survive restarts. A `helm upgrade` from dev to production keeps the data and ends with one Sentinel failover to a new node.
+- **Fix: temp-file cleanup no longer races Redis**: with persistence on, the `postStart` hook that removed leftover `temp-*.rdb` / `temp-rewriteaof-*.aof` files could delete a file Redis was writing, crashing a fresh node or aborting a replica's first full sync. The cleanup now runs in the start script before the server starts, and the `preStop` hook only waits.
+- **Fix: whole-number CPU values**: `cpu`, `memory`, `minCpu` and `minMemory` are now quoted, so a value such as `redis.resources.maxCpu: 1` installs instead of being rejected by the API.
 
 
 # Release Notes - Version 3.7.0

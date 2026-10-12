@@ -44,8 +44,8 @@ alternativeTo:
 compatibleWith: [redis-protocol]
 
 pickInsteadIf:
-  - need: a single Redis on persistent disk without sharding or failover
-    template: redis-standalone
+  - need: a single Redis node without Sentinel or sharding, for development and testing
+    template: redis
   - need: one write endpoint with Sentinel failover for clients without cluster support
     template: redis
   - need: one Redis spread across several locations that survives losing a location

@@ -764,28 +764,29 @@ steps:
     rules:
       - when: self.redis.firewall.internal_inboundAllowType == 'workload-list' && context.gvc != null
         rule: >-
-          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis') in self.redis.firewall.inboundAllowWorkload &&
           (self.mode == 'dev' ||
-          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-sentinel') in self.redis.firewall.inboundAllowWorkload) &&
+          (('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis') in self.redis.firewall.inboundAllowWorkload &&
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-sentinel') in self.redis.firewall.inboundAllowWorkload)) &&
           (!self.backup.enabled ||
           ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis-backup') in self.redis.firewall.inboundAllowWorkload)
         severity: warning
         paths: [redis.firewall.inboundAllowWorkload]
         messageExpression: >-
+          self.mode == 'dev' ?
+          'The chart does not add its own workloads to the list. Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis-backup, or the backup job cannot reach Redis.' :
           'The chart does not add its own workloads to the list. Add //gvc/' + context.gvc + '/workload/' +
-          context.releaseName + '-redis' +
-          (self.mode == 'dev' ? '' : ', //gvc/' + context.gvc + '/workload/' + context.releaseName + '-sentinel') +
+          context.releaseName + '-redis, //gvc/' + context.gvc + '/workload/' + context.releaseName + '-sentinel' +
           (self.backup.enabled ? ' and //gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis-backup' : '') +
-          (self.mode == 'dev' ? ', or the node and backups cannot reach Redis.' : ', or replication, failover and backups cannot reach Redis.')
+          ', or replication, failover and backups cannot reach Redis.'
         fix:
           path: redis.firewall.inboundAllowWorkload
           items: >-
-            ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis'] +
-            (self.mode == 'dev' ? [] : ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-sentinel']) +
+            (self.mode == 'dev' ? [] : ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis',
+              '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-sentinel']) +
             (self.backup.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis-backup'] : [])
         message: >-
-          The chart does not add its own workloads to the list. Add the Redis workload, the Sentinel workload
-          (production mode) and, with backups, the backup workload, or they cannot reach Redis.
+          The chart does not add its own workloads to the list. In production mode add the Redis and Sentinel
+          workloads; in both modes, with backups, add the backup workload, or it cannot reach Redis.
       - when: self.mode != 'dev' && self.sentinel.firewall.internal_inboundAllowType == 'workload-list' && context.gvc != null
         rule: >-
           ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-sentinel') in self.sentinel.firewall.inboundAllowWorkload &&

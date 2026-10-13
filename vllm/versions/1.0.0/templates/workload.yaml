@@ -32,6 +32,11 @@ spec:
         - --served-model-name
         - {{ .Values.model.servedModelName | quote }}
         {{- end }}
+        {{- if .Values.model.toolCallParser }}
+        - --enable-auto-tool-choice
+        - --tool-call-parser
+        - {{ .Values.model.toolCallParser | quote }}
+        {{- end }}
         {{- if gt (int .Values.gpu.quantity) 1 }}
         - --tensor-parallel-size
         - {{ .Values.gpu.quantity | int | quote }}

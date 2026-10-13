@@ -8,6 +8,7 @@ model:
   maxModelLen: 8192 # max tokens per request (prompt + output)
   gpuMemoryUtilization: 0.90 # share of GPU memory vLLM may use for weights and KV cache
   dtype: auto # options: auto, half, bfloat16, float32 (bfloat16 is not supported on t4)
+  toolCallParser: hermes # tool calling, which Open WebUI and agents need; must match the model: hermes (Qwen), llama3_json (Llama 3), mistral; "" = off
   extraArgs: [] # extra `vllm serve` flags, e.g. ["--max-num-seqs", "32"]
 
 # ─── Credentials ──────────────────────────────────────────────────────────────

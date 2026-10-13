@@ -116,6 +116,14 @@ steps:
           - { value: half, label: Half }
           - { value: bfloat16, label: bfloat16 }
           - { value: float32, label: float32 }
+      - path: model.toolCallParser
+        type: string
+        label: Tool-call parser
+        description: >-
+          Turns on tool calling, which Open WebUI and agent frameworks use. It must match the model family:
+          `hermes` for Qwen, `llama3_json` for Llama 3, `mistral` for Mistral. Empty turns it off, and requests
+          that offer tools then fail.
+        suggestions: [hermes, llama3_json, mistral]
       - path: model.extraArgs
         type: list
         label: Extra server flags
@@ -137,14 +145,15 @@ steps:
         message: A T4 cannot run bfloat16. Choose Auto or Half.
       - rule: >-
           self.model.extraArgs.all(a, !(['--port', '--host', '--model', '--api-key', '--served-model-name',
-          '--max-model-len', '--gpu-memory-utilization', '--dtype', '--tensor-parallel-size', '-tp'].exists(f,
+          '--max-model-len', '--gpu-memory-utilization', '--dtype', '--tensor-parallel-size', '-tp',
+          '--enable-auto-tool-choice', '--tool-call-parser'].exists(f,
           a == f || a.startsWith(f + '='))))
         mirrors: vllm.validateModel
         paths: [model.extraArgs]
         message: >-
           The extra flags may not set --port, --host, --model, --api-key, --served-model-name,
-          --max-model-len, --gpu-memory-utilization, --dtype or --tensor-parallel-size (-tp); the chart sets
-          them from its own settings.
+          --max-model-len, --gpu-memory-utilization, --dtype, --tensor-parallel-size (-tp),
+          --enable-auto-tool-choice or --tool-call-parser; the chart sets them from its own settings.
 
   - id: gpu
     title: GPU and compute

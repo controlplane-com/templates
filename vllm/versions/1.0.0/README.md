@@ -44,6 +44,7 @@ model:
   maxModelLen: 8192 # max tokens per request (prompt + output)
   gpuMemoryUtilization: 0.90 # share of GPU memory vLLM may use for weights and KV cache
   dtype: auto # options: auto, half, bfloat16, float32 (bfloat16 is not supported on t4)
+  toolCallParser: hermes # tool calling, which Open WebUI and agents need; must match the model: hermes (Qwen), llama3_json (Llama 3), mistral; "" = off
   extraArgs: [] # extra `vllm serve` flags, e.g. ["--max-num-seqs", "32"]
 ```
 
@@ -128,7 +129,7 @@ curl http://localhost:8000/v1/chat/completions \
   -d '{"model":"Qwen/Qwen2.5-1.5B-Instruct","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
-Any OpenAI SDK works with `base_url` set to the `/v1` address and `api_key` set to the key. The `open-webui` and `litellm` templates can use it as an OpenAI-compatible backend.
+Any OpenAI SDK works with `base_url` set to the `/v1` address and `api_key` set to the key. The `open-webui` and `litellm` templates can use it as an OpenAI-compatible backend; Open WebUI offers tools on every chat, so keep `model.toolCallParser` set and matched to your model, or each message fails with `"auto" tool choice requires --enable-auto-tool-choice`.
 
 ## Important Notes
 

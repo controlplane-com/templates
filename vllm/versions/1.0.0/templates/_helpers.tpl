@@ -100,7 +100,7 @@ long a hung server stays in rotation (3 x periodSeconds).
 {{- if and (eq .Values.gpu.type "builtin") (eq .Values.gpu.model "t4") (eq .Values.model.dtype "bfloat16") -}}
 {{- fail "vllm: model.dtype bfloat16 is not supported on a T4 (a pre-Ampere card); use auto or half" -}}
 {{- end -}}
-{{- $owned := list "--port" "--host" "--model" "--api-key" "--served-model-name" "--max-model-len" "--gpu-memory-utilization" "--dtype" "--tensor-parallel-size" "-tp" -}}
+{{- $owned := list "--port" "--host" "--model" "--api-key" "--served-model-name" "--max-model-len" "--gpu-memory-utilization" "--dtype" "--tensor-parallel-size" "-tp" "--enable-auto-tool-choice" "--tool-call-parser" -}}
 {{- range .Values.model.extraArgs -}}
 {{- $arg := toString . -}}
 {{- range $owned -}}

@@ -155,8 +155,10 @@ steps:
         severity: info
         paths: [replicas]
         message: >-
-          Changing the replica count adds or drains cluster members; history shards then rebalance across
-          them, and workflows on moving shards pause briefly.
+          Changing the replica count restarts every server replica, because each replica's database pools
+          are sized from it; with more than one replica that brings a period of worker restarts and retried
+          client calls. Shards then rebalance. Make the change under light load: old and new replicas
+          running side by side can briefly exceed the database's connection limit.
       - when: >-
           oldSelf != null && self.image.matches(':1[.](30|31|32)[.][0-9]+([.][0-9]+)?$') &&
           oldSelf.image.matches(':1[.](29|30|31|32)[.][0-9]+([.][0-9]+)?$')
@@ -363,7 +365,7 @@ steps:
       - id: postgres-ha
         title: Highly available PostgreSQL
         when: self.postgresHA.enabled
-        docs: "#highly-available-postgresql"
+        docs: "#postgresql"
         fields:
           - path: postgresHA.replicas
             type: integer

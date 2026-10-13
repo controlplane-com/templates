@@ -37,7 +37,7 @@
 | `postgresHA.backup.resources.memory` | 512Mi | Was 128Mi, which OOMKills wal-g |
 | `postgres.credentials.*` | temporal / change-me-temporal-db-password / temporal | Feeds both modes; `database` must be `temporal` (both modes, render-enforced) |
 
-**DB connection budget (D6 A):** per-service pools are computed from `replicas` so N replicas plus one surge replica stay under the bundled DB's 100 connections (budget 84/(N+1)): main/vis per service 7/3, 5/2, 4/1, 3/1, 2/1 for N=1..5 (40/28/20/16/12 connections per replica). Not a values knob. 1.x ran 20/10 (up to 120 per replica) and could exhaust the DB under load.
+**DB connection budget (D6 A):** per-service pools are computed from `replicas` so N replicas plus one surge replica stay under the bundled DB's 100 connections (budget 84/(N+1)): main/vis per service 7/3, 5/2, 4/1, 3/1, 2/1 for N=1..5 (40/28/20/16/12 connections per replica). Not a values knob. 1.x ran 20/10 (up to 120 per replica) and could exhaust the DB under load. **Caveat:** a `replicas` change rolls every replica (the pool env vars change), and while old-N and new-N replicas coexist the total can pass 100 (2→4 ≈ 120); the README says to change `replicas` under light load.
 
 ## Troubleshooting / considerations
 

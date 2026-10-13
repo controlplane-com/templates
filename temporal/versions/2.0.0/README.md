@@ -125,7 +125,8 @@ postgres: # dev/lightweight: single-instance PostgreSQL
 
 - **Losing a replica:** the remaining replicas take over its share of workflows within about a minute. Workflows on the moved shards pause briefly and timers fire late by that gap; nothing is lost. The lost replica restarts on its own.
 - **Rolling upgrades and restarts with more than one replica are noisy.** For a period after each roll, the worker service on new replicas exits and restarts while workflows rebalance (upstream Temporal treats a slow internal start-up as fatal), and clients see a small share of retried calls. In earlier measurements at 3 replicas this lasted 60 to 90 minutes with about 5% of calls retried. Workflows are unaffected. Plan upgrades outside peak hours.
-- **Changing the count** is a plain `helm upgrade` with the new `replicas`; members join or drain and the shards rebalance. Nothing else restarts.
+- **Changing the count** is a plain `helm upgrade` with the new `replicas`. It is a rolling restart of every server replica, not just an added or removed one: the per-replica connection pools are sized from `replicas`, so every replica is replaced with the new sizes, and with more than one replica that brings the restart period described above. Members join or drain and the shards rebalance.
+- **Change `replicas` under light load.** While replicas with the old and the new pool sizes run side by side, the total can briefly exceed the database's 100 connections (going from 2 to 4 replicas reaches about 120).
 
 ## Connecting
 
@@ -201,7 +202,7 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
 
 1. Create your GCS bucket. Set `backup.gcp.bucket`.
 2. If you do not have one, create a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) for your GCP project. Set `backup.gcp.cloudAccountName`. The backup identity reaches the bucket keylessly (no stored credentials).
-3. Grant the cloud account's GCP service account the **Storage Admin** role.
+3. Grant the cloud account's GCP service account the **Storage Admin** role on the bucket.
 
 ### S3-compatible (MinIO, R2, Wasabi, …)
 

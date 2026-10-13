@@ -16,6 +16,9 @@ and password arrive as cpln://secret env vars.
 */}}
 {{- define "temporal.script.server" -}}
 set -u
+# sh is PID 1 and ignores signals it has no handler for: exit at once on TERM
+# while waiting (the wait sleeps as `sleep 5 & wait $!` so the trap is prompt).
+trap 'exit 143' TERM INT
 GATE=/temporal-gate/schema-ready
 waited=0
 echo "temporal: waiting for the admin container to finish database setup ($GATE)"
@@ -24,7 +27,7 @@ while [ ! -f "$GATE" ]; do
     echo "FATAL: schema not ready after 560s — read the admin container's logs (another replica may be migrating, or the database is unreachable)"
     exit 1
   fi
-  sleep 5
+  sleep 5 & wait $!
   waited=$((waited + 5))
   if [ $((waited % 30)) -eq 0 ]; then
     echo "temporal: still waiting for database setup (${waited}s) — see the admin container's logs"
@@ -46,9 +49,10 @@ esac
 export TEMPORAL_BROADCAST_ADDRESS="$addr"
 echo "temporal: cluster membership broadcast address ${TEMPORAL_BROADCAST_ADDRESS}"
 
+child=""
+trap 'if [ -n "$child" ]; then kill -TERM "$child" 2>/dev/null; else exit 143; fi' TERM INT
 /etc/temporal/entrypoint.sh &
 child=$!
-trap 'kill -TERM "$child" 2>/dev/null' TERM INT
 wait "$child"
 status=$?
 if kill -0 "$child" 2>/dev/null; then

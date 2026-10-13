@@ -25,6 +25,15 @@ Every replica runs its own sidecar:
 {{- define "temporal.script.admin" -}}
 set -u
 log() { echo "admin: $*"; }
+MAIN=$$
+holding=""
+renew=""
+# sh runs as PID 1, which ignores a signal it has no handler for: trap TERM so a
+# rollout stops this container at once, releasing the lease if this replica
+# holds it. Every wait below is `sleep N & wait $!`, which a trapped signal
+# interrupts (a foreground sleep would delay the trap until it ends).
+trap '[ -n "$holding" ] && release; exit 143' TERM INT
+nap() { sleep "$1" & wait $!; }
 SCHEMA_DIR=/etc/temporal/schema/postgresql/v12
 TARGET_TAG={{ include "temporal.imageTag" .Values.image }}
 TARGET_MINOR={{ include "temporal.imageMinor" . }}
@@ -43,7 +52,7 @@ retry() {
       log "${label}: not yet ($(echo "$out" | tail -n 2 | tr '\n' ' ')) — retrying"
     fi
     i=$((i + 1))
-    sleep 5
+    nap 5
   done
   log "${label}: ok"
 }
@@ -71,10 +80,24 @@ SQL
 sed -i "s/__HOLDER__/${HOLDER}/g" /tmp/lock.sql /tmp/release.sql
 
 lease() { temporal-sql-tool --db postgres setup-schema --disable-versioning -f /tmp/lock.sql 2>&1; }
+# release — stop the renewal loop, WAIT for it (an in-flight renewal could
+# otherwise re-insert the row after the DELETE), then delete this replica's row.
 release() {
-  [ -n "${renew:-}" ] && kill "$renew" 2>/dev/null
+  if [ -n "$renew" ]; then
+    kill "$renew" 2>/dev/null
+    wait "$renew" 2>/dev/null
+  fi
   renew=""
+  holding=""
   temporal-sql-tool --db postgres setup-schema --disable-versioning -f /tmp/release.sql >/dev/null 2>&1 || true
+}
+# lost — another replica holds the lease (ours expired): stop migrating NOW and
+# exit, so the container restarts and queues for the lease again.
+lost() {
+  log "FATAL: migration lease lost to another replica — stopping this migration and restarting"
+  holding=""
+  [ -n "$renew" ] && kill "$renew" 2>/dev/null
+  exit 1
 }
 
 i=0
@@ -88,10 +111,29 @@ until out=$(lease); do
       ;;
   esac
   i=$((i + 1))
-  sleep 10
+  nap 10
 done
+holding=1
 log "migration lease acquired"
-( while :; do sleep 60; lease >/dev/null; done ) &
+# Renewal loop: extends only this replica's lease. If a renewal finds another
+# holder, stop the main script AND any schema tool it is running, so two
+# replicas never migrate at once. Its own TERM trap lets an in-flight renewal
+# finish before it exits, so release() can wait for it.
+(
+  trap 'exit 0' TERM
+  while :; do
+    sleep 60 & wait $!
+    out=$(lease)
+    case "$out" in
+      *CPLN_TEMPORAL_LOCK_HELD*)
+        log "FATAL: lease renewal found another holder — stopping this replica's migration"
+        kill -TERM "$MAIN" 2>/dev/null
+        pkill -TERM -f 'temporal-sql-tool' 2>/dev/null
+        exit 0
+        ;;
+    esac
+  done
+) &
 renew=$!
 
 # ── Resume markers ──────────────────────────────────────────────────────────
@@ -146,7 +188,7 @@ refuse() {
   log "FATAL:     image=temporalio/server:${next}  adminTools.image=temporalio/admin-tools:${next}"
   log "FATAL:   then step to the next minor. The database was not changed."
   log "FATAL:   See \"Upgrading from 1.x\" in the template README."
-  sleep 120
+  sleep 120 & wait $!
   exit 1
 }
 
@@ -169,7 +211,7 @@ for pair in "temporal_visibility:${REQ_VIS}" "temporal:${REQ_MAIN}"; do
       err=$SKIP_OUT
     fi
     log "version guard (${db}): not yet ($(echo "$err" | tail -n 2 | tr '\n' ' ')) — retrying"
-    sleep 10
+    nap 10
   done
 done
 log "version guard: ok (no skipped minor)"
@@ -179,11 +221,15 @@ log "version guard: ok (no skipped minor)"
 migrate() {
   until marker set "$1"; do
     log "resume marker (${1}): not yet ($(echo "$MARK_OUT" | tail -n 2 | tr '\n' ' ')) — retrying"
-    sleep 5
+    nap 5
   done
-  until out=$(temporal-sql-tool --db "$1" update-schema -d "$2" 2>&1); do
+  while :; do
+    # Re-check (and renew) the lease before every attempt: never migrate without it.
+    held=$(lease)
+    case "$held" in *CPLN_TEMPORAL_LOCK_HELD*) lost ;; esac
+    out=$(temporal-sql-tool --db "$1" update-schema -d "$2" 2>&1) && break
     log "schema update (${1}): not yet ($(echo "$out" | tail -n 2 | tr '\n' ' ')) — retrying"
-    sleep 5
+    nap 5
   done
   from=$(echo "$out" | sed -n 's/.*Schema updated from \([0-9.]*\) to.*/\1/p' | head -n 1)
   to=$(echo "$out" | sed -n 's/.*Schema updated from [0-9.]* to \([0-9.]*\).*/\1/p' | tail -n 1)
@@ -194,7 +240,7 @@ migrate() {
   fi
   until marker clear "$1"; do
     log "resume marker (${1}): not yet cleared ($(echo "$MARK_OUT" | tail -n 2 | tr '\n' ' ')) — retrying"
-    sleep 5
+    nap 5
   done
 }
 migrate temporal "${SCHEMA_DIR}/temporal/versioned"
@@ -208,11 +254,11 @@ i=0
 until temporal operator cluster health 2>/dev/null | grep -q SERVING; do
   [ $((i % 6)) -eq 0 ] && log "waiting for the local Temporal frontend (${TEMPORAL_ADDRESS})"
   i=$((i + 1))
-  sleep 5
+  nap 5
 done
 until temporal operator namespace describe -n default >/dev/null 2>&1; do
   out=$(temporal operator namespace create -n default --retention "$DEFAULT_NAMESPACE_RETENTION" --description "Default namespace" 2>&1) || log "namespace create: $(echo "$out" | tail -n 1)"
-  sleep 5
+  nap 5
 done
 log "namespace default present"
 touch /temporal-gate/bootstrap-done

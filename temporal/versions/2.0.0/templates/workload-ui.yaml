@@ -25,12 +25,12 @@ spec:
       ports:
         - number: 8080
           protocol: http
-      # `GET /` is the probe (no documented dedicated health endpoint);
-      # fallback if it proves unreliable: a tcpSocket probe on 8080.
+      # The UI server's own health endpoint (GET /healthz -> 200).
       readinessProbe:
         httpGet:
-          path: /
+          path: /healthz
           port: 8080
+          scheme: HTTP
         initialDelaySeconds: 5
         periodSeconds: 10
         failureThreshold: 20
@@ -38,11 +38,13 @@ spec:
         timeoutSeconds: 5
       livenessProbe:
         httpGet:
-          path: /
+          path: /healthz
           port: 8080
+          scheme: HTTP
         initialDelaySeconds: 30
         periodSeconds: 30
         failureThreshold: 5
+        successThreshold: 1
         timeoutSeconds: 5
   defaultOptions:
     autoscaling:
@@ -61,8 +63,8 @@ spec:
       outboundAllowCIDR:
         - 0.0.0.0/0
       # Internal-only, fail-closed: the UI has no built-in authentication and
-      # must never be reachable from the internet. No publicAccess knob exists
-      # in this template by design.
+      # must never be reachable from the internet. Reach it with
+      # `cpln port-forward` (see README); no publicAccess knob exists by design.
       inboundAllowCIDR: []
     internal:
       inboundAllowType: {{ .Values.internalAccess.type }}

@@ -1,0 +1,60 @@
+{{/*
+Start script of the `temporal` (server) container. Rendered INLINE into the
+container args through temporal.inlineScript (every $ doubled), so the upgrade
+adds no secret and no reveal grant. It holds no credentials: the database user
+and password arrive as cpln://secret env vars.
+
+  1. Wait for the admin sidecar's /temporal-gate/schema-ready marker. The 560 s
+     timeout sits inside the readiness-derived startup window (~615 s), so the
+     FATAL below is always printed before the platform would kill the container.
+  2. Write the mandatory dynamic-config file (the image ships none).
+  3. Derive the ringpop broadcast address from this replica's own IP and refuse
+     a loopback one — on a multi-replica ring a wrong address silently splits
+     the cluster.
+  4. Run the upstream entrypoint as a CHILD (not PID 1), forwarding TERM/INT,
+     so shutdown is graceful and a SIGSTOP from inside the container works.
+*/}}
+{{- define "temporal.script.server" -}}
+set -u
+GATE=/temporal-gate/schema-ready
+waited=0
+echo "temporal: waiting for the admin container to finish database setup ($GATE)"
+while [ ! -f "$GATE" ]; do
+  if [ "$waited" -ge 560 ]; then
+    echo "FATAL: schema not ready after 560s — read the admin container's logs (another replica may be migrating, or the database is unreachable)"
+    exit 1
+  fi
+  sleep 5
+  waited=$((waited + 5))
+  if [ $((waited % 30)) -eq 0 ]; then
+    echo "temporal: still waiting for database setup (${waited}s) — see the admin container's logs"
+  fi
+done
+
+printf '{}\n' > "$DYNAMIC_CONFIG_FILE_PATH"
+
+addr=$(getent hosts "$(hostname)" | awk '{print $1}' | head -n 1)
+if [ -z "$addr" ]; then
+  addr=$(hostname -i 2>/dev/null | awk '{print $1}')
+fi
+case "$addr" in
+  ""|127.*|::1)
+    echo "FATAL: could not derive this replica's own IP for cluster membership (got '${addr}')"
+    exit 1
+    ;;
+esac
+export TEMPORAL_BROADCAST_ADDRESS="$addr"
+echo "temporal: cluster membership broadcast address ${TEMPORAL_BROADCAST_ADDRESS}"
+
+/etc/temporal/entrypoint.sh &
+child=$!
+trap 'kill -TERM "$child" 2>/dev/null' TERM INT
+wait "$child"
+status=$?
+if kill -0 "$child" 2>/dev/null; then
+  wait "$child"
+  status=$?
+fi
+echo "temporal: server exited with status ${status}"
+exit "$status"
+{{- end }}

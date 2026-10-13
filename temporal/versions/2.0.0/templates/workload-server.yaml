@@ -1,26 +1,26 @@
 {{- include "temporal.validate" . }}
 kind: workload
 name: {{ include "temporal.name" . }}
-description: Temporal server — single-process (frontend, history, matching, worker), gRPC frontend on 7233
+description: Temporal server — frontend, history, matching and worker services; gRPC on 7233, HTTP API on 7243
 gvc: {{ .Values.global.cpln.gvc }}
 tags: {{- include "temporal.tags" . | nindent 4 }}
 spec:
   # Stateless by design: all state (workflow histories, task queues, timers,
-  # visibility) lives in the two Postgres databases — no volumeset.
+  # visibility) lives in the two Postgres databases — no volumeset. It stays
+  # `standard`, not `stateful`: the API drops maxUnavailableReplicas on stateful
+  # workloads, which would leave a multi-replica rolling restart unlimited.
   type: standard
   identityLink: //identity/{{ include "temporal.identity.name" . }}
   containers:
     - name: temporal
       image: {{ .Values.image }}
-      # No command override: the auto-setup entrypoint runs idempotent DB
-      # create + schema setup/upgrade synchronously, then starts the server
-      # (with a backgrounded describe-then-create default-namespace
-      # registration). This is the template's schema/migration mechanism —
-      # upgrades apply new schema migrations at boot, in the upstream-documented
-      # schema-before-server order. Fallback if restarts prove non-idempotent:
-      # boot via a template start script that guards the schema steps
-      # (SKIP_DB_CREATE=true / schema_version-table check) before
-      # `exec /etc/temporal/start-temporal.sh` — all tools are in this image.
+      # Inline start script (_script-server.tpl): waits for the admin sidecar's
+      # schema gate, writes the dynamic-config file, derives the cluster
+      # broadcast address, then runs the upstream entrypoint as a child.
+      command: /bin/sh
+      args:
+        - "-c"
+        - {{- include "temporal.inlineScript" (include "temporal.script.server" .) | nindent 10 }}
       inheritEnv: false
       minCpu: {{ .Values.resources.minCpu | quote }}
       minMemory: {{ .Values.resources.minMemory | quote }}
@@ -42,75 +42,136 @@ spec:
           value: 'cpln://secret/{{ include "temporal.postgres.secret.name" . }}.username'
         - name: POSTGRES_PWD
           value: 'cpln://secret/{{ include "temporal.postgres.secret.name" . }}.password'
-        # The main store matches the subchart-created database; auto-setup
-        # creates the visibility database alongside it.
         - name: DBNAME
           value: temporal
         - name: VISIBILITY_DBNAME
           value: temporal_visibility
-        - name: ENABLE_ES
-          value: 'false'
+        # ── Connection budget: per-service pools sized from `replicas` so the
+        # cluster, plus one surge replica, stays under the database's 100
+        # connections (temporal.dbPools) ──
+        - name: SQL_MAX_CONNS
+          value: {{ include "temporal.dbPools" (dict "ctx" . "store" "main") | quote }}
+        - name: SQL_MAX_IDLE_CONNS
+          value: {{ include "temporal.dbPools" (dict "ctx" . "store" "main") | quote }}
+        - name: SQL_VIS_MAX_CONNS
+          value: {{ include "temporal.dbPools" (dict "ctx" . "store" "vis") | quote }}
+        - name: SQL_VIS_MAX_IDLE_CONNS
+          value: {{ include "temporal.dbPools" (dict "ctx" . "store" "vis") | quote }}
         # ── Cluster settings ──
         # NUM_HISTORY_SHARDS is PERMANENT once the cluster is initialized.
         - name: NUM_HISTORY_SHARDS
           value: {{ .Values.historyShards | quote }}
-        # ── Namespace bootstrap (idempotent describe-then-create) ──
-        - name: DEFAULT_NAMESPACE
-          value: default
-        - name: DEFAULT_NAMESPACE_RETENTION
-          value: {{ .Values.namespaceRetention | quote }}
-        - name: SKIP_ADD_CUSTOM_SEARCH_ATTRIBUTES
-          value: 'true'
-        # ── Networking ──
-        # Bind all interfaces so mesh inbound works regardless of Envoy's
-        # target IP; the entrypoint then derives TEMPORAL_BROADCAST_ADDRESS
-        # (container IP — ringpop only talks to itself in single-process mode).
-        # Fallback if 0.0.0.0 misbehaves under the mesh: drop BIND_ON_IP — the
-        # entrypoint defaults to the container IP (the k8s-normal shape).
+        # ── Networking and observability ──
+        # Bind all interfaces; the start script sets TEMPORAL_BROADCAST_ADDRESS
+        # to this replica's own IP for cluster membership.
         - name: BIND_ON_IP
           value: 0.0.0.0
-        # In-process client address (worker service, auto-setup health polling,
-        # in-container CLI).
-        - name: TEMPORAL_ADDRESS
-          value: 127.0.0.1:7233
+        - name: PROMETHEUS_ENDPOINT
+          value: 0.0.0.0:8000
+        # Mandatory file; the start script writes it (empty: upstream defaults).
+        - name: DYNAMIC_CONFIG_FILE_PATH
+          value: /tmp/temporal-dynamicconfig.yaml
+      # Per-replica server metrics, scraped into the built-in Grafana.
+      metrics:
+        path: /metrics
+        port: 8000
+      # gRPC frontend, HTTP API, and the cluster ports (ringpop membership
+      # 6933-6939, internal gRPC 7234-7239) — declared at every replica count:
+      # with one replica they let the old and new server overlap during a roll.
       ports:
+        - number: 6933
+          protocol: tcp
+        - number: 6934
+          protocol: tcp
+        - number: 6935
+          protocol: tcp
+        - number: 6939
+          protocol: tcp
         - number: 7233
           protocol: grpc
-      # Ready = the frontend gRPC health check reports SERVING — the same
-      # check auto-setup itself polls. failureThreshold 20 is the platform
-      # max; first boot runs DB create + schema setup before the port opens.
+        - number: 7234
+          protocol: tcp
+        - number: 7235
+          protocol: tcp
+        - number: 7239
+          protocol: tcp
+        - number: 7243
+          protocol: http
+      # Ready = the `default` namespace is served over the HTTP API, i.e. the
+      # schema is current, the server is up and the namespace exists. The
+      # startup window (~initialDelay + 30 x period = 615 s) exceeds the start
+      # script's 560 s schema wait, so its FATAL is always printed.
       readinessProbe:
-        exec:
-          command:
-            - /bin/sh
-            - -c
-            - temporal operator cluster health --address 127.0.0.1:7233 | grep -q SERVING
-        initialDelaySeconds: 10
-        periodSeconds: 10
-        failureThreshold: 20
+        httpGet:
+          path: /api/v1/namespaces/default
+          port: 7243
+          scheme: HTTP
+        initialDelaySeconds: 15
+        periodSeconds: 20
+        failureThreshold: 3
         successThreshold: 1
         timeoutSeconds: 5
-      # Schema setup runs pre-listen — a liveness kill mid-migration would
-      # crash-loop, hence the long initial delay.
       livenessProbe:
-        exec:
-          command:
-            - /bin/sh
-            - -c
-            - temporal operator cluster health --address 127.0.0.1:7233 | grep -q SERVING
+        httpGet:
+          path: /api/v1/system-info
+          port: 7243
+          scheme: HTTP
         initialDelaySeconds: 120
         periodSeconds: 30
         failureThreshold: 5
+        successThreshold: 1
         timeoutSeconds: 5
+      volumes:
+        - path: /temporal-gate
+          recoveryPolicy: retain
+          uri: scratch://temporal-gate
+    - name: admin
+      image: {{ .Values.adminTools.image }}
+      # Inline start script (_script-admin.tpl): creates the databases, migrates
+      # the schema under a database-held lease (one replica at a time), refuses a
+      # skipped minor, registers the `default` namespace, then idles as the
+      # in-cluster `temporal` CLI. No probes: it never serves traffic.
+      command: /bin/sh
+      args:
+        - "-c"
+        - {{- include "temporal.inlineScript" (include "temporal.script.admin" .) | nindent 10 }}
+      inheritEnv: false
+      minCpu: 50m
+      minMemory: 64Mi
+      cpu: 250m
+      memory: 256Mi
+      env:
+        - name: SQL_PLUGIN
+          value: postgres12
+        - name: SQL_HOST
+          value: {{ include "temporal.postgres.host" . }}
+        - name: SQL_PORT
+          value: '5432'
+        - name: SQL_USER
+          value: 'cpln://secret/{{ include "temporal.postgres.secret.name" . }}.username'
+        - name: SQL_PASSWORD
+          value: 'cpln://secret/{{ include "temporal.postgres.secret.name" . }}.password'
+        # In-container `temporal` CLI target: this replica's own frontend.
+        - name: TEMPORAL_ADDRESS
+          value: 127.0.0.1:7233
+        - name: DEFAULT_NAMESPACE_RETENTION
+          value: {{ .Values.namespaceRetention | quote }}
+        # Skipped-minor guard: the schema levels the previous minor leaves behind.
+        - name: REQ_MAIN
+          value: {{ include "temporal.schemaFloor" (dict "ctx" . "store" "main") | quote }}
+        - name: REQ_VIS
+          value: {{ include "temporal.schemaFloor" (dict "ctx" . "store" "vis") | quote }}
+      volumes:
+        - path: /temporal-gate
+          recoveryPolicy: retain
+          uri: scratch://temporal-gate
   defaultOptions:
     autoscaling:
-      # Pinned to exactly one replica: multi-replica requires a ringpop
-      # membership design — a second replica would split-brain, so
-      # autoscaling is disabled, not merely defaulted.
+      # Fixed replica count: every replica joins one Temporal cluster.
       maxConcurrency: 0
-      maxScale: 1
+      maxScale: {{ int .Values.replicas }}
       metric: disabled
-      minScale: 1
+      minScale: {{ int .Values.replicas }}
       scaleToZeroDelay: 300
       target: 100
     capacityAI: false
@@ -118,6 +179,15 @@ spec:
     suspend: false
     # SDK task-queue long-polls are ~60-70 s gRPC calls; 120 s gives headroom.
     timeoutSeconds: 120
+  {{- if gt (int .Values.replicas) 1 }}
+  # Multi-replica only (the whole block — the API backfills a partial one):
+  # replace one member at a time and let it take its shards before the next goes.
+  rolloutOptions:
+    maxSurgeReplicas: "1"
+    maxUnavailableReplicas: "0"
+    minReadySeconds: 120
+    terminationGracePeriodSeconds: 90
+  {{- end }}
   firewallConfig:
     external:
       outboundAllowCIDR:

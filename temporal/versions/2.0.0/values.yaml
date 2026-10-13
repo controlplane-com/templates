@@ -1,4 +1,10 @@
-image: temporalio/auto-setup:1.29.7 # Temporal server + schema tools; boot runs schema setup, then the server
+# ─── Temporal Server ──────────────────────────────────────────────────────────
+# Temporal upgrades ONE MINOR VERSION AT A TIME (1.30 → 1.31 → 1.32). This chart
+# runs tags 1.30.x, 1.31.x and 1.32.x; `image` and `adminTools.image` must carry
+# the same tag. Coming from temporal 1.x? See "Upgrading from 1.x" in the README.
+image: temporalio/server:1.32.1 # server binary; configured from env, no config file
+
+replicas: 1 # 1-5; 3 survives a replica loss. >1 rolling restarts are noisy — see README
 
 resources:
   maxCpu: 1000m
@@ -6,17 +12,19 @@ resources:
   minCpu: 500m
   minMemory: 1Gi
 
+adminTools:
+  image: temporalio/admin-tools:1.32.1 # schema migrations + `temporal` CLI sidecar; same tag as image
+
 # ─── Cluster Settings ─────────────────────────────────────────────────────────
 historyShards: 512 # PERMANENT after first install — cannot ever be changed for this cluster
-namespaceRetention: 72h # how long closed workflow histories are kept in the default namespace
+namespaceRetention: 72h # retention of the `default` namespace, applied when it is first created
 
 # ─── Web UI ───────────────────────────────────────────────────────────────────
-# Internal-only: the Temporal UI has no built-in authentication, so this
-# template never exposes it publicly. Reach it from workloads in the internal
-# access scope, or front it with your own authenticating proxy.
+# Internal-only: the Temporal UI has no built-in authentication. Reach it with
+# `cpln port-forward` (see README) or from workloads in the internal access scope.
 ui:
   enabled: true
-  image: temporalio/ui:2.52.1
+  image: temporalio/ui:2.55.0
   resources:
     maxCpu: 500m
     maxMemory: 512Mi
@@ -24,7 +32,7 @@ ui:
     minMemory: 128Mi
 
 # ─── Access ───────────────────────────────────────────────────────────────────
-internalAccess: # internal firewall scope for the gRPC frontend (:7233) and the UI (:8080)
+internalAccess: # internal firewall scope for the server (gRPC :7233, HTTP API :7243, cluster ports) and the UI (:8080)
   type: same-gvc # options: none, same-gvc, same-org, workload-list
   workloads: [] # used with workload-list
   # workloads:
@@ -36,10 +44,8 @@ internalAccess: # internal firewall scope for the gRPC frontend (:7233) and the 
 postgresHA:
   enabled: true
   config:
-    # Name of the dictionary secret this chart creates and the bundled
-    # postgres-highly-available reads. Since pgHA 2.5.0 the subchart creates no
-    # credentials secret of its own, so both stores are fed the same one, built
-    # from postgres.credentials.* above.
+    # Name of the dictionary secret this chart creates (from postgres.credentials.*)
+    # and the bundled postgres-highly-available reads. Org-wide: unique per release.
     credentialsSecretName: my-temporal-db-credentials
   replicas: 3
   volumeset:
@@ -50,7 +56,7 @@ postgresHA:
     mode: logical # logical or wal-g
     resources:
       cpu: 100m
-      memory: 128Mi
+      memory: 512Mi # 128Mi OOMKills wal-g mid-backup
     logical:
       image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
       schedule: "0 2 * * *"
@@ -71,8 +77,7 @@ postgresHA:
       endpoint: http://my-minio-workload:9000
       bucket: temporal-pg-backup-bucket
       # REQUIRED PREREQUISITE SECRET when provider is `minio` — a `dictionary`
-      # secret holding exactly `accessKey` and `secretKey`. See Backup setup
-      # in the README.
+      # secret holding exactly `accessKey` and `secretKey`. See README.
       credentialsSecretName: my-temporal-minio-credentials
       prefix: postgres/backups
 
@@ -80,25 +85,17 @@ postgresHA:
 # Enable this and disable postgresHA for a lighter non-HA deployment.
 postgres:
   enabled: false
-  # Credentials for the bundled database — internal plumbing no human types elsewhere.
-  # Used in BOTH database modes: Temporal CREATES the dictionary secret named by
-  # postgresHA.config.credentialsSecretName (HA) or config.credentialsSecretName below
-  # (single-instance) out of these three values, so there is nothing for you to create
-  # before installing. Changing the password later does not change it in the database.
-  # `database` MUST stay `temporal`. Temporal's server reads DBNAME as the literal
-  # `temporal` and auto-setup does NOT create it — it only creates the visibility
-  # store. Measured 2026-08-19: setting anything else wedges the install permanently
-  # on `Unable to setup SQL schema: no usable database connection found`. A render
-  # guard enforces this.
+  # Credentials for the bundled database, used in BOTH database modes: this chart
+  # creates the secret from them, so there is nothing to create before installing.
+  # The password is set once, when the database volume is initialised.
+  # `database` MUST stay `temporal` (render-enforced in both modes).
   credentials:
     username: temporal
     password: change-me-temporal-db-password # change before installing
     database: temporal
   config:
     # Name of the dictionary secret this chart creates and the bundled postgres reads.
-    # Secret names are org-wide: give each temporal release its own name. A second
-    # release left on this name is REFUSED at install (it is owned by the first
-    # release) — nothing is shared, overwritten or deleted.
+    # Org-wide: unique per release (a second release on this name is refused at install).
     credentialsSecretName: my-temporal-db-credentials
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)
@@ -125,6 +122,6 @@ postgres:
       endpoint: http://my-minio-workload:9000
       bucket: temporal-pg-backup-bucket
       # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
-      # only when this backup is enabled with provider: minio. See README backup setup.
+      # only when this backup is enabled with provider: minio. See README.
       credentialsSecretName: my-temporal-minio-credentials
       prefix: postgres/backups

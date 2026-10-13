@@ -2,55 +2,52 @@
 
 ## What it is
 
-- Temporal is a durable-execution platform: apps write workflows as ordinary code, and the Temporal server guarantees they finish — surviving crashes, restarts, and waits of days or months (it persists every step and resumes exactly where it left off). MIT license (a permissive open-source license with no strings attached); the paid product is hosted-only, so nothing in the self-hosted server is feature-gated.
+- Temporal is a durable-execution platform: apps write workflows as ordinary code, and the server persists every step so runs survive crashes, restarts and waits of days or months. MIT license; the paid product is hosted-only, so nothing in the self-hosted server is feature-gated.
 
 ## Common use cases
 
-- Long-running business processes: order fulfillment, payment/refund flows, user onboarding sequences.
-- Reliable background jobs with automatic retries — replaces hand-rolled queue + cron + retry glue.
-- Orchestrating multi-step calls across services/AI pipelines where a half-finished run is unacceptable.
-- Scheduled and human-in-the-loop work (timers, reminders, approval waits) that must survive deploys.
+- Order, payment, refund and onboarding flows.
+- Reliable background jobs with retries (replaces queue + cron + retry glue).
+- Multi-step service or AI orchestration where a half-finished run is unacceptable.
+- Timers, reminders and human-approval waits that must survive deploys.
 
-## Architecture on Control Plane
+## Architecture on Control Plane (2.0.0)
 
 | Resource | Purpose |
 |---|---|
-| `{release}-temporal` workload | Single-process Temporal server; apps connect via gRPC (a binary API protocol apps use to call services) on port 7233, internal-only |
-| `{release}-temporal-ui` workload | Web dashboard on port 8080; internal-only because it has NO login of its own; optional (`ui.enabled`) |
-| `postgresHA` subchart (default, pg-ha **2.5.0** since 1.2.0) | 3-node HA PostgreSQL (Patroni + etcd + HAProxy leader endpoint) holding ALL workflow state |
-| `postgres` subchart (dev, **3.4.1** since 1.1.0) | Single-instance PostgreSQL alternative — exactly one DB mode must be enabled |
-| `my-temporal-db-credentials` (dictionary, **chart-created**, `templates/secret-db.yaml`) | `username`/`password`/`database` for the bundled DB, built from `postgres.credentials.*` in **both** modes and handed to the active subchart by name — `postgresHA.config.credentialsSecretName` (HA, since 1.2.0) or `postgres.config.credentialsSecretName` (single, since 1.1.0). pg-ha's `{release}-postgres-config` now holds only backup bucket/region, and only when HA backups are on |
-| identity + policy | Server-only; reveal on just the DB credentials secret |
+| `{release}-temporal` (standard, `replicas` 1-5, default 1) | Each replica: `temporal` container (all four services in one process; gRPC 7233, HTTP API 7243, metrics 8000, cluster ports 6933-6939 / 7234-7239, all declared at every N) + `admin` sidecar (`temporalio/admin-tools`). Replicas form one ringpop cluster over pod IPs. |
+| `admin` sidecar | Creates both DBs, takes a migration **lease** (one-row table `cpln_temporal_schema_lock` in the `postgres` DB), refuses a **skipped minor**, runs `update-schema`, opens a scratch gate (`/temporal-gate/schema-ready`) for the server, creates `default` (create-only), then idles as the `temporal` CLI. |
+| `{release}-temporal-ui` | Web UI :8080, internal-only (no login); reached by `cpln port-forward`. `/healthz` probes. |
+| postgresHA (pg-ha **2.7.0**, default) / postgres **3.4.1** | All state, in `temporal` and `temporal_visibility`; plus the lease table and `cpln_temporal_schema_migration` (resume markers) in the `postgres` DB. |
+| DB secret | Chart-created from `postgres.credentials.*` in both modes; the identity reveals only it. |
 
-- Boot uses the upstream `auto-setup` image: it creates the visibility database (`temporal_visibility`; the main `temporal` database must already exist — the Postgres subchart creates it from the secret's `database` key), applies/upgrades the schema, registers the `default` namespace (a tenant-like grouping for workflows) idempotently, then starts the server. Image tag bumps run schema migrations automatically in the documented order.
+- Both start scripts are **inline args** (`_script-server.tpl`, `_script-admin.tpl`, `$` doubled by `temporal.inlineScript`); the upgrade adds no secret and no grant.
+- The server runs `/etc/temporal/entrypoint.sh` as a **child** (TERM forwarded; SIGSTOP from inside works), with `TEMPORAL_BROADCAST_ADDRESS` set to the replica's own IP and a mandatory empty dynamic-config file in `/tmp`.
 
 ## Key knobs
 
 | Knob | Default | Note |
 |---|---|---|
-| `historyShards` | 512 | PERMANENT once installed — can never be changed for this cluster |
-| `namespaceRetention` | 72h | how long finished workflow histories stay viewable |
-| `ui.enabled` | true | UI workload on/off |
-| `internalAccess.type` | same-gvc | scope for both server and UI; no public exposure exists in v1 |
-| `postgresHA.*` / `postgres.*` | HA on | n8n/metabase-style dual mode, incl. optional backups |
-| `postgres.credentials.{username,password,database}` | `temporal` / `change-me-temporal-db-password` / `temporal` | feeds **both** modes — single since 1.1.0 (was `postgres.config.*`), HA since 1.2.0 (was `postgresHA.postgres.*`); bundled plumbing, still plain values. Changing the password on a live release breaks the DB login — applied only at volume init |
-| `postgresHA.config.credentialsSecretName` / `postgres.config.credentialsSecretName` | `my-temporal-db-credentials` (both) | name of the dictionary secret the CHART creates and the active subchart reads; org-wide, so unique per release |
-| `postgresHA.backup.minio.credentialsSecretName` / `postgres.backup.minio.credentialsSecretName` | `my-temporal-minio-credentials` | genuine prerequisite, only for MinIO backups — single since 1.1.0, HA since 1.2.1 |
+| `image` / `adminTools.image` | `temporalio/server:1.32.1` / `temporalio/admin-tools:1.32.1` | Same tag, minor 30-32 only (render-enforced); auto-setup refused at render |
+| `replicas` | 1 | 1-5; `rolloutOptions` (surge 1, unavailable 0, minReady 120, grace 90) rendered only when >1 |
+| `historyShards` | 512 | Permanent |
+| `namespaceRetention` | 72h | Applied only when `default` is created |
+| `ui.enabled` | true | |
+| `internalAccess.type` | same-gvc | Server and UI; workload-list must include `{release}-temporal-ui` or the UI cannot reach the server |
+| `postgresHA.backup.resources.memory` | 512Mi | Was 128Mi, which OOMKills wal-g |
+| `postgres.credentials.*` | temporal / change-me-temporal-db-password / temporal | Feeds both modes; `database` must be `temporal` (both modes, render-enforced) |
+
+**DB connection budget (D6 A):** per-service pools are computed from `replicas` so N replicas plus one surge replica stay under the bundled DB's 100 connections (budget 84/(N+1)): main/vis per service 7/3, 5/2, 4/1, 3/1, 2/1 for N=1..5 (40/28/20/16/12 connections per replica). Not a values knob. 1.x ran 20/10 (up to 120 per replica) and could exhaust the DB under load.
 
 ## Troubleshooting / considerations
 
-- **Workers/clients must use the full internal hostname** `{release}-temporal.{gvc}.cpln.local:7233` — short workload names do not resolve (proven in the spike).
-- **The UI has no authentication** — it is deliberately unreachable from the internet and there is no knob to expose it. Outside access requires the user's own authenticating proxy.
-- **Never change `historyShards` after install** — the server refuses to start against a cluster initialized with a different count; recovery means a fresh install.
-- Temporal connects to Postgres as the subchart's superuser (highest-privilege DB account) — it's the only credential the subchart creates, and schema upgrades need it. A lesser runtime role is a possible follow-up.
-- First boot runs schema setup before the port opens — readiness can take a couple of minutes; the liveness probe is delayed 120 s on purpose. Don't "fix" slow first boots by tightening probes.
-- Python workers written as a single file need the `if __name__ == "__main__":` guard, or Temporal's sandbox re-runs the file and crashes the worker — this belongs in any sample we hand users.
-- The dev-mode `temporal server start-dev` command is in-memory only — never an answer to persistence questions; the template always requires a Postgres mode.
-- Test evidence should come from server-side queries (`temporal workflow show`, `namespace describe`), not `cpln logs` alone — log ingestion lag was observed during the spike.
-- Server is pinned to 1 replica in this version — a deliberate call, not a capability gap. Two live spikes (2026-07-23) proved 3 replicas cluster cleanly on Control Plane (peer discovery via the database, no config hacks) and durable execution survives replica loss flawlessly (10/10 timers fired on schedule with a member killed mid-timer). Deferred because rolling restarts are noisy: upstream treats a slow housekeeping-startup call as fatal during join churn, so every rollout means 60–90 min of crash-retry cycles and ~5% bursty client errors (measured; pacing tuning didn't remove it). A `replicas` knob is fully designed off the spike evidence: conditional rolloutOptions (minReadySeconds 120 / surge 1 / unavailable 0) ONLY at replicas > 1 with untouched defaults at 1 (maintainer directive), plus 8 extra tcp ports and raised DB max_connections (~N×120) in both Postgres subcharts. Evidence: spike-temporal-multireplica.md + spike-temporal-rollout.md (archived with the pipeline artifacts).
-
-- **1.1.0 adopted postgres 3.4.1 and absorbed the break rather than passing it on.** 3.4.0 deleted its `{release}-pg-config` secret and now takes only a secret NAME. Because a parent cannot template a subchart value, the name is a plain value (`postgres.config.credentialsSecretName`) that BOTH sides read: temporal's `secret-db.yaml` renders it, the subchart's env refs and policy consume it, and `temporal.postgres.secret.name` points the server at it on the single-instance branch. Net user-visible change is one rename; **no new prerequisite** for the database.
-- **Temporal's TWO databases need no extra secret — but `credentials.database` MUST stay `temporal`, and a guard now enforces it.** The three-key secret suffices because Temporal reads no database name from the secret: `DBNAME: temporal` and `VISIBILITY_DBNAME: temporal_visibility` are literals on the server workload. **The consequence was initially recorded wrongly here** — as "changing it just creates an extra unused database", with no guard added on the reasoning that an existing install that changed it must be working. Testing disproved both halves: `auto-setup` creates the **visibility** store but **not** the main one, which it requires to already exist. With `credentials.database=tempcustom` the workload crash-looped 8+ minutes on `Unable to setup SQL schema: no usable database connection found`, `pg_database` held only `tempcustom`, and `psql -d temporal` returned `FATAL: database "temporal" does not exist`. So no such install was ever working, the guard breaks nothing, and 1.1.0 fails the render with an explanation instead.
-- **The HA branch followed in 1.2.0 (pg-ha 2.5.0).** `postgresHA.postgres.*` were removed; `secret-db.yaml` now renders in both modes and `temporal.postgres.secret.name`'s HA branch returns `postgresHA.config.credentialsSecretName`. HA upgraders from 1.1.x must copy their existing `postgresHA.postgres.*` values into `postgres.credentials.*` unchanged and ignore pg-ha's removal error telling them to create the secret. **The `database == temporal` guard only checks `postgres.enabled`** — on the HA path nothing stops a non-`temporal` value (pg-ha's `post_init` would create that database instead and the server would wedge the same way); candidate for a guard in a future version.
-- **A stale 1.0.x values file fails with the SUBCHART's message, not temporal's.** Helm renders `charts/…` before `templates/…`, so the postgres chart's "create a dictionary secret" advice always wins — wrong for the three credentials keys, since this template creates that secret. The README's "Upgrading from 1.0.x" table carries the correction; a parent-side guard would be dead code.
-- **MinIO backup keys are a prerequisite dictionary secret on both paths** (`accessKey`/`secretKey`) — single-instance since 1.1.0, HA since 1.2.1 (`postgresHA.backup.minio.credentialsSecretName`). Inline keys fail the render.
+- **One minor at a time.** 1.x (server 1.29.7) → 2.0.0 is three upgrades: `--set` both images to 1.30.8, then 1.31.4, then defaults, ~10 min apart, at `replicas: 1`. The wizard lands a console upgrade from <2.0.0 on 1.30.8. A skip is refused under the lease, before any migration: the admin container logs `CPLN_TEMPORAL_SKIP_GUARD` with the next tag, sleeps 120 s and exits; the new replica never becomes ready.
+- **"Not ready" → read the `admin` container.** "another replica is migrating the schema" is normal while one replica holds the lease. A holder that dies mid-migration leaves its lease to expire (3 min) and a resume marker; the next replica finishes the same-target migration instead of tripping the skip guard (a fresh install half-migrated to, e.g., visibility 1.7 is otherwise indistinguishable from an ancient DB — found and fixed at build).
+- **The server waits at most 560 s for the schema gate**, inside its ~615 s readiness-derived startup window, so its FATAL always prints.
+- **`tdbg membership list-gossip`** (from the admin container, `--address 127.0.0.1:7233`) shows ring members; there is no `list-members`.
+- **Multi-replica rolling restarts are noisy by upstream design:** the worker service treats a slow scanner start as fatal during rebalancing (still in 1.32.1). July measured 60-90 min of crash-retry and ~5% bursty client errors at N=3 on 1.29; re-measure on 1.32.1 (test row T22) and update the README.
+- **Workers need the full FQDN.** Python workers need the `__main__` guard.
+- **No rollback after a hop migrates the schema.** Back up first.
+- 1.32's visibility filters are stricter (type-mismatched or empty `Text` filters error). Upstream, not the template.
+- Snapshots never run on the bundled DB (no schedule, work item 5219). Use `backup.*`.
+- **pg-ha's local `max_connections: 100` is dead config** (Patroni takes it from the DCS only); flagged to the pg-ha owner. Raising the DB limit for throughput is the documented follow-up (D6 B), not built.

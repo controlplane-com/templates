@@ -2,8 +2,8 @@
 
 > **Upgrading from 1.2.0:** create the admin secret (see Prerequisites) before upgrading — 1.3.0 requires it,
 > though an install that already has accounts ignores it and keeps every login. Remove `auth.enableSignup`
-> from your values (the upgrade is refused while it is set) and manage sign-up in Admin Panel → Settings →
-> General. `publicAccess.enabled` now defaults to `true`; set it to `false` explicitly to stay private.
+> from your values (the upgrade is refused while it is set) and manage sign-up in Settings → Admin →
+> Authentication (New Sign Ups). `publicAccess.enabled` now defaults to `true`; set it to `false` explicitly to stay private.
 
 
 This app deploys [Open WebUI](https://github.com/open-webui/open-webui), a self-hosted, ChatGPT-style chat interface for LLMs with users, RAG (chat grounded in your uploaded documents), and model management. A single stateful workload keeps all of its state on a persistent volume and connects to your models via an in-GVC Ollama server and/or any OpenAI-compatible endpoint. The admin account comes from a secret you create first, so the UI is ready to sign in to on its public URL as soon as it starts.
@@ -114,7 +114,7 @@ openai:
 ```
 
 vLLM must allow the caller (its default `internalAccess.type: same-gvc` does) and keep `model.toolCallParser` set — Open WebUI offers tools on every chat, and vLLM rejects those requests without it.
-Set these at install: the backend settings are read on first boot only (see Important Notes); change them later in Admin Panel → Settings → Connections.
+Set these at install: the backend settings are read on first boot only (see Important Notes); change them later in Settings → Admin → Connections.
 
 ## Connecting
 
@@ -132,12 +132,12 @@ Set these at install: the backend settings are read on first boot only (see Impo
 - **Create both secrets before installing.** A missing one stalls the deployment with no logs at all; `cpln workload get-deployments {release}-open-webui --gvc {gvc} -o yaml` names it under `status.versions[].message`, and the install recovers by itself within ~10 minutes of the secret appearing. Never change the session key afterwards: it signs every session and JWT, so replacing it logs every user out.
 - **The admin secret is read on first boot only.** Open WebUI creates the admin while the database has no accounts and never touches it again, so changing the secret later changes nothing — change the password in the UI (Settings → Account). A restore to a snapshot taken before any account existed would create it again.
 - **Restoring a snapshot is a manual, deliberate operation.** `backup.enabled` takes crash-consistent volume snapshots; it does not restore them. To roll back, restore the snapshot onto the volume set from the Control Plane console or CLI and let the workload restart onto it. Measured restore: ~2.5 minutes, of which ~40 seconds is downtime, and everything written after the snapshot is gone — including accounts, so a user registered after it will no longer be able to sign in.
-- **Self-service sign-up is off.** Add users from Admin Panel → Users, or open sign-up from Admin Panel → Settings → General; the setting lives in the app database, not in this template.
+- **Self-service sign-up is off.** Add users from Admin Panel → Users, or open sign-up from Settings → Admin → Authentication (New Sign Ups); the setting lives in the app database, not in this template.
 - **License / branding clause** — you must keep the "Open WebUI" branding visible in the UI unless your deployment serves 50 or fewer users, or you have enterprise permission. Removing the branding outside those cases violates the license; it is not a template setting.
 - **Single replica, by design.** The default embedded SQLite is single-writer and the volumeset is per-replica, so the workload is pinned to 1 replica. A restart or upgrade is a brief full outage (about a minute). Multi-replica HA requires an external Postgres + Redis + object store (a planned follow-up).
 - **Data lives only on the volumeset.** Uninstall deletes it (a final snapshot is taken); reinstall starts empty, including the admin account.
 - **Ollama unreachable is non-fatal.** The UI boots and simply shows no Ollama models — check that `ollama.workloadName` names a `ready` ollama workload in this GVC.
-- **`ollama.*`, `openai.*` and `customDomain` apply at install, then persist in the app database.** They are read from the environment only on first boot and then stored in `webui.db`; a later `helm upgrade` is ignored. The trap is that a stale backend keeps *working*, so nothing looks wrong — change model connections from the admin UI (Settings → Connections) instead, and set `customDomain` at first install rather than adding it later.
+- **`ollama.*`, `openai.*` and `customDomain` apply at install, then persist in the app database.** They are read from the environment only on first boot and then stored in `webui.db`; a later `helm upgrade` is ignored. The trap is that a stale backend keeps *working*, so nothing looks wrong — change model connections in Settings → Admin → Connections instead, and set `customDomain` at first install rather than adding it later.
 - **Backups are scheduled volume snapshots** (default: daily, 7-day retention), managed by the platform — crash-consistent, and SQLite recovers cleanly. These live in the platform storage layer alongside the volume, not off-site.
 
 ## Links

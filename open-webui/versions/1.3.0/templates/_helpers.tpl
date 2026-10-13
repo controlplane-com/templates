@@ -58,7 +58,7 @@ Open WebUI Policy Name
 {{- fail "open-webui: auth.secretKeyName is required — it names the prerequisite opaque secret (encoding: plain) holding the session/JWT signing key, which must exist BEFORE install and stay the same forever" -}}
 {{- end -}}
 {{- if hasKey .Values.auth "enableSignup" -}}
-{{- fail "open-webui: auth.enableSignup was removed in 1.3.0 — the admin account is now created from admin.secretName at first boot and sign-up is turned off then; open self-service sign-up from Admin Panel → Settings → General instead. Remove auth.enableSignup from your values." -}}
+{{- fail "open-webui: auth.enableSignup was removed in 1.3.0 — the admin account is now created from admin.secretName at first boot and sign-up is turned off then; open self-service sign-up from Settings → Admin → Authentication (New Sign Ups) instead. Remove auth.enableSignup from your values." -}}
 {{- end -}}
 {{- if not (.Values.admin).secretName -}}
 {{- fail "open-webui: admin.secretName is required — it names the prerequisite dictionary secret (keys: email, password) holding the admin account, which must exist BEFORE install" -}}

@@ -10,8 +10,8 @@ summary: >-
   Open WebUI, a ChatGPT-style chat interface with user accounts, chat over uploaded documents and
   model management, as one workload keeping SQLite, uploads and its Chroma vector store on a
   persistent volume with daily platform snapshots. It connects to an Ollama workload in the same
-  GVC and to any OpenAI-compatible API with your key. It stays private until you register the
-  admin and turn on public access. Pick it to give a team one chat UI over models you already run
+  GVC and to any OpenAI-compatible API with your key, such as a vLLM workload. The admin account
+  comes from a secret you create, so it serves on a public URL from the first start. Pick it to give a team one chat UI over models you already run
   or pay for.
 
 keywords:
@@ -57,11 +57,20 @@ related:
   - template: litellm
     relation: companion
     note: One OpenAI-compatible backend for Open WebUI in front of many providers
+  - template: vllm
+    relation: companion
+    note: Serves an open-weight model on a GPU through the OpenAI-compatible backend
   - template: searxng
     relation: companion
     note: Web search provider for chats that need live results
 
 prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [email, password]
+    valuesPath: admin.secretName
+    required: true
+    description: The admin account, created at first boot before the UI serves. Create it before installing; when it is missing the deployment waits with no logs.
   - kind: secret
     secretType: opaque
     valuesPath: auth.secretKeyName

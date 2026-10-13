@@ -30,7 +30,13 @@ spec:
         - name: WEBUI_AUTH
           value: 'true'
         - name: ENABLE_SIGNUP
-          value: {{ .Values.auth.enableSignup | quote }}
+          value: 'false'
+        # Admin account from the prerequisite dictionary secret. Open WebUI creates
+        # it at startup, before serving, only while the database has no users.
+        - name: WEBUI_ADMIN_EMAIL
+          value: 'cpln://secret/{{ .Values.admin.secretName }}.email'
+        - name: WEBUI_ADMIN_PASSWORD
+          value: 'cpln://secret/{{ .Values.admin.secretName }}.password'
         {{- if .Values.customDomain }}
         # explicit WEBUI_URL wins over the start script's canonical-endpoint fallback
         - name: WEBUI_URL

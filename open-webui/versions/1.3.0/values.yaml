@@ -28,10 +28,13 @@ auth:
   # and must stay the same forever: replacing it logs every user out.
   # Create it with: printf '%s' "$(openssl rand -base64 32)" | cpln secret create-opaque --name my-openwebui-secret-key --encoding plain -f -
   secretKeyName: my-openwebui-secret-key
-  # false = nobody can create their own account. The FIRST account is exempt, so
-  # you can still register the admin on a fresh install (see the README first-run
-  # steps); invite everyone else from Admin Settings → Users.
-  enableSignup: false
+
+# REQUIRED dictionary secret with keys `email` and `password`: the admin account,
+# created at first boot before the UI serves anything (sign-up then stays off).
+# It must EXIST BEFORE INSTALL. Read on first boot only; change the password in the UI.
+# Create it with: cpln secret create-dictionary --name my-openwebui-admin --entry email=you@example.com --entry 'password=...'
+admin:
+  secretName: my-openwebui-admin
 
 # ─── Model backends ───────────────────────────────────────────────────────────
 # Point at an existing `ollama` template deployment in this same GVC.
@@ -55,10 +58,9 @@ openai:
 customDomain: "" # full URL, e.g. https://chat.example.com ; empty = canonical *.cpln.app
 
 publicAccess:
-  # false = not reachable from the internet. Turning this on publishes the chat
-  # UI, and its sign-in/sign-up form, to the whole internet — so register your
-  # admin account FIRST (see the README first-run steps), then turn it on.
-  enabled: false
+  # true = the chat UI and its sign-in form are on the canonical *.cpln.app URL.
+  # Safe by default: the admin exists before the UI serves and sign-up is off.
+  enabled: true
 
 internalAccess: # inbound firewall scope for in-GVC callers of the Open WebUI API
   type: none # options: none, same-gvc, same-org, workload-list

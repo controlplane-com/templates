@@ -10,6 +10,7 @@ bindings:
 targetKind: secret
 targetLinks:
   - //secret/{{ .Values.auth.secretKeyName }}
+  - //secret/{{ .Values.admin.secretName }}
   - //secret/{{ include "open-webui.secretStart.name" . }}
   {{- if .Values.openai.apiKeySecretName }}
   - //secret/{{ .Values.openai.apiKeySecretName }}

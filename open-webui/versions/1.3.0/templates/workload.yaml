@@ -22,37 +22,48 @@ spec:
       cpu: {{ .Values.resources.maxCpu | quote }}
       memory: {{ .Values.resources.maxMemory | quote }}
       env:
-        # ── Session/JWT signing key (prerequisite opaque secret, created by the
-        #    user before install so it never passes through Helm values) ──
-        - name: WEBUI_SECRET_KEY
-          value: 'cpln://secret/{{ .Values.auth.secretKeyName }}.payload'
-        # ── Authentication ──
-        - name: WEBUI_AUTH
-          value: 'true'
+        # Sorted by name: the API stores env alphabetically (rendered == stored).
+        # A backend left unset is turned OFF explicitly: otherwise Open WebUI falls back to its
+        # built-in defaults (Ollama at host.docker.internal:11434, OpenAI at api.openai.com with
+        # no key) and logs a connection error on every model list. Backend settings, like the
+        # admin account, are read on first boot only.
+        {{- if not .Values.ollama.enabled }}
+        - name: ENABLE_OLLAMA_API
+          value: 'false'
+        {{- end }}
+        {{- if not .Values.openai.apiKeySecretName }}
+        - name: ENABLE_OPENAI_API
+          value: 'false'
+        {{- end }}
         - name: ENABLE_SIGNUP
           value: 'false'
+        {{- if .Values.ollama.enabled }}
+        # Ollama backend: an existing in-GVC ollama workload over internal DNS
+        - name: OLLAMA_BASE_URL
+          value: {{ printf "http://%s.%s.cpln.local:%v" .Values.ollama.workloadName .Values.global.cpln.gvc .Values.ollama.port | quote }}
+        {{- end }}
+        {{- if .Values.openai.apiKeySecretName }}
+        # OpenAI-compatible backend; the API key is a prerequisite opaque secret
+        - name: OPENAI_API_BASE_URL
+          value: {{ .Values.openai.baseUrl | quote }}
+        - name: OPENAI_API_KEY
+          value: 'cpln://secret/{{ .Values.openai.apiKeySecretName }}.payload'
+        {{- end }}
         # Admin account from the prerequisite dictionary secret. Open WebUI creates
         # it at startup, before serving, only while the database has no users.
         - name: WEBUI_ADMIN_EMAIL
           value: 'cpln://secret/{{ .Values.admin.secretName }}.email'
         - name: WEBUI_ADMIN_PASSWORD
           value: 'cpln://secret/{{ .Values.admin.secretName }}.password'
+        - name: WEBUI_AUTH
+          value: 'true'
+        # Session/JWT signing key: a prerequisite opaque secret, never in Helm values
+        - name: WEBUI_SECRET_KEY
+          value: 'cpln://secret/{{ .Values.auth.secretKeyName }}.payload'
         {{- if .Values.customDomain }}
         # explicit WEBUI_URL wins over the start script's canonical-endpoint fallback
         - name: WEBUI_URL
           value: {{ .Values.customDomain | quote }}
-        {{- end }}
-        {{- if .Values.ollama.enabled }}
-        # ── Ollama backend (existing in-GVC ollama workload over internal DNS) ──
-        - name: OLLAMA_BASE_URL
-          value: {{ printf "http://%s.%s.cpln.local:%v" .Values.ollama.workloadName .Values.global.cpln.gvc .Values.ollama.port | quote }}
-        {{- end }}
-        {{- if .Values.openai.apiKeySecretName }}
-        # ── OpenAI-compatible backend (API key = prerequisite opaque secret) ──
-        - name: OPENAI_API_BASE_URL
-          value: {{ .Values.openai.baseUrl | quote }}
-        - name: OPENAI_API_KEY
-          value: 'cpln://secret/{{ .Values.openai.apiKeySecretName }}.payload'
         {{- end }}
       ports:
         - number: 8080

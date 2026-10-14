@@ -1,0 +1,16 @@
+kind: policy
+name: {{ include "n8n.policy.name" . }}
+description: n8n secret access
+tags: {{- include "n8n.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "n8n.identity.name" . }}
+targetKind: secret
+targetLinks:
+  # Prerequisite secret the user creates — granted by name, nothing broader.
+  - //secret/{{ .Values.owner.secretName }}
+  - //secret/{{ include "n8n.secretStart.name" . }}
+  - //secret/{{ include "n8n.postgres.secret.name" . }}
+  - //secret/{{ .Values.encryptionKey.secretName }}

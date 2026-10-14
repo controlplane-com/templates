@@ -9,8 +9,8 @@ topology: stateless
 summary: >-
   A Temporal server running the frontend, history, matching and worker services as one replica or an
   optional multi-replica cluster, with an admin-tools sidecar that migrates the schema and serves the
-  temporal CLI. It exposes gRPC and an HTTP API inside your org, an internal Web UI reached by
-  port-forward, and server metrics in the built-in Grafana. State lives in a bundled three-node
+  temporal CLI. It exposes gRPC and an HTTP API inside your org, a Web UI that is internal or open
+  to IP ranges you list, and server metrics in the built-in Grafana. State lives in a bundled three-node
   PostgreSQL cluster with Patroni failover or a single instance, with optional backups to S3, GCS or an
   S3-compatible endpoint. Pick it to run durable workflows written with the Temporal SDKs.
 

@@ -5,13 +5,13 @@
 > [Upgrading from 1.x](#upgrading-from-1x). A direct upgrade with the defaults is refused before the
 > database is touched.
 
-This app deploys [Temporal](https://temporal.io/), an open-source (MIT) durable-execution platform for writing workflows that survive process crashes and outages. It runs the Temporal server (one replica by default, or a cluster of up to five) with its gRPC frontend and HTTP API, plus the Temporal Web UI, all internal-only, on a highly available PostgreSQL cluster by default. Database creation, schema migrations and the `default` namespace are handled automatically.
+This app deploys [Temporal](https://temporal.io/), an open-source (MIT) durable-execution platform for writing workflows that survive process crashes and outages. It runs the Temporal server (one replica by default, or a cluster of up to five) with its gRPC frontend and HTTP API, plus the Temporal Web UI, all internal-only by default (the UI can be opened to IP ranges you list), on a highly available PostgreSQL cluster by default. Database creation, schema migrations and the `default` namespace are handled automatically.
 
 ## Architecture
 
 - **Temporal server**: `replicas` replicas (default 1), each running all four services (frontend, history, matching, worker) in one process; gRPC on 7233, HTTP API on 7243, internal-only. With more than one replica they form a single Temporal cluster. Stateless: all state lives in PostgreSQL.
 - **`admin` sidecar** (in every server replica): creates the databases, migrates the schema (one replica at a time), refuses an upgrade that skips a minor version, creates the `default` namespace, then serves as an in-cluster `temporal` CLI.
-- **Temporal Web UI** (optional, default on): serves the UI on port 8080, internal-only (the UI has no built-in authentication).
+- **Temporal Web UI** (optional, default on): serves the UI on port 8080, internal-only unless you list IP ranges in `ui.allowedCIDRs` (the UI has no built-in authentication).
 - **PostgreSQL (HA, default)** (subchart): the `postgres-highly-available` template: 3 Patroni Postgres replicas, 3 etcd replicas, and an HAProxy leader endpoint Temporal connects through.
 - **PostgreSQL (single-instance, optional)** (subchart): the `postgres` template instead, for lighter deployments.
 - **Database credentials secret** (dictionary): created by this template from `postgres.credentials.*` in both database modes. Nothing for you to create.
@@ -51,6 +51,7 @@ namespaceRetention: 72h # retention of the `default` namespace, applied when it 
 ui:
   enabled: true # set false to remove the UI workload
   image: temporalio/ui:2.55.0
+  allowedCIDRs: [] # IP ranges that may open the UI in a browser, e.g. [203.0.113.10/32]; empty = internal-only
   resources:
     maxCpu: 500m
     maxMemory: 512Mi
@@ -60,7 +61,7 @@ ui:
 
 ### Access
 
-There is no public-access option. Workers and clients run as workloads in your org; reach the UI with `cpln port-forward` (see [Connecting](#connecting)).
+The server is never reachable from outside Control Plane: workers and clients run as workloads in your org. The Web UI is internal-only too, unless you list IP ranges in `ui.allowedCIDRs` (see [Connecting](#connecting)).
 
 ```yaml
 internalAccess: # firewall scope for the server (gRPC :7233, HTTP API :7243, cluster ports) and the UI (:8080)
@@ -137,14 +138,15 @@ postgres: # dev/lightweight: single-instance PostgreSQL
 | gRPC frontend (workers and clients) | `RELEASE_NAME-temporal.GVC_NAME.cpln.local:7233` |
 | HTTP API | `http://RELEASE_NAME-temporal.GVC_NAME.cpln.local:7243` (for example `/api/v1/namespaces/default`) |
 | Namespace | `default` |
-| Web UI | `cpln port-forward RELEASE_NAME-temporal-ui 8080:8080 --gvc GVC_NAME`, then open `http://localhost:8080` |
+| Web UI in a browser (recommended) | List your address in `ui.allowedCIDRs`, then open the UI's canonical endpoint: `status.canonicalEndpoint` in `cpln workload get RELEASE_NAME-temporal-ui --gvc GVC_NAME -o yaml` |
+| Web UI, quick checks | `cpln port-forward RELEASE_NAME-temporal-ui 8080:8080 --gvc GVC_NAME`, then `curl http://localhost:8080/healthz` |
 | `temporal` CLI | `cpln workload exec RELEASE_NAME-temporal --gvc GVC_NAME --container admin -- temporal workflow list` |
 | Postgres (HA mode) | `RELEASE_NAME-postgres-ha-proxy.GVC_NAME.cpln.local:5432`, credentials in the secret named by `postgresHA.config.credentialsSecretName` |
 | Postgres (single mode) | `RELEASE_NAME-postgres.GVC_NAME.cpln.local:5432`, credentials in the secret named by `postgres.config.credentialsSecretName` |
 
 - **Always use the full `.cpln.local` name** in worker and client configuration; short workload names do not resolve.
 - **Python workers must guard their entrypoint with `if __name__ == "__main__":`**: the Temporal Python SDK's workflow sandbox re-imports the worker module, and an unguarded module-level `main()` crashes the worker.
-- If the UI stops loading pages through `cpln port-forward` after some navigation, restart the port-forward and reload.
+- `cpln port-forward` suits curl-level checks; a browser through it can stop loading pages after some navigation. For browser use, list your address in `ui.allowedCIDRs`.
 
 ## Upgrading from 1.x
 
@@ -228,7 +230,7 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
 - **Change the database password (`postgres.credentials.password`) before installing.** It is set once, when the database volume is first initialised; changing it later only rewrites the secret, and the server can no longer connect.
 - **Give each Temporal release its own credentials secret name** (`postgresHA.config.credentialsSecretName` or `postgres.config.credentialsSecretName`). Secret names are org-wide, so a second release on the default name is refused at install.
 - **`historyShards` is permanent**: it is fixed at the cluster's first boot, and a later change is ignored (the server keeps the original count and only logs the mismatch). 512 suits most deployments.
-- **Never expose the Web UI publicly**: it has no built-in authentication.
+- **The Web UI has no login**: anyone who can reach it can view and act on every workflow. List only addresses you trust in `ui.allowedCIDRs` (whole-internet ranges are refused), and allow up to a few minutes for a change to apply.
 - **A replica that stays not ready:** read its `admin` container's logs. "another replica is migrating the schema" is normal during an upgrade with several replicas; `CPLN_TEMPORAL_SKIP_GUARD` means the image skips a minor version.
 - **Keep the GVC to one location.** Each location would run its own servers against its own database.
 - **Uninstall deletes the database volumesets**, with all workflow histories. Enable backups if the data matters.

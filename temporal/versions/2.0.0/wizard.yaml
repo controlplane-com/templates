@@ -177,16 +177,40 @@ steps:
 
   - id: ui
     title: Web UI
-    description: The Temporal Web UI, reachable only inside the internal access scope or by port-forward.
+    description: The Temporal Web UI, and which IP ranges may open it in a browser.
     docs: "#web-ui"
     sections:
       - id: ui
         title: Temporal Web UI
         toggle: ui.enabled
         description: >-
-          The UI has no login of its own, so it is never exposed publicly. Open it with
-          `cpln port-forward RELEASE-temporal-ui 8080:8080 --gvc GVC`.
+          The UI has no login of its own. It is internal-only unless you list IP ranges below; for a quick
+          check without that, use `cpln port-forward RELEASE-temporal-ui 8080:8080 --gvc GVC`.
         fields:
+          - path: ui.allowedCIDRs
+            type: list
+            label: Browser access from
+            widget: tags
+            description: >-
+              IP ranges that may open the UI on its public endpoint, for example `203.0.113.10/32` for one
+              address. The UI has no login, so this list is its only protection: list only addresses you
+              trust. Leave it empty to keep the UI internal-only. Changes take up to a few minutes to apply.
+            item:
+              type: string
+            rules:
+              - rule: >-
+                  self.ui.allowedCIDRs.all(c, c.matches('^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])[.]){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$') || (c.contains(':') && c.matches('^[0-9a-fA-F:.]+/(12[0-8]|1[01][0-9]|[1-9]?[0-9])$')))
+                mirrors: temporal.validateUiAccess
+                message: Every entry must be an IPv4 or IPv6 range with a prefix length, such as 203.0.113.10/32.
+                messageExpression: >-
+                  'Not an IP range with a prefix length: ' +
+                  self.ui.allowedCIDRs.filter(c, !(c.matches('^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])[.]){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$') || (c.contains(':') && c.matches('^[0-9a-fA-F:.]+/(12[0-8]|1[01][0-9]|[1-9]?[0-9])$')))).join(', ') +
+                  '. Use a form such as 203.0.113.10/32 or 2001:db8::/48.'
+              - rule: "!self.ui.allowedCIDRs.exists(c, c.endsWith('/0'))"
+                mirrors: temporal.validateUiAccess
+                message: >-
+                  A /0 range (0.0.0.0/0 or ::/0) opens the UI to the whole internet. The UI has no login, so list
+                  specific ranges, such as your office or VPN egress address (/32).
           - path: ui.image
             type: string
             format: image
@@ -568,6 +592,12 @@ steps:
 
 # Rules over values outside the steps: their issues show on the fields named in paths.
 rules:
+  - rule: self.ui.enabled || size(self.ui.allowedCIDRs) == 0
+    mirrors: temporal.validateUiAccess
+    paths: [ui.enabled]
+    message: >-
+      ui.allowedCIDRs opens the Web UI, which is turned off. Turn the Web UI on, or empty the list in YAML
+      mode.
   - rule: >-
       context.mode != 'upgrade' || context.fromVersion == null ||
       semverCompare(context.fromVersion, '2.0.0') >= 0 || self.image.matches(':1[.]30[.][0-9]+([.][0-9]+)?$')

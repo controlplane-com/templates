@@ -25,6 +25,7 @@ namespaceRetention: 72h # retention of the `default` namespace, applied when it 
 ui:
   enabled: true
   image: temporalio/ui:2.55.0
+  allowedCIDRs: [] # IP ranges that may open the UI in a browser (e.g. 203.0.113.10/32); empty = internal-only. The UI has no login
   resources:
     maxCpu: 500m
     maxMemory: 512Mi

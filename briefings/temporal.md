@@ -17,7 +17,7 @@
 |---|---|
 | `{release}-temporal` (standard, `replicas` 1-5, default 1) | Each replica: `temporal` container (all four services in one process; gRPC 7233, HTTP API 7243, metrics 8000, cluster ports 6933-6939 / 7234-7239, all declared at every N) + `admin` sidecar (`temporalio/admin-tools`). Replicas form one ringpop cluster over pod IPs. |
 | `admin` sidecar | Creates both DBs, takes a migration **lease** (one-row table `cpln_temporal_schema_lock` in the `postgres` DB), refuses a **skipped minor**, runs `update-schema`, opens a scratch gate (`/temporal-gate/schema-ready`) for the server, creates `default` (create-only), then idles as the `temporal` CLI. |
-| `{release}-temporal-ui` | Web UI :8080, internal-only (no login); reached by `cpln port-forward`. `/healthz` probes. |
+| `{release}-temporal-ui` | Web UI :8080 (no login), internal-only by default. `ui.allowedCIDRs` opens ONLY this workload's external firewall to the listed ranges (its single `http` port serves the canonical endpoint; no load balancer). `cpln port-forward` stays for curl-level checks: browsers through the tunnel stall. `/healthz` probes. |
 | postgresHA (pg-ha **2.7.0**, default) / postgres **3.4.1** | All state, in `temporal` and `temporal_visibility`; plus the lease table and `cpln_temporal_schema_migration` (resume markers) in the `postgres` DB. |
 | DB secret | Chart-created from `postgres.credentials.*` in both modes; the identity reveals only it. |
 
@@ -33,6 +33,7 @@
 | `historyShards` | 512 | Permanent: a later change is IGNORED, not refused (server logs `Supplied configuration key/value mismatches persisted cluster metadata`; the workload env then shows the ignored value) |
 | `namespaceRetention` | 72h | Applied only when `default` is created |
 | `ui.enabled` | true | |
+| `ui.allowedCIDRs` | `[]` | Empty = internal-only (default render byte-identical to before the knob). Render refuses non-CIDR entries, any `/0` (0.0.0.0/0, ::/0), and a list with `ui.enabled: false`. The server workload is never opened |
 | `internalAccess.type` | same-gvc | Server and UI. With workload-list the chart always prepends `//gvc/{gvc}/workload/{release}-temporal` (and `…-temporal-ui` when the UI is on) to the server's list: ringpop and internal RPC between replicas, and UI→server gRPC, go through that same firewall. Without it N≥2 split into single-member clusters (`ShardOwnershipLost`) and the UI was cut off (test round 1, T11). A change rolls every replica; enforcement follows the roll (~8 min at N=3) |
 | `postgresHA.backup.resources.memory` | 512Mi | Was 128Mi, which OOMKills wal-g |
 | `postgres.credentials.*` | temporal / change-me-temporal-db-password / temporal | Feeds both modes; `database` must be `temporal` (both modes, render-enforced) |

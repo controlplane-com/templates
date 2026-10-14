@@ -171,6 +171,7 @@ byte-identical to the script source. Copied from pgedge.inlineScript.
 {{- define "temporal.validate" -}}
 {{- include "temporal.validateResourceKnobs" . -}}
 {{- include "temporal.validateImages" . -}}
+{{- include "temporal.validateUiAccess" . -}}
 {{- if ne (default "temporal" .Values.postgres.credentials.database) "temporal" -}}
 {{- fail (printf "temporal: postgres.credentials.database must be \"temporal\", got %q. It is used in BOTH database modes, and the Temporal server reads its main store as the literal database \"temporal\" — any other value creates a database nothing uses." .Values.postgres.credentials.database) -}}
 {{- end -}}
@@ -215,6 +216,33 @@ happens at boot, against the database; these are the render-time halves.
 {{- $adminTag := include "temporal.imageTag" $admin -}}
 {{- if ne $tag $adminTag -}}
 {{- fail (printf "temporal: image (%s) and adminTools.image (%s) must carry the same tag — the admin sidecar migrates the schema the server expects. Set both, e.g. --set image=temporalio/server:%s --set adminTools.image=temporalio/admin-tools:%s" $image $admin $tag $tag) -}}
+{{- end -}}
+{{- end }}
+
+
+{{/*
+Web UI external access. The UI has no login of its own, so ui.allowedCIDRs is
+its only protection: every entry must be a specific IPv4 or IPv6 range with a
+prefix, never a whole-internet range, and the list needs the UI to exist.
+*/}}
+{{- define "temporal.validateUiAccess" -}}
+{{- $cidrs := (.Values.ui).allowedCIDRs | default list -}}
+{{- if not (kindIs "slice" $cidrs) -}}
+{{- fail (printf "temporal: ui.allowedCIDRs must be a list of IP ranges such as [\"203.0.113.10/32\"], got %v" $cidrs) -}}
+{{- end -}}
+{{- if and $cidrs (not .Values.ui.enabled) -}}
+{{- fail "temporal: ui.allowedCIDRs is set but ui.enabled is false. The list opens the Web UI workload, which is not deployed; turn the UI on or empty the list." -}}
+{{- end -}}
+{{- range $cidrs -}}
+{{- $c := toString . -}}
+{{- $v4 := regexMatch "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])[.]){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$" $c -}}
+{{- $v6 := and (contains ":" $c) (regexMatch "^[0-9a-fA-F:.]+/(12[0-8]|1[01][0-9]|[1-9]?[0-9])$" $c) -}}
+{{- if not (or $v4 $v6) -}}
+{{- fail (printf "temporal: ui.allowedCIDRs entry %q is not an IP range. Use an IPv4 or IPv6 address with a prefix length, such as 203.0.113.10/32 or 2001:db8::/48." $c) -}}
+{{- end -}}
+{{- if hasSuffix "/0" $c -}}
+{{- fail (printf "temporal: ui.allowedCIDRs entry %q opens the Web UI to the whole internet. The UI has no login of its own, so this list is its only protection: list specific ranges, such as your office or VPN egress address (/32)." $c) -}}
+{{- end -}}
 {{- end -}}
 {{- end }}
 

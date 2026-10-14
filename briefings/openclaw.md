@@ -38,8 +38,9 @@
 - Considered and deferred: a Control Plane service-account key as a static `Authorization: Bearer` header (mcp.cpln.io answered 200 to a token, 401 without; OpenClaw supports `headers`, but they are ignored while `auth: oauth`). No sign-in at all and scoped permissions — a candidate for 1.1.0.
 - The agent can edit its own config (it has full admin over its gateway): on test-ocd it set `commands.ownerAllowFrom` while trying to fix MCP from chat.
 
-**Restarting**
-- `gateway restart` via exec is in place: the exec returns in ~9–12 s and `/startupz` is non-200 for only ~3.5 s; PID 1 untouched, workers restart, WhatsApp reconnects, browser tabs reconnect. `gateway call channels.start --params '{"channel":"whatsapp"}'` restarts one channel (answers `skipped: unlinked` when nothing is linked). **`started: true` is a false positive** — it means "handed to the channel"; with a bad token the channel stopped 271 ms later. Read `channels status` after. `force-redeployment` only as a last resort or after a secret rotation (env is resolved at replica start).
+**Restarting** (re-measured 2026-10-14)
+- `gateway restart` via exec is in place (PID 1 untouched): idle ≈7 s of non-200; with an agent turn running it **waits for the turn to finish while still serving**, then ≈8 s down. No container kill in either case. (An earlier 6-min outage with exit 137 did not reproduce — most likely the waiting CLI being killed mid-drain.) `gateway call channels.start --params '{"channel":"whatsapp"}'` restarts one channel; **`started: true` is a false positive** (bad token died 271 ms later) — read `channels status` after.
+- `force-redeployment` ≈190 s of non-200 (old replica serves ~50 s, then the volume moves). WhatsApp link, Telegram, paired devices/nodes, MCP sign-ins and runtime `config set` changes all survive. Needed after a secret rotation (env resolved at replica start).
 
 **Availability (measured, round 2)**
 - Container start → `[gateway] ready`: 33–55 s with no channels; 71–110 s with three external channel plugins (doctor). `ready: true` follows within ~15–30 s; well inside the 310 s readiness deadline.
@@ -68,3 +69,12 @@
 - Anyone who can message the bot shares its tool power (prompt injection — hostile text steering the model): keep DM pairing, vet ClawHub skills. Hundreds of GHSAs (GitHub security advisories) so far: plan frequent tag bumps.
 - **Custom domain after a reinstall must be recreated** (measured 2026-10-08): a domain whose route workload was deleted does not rebind when a same-name workload returns — status and cert read `ready`, `endpoints: []`, the edge resets TLS; re-applying the identical spec does nothing; delete + recreate fixes it in ~30 s.
 - **Reading the token back:** plain `cpln secret reveal` shows only a summary table for a dictionary; use `-o json | jq -r ".data[\"gateway-token\"]"`.
+
+**Round 3 findings (maintainer sweep, 2026-10-12/14)**
+- **Trust model:** by default exec is `full`, no prompts. Any approved chat contact can make the agent run shell that reads `OPENCLAW_GATEWAY_TOKEN`, channel tokens and `CPLN_TOKEN` (which can reveal the whole prerequisite secret); `OPENAI_API_KEY` is hidden from exec. Upstream model = one trusted operator. README: approve only admin-trustworthy contacts; `config set tools.exec.ask always` holds every command — verified over Telegram (approve runs, deny → `status: declined`).
+- **Talk:** the composer mic only dictates until `talk.realtime.provider` is set (`openai` uses the same key); then spoken replies work (maintainer).
+- **Provider switch** leaves the memory index fts-only → search empty until `memory status --index --agent main`.
+- **Widgets** are agent-built (ask in a thread; listed on Dashboards); **Usage** lives at `/usage` / account menu, not the left nav.
+- **Paired session hosts** work, but a node on Control Plane needs: stateful workload + own volume, `OPENCLAW_HOME` on a private SUBDIR (worker host refuses any group-writable ancestor without sticky bit — volume roots are root:fsGroup 2775, so set `chmod 1775` once from a root container), `node run --pair-if-needed` (plain `--pair` re-uses a spent single-use code and crash-loops after any restart), Codex plugin enabled on the node and `gateway.nodes.commands.allow: ["codex.exec-server.stdio.v1"]` on the gateway for OpenAI models (else greyed out in the picker). Join URLs need TLS (`qr --setup-code-only --url wss://…` works). README only links upstream; candidate 1.1 feature (`executionNode`).
+- `cron --announce` needs `--channel` when several channels are configured. `capability image describe` (CLI) ignores env `OPENAI_API_KEY`; the agent path works.
+- `security audit`: `gateway.auth_no_rate_limit` (consider seeding `gateway.auth.rateLimit` in 1.1), credentials dir 755, unpinned whatsapp npm spec.

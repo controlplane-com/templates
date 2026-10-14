@@ -2,12 +2,12 @@ apiVersion: v2
 name: grafana
 description: Grafana OSS dashboards and alerting over your own datasources, backed by PostgreSQL
 type: application
-version: 1.4.1
+version: 1.5.0
 appVersion: "13.1.1"
 
 annotations:
   created: "2026-07-31"
-  lastModified: "2026-10-01"
+  lastModified: "2026-10-14"
   createsGvc: false
 
 dependencies:

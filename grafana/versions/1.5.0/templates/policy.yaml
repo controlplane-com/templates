@@ -13,6 +13,7 @@ targetLinks:
   - //secret/{{ .Values.admin.passwordSecretName }}
   {{- end }}
   - //secret/{{ .Values.admin.secretKeySecretName }}
+  # Prerequisite database credentials secret the user creates — granted by name.
   - //secret/{{ include "grafana.postgres.secret.name" . }}
   {{- if .Values.datasources.definitions }}
   - //secret/{{ include "grafana.secretDatasources.name" . }}

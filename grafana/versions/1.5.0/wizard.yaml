@@ -1,0 +1,726 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Grafana
+
+# Grafana itself is stateless, but every database mode (postgres-highly-available, postgres) and the
+# optional Redis Sentinel tier are stateful with no location handling: each GVC location would run its
+# own copy with its own data.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.4.1
+    when: self.postgres.enabled
+    title: Single-instance PostgreSQL
+    after: database
+    steps:
+      - { id: credentials, title: Database credentials }
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the single-instance PostgreSQL. }
+      - { id: backup, title: Database backups }
+    exclude:
+      # Grafana connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      internalAccess.type:
+        description: >-
+          Grafana connects to its database like any other workload: keep Same GVC, or add the Grafana
+          workload under Allowed workloads.
+
+steps:
+  - id: grafana
+    title: Grafana
+    description: The Grafana image, its replicas and compute, and the admin login.
+    docs: "#grafana-instance"
+    sections:
+      - title: Server
+        fields:
+          - path: image
+            type: string
+            format: image
+            label: Grafana image
+            required: true
+          - path: replicas
+            type: integer
+            label: Replicas
+            min: 1
+            required: true
+            suggestions: [1, 2, 3]
+            description: Replicas share the PostgreSQL app database; the Grafana tier itself is stateless.
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+      - id: redis
+        title: Alerting coordination (Redis Sentinel)
+        toggle: redis.enabled
+        description: >-
+          Needed for 2 or more replicas: Redis Sentinel coordinates alert evaluation so each alert sends one
+          notification instead of one per replica.
+        docs: "#alerting-high-availability"
+        fields:
+          - path: redis.redis.replicas
+            type: integer
+            label: Redis nodes
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 5]
+          - path: redis.sentinel.replicas
+            type: integer
+            label: Sentinels
+            min: 1
+            required: true
+            suggestions: [1, 3, 5]
+          - path: redis.redis.image
+            type: string
+            format: image
+            label: Redis image
+            required: true
+            advanced: true
+          - path: redis.redis.resources.minCpu
+            type: quantity
+            quantity: cpu
+            label: Redis minimum CPU
+            required: true
+            advanced: true
+          - path: redis.redis.resources.cpu
+            type: quantity
+            quantity: cpu
+            label: Redis maximum CPU
+            required: true
+            advanced: true
+          - path: redis.redis.resources.minMemory
+            type: quantity
+            quantity: memory
+            label: Redis minimum memory
+            required: true
+            advanced: true
+          - path: redis.redis.resources.memory
+            type: quantity
+            quantity: memory
+            label: Redis maximum memory
+            required: true
+            advanced: true
+          - path: redis.sentinel.image
+            type: string
+            format: image
+            label: Sentinel image
+            required: true
+            advanced: true
+          - path: redis.sentinel.resources.minCpu
+            type: quantity
+            quantity: cpu
+            label: Sentinel minimum CPU
+            required: true
+            advanced: true
+          - path: redis.sentinel.resources.cpu
+            type: quantity
+            quantity: cpu
+            label: Sentinel maximum CPU
+            required: true
+            advanced: true
+          - path: redis.sentinel.resources.minMemory
+            type: quantity
+            quantity: memory
+            label: Sentinel minimum memory
+            required: true
+            advanced: true
+          - path: redis.sentinel.resources.memory
+            type: quantity
+            quantity: memory
+            label: Sentinel maximum memory
+            required: true
+            advanced: true
+        rules:
+          # Redis and Sentinel are stateful workloads: the platform rejects a max:min ratio above 4:1.
+          - rule: >-
+              cpuMillicores(self.redis.redis.resources.cpu) <= 4 * cpuMillicores(self.redis.redis.resources.minCpu) &&
+              memoryBytes(self.redis.redis.resources.memory) <= 4 * memoryBytes(self.redis.redis.resources.minMemory)
+            paths: [redis.redis.resources.minCpu, redis.redis.resources.minMemory]
+            message: The Redis maximum CPU and memory can each be at most 4 times their minimum on a stateful workload.
+          - rule: >-
+              cpuMillicores(self.redis.sentinel.resources.cpu) <= 4 * cpuMillicores(self.redis.sentinel.resources.minCpu) &&
+              memoryBytes(self.redis.sentinel.resources.memory) <= 4 * memoryBytes(self.redis.sentinel.resources.minMemory)
+            paths: [redis.sentinel.resources.minCpu, redis.sentinel.resources.minMemory]
+            message: The Sentinel maximum CPU and memory can each be at most 4 times their minimum on a stateful workload.
+          - rule: >-
+              !has(self.redis.redis.auth) ||
+              ((!has(self.redis.redis.auth.password) || !has(self.redis.redis.auth.password.enabled)) &&
+              (!has(self.redis.redis.auth.fromSecret) || !has(self.redis.redis.auth.fromSecret.enabled)))
+            mirrors: grafana.validate
+            paths: [redis.redis.replicas]
+            message: >-
+              Redis authentication is not supported in this version: remove redis.redis.auth from the values (the
+              same-GVC firewall is the boundary).
+          - rule: >-
+              !has(self.redis.sentinel.auth) ||
+              ((!has(self.redis.sentinel.auth.password) || !has(self.redis.sentinel.auth.password.enabled)) &&
+              (!has(self.redis.sentinel.auth.fromSecret) || !has(self.redis.sentinel.auth.fromSecret.enabled)))
+            mirrors: grafana.validate
+            paths: [redis.sentinel.replicas]
+            message: >-
+              Sentinel authentication is not supported in this version: remove redis.sentinel.auth from the
+              values (the same-GVC firewall is the boundary).
+      - title: Admin login
+        docs: "#admin-credentials"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The admin password and encryption key secrets must exist **before** you install. If one is missing,
+              the deployment waits and `cpln logs` shows nothing at all.
+          - path: admin.user
+            type: string
+            label: Admin user
+            required: true
+            description: Applies only when the admin account is first created.
+          - path: admin.applyPassword
+            type: boolean
+            label: Apply the admin password secret
+            description: >-
+              Turn off after your first login: the chart stops referencing the password secret, which you can then
+              delete.
+          - path: admin.passwordSecretName
+            type: ref
+            label: Admin password secret
+            required: true
+            when: self.admin.applyPassword
+            description: An opaque secret (encoding plain) holding only the first-boot admin password.
+            help: >-
+              Grafana reads it only when the admin account is first created; change the password in the Grafana UI
+              afterwards.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                secretType: opaque
+                encoding: plain
+                suggestName: "context.releaseName + '-grafana-admin-password'"
+          - path: admin.secretKeySecretName
+            type: ref
+            label: Encryption key secret
+            required: true
+            description: >-
+              An opaque secret (encoding plain) with the key that encrypts stored datasource credentials. Read on
+              every boot: keep it for the life of the install and back it up.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                secretType: opaque
+                encoding: plain
+                suggestName: "context.releaseName + '-grafana-secret-key'"
+                hint: "Generate the content with: openssl rand -hex 32"
+        rules:
+          - rule: "!self.admin.applyPassword || self.admin.passwordSecretName != ''"
+            mirrors: grafana.validate
+            paths: [admin.passwordSecretName]
+            message: Name the admin password secret, or turn off applying it once you have logged in.
+          - rule: self.admin.secretKeySecretName != ''
+            mirrors: grafana.validate
+            paths: [admin.secretKeySecretName]
+            message: Name the encryption key secret; the chart does not render without it.
+          - rule: oldSelf == null || self.admin.secretKeySecretName == oldSelf.admin.secretKeySecretName
+            severity: info
+            paths: [admin.secretKeySecretName]
+            message: >-
+              The new secret must hold the same encryption key as the installed one, or every datasource credential
+              stored in the database becomes unreadable.
+    rules:
+      - rule: self.replicas < 2 || self.redis.enabled
+        mirrors: grafana.validate
+        paths: [replicas]
+        message: >-
+          2 or more replicas need alerting coordination (Redis Sentinel); without it every replica sends its own
+          alert notifications. Turn it on, or use 1 replica.
+
+  - id: datasources
+    title: Datasources and email
+    description: Datasources provisioned as code, their credentials, and SMTP for alert emails.
+    sections:
+      - title: Datasources as code
+        docs: "#datasources-as-code"
+        fields:
+          - path: datasources.definitions
+            type: yaml
+            yamlType: list
+            label: Datasource definitions
+            description: >-
+              Grafana provisioning entries, passed through verbatim; provisioned datasources are read-only in the
+              UI. Write `$KEY` where a credential goes.
+            help: >-
+              Point them at your own datasources, such as a Prometheus or Thanos install in the same GVC
+              (`http://RELEASE-prometheus.GVC.cpln.local:9095`). Control Plane's built-in workload metrics already
+              have dashboards in the console.
+      - title: Datasource credentials
+        docs: "#datasource-credentials"
+        fields:
+          - path: datasources.credentialSecrets
+            type: list
+            label: Credential secrets
+            widget: table
+            uniqueBy: [name]
+            newItem: { name: "", keys: [] }
+            itemLabel: "item.name + ' (' + string(size(item.keys)) + ' keys)'"
+            description: >-
+              What Grafana authenticates to each datasource with. Each key becomes an environment variable that a
+              definition references as `$KEY`.
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: ref
+                  label: Secret
+                  required: true
+                  ref:
+                    kind: secret
+                    format: name
+                    filter: { secretType: [dictionary] }
+                    mustExist: error
+                    allowCreate: true
+                - path: keys
+                  type: list
+                  label: Keys
+                  required: true
+                  unique: true
+                  widget: tags
+                  item:
+                    type: string
+                    pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+                    patternMessage: Use letters, digits and underscores, and do not start with a digit.
+              rules:
+                - rule: item.name != '' && size(item.keys) > 0
+                  mirrors: grafana.validate
+                  paths: [keys]
+                  message: Each credential secret needs a name and at least one key.
+      - id: smtp
+        title: Alert emails (SMTP)
+        toggle: smtp.enabled
+        description: Lets Grafana send alert notifications and invites by email.
+        docs: "#smtp"
+        fields:
+          - path: smtp.host
+            type: string
+            label: SMTP server
+            required: true
+            example: true
+            placeholder: smtp.example.com:587
+            pattern: '^[^:\s]+:\d+$'
+            patternMessage: Enter the host and port, such as smtp.example.com:587.
+          - path: smtp.user
+            type: string
+            label: SMTP user
+            description: Leave empty for unauthenticated SMTP.
+          - path: smtp.passwordSecretName
+            type: ref
+            label: SMTP password secret
+            required: true
+            when: self.smtp.user != ''
+            description: An opaque secret (encoding plain) holding only the SMTP password.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create: { secretType: opaque, encoding: plain }
+          - path: smtp.fromAddress
+            type: string
+            format: email
+            label: Sender address
+            required: true
+            example: true
+          - path: smtp.fromName
+            type: string
+            label: Sender name
+        rules:
+          - rule: self.smtp.user == '' || self.smtp.passwordSecretName != ''
+            mirrors: grafana.validate
+            paths: [smtp.passwordSecretName]
+            message: Name the SMTP password secret, or clear the SMTP user for unauthenticated SMTP.
+
+  - id: access
+    title: Access
+    description: Who reaches Grafana, from the internet and from inside the GVC.
+    docs: "#access"
+    sections:
+      - title: Public access
+        fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Public HTTPS endpoint
+            description: The UI and API on the workload's `*.cpln.app` endpoint.
+      - title: Internal access
+        docs: /reference/workload/firewall
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: Firewall changes take 30 to 150 seconds to take effect.
+            options:
+              - { value: none, label: None, description: No workload can reach Grafana internally. }
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+            rules:
+              - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+                mirrors: grafana.validate
+                message: The internal access must be none, same-gvc, same-org or workload-list.
+          # workload.yaml writes inboundAllowWorkload only for workload-list.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type == 'workload-list'
+            widget: tags
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+            rules:
+              - rule: size(self.internalAccess.workloads) > 0
+                severity: warning
+                message: With "Specific workloads" and an empty list, no workload can connect.
+
+  - id: database
+    title: Database
+    description: The PostgreSQL that holds every dashboard, user and alert rule.
+    docs: "#app-database"
+    sections:
+      - id: postgres-ha
+        title: Highly available PostgreSQL
+        toggle: postgresHA.enabled
+        description: >-
+          The default: 3 Patroni PostgreSQL replicas, 3 etcd replicas and an HAProxy leader endpoint Grafana
+          connects through. Turn it off only to use the single-instance PostgreSQL below instead.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The credentials secret must exist **before** you install. If it is missing, the deployment waits and
+              `cpln logs` shows nothing at all.
+          - path: postgresHA.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`. PostgreSQL initializes from
+              it and Grafana connects with it.
+            help: >-
+              PostgreSQL reads these values only when its data directory is first initialized. To rotate the
+              password later, run `ALTER ROLE ... PASSWORD`, update the secret, and force a redeployment of the
+              database and Grafana workloads.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-grafana-db-credentials'"
+          - path: postgresHA.replicas
+            type: integer
+            label: PostgreSQL replicas
+            min: 1
+            required: true
+            suggestions: [1, 3, 5]
+          - path: postgresHA.volumeset.capacity
+            type: integer
+            label: Initial capacity per replica
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            help: Uninstalling the release deletes the volume sets, so the data does not survive a reinstall.
+            docs: "/reference/volumeset#capacity-and-billing"
+          - path: postgresHA.proxy.enabled
+            type: boolean
+            absent: true
+            default: true
+            readOnly: true
+            advanced: true
+            label: HAProxy leader endpoint
+            description: Grafana's database endpoint; it stays on.
+        rules:
+          - rule: self.postgresHA.proxy.enabled != false
+            mirrors: grafana.validate
+            paths: [postgresHA.proxy.enabled]
+            message: >-
+              postgresHA.proxy.enabled must stay true: the HAProxy leader endpoint is Grafana's database endpoint.
+          - rule: >-
+              oldSelf == null || !oldSelf.postgresHA.enabled ||
+              self.postgresHA.volumeset.capacity >= oldSelf.postgresHA.volumeset.capacity
+            paths: [postgresHA.volumeset.capacity]
+            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+          - rule: >-
+              oldSelf == null || !oldSelf.postgresHA.enabled ||
+              self.postgresHA.config.credentialsSecretName == oldSelf.postgresHA.config.credentialsSecretName ||
+              (context.fromVersion != null && semverCompare(context.fromVersion, '1.5.0') < 0)
+            severity: info
+            paths: [postgresHA.config.credentialsSecretName]
+            message: >-
+              PostgreSQL reads the credentials only when the data directory is first initialized; the new secret
+              must hold the same username, password and database.
+      - id: postgres-single
+        title: Single-instance PostgreSQL
+        toggle: postgres.enabled
+        description: >-
+          One PostgreSQL replica, for lighter installs, instead of the highly available one. Its credentials,
+          server, storage, network and backups follow in the next steps.
+        fields: []
+    rules:
+      - rule: self.postgresHA.enabled != self.postgres.enabled
+        mirrors: grafana.validate
+        paths: [postgresHA.enabled]
+        message: >-
+          Turn on exactly one database: the highly available PostgreSQL or the single-instance PostgreSQL.
+
+  - id: ha-backup
+    title: Database backups
+    description: Optional backups of the highly available PostgreSQL to object storage.
+    when: self.postgresHA.enabled
+    docs: "#backing-up"
+    sections:
+      - id: ha-backup
+        title: Database backups
+        toggle: postgresHA.backup.enabled
+        fields:
+          - path: postgresHA.backup.mode
+            type: enum
+            label: Backup mode
+            widget: cards
+            required: true
+            options:
+              - { value: logical, label: Logical, description: A scheduled pg_dumpall uploaded to the bucket. }
+              - { value: wal-g, label: WAL-G, description: Base backups and WAL archiving at an interval. }
+          - path: postgresHA.backup.provider
+            type: enum
+            label: Destination
+            widget: cards
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+              - { value: minio, label: MinIO or S3-compatible }
+          - path: postgresHA.backup.logical.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+            when: self.postgresHA.backup.mode == 'logical'
+          - path: postgresHA.backup.walg.intervalSeconds
+            type: integer
+            label: Backup interval
+            unit: seconds
+            min: 60
+            required: true
+            when: self.postgresHA.backup.mode == 'wal-g'
+            suggestions: [3600, 21600, 43200, 86400]
+          - path: postgresHA.backup.logical.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+            when: self.postgresHA.backup.mode == 'logical'
+          - path: postgresHA.backup.resources
+            type: resources
+            label: Backup resources
+            required: true
+            advanced: true
+      - title: AWS S3
+        when: self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
+        docs: "#backing-up"
+        fields:
+          - path: postgresHA.backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: postgresHA.backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: postgresHA.backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: postgresHA.backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+          - path: postgresHA.backup.aws.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+      - title: Google Cloud Storage
+        when: self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp'
+        docs: "#backing-up"
+        fields:
+          - path: postgresHA.backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: postgresHA.backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the Storage Admin role
+              on the bucket.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: postgresHA.backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+      - title: MinIO or S3-compatible
+        when: self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio'
+        docs: "#backing-up"
+        fields:
+          - path: postgresHA.backup.minio.endpoint
+            type: string
+            format: url
+            label: S3 endpoint
+            required: true
+            example: true
+            placeholder: http://my-minio-workload:9000
+            description: The URL including the port.
+          - path: postgresHA.backup.minio.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: postgresHA.backup.minio.credentialsSecretName
+            type: ref
+            label: MinIO credentials secret
+            required: true
+            description: A dictionary secret with the keys `accessKey` and `secretKey`.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [accessKey, secretKey]
+          - path: postgresHA.backup.minio.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+        rules:
+          - rule: "!has(self.postgresHA.backup.minio.accessKey) && !has(self.postgresHA.backup.minio.secretKey)"
+            paths: [postgresHA.backup.minio.credentialsSecretName]
+            message: >-
+              postgresHA.backup.minio.accessKey and secretKey were removed in 1.4.1. Put them in a dictionary
+              secret and remove them from the values.
+
+rules:
+  - rule: "!has(self.postgres.credentials)"
+    mirrors: grafana.validateRemovedKeys
+    paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+    message: >-
+      postgres.credentials was removed in 1.5.0: the database credentials are now a prerequisite dictionary secret
+      named by the credentials secret field. Remove postgres.credentials from the values.
+  - rule: "!has(self.postgresHA.postgres)"
+    paths: [postgresHA.config.credentialsSecretName]
+    message: >-
+      postgresHA.postgres was removed in 1.4.0: put the username, password and database in the credentials secret
+      and remove postgresHA.postgres from the values.
+  # Upgrading from 1.4.x, the chart-created secret is deleted by the upgrade itself, so the new prerequisite
+  # secret must have a different name (holding the same username, password and database).
+  - when: >-
+      oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.4.0') >= 0 &&
+      semverCompare(context.fromVersion, '1.5.0') < 0 && self.postgresHA.enabled && oldSelf.postgresHA.enabled
+    rule: self.postgresHA.config.credentialsSecretName != oldSelf.postgresHA.config.credentialsSecretName
+    paths: [postgresHA.config.credentialsSecretName]
+    message: >-
+      The installed version created the database secret itself, and this upgrade deletes it. Create a secret
+      under a NEW name holding the same username, password and database, and name it here.
+  - when: >-
+      oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') >= 0 &&
+      semverCompare(context.fromVersion, '1.5.0') < 0 && self.postgres.enabled && oldSelf.postgres.enabled
+    rule: self.postgres.config.credentialsSecretName != oldSelf.postgres.config.credentialsSecretName
+    paths: [postgres.config.credentialsSecretName]
+    message: >-
+      The installed version created the database secret itself, and this upgrade deletes it. Create a secret
+      under a NEW name holding the same username, password and database, and name it here.
+  # Rules over the imported values: their issues show on the imported fields' step (postgres:network).
+  - when: self.postgres.enabled
+    rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks Grafana, which connects to its database like any other workload.'
+  - when: self.postgres.enabled && self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-grafana') in self.postgres.internalAccess.workloads
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-grafana, or Grafana cannot reach its database.'"
+    message: Add the Grafana workload to the list, or Grafana cannot reach its database.
+
+yamlOnly:
+  - path: postgres.pgbouncer
+    reason: Grafana connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+
+migrations:
+  - fromVersions: "<1.5.0"
+    from: postgres.credentials
+    note: >-
+      The database credentials are now a prerequisite dictionary secret (username, password, database). Create it
+      under a NEW name with the values the database was initialized with, and choose it under Database (highly
+      available) or Database credentials (single instance).
+  - fromVersions: "<1.4.0"
+    from: postgresHA.postgres
+    note: >-
+      Put the username, password and database the HA database was initialized with into a dictionary secret
+      (keys username, password, database), and choose it under Database.
+  - fromVersions: "<1.4.1"
+    from: postgresHA.backup.minio.accessKey
+    note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey; choose it under Database backups.
+  - fromVersions: "<1.4.1"
+    from: postgresHA.backup.minio.secretKey
+    note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey; choose it under Database backups.
+  - fromVersions: "<1.3.0"
+    from: postgres.config.username
+    note: Put it in the database credentials secret (key username).
+  - fromVersions: "<1.3.0"
+    from: postgres.config.password
+    note: Put it in the database credentials secret (key password). PostgreSQL keeps the password it was initialized with.
+  - fromVersions: "<1.3.0"
+    from: postgres.config.database
+    note: Put it in the database credentials secret (key database).
+  - fromVersions: "<1.3.0"
+    from: postgres.backup.minio.accessKey
+    note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey; choose it under Database backups.
+  - fromVersions: "<1.3.0"
+    from: postgres.backup.minio.secretKey
+    note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey; choose it under Database backups.

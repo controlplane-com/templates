@@ -1,4 +1,5 @@
 {{- include "grafana.validate" . }}
+{{- include "grafana.validateRemovedKeys" . }}
 kind: workload
 name: {{ include "grafana.name" . }}
 description: Grafana OSS — dashboards and alerting over your own datasources, HTTP :3000
@@ -41,9 +42,8 @@ spec:
           value: postgres
         - name: GF_DATABASE_HOST
           value: '{{ include "grafana.postgres.host" . }}:5432'
-        # Both stores' credential secrets now carry a `database` key, so this is
-        # read the same way in either mode (the single-instance secret is created
-        # by this chart, the HA one by postgres-highly-available).
+        # All three come from the user's prerequisite credentials secret of the
+        # active mode, the same secret the database subchart initializes from.
         - name: GF_DATABASE_NAME
           value: 'cpln://secret/{{ include "grafana.postgres.secret.name" . }}.database'
         - name: GF_DATABASE_USER

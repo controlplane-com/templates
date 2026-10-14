@@ -47,23 +47,23 @@ derived name (metabase/tyk pattern).
 {{- end }}
 
 {{/*
-Name of the bundled app database's credential secret in the SINGLE-INSTANCE path.
-This chart CREATES that secret (secret-db.yaml) and the postgres subchart only
-receives its NAME — since postgres 3.4.0 the subchart creates no secret of its
-own. A subchart value cannot be templated by its parent, so the name is a plain
-value that both sides read, which is why it is not derived from the release name.
+Name of the bundled app database's credential secret in the SINGLE-INSTANCE path —
+a PREREQUISITE the user creates (keys: username, password, database). The postgres
+subchart requires it by name, so Grafana requires the same secret rather than
+building one from plaintext values; both sides read it. A subchart value cannot be
+templated by its parent, so the name is a plain value. 1.4.x and earlier created
+it from postgres.credentials.*.
 */}}
 {{- define "grafana.secret.db.name" -}}
 {{- .Values.postgres.config.credentialsSecretName }}
 {{- end }}
 
 {{/*
-Credentials secret of the ACTIVE app database.
-Created by this chart (secret-db.yaml) in BOTH modes from postgres.credentials.*.
-HA path: named by postgresHA.config.credentialsSecretName (postgres-highly-available
-2.5.0 creates no credentials secret of its own).
-Single-instance path: named by postgres.config.credentialsSecretName.
-Both hold the same three keys — username, password, database.
+Credentials secret of the ACTIVE app database — a user-created prerequisite in
+BOTH modes (1.5.0+). HA path: named by postgresHA.config.credentialsSecretName;
+single-instance path: named by postgres.config.credentialsSecretName. Both hold
+the same three keys — username, password, database — which the subchart and
+Grafana's GF_DATABASE_* env vars read.
 */}}
 {{- define "grafana.postgres.secret.name" -}}
 {{- if .Values.postgresHA.enabled -}}
@@ -131,6 +131,18 @@ master name `mymaster` (litellm precedent).
 {{- end -}}
 {{- if and .Values.smtp.enabled .Values.smtp.user (not .Values.smtp.passwordSecretName) -}}
 {{- fail "grafana: smtp.passwordSecretName is required when smtp.user is set — the name of a pre-created opaque secret (encoding: plain) holding the SMTP password" -}}
+{{- end -}}
+{{- end }}
+
+
+{{/*
+Keys removed in 1.5.0. An upgrader carrying a 1.4.x values file forward is told
+exactly what to do instead of the value silently being ignored. There are
+deliberately NO compatibility fallbacks — the version bump IS the migration path.
+*/}}
+{{- define "grafana.validateRemovedKeys" -}}
+{{- if hasKey .Values.postgres "credentials" -}}
+{{- fail "grafana: postgres.credentials was removed in 1.5.0. The database credentials are now a prerequisite dictionary secret (keys: username, password, database) named by postgresHA.config.credentialsSecretName (HA mode) or postgres.config.credentialsSecretName (single-instance mode). Upgrading from 1.4.x: create it under a NEW name holding your EXISTING values, set the credentialsSecretName of the mode you use to that name, and remove postgres.credentials — see \"Upgrading from 1.4.1\" in the README." -}}
 {{- end -}}
 {{- end }}
 

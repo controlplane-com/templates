@@ -27,7 +27,7 @@ cpln secret create-dictionary --name my-fusionauth-db-credentials \
 Set `postgres.config.credentialsSecretName` to that name. Secret names are org-wide, so give each fusionauth release its own secret.
 
 - **`database` must be URL-safe** (letters, digits, `_`): FusionAuth's JDBC URL is assembled from it at container start. The snippet's hex password is URL-safe too.
-- **Postgres reads the secret only when its data directory is first initialized.** To change the password later, run `ALTER ROLE` first, then update the secret and force a redeployment of both workloads (`cpln workload force-redeployment`) — a running workload keeps the values it started with.
+- **Postgres reads the secret only when its data directory is first initialized.** To change the password later, run `ALTER ROLE` first, then edit the secret (`cpln secret edit my-fusionauth-db-credentials`), then force a redeployment of the Postgres workload, wait for it to be ready, and redeploy FusionAuth (`cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME`, then `RELEASE_NAME-fusionauth`). A running workload keeps the values it started with, and FusionAuth reports unhealthy for a few minutes if it restarts before Postgres does.
 - **If the secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the containers never start. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-fusionauth --gvc GVC_NAME -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own after several minutes, or skip the wait with `cpln workload force-redeployment`.
 - **(Only for database backups)** an AWS S3 or Google Cloud Storage bucket and a Control Plane cloud account — see [Backing Up Postgres](#backing-up-postgres).
 
@@ -177,7 +177,7 @@ cpln secret create-dictionary --name RELEASE_NAME-fusionauth-db \
   --entry username=username --entry password=YOUR_CURRENT_PASSWORD --entry database=test
 ```
 
-(`username` and `test` were the 2.4.x defaults; use your own values if you overrode them.) Your current values are in `postgres.credentials` of the installed release, and also in the old secret (`cpln secret reveal my-fusionauth-db-credentials -o yaml`) until the upgrade deletes it. **If you installed 2.4.0 and never overrode the password, it is literally `password`** — put that in the new secret, and rotate it afterwards (`ALTER ROLE`, update the secret, force a redeployment).
+(`username` and `test` were the 2.4.x defaults; use your own values if you overrode them.) Your current values are in `postgres.credentials` of the installed release, and also in the old secret (`cpln secret reveal my-fusionauth-db-credentials -o yaml`) until the upgrade deletes it. **If you installed 2.4.0 and never overrode the password, it is literally `password`** — put that in the new secret, and rotate it afterwards as described under [Prerequisites](#prerequisites).
 
 Then upgrade with `postgres.config.credentialsSecretName` set to the new name and `postgres.credentials` removed.
 

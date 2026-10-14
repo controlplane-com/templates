@@ -17,7 +17,7 @@ spec:
         {{- /*
           Every DB credential comes from the prerequisite secret. POSTGRES_DB_NAME exists
           only to feed DATABASE_URL: the platform expands $(VAR) in an env value at
-          container start, so it must be declared BEFORE the URL that references it.
+          container start (measured; the API stores env alphabetically, so order is irrelevant).
         */}}
         - name: POSTGRES_DB_NAME
           value: 'cpln://secret/{{ include "fusionauth.secretPostgres.name" . }}.database'

@@ -41,7 +41,7 @@ resources: # per replica
 adminTools:
   image: temporalio/admin-tools:1.32.1 # schema migrations + `temporal` CLI sidecar; same tag as image
 
-historyShards: 512 # PERMANENT after first install; can never be changed for this cluster
+historyShards: 512 # fixed at first install; a later change is ignored (the cluster keeps its original count)
 namespaceRetention: 72h # retention of the `default` namespace, applied when it is first created
 ```
 
@@ -65,7 +65,8 @@ There is no public-access option. Workers and clients run as workloads in your o
 ```yaml
 internalAccess: # firewall scope for the server (gRPC :7233, HTTP API :7243, cluster ports) and the UI (:8080)
   type: same-gvc # none, same-gvc, same-org, workload-list
-  workloads: [] # used with workload-list, e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME
+  workloads: [] # used with workload-list, e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME;
+                # the server's own replicas and the Web UI are always allowed
 ```
 
 ### PostgreSQL
@@ -123,9 +124,10 @@ postgres: # dev/lightweight: single-instance PostgreSQL
   | 4 | 16 | 80 |
   | 5 | 12 | 72 |
 
-- **Losing a replica:** the remaining replicas take over its share of workflows within about a minute. Workflows on the moved shards pause briefly and timers fire late by that gap; nothing is lost. The lost replica restarts on its own.
-- **Rolling upgrades and restarts with more than one replica are noisy.** For a period after each roll, the worker service on new replicas exits and restarts while workflows rebalance (upstream Temporal treats a slow internal start-up as fatal), and clients see a small share of retried calls. In earlier measurements at 3 replicas this lasted 60 to 90 minutes with about 5% of calls retried. Workflows are unaffected. Plan upgrades outside peak hours.
-- **Changing the count** is a plain `helm upgrade` with the new `replicas`. It is a rolling restart of every server replica, not just an added or removed one: the per-replica connection pools are sized from `replicas`, so every replica is replaced with the new sizes, and with more than one replica that brings the restart period described above. Members join or drain and the shards rebalance.
+- **Losing a replica:** the other members notice within about 20 seconds and take over its share of workflows; the lost replica leaves service within about a minute and is replaced in about 4 to 5 minutes. Timers fire on time and nothing is lost; clients may see a few timed-out calls in the first minute.
+- **Rolling upgrades and restarts with more than one replica take a while.** Replicas are replaced one at a time, about 8 to 10 minutes per roll at 3 replicas. A newly started replica's worker service may exit and restart a few times in its first minutes (upstream Temporal treats a slow internal start-up as fatal); in testing clients saw no errors and no workflow failed.
+- **Changing the count** is a plain `helm upgrade` with the new `replicas`. It is a rolling restart of every server replica, not just an added or removed one: the per-replica connection pools are sized from `replicas`, so every replica is replaced with the new sizes. Members join or drain and the shards rebalance.
+- **Changing `internalAccess` also restarts every server replica**, and the new firewall is fully in force only once the last replica has restarted.
 - **Change `replicas` under light load.** While replicas with the old and the new pool sizes run side by side, the total can briefly exceed the database's 100 connections (going from 2 to 4 replicas reaches about 120).
 
 ## Connecting
@@ -148,12 +150,15 @@ postgres: # dev/lightweight: single-instance PostgreSQL
 
 Temporal supports upgrading **one minor version at a time**, with about 10 minutes on each. A 1.x release runs Temporal 1.29.7, so it takes three upgrades. Do them at `replicas: 1`, and raise `replicas` only after the last one, so each step replaces a single replica.
 
-1. **Back up first.** A migrated schema cannot be rolled back. Enable `postgresHA.backup` (or `postgres.backup`) and confirm a backup reached the bucket, or snapshot the database volumes:
+1. **Back up first.** A migrated schema cannot be rolled back. If backups are not on yet, turn on `postgresHA.backup` (HA) or `postgres.backup` (single-instance) for your current release (see [Backup storage setup](#backup-storage-setup)). With logical backups, take one now and check that it reports success:
 
    ```bash
-   cpln volumeset snapshot create RELEASE_NAME-postgres-ha-vs --snapshot-name pre-temporal-2 --gvc GVC_NAME   # HA mode
-   cpln volumeset snapshot create RELEASE_NAME-pg-vs --snapshot-name pre-temporal-2 --gvc GVC_NAME          # single mode
+   cpln workload cron start RELEASE_NAME-postgres-ha-backup --gvc GVC_NAME   # HA mode
+   cpln workload cron start RELEASE_NAME-postgres-backup --gvc GVC_NAME      # single mode
+   cpln workload cron get RELEASE_NAME-postgres-ha-backup --gvc GVC_NAME     # the run must show Successful
    ```
+
+   With WAL-G backups, wait for a base backup (`Backup complete` in the leader's `wal-g-backup` container logs). Restoring follows the bundled database template's procedure: [postgres-highly-available](https://docs.controlplane.com/template-catalog/templates/postgres-highly-available#restoring-a-backup) or [postgres](https://docs.controlplane.com/template-catalog/templates/postgres#restoring-a-backup); it has not been tested as part of this template. Volume set snapshots are **not** a supported recovery path for the HA database: restoring them onto a running Patroni cluster does not bring the database back.
 
 2. **Upgrade to 2.0.0 on Temporal 1.30** (with your existing values file):
 
@@ -163,6 +168,8 @@ Temporal supports upgrading **one minor version at a time**, with about 10 minut
    ```
 
    If your values file sets `image: temporalio/auto-setup:…`, delete that line now: the last step uses the chart default, and the chart refuses an auto-setup image.
+
+   On the HA database, this first upgrade also updates the bundled PostgreSQL cluster, which restarts every member and fails the leader over: expect about 2.5 minutes in which Temporal cannot reach its database, after the schema step has finished. Workflows resume afterwards; plan this step in a maintenance window. The later steps, and the single-instance database, have no such outage.
 3. **Wait** until the server is ready, then about 10 more minutes.
 4. **Upgrade to 1.31:** the same command with `1.31.4` in both `--set`s.
 5. **Upgrade to 1.32:** the same command without the two `--set`s (the chart defaults are 1.32.1).
@@ -220,7 +227,7 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
 
 - **Change the database password (`postgres.credentials.password`) before installing.** It is set once, when the database volume is first initialised; changing it later only rewrites the secret, and the server can no longer connect.
 - **Give each Temporal release its own credentials secret name** (`postgresHA.config.credentialsSecretName` or `postgres.config.credentialsSecretName`). Secret names are org-wide, so a second release on the default name is refused at install.
-- **`historyShards` is permanent**: it is fixed at the cluster's first boot and the server refuses a different value later. 512 suits most deployments.
+- **`historyShards` is permanent**: it is fixed at the cluster's first boot, and a later change is ignored (the server keeps the original count and only logs the mismatch). 512 suits most deployments.
 - **Never expose the Web UI publicly**: it has no built-in authentication.
 - **A replica that stays not ready:** read its `admin` container's logs. "another replica is migrating the schema" is normal during an upgrade with several replicas; `CPLN_TEMPORAL_SKIP_GUARD` means the image skips a minor version.
 - **Keep the GVC to one location.** Each location would run its own servers against its own database.

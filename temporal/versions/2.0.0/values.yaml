@@ -16,7 +16,7 @@ adminTools:
   image: temporalio/admin-tools:1.32.1 # schema migrations + `temporal` CLI sidecar; same tag as image
 
 # ─── Cluster Settings ─────────────────────────────────────────────────────────
-historyShards: 512 # PERMANENT after first install — cannot ever be changed for this cluster
+historyShards: 512 # fixed at first install; a later change is ignored (the cluster keeps its original count)
 namespaceRetention: 72h # retention of the `default` namespace, applied when it is first created
 
 # ─── Web UI ───────────────────────────────────────────────────────────────────
@@ -34,7 +34,7 @@ ui:
 # ─── Access ───────────────────────────────────────────────────────────────────
 internalAccess: # internal firewall scope for the server (gRPC :7233, HTTP API :7243, cluster ports) and the UI (:8080)
   type: same-gvc # options: none, same-gvc, same-org, workload-list
-  workloads: [] # used with workload-list
+  workloads: [] # used with workload-list; the server and UI workloads are always added
   # workloads:
   #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
 

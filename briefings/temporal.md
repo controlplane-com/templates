@@ -30,10 +30,10 @@
 |---|---|---|
 | `image` / `adminTools.image` | `temporalio/server:1.32.1` / `temporalio/admin-tools:1.32.1` | Same tag, minor 30-32 only (render-enforced); auto-setup refused at render |
 | `replicas` | 1 | 1-5; `rolloutOptions` (surge 1, unavailable 0, minReady 120, grace 90) rendered only when >1 |
-| `historyShards` | 512 | Permanent |
+| `historyShards` | 512 | Permanent: a later change is IGNORED, not refused (server logs `Supplied configuration key/value mismatches persisted cluster metadata`; the workload env then shows the ignored value) |
 | `namespaceRetention` | 72h | Applied only when `default` is created |
 | `ui.enabled` | true | |
-| `internalAccess.type` | same-gvc | Server and UI; workload-list must include `{release}-temporal-ui` or the UI cannot reach the server |
+| `internalAccess.type` | same-gvc | Server and UI. With workload-list the chart always prepends `//gvc/{gvc}/workload/{release}-temporal` (and `…-temporal-ui` when the UI is on) to the server's list: ringpop and internal RPC between replicas, and UI→server gRPC, go through that same firewall. Without it N≥2 split into single-member clusters (`ShardOwnershipLost`) and the UI was cut off (test round 1, T11). A change rolls every replica; enforcement follows the roll (~8 min at N=3) |
 | `postgresHA.backup.resources.memory` | 512Mi | Was 128Mi, which OOMKills wal-g |
 | `postgres.credentials.*` | temporal / change-me-temporal-db-password / temporal | Feeds both modes; `database` must be `temporal` (both modes, render-enforced) |
 
@@ -45,9 +45,11 @@
 - **"Not ready" → read the `admin` container.** "another replica is migrating the schema" is normal while one replica holds the lease. A holder that dies mid-migration leaves its lease to expire (3 min) and a resume marker; the next replica finishes the same-target migration instead of tripping the skip guard (a fresh install half-migrated to, e.g., visibility 1.7 is otherwise indistinguishable from an ancient DB — found and fixed at build).
 - **The server waits at most 560 s for the schema gate**, inside its ~615 s readiness-derived startup window, so its FATAL always prints.
 - **`tdbg membership list-gossip`** (from the admin container, `--address 127.0.0.1:7233`) shows ring members; there is no `list-members`.
-- **Multi-replica rolling restarts are noisy by upstream design:** the worker service treats a slow scanner start as fatal during rebalancing (still in 1.32.1). July measured 60-90 min of crash-retry and ~5% bursty client errors at N=3 on 1.29; re-measure on 1.32.1 (test row T22) and update the README.
+- **Multi-replica rolls (1.32.1, measured):** ~8–9.5 min per roll at N=3 (surge 1, minReady 120), 0% client errors, 0 failed workflows, 0–3 worker-service restarts (`error starting scanner`) per roll, always on a freshly started replica within ~3.5 min. July's 60–90 min / ~5% on 1.29 + auto-setup no longer applies. **Root cause of the remaining restarts:** the worker service dials frontends by member pod IP on 7233, and the mesh resets pod-IP calls on that `grpc` port (`The server requires TLS` / Envoy `connection termination`) while the `tcp` cluster ports work. Re-declaring 7233 as `tcp` fixes the peer dial but breaks SDK long-polls, so it is not a fix. Follow-up spike: `USE_INTERNAL_FRONTEND=true` (internal frontend on 7236 / membership 6936, declared `tcp`), leaving client-facing 7233 as `grpc`.
+- **Replica loss (measured, SIGSTOP at N=3):** membership drops in ≤19 s, the replica leaves service at ~54 s, liveness replaces it at ~4 min and it rejoins at ~4.5 min; 0.7% client timeouts in the first ~40 s; timers ≤0.21 s late.
+- **First HA hop = ~148 s database outage.** 1.x → 2.0.0 also moves pg-ha 2.5.0 → 2.7.0, which rolls all Patroni members and fails the leader over (measured ha-0 → ha-2, timeline 1 → 2) AFTER the schema step finished: `no usable database connection found` for 148 s, plus a few `read-only transaction` errors. No data lost. Later hops and the single-Postgres path have no outage.
 - **Workers need the full FQDN.** Python workers need the `__main__` guard.
-- **No rollback after a hop migrates the schema.** Back up first.
+- **No rollback after a hop migrates the schema.** Back up first through `postgresHA.backup` / `postgres.backup` (logical → S3 and wal-g → GCS verified). **Volume set snapshots are not a recovery path for HA:** a pre-upgrade `volumeset snapshot create` makes one snapshot per volume, restore is per volume, and restoring all three onto the running Patroni cluster left members on different timelines with the leader still serving post-upgrade data (test round 1, m4). An uninstall while a snapshot restore is `Restoring` can leave the release half-deleted; a second uninstall finished it.
 - 1.32's visibility filters are stricter (type-mismatched or empty `Text` filters error). Upstream, not the template.
 - Snapshots never run on the bundled DB (no schedule, work item 5219). Use `backup.*`.
 - **pg-ha's local `max_connections: 100` is dead config** (Patroni takes it from the DCS only); flagged to the pg-ha owner. Raising the DB limit for throughput is the documented follow-up (D6 B), not built.

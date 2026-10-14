@@ -92,12 +92,11 @@ steps:
               ', visibility pool ' + string((84 / (self.replicas + 1)) / 4 / 3 < 1 ? 1 : (84 / (self.replicas + 1)) / 4 / 3) +
               ', for each of its four services), sized so every replica plus one rolling-update replica fits in the database\'s 100 connections.'
           - type: note
-            severity: warning
             when: self.replicas > 1
             text: >-
-              With more than one replica, every rolling upgrade or restart is followed by a period in which the
-              worker services on new replicas restart while workflows rebalance, and clients see some retried
-              calls. Workflows are not affected. Plan upgrades outside peak hours.
+              With more than one replica, upgrades and restarts replace one replica at a time, about 8 to 10
+              minutes per roll at 3 replicas. A new replica's worker service may restart a few times in its
+              first minutes; workflows and clients are not affected.
           - path: resources
             type: resources
             label: Server resources
@@ -155,10 +154,9 @@ steps:
         severity: info
         paths: [replicas]
         message: >-
-          Changing the replica count restarts every server replica, because each replica's database pools
-          are sized from it; with more than one replica that brings a period of worker restarts and retried
-          client calls. Shards then rebalance. Make the change under light load: old and new replicas
-          running side by side can briefly exceed the database's connection limit.
+          Changing the replica count restarts every server replica, one at a time, because each replica's
+          database pools are sized from it. Shards then rebalance. Make the change under light load: old and
+          new replicas running side by side can briefly exceed the database's connection limit.
       - when: >-
           oldSelf != null && self.image.matches(':1[.](30|31|32)[.][0-9]+([.][0-9]+)?$') &&
           oldSelf.image.matches(':1[.](29|30|31|32)[.][0-9]+([.][0-9]+)?$')
@@ -212,8 +210,9 @@ steps:
         widget: cards
         required: true
         description: >-
-          Applies to the gRPC frontend (7233), the HTTP API (7243) and the Web UI. Firewall changes take up to
-          a few minutes to take effect.
+          Applies to the gRPC frontend (7233), the HTTP API (7243) and the Web UI. With Specific workloads, the
+          server's own replicas and the Web UI are always allowed. A change restarts every server replica and
+          takes effect as the restart completes.
         options:
           - { value: none, label: None, description: No workload can connect. }
           - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
@@ -227,6 +226,7 @@ steps:
         type: list
         label: Allowed workloads
         when: self.internalAccess.type == 'workload-list'
+        description: Your workers and clients. The server and Web UI workloads are added for you.
         widget: tags
         item:
           type: ref
@@ -241,12 +241,13 @@ steps:
         severity: warning
         paths: [internalAccess.type]
         message: '"None" also blocks the Web UI, which reaches the server like any other workload.'
-      - when: self.ui.enabled && self.internalAccess.type == 'workload-list' && context.gvc != null
-        rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-temporal-ui') in self.internalAccess.workloads
-        severity: warning
-        paths: [internalAccess.workloads]
-        messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-temporal-ui, or the Web UI cannot reach the server.'"
-        message: Add the Web UI workload to the list, or the Web UI cannot reach the server.
+      - when: oldSelf != null && self.internalAccess.type != oldSelf.internalAccess.type
+        rule: "false"
+        severity: info
+        paths: [internalAccess.type]
+        message: >-
+          Changing who can connect restarts every server replica, and the new firewall is fully in force only
+          once the last replica has restarted (several minutes with more than one replica).
 
   - id: database
     title: Database

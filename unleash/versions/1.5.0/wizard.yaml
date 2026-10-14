@@ -173,14 +173,43 @@ steps:
     docs: "#database"
     sections:
       - fields:
+          - id: dbMode
+            virtual: true
+            type: enum
+            label: Database
+            widget: cards
+            required: true
+            init: "self.postgres.enabled && !self.postgresHA.enabled ? 'single' : 'ha'"
+            options:
+              - value: ha
+                label: Highly available PostgreSQL
+                description: Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint.
+                set: { postgresHA.enabled: true, postgres.enabled: false }
+              - value: single
+                label: Single-instance PostgreSQL
+                description: One PostgreSQL replica; lighter, without failover.
+                set: { postgresHA.enabled: false, postgres.enabled: true }
+          # Declared so the postgres import's condition is a field; the chooser above writes it.
+          - path: postgres.enabled
+            type: boolean
+            label: Single-instance PostgreSQL on
+            readOnly: true
+            advanced: true
+            description: Set by the database choice above.
+          - path: postgresHA.enabled
+            type: boolean
+            label: Highly available PostgreSQL on
+            readOnly: true
+            advanced: true
+            description: Set by the database choice above.
           - type: note
             severity: warning
             text: >-
-              Turn on exactly one of the two databases below. Its credentials secret must exist **before** you
-              install; if it is missing, the deployment waits and `cpln logs` shows nothing at all.
+              The database credentials secret must exist **before** you install; if it is missing, the
+              deployment waits and `cpln logs` shows nothing at all.
       - id: ha
         title: Highly available PostgreSQL
-        toggle: postgresHA.enabled
+        when: self.postgresHA.enabled
         description: >-
           3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that Unleash connects through.
           Recommended for production.
@@ -227,7 +256,7 @@ steps:
             message: A volume set cannot shrink. Keep the capacity at or above the installed size.
       - id: single
         title: Single-instance PostgreSQL
-        toggle: postgres.enabled
+        when: self.postgres.enabled
         description: >-
           One PostgreSQL replica, for development and light use. Its server, storage, network and backups
           follow in the next steps.

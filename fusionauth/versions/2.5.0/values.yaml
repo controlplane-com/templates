@@ -18,22 +18,12 @@ firewall:
 # Database configuration
 postgres:
   image: postgres:18
-  # Credentials for the bundled database — internal plumbing no human types elsewhere.
-  # FusionAuth CREATES the dictionary secret named by config.credentialsSecretName
-  # below out of these three values, so there is nothing for you to create before
-  # installing.
-  credentials:
-    # username and database are UNCHANGED from 2.4.0 on purpose: an existing
-    # install's data directory was initialized with them, so a new default would
-    # break the upgrade. Only the password placeholder changed — see the README.
-    username: username
-    password: change-me-fusionauth-db # used EXACTLY as given — change it before installing
-    database: test
   config:
-    # Name of the dictionary secret this chart creates and the bundled postgres reads.
-    # Secret names are org-wide: give each fusionauth release its own name. A second
-    # release left on this name is REFUSED at install (it is owned by the first
-    # release) — nothing is shared, overwritten or deleted.
+    # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. If it does
+    # not exist the deployment WEDGES silently and looks like a platform fault.
+    # A `dictionary` secret holding exactly three keys: username, password, database.
+    # Postgres reads it once, when its data directory is first initialized, and
+    # FusionAuth connects with the same keys. See README Prerequisites for the command.
     credentialsSecretName: my-fusionauth-db-credentials
   resources:
     minCpu: 200m

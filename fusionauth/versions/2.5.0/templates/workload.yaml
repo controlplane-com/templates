@@ -1,3 +1,4 @@
+{{- include "fusionauth.validateRemovedKeys" . }}
 kind: workload
 name: {{ include "fusionauth.name" . }}
 description: FusionAuth
@@ -13,12 +14,19 @@ spec:
       image: {{ .Values.image }}
       inheritEnv: false
       env:
+        {{- /*
+          Every DB credential comes from the prerequisite secret. POSTGRES_DB_NAME exists
+          only to feed DATABASE_URL: the platform expands $(VAR) in an env value at
+          container start, so it must be declared BEFORE the URL that references it.
+        */}}
+        - name: POSTGRES_DB_NAME
+          value: 'cpln://secret/{{ include "fusionauth.secretPostgres.name" . }}.database'
+        - name: DATABASE_USERNAME
+          value: 'cpln://secret/{{ include "fusionauth.secretPostgres.name" . }}.username'
         - name: DATABASE_PASSWORD
           value: 'cpln://secret/{{ include "fusionauth.secretPostgres.name" . }}.password'
         - name: DATABASE_URL
-          value: jdbc:postgresql://{{ include "fusionauth.postgres.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:5432/{{ .Values.postgres.credentials.database }}
-        - name: DATABASE_USERNAME
-          value: 'cpln://secret/{{ include "fusionauth.secretPostgres.name" . }}.username'
+          value: jdbc:postgresql://{{ include "fusionauth.postgres.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:5432/$(POSTGRES_DB_NAME)
         - name: fusionauth-app.runtime-mode
           value: 'production'
         - name: fusionauth-app.silent-mode

@@ -10,8 +10,9 @@ summary: >-
   FusionAuth identity and access management: an autoscaling FusionAuth server (one to three replicas)
   that keeps all state in a bundled single-instance PostgreSQL, with optional scheduled pg_dump backups
   to S3 or GCS. Admin setup happens in a first-run wizard; outbound traffic is closed until you open it
-  for external identity providers. Pick it for login, registration, OAuth2, OIDC and SAML for your own
-  apps without a database to provision.
+  for external identity providers. The database credentials are a dictionary secret you create before
+  installing. Pick it for login, registration, OAuth2, OIDC and SAML for your own apps without running a
+  database of your own.
 
 keywords:
   - ciam
@@ -63,6 +64,12 @@ related:
     note: Keycloak identity server with SSO, OIDC, SAML and user federation
 
 prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: postgres.config.credentialsSecretName
+    required: true
+    description: Credentials the bundled PostgreSQL initializes with and FusionAuth connects with. When it is missing the deployment waits with no logs.
   - kind: bucket
     valuesPath: [postgres.backup.aws.bucket, postgres.backup.gcp.bucket]
     required: false

@@ -6,16 +6,29 @@ FusionAuth is a modern, self-hosted identity and access management platform that
 
 - **FusionAuth workload** — the identity provider, publicly reachable by default so applications can redirect users to it.
 - **Bundled PostgreSQL** — deployed from the `postgres` template as a dependency, holding all FusionAuth state.
-- **Secrets** — the database credentials secret this chart creates from your values, and the startup script.
-- **Identity and policy** — `reveal` on exactly those secrets.
+- **Database credentials secret** (dictionary) — *not created by this template*; you create it before install. Postgres initializes from it and FusionAuth connects with it.
+- **Startup script secret** (opaque) — waits for PostgreSQL, then starts FusionAuth.
+- **Identity and policy** — `reveal` on exactly those two secrets.
 - **Backup cron** (optional) — deployed by the `postgres` template when `postgres.backup.enabled: true`.
 
 There is no volume set on the application tier — all state lives in PostgreSQL.
 
 ## Prerequisites
 
-None for a default install. The database is deployed and wired up for you; there is no secret to create beforehand.
+**One dictionary secret must exist BEFORE you install** — the database credentials. The bundled Postgres initializes with them and FusionAuth connects with them. They are a prerequisite secret rather than values so the password never sits in plaintext in the Helm release:
 
+```bash
+cpln secret create-dictionary --name my-fusionauth-db-credentials \
+  --entry username=fusionauth \
+  --entry password="$(openssl rand -hex 24)" \
+  --entry database=fusionauth
+```
+
+Set `postgres.config.credentialsSecretName` to that name. Secret names are org-wide, so give each fusionauth release its own secret.
+
+- **`database` must be URL-safe** (letters, digits, `_`): FusionAuth's JDBC URL is assembled from it at container start. The snippet's hex password is URL-safe too.
+- **Postgres reads the secret only when its data directory is first initialized.** To change the password later, run `ALTER ROLE` first, then update the secret and force a redeployment of both workloads (`cpln workload force-redeployment`) — a running workload keeps the values it started with.
+- **If the secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the containers never start. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-fusionauth --gvc GVC_NAME -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own after several minutes, or skip the wait with `cpln workload force-redeployment`.
 - **(Only for database backups)** an AWS S3 or Google Cloud Storage bucket and a Control Plane cloud account — see [Backing Up Postgres](#backing-up-postgres).
 
 ## Configuration
@@ -34,17 +47,13 @@ firewall:
     type: same-gvc # options: same-gvc, same-org, workload-list
 ```
 
-The `postgres` block configures the bundled database — its credentials, the name of the secret this chart creates from them, resources, volume size and backups:
+The `postgres` block configures the bundled database — the credentials secret it reads, resources, volume size and backups:
 
 ```yaml
 postgres:
   image: postgres:18
-  credentials:                      # this chart builds the DB credentials secret from these
-    username: username
-    password: change-me-fusionauth-db # used EXACTLY as given — change it before installing
-    database: test
   config:
-    credentialsSecretName: my-fusionauth-db-credentials # org-wide: give each release its own name
+    credentialsSecretName: my-fusionauth-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)
   backup:
@@ -55,11 +64,9 @@ postgres:
 
 ## Getting Started
 
-1. **Automatic Database Setup**: A PostgreSQL database is automatically created and connected to FusionAuth. No manual database configuration required.
+1. **Automatic Database Setup**: A PostgreSQL database is automatically created and connected to FusionAuth.
 
-    - Set the credentials under `postgres.credentials` (`username`, `password`, `database`). They are used **exactly as given**, so change `change-me-fusionauth-db` before installing. They are internal plumbing — nothing outside this release connects to that database — which is why they stay values rather than becoming a prerequisite secret.
-    - This template builds a `dictionary` secret from those three values and hands the bundled Postgres its **name** — you create nothing yourself. The name comes from `postgres.config.credentialsSecretName` (default `my-fusionauth-db-credentials`).
-    - Secret names are org-wide, so **give each fusionauth release its own name**. A second release left on the default name is *refused at install* (`cannot be updated because it is being managed by a different release`) and creates nothing — nothing is shared, overwritten or deleted, and the first release is unaffected.
+    - The database credentials come from the secret you created under [Prerequisites](#prerequisites), named by `postgres.config.credentialsSecretName`.
 
 2. **Firewall Configuration**: By default, inbound traffic is open to all (`0.0.0.0/0`). If FusionAuth needs to communicate with external Identity Providers (e.g. Google OAuth), set `firewall.external.outboundAllowCIDR` to `0.0.0.0/0` or the specific CIDRs required by your IdP.
 
@@ -128,7 +135,7 @@ For the cron job to have access to a GCS bucket, ensure the following prerequisi
 
 ### Restoring Backup
 
-Run the following command with password from a client with access to the bucket and to the database (the internal hostname resolves only inside the GVC).
+Run the following command from a client with access to the bucket and to the database (the internal hostname resolves only inside the GVC). `USERNAME` and `PASSWORD` are the `username` and `password` keys of your database credentials secret (`cpln secret reveal my-fusionauth-db-credentials -o yaml`).
 S3
 ```SH
 export PGPASSWORD="PASSWORD"
@@ -159,41 +166,26 @@ gsutil cp "gs://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" - \
 unset PGPASSWORD
 ```
 
-## Upgrading from 2.4.0
+## Upgrading from 2.4.1 or 2.4.0
 
-**Only one thing changed: the default `postgres.credentials.password` is now `change-me-fusionauth-db` instead of `password`.**
+`postgres.credentials` was removed: the database credentials are now a prerequisite secret, the same one the `postgres` template requires on its own. Carrying the old key forward fails the render.
 
-That matters because the bundled database initialized its data directory with whatever password was in force at **first boot**, and changing the value afterwards does not change the database. So:
+2.4.x created the database secret itself, so **this upgrade deletes it**. Before upgrading, create a secret under a **new** name holding the values your database was initialized with — not new ones, or FusionAuth loses its database connection:
 
-- **If you already set your own password**, nothing changes — upgrade normally.
-- **If you never overrode it**, your database's password is literally `password`. Do **one** of these before upgrading, or FusionAuth will fail to authenticate:
+```bash
+cpln secret create-dictionary --name RELEASE_NAME-fusionauth-db \
+  --entry username=username --entry password=YOUR_CURRENT_PASSWORD --entry database=test
+```
 
-  1. **Keep it working as-is** — set `postgres.credentials.password: password` explicitly in your values. The upgrade is then a no-op.
-  2. **Rotate it properly** (recommended — `password` was a published default, so treat it as compromised). Change it inside Postgres first, then set the value to match:
+(`username` and `test` were the 2.4.x defaults; use your own values if you overrode them.) Your current values are in `postgres.credentials` of the installed release, and also in the old secret (`cpln secret reveal my-fusionauth-db-credentials -o yaml`) until the upgrade deletes it. **If you installed 2.4.0 and never overrode the password, it is literally `password`** — put that in the new secret, and rotate it afterwards (`ALTER ROLE`, update the secret, force a redeployment).
 
-     ```sql
-     ALTER ROLE username WITH PASSWORD 'YOUR-STRONG-PASSWORD';
-     ```
+Then upgrade with `postgres.config.credentialsSecretName` set to the new name and `postgres.credentials` removed.
 
-`postgres.credentials.username` and `postgres.credentials.database` are deliberately unchanged, for the same reason — they are baked into the initialized data directory, and `database` also forms the JDBC URL.
-
-These credentials stay plain values rather than becoming a prerequisite secret because they are genuinely internal plumbing: the chart creates the secret from them, the bundled Postgres is the only consumer, and no human ever types this password anywhere else.
+The new version of a workload may then wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates. The previous version keeps serving meanwhile, and it clears by itself.
 
 ## Upgrading from 2.3.x
 
-The bundled Postgres moved to the `postgres` 3.4.1 template, which no longer takes
-database credentials as values. FusionAuth absorbed that change rather than passing it
-on, so **there is no new prerequisite** — only a rename:
-
-| Removed key | Replacement |
-|---|---|
-| `postgres.config.username` | `postgres.credentials.username` |
-| `postgres.config.password` | `postgres.credentials.password` |
-| `postgres.config.database` | `postgres.credentials.database` |
-
-Carrying an old key forward fails the render with the **Postgres template's** message,
-which tells you to create a dictionary secret yourself. Ignore that advice here — this
-template creates it. Move the three keys and you are done.
+`postgres.config.username`, `.password` and `.database` were removed. Put the values your database was initialized with into the database credentials secret under [Prerequisites](#prerequisites) (keys `username`, `password`, `database`), set `postgres.config.credentialsSecretName` to its name, and remove the three keys.
 
 ## Connecting
 
@@ -201,13 +193,14 @@ template creates it. Move the three keys and you are done.
 |---|---|
 | Admin UI and API | the canonical endpoint, since inbound defaults to `0.0.0.0/0` — read `status.canonicalEndpoint` from `cpln workload get RELEASE_NAME-fusionauth --gvc GVC_NAME -o yaml` |
 | Internal (same GVC) | `RELEASE_NAME-fusionauth.GVC_NAME.cpln.local:9011` |
-| Credentials | created by you in the setup wizard on first visit |
+| Admin login | created by you in the setup wizard on first visit |
+| Database credentials | `username` / `password` / `database` from your `postgres.config.credentialsSecretName` secret |
 
 ## Important Notes
 
 - **Complete the setup wizard immediately after installing.** Inbound is open to `0.0.0.0/0` by default and FusionAuth has no administrator until the wizard is finished, so whoever reaches it first creates that account.
-- **The database credentials are used exactly as given.** Change `change-me-fusionauth-db` before installing; they are applied when the data directory is first initialized and cannot be changed by editing values afterwards.
-- **Give each release its own `postgres.config.credentialsSecretName`.** Secret names are organization-wide, so a second release left on the default is refused at install.
+- **Create the database credentials secret before installing.** A missing prerequisite secret leaves the workloads waiting with zero log lines — see Prerequisites for how to diagnose it.
+- **Rotating the database secret needs `ALTER ROLE` plus a forced redeployment** — Postgres keeps the password it was initialized with, and a running workload keeps the values it started with.
 - **First boot waits on PostgreSQL by design.** The startup script polls for up to five minutes; a FusionAuth container that looks stuck early in an install is usually just waiting for the database.
 
 ## Links

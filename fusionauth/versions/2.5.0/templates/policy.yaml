@@ -10,5 +10,6 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "fusionauth.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "fusionauth.secretPostgres.name" . }}
   - //secret/{{ include "fusionauth.secretStartup.name" . }}
+  # Prerequisite secret the user creates — granted by name, nothing broader.
+  - //secret/{{ include "fusionauth.secretPostgres.name" . }}

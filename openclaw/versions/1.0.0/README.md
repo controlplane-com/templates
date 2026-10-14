@@ -209,6 +209,7 @@ Use `cpln workload force-redeployment RELEASE-openclaw --gvc GVC` only as a last
 - **"You've reached your Codex subscription usage limit" with `model.provider: openai` most likely means your OpenAI API account is out of credit or quota.** The image runs `openai/*` models on its Codex runtime, which words billing errors that way; pinning the model to the `openclaw` runtime (`agents.defaults.models["openai/MODEL"].agentRuntime.id`) shows the provider's real error (e.g. `credit_balance_exhausted`).
 - **After changing `model.provider`, rebuild the memory index** with `… node openclaw.mjs memory status --index --agent main`; until then memory search returns nothing.
 - **The Control UI microphone only dictates until you choose a voice provider.** For spoken conversation (Talk), run `… node openclaw.mjs config set talk.realtime.provider openai`.
+- **To run sessions on another machine** (a laptop, a VM), pair it as a [session host](https://docs.openclaw.ai/gateway/cloud-sessions) using the public endpoint; with `model.provider: openai` it also needs the [Codex placement](https://docs.openclaw.ai/plugins/codex-harness/placement) steps, or it stays greyed out in the picker.
 - Access-knob changes take from about 30 seconds to 10 minutes to propagate.
 - **Uninstall deletes the volume and all state** — the WhatsApp link, MCP sign-ins, sessions and workspace — with no tested way to restore it into a new install. Copy out anything you need first.
 

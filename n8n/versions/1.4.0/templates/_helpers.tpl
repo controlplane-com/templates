@@ -54,21 +54,20 @@ derived name (tyk pattern).
 {{- end }}
 
 {{/*
-Name of the bundled database's credential secret in the SINGLE-INSTANCE path.
-This chart CREATES that secret (secret-db.yaml) and the postgres subchart only
-receives its NAME — since postgres 3.4.0 the subchart creates no secret of its
-own. A subchart value cannot be templated by its parent, so the name is a plain
-value that both sides read, which is why it is not derived from the release name.
+Name of the bundled database's credential secret in the SINGLE-INSTANCE path —
+a PREREQUISITE the user creates (keys: username, password, database). The
+postgres subchart requires it by name, so n8n requires the same secret rather
+than building one from plaintext values; both sides read it. 1.3.1 and earlier
+created it from postgres.credentials.*.
 */}}
 {{- define "n8n.secret.db.name" -}}
 {{- .Values.postgres.config.credentialsSecretName }}
 {{- end }}
 
 {{/*
-Credentials secret of the ACTIVE database.
-Created by this chart (secret-db.yaml) in BOTH modes from postgres.credentials.*.
+Credentials secret of the ACTIVE database — a user-created prerequisite in BOTH modes.
 HA path: named by postgresHA.config.credentialsSecretName (postgres-highly-available
-2.5.0 creates no credentials secret of its own).
+2.5.0 requires it by name).
 Single-instance path: named by postgres.config.credentialsSecretName.
 Both hold the same three keys — username, password, database.
 */}}
@@ -107,13 +106,16 @@ Both hold the same three keys — username, password, database.
 
 
 {{/*
-Keys removed in 1.1.0. An upgrader carrying a 1.0.x values file forward is told
+Keys removed in 1.1.0 and 1.4.0. An upgrader carrying an older values file forward is told
 exactly what to do instead of silently getting a default. There are deliberately
 NO compatibility fallbacks — the version bump IS the migration path.
 */}}
 {{- define "n8n.validateRemovedKeys" -}}
 {{- if dig "email" "" .Values.owner -}}
 {{- fail "n8n: owner.email was removed in 1.1.0. Put it in the prerequisite dictionary secret named by owner.secretName (key: email) — see the README." -}}
+{{- end -}}
+{{- if hasKey .Values.postgres "credentials" -}}
+{{- fail "n8n: postgres.credentials was removed in 1.4.0. The database credentials are now a prerequisite dictionary secret (keys: username, password, database) named by postgresHA.config.credentialsSecretName (HA mode) or postgres.config.credentialsSecretName (single-instance mode). Upgrading from 1.3.x: create it under a NEW name holding your EXISTING values, set the credentialsSecretName of the mode you use to that name, and remove postgres.credentials — see \"Upgrading from 1.3.1\" in the README." -}}
 {{- end -}}
 {{- if dig "password" "" .Values.owner -}}
 {{- fail "n8n: owner.password was removed in 1.1.0. Put a BCRYPT HASH of it in the prerequisite dictionary secret named by owner.secretName (key: passwordHash) — see the README. n8n re-applies the owner from those values on every start, so hash the password you are using today to keep the same login." -}}

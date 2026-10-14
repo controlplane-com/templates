@@ -33,9 +33,8 @@ spec:
           value: {{ include "n8n.postgres.host" . }}
         - name: DB_POSTGRESDB_PORT
           value: '5432'
-        # Both stores' credential secrets now carry a `database` key, so this is
-        # read the same way in either mode (the single-instance secret is created
-        # by this chart, the HA one by postgres-highly-available).
+        # All three come from the user's prerequisite dictionary secret — the same
+        # one the active postgres subchart initializes from — in either mode.
         - name: DB_POSTGRESDB_DATABASE
           value: 'cpln://secret/{{ include "n8n.postgres.secret.name" . }}.database'
         - name: DB_POSTGRESDB_USER

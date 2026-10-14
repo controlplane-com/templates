@@ -11,6 +11,6 @@ bindings:
 targetKind: secret
 targetLinks:
   - //secret/{{ include "gitea.secret.bootstrap.name" . }}
+  # Prerequisite secrets the user creates — granted by name, nothing broader.
   - //secret/{{ include "gitea.secretPostgres.name" . }}
-  # Prerequisite secret the user creates — granted by name, nothing broader.
   - //secret/{{ .Values.gitea.auth.secretName }}

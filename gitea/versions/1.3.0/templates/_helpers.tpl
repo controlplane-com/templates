@@ -15,11 +15,10 @@ Backing Postgres Workload Name (created by the postgres subchart)
 {{- end }}
 
 {{/*
-Name of the bundled database's credential secret.
-This chart CREATES that secret (secret-db.yaml) and the postgres subchart only
-receives its NAME — since postgres 3.4.0 the subchart creates no secret of its own.
-A subchart value cannot be templated by its parent, so the name is a plain value
-that both sides read, which is why it is not derived from the release name.
+Name of the bundled database's credential secret — a PREREQUISITE the user creates
+(keys: username, password, database). The postgres subchart requires it by name,
+so Gitea requires the same secret rather than building one from plaintext values;
+both sides read it. 1.2.0 and earlier created it from postgres.credentials.*.
 */}}
 {{- define "gitea.secretPostgres.name" -}}
 {{- .Values.postgres.config.credentialsSecretName }}
@@ -69,7 +68,7 @@ Validate configuration — internal access scope must be a supported enum value.
 {{- end }}
 
 {{/*
-Keys removed in 1.1.0. An upgrader carrying a 1.0.0 values file forward is told
+Keys removed in 1.1.0 and 1.3.0. An upgrader carrying an older values file forward is told
 exactly what to do instead of silently getting a default. There are deliberately
 NO compatibility fallbacks — the version bump IS the migration path.
 */}}
@@ -91,6 +90,9 @@ NO compatibility fallbacks — the version bump IS the migration path.
 {{- end -}}
 {{- if dig "security" "jwtSecret" "" .Values.gitea -}}
   {{- fail "gitea.security.jwtSecret was removed in 1.1.0. Put it in the prerequisite dictionary secret named by gitea.auth.secretName (key: jwtSecret) — see the README." -}}
+{{- end -}}
+{{- if hasKey .Values.postgres "credentials" -}}
+  {{- fail "postgres.credentials was removed in 1.3.0. The database credentials are now a prerequisite dictionary secret (keys: username, password, database) named by postgres.config.credentialsSecretName. Upgrading from 1.2.0: create it under a NEW name holding your EXISTING values, set postgres.config.credentialsSecretName to that name, and remove postgres.credentials — see \"Upgrading from 1.2.0\" in the README." -}}
 {{- end -}}
 {{- end }}
 

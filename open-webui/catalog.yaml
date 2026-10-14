@@ -85,7 +85,7 @@ prerequisites:
   - kind: other
     valuesPath: ollama.workloadName
     required: false
-    when: ollama.enabled (the default), to chat with local models
+    when: ollama.enabled, to chat with local models
     description: An Ollama workload in the same GVC, such as {release}-ollama from the ollama template. Without it the UI starts but lists no Ollama models.
   - kind: domain
     valuesPath: customDomain

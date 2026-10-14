@@ -39,8 +39,8 @@ admin:
 # ─── Model backends ───────────────────────────────────────────────────────────
 # Point at an existing `ollama` template deployment in this same GVC.
 ollama:
-  enabled: true
-  workloadName: ollama # the ollama workload's name in this GVC
+  enabled: false # true = connect to an existing ollama workload in this GVC
+  workloadName: "" # its workload name, e.g. my-ollama-ollama for an ollama release named my-ollama; required when enabled
   port: 11434
   # → OLLAMA_BASE_URL = http://{workloadName}.{gvc}.cpln.local:{port}
 

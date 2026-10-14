@@ -33,7 +33,7 @@
 | `admin.secretName` | `my-openwebui-admin` | Name of the REQUIRED dictionary secret (`email`, `password`) the admin is created from at first boot — must exist before install; ignored once any account exists |
 | `publicAccess.enabled` | `true` | Chat UI and sign-in form on the canonical URL; `false` = not reachable from the internet |
 | `internalAccess.type` | `none` | `same-gvc` / `same-org` / `workload-list` open the API to in-GVC callers |
-| `ollama.workloadName` | `ollama` | In-GVC Ollama workload to connect to (`ollama.enabled: true`) |
+| `ollama.enabled` / `ollama.workloadName` | `false` / `""` | In-GVC Ollama workload (`{release}-ollama` from the ollama template); name required when enabled |
 | `openai.apiKeySecretName` | `""` (off) | Name of a pre-created opaque key secret to enable an OpenAI-compatible backend |
 | `volumeset.capacity` / `backup.*` | 10 GiB / daily 03:00, 7d | Data volume size + snapshot schedule |
 
@@ -45,6 +45,10 @@
 - **The session key must exist BEFORE install and must never change.** It is `auth.secretKeyName` (a name, not the value); a missing secret wedges the deployment, and replacing the key logs every user out. `auth.webuiSecretKey` from 1.0.0 is a hard `fail` in 1.1.0 pointing at the replacement.
 - **Data lives only on the per-replica volumeset.** Uninstall deletes it (final snapshot taken); reinstall = empty app, including the admin account.
 - **Single-replica downtime window on upgrade/restart is expected** — near-zero-downtime needs the HA follow-up (external Postgres + Redis + object storage). Do not promise a `replicas` knob yet.
+- **1.3.0 defaults Ollama OFF (maintainer ruling 2026-10-14).** Through 1.2.0 the default `enabled: true` + `workloadName: ollama` pointed at a workload the ollama template never creates (it names it `{release}-ollama`). Measured on a 1.3.0 default install before the change: every model fetch logged `Connection error` and full page loads took **10–11 s, vs ~1 s** on the same chart with Ollama off. Pairing with vLLM uses the OpenAI backend instead, so Ollama is opt-in.
+- **Settings paths (v0.11.0):** admin settings are a DIALOG, not pages — sign-up switch = Settings → Admin → Authentication → "New Sign Ups"; backends = Settings → Admin → Connections. `/admin/settings*` URLs load the home page with the dialog open, so a page-content browser check reads "blank" — check the dialog.
+- **Snapshot schedule is guarded at render (1.3.0):** a schedule more frequent than hourly is refused by the chart, not left to fail at apply with a half-installed release (pgedge 3.0.0 pattern).
+- **Upgrade 1.2.0 → 1.3.0 measured:** the new `reveal` grant on the admin secret did NOT stall the rollout (ready 2m23s, 1/1); existing logins kept, secret ignored. Missing admin secret on a fresh install: recovered 662 s after the secret was created.
 - **Ollama unreachable is non-fatal** — the UI boots and just shows no Ollama models. Check `OLLAMA_BASE_URL` resolves to a real in-GVC workload name and that the ollama workload is `ready`.
 - **Model-backend settings apply at install, then persist in `webui.db`** — later `helm upgrade` changes to `ollama.*`/`openai.*` are ignored; change connections in the admin UI.
 - **RAG memory**: first use of document features loads a local embedding model into RAM — the 2 GiB default max is deliberate; lowering it can OOM on RAG.

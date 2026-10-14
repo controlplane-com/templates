@@ -57,6 +57,13 @@ Open WebUI Policy Name
 {{- if not .Values.auth.secretKeyName -}}
 {{- fail "open-webui: auth.secretKeyName is required — it names the prerequisite opaque secret (encoding: plain) holding the session/JWT signing key, which must exist BEFORE install and stay the same forever" -}}
 {{- end -}}
+{{- if .Values.backup.enabled -}}
+{{- /* The platform rejects snapshot schedules more frequent than hourly at apply time only,
+       leaving a half-installed release; a single fixed minute runs at most hourly. */ -}}
+{{- if not (regexMatch "^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$" (trim (toString .Values.backup.schedule))) -}}
+{{- fail (printf "open-webui: backup.schedule %q must be a 5-field cron with a single fixed minute (snapshots cannot run more often than hourly), e.g. \"0 3 * * *\"" (toString .Values.backup.schedule)) -}}
+{{- end -}}
+{{- end -}}
 {{- if hasKey .Values.auth "enableSignup" -}}
 {{- fail "open-webui: auth.enableSignup was removed in 1.3.0 — the admin account is now created from admin.secretName at first boot and sign-up is turned off then; open self-service sign-up from Settings → Admin → Authentication (New Sign Ups) instead. Remove auth.enableSignup from your values." -}}
 {{- end -}}

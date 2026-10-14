@@ -3,7 +3,8 @@
 > **Upgrading from 1.2.0:** create the admin secret (see Prerequisites) before upgrading — 1.3.0 requires it,
 > though an install that already has accounts ignores it and keeps every login. Remove `auth.enableSignup`
 > from your values (the upgrade is refused while it is set) and manage sign-up in Settings → Admin →
-> Authentication (New Sign Ups). `publicAccess.enabled` now defaults to `true`; set it to `false` explicitly to stay private.
+> Authentication (New Sign Ups). `publicAccess.enabled` now defaults to `true` (your existing login protects it); set it to `false` explicitly to stay private.
+> `ollama.enabled` now defaults to `false`; an existing install keeps its stored connections either way (they are read on first boot only).
 
 
 This app deploys [Open WebUI](https://github.com/open-webui/open-webui), a self-hosted, ChatGPT-style chat interface for LLMs with users, RAG (chat grounded in your uploaded documents), and model management. A single stateful workload keeps all of its state on a persistent volume and connects to your models via an in-GVC Ollama server and/or any OpenAI-compatible endpoint. The admin account comes from a secret you create first, so the UI is ready to sign in to on its public URL as soon as it starts.
@@ -76,8 +77,8 @@ admin:
 
 ```yaml
 ollama:
-  enabled: true               # connect to an existing ollama workload in this GVC
-  workloadName: ollama        # the ollama workload's name in this GVC
+  enabled: false              # true = connect to an existing ollama workload in this GVC
+  workloadName: ""            # its workload name, e.g. my-ollama-ollama for an ollama release named my-ollama; required when enabled
   port: 11434                 # → OLLAMA_BASE_URL = http://{workloadName}.{gvc}.cpln.local:{port}
 
 openai:

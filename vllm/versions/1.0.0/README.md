@@ -129,7 +129,7 @@ curl http://localhost:8000/v1/chat/completions \
   -d '{"model":"Qwen/Qwen2.5-1.5B-Instruct","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
-Any OpenAI SDK works with `base_url` set to the `/v1` address and `api_key` set to the key. The `open-webui` and `litellm` templates can use it as an OpenAI-compatible backend; Open WebUI offers tools on every chat, so keep `model.toolCallParser` set and matched to your model, or each message fails with `"auto" tool choice requires --enable-auto-tool-choice`.
+Any OpenAI SDK works with `base_url` set to the `/v1` address and `api_key` set to the key. The `open-webui` and `litellm` templates can use it as an OpenAI-compatible backend; for a chat UI, install `open-webui` 1.3.0 or later in the same GVC with the values in its README's "Pairing with vLLM" section. Open WebUI offers tools on every chat, so keep `model.toolCallParser` set and matched to your model, or each message fails with `"auto" tool choice requires --enable-auto-tool-choice`.
 
 ## Important Notes
 

@@ -716,6 +716,16 @@ yamlOnly:
     reason: Grafana connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
 
 migrations:
+  # Before 1.5.0 the chart created the database secret under this name, and the upgrade deletes it. Clear the
+  # name so a carried upgrade cannot point at the doomed secret: the user must choose a new one.
+  - fromVersions: "<1.5.0"
+    to: postgresHA.config.credentialsSecretName
+    valueExpr: "''"
+    note: The chart-created database secret is deleted by this upgrade; choose a NEW prerequisite secret.
+  - fromVersions: "<1.5.0"
+    to: postgres.config.credentialsSecretName
+    valueExpr: "''"
+    note: The chart-created database secret is deleted by this upgrade; choose a NEW prerequisite secret.
   - fromVersions: "<1.5.0"
     from: postgres.credentials
     note: >-

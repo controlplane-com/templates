@@ -9,10 +9,10 @@ topology: stateless
 summary: >-
   A Temporal server running the frontend, history, matching and worker services as one replica or an
   optional multi-replica cluster, with an admin-tools sidecar that migrates the schema and serves the
-  temporal CLI. It exposes gRPC and an HTTP API inside your org, a Web UI that is internal or open
-  to IP ranges you list, and server metrics in the built-in Grafana. State lives in a bundled three-node
-  PostgreSQL cluster with Patroni failover or a single instance, with optional backups to S3, GCS or an
-  S3-compatible endpoint. Pick it to run durable workflows written with the Temporal SDKs.
+  temporal CLI. It exposes gRPC and an HTTP API inside your org, a Web UI that is internal or open to IP
+  ranges you list, and server metrics. State lives in a bundled three-node PostgreSQL cluster with
+  Patroni failover or a single instance, with optional backups to S3, GCS or S3-compatible storage and
+  optional workflow archival to S3. Pick it to run durable workflows written with the Temporal SDKs.
 
 keywords:
   - durable execution
@@ -85,3 +85,18 @@ prerequisites:
     required: false
     when: backups enabled with provider minio
     description: Access keys for the MinIO or S3-compatible backup endpoint.
+  - kind: bucket
+    valuesPath: archival.s3.bucket
+    required: false
+    when: archival.enabled
+    description: S3 bucket that receives archived workflow histories and visibility records.
+  - kind: cloud-account
+    valuesPath: archival.s3.cloudAccountName
+    required: false
+    when: archival.enabled
+    description: Control Plane AWS cloud account the server identity uses to reach the archival bucket (no keys).
+  - kind: other
+    valuesPath: archival.s3.policyName
+    required: false
+    when: archival.enabled
+    description: AWS IAM policy scoped to the archival bucket, with the S3 actions listed in the README; the chart attaches it to the server identity.

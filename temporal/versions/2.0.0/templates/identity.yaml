@@ -3,3 +3,12 @@ name: {{ include "temporal.identity.name" . }}
 description: Temporal server workload identity
 gvc: {{ .Values.global.cpln.gvc }}
 tags: {{- include "temporal.tags" . | nindent 4 }}
+{{- if .Values.archival.enabled }}
+# S3 archival: keyless access through the AWS cloud account and the bucket-scoped
+# IAM policy the user created (see README "Archival storage setup").
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.archival.s3.cloudAccountName }}
+  policyRefs:
+    - cpln-connector
+    - {{ .Values.archival.s3.policyName }}
+{{- end }}

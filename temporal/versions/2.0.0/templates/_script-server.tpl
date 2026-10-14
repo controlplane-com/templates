@@ -35,6 +35,16 @@ while [ ! -f "$GATE" ]; do
 done
 
 printf '{}\n' > "$DYNAMIC_CONFIG_FILE_PATH"
+{{- if .Values.archival.enabled }}
+# Archival: the embedded config template knows only the filestore archiver, so
+# run from a copy of it (same minor) that also declares the S3 archiver.
+# Credentials come from the workload identity through the AWS default chain.
+cat > /tmp/temporal-config.yaml <<'CPLNCFG'
+{{ .Files.Get (include "temporal.archival.configFile" .) | trimSuffix "\n" }}
+CPLNCFG
+export TEMPORAL_SERVER_CONFIG_FILE_PATH=/tmp/temporal-config.yaml
+echo "temporal: archival enabled — server config /tmp/temporal-config.yaml (s3store region ${ARCHIVAL_S3_REGION})"
+{{- end }}
 
 addr=$(getent hosts "$(hostname)" | awk '{print $1}' | head -n 1)
 if [ -z "$addr" ]; then

@@ -71,6 +71,11 @@ spec:
         # Mandatory file; the start script writes it (empty: upstream defaults).
         - name: DYNAMIC_CONFIG_FILE_PATH
           value: /tmp/temporal-dynamicconfig.yaml
+        {{- if .Values.archival.enabled }}
+        # Region of the S3 archival bucket, read by the server config's s3store.
+        - name: ARCHIVAL_S3_REGION
+          value: {{ .Values.archival.s3.region | quote }}
+        {{- end }}
       # Per-replica server metrics, scraped into the built-in Grafana.
       metrics:
         path: /metrics
@@ -161,6 +166,13 @@ spec:
           value: {{ include "temporal.schemaFloor" (dict "ctx" . "store" "main") | quote }}
         - name: REQ_VIS
           value: {{ include "temporal.schemaFloor" (dict "ctx" . "store" "vis") | quote }}
+        {{- if .Values.archival.enabled }}
+        # Archival targets applied to the `default` namespace.
+        - name: ARCHIVAL_HISTORY_URI
+          value: {{ include "temporal.archival.uri" (dict "ctx" . "store" "history") | quote }}
+        - name: ARCHIVAL_VISIBILITY_URI
+          value: {{ include "temporal.archival.uri" (dict "ctx" . "store" "visibility") | quote }}
+        {{- end }}
       volumes:
         - path: /temporal-gate
           recoveryPolicy: retain

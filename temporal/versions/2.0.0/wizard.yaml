@@ -273,6 +273,78 @@ steps:
           Changing who can connect restarts every server replica, and the new firewall is fully in force only
           once the last replica has restarted (several minutes with more than one replica).
 
+  - id: archival
+    title: Archival
+    description: Optional long-term copies of closed workflows in S3.
+    docs: "#archival"
+    sections:
+      - id: archival
+        title: Workflow archival to S3
+        toggle: archival.enabled
+        description: >-
+          Copies each closed workflow's history and visibility record to S3 a few minutes after it closes, so
+          it stays readable (`temporal workflow list --archived`, `workflow show`) after retention deletes it.
+          Access is keyless, through an AWS cloud account and a bucket-scoped IAM policy you create first.
+        fields:
+          - type: note
+            severity: warning
+            when: oldSelf != null && oldSelf.archival.enabled
+            text: >-
+              Temporal never changes an archival URI once it is enabled on a namespace, so a new bucket or
+              prefix applies only to namespaces that do not archive yet; `default` keeps its current target.
+          - path: archival.s3.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+            patternMessage: The bare bucket name (3 to 63 lowercase letters, digits, dots and hyphens), without s3://.
+            rules:
+              - rule: self.archival.s3.bucket.matches('^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$')
+                mirrors: temporal.validateArchival
+                message: The archival bucket must be a bare S3 bucket name, without s3:// or a path.
+          - path: archival.s3.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+            patternMessage: Use an AWS region name, such as us-east-1.
+            rules:
+              - rule: self.archival.s3.region != ''
+                mirrors: temporal.validateArchival
+                message: The archival bucket's region is required.
+          - path: archival.s3.prefix
+            type: string
+            label: Folder prefix
+            description: History goes under `<prefix>/history` and visibility under `<prefix>/visibility`.
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+          - path: archival.s3.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+            rules:
+              - rule: self.archival.s3.cloudAccountName != ''
+                mirrors: temporal.validateArchival
+                message: The AWS cloud account for archival is required.
+          - path: archival.s3.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            rules:
+              - rule: self.archival.s3.policyName != ''
+                mirrors: temporal.validateArchival
+                message: The AWS IAM policy name for archival is required.
+
   - id: database
     title: Database
     description: The bundled PostgreSQL and its credentials. Temporal creates the secret from them.

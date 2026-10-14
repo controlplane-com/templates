@@ -20,6 +20,7 @@
 | `{release}-temporal-ui` | Web UI :8080 (no login), internal-only by default. `ui.allowedCIDRs` opens ONLY this workload's external firewall to the listed ranges (its single `http` port serves the canonical endpoint; no load balancer). `cpln port-forward` stays for curl-level checks: browsers through the tunnel stall. `/healthz` probes. |
 | postgresHA (pg-ha **2.7.0**, default) / postgres **3.4.1** | All state, in `temporal` and `temporal_visibility`; plus the lease table and `cpln_temporal_schema_migration` (resume markers) in the `postgres` DB. |
 | DB secret | Chart-created from `postgres.credentials.*` in both modes; the identity reveals only it. |
+| Archival (optional, `archival.enabled`) | S3 only. The server runs from `files/temporal-config-1.30.yaml` (1.30/1.31) or `-1.32.yaml` (1.32): the upstream embedded config template of that minor, verbatim, plus an `s3store` provider, written to `/tmp` by the start script and loaded via `TEMPORAL_SERVER_CONFIG_FILE_PATH`. Keyless: the identity gets `aws.cloudAccountLink` + `policyRefs [cpln-connector, policyName]`; s3store uses the AWS default chain. The admin sidecar enables archival on `default` every boot when it does not already match. |
 
 - Both start scripts are **inline args** (`_script-server.tpl`, `_script-admin.tpl`, `$` doubled by `temporal.inlineScript`); the upgrade adds no secret and no grant.
 - The server runs `/etc/temporal/entrypoint.sh` as a **child** (TERM forwarded; SIGSTOP from inside works), with `TEMPORAL_BROADCAST_ADDRESS` set to the replica's own IP and a mandatory empty dynamic-config file in `/tmp`.
@@ -39,6 +40,14 @@
 | `postgres.credentials.*` | temporal / change-me-temporal-db-password / temporal | Feeds both modes; `database` must be `temporal` (both modes, render-enforced) |
 
 **DB connection budget (D6 A):** per-service pools are computed from `replicas` so N replicas plus one surge replica stay under the bundled DB's 100 connections (budget 84/(N+1)): main/vis per service 7/3, 5/2, 4/1, 3/1, 2/1 for N=1..5 (40/28/20/16/12 connections per replica). Not a values knob. 1.x ran 20/10 (up to 120 per replica) and could exhaust the DB under load. **Caveat:** a `replicas` change rolls every replica (the pool env vars change), and while old-N and new-N replicas coexist the total can pass 100 (2→4 ≈ 120); the README says to change `replicas` under light load.
+
+## Feature round findings (2026-10-14)
+
+- **Nexus** works with the empty dynamic config for endpoints targeting a namespace + task queue in this cluster: the callback is the internal `temporal://system` URL. External-URL endpoints would need `component.nexusoperations.callback.endpoint.template`; not offered.
+- **Workflow Updates** work (CLI and the UI's update API). The UI dialog's Submit click did not fire from headless Chrome — an automation gap; a human click is the outstanding confirmation.
+- **Worker Deployments / versioning** work on Python SDK 1.18; the UI Workers "Instances" tab (worker heartbeats) needs Python SDK ≥ 1.20.
+- **The UI's Agents page is marketing** (static page in UI 2.55.0, no server API) — nothing to configure.
+- **Archival mechanics:** without the s3store config a namespace with an `s3://` URI is refused (`unable to find archiver config for the given scheme`). Objects land ~2 min after close; `workflow show` of a run deleted from the primary store is served from S3. Namespace archival URIs can never change once enabled, so the admin step logs and continues if `default` already archives elsewhere. 1.32's embedded template differs from 1.30/1.31 outside sqlite (`clusterMetadata` rpc/http address uses the broadcast address), hence one file per template. GCS (`gstore`) and turning archival OFF again are untested.
 
 ## Troubleshooting / considerations
 

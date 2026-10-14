@@ -39,6 +39,19 @@ internalAccess: # internal firewall scope for the server (gRPC :7233, HTTP API :
   # workloads:
   #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
+# ─── Archival (optional) ──────────────────────────────────────────────────────
+# Copies closed workflow histories and visibility records to S3 before retention
+# deletes them; read them back with `temporal workflow list --archived`. Access is
+# keyless through the workload identity. See "Archival storage setup" in the README.
+archival:
+  enabled: false
+  s3:
+    bucket: my-temporal-archival-bucket
+    region: us-east-1
+    prefix: temporal # folder in the bucket; history and visibility go below it
+    cloudAccountName: my-s3-cloud-account
+    policyName: my-temporal-archival-policy # AWS IAM policy scoped to the bucket
+
 # ─── Database: Highly Available PostgreSQL (default) ──────────────────────────
 # Deploys the postgres-highly-available template: 3 Patroni replicas, 3 etcd
 # replicas, and an HAProxy leader-routing endpoint Temporal connects to.

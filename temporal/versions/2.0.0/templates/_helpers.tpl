@@ -172,6 +172,7 @@ byte-identical to the script source. Copied from pgedge.inlineScript.
 {{- include "temporal.validateResourceKnobs" . -}}
 {{- include "temporal.validateImages" . -}}
 {{- include "temporal.validateUiAccess" . -}}
+{{- include "temporal.validateArchival" . -}}
 {{- if ne (default "temporal" .Values.postgres.credentials.database) "temporal" -}}
 {{- fail (printf "temporal: postgres.credentials.database must be \"temporal\", got %q. It is used in BOTH database modes, and the Temporal server reads its main store as the literal database \"temporal\" — any other value creates a database nothing uses." .Values.postgres.credentials.database) -}}
 {{- end -}}
@@ -242,6 +243,62 @@ prefix, never a whole-internet range, and the list needs the UI to exist.
 {{- end -}}
 {{- if hasSuffix "/0" $c -}}
 {{- fail (printf "temporal: ui.allowedCIDRs entry %q opens the Web UI to the whole internet. The UI has no login of its own, so this list is its only protection: list specific ranges, such as your office or VPN egress address (/32)." $c) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+
+{{/* Archival */}}
+
+{{/*
+Server config file used when archival is on: the upstream embedded config template
+of the image's minor, verbatim, plus the s3store archiver. 1.30.x and 1.31.x share
+one template; 1.32 changed clusterMetadata's rpc/http addresses, so it has its own.
+*/}}
+{{- define "temporal.archival.configFile" -}}
+{{- if eq (include "temporal.imageMinor" .) "32" -}}
+files/temporal-config-1.32.yaml
+{{- else -}}
+files/temporal-config-1.30.yaml
+{{- end -}}
+{{- end }}
+
+{{/*
+Archival URI for a store ("history" or "visibility"): s3://bucket[/prefix]/store.
+Call with (dict "ctx" . "store" "history").
+*/}}
+{{- define "temporal.archival.uri" -}}
+{{- $s3 := .ctx.Values.archival.s3 -}}
+{{- $prefix := trimAll "/" (toString (default "" $s3.prefix)) -}}
+{{- if $prefix -}}
+{{- printf "s3://%s/%s/%s" $s3.bucket $prefix .store -}}
+{{- else -}}
+{{- printf "s3://%s/%s" $s3.bucket .store -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Archival needs a bucket, its region, a cloud account and an IAM policy (the
+workload identity reaches S3 through them; no keys). Same shape as the backup
+validators: each required value must be set when the feature is on.
+*/}}
+{{- define "temporal.validateArchival" -}}
+{{- if (.Values.archival).enabled -}}
+{{- $s3 := .Values.archival.s3 | default dict -}}
+{{- if not $s3.bucket -}}
+{{- fail "temporal: archival.s3.bucket is required when archival.enabled is true." -}}
+{{- end -}}
+{{- if not (regexMatch "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$" (toString $s3.bucket)) -}}
+{{- fail (printf "temporal: archival.s3.bucket %q is not an S3 bucket name. Give the bare name (3-63 lowercase letters, digits, dots and hyphens), without s3:// or a path; put the folder in archival.s3.prefix." (toString $s3.bucket)) -}}
+{{- end -}}
+{{- if not $s3.region -}}
+{{- fail "temporal: archival.s3.region is required when archival.enabled is true (the bucket's AWS region, e.g. us-east-1)." -}}
+{{- end -}}
+{{- if not $s3.cloudAccountName -}}
+{{- fail "temporal: archival.s3.cloudAccountName is required when archival.enabled is true. It names the Control Plane AWS cloud account the workload identity uses to reach the bucket." -}}
+{{- end -}}
+{{- if not $s3.policyName -}}
+{{- fail "temporal: archival.s3.policyName is required when archival.enabled is true. It names the AWS IAM policy scoped to the bucket; see \"Archival storage setup\" in the README." -}}
 {{- end -}}
 {{- end -}}
 {{- end }}

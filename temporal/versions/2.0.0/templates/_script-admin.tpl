@@ -261,6 +261,44 @@ until temporal operator namespace describe -n default >/dev/null 2>&1; do
   nap 5
 done
 log "namespace default present"
+{{- if .Values.archival.enabled }}
+
+# ── Archival on the `default` namespace (every boot; idempotent) ────────────
+# Enables history and visibility archival with the configured S3 URIs, on a new
+# namespace and on one created before archival was turned on. Skipped when the
+# namespace already matches. Temporal never lets an enabled archival URI change,
+# so a refused update is logged and the boot continues.
+archival_ok() {
+  d=$(temporal operator namespace describe -n default -o json 2>/dev/null) || return 1
+  echo "$d" | grep -q '"historyArchivalState": *"ARCHIVAL_STATE_ENABLED"' &&
+    echo "$d" | grep -q '"visibilityArchivalState": *"ARCHIVAL_STATE_ENABLED"' &&
+    echo "$d" | grep -qF "\"historyArchivalUri\": \"${ARCHIVAL_HISTORY_URI}\"" &&
+    echo "$d" | grep -qF "\"visibilityArchivalUri\": \"${ARCHIVAL_VISIBILITY_URI}\""
+}
+i=0
+until archival_ok; do
+  if [ "$i" -ge 12 ]; then
+    log "WARNING: archival could not be enabled on namespace default (last error above); continuing without it"
+    break
+  fi
+  out=$(temporal operator namespace update -n default \
+    --history-archival-state enabled --history-uri "$ARCHIVAL_HISTORY_URI" \
+    --visibility-archival-state enabled --visibility-uri "$ARCHIVAL_VISIBILITY_URI" 2>&1)
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    log "archival update on namespace default: $(echo "$out" | tail -n 1)"
+    case "$out" in
+      *"can't be changed"*|*"cannot be changed"*|*"URI cannot"*|*"cannot update"*)
+        log "WARNING: namespace default already archives to another URI, which Temporal never changes; keeping it"
+        break
+        ;;
+    esac
+  fi
+  i=$((i + 1))
+  nap 5
+done
+archival_ok && log "archival enabled on namespace default: ${ARCHIVAL_HISTORY_URI} , ${ARCHIVAL_VISIBILITY_URI}"
+{{- end }}
 touch /temporal-gate/bootstrap-done
 log "bootstrap complete"
 

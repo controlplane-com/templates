@@ -18,11 +18,13 @@ This app deploys [Temporal](https://temporal.io/), an open-source (MIT) durable-
 - **Identity and policy**: the server identity may `reveal` exactly the database credentials secret.
 - **Server metrics**: each replica's Prometheus metrics (port 8000) are collected into the platform's built-in metrics.
 - **Optional database backups** (subchart): logical dumps or WAL-G archiving to S3, GCS, or an S3-compatible endpoint.
+- **Optional workflow archival** (`archival.enabled`): closed workflow histories and visibility records copied to an S3 bucket, reached keylessly through the server identity.
 
 ## Prerequisites
 
 - None for a default install.
 - For optional database backups: a bucket and access setup for one of the supported providers (see [Backup storage setup](#backup-storage-setup)).
+- For optional archival: an S3 bucket, an AWS cloud account and a bucket-scoped IAM policy (see [Archival storage setup](#archival-storage-setup)).
 
 ## Configuration
 
@@ -69,6 +71,30 @@ internalAccess: # firewall scope for the server (gRPC :7233, HTTP API :7243, clu
   workloads: [] # used with workload-list, e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME;
                 # the server's own replicas and the Web UI are always allowed
 ```
+
+### Archival
+
+Archival keeps closed workflows readable after the namespace's retention deletes them. It is S3-only in this version (the local-file archiver is not offered: it would write to the replica's own short-lived disk).
+
+```yaml
+archival:
+  enabled: false # set true after the Archival storage setup steps
+  s3:
+    bucket: my-temporal-archival-bucket # bare bucket name, no s3://
+    region: us-east-1
+    prefix: temporal # history goes under temporal/history, visibility under temporal/visibility
+    cloudAccountName: my-s3-cloud-account # AWS cloud account; access is keyless
+    policyName: my-temporal-archival-policy # AWS IAM policy scoped to the bucket
+```
+
+With archival on, the `default` namespace archives to `s3://BUCKET/PREFIX/history` and `s3://BUCKET/PREFIX/visibility`, also when you turn it on for an existing install. A workflow appears in the archive a few minutes after it closes. Read it back from the `admin` container:
+
+```bash
+cpln workload exec RELEASE_NAME-temporal --gvc GVC_NAME --container admin -- temporal workflow list -n default --archived
+cpln workload exec RELEASE_NAME-temporal --gvc GVC_NAME --container admin -- temporal workflow show -n default -w WORKFLOW_ID -r RUN_ID
+```
+
+Temporal never changes an archival target once it is enabled on a namespace: a later change to `bucket` or `prefix` applies only to namespaces that do not archive yet. Other namespaces you create can archive to the same bucket with `temporal operator namespace create … --history-archival-state enabled --history-uri s3://BUCKET/PREFIX/history --visibility-archival-state enabled --visibility-uri s3://BUCKET/PREFIX/visibility`.
 
 ### PostgreSQL
 
@@ -184,6 +210,25 @@ Also in this version:
 - **Temporal 1.32 visibility queries are stricter:** a list filter that compares a search attribute with the wrong type, or an empty `Text` filter, now returns an error instead of results.
 - **Older releases:** 1.0.x moved `postgres.config.{username,password,database}` to `postgres.credentials.*` (1.1.0); 1.1.x moved `postgresHA.postgres.*` to `postgres.credentials.*` (1.2.0) and MinIO keys to `postgresHA.backup.minio.credentialsSecretName` / `postgres.backup.minio.credentialsSecretName` (1.2.1, a dictionary secret with `accessKey` and `secretKey`); 1.2.x renamed `resources.cpu`/`memory` to `maxCpu`/`maxMemory` (1.3.0, also under `ui.resources`). Keep your existing password values unchanged when you move them: the database keeps the password it was initialised with.
 
+## Archival storage setup
+
+Only needed when `archival.enabled` is true. Complete these steps before turning it on.
+
+1. Create an S3 bucket. Set `archival.s3.bucket` and `archival.s3.region`.
+2. If you do not have one, create a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) for your AWS account. Set `archival.s3.cloudAccountName`.
+3. Create an AWS IAM policy with the JSON below (replace `YOUR_BUCKET`), then set `archival.s3.policyName` to the policy's name. The server writes and reads archives and lists the bucket; it never deletes from it.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["s3:PutObject", "s3:GetObject", "s3:ListBucket"],
+    "Resource": ["arn:aws:s3:::YOUR_BUCKET", "arn:aws:s3:::YOUR_BUCKET/*"]
+  }]
+}
+```
+
 ## Backup storage setup
 
 Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.backup.enabled`). Complete the steps for your provider before installing.
@@ -232,6 +277,7 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
 - **`historyShards` is permanent**: it is fixed at the cluster's first boot, and a later change is ignored (the server keeps the original count and only logs the mismatch). 512 suits most deployments.
 - **The Web UI has no login**: anyone who can reach it can view and act on every workflow. List only addresses you trust in `ui.allowedCIDRs` (whole-internet ranges are refused), and allow up to a few minutes for a change to apply.
 - **A replica that stays not ready:** read its `admin` container's logs. "another replica is migrating the schema" is normal during an upgrade with several replicas; `CPLN_TEMPORAL_SKIP_GUARD` means the image skips a minor version.
+- **Features that need no configuration:** Nexus endpoints that target a namespace and task queue in this Temporal cluster (create them with `temporal operator nexus endpoint create` or the UI's Nexus page); endpoints that target an external URL are not supported. Worker Deployments (versioning) work; the UI's worker list relies on worker heartbeats, which need a recent SDK.
 - **Keep the GVC to one location.** Each location would run its own servers against its own database.
 - **Uninstall deletes the database volumesets**, with all workflow histories. Enable backups if the data matters.
 

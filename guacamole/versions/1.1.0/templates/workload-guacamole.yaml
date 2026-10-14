@@ -26,8 +26,9 @@ spec:
       env:
         # ── Database (postgres subchart) — users, connections, permissions, history ──
         # The 1.6.0 entrypoint enables `enable-environment-properties`, so every
-        # property is read from the environment and the password stays a
-        # platform-resolved cpln:// reference (never interpolated at render time).
+        # property is read from the environment, and the database name, user and
+        # password all stay platform-resolved cpln:// references to the user's
+        # prerequisite secret (never interpolated at render time).
         - name: POSTGRESQL_ENABLED
           value: "true"
         - name: POSTGRESQL_HOSTNAME
@@ -137,6 +138,8 @@ spec:
       minMemory: "128Mi"
       memory: "128Mi"
       env:
+        # ── Database (user-created prerequisite dictionary secret, the same one
+        # the bundled postgres initializes from) ──
         - name: PGHOST
           value: {{ include "guacamole.postgres.host" . | quote }}
         - name: PGPORT

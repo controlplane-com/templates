@@ -10,6 +10,7 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "guacamole.identity.name" . }}
 targetKind: secret
 targetLinks:
+  # Prerequisite secrets the user creates — granted by name, nothing broader.
   - //secret/{{ .Values.admin.secretName }}
   - //secret/{{ include "guacamole.secret.db.name" . }}
   - //secret/{{ include "guacamole.secret.start.name" . }}

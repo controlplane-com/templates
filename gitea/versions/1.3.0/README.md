@@ -151,7 +151,9 @@ cpln secret create-dictionary --name RELEASE_NAME-gitea-db \
   --entry username=gitea --entry password=YOUR_CURRENT_PASSWORD --entry database=gitea
 ```
 
-Then upgrade with `postgres.config.credentialsSecretName` set to that name and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.2.0 release, and also in the old secret (`cpln secret reveal my-gitea-db-credentials -o yaml`).
+Then upgrade with `postgres.config.credentialsSecretName` set to that name and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.2.0 release, and also in the old secret (`cpln secret reveal my-gitea-db-credentials -o yaml`) until the upgrade deletes it.
+
+The new version of a workload may then wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates. The previous version keeps serving meanwhile, and it clears by itself.
 
 ## Upgrading from 1.1.0
 

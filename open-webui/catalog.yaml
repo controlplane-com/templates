@@ -57,9 +57,6 @@ related:
   - template: litellm
     relation: companion
     note: One OpenAI-compatible backend for Open WebUI in front of many providers
-  - template: vllm
-    relation: companion
-    note: Serves an open-weight model on a GPU through the OpenAI-compatible backend
   - template: searxng
     relation: companion
     note: Web search provider for chats that need live results

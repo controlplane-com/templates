@@ -9,9 +9,9 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "unleash.identity.name" . }}
 targetKind: secret
 targetLinks:
-  # The user-created admin credentials — reveal on exactly that one secret.
-  - //secret/{{ .Values.admin.secretName }}
   - //secret/{{ include "unleash.secretStart.name" . }}
+  # Prerequisite secrets the user creates — granted by name, nothing broader.
+  - //secret/{{ .Values.admin.secretName }}
   - //secret/{{ include "unleash.postgres.secret.name" . }}
   {{- if .Values.apiTokens.secretName }}
   - //secret/{{ .Values.apiTokens.secretName }}

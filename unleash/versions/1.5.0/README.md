@@ -1,10 +1,7 @@
 # Unleash
 
-> **Upgrading from 1.3.1:** resource blocks that expose both a floor and a ceiling now name the
-> ceiling `maxCpu`/`maxMemory` instead of `cpu`/`memory`, so it is no longer ambiguous which number
-> is the limit. Rename those two keys in your values; an upgrade that still carries the old names is
-> refused at render. Blocks that expose only a limit keep the bare `cpu`/`memory` names.
-
+> **Upgrading from 1.4.0:** the database credentials are now a secret you create before upgrading,
+> under a **new** name — see [Upgrading from 1.4.0](#upgrading-from-140).
 
 This app deploys [Unleash](https://www.getunleash.io/) — the open-source feature-flag server — backed by a highly available PostgreSQL cluster by default. The admin UI and the Admin, Client, and Frontend APIs are served on one public HTTPS endpoint; the server is stateless, so it scales to multiple replicas with a single value.
 
@@ -14,13 +11,27 @@ This app deploys [Unleash](https://www.getunleash.io/) — the open-source featu
 - **PostgreSQL (HA, default)** (subchart): the `postgres-highly-available` template — 3× Patroni Postgres, 3× etcd, and a 2-replica HAProxy leader endpoint Unleash connects through. Holds every flag, user, and token.
 - **PostgreSQL (dev/lightweight, optional)** (subchart): the single-instance `postgres` template instead, for lighter deployments.
 - **Admin secret** (dictionary) — *not created by this template*; you create it before install and reference it by name. Holds the initial admin login.
+- **Database credentials secret** (dictionary) — *not created by this template*; you create it before install. The database initializes from it and Unleash connects with it, in either database mode.
 - **API-token secret** (dictionary, optional) — likewise user-created; seeds SDK tokens on first boot.
 - **Start script** (opaque secret) and **identity + policy**: a least-privilege policy granting the Unleash identity `reveal` on exactly the secrets it uses.
 - **Optional database backups** (subchart): logical dumps or WAL-G archiving to S3, GCS, or an S3-compatible endpoint.
 
 ## Prerequisites
 
-**One dictionary secret must exist BEFORE you install.** The initial admin guards a login form on the public endpoint, so it is a prerequisite secret rather than a value — a value would sit in plaintext in the Helm release for the life of the install.
+**Two dictionary secrets must exist BEFORE you install.** They hold credentials, so they are prerequisite secrets rather than values — a value would sit in plaintext in the Helm release for the life of the install.
+
+**1. Database credentials** — the bundled PostgreSQL initializes with these and Unleash connects with them:
+
+```bash
+cpln secret create-dictionary --name my-unleash-db-credentials \
+  --entry username=unleash \
+  --entry password="$(openssl rand -hex 24)" \
+  --entry database=unleash
+```
+
+Set its name in the key of the database mode you use: `postgresHA.config.credentialsSecretName` (HA, the default) or `postgres.config.credentialsSecretName` (single-instance). PostgreSQL reads the secret only when its data is first initialized; to change the password later, change it in the database first, then update the secret and force a redeployment of the Unleash workload.
+
+**2. Admin login** — the initial admin guards a login form on the public endpoint:
 
 ```bash
 cpln secret create-dictionary --name my-unleash-admin \
@@ -35,7 +46,7 @@ Then set `admin.secretName` to that name. Read the password back with `cpln secr
 | `username` | The initial admin's login name. |
 | `password` | Its password. The login form is on the public endpoint. |
 
-**If the secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments {release}-unleash --gvc {gvc} -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own within roughly 5.5–10.5 minutes — poll rather than giving up — or clear it immediately with `cpln workload force-redeployment {release}-unleash --gvc {gvc}` (~90 s).
+**If either secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments {release}-unleash --gvc {gvc} -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own within roughly 5.5–10.5 minutes — poll rather than giving up — or clear it immediately with `cpln workload force-redeployment {release}-unleash --gvc {gvc}` (~90 s).
 
 **Optional — first-boot SDK API tokens**: a **dictionary** secret with exactly two keys, `backend` and `frontend`, each a full Unleash token string in the format `<project>:<environment>.<secret>` (OSS environments are `development` and `production`):
 
@@ -46,8 +57,6 @@ cpln secret create-dictionary --name my-unleash-api-tokens \
 ```
 
 Set its name in `apiTokens.secretName`. Leave it empty to create tokens in the admin UI after install instead.
-
-**The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*` in either database mode.
 
 For optional database backups: a bucket and access setup for one of the supported providers (see [Backup storage setup](#backup-storage-setup)). With `provider: minio` (either store), the endpoint's keys are a prerequisite `dictionary` secret — see that section.
 
@@ -94,7 +103,7 @@ Exactly one of the two databases must be enabled (the chart enforces this at ren
 postgresHA:                   # default: highly available PostgreSQL
   enabled: true
   config:
-    credentialsSecretName: my-unleash-db-credentials # name of the secret this template CREATES from postgres.credentials.*; org-wide, unique per release
+    credentialsSecretName: my-unleash-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   replicas: 3
   volumeset:
     capacity: 10              # GiB per replica
@@ -107,14 +116,8 @@ postgresHA:
   enabled: false
 postgres:                     # dev/lightweight: single-instance PostgreSQL
   enabled: true
-  credentials:                # this template builds the DB credential secret from these — used in BOTH modes
-    username: unleash
-    password: change-me-unleash-db-password # change before installing
-    database: unleash
   config:
-    # name of the dictionary secret this template CREATES and Postgres reads;
-    # secret names are org-wide; a second release on this name is refused at install
-    credentialsSecretName: my-unleash-db-credentials
+    credentialsSecretName: my-unleash-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   volumeset:
     capacity: 10              # GiB
   backup:
@@ -130,18 +133,37 @@ postgres:                     # dev/lightweight: single-instance PostgreSQL
 | Frontend API (browser/mobile SDKs) | `{canonical-endpoint}/api/frontend` — `Authorization: <frontend token>` |
 | Internal (same GVC) | `http://{release}-unleash.{gvc}.cpln.local:4242` |
 | Login | `username` / `password` from your `admin.secretName` secret — `cpln secret reveal my-unleash-admin -o yaml` |
-| Postgres (internal, HA mode) | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432`, credentials in the secret named by `postgresHA.config.credentialsSecretName` (`cpln secret reveal SECRET_NAME -o yaml`) |
-| Postgres (internal, single mode) | `{release}-postgres.{gvc}.cpln.local:5432`, credentials in the secret named by `postgres.config.credentialsSecretName` |
+| Postgres (internal, HA mode) | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432`, credentials from your `postgresHA.config.credentialsSecretName` secret (`cpln secret reveal SECRET_NAME -o yaml`) |
+| Postgres (internal, single mode) | `{release}-postgres.{gvc}.cpln.local:5432`, credentials from your `postgres.config.credentialsSecretName` secret |
+
+## Upgrading from 1.4.0
+
+`postgres.credentials` was removed: the database credentials are now a prerequisite secret, the same one the database templates require on their own. Carrying the old key forward fails the render.
+
+1.4.0 created the database secret itself, so **this upgrade deletes it**. Before upgrading, create a secret under a **new** name holding the values your database was initialized with — not new ones, or Unleash loses its database connection:
+
+```bash
+cpln secret create-dictionary --name RELEASE_NAME-unleash-db \
+  --entry username=unleash --entry password=YOUR_CURRENT_PASSWORD --entry database=unleash
+```
+
+Then upgrade with `postgresHA.config.credentialsSecretName` (HA mode) or `postgres.config.credentialsSecretName` (single-instance mode) set to that name, and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.4.0 release, and also in the old secret (`cpln secret reveal my-unleash-db-credentials -o yaml`) until the upgrade deletes it.
+
+The new version of a workload may then wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates. The previous version keeps serving meanwhile, and it clears by itself.
+
+## Upgrading from 1.3.x
+
+Resource blocks that expose both a floor and a ceiling name the ceiling `maxCpu`/`maxMemory` instead of `cpu`/`memory`. Rename those two keys in your values; an upgrade that still carries the old names is refused at render. Then follow [Upgrading from 1.4.0](#upgrading-from-140).
 
 ## Upgrading from 1.2.x (HA mode)
 
-1.3.0 moved the HA database to `postgres-highly-available` 2.5.0, which no longer takes credentials as values. Move `postgresHA.postgres.username/password/database` into `postgres.credentials.*` **unchanged** — this template now builds the HA credentials secret from them, named by `postgresHA.config.credentialsSecretName`. Carrying the old block fails the render with `the postgres block was REMOVED in 2.5.0`, which tells you to create the secret yourself — **ignore that advice; this template creates it.**
+1.3.0 moved the HA database to `postgres-highly-available` 2.5.0, which no longer takes credentials as values. Put the values of `postgresHA.postgres.username/password/database` **unchanged** into the database credentials secret under Prerequisites, set `postgresHA.config.credentialsSecretName` to its name, and delete the `postgresHA.postgres` block.
 
 With `postgresHA.backup.provider: minio`, `postgresHA.backup.minio.accessKey`/`secretKey` are refused by the same subchart — put them in a `dictionary` secret and set `postgresHA.backup.minio.credentialsSecretName` to its name (that knob arrived in 1.3.1; 1.3.0 still showed the removed keys). See [Backup storage setup](#backup-storage-setup).
 
 ## Upgrading from 1.1.0
 
-The single-instance database credentials moved from `postgres.config.username/password/database` to `postgres.credentials.username/password/database`, and `postgres.config.credentialsSecretName` names the secret this template now creates from them. If you carry the old keys the install fails with `config.username was REMOVED in postgres 3.4.0` — move the three keys and you are done. **Ignore that message's advice to create a secret yourself; this template creates it**, and the database password stays a value exactly as before.
+`postgres.config.username/password/database` were removed. Put the values your single-instance database was initialized with into the database credentials secret under Prerequisites (keys `username`, `password`, `database`), set `postgres.config.credentialsSecretName` to its name, and remove the three keys.
 
 With `postgres.backup.provider: minio`, `postgres.backup.minio.accessKey`/`secretKey` were likewise removed — put them in a `dictionary` secret and set `postgres.backup.minio.credentialsSecretName` to its name (see [Backup storage setup](#backup-storage-setup)).
 
@@ -200,9 +222,8 @@ cpln secret create-dictionary --name my-unleash-minio-credentials \
 
 ## Important Notes
 
-- **Create the admin secret before installing.** A missing prerequisite secret leaves the workload waiting on something that does not exist, with zero log lines — see Prerequisites for how to diagnose it.
-- **Change the database password (`postgres.credentials.password`) before installing** — it is bundled plumbing, used exactly as given in both modes. Changing it on an existing release does not change the database password; it only rewrites the secret, so logins then fail.
-- **Give each unleash release its own `postgresHA.config.credentialsSecretName` (HA) or `postgres.config.credentialsSecretName` (single-instance).** Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
+- **Create both secrets before installing.** A missing prerequisite secret leaves the workload waiting on something that does not exist, with zero log lines — see Prerequisites for how to diagnose it.
+- **Rotating the database secret needs a forced redeployment** (`cpln workload force-redeployment`) — a running workload keeps the values it started with, and the database keeps the password it was initialized with until you change it there.
 - **Admin credentials and API tokens are seeded on first boot only** — they live in the database afterwards; change the password or manage tokens in the admin UI, not by editing the secrets.
 - **Backend tokens must stay secret** (server-side SDKs, `/api/client`); frontend tokens are safe to embed in browsers (`/api/frontend`). A 401 usually means the wrong token type or environment.
 - **The free edition ships exactly two environments** (`development`, `production`); SSO, role-based access control, multiple projects, change requests, and audit logs require an Unleash Enterprise license and are not available in this template.

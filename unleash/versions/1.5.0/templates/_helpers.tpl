@@ -47,29 +47,21 @@ derived name (n8n/tyk pattern).
 {{- end }}
 
 {{/*
-Name of the bundled database's credential secret in the SINGLE-INSTANCE path.
-This chart CREATES that secret (secret-db.yaml) and the postgres subchart only
-receives its NAME — since postgres 3.4.0 the subchart creates no secret of its
-own. A subchart value cannot be templated by its parent, so the name is a plain
-value that both sides read, which is why it is not derived from the release name.
-*/}}
-{{- define "unleash.secret.db.name" -}}
-{{- .Values.postgres.config.credentialsSecretName }}
-{{- end }}
-
-{{/*
-Credentials secret of the ACTIVE database.
-Created by this chart (secret-db.yaml) in BOTH modes from postgres.credentials.*.
-HA path: named by postgresHA.config.credentialsSecretName (postgres-highly-available
-2.5.0 creates no credentials secret of its own).
+Credentials secret of the ACTIVE database — a PREREQUISITE the user creates
+(keys: username, password, database). Both database subcharts require it by
+name, so Unleash requires the same secret rather than building one from
+plaintext values; the subchart and Unleash both read it. 1.4.0 and earlier
+created it from postgres.credentials.*.
+HA path: named by postgresHA.config.credentialsSecretName.
 Single-instance path: named by postgres.config.credentialsSecretName.
-Both hold the same three keys — username, password, database.
+A subchart value cannot be templated by its parent, so each name is a plain
+value that both sides read.
 */}}
 {{- define "unleash.postgres.secret.name" -}}
 {{- if .Values.postgresHA.enabled -}}
 {{- .Values.postgresHA.config.credentialsSecretName }}
 {{- else -}}
-{{- include "unleash.secret.db.name" . }}
+{{- .Values.postgres.config.credentialsSecretName }}
 {{- end }}
 {{- end }}
 
@@ -79,6 +71,7 @@ Both hold the same three keys — username, password, database.
 {{- define "unleash.validate" -}}
 {{- include "unleash.validateResourceKnobs" . -}}
 {{- include "unleash.validateAdmin" . -}}
+{{- include "unleash.validateDatabaseSecret" . -}}
 {{- if lt (int .Values.replicas) 1 -}}
 {{- fail (printf "unleash: replicas must be at least 1, got '%v'" .Values.replicas) -}}
 {{- end -}}
@@ -114,6 +107,24 @@ prerequisite secret and is unchanged.)
 {{- end -}}
 {{- if not .Values.admin.secretName -}}
 {{- fail "unleash: admin.secretName is required — it names the prerequisite `dictionary` secret holding the `username` and `password` keys. Create that secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- end }}
+
+
+{{/*
+The bundled database's credentials became a user-created prerequisite secret in
+1.5.0: both database subcharts require a pre-existing secret, so Unleash requires
+the same one instead of rendering it from plaintext values. The removed key is
+named explicitly so a 1.4.0 values file fails at render with its replacement and
+the upgrade procedure. No compatibility shims — the version bump IS the migration
+path.
+*/}}
+{{- define "unleash.validateDatabaseSecret" -}}
+{{- if hasKey .Values.postgres "credentials" -}}
+{{- fail "unleash: postgres.credentials was REMOVED in 1.5.0. The database credentials are now a prerequisite `dictionary` secret you create (keys: username, password, database), named by postgresHA.config.credentialsSecretName (HA mode) or postgres.config.credentialsSecretName (single-instance mode). Upgrading from 1.4.0: create it under a NEW name holding your EXISTING values, set the credentialsSecretName of the mode you use to that name, and remove postgres.credentials — see \"Upgrading from 1.4.0\" in the README." -}}
+{{- end -}}
+{{- if not (include "unleash.postgres.secret.name" .) -}}
+{{- fail "unleash: the database credentials secret name is required — set postgresHA.config.credentialsSecretName (HA mode) or postgres.config.credentialsSecretName (single-instance mode) to your pre-created `dictionary` secret holding username, password and database. See Prerequisites in the README." -}}
 {{- end -}}
 {{- end }}
 

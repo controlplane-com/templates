@@ -1,0 +1,16 @@
+---
+kind: policy
+name: {{ include "guacamole.policy.name" . }}
+description: Guacamole secret access
+tags: {{- include "guacamole.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "guacamole.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ .Values.admin.secretName }}
+  - //secret/{{ include "guacamole.secret.db.name" . }}
+  - //secret/{{ include "guacamole.secret.start.name" . }}
+  - //secret/{{ include "guacamole.secret.init.name" . }}

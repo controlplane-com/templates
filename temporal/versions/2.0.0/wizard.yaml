@@ -370,12 +370,13 @@ steps:
     rules:
       - when: oldSelf != null && oldSelf.archival.enabled == true
         rule: self.archival.enabled == true
-        severity: warning
+        severity: info
         paths: [archival.enabled]
         message: >-
-          Do not turn the archiver off once archival has been used: namespaces keep their S3 targets, every
-          later update of `default` then fails and archived workflows become unreadable. To stop archiving,
-          keep it on and turn off "Archive the default namespace" instead.
+          Turning the archiver off after archival has been used breaks the `default` namespace: it keeps its
+          S3 targets, every later update of it fails, the server retries archiving each closed workflow
+          indefinitely, and archived workflows become unreadable. To stop archiving, keep it on and turn off
+          "Archive the default namespace" instead. Turn it off only if the archive is gone for good.
 
   - id: database
     title: Database

@@ -199,18 +199,24 @@ steps:
               type: string
             rules:
               - rule: >-
-                  self.ui.allowedCIDRs.all(c, c.matches('^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])[.]){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$') || (c.contains(':') && c.matches('^[0-9a-fA-F:.]+/(12[0-8]|1[01][0-9]|[1-9]?[0-9])$')))
+                  self.ui.allowedCIDRs.all(c, (size(c.split('/')) == 2 && c.split('/')[1].matches('^[0-9]{1,3}$') && ((c.split('/')[0].matches('^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])[.]){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$') && int(c.split('/')[1]) <= 32) || (c.split('/')[0].matches('^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(:[0-9a-fA-F]{1,4}){1,6}|:((:[0-9a-fA-F]{1,4}){1,7}|:))$') && int(c.split('/')[1]) <= 128))))
                 mirrors: temporal.validateUiAccess
                 message: Every entry must be an IPv4 or IPv6 range with a prefix length, such as 203.0.113.10/32.
                 messageExpression: >-
                   'Not an IP range with a prefix length: ' +
-                  self.ui.allowedCIDRs.filter(c, !(c.matches('^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])[.]){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$') || (c.contains(':') && c.matches('^[0-9a-fA-F:.]+/(12[0-8]|1[01][0-9]|[1-9]?[0-9])$')))).join(', ') +
+                  self.ui.allowedCIDRs.filter(c, !(size(c.split('/')) == 2 && c.split('/')[1].matches('^[0-9]{1,3}$') && ((c.split('/')[0].matches('^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])[.]){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$') && int(c.split('/')[1]) <= 32) || (c.split('/')[0].matches('^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(:[0-9a-fA-F]{1,4}){1,6}|:((:[0-9a-fA-F]{1,4}){1,7}|:))$') && int(c.split('/')[1]) <= 128)))).join(', ') +
                   '. Use a form such as 203.0.113.10/32 or 2001:db8::/48.'
               - rule: "!self.ui.allowedCIDRs.exists(c, c.endsWith('/0'))"
                 mirrors: temporal.validateUiAccess
                 message: >-
                   A /0 range (0.0.0.0/0 or ::/0) opens the UI to the whole internet. The UI has no login, so list
                   specific ranges, such as your office or VPN egress address (/32).
+              - rule: >-
+                  self.ui.allowedCIDRs.all(c, !(size(c.split('/')) == 2 && c.split('/')[1].matches('^[0-9]{1,3}$') && ((c.split('/')[0].matches('^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])[.]){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$') && int(c.split('/')[1]) <= 32) || (c.split('/')[0].matches('^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(:[0-9a-fA-F]{1,4}){1,6}|:((:[0-9a-fA-F]{1,4}){1,7}|:))$') && int(c.split('/')[1]) <= 128))) || c.endsWith('/0') || (c.split('/')[0].matches('^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])[.]){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$') ? int(c.split('/')[1]) >= 8 : int(c.split('/')[1]) >= 32))
+                mirrors: temporal.validateUiAccess
+                message: >-
+                  A range is too broad for a UI with no login: IPv4 ranges must be /8 or narrower and IPv6 ranges
+                  /32 or narrower. List specific ranges, such as your office or VPN egress address (/32).
           - path: ui.image
             type: string
             format: image
@@ -288,10 +294,16 @@ steps:
         fields:
           - type: note
             severity: warning
-            when: oldSelf != null && oldSelf.archival.enabled
+            when: oldSelf != null && oldSelf.archival.enabled == true
             text: >-
               Temporal never changes an archival URI once it is enabled on a namespace, so a new bucket or
               prefix applies only to namespaces that do not archive yet; `default` keeps its current target.
+          - path: archival.defaultNamespace
+            type: boolean
+            label: Archive the default namespace
+            description: >-
+              Turn this off to stop archiving `default`. Keep the archiver itself on: once archival has been
+              used, the namespace keeps its S3 targets and needs it.
           - path: archival.s3.bucket
             type: string
             label: Bucket
@@ -318,8 +330,12 @@ steps:
             type: string
             label: Folder prefix
             description: History goes under `<prefix>/history` and visibility under `<prefix>/visibility`.
-            pattern: "^(?!/)"
-            patternMessage: Leave out the leading /.
+            pattern: '^([^\s/]\S*)?$'
+            patternMessage: Leave out the leading / and spaces.
+            rules:
+              - rule: self.archival.s3.prefix == null || self.archival.s3.prefix.matches('^([^\\s/]\\S*)?$')
+                mirrors: temporal.validateArchival
+                message: The archival prefix must not start with / or contain spaces.
           - path: archival.s3.cloudAccountName
             type: ref
             label: Cloud account
@@ -344,6 +360,22 @@ steps:
               - rule: self.archival.s3.policyName != ''
                 mirrors: temporal.validateArchival
                 message: The AWS IAM policy name for archival is required.
+        rules:
+          - rule: "!self.image.matches(':1[.]30[.][0-9]+([.][0-9]+)?$')"
+            mirrors: temporal.validateArchival
+            paths: [archival.enabled]
+            message: >-
+              Archival needs Temporal server 1.31 or later, and this release runs 1.30.x. Finish the upgrade to
+              1.31 first, then turn archival on.
+    rules:
+      - when: oldSelf != null && oldSelf.archival.enabled == true
+        rule: self.archival.enabled == true
+        severity: warning
+        paths: [archival.enabled]
+        message: >-
+          Do not turn the archiver off once archival has been used: namespaces keep their S3 targets, every
+          later update of `default` then fails and archived workflows become unreadable. To stop archiving,
+          keep it on and turn off "Archive the default namespace" instead.
 
   - id: database
     title: Database
@@ -702,6 +734,9 @@ yamlOnly:
     reason: Temporal connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
 
 migrations:
+  # Archival is new in 2.0.0: an older release had it off.
+  - fromVersions: "<2.0.0"
+    assume: { archival.enabled: false, archival.defaultNamespace: true }
   # 2.0.0 replaces auto-setup with temporalio/server plus an admin-tools sidecar, and Temporal upgrades one
   # minor version at a time: a 1.x release (server 1.29) must land on 1.30 first, whatever image it ran.
   - fromVersions: "<2.0.0"

@@ -236,13 +236,25 @@ prefix, never a whole-internet range, and the list needs the UI to exist.
 {{- end -}}
 {{- range $cidrs -}}
 {{- $c := toString . -}}
-{{- $v4 := regexMatch "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])[.]){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$" $c -}}
-{{- $v6 := and (contains ":" $c) (regexMatch "^[0-9a-fA-F:.]+/(12[0-8]|1[01][0-9]|[1-9]?[0-9])$" $c) -}}
-{{- if not (or $v4 $v6) -}}
+{{- $parts := splitList "/" $c -}}
+{{- $family := "" -}}
+{{- $prefix := -1 -}}
+{{- if and (eq (len $parts) 2) (regexMatch "^[0-9]{1,3}$" (last $parts)) -}}
+{{- $prefix = atoi (last $parts) -}}
+{{- if and (regexMatch "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])[.]){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$" (first $parts)) (le $prefix 32) -}}
+{{- $family = "v4" -}}
+{{- else if and (regexMatch "^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(:[0-9a-fA-F]{1,4}){1,6}|:((:[0-9a-fA-F]{1,4}){1,7}|:))$" (first $parts)) (le $prefix 128) -}}
+{{- $family = "v6" -}}
+{{- end -}}
+{{- end -}}
+{{- if not $family -}}
 {{- fail (printf "temporal: ui.allowedCIDRs entry %q is not an IP range. Use an IPv4 or IPv6 address with a prefix length, such as 203.0.113.10/32 or 2001:db8::/48." $c) -}}
 {{- end -}}
-{{- if hasSuffix "/0" $c -}}
+{{- if eq $prefix 0 -}}
 {{- fail (printf "temporal: ui.allowedCIDRs entry %q opens the Web UI to the whole internet. The UI has no login of its own, so this list is its only protection: list specific ranges, such as your office or VPN egress address (/32)." $c) -}}
+{{- end -}}
+{{- if or (and (eq $family "v4") (lt $prefix 8)) (and (eq $family "v6") (lt $prefix 32)) -}}
+{{- fail (printf "temporal: ui.allowedCIDRs entry %q is too broad for a UI with no login (IPv4 ranges must be /8 or narrower, IPv6 /32 or narrower). List specific ranges, such as your office or VPN egress address (/32)." $c) -}}
 {{- end -}}
 {{- end -}}
 {{- end }}
@@ -299,6 +311,12 @@ validators: each required value must be set when the feature is on.
 {{- end -}}
 {{- if not $s3.policyName -}}
 {{- fail "temporal: archival.s3.policyName is required when archival.enabled is true. It names the AWS IAM policy scoped to the bucket; see \"Archival storage setup\" in the README." -}}
+{{- end -}}
+{{- if not (regexMatch "^[^\\s/][^\\s]*$|^$" (toString (default "" $s3.prefix))) -}}
+{{- fail (printf "temporal: archival.s3.prefix %q must not start with / or contain spaces." (toString $s3.prefix)) -}}
+{{- end -}}
+{{- if eq (include "temporal.imageMinor" .) "30" -}}
+{{- fail "temporal: archival needs Temporal server 1.31 or later, and this release runs 1.30.x. 1.30 is a one-step stop on the way from 1.x: finish the upgrade to 1.31 first, then turn archival.enabled on." -}}
 {{- end -}}
 {{- end -}}
 {{- end }}

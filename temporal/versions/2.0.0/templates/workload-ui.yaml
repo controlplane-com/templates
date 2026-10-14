@@ -73,7 +73,7 @@ spec:
       # protection; 0.0.0.0/0 and ::/0 are refused at render.
       inboundAllowCIDR:
         {{- range .Values.ui.allowedCIDRs }}
-        - {{ . }}
+        - {{ . | quote }}
         {{- end }}
       {{- else }}
       # Internal-only, fail-closed: the UI has no built-in authentication and

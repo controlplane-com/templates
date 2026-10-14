@@ -89,7 +89,7 @@ prerequisites:
     valuesPath: archival.s3.bucket
     required: false
     when: archival.enabled
-    description: S3 bucket that receives archived workflow histories and visibility records.
+    description: S3 bucket that receives archived workflow histories and visibility records (archival needs server 1.31 or later).
   - kind: cloud-account
     valuesPath: archival.s3.cloudAccountName
     required: false
@@ -99,4 +99,4 @@ prerequisites:
     valuesPath: archival.s3.policyName
     required: false
     when: archival.enabled
-    description: AWS IAM policy scoped to the archival bucket, with the S3 actions listed in the README; the chart attaches it to the server identity.
+    description: AWS IAM policy with s3:ListBucket on the archival bucket and Put/GetObject under its prefix; the chart attaches it to the server identity.

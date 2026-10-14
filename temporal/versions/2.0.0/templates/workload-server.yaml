@@ -167,7 +167,9 @@ spec:
         - name: REQ_VIS
           value: {{ include "temporal.schemaFloor" (dict "ctx" . "store" "vis") | quote }}
         {{- if .Values.archival.enabled }}
-        # Archival targets applied to the `default` namespace.
+        # Archival targets and wanted state of the `default` namespace.
+        - name: ARCHIVAL_DEFAULT_NAMESPACE
+          value: {{ ternary "true" "false" (ne (toString .Values.archival.defaultNamespace) "false") | quote }}
         - name: ARCHIVAL_HISTORY_URI
           value: {{ include "temporal.archival.uri" (dict "ctx" . "store" "history") | quote }}
         - name: ARCHIVAL_VISIBILITY_URI

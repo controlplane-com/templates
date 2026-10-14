@@ -2,7 +2,7 @@
 # Temporal upgrades ONE MINOR VERSION AT A TIME (1.30 → 1.31 → 1.32). This chart
 # runs tags 1.30.x, 1.31.x and 1.32.x; `image` and `adminTools.image` must carry
 # the same tag. Coming from temporal 1.x? See "Upgrading from 1.x" in the README.
-image: temporalio/server:1.32.1 # server binary; configured from env, no config file
+image: temporalio/server:1.32.1 # server binary; configured from env (archival adds a generated config file)
 
 replicas: 1 # 1-5; 3 survives a replica loss. >1 rolling restarts are noisy — see README
 
@@ -42,9 +42,12 @@ internalAccess: # internal firewall scope for the server (gRPC :7233, HTTP API :
 # ─── Archival (optional) ──────────────────────────────────────────────────────
 # Copies closed workflow histories and visibility records to S3 before retention
 # deletes them; read them back with `temporal workflow list --archived`. Access is
-# keyless through the workload identity. See "Archival storage setup" in the README.
+# keyless through the workload identity. Needs server 1.31 or later. See
+# "Archival storage setup" in the README. To STOP archiving set defaultNamespace:
+# false. Once archival has been used, never set enabled back to false.
 archival:
-  enabled: false
+  enabled: false # declares the S3 archiver on the server and binds the identity to AWS
+  defaultNamespace: true # archive the `default` namespace (false = stop archiving it)
   s3:
     bucket: my-temporal-archival-bucket
     region: us-east-1

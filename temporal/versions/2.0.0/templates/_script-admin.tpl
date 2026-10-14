@@ -264,40 +264,60 @@ log "namespace default present"
 {{- if .Values.archival.enabled }}
 
 # ── Archival on the `default` namespace (every boot; idempotent) ────────────
-# Enables history and visibility archival with the configured S3 URIs, on a new
-# namespace and on one created before archival was turned on. Skipped when the
-# namespace already matches. Temporal never lets an enabled archival URI change,
-# so a refused update is logged and the boot continues.
-archival_ok() {
-  d=$(temporal operator namespace describe -n default -o json 2>/dev/null) || return 1
-  echo "$d" | grep -q '"historyArchivalState": *"ARCHIVAL_STATE_ENABLED"' &&
-    echo "$d" | grep -q '"visibilityArchivalState": *"ARCHIVAL_STATE_ENABLED"' &&
-    echo "$d" | grep -qF "\"historyArchivalUri\": \"${ARCHIVAL_HISTORY_URI}\"" &&
-    echo "$d" | grep -qF "\"visibilityArchivalUri\": \"${ARCHIVAL_VISIBILITY_URI}\""
-}
+# Brings `default` to the wanted archival state (archival.defaultNamespace),
+# deciding from the namespace's own describe output, and logs every decision.
+# Temporal never changes an archival URI once one is set, so an existing URI is
+# kept (and reported) rather than overwritten.
+jfield() { printf '%s' "$1" | tr -d ' \t\r\n' | sed -n "s/.*\"$2\":\"\([^\"]*\)\".*/\1/p"; }
+if [ "$ARCHIVAL_DEFAULT_NAMESPACE" = "true" ]; then want=ARCHIVAL_STATE_ENABLED; else want=ARCHIVAL_STATE_DISABLED; fi
 i=0
-until archival_ok; do
+while :; do
+  if ! d=$(temporal operator namespace describe -n default -o json 2>&1); then
+    log "archival: cannot read namespace default: $(echo "$d" | tail -n 1)"
+    d=""
+  fi
+  hs=$(jfield "$d" historyArchivalState); vs=$(jfield "$d" visibilityArchivalState)
+  hu=$(jfield "$d" historyArchivalUri); vu=$(jfield "$d" visibilityArchivalUri)
+  if [ -n "$d" ]; then
+    log "archival on namespace default: history ${hs:-unset} ${hu:-(no URI)}; visibility ${vs:-unset} ${vu:-(no URI)}; wanted ${want}"
+    if [ "$want" = ARCHIVAL_STATE_ENABLED ] && [ "$hs" = "$want" ] && [ "$vs" = "$want" ]; then
+      if [ "$hu" != "$ARCHIVAL_HISTORY_URI" ] || [ "$vu" != "$ARCHIVAL_VISIBILITY_URI" ]; then
+        log "WARNING: namespace default keeps archiving to ${hu} and ${vu}; Temporal never changes an archival URI once set, so the configured ${ARCHIVAL_HISTORY_URI} and ${ARCHIVAL_VISIBILITY_URI} apply only to namespaces that do not archive yet"
+      fi
+      log "archival on namespace default: enabled — no change"
+      break
+    fi
+    if [ "$want" = ARCHIVAL_STATE_DISABLED ] && [ "$hs" != ARCHIVAL_STATE_ENABLED ] && [ "$vs" != ARCHIVAL_STATE_ENABLED ]; then
+      log "archival on namespace default: disabled — no change"
+      break
+    fi
+  fi
   if [ "$i" -ge 12 ]; then
-    log "WARNING: archival could not be enabled on namespace default (last error above); continuing without it"
+    log "WARNING: archival on namespace default is NOT in the wanted state (${want}) after ${i} attempts; continuing — see the errors above"
     break
   fi
-  out=$(temporal operator namespace update -n default \
-    --history-archival-state enabled --history-uri "$ARCHIVAL_HISTORY_URI" \
-    --visibility-archival-state enabled --visibility-uri "$ARCHIVAL_VISIBILITY_URI" 2>&1)
-  rc=$?
-  if [ "$rc" -ne 0 ]; then
-    log "archival update on namespace default: $(echo "$out" | tail -n 1)"
-    case "$out" in
-      *"can't be changed"*|*"cannot be changed"*|*"URI cannot"*|*"cannot update"*)
-        log "WARNING: namespace default already archives to another URI, which Temporal never changes; keeping it"
-        break
-        ;;
-    esac
+  if [ -n "$d" ]; then
+    if [ "$want" = ARCHIVAL_STATE_ENABLED ]; then
+      args="--history-archival-state enabled --visibility-archival-state enabled"
+      [ -z "$hu" ] && args="$args --history-uri $ARCHIVAL_HISTORY_URI"
+      [ -z "$vu" ] && args="$args --visibility-uri $ARCHIVAL_VISIBILITY_URI"
+      [ -n "$hu" ] && [ "$hu" != "$ARCHIVAL_HISTORY_URI" ] && log "archival: namespace default already has history URI ${hu}; keeping it"
+      [ -n "$vu" ] && [ "$vu" != "$ARCHIVAL_VISIBILITY_URI" ] && log "archival: namespace default already has visibility URI ${vu}; keeping it"
+    else
+      args="--history-archival-state disabled --visibility-archival-state disabled"
+    fi
+    log "archival: temporal operator namespace update -n default ${args}"
+    # $args holds flags and URIs without spaces (render-enforced), so word splitting is intended.
+    # shellcheck disable=SC2086
+    if out=$(temporal operator namespace update -n default $args 2>&1); then
+      log "archival: namespace default updated"
+    else
+      log "ERROR: archival: namespace update on default failed: $(echo "$out" | tail -n 3 | tr '\n' ' ')"
+    fi
   fi
   i=$((i + 1))
   nap 5
 done
-archival_ok && log "archival enabled on namespace default: ${ARCHIVAL_HISTORY_URI} , ${ARCHIVAL_VISIBILITY_URI}"
 {{- end }}
 touch /temporal-gate/bootstrap-done
 log "bootstrap complete"

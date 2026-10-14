@@ -15,7 +15,7 @@ This app deploys [Temporal](https://temporal.io/), an open-source (MIT) durable-
 - **PostgreSQL (HA, default)** (subchart): the `postgres-highly-available` template: 3 Patroni Postgres replicas, 3 etcd replicas, and an HAProxy leader endpoint Temporal connects through.
 - **PostgreSQL (single-instance, optional)** (subchart): the `postgres` template instead, for lighter deployments.
 - **Database credentials secret** (dictionary): created by this template from `postgres.credentials.*` in both database modes. Nothing for you to create.
-- **Identity and policy**: the server identity may `reveal` exactly the database credentials secret.
+- **Identity and policy**: the server identity may `reveal` exactly the database credentials secret; with archival on it is also bound to your AWS cloud account and the bucket-scoped IAM policy (no keys).
 - **Server metrics**: each replica's Prometheus metrics (port 8000) are collected into the platform's built-in metrics.
 - **Optional database backups** (subchart): logical dumps or WAL-G archiving to S3, GCS, or an S3-compatible endpoint.
 - **Optional workflow archival** (`archival.enabled`): closed workflow histories and visibility records copied to an S3 bucket, reached keylessly through the server identity.
@@ -74,11 +74,12 @@ internalAccess: # firewall scope for the server (gRPC :7233, HTTP API :7243, clu
 
 ### Archival
 
-Archival keeps closed workflows readable after the namespace's retention deletes them. It is S3-only in this version (the local-file archiver is not offered: it would write to the replica's own short-lived disk).
+Archival keeps closed workflows readable after the namespace's retention deletes them. It is S3-only in this version (the local-file archiver is not offered: it would write to the replica's own short-lived disk), and needs Temporal server 1.31 or later: on a 1.x upgrade, turn it on after the hop to 1.31.
 
 ```yaml
 archival:
-  enabled: false # set true after the Archival storage setup steps
+  enabled: false # declares the S3 archiver and binds the identity to AWS; set true after the Archival storage setup steps
+  defaultNamespace: true # archive the `default` namespace; set false to stop archiving it
   s3:
     bucket: my-temporal-archival-bucket # bare bucket name, no s3://
     region: us-east-1
@@ -86,6 +87,8 @@ archival:
     cloudAccountName: my-s3-cloud-account # AWS cloud account; access is keyless
     policyName: my-temporal-archival-policy # AWS IAM policy scoped to the bucket
 ```
+
+**To stop archiving, set `archival.defaultNamespace: false` and keep `archival.enabled: true`.** Never set `archival.enabled: false` once archival has been used: namespaces keep their `s3://` targets, every later update of `default` then fails with `unable to find archiver config`, the server retries archiving each closed workflow indefinitely, and archived workflows become unreadable. The identity keeps its AWS binding until the release is uninstalled.
 
 With archival on, the `default` namespace archives to `s3://BUCKET/PREFIX/history` and `s3://BUCKET/PREFIX/visibility`, also when you turn it on for an existing install. A workflow appears in the archive a few minutes after it closes. Read it back from the `admin` container:
 
@@ -216,16 +219,15 @@ Only needed when `archival.enabled` is true. Complete these steps before turning
 
 1. Create an S3 bucket. Set `archival.s3.bucket` and `archival.s3.region`.
 2. If you do not have one, create a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) for your AWS account. Set `archival.s3.cloudAccountName`.
-3. Create an AWS IAM policy with the JSON below (replace `YOUR_BUCKET`), then set `archival.s3.policyName` to the policy's name. The server writes and reads archives and lists the bucket; it never deletes from it.
+3. Create an AWS IAM policy with the JSON below (replace `YOUR_BUCKET` and `YOUR_PREFIX`, the value of `archival.s3.prefix`), then set `archival.s3.policyName` to the policy's name. The server lists the bucket and writes and reads archives under the prefix; it never deletes from it.
 
 ```json
 {
   "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Action": ["s3:PutObject", "s3:GetObject", "s3:ListBucket"],
-    "Resource": ["arn:aws:s3:::YOUR_BUCKET", "arn:aws:s3:::YOUR_BUCKET/*"]
-  }]
+  "Statement": [
+    { "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": ["arn:aws:s3:::YOUR_BUCKET"] },
+    { "Effect": "Allow", "Action": ["s3:PutObject", "s3:GetObject"], "Resource": ["arn:aws:s3:::YOUR_BUCKET/YOUR_PREFIX/*"] }
+  ]
 }
 ```
 

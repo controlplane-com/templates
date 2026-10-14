@@ -190,22 +190,25 @@ Check either mode with `… node openclaw.mjs mcp status --verbose`: `oauth: aut
 ## Restarting the gateway or a channel
 
 ```bash
-# Gateway, in place (~15 s): the container keeps running, WhatsApp reconnects, open Control UI tabs reconnect
+# Gateway, in place (~15 s, after any running agent turn finishes; it keeps serving while it waits): channels and open Control UI tabs reconnect
 cpln workload exec RELEASE-openclaw --gvc GVC --container openclaw -- sh -c 'cd /app && node openclaw.mjs gateway restart'
 # One channel, then confirm with channels status: "started": true is returned even if the channel fails moments later (e.g. a bad token)
 cpln workload exec RELEASE-openclaw --gvc GVC --container openclaw -- sh -c 'cd /app && node openclaw.mjs gateway call channels.start --params "{\"channel\":\"whatsapp\"}"'
 cpln workload exec RELEASE-openclaw --gvc GVC --container openclaw -- sh -c 'cd /app && node openclaw.mjs channels status'
 ```
 
-Use `cpln workload force-redeployment RELEASE-openclaw --gvc GVC` only as a last resort — and after rotating a key in your secret, since a new key reaches only a new replica.
+Use `cpln workload force-redeployment RELEASE-openclaw --gvc GVC` only as a last resort — it takes the assistant offline for about 4 minutes — and after rotating a key in your secret, since a new key reaches only a new replica. Pairings, the WhatsApp link and MCP sign-ins survive it.
 
 ## Important Notes
 
 - **Security:** with `publicAccess.enabled` an agent with a shell sits on the internet behind one token. Keep the token long and secret, keep DM pairing on, and vet third-party skills.
+- **Approve only chat contacts you would trust as admins.** An approved contact can have the agent run shell commands in the container without asking, and those commands can read the gateway token and the workload's Control Plane token; per-requester MCP sign-in does not change that. To hold each command for your approval, run `… node openclaw.mjs config set tools.exec.ask always`.
 - **Every new chat contact gets a pairing code** and is ignored until you approve it (`pairing approve CHANNEL CODE`, see [Connecting chat channels](#connecting-chat-channels)).
 - **Image upgrades run one-way state migrations.** Take a volume snapshot before bumping the tag; a downgrade cannot read migrated state.
 - **The assistant spends model tokens on its own.** OpenClaw runs a heartbeat turn every 30 minutes by default; change or turn it off in the Control UI.
 - **"You've reached your Codex subscription usage limit" with `model.provider: openai` most likely means your OpenAI API account is out of credit or quota.** The image runs `openai/*` models on its Codex runtime, which words billing errors that way; pinning the model to the `openclaw` runtime (`agents.defaults.models["openai/MODEL"].agentRuntime.id`) shows the provider's real error (e.g. `credit_balance_exhausted`).
+- **After changing `model.provider`, rebuild the memory index** with `… node openclaw.mjs memory status --index --agent main`; until then memory search returns nothing.
+- **The Control UI microphone only dictates until you choose a voice provider.** For spoken conversation (Talk), run `… node openclaw.mjs config set talk.realtime.provider openai`.
 - Access-knob changes take from about 30 seconds to 10 minutes to propagate.
 - **Uninstall deletes the volume and all state** — the WhatsApp link, MCP sign-ins, sessions and workspace — with no tested way to restore it into a new install. Copy out anything you need first.
 

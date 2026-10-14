@@ -44,7 +44,6 @@ useCases:
   - Wrap any LLM in an agent behind an OpenAI-compatible API
 
 alternativeTo:
-  - OpenClaw
   - Manus
   - ChatGPT agent
   - Letta
@@ -61,6 +60,9 @@ pickInsteadIf:
     template: n8n
 
 related:
+  - template: openclaw
+    relation: alternative
+    note: Another self-hosted assistant, with chat channels, a Control UI and a headless browser tool
   - template: litellm
     relation: companion
     note: OpenAI-compatible gateway Hermes can use as its model provider

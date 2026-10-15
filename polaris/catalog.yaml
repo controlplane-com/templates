@@ -65,6 +65,12 @@ related:
 prerequisites:
   - kind: secret
     secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: [postgres.config.credentialsSecretName, postgresHA.config.credentialsSecretName]
+    required: true
+    description: Metastore credentials PostgreSQL initializes with and Polaris connects with; database must be URL-safe. When missing, the deployment waits with no logs.
+  - kind: secret
+    secretType: dictionary
     keys: [CLIENT_ID, CLIENT_SECRET]
     valuesPath: rootCredentials.secretName
     required: true

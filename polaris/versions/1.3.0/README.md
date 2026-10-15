@@ -1,5 +1,8 @@
 # Apache Polaris
 
+> **Upgrading from 1.2.1:** the metastore credentials are now a secret you create before upgrading,
+> under a **new** name — see [Upgrading from 1.2.1](#upgrading-from-121).
+
 This app deploys [Apache Polaris](https://polaris.apache.org/) — an Apache Iceberg **REST catalog** (Apache-2.0). It is the service that tells query engines which tables exist, where their metadata lives in object storage, and who may read them. Together with an S3-compatible bucket and a query engine such as the `trino` template, it turns a bucket of Parquet files into a lakehouse.
 
 ## Architecture
@@ -7,17 +10,23 @@ This app deploys [Apache Polaris](https://polaris.apache.org/) — an Apache Ice
 - **Polaris server**: Standard workload serving the Iceberg REST API and the management API on `8181`, and Quarkus health/metrics on `8182`. Stateless — a `replicas` knob scales it horizontally.
 - **Bootstrap workload**: Runs the official `polaris-admin-tool` image once to create the realm schema and the root principal, then idles. Always one replica; the operation is idempotent, so restarts and upgrades re-run it harmlessly.
 - **Bootstrap script secret**: The shell script the bootstrap workload runs (opaque secret, mounted as a file).
-- **Two identities and two policies**: Least privilege — only the bootstrap principal can reveal the root credentials; only the server principal can reveal the token signing key and the object-storage credentials.
+- **Two identities and two policies**: Least privilege — only the bootstrap principal can reveal the root credentials; only the server principal can reveal the token signing key and the object-storage credentials. Both can reveal your metastore credentials secret.
 - **PostgreSQL (single-instance, default)**: The `postgres` template — every catalog, namespace, table pointer, principal and grant lives here.
 - **PostgreSQL (HA, optional)**: The `postgres-highly-available` template instead — 3 Patroni replicas, 3 etcd replicas, and an HAProxy leader endpoint.
-- **Metastore credentials secret**: A `dictionary` secret holding the metastore's `username`, `password` and `database`, built by this template from `postgres.credentials.*` in **both** modes and handed to the database subchart by name (`postgres.config.credentialsSecretName`, or `postgresHA.config.credentialsSecretName` in HA mode). Nothing for you to create.
+- **Metastore credentials secret** (dictionary) — *not created by this template*; you create it before install. The database initializes from it, and the Polaris server and bootstrap workload connect with it, in either metastore mode.
 - **No volumeset**: The Polaris server writes nothing to local disk that must survive a restart.
 
 ## Prerequisites
 
-Two Control Plane secrets **must exist before installing** (the deployment waits on them otherwise):
+Three Control Plane secrets **must exist before installing**. They hold credentials, so they are prerequisite secrets rather than values — a value would sit in plaintext in the Helm release for the life of the install.
 
 ```bash
+# Metastore credentials — the bundled PostgreSQL initializes with these and Polaris connects with them.
+cpln secret create-dictionary --name my-polaris-db-credentials \
+  --entry username=polaris \
+  --entry password="$(openssl rand -hex 24)" \
+  --entry database=polaris
+
 # Root principal credentials — what Trino, Spark and any Iceberg REST client authenticate with.
 # Neither value may contain a comma.
 cpln secret create-dictionary --name my-polaris-root-credentials \
@@ -28,12 +37,17 @@ printf '%s' "$(openssl rand -hex 32)" | \
   cpln secret create-opaque --name my-polaris-signing-key --encoding plain -f -
 ```
 
+Set the metastore secret's name in the key of the store you use: `postgres.config.credentialsSecretName` (single-instance, the default) or `postgresHA.config.credentialsSecretName` (HA). Secret names are org-wide, so give each polaris release its own secret.
+
+- **`database` must be URL-safe** (letters, digits, `_`): the JDBC URL is assembled from it at container start. The snippet's hex password needs no escaping either.
+- **PostgreSQL reads the metastore secret only when its data is first initialized.** To change the password later, run `ALTER ROLE` first, then edit the secret (`cpln secret edit my-polaris-db-credentials`), then `cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME`, wait until `cpln workload get-deployments RELEASE_NAME-postgres --gvc GVC_NAME` no longer shows `will be restarted shortly` (`ready: true` alone can still describe the old replica), and force-redeploy `RELEASE_NAME-polaris`. In HA mode follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode) instead. A running workload keeps the values it started with.
+
+**If any of these secrets does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-polaris --gvc GVC_NAME -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key); check `RELEASE_NAME-polaris-bootstrap` and `RELEASE_NAME-postgres` the same way. Create the missing secret and it can take up to about 12 minutes to serve again — poll rather than giving up — or clear it immediately with `cpln workload force-redeployment` on the waiting workload.
+
 Optional:
 
 - **Object storage credentials** for the bucket that holds your Iceberg data — see **Iceberg bucket setup** below.
 - **Cloud account + bucket** only if you enable the Postgres backup pass-through (see **Storage setup**). With `postgres.backup.provider: minio` (single-instance mode) the endpoint's keys are a prerequisite dictionary secret instead — see that section.
-
-**The metastore password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*` in both single-instance and HA mode.
 
 ## Iceberg bucket setup
 
@@ -147,14 +161,8 @@ Exactly one of the two stores must be enabled (the chart enforces this at render
 ```yaml
 postgres: # default: single-instance PostgreSQL
   enabled: true
-  credentials: # this template builds the metastore credential secret from these
-    username: polaris
-    password: change-me-polaris-db # change before installing
-    database: polaris
   config:
-    # name of the dictionary secret this template CREATES and Postgres reads;
-    # secret names are org-wide; a second release on this name is refused at install
-    credentialsSecretName: my-polaris-db-credentials
+    credentialsSecretName: my-polaris-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   resources:
     minCpu: 200m
     maxCpu: 500m
@@ -178,7 +186,7 @@ postgres:
 postgresHA: # set postgresHA.enabled: true for near-zero-downtime upgrades and failover
   enabled: true
   config:
-    credentialsSecretName: my-polaris-db-credentials # created by this template from postgres.credentials.*; give each release its own
+    credentialsSecretName: my-polaris-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   replicas: 3
   volumeset:
     capacity: 10 # initial capacity in GiB per replica (minimum is 10)
@@ -201,6 +209,7 @@ Each Polaris replica opens up to 20 JDBC connections, plus the bootstrap workloa
 | In-GVC (internal) | `http://RELEASE_NAME-polaris.GVC_NAME.cpln.local:8181` |
 | Health and metrics | `http://RELEASE_NAME-polaris.GVC_NAME.cpln.local:8182/q/health`, `/q/metrics` — reachable in-GVC only |
 | Credentials | `CLIENT_ID` / `CLIENT_SECRET` from your `rootCredentials` secret |
+| Metastore credentials | the `username` / `password` / `database` keys of your secret named by `postgres.config.credentialsSecretName` (or `postgresHA.config.credentialsSecretName` in HA mode) — `cpln secret reveal SECRET_NAME -o yaml` |
 
 With `publicAccess.enabled`, only port `8181` is served on the canonical endpoint; the unauthenticated Quarkus health and metrics interface on `8182` stays reachable in-GVC only.
 
@@ -311,19 +320,69 @@ cpln secret create-dictionary --name my-polaris-minio-credentials \
   --entry secretKey=YOUR_SECRET_KEY
 ```
 
+## Upgrading from 1.2.1
+
+`postgres.credentials` was removed: the metastore credentials are now a prerequisite secret, the same one the database templates require on their own. Carrying the old key forward fails the render.
+
+1.2.1 created the metastore secret itself, so **this upgrade deletes it**. Before upgrading, create a secret under a **new** name holding the values your database was initialized with — not new ones, or Polaris loses its metastore connection:
+
+```bash
+cpln secret create-dictionary --name RELEASE_NAME-postgres-credentials \
+  --entry username=polaris --entry password=YOUR_CURRENT_PASSWORD --entry database=polaris
+```
+
+Your current values are in `postgres.credentials` of the 1.2.1 release, and also in the old secret (`cpln secret reveal my-polaris-db-credentials -o yaml`, or whatever name your release set) until the upgrade deletes it. Then upgrade with `postgres.config.credentialsSecretName` (single-instance mode) or `postgresHA.config.credentialsSecretName` (HA mode) set to the new name, and `postgres.credentials` removed.
+
+The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so Polaris can briefly lose its database; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
+
+## Upgrading from 1.2.0
+
+With `postgresHA.backup.provider: minio`, `postgresHA.backup.minio.accessKey`/`secretKey` were replaced by `postgresHA.backup.minio.credentialsSecretName`; create that secret (see Storage setup). Then follow [Upgrading from 1.2.1](#upgrading-from-121).
+
+## Upgrading from 1.1.x
+
+The HA metastore moved to `postgres-highly-available` 2.5.0, which removed `postgresHA.postgres.*`. Put the username, password and database your HA cluster was **initialized with** into the metastore credentials secret under [Prerequisites](#prerequisites) — new values there do not change the database password, and Polaris can no longer log in — set `postgresHA.config.credentialsSecretName` to its name, and delete the `postgresHA.postgres` block. Single-instance installs follow [Upgrading from 1.2.1](#upgrading-from-121).
+
+## Upgrading from 1.0.x
+
+`postgres.config.username/password/database` were removed. Put the values your single-instance database was initialized with into the metastore credentials secret under [Prerequisites](#prerequisites), set `postgres.config.credentialsSecretName` to its name, and remove the three keys. With `postgres.backup.provider: minio`, `postgres.backup.minio.accessKey`/`secretKey` moved to a dictionary secret named by `postgres.backup.minio.credentialsSecretName` (see Storage setup). HA installs also follow [Upgrading from 1.1.x](#upgrading-from-11x).
+
+## Rotating the database password in HA mode
+
+The HA database (`postgresHA`) needs its own order. The replication role `repl` shares the password, and a member that restarts with the old password can be promoted to leader, which splits the cluster. Move the leader to member `-0` first, so it restarts last, after every other member already has the new password. `pgx` runs a command in one member (`LOCATION` is your GVC's location, `DB_USERNAME` the secret's `username`):
+
+```bash
+pgx() { cpln workload exec RELEASE_NAME-postgres-ha --gvc GVC_NAME --location LOCATION \
+  --container patroni-postgres --replica "RELEASE_NAME-postgres-ha-$1" -- "${@:2}"; }
+# 1. Find the leader ("role": "leader"); the other two must be "streaming" on the same "timeline"
+pgx 0 curl -s localhost:8008/cluster
+# 2. If the leader is not RELEASE_NAME-postgres-ha-0, move it there (N = current leader), then repeat step 1
+pgx 0 curl -s -XPOST -d '{"leader":"RELEASE_NAME-postgres-ha-N","candidate":"RELEASE_NAME-postgres-ha-0"}' localhost:8008/switchover
+# 3-5. Back to back: change BOTH roles on -0, put the same password in the secret, restart the members
+pgx 0 psql -h 127.0.0.1 -d postgres -c "ALTER ROLE DB_USERNAME PASSWORD 'NEW_PASSWORD'; ALTER ROLE repl PASSWORD 'NEW_PASSWORD';"
+cpln secret edit SECRET_NAME
+cpln workload force-redeployment RELEASE_NAME-postgres-ha --gvc GVC_NAME
+# 6. After ~5-6 minutes, confirm one leader and two "streaming" replicas on one timeline (repeat step 1)
+# 7. Optional: remove the install-time password Patroni keeps in its cluster config
+pgx 0 curl -s -XPATCH -d '{"postgresql":{"authentication":null}}' localhost:8008/config
+```
+
+Then force-redeploy `RELEASE_NAME-polaris`, which keeps the old password until they restart. Clients see roughly 10–60 s of connection errors during the switchovers. If a member stays `starting`, or `running` without `streaming` for several minutes, re-copy it from the leader. This copies the whole database, so it costs network traffic in proportion to its size:
+
+```bash
+pgx N curl -s -XPOST -d '{"force": true}' localhost:8008/reinitialize
+```
+
 ## Important Notes
 
-- **Create both prerequisite secrets before installing** — without them the workloads wait on a secret that does not exist and the install looks broken.
+- **Create all three prerequisite secrets before installing** — without them the workloads wait on a secret that does not exist, with zero log lines; see Prerequisites for how to diagnose it.
 - **Expect a warm-up while the metastore comes up, and do not interrupt it.** The server may restart a few times and the bootstrap workload retries until PostgreSQL answers; both self-heal. The `postgresHA` metastore takes noticeably longer than the single instance.
 - **Use `replicas: 2` or more for rolling upgrades without downtime** — all replicas share the signing key and the metastore, so a token or catalog from one is valid on every other.
 - **Root credentials are write-once.** They are applied when the realm is first bootstrapped; changing them afterwards has no effect. Rotate by creating a new principal through the management API.
 - **Rotating `tokenSigningKey` invalidates every outstanding token** — clients must obtain a new one.
 - **`realm` is permanent.** Renaming it bootstraps a new, empty realm and hides the existing catalogs; changing it back makes them visible again.
-- **Change `postgres.credentials.password` before installing** — the default is a placeholder.
-- **Upgrading from 1.0.x**: the single-instance metastore credentials moved from `postgres.config.username/password/database` to `postgres.credentials.username/password/database`, named by the new `postgres.config.credentialsSecretName`. Carrying the old keys fails the render with `config.username was REMOVED in postgres 3.4.0` — move the three keys and you are done. **Ignore that message's advice to create a secret yourself; this template creates it**, and the metastore password stays a value. `postgres.backup.minio.accessKey`/`secretKey` were removed the same way (see Storage setup).
-- **Upgrading from 1.1.x (HA mode)**: 1.2.0 moved to `postgres-highly-available` 2.5.0, which removed `postgresHA.postgres.*`. Delete that block and put the username, password and database your cluster was **initialized with** into `postgres.credentials.*` — this template now creates the HA credentials secret too, so ignore the subchart error's advice to create it yourself. New values there change the secret but not the database password, and Polaris can no longer log in.
-- **Upgrading from 1.2.0 (HA MinIO backups only)**: `postgresHA.backup.minio.accessKey`/`secretKey` were replaced by `postgresHA.backup.minio.credentialsSecretName`; create that secret (see Storage setup) before upgrading.
-- **Give each polaris release its own credentials secret name** — `postgres.config.credentialsSecretName`, or `postgresHA.config.credentialsSecretName` in HA mode. Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. The first release is unaffected; you simply cannot install the second until you give it a distinct name.
+- **Rotating the metastore password needs `ALTER ROLE` plus a forced redeployment** — PostgreSQL keeps the password it was initialized with, and a running workload keeps the values it started with (see Prerequisites).
+- **Rotating the database password in HA mode needs a leader switchover first** — follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode). A plain redeploy can promote a member still holding the old password and split the cluster.
 - **Database volumes survive restarts, redeploys and upgrades; uninstalling deletes them** — every catalog definition is lost with them. Use `postgresHA` and/or the backup pass-through for production.
 - **No credential vending in this version.** Polaris and each engine hold their own static object-storage credentials; keep `iceberg.rest-catalog.vended-credentials-enabled=false` in Trino.
 - **Polaris does not migrate its own database schema** — treat a future Polaris version bump as an explicit schema step, not something boot handles.

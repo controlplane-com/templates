@@ -71,34 +71,22 @@ parent duplicates the derived name (temporal pattern).
 {{- end }}
 
 {{/*
-Name of the bundled metastore's credential secret in the SINGLE-INSTANCE path.
-This chart CREATES that secret (secret-db.yaml) and the postgres subchart only
-receives its NAME — since postgres 3.4.0 the subchart creates no secret of its
-own. A subchart value cannot be templated by its parent, so the name is a plain
-value that both sides read, which is why it is not derived from the release name.
-*/}}
-{{- define "polaris.secret.db.name" -}}
-{{- .Values.postgres.config.credentialsSecretName }}
-{{- end }}
-
-{{/*
-Credentials secret of the ACTIVE metastore.
-HA path: still created by postgres-highly-available 2.4.2 (pg-ha.secretDatabase.name)
-— unchanged, that chart has not adopted the prerequisite-secret convention.
-Single-instance path: created by this chart, named by postgres.config.credentialsSecretName.
-Both hold the same three keys — username, password, database.
+Credentials secret of the ACTIVE metastore — a PREREQUISITE the user creates
+(keys: username, password, database). Both database subcharts require it by
+name, so Polaris requires the same secret rather than building one from
+plaintext values; the subchart, the server and the bootstrap admin tool all
+read it. 1.2.1 and earlier created it from postgres.credentials.*.
+HA path: named by postgresHA.config.credentialsSecretName.
+Single-instance path: named by postgres.config.credentialsSecretName.
+A subchart value cannot be templated by its parent, so each name is a plain
+value that both sides read.
 */}}
 {{- define "polaris.postgres.secret.name" -}}
 {{- if .Values.postgresHA.enabled -}}
 {{- .Values.postgresHA.config.credentialsSecretName }}
 {{- else -}}
-{{- include "polaris.secret.db.name" . }}
+{{- .Values.postgres.config.credentialsSecretName }}
 {{- end }}
-{{- end }}
-
-{{/* Database name of the active metastore (the JDBC URL cannot read a secret). */}}
-{{- define "polaris.postgres.database" -}}
-{{- .Values.postgres.credentials.database }}
 {{- end }}
 
 {{/*
@@ -112,8 +100,17 @@ configuration. The hyphenated property polaris.persistence.relational.jdbc
   value: relational-jdbc
 - name: POLARIS_PERSISTENCE_RELATIONAL_JDBC_DATABASE_TYPE
   value: postgresql
+{{- /*
+  The database name lives in the prerequisite secret, so the JDBC URL is assembled
+  at container start: the platform expands $(VAR) in an env value (fusionauth 2.5.0
+  / keycloak 1.5.0 precedent; the API stores env alphabetically, so declaration
+  order is irrelevant). POSTGRES_DB_NAME is deliberately not QUARKUS_* or POLARIS_*,
+  so neither Quarkus nor Polaris reads it as a configuration property.
+*/}}
+- name: POSTGRES_DB_NAME
+  value: cpln://secret/{{ include "polaris.postgres.secret.name" . }}.database
 - name: QUARKUS_DATASOURCE_JDBC_URL
-  value: jdbc:postgresql://{{ include "polaris.postgres.host" . }}:5432/{{ include "polaris.postgres.database" . }}
+  value: jdbc:postgresql://{{ include "polaris.postgres.host" . }}:5432/$(POSTGRES_DB_NAME)
 - name: QUARKUS_DATASOURCE_USERNAME
   value: cpln://secret/{{ include "polaris.postgres.secret.name" . }}.username
 - name: QUARKUS_DATASOURCE_PASSWORD
@@ -186,7 +183,24 @@ exec sleep infinity
 {{- end -}}
 {{- end -}}
 
+{{/*
+The metastore credentials became a user-created prerequisite secret in 1.3.0:
+both database subcharts require a pre-existing secret, so Polaris requires the
+same one instead of rendering it from plaintext values. The removed key is named
+explicitly so a 1.2.1 values file fails at render with its replacement and the
+upgrade procedure. No compatibility shims — the version bump IS the migration path.
+*/}}
+{{- define "polaris.validateDatabaseSecret" -}}
+{{- if hasKey .Values.postgres "credentials" -}}
+{{- fail "polaris: postgres.credentials was REMOVED in 1.3.0. The metastore credentials are now a prerequisite `dictionary` secret you create (keys: username, password, database), named by postgres.config.credentialsSecretName (single-instance mode) or postgresHA.config.credentialsSecretName (HA mode). Upgrading from 1.2.1: create it under a NEW name holding your EXISTING values, set the credentialsSecretName of the mode you use to that name, and remove postgres.credentials — see \"Upgrading from 1.2.1\" in the README." -}}
+{{- end -}}
+{{- if not (include "polaris.postgres.secret.name" .) -}}
+{{- fail "polaris: the metastore credentials secret name is required — set postgres.config.credentialsSecretName (single-instance mode) or postgresHA.config.credentialsSecretName (HA mode) to your pre-created `dictionary` secret holding username, password and database. See Prerequisites in the README." -}}
+{{- end -}}
+{{- end }}
+
 {{- define "polaris.validate" -}}
+{{- include "polaris.validateDatabaseSecret" . -}}
 {{- if lt (int .Values.replicas) 1 -}}
 {{- fail (printf "polaris: replicas must be 1 or more — got %v" .Values.replicas) -}}
 {{- end -}}

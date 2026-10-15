@@ -1,33 +1,50 @@
 # Infisical
 
+> **Upgrading from 1.1.0:** the database credentials are now a secret you create before upgrading,
+> under a **new** name — see [Upgrading from 1.1.0](#upgrading-from-110).
+
 Infisical is an open-source (MIT core) secrets-management platform: store, version, scope, and serve application secrets through a web UI and REST API. This template deploys a stateless Infisical server tier backed by Postgres (durable secret store) and Redis (cache + background-job queues).
 
 ## Architecture
 
-- **Infisical server** — a `standard` HTTP workload (`{release}-infisical`, port 8080) serving the UI + API; scale with `infisical.replicas`. Runs DB migrations automatically on boot.
+- **Infisical server** — a `standard` HTTP workload (`RELEASE_NAME-infisical`, port 8080) serving the UI + API; scale with `infisical.replicas`. Runs DB migrations automatically on boot.
 - **PostgreSQL** (`postgres` subchart) — durable store for all secrets, versions, projects, and users.
 - **Redis + Sentinel** (`redis` subchart, HA) — cache and BullMQ job queues; connected Sentinel-aware (master `mymaster`). Required — Infisical will not boot without Redis.
-- **DB-credentials secret** — template-created dictionary secret used to assemble `DB_CONNECTION_URI`.
-- **Identity + policy** — grants the server `reveal` on exactly the secrets it mounts.
+- **Keys secret** (dictionary) — *not created by this template*; you create it before install. Holds Infisical's root-of-trust keys.
+- **Database credentials secret** (dictionary) — *not created by this template*; you create it before install. Postgres initializes from it and Infisical connects with it.
+- **Identity + policy** — grants the server `reveal` on exactly the secrets it reads.
 
 ## Prerequisites
 
-- **A prerequisite dictionary secret — create it BEFORE installing.** The server references it by name (`secrets.name`, default `my-infisical-secrets`) and the deployment wedges on a missing secret. It must be a **dictionary** secret containing Infisical's root-of-trust keys — both **write-once, never rotate** (rotating `ENCRYPTION_KEY` corrupts every stored secret; rotating `AUTH_SECRET` invalidates all sessions):
-  - `ENCRYPTION_KEY` — `openssl rand -hex 16` (16-byte hex).
-  - `AUTH_SECRET` — `openssl rand -base64 32` (32-byte base64).
+**Two dictionary secrets must exist BEFORE you install.** They hold credentials and key material, so they are prerequisite secrets rather than values — a value would sit in plaintext in the Helm release for the life of the install.
 
-  ```bash
-  cpln secret create-dictionary --name my-infisical-secrets \
-    --entry ENCRYPTION_KEY=$(openssl rand -hex 16) \
-    --entry AUTH_SECRET=$(openssl rand -base64 32)
-  ```
+**1. Database credentials** — the bundled Postgres initializes with these and Infisical connects with them:
 
-- **(Optional, only for authenticated SMTP)** a dictionary secret with `SMTP_USERNAME` + `SMTP_PASSWORD`, referenced via `smtp.auth.secretName`. Leave `smtp.auth.secretName` empty for unauthenticated relays / mail catchers.
+```bash
+cpln secret create-dictionary --name my-infisical-db-credentials \
+  --entry username=infisical \
+  --entry password="$(openssl rand -hex 24)" \
+  --entry database=infisical
+```
 
-  ```bash
-  cpln secret create-dictionary --name my-infisical-smtp \
-    --entry SMTP_USERNAME=apikey --entry SMTP_PASSWORD=...
-  ```
+Set `postgres.config.credentialsSecretName` to that name. Keep the password and database name URL-safe (letters, digits, `-`, `_`) — Infisical places them in a connection URL as-is. Postgres reads the secret only when its data directory is first initialized; see Important Notes for how to change the password later.
+
+**2. Root-of-trust keys** — referenced by `secrets.name` (default `my-infisical-secrets`). Both keys are **write-once, never rotate** (rotating `ENCRYPTION_KEY` corrupts every stored secret; rotating `AUTH_SECRET` invalidates all sessions):
+
+```bash
+cpln secret create-dictionary --name my-infisical-secrets \
+  --entry ENCRYPTION_KEY=$(openssl rand -hex 16) \
+  --entry AUTH_SECRET=$(openssl rand -base64 32)
+```
+
+**(Optional, only for authenticated SMTP)** a dictionary secret with `SMTP_USERNAME` + `SMTP_PASSWORD`, referenced via `smtp.auth.secretName`. Leave `smtp.auth.secretName` empty for unauthenticated relays / mail catchers.
+
+```bash
+cpln secret create-dictionary --name my-infisical-smtp \
+  --entry SMTP_USERNAME=apikey --entry SMTP_PASSWORD=...
+```
+
+**If a secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-infisical --gvc GVC_NAME -o yaml` (and `RELEASE_NAME-postgres` for the database secret; note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own after several minutes, or skip the wait with `cpln workload force-redeployment`.
 
 ## Configuration
 
@@ -81,19 +98,16 @@ internalAccess:
 ```yaml
 postgres:
   image: postgres:18
-  credentials:                 # this template builds the DB credential secret from these
-    username: infisical
-    password: change-me-infisical-pg   # change before installing
-    database: infisical
   config:
-    # name of the dictionary secret this template CREATES and Postgres reads;
-    # secret names are org-wide, so give each infisical release its own name
-    credentialsSecretName: my-infisical-db-credentials
+    credentialsSecretName: my-infisical-db-credentials  # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 1Gi
   volumeset:
     capacity: 10               # GiB (minimum 10)
 ```
-
-The database password is **not** a prerequisite — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*`.
 
 ### Redis
 
@@ -114,14 +128,30 @@ redis:
 | Target | Address | Credentials |
 |---|---|---|
 | Public UI + API | the canonical endpoint — read `status.canonicalEndpoint` (below) | first sign-up becomes super-admin |
-| Internal (same GVC) | `http://{release}-infisical.{gvc}.cpln.local:8080` | account login / API token |
+| Internal (same GVC) | `http://RELEASE_NAME-infisical.GVC_NAME.cpln.local:8080` | account login / API token |
 | Health | `GET /api/status` | none |
+| PostgreSQL (internal) | `RELEASE_NAME-postgres.GVC_NAME.cpln.local:5432` | from your `postgres.config.credentialsSecretName` secret (`cpln secret reveal SECRET_NAME -o yaml`) |
 
-The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`cpln workload get {release}-infisical --gvc {gvc} -o yaml`).
+The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`cpln workload get RELEASE_NAME-infisical --gvc GVC_NAME -o yaml`).
+
+## Upgrading from 1.1.0
+
+`postgres.credentials` was removed: the database credentials are now a prerequisite secret, the same one the `postgres` template requires on its own. Carrying the old key forward fails the render.
+
+1.1.0 created the database secret itself, so **this upgrade deletes it**. Before upgrading, create a secret under a **new** name holding the values your database was initialized with — not new ones, or Infisical loses its database connection:
+
+```bash
+cpln secret create-dictionary --name RELEASE_NAME-infisical-db \
+  --entry username=infisical --entry password=YOUR_CURRENT_PASSWORD --entry database=infisical
+```
+
+Then upgrade with `postgres.config.credentialsSecretName` set to that name and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.1.0 release, and also in the old secret (`cpln secret reveal my-infisical-db-credentials -o yaml`) until the upgrade deletes it.
+
+The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so Infisical can briefly lose its database; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
 
 ## Upgrading from 1.0.0
 
-The bundled database credentials moved from `postgres.config.username/password/database` to `postgres.credentials.username/password/database`, and `postgres.config.credentialsSecretName` names the secret this template now creates from them. If you carry the old keys the install fails with `config.username was REMOVED in postgres 3.4.0` — move the three keys and you are done. **Ignore that message's advice to create a secret yourself; this template creates it**, and the database password stays a value exactly as before.
+`postgres.config.username`, `.password` and `.database` were removed. Put the values your database was initialized with into the database credentials secret under Prerequisites (keys `username`, `password`, `database`), set `postgres.config.credentialsSecretName` to its name, and remove the three keys. The keys secret is unchanged.
 
 ## Backing up the bundled database
 
@@ -155,11 +185,11 @@ Check the object size before restoring from one.
 
 ## Important Notes
 
-- **The prerequisite secret must exist before install** — `secrets.name` is a dictionary secret with `ENCRYPTION_KEY` and `AUTH_SECRET`. A missing secret wedges the deployment.
+- **Both prerequisite secrets must exist before install** — the keys secret (`secrets.name`) and the database credentials secret (`postgres.config.credentialsSecretName`). A missing secret wedges the deployment with zero log lines; see Prerequisites for how to diagnose it.
 - **`ENCRYPTION_KEY` and `AUTH_SECRET` are write-once — never rotate them.** `ENCRYPTION_KEY` encrypts every stored secret; `AUTH_SECRET` signs all sessions.
+- **Changing the database password is a database change first.** Editing the secret alone does nothing to the database, and a running workload keeps the values it started with. Run `ALTER ROLE <username> PASSWORD '...'` in PostgreSQL, then `cpln secret edit SECRET_NAME`, then `cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME`, wait until it is ready, and force-redeploy `RELEASE_NAME-infisical`.
 - **The first account to sign up becomes super-admin.** There are no admin env vars — create your admin account immediately after install, then disable open sign-ups in the admin panel.
 - **Redis is required, not optional** — Infisical will not boot without it; the template hard-wires the Sentinel dependency (authless behind the same-GVC firewall by default).
-- **Give each infisical release its own `postgres.config.credentialsSecretName`.** Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
 - **Stored secrets live in Postgres and survive an app restart/reinstall** — to wipe all data you must also reinstall the Postgres dependency (its volumeset).
 - **Set `smtp.requireTls: false` for a plaintext mail catcher** (e.g. Mailpit); real providers on port 587 need it left `true`.
 - **First boot takes ~2–5 minutes** — the app waits for Postgres to finish initializing and runs its migrations, logging transient `ECONNRESET` / "Boot up migration failed" retries in the meantime. This is normal; it becomes `ready` once migrations complete.

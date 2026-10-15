@@ -26,12 +26,17 @@ spec:
         - name: SITE_URL
           value: {{ if .Values.infisical.siteUrl }}{{ .Values.infisical.siteUrl | quote }}{{ else }}"$(CPLN_GLOBAL_ENDPOINT)"{{ end }}
         # ── Database (postgres subchart) — durable secret store ──
+        # Credentials come from the user's prerequisite secret (the same one the
+        # postgres subchart initializes from). The URI is assembled at container
+        # start from $(VAR) placeholders, so no credential is rendered by Helm.
         - name: POSTGRES_USER
-          value: cpln://secret/{{ include "infisical.db.secret.name" . }}.postgresUsername
+          value: cpln://secret/{{ include "infisical.pgCredentials.secret.name" . }}.username
         - name: POSTGRES_PASSWORD
-          value: cpln://secret/{{ include "infisical.db.secret.name" . }}.postgresPassword
+          value: cpln://secret/{{ include "infisical.pgCredentials.secret.name" . }}.password
+        - name: POSTGRES_DB
+          value: cpln://secret/{{ include "infisical.pgCredentials.secret.name" . }}.database
         - name: DB_CONNECTION_URI
-          value: postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@{{ include "infisical.postgres.host" . }}:5432/{{ .Values.postgres.credentials.database }}
+          value: postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@{{ include "infisical.postgres.host" . }}:5432/$(POSTGRES_DB)
         # ── Redis (redis subchart, Sentinel-aware) — cache + BullMQ job queues ──
         - name: REDIS_SENTINEL_HOSTS
           value: {{ include "infisical.redis.sentinelHosts" . | quote }}

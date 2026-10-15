@@ -10,7 +10,7 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "infisical.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "infisical.db.secret.name" . }}
+  - //secret/{{ include "infisical.pgCredentials.secret.name" . }}
   - //secret/{{ .Values.secrets.name }}
   {{- if and .Values.smtp.enabled .Values.smtp.auth.secretName }}
   - //secret/{{ .Values.smtp.auth.secretName }}

@@ -453,6 +453,7 @@ steps:
               PostgreSQL reads these values only when its data directory is first initialized. To rotate the
               password later, run `ALTER ROLE ... PASSWORD`, update the secret, and force a redeployment of the
               database and Grafana workloads.
+              In HA mode also run `ALTER ROLE repl PASSWORD` with the same new password: the replication role shares it.
             ref:
               kind: secret
               format: name

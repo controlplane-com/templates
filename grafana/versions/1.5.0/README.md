@@ -277,6 +277,7 @@ cpln secret create-dictionary --name my-grafana-minio-credentials \
 - **Upgrading from 1.2.x or 1.3.x**: the old database keys (`postgres.config.username/password/database` in single-instance mode, `postgresHA.postgres.*` in HA mode) fail the render. Put the values your database was initialized with into the database credentials secret under Prerequisites, set the `credentialsSecretName` of the mode you use to its name, and remove the old keys. `postgres.backup.minio.accessKey`/`secretKey` and `postgresHA.backup.minio.accessKey`/`secretKey` moved to a prerequisite secret the same way (see Backup storage setup).
 - **Rotating any prerequisite secret needs a forced redeployment** (`cpln workload force-redeployment`) — a running workload keeps the values it started with. For the database password, run `ALTER ROLE` first: Postgres keeps the password it was initialized with, so a new value in the secret alone breaks Grafana's login to the database.
 - **This template ships Grafana OSS only** — Enterprise features (RBAC, reporting, query caching) are not available.
+- **Rotating the database password in HA mode (`postgresHA`):** also run `ALTER ROLE repl PASSWORD '<new password>'` on the leader with the same new password, before redeploying. The HA database's replication role shares it, and without this the standbys stop replicating while the app keeps working on the leader alone.
 
 ## Links
 

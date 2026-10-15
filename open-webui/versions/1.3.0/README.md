@@ -124,6 +124,7 @@ openai:
 ```
 
 vLLM must allow the caller (its default `internalAccess.type: same-gvc` does) and keep `model.toolCallParser` set — Open WebUI offers tools on every chat, and vLLM rejects those requests without it.
+Images (Capture and image uploads) need a vision model; a text model such as Qwen2.5-7B-Instruct rejects them (`is not a multimodal model`).
 Set these at install: the backend settings are read on first boot only (see Important Notes); change them later in Settings → Admin → Connections.
 
 ### Connecting Control Plane tools (MCP)

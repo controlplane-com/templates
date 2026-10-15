@@ -1,0 +1,72 @@
+---
+kind: workload
+name: {{ include "chatwoot.redis.name" . }}
+description: Chatwoot Redis — Sidekiq queues, ActionCable pub/sub, cache and the install-onboarding flag
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "chatwoot.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "chatwoot.identity.name" . }}
+  containers:
+    - name: redis
+      image: {{ .Values.redis.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.redis.resources.minCpu | quote }}
+      cpu: {{ .Values.redis.resources.maxCpu | quote }}
+      minMemory: {{ .Values.redis.resources.minMemory | quote }}
+      memory: {{ .Values.redis.resources.maxMemory | quote }}
+      command: redis-server
+      # AOF + noeviction: an evicted key silently drops queued Sidekiq jobs, and
+      # the one-time install-onboarding flag lives here too.
+      args:
+        - --requirepass
+        - $(REDIS_PASSWORD)
+        - --appendonly
+        - "yes"
+        - --maxmemory-policy
+        - noeviction
+      env:
+        - name: REDIS_PASSWORD
+          value: cpln://secret/{{ include "chatwoot.secret.creds.name" . }}.redisPassword
+      ports:
+        - number: 6379
+          protocol: tcp
+      readinessProbe:
+        exec:
+          command:
+            - sh
+            - -c
+            - redis-cli -a "$REDIS_PASSWORD" ping | grep -q PONG
+        initialDelaySeconds: 10
+        periodSeconds: 5
+        failureThreshold: 10
+        successThreshold: 1
+        timeoutSeconds: 3
+      volumes:
+        - path: /data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "chatwoot.redis.volumeset.name" . }}
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      # Fixed single node: ActionCable pub/sub is not propagated between Redis
+      # replicas, so every publisher and subscriber must share one instance.
+      minScale: 1
+      maxScale: 1
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+    capacityAI: false
+    debug: false
+    suspend: false
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      outboundAllowCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  supportDynamicTags: false

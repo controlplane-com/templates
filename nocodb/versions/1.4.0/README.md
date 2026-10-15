@@ -327,7 +327,7 @@ The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), s
 - **Webhooks to same-GVC targets are blocked by default** — NocoDB's SSRF guard refuses private-network addresses, so a webhook aimed at another workload in your GVC (e.g. an internal n8n at `<workload>.<gvc>.cpln.local`) is rejected with a message to set `NC_ALLOW_LOCAL_HOOKS=true`. Set `nocodb.allowLocalWebhooks: true` to allow it. Leave it off if webhooks only ever call the public internet.
 - **Rotating the database password needs `ALTER ROLE` plus forced redeployments** — see [Rotating the database password](#rotating-the-database-password).
 - **Rotating the database password in HA mode needs a leader switchover first** — follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode). A plain redeploy can promote a member still holding the old password and split the cluster.
-- **Data survives reinstall** — bases live in the database volumeset and local attachments in the storage volumeset; to wipe an instance, delete those volumesets too.
+- **Uninstalling deletes all data** — `helm uninstall` removes the database and storage volumesets with the release, so bases and local attachments are gone. Back up first if you need them.
 - **SSO/SAML/OIDC, audit logs and row-level security are Enterprise features** — they are in the same image but need a purchased licence key that this template never sets.
 
 ## Model Context Protocol (MCP)

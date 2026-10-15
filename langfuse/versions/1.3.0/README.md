@@ -50,7 +50,7 @@ cpln secret create-dictionary --name my-langfuse-db-credentials \
   --entry database=langfuse
 ```
 
-Set `postgres.config.credentialsSecretName` to that name. Keep all three values URL-safe (letters, digits, `-`, `_`): Langfuse puts them in its connection URL. PostgreSQL reads the secret only when its data directory is first initialized. To change the password later, run `ALTER ROLE` in the database first, then edit the secret (`cpln secret edit my-langfuse-db-credentials`), force a redeployment of `RELEASE_NAME-postgres` and wait for it to be ready, then force a redeployment of `RELEASE_NAME-langfuse-web` and `RELEASE_NAME-langfuse-worker`. A running workload keeps the values it started with.
+Set `postgres.config.credentialsSecretName` to that name. Keep all three values URL-safe (letters, digits, `-`, `_`): Langfuse puts them in its connection URL. PostgreSQL reads the secret only when its data directory is first initialized. To change the password later, run `ALTER ROLE` in the database first, then edit the secret (`cpln secret edit my-langfuse-db-credentials`), force a redeployment of `RELEASE_NAME-postgres` and wait for it to be ready, then force a redeployment of `RELEASE_NAME-langfuse-web` and `RELEASE_NAME-langfuse-worker`. A running workload keeps the values it started with. Database-backed requests fail from the `ALTER ROLE` until the app redeploy finishes, several minutes in all, so rotate in a quiet window.
 
 **If either secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-langfuse-web --gvc GVC_NAME -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own after several minutes, or skip the wait with `cpln workload force-redeployment` on each waiting workload.
 
@@ -267,12 +267,12 @@ Or use a [Langfuse SDK](https://langfuse.com/docs/sdk/overview).
 
 ```bash
 cpln secret create-dictionary --name RELEASE_NAME-langfuse-db \
-  --entry username=langfuse --entry password=YOUR_CURRENT_PASSWORD --entry database=langfuse
+  --entry username=YOUR_CURRENT_USERNAME --entry password=YOUR_CURRENT_PASSWORD --entry database=YOUR_CURRENT_DATABASE
 ```
 
-Then upgrade with `postgres.config.credentialsSecretName` set to that name and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.2.x release, and also in the old secret (`cpln secret reveal my-langfuse-db-credentials -o yaml`) until the upgrade deletes it.
+Then upgrade with `postgres.config.credentialsSecretName` set to that name and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.2.x release, and also in the old secret, the one named by `postgres.config.credentialsSecretName` in 1.2.x (`cpln secret reveal SECRET_NAME -o yaml`), until the upgrade deletes it.
 
-The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so Langfuse can briefly lose its database; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
+The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so Langfuse loses its database for about a minute and a half; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
 
 ## Upgrading from 1.1.0
 

@@ -67,6 +67,12 @@ prerequisites:
     description: Root-of-trust keys, write-once (rotating ENCRYPTION_KEY corrupts stored secrets). Create before installing; when missing the workload waits with no logs.
   - kind: secret
     secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: postgres.config.credentialsSecretName
+    required: true
+    description: Credentials of the bundled PostgreSQL; it initializes from them and Infisical connects with them. Create before installing, with a URL-safe password; when missing the deployment waits with no logs.
+  - kind: secret
+    secretType: dictionary
     keys: [SMTP_USERNAME, SMTP_PASSWORD]
     valuesPath: smtp.auth.secretName
     required: false

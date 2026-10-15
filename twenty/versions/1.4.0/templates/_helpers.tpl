@@ -91,46 +91,22 @@ derived name (glitchtip/unleash pattern).
 {{- end }}
 
 {{/*
-Name of the bundled database's credential secret in the SINGLE-INSTANCE path.
-This chart CREATES that secret (secret-db.yaml) and the postgres subchart only
-receives its NAME — since postgres 3.4.0 the subchart creates no secret of its own.
-A subchart value cannot be templated by its parent, so the name is a plain value
-that both sides read, which is why it is not derived from the release name.
-*/}}
-{{- define "twenty.secret.db.name" -}}
-{{- .Values.postgres.config.credentialsSecretName }}
-{{- end }}
-
-{{/*
-Credentials secret of the ACTIVE database.
-Created by this chart (secret-db.yaml) in BOTH modes from postgres.credentials.*.
-HA path: named by postgresHA.config.credentialsSecretName (postgres-highly-available
-2.5.0 creates no credentials secret of its own).
+Credentials secret of the ACTIVE database — a PREREQUISITE the user creates
+(keys: username, password, database). Both database subcharts require it by
+name, so Twenty requires the same secret rather than building one from
+plaintext values; the subchart and Twenty both read it. 1.3.0 and earlier
+created it from postgres.credentials.*.
+HA path: named by postgresHA.config.credentialsSecretName.
 Single-instance path: named by postgres.config.credentialsSecretName.
-Both hold {username, password, database}.
+A subchart value cannot be templated by its parent, so each name is a plain
+value that both sides read.
 */}}
 {{- define "twenty.postgres.secret.name" -}}
 {{- if .Values.postgresHA.enabled -}}
 {{- .Values.postgresHA.config.credentialsSecretName }}
 {{- else -}}
-{{- include "twenty.secret.db.name" . }}
+{{- .Values.postgres.config.credentialsSecretName }}
 {{- end }}
-{{- end }}
-
-{{/*
-Database name of the active database — taken from values (not the secret) so a
-single code path serves both database modes.
-*/}}
-{{- define "twenty.postgres.database" -}}
-{{- .Values.postgres.credentials.database }}
-{{- end }}
-
-{{/*
-Password of the active database — used only by validation (it is embedded in
-PG_DATABASE_URL, so its charset matters).
-*/}}
-{{- define "twenty.postgres.password" -}}
-{{- .Values.postgres.credentials.password }}
 {{- end }}
 
 {{/*
@@ -215,12 +191,17 @@ DB-backed and editable in Settings → Admin Panel → Configuration Variables.
 {{- else }}
 # ── Database (postgres subchart, single instance) ──
 {{- end }}
+# All three parts come from the user's prerequisite credentials secret (the same
+# one the active database subchart initializes from) and are assembled into the
+# URL at container start by $(VAR) expansion, so they must be listed above it.
 - name: PG_USER
   value: cpln://secret/{{ include "twenty.postgres.secret.name" . }}.username
 - name: PG_PASSWORD
   value: cpln://secret/{{ include "twenty.postgres.secret.name" . }}.password
+- name: PG_DATABASE
+  value: cpln://secret/{{ include "twenty.postgres.secret.name" . }}.database
 - name: PG_DATABASE_URL
-  value: postgres://$(PG_USER):$(PG_PASSWORD)@{{ include "twenty.postgres.host" . }}:5432/{{ include "twenty.postgres.database" . }}
+  value: postgres://$(PG_USER):$(PG_PASSWORD)@{{ include "twenty.postgres.host" . }}:5432/$(PG_DATABASE)
 - name: PG_POOL_MAX_CONNECTIONS
   value: {{ .Values.twenty.dbPoolMaxConnections | quote }}
 # ── Redis (bundled single node) — BullMQ queues + cache ──
@@ -265,6 +246,7 @@ DB-backed and editable in Settings → Admin Panel → Configuration Variables.
 {{/* Validation */}}
 
 {{- define "twenty.validate" -}}
+{{- include "twenty.validateDatabaseSecret" . -}}
 {{- if not .Values.secrets.name -}}
 {{- fail "twenty: secrets.name is required — the name of the prerequisite opaque secret (encoding: plain) whose payload is the app key used as APP_SECRET and ENCRYPTION_KEY (must exist BEFORE install; changing it without secrets.fallbackName makes stored OAuth/TOTP secrets undecryptable and logs everyone out)" -}}
 {{- end -}}
@@ -303,10 +285,26 @@ DB-backed and editable in Settings → Admin Panel → Configuration Variables.
 {{- if and .Values.postgresHA.enabled (not (dig "proxy" "enabled" true .Values.postgresHA)) -}}
 {{- fail "twenty: postgresHA.proxy.enabled must remain true — the HAProxy leader endpoint is Twenty's stable write endpoint" -}}
 {{- end -}}
-{{- if not (regexMatch "^[A-Za-z0-9_-]+$" (include "twenty.postgres.password" .)) -}}
-{{- fail "twenty: the database password must contain only letters, digits, '-' and '_' — it is embedded in PG_DATABASE_URL and other characters break the connection URL" -}}
-{{- end -}}
 {{- if not (regexMatch "^[A-Za-z0-9_-]+$" .Values.redis.auth.password) -}}
 {{- fail "twenty: redis.auth.password must contain only letters, digits, '-' and '_' — it is embedded in REDIS_URL and other characters break the connection URL" -}}
+{{- end -}}
+{{- end }}
+
+
+{{/*
+The bundled database's credentials became a user-created prerequisite secret in
+1.4.0: both database subcharts require a pre-existing secret, so Twenty requires
+the same one instead of rendering it from plaintext values. The removed key is
+named explicitly so a 1.3.x values file fails at render with its replacement and
+the upgrade procedure. No compatibility shims — the version bump IS the migration
+path. The 1.3.x render-time check that the password is URL-safe went with the
+value: the password now lives only in the secret, so that constraint is README prose.
+*/}}
+{{- define "twenty.validateDatabaseSecret" -}}
+{{- if hasKey .Values.postgres "credentials" -}}
+{{- fail "twenty: postgres.credentials was REMOVED in 1.4.0. The database credentials are now a prerequisite `dictionary` secret you create (keys: username, password, database), named by postgres.config.credentialsSecretName (single-instance mode) or postgresHA.config.credentialsSecretName (HA mode). Upgrading from 1.3.x: create it under a NEW name holding your EXISTING values, set the credentialsSecretName of the mode you use to that name, and remove postgres.credentials — see \"Upgrading from 1.3.x\" in the README." -}}
+{{- end -}}
+{{- if not (include "twenty.postgres.secret.name" .) -}}
+{{- fail "twenty: the database credentials secret name is required — set postgres.config.credentialsSecretName (single-instance mode) or postgresHA.config.credentialsSecretName (HA mode) to your pre-created `dictionary` secret holding username, password and database. See Prerequisites in the README." -}}
 {{- end -}}
 {{- end }}

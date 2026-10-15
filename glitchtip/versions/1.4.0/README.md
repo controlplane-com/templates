@@ -1,5 +1,8 @@
 # GlitchTip
 
+> **Upgrading from 1.3.x:** the database credentials are now a secret you create before upgrading,
+> under a **new** name — see [Upgrading from 1.3.1](#upgrading-from-131).
+
 This app deploys [GlitchTip](https://glitchtip.com/) — Sentry-API-compatible error tracking, fully MIT-licensed with nothing feature-gated. Apps report crashes with standard Sentry SDKs pointed at a GlitchTip DSN; a stateless web tier serves the UI and event ingest, a background worker processes events and alerts, and all state lives in PostgreSQL and Redis.
 
 ## Architecture
@@ -10,14 +13,25 @@ This app deploys [GlitchTip](https://glitchtip.com/) — Sentry-API-compatible e
 - **PostgreSQL (dev/lightweight, optional)** (subchart): the single-instance `postgres` template instead.
 - **Redis + Sentinel (default, optional)** (subchart): the `redis` template — task queue, cache, and sessions; disable to run those on PostgreSQL instead.
 - **Auth secret** (dictionary): *not created by this template*; you create it before install and reference it by name. Holds the Django signing key and the initial superuser login.
-- **Database credentials secret** (dictionary): the bundled database's `username`, `password` and `database`, built by this template from `postgres.credentials.*` in **both** database modes and handed to the active Postgres subchart by name (`postgresHA.config.credentialsSecretName` in HA mode, `postgres.config.credentialsSecretName` in single-instance mode). Nothing for you to create.
+- **Database credentials secret** (dictionary): *not created by this template*; you create it before install. The database initializes from it and GlitchTip connects with it, in either database mode.
 - **Secrets, identity, and policy**: two start scripts, and a least-privilege policy granting the shared identity `reveal` on exactly the secrets used — nothing broader.
 
 ## Prerequisites
 
-**One dictionary secret must exist BEFORE you install.** The signing key and the superuser login are credentials, so they are a prerequisite secret rather than values — a value would sit in plaintext in the Helm release for the life of the install, and the admin login form is on a public endpoint.
+**Two dictionary secrets must exist BEFORE you install.** They hold credentials, so they are prerequisite secrets rather than values — a value would sit in plaintext in the Helm release for the life of the install.
 
-Create it with exactly these three keys:
+**1. Database credentials** — the bundled PostgreSQL initializes with these and GlitchTip connects with them:
+
+```bash
+cpln secret create-dictionary --name my-glitchtip-db-credentials \
+  --entry username=glitchtip \
+  --entry password="$(openssl rand -hex 24)" \
+  --entry database=glitchtip
+```
+
+Set its name in the key of the database mode you use: `postgresHA.config.credentialsSecretName` (HA, the default) or `postgres.config.credentialsSecretName` (single-instance). PostgreSQL reads the secret only when its data is first initialized — see Important Notes for how to change the password later.
+
+**2. Auth** — the Django signing key and the superuser login; the admin login form is on a public endpoint. Create it with exactly these three keys:
 
 ```bash
 cpln secret create-dictionary --name my-glitchtip-auth \
@@ -33,14 +47,12 @@ Then set `auth.secretName` to that name. Read it back later with `cpln secret re
 | `secretKey` | Django's `SECRET_KEY` — signs sessions and tokens. Keep it for the life of the install: changing it logs every user out. |
 | `adminEmail` / `adminPassword` | The initial superuser, seeded on first boot only. Afterwards manage accounts in the UI; editing the secret does not change the existing login. |
 
-**If the secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments <release>-glitchtip --gvc <gvc> -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own in roughly 6–8 minutes, or clear it immediately with `cpln workload force-redeployment <release>-glitchtip --gvc <gvc>` (~90 s). The worker workload wedges the same way and needs the same treatment.
+**If either secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments <release>-glitchtip --gvc <gvc> -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own within roughly 5.5–10.5 minutes — poll rather than giving up — or clear it immediately with `cpln workload force-redeployment <release>-glitchtip --gvc <gvc>` (~90 s). The worker workload wedges the same way and needs the same treatment.
 
 Also:
 
 - **Optional — outbound email (invites, alerts, password resets)**: an **opaque** secret in your org whose payload is a full email URL, e.g. `smtp://user:password@smtp.example.com:587`. Set its name in `email.secretName`. Create it BEFORE installing; leave empty to run without email.
 - For optional database backups: a bucket and access setup for one of the supported providers (see [Backup storage setup](#backup-storage-setup)). With `provider: minio` (either database mode), the endpoint's keys are a prerequisite `dictionary` secret — see that section.
-
-**The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*` in either database mode.
 
 ## Configuration
 
@@ -111,13 +123,13 @@ redis:
 
 ### PostgreSQL
 
-Exactly one of the two databases must be enabled (the chart enforces this at render). The database password is bundled plumbing set from `postgres.credentials.*` in **both** modes — used as-is, so change it before installing.
+Exactly one of the two databases must be enabled (the chart enforces this at render).
 
 ```yaml
 postgresHA: # default: highly available PostgreSQL
   enabled: true
   config:
-    credentialsSecretName: my-glitchtip-db-credentials # name of the secret this template CREATES from postgres.credentials.*; org-wide, unique per release
+    credentialsSecretName: my-glitchtip-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   replicas: 3
   volumeset:
     capacity: 10 # initial capacity in GiB per replica (minimum is 10)
@@ -130,14 +142,8 @@ postgresHA:
   enabled: false
 postgres: # dev/lightweight: single-instance PostgreSQL
   enabled: true
-  credentials: # this template builds the DB credential secret from these — used in BOTH modes
-    username: glitchtip
-    password: change-me-glitchtip-db # change before installing
-    database: glitchtip
   config:
-    # name of the dictionary secret this template CREATES and Postgres reads;
-    # secret names are org-wide; a second release on this name is refused at install
-    credentialsSecretName: my-glitchtip-db-credentials
+    credentialsSecretName: my-glitchtip-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)
   backup:
@@ -154,8 +160,33 @@ postgres: # dev/lightweight: single-instance PostgreSQL
 | Internal (same GVC) | `http://{release}-glitchtip.{gvc}.cpln.local:8000` |
 | Login | the `adminEmail` / `adminPassword` keys of your `auth.secretName` secret |
 | Django admin (user management) | `/admin/` on the canonical endpoint |
-| Postgres (internal, HA mode) | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432`, credentials in the secret named by `postgresHA.config.credentialsSecretName` (`cpln secret reveal SECRET_NAME -o yaml`) |
-| Postgres (internal, single mode) | `{release}-postgres.{gvc}.cpln.local:5432`, credentials in the secret named by `postgres.config.credentialsSecretName` |
+| Postgres (internal, HA mode) | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432`, credentials from your `postgresHA.config.credentialsSecretName` secret (`cpln secret reveal SECRET_NAME -o yaml`) |
+| Postgres (internal, single mode) | `{release}-postgres.{gvc}.cpln.local:5432`, credentials from your `postgres.config.credentialsSecretName` secret |
+
+## Upgrading from 1.3.1
+
+`postgres.credentials` was removed: the database credentials are now a prerequisite secret, the same one the database templates require on their own. Carrying the old key forward fails the render. This applies to 1.3.0 as well.
+
+1.3.x created the database secret itself, so **this upgrade deletes it**. Before upgrading, create a secret under a **new** name holding the values your database was initialized with — not new ones, or GlitchTip loses its database connection:
+
+```bash
+cpln secret create-dictionary --name RELEASE_NAME-glitchtip-db \
+  --entry username=glitchtip --entry password=YOUR_CURRENT_PASSWORD --entry database=glitchtip
+```
+
+Then upgrade with `postgresHA.config.credentialsSecretName` (HA mode) or `postgres.config.credentialsSecretName` (single-instance mode) set to that name, and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.3.x release, and also in the old secret (`cpln secret reveal my-glitchtip-db-credentials -o yaml`) until the upgrade deletes it.
+
+The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so GlitchTip can briefly lose its database; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
+
+## Upgrading from 1.2.x (HA mode)
+
+1.3.0 moved the HA database to `postgres-highly-available` 2.5.0, which no longer takes credentials as values. Put the values of `postgresHA.postgres.username/password/database` **unchanged** into the database credentials secret under Prerequisites, set `postgresHA.config.credentialsSecretName` to its name, and delete the `postgresHA.postgres` block. Carrying the old block fails the render with `the postgres block was REMOVED in 2.5.0`.
+
+With `postgresHA.backup.provider: minio`, `postgresHA.backup.minio.accessKey`/`secretKey` are refused by the same subchart — put them in a `dictionary` secret and set `postgresHA.backup.minio.credentialsSecretName` to its name (see [Backup storage setup](#backup-storage-setup)). For single-instance mode, follow [Upgrading from 1.3.1](#upgrading-from-131).
+
+## Upgrading from 1.1.0
+
+`postgres.config.username/password/database` were removed (postgres 3.4.0). Put the values your single-instance database was initialized with into the database credentials secret under Prerequisites (keys `username`, `password`, `database`), set `postgres.config.credentialsSecretName` to its name, and remove the three keys. Carrying them fails the render with `config.username was REMOVED in postgres 3.4.0`. `postgres.backup.minio.accessKey`/`secretKey` were removed the same way (see [Backup storage setup](#backup-storage-setup)). For HA mode, follow the 1.2.x section above.
 
 ## Upgrading from 1.0.x
 
@@ -215,19 +246,16 @@ cpln secret create-dictionary --name my-glitchtip-minio-credentials \
 ## Important Notes
 
 - **The default HA stack takes about six and a half minutes to converge**, and the worker crash-loops with `Connection reset by peer` for the first several minutes while Patroni elects a database leader. This is expected and self-correcting — do not treat it as a failed install.
-- **Create the auth secret before installing.** A missing prerequisite secret leaves both workloads waiting on something that does not exist, with zero log lines — see Prerequisites for how to diagnose it.
+- **Create both secrets before installing.** A missing prerequisite secret leaves the workloads waiting on something that does not exist, with zero log lines — see Prerequisites for how to diagnose it.
 - **Never rotate `secretKey` on a live install unless you intend to** — it logs every user out and invalidates password-reset links in flight. Nothing is corrupted, but everyone has to sign in again.
-- **Change the database password and the redis password before installing** — both are bundled plumbing used as-is.
+- **Change the redis password before installing** — it is bundled plumbing used as-is.
+- **Changing the database password is a database change first.** Editing the secret alone does nothing to the database, and a running workload keeps the values it started with. Run `ALTER ROLE <username> PASSWORD '...'` in PostgreSQL, then `cpln secret edit SECRET_NAME`, then `cpln workload force-redeployment` the database workload (`RELEASE_NAME-postgres-ha` or `RELEASE_NAME-postgres`), wait until it is ready, and force-redeploy `RELEASE_NAME-glitchtip` and `RELEASE_NAME-glitchtip-worker`.
 - **With registration closed (default), invites only work for accounts that already exist** — create teammate accounts first at `/admin/` (Django admin, superuser login), then invite them to the organization. Invite and alert emails require `email.secretName`.
 - **Do not scale the worker** — it is a fixed singleton (scheduler + boot-time migrations). Web `replicas` is the scaling knob; a worker outage pauses processing but ingest keeps accepting and catches up.
 - **First boot: the web tier stays not-ready until the worker finishes migrations** (several minutes in HA mode) — check worker logs first if it seems stuck.
 - **The first `helm upgrade` after an install re-applies the bundled database and Redis**, so expect GlitchTip to be briefly unreachable while they restart; later upgrades do not do this.
 - **DSNs embed the endpoint URL** — if you add a custom domain later, set `domain`, upgrade, and update the DSNs in your apps.
 - **Source-map/artifact uploads are ephemeral** (local disk) — lost on restart and not shared across web replicas; error ingest itself is unaffected.
-- **Upgrading from 1.1.0**: the single-instance database credentials moved from `postgres.config.username/password/database` to `postgres.credentials.username/password/database`, named by the new `postgres.config.credentialsSecretName`. Carrying the old keys fails the render with `config.username was REMOVED in postgres 3.4.0` — move the three keys and you are done. **Ignore that message's advice to create a secret yourself; this template creates it**, and the database password stays a value. `postgres.backup.minio.accessKey`/`secretKey` were removed the same way (see Backup storage setup). Redis and the `auth.secretName` prerequisite secret are unchanged; for the HA path see the next note.
-- **Upgrading from 1.2.x (HA mode)**: `postgresHA.postgres.username/password/database` were removed in 1.3.0 (postgres-highly-available 2.5.0). Move those three values into `postgres.credentials.*` **unchanged** — this template now builds the HA credentials secret from them, named by `postgresHA.config.credentialsSecretName`. Carrying the old block fails the render with `the postgres block was REMOVED in 2.5.0`; **ignore that message's advice to create a secret yourself — this template creates it.** `postgresHA.backup.minio.accessKey`/`secretKey` moved to a prerequisite secret named by `postgresHA.backup.minio.credentialsSecretName` (see Backup storage setup).
-- **Changing `postgres.credentials.password` on an existing release does not change the database password** — it only rewrites the secret, so the new value no longer matches the database and logins fail. The password is set once, when the database volume is first initialised.
-- **Give each glitchtip release its own `postgresHA.config.credentialsSecretName` (HA) or `postgres.config.credentialsSecretName` (single-instance).** Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
 - **Uninstall deletes the database volumesets** — all issues, events, and users. Enable backups if the data matters.
 
 ## Links

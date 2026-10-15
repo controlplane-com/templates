@@ -173,6 +173,7 @@ The bootstrap admin credentials moved out of `values.yaml` into the prerequisite
 - **Do not disable the HA proxy** (`postgresHA.proxy.enabled`) — Keycloak writes through the HAProxy leader endpoint; the chart enforces this at render.
 - **Scaling is operator-driven** — change `replicas` via `helm upgrade`; there is deliberately no autoscaling, so cluster membership only changes intentionally.
 - **Uninstall deletes the database volumesets** — all realms, users and sessions. Enable backups if the data matters.
+- **Rotating the database password in HA mode (`postgresHA`):** also run `ALTER ROLE repl PASSWORD '<new password>'` on the leader with the same new password, before redeploying. The HA database's replication role shares it, and without this the standbys stop replicating while the app keeps working on the leader alone.
 
 ## Links
 

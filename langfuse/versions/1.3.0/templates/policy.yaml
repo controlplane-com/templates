@@ -1,0 +1,20 @@
+---
+kind: policy
+name: {{ include "langfuse.policy.name" . }}
+description: Langfuse policy
+tags: {{- include "langfuse.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "langfuse.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "langfuse.secret.name" . }}
+  - //secret/{{ include "langfuse.clickhouse.startup.secret.name" . }}
+  - //secret/{{ include "langfuse.clickhouse.storage.secret.name" . }}
+  # Prerequisite secrets the user creates — granted by name, nothing broader.
+  - //secret/{{ .Values.langfuse.auth.secretName }}
+  {{- if eq .Values.objectStore.provider "gcp" }}
+  - //secret/{{ .Values.objectStore.gcp.credentialsSecretName }}
+  {{- end }}

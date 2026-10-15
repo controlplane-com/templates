@@ -181,7 +181,7 @@ cpln secret create-dictionary --name RELEASE_NAME-fusionauth-db \
 
 Then upgrade with `postgres.config.credentialsSecretName` set to the new name and `postgres.credentials` removed.
 
-The new version of a workload may then wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates. The previous version keeps serving meanwhile, and it clears by itself.
+The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so FusionAuth can briefly lose its database; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
 
 ## Upgrading from 2.3.x
 

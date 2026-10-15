@@ -1,0 +1,109 @@
+---
+kind: workload
+name: {{ include "litellm.name" . }}
+description: LiteLLM proxy — OpenAI-compatible gateway (UI + API), HTTP :4000
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "litellm.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "litellm.identity.name" . }}
+  containers:
+    - name: litellm
+      image: {{ .Values.litellm.image }}
+      # Pass the mounted config to the image's own entrypoint (prod_entrypoint.sh
+      # execs `litellm "$@"`); the DB-bundled image runs Prisma migrate deploy on boot.
+      args:
+        - "--config"
+        - "/app/config.yaml"
+        - "--port"
+        - "4000"
+      inheritEnv: false
+      minCpu: {{ .Values.litellm.resources.minCpu | quote }}
+      cpu: {{ .Values.litellm.resources.maxCpu | quote }}
+      minMemory: {{ .Values.litellm.resources.minMemory | quote }}
+      memory: {{ .Values.litellm.resources.maxMemory | quote }}
+      env:
+        # ── Admin + encryption keys (user prerequisite dictionary secret) ──
+        - name: LITELLM_MASTER_KEY
+          value: cpln://secret/{{ .Values.secrets.name }}.LITELLM_MASTER_KEY
+        - name: LITELLM_SALT_KEY
+          value: cpln://secret/{{ .Values.secrets.name }}.LITELLM_SALT_KEY
+        # ── Database (postgres subchart) — enables virtual keys / spend / budgets ──
+        - name: POSTGRES_USER
+          value: cpln://secret/{{ include "litellm.db.secret.name" . }}.postgresUsername
+        - name: POSTGRES_PASSWORD
+          value: cpln://secret/{{ include "litellm.db.secret.name" . }}.postgresPassword
+        - name: DATABASE_URL
+          value: postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@{{ include "litellm.postgres.host" . }}:5432/{{ .Values.postgres.credentials.database }}
+        - name: STORE_MODEL_IN_DB
+          value: {{ ternary "\"True\"" "\"False\"" .Values.litellm.storeModelInDb }}
+        {{- if eq (include "litellm.redisAuthEnabled" .) "true" }}
+        # ── Redis master password (redis subchart auth secret); read by config.yaml ──
+        - name: LITELLM_REDIS_PASSWORD
+          value: cpln://secret/{{ include "litellm.redis.secretPassword.name" . }}.password
+        {{- end }}
+        # ── Provider API keys (user prerequisite secret; referenced by config.yaml) ──
+        {{- range .Values.litellm.providerEnv }}
+        - name: {{ . }}
+          value: cpln://secret/{{ $.Values.secrets.name }}.{{ . }}
+        {{- end }}
+      ports:
+        - number: 4000
+          protocol: http
+      volumes:
+        - path: /app/config.yaml
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "litellm.config.secret.name" . }}.payload
+      readinessProbe:
+        httpGet:
+          path: /health/readiness
+          port: 4000
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /health/liveliness
+          port: 4000
+        initialDelaySeconds: 60
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: {{ .Values.litellm.replicas }}
+      maxScale: {{ .Values.litellm.replicas }}
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  supportDynamicTags: false

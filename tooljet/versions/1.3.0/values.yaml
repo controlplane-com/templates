@@ -56,19 +56,13 @@ internalAccess:
 # See "Backing up the bundled database" in the README.
 postgres:
   image: postgres:16          # upstream-proven with the bundled PostgREST 12.2.0
-  # Credentials for the bundled database — internal plumbing no human types
-  # elsewhere. ToolJet CREATES the dictionary secret named by
-  # config.credentialsSecretName below out of these three values, so there is
-  # nothing for you to create before installing.
-  credentials:
-    username: tooljet
-    password: change-me-tooljet-pg   # template-managed cred for the bundled DB — change before install
-    database: tooljet         # app DB; ToolJet Database (tooljet_db) is auto-created alongside it
   config:
-    # Name of the dictionary secret this chart creates and the bundled postgres
-    # reads. Secret names are org-wide: give each tooljet release its own name.
-    # A second release left on this name is REFUSED at install (it is owned by
-    # the first release) — nothing is shared, overwritten or deleted.
+    # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. If it does
+    # not exist the deployment WEDGES silently and looks like a platform fault.
+    # A `dictionary` secret holding exactly three keys: username, password, database.
+    # Postgres reads it once, when its data directory is first initialized, and
+    # ToolJet connects with the same keys (tooljet_db is created alongside the
+    # app database). See README Prerequisites for the command.
     credentialsSecretName: my-tooljet-db-credentials
   resources:
     minCpu: 250m

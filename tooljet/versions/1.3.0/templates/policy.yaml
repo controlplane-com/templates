@@ -10,7 +10,7 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "tooljet.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "tooljet.db.secret.name" . }}
+  - //secret/{{ include "tooljet.pgCredentials.secret.name" . }}
   - //secret/{{ include "tooljet.secret.startup.name" . }}
   - //secret/{{ .Values.secrets.name }}
   {{- if and .Values.smtp.enabled .Values.smtp.auth.secretName }}

@@ -36,16 +36,19 @@ spec:
         - name: PGRST_JWT_SECRET
           value: cpln://secret/{{ .Values.secrets.name }}.PGRST_JWT_SECRET
         # ── App database (postgres subchart) ──
+        # Credentials come from the user's prerequisite secret (the same one the
+        # postgres subchart initializes from). PGRST_DB_URI below is assembled at
+        # container start from $(VAR) placeholders, so Helm renders no credential.
         - name: PG_HOST
           value: {{ include "tooljet.postgres.host" . | quote }}
         - name: PG_PORT
           value: "5432"
         - name: PG_DB
-          value: {{ .Values.postgres.credentials.database | quote }}
+          value: cpln://secret/{{ include "tooljet.pgCredentials.secret.name" . }}.database
         - name: PG_USER
-          value: cpln://secret/{{ include "tooljet.db.secret.name" . }}.postgresUsername
+          value: cpln://secret/{{ include "tooljet.pgCredentials.secret.name" . }}.username
         - name: PG_PASS
-          value: cpln://secret/{{ include "tooljet.db.secret.name" . }}.postgresPassword
+          value: cpln://secret/{{ include "tooljet.pgCredentials.secret.name" . }}.password
         # ── ToolJet Database (tooljet_db, same Postgres instance — auto-created at boot) ──
         - name: TOOLJET_DB
           value: "tooljet_db"
@@ -54,9 +57,9 @@ spec:
         - name: TOOLJET_DB_PORT
           value: "5432"
         - name: TOOLJET_DB_USER
-          value: cpln://secret/{{ include "tooljet.db.secret.name" . }}.postgresUsername
+          value: cpln://secret/{{ include "tooljet.pgCredentials.secret.name" . }}.username
         - name: TOOLJET_DB_PASS
-          value: cpln://secret/{{ include "tooljet.db.secret.name" . }}.postgresPassword
+          value: cpln://secret/{{ include "tooljet.pgCredentials.secret.name" . }}.password
         # ── In-container PostgREST (localhost: triggers the bundled binary) ──
         - name: PGRST_HOST
           value: "localhost:3001"

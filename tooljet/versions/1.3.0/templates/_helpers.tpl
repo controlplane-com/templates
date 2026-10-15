@@ -4,18 +4,13 @@
 {{- printf "%s-tooljet" .Release.Name }}
 {{- end }}
 
-{{- define "tooljet.db.secret.name" -}}
-{{- printf "%s-tooljet-db" .Release.Name }}
-{{- end }}
-
 {{/*
-Name of the bundled database's credential secret that the postgres SUBCHART
-reads. This chart CREATES that secret (secret-db-credentials.yaml) and the
-subchart only receives its NAME — since postgres 3.4.0 the subchart creates no
-secret of its own. A subchart value cannot be templated by its parent, so the
-name is a plain value that both sides read, which is why it is not derived from
-the release name. Distinct from tooljet.db.secret.name, which is the app's own
-secret.
+Name of the bundled database's credential secret — a PREREQUISITE the user
+creates (keys: username, password, database). The postgres subchart requires it
+by name, so ToolJet requires the same secret rather than building one from
+plaintext values; the database initializes from it and the app connects with it.
+1.2.0 and earlier created it (plus a duplicate {release}-tooljet-db secret)
+from postgres.credentials.*.
 */}}
 {{- define "tooljet.pgCredentials.secret.name" -}}
 {{- .Values.postgres.config.credentialsSecretName }}
@@ -84,6 +79,7 @@ true
 {{/* Validation */}}
 
 {{- define "tooljet.validate" -}}
+{{- include "tooljet.validateRemovedKeys" . -}}
 {{- if not .Values.secrets.name -}}
 {{- fail "tooljet: secrets.name is required — the name of the prerequisite dictionary secret holding SECRET_KEY_BASE, LOCKBOX_MASTER_KEY and PGRST_JWT_SECRET (must exist BEFORE install; SECRET_KEY_BASE and LOCKBOX_MASTER_KEY are write-once, never rotate)" -}}
 {{- end -}}
@@ -119,5 +115,16 @@ true
 {{- end -}}
 {{- if or (dig "auth" "password" "enabled" false .Values.redis.sentinel) (dig "auth" "fromSecret" "enabled" false .Values.redis.sentinel) -}}
 {{- fail "tooljet: redis.sentinel.auth must stay disabled — ToolJet authenticates only the data node (REDIS_PASSWORD), not the sentinel; the same-gvc firewall is the boundary" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Keys removed in 1.3.0. An upgrader carrying an older values file forward is told
+exactly what to do instead of silently getting a default. There are deliberately
+NO compatibility fallbacks — the version bump IS the migration path.
+*/}}
+{{- define "tooljet.validateRemovedKeys" -}}
+{{- if hasKey .Values.postgres "credentials" -}}
+  {{- fail "postgres.credentials was removed in 1.3.0. The database credentials are now a prerequisite dictionary secret (keys: username, password, database) named by postgres.config.credentialsSecretName. Upgrading from 1.2.0: create it under a NEW name holding your EXISTING values, set postgres.config.credentialsSecretName to that name, and remove postgres.credentials — see \"Upgrading from 1.2.0\" in the README." -}}
 {{- end -}}
 {{- end }}

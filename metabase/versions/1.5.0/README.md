@@ -56,7 +56,7 @@ printf '%s' "$(openssl rand -hex 24)" | cpln secret create-opaque --name my-meta
 
 Set its name in `encryptionKey.secretName`. Metabase uses it to encrypt saved database-connection details — **back it up; losing or changing it means re-entering every saved connection**.
 
-**If any of these secrets does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments {release}-metabase --gvc {gvc} -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own within roughly 5.5–10.5 minutes — poll rather than giving up — or clear it immediately with `cpln workload force-redeployment {release}-metabase --gvc {gvc}` (~90 s).
+**If any of these secrets does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments {release}-metabase --gvc {gvc} -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own within roughly 6–12 minutes — a missing database secret also holds the database, and Metabase recovers after it (measured 11.5 min), so poll rather than giving up — or clear it sooner with `cpln workload force-redeployment` on the database workload, then on `{release}-metabase`.
 
 For optional database backups: a bucket and access setup for one of the supported providers (see [Backup storage setup](#backup-storage-setup)).
 

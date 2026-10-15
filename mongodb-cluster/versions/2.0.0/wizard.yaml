@@ -9,7 +9,6 @@ steps:
   - id: topology
     title: Locations
     description: Where the replica set members run. Every member votes.
-    docs: "#locations"
     fields:
       - type: note
         textExpression: >-
@@ -26,6 +25,7 @@ steps:
       - path: locations
         type: list
         label: Locations
+        docs: "#locations"
         required: true
         minItems: 1
         uniqueBy: [name]
@@ -103,7 +103,6 @@ steps:
   - id: credentials
     title: Credentials
     description: The two prerequisite secrets. Neither value passes through the release values.
-    docs: "#prerequisites"
     fields:
       - type: note
         severity: warning
@@ -221,7 +220,7 @@ steps:
     rules:
       - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
         paths: [volumeset.capacity]
-        message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
 
   - id: access
     title: Access and proxy
@@ -292,10 +291,10 @@ steps:
   - id: backup
     title: Backups
     description: Scheduled logical backups (mongodump) to object storage.
-    docs: "#backing-up"
     sections:
       - id: backup
         title: Scheduled backups
+        docs: "#backups"
         toggle: backup.enabled
         fields:
           - path: backup.provider
@@ -343,7 +342,6 @@ steps:
             message: The backup location must be one of the configured locations, or the job never runs.
       - title: AWS S3
         when: self.backup.enabled && self.backup.provider == 'aws'
-        docs: "#backups"
         fields:
           - path: backup.aws.bucket
             type: string
@@ -380,7 +378,6 @@ steps:
             patternMessage: Leave out the leading /.
       - title: Google Cloud Storage
         when: self.backup.enabled && self.backup.provider == 'gcp'
-        docs: "#backups"
         fields:
           - path: backup.gcp.bucket
             type: string

@@ -18,8 +18,17 @@ spec:
       env:
         - name: KC_DB
           value: postgres
+        {{- /*
+          Every DB credential comes from the user's prerequisite secret. POSTGRES_DB_NAME
+          exists only to feed KC_DB_URL: the platform expands $(VAR) in an env value at
+          container start (fusionauth 2.5.0 precedent; the API stores env alphabetically,
+          so declaration order is irrelevant). Deliberately not named KC_*, so Keycloak
+          never reads it as a configuration option.
+        */}}
+        - name: POSTGRES_DB_NAME
+          value: 'cpln://secret/{{ include "keycloak.db.secretName" . }}.database'
         - name: KC_DB_URL
-          value: jdbc:postgresql://{{ include "keycloak.db.host" . }}:5432/{{ include "keycloak.db.database" . }}
+          value: jdbc:postgresql://{{ include "keycloak.db.host" . }}:5432/$(POSTGRES_DB_NAME)
         - name: KC_DB_USERNAME
           value: 'cpln://secret/{{ include "keycloak.db.secretName" . }}.username'
         - name: KC_DB_PASSWORD

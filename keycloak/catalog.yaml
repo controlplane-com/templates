@@ -76,6 +76,12 @@ prerequisites:
     valuesPath: admin.secretName
     required: true
     description: Bootstrap admin login for the public admin console. Create it before installing; when it is missing the workload waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+    required: true
+    description: Credentials the bundled PostgreSQL initializes with and Keycloak connects with; set the name for the store in use. A missing secret leaves the deployment waiting with no logs.
   - kind: bucket
     valuesPath:
       - postgresHA.backup.aws.bucket

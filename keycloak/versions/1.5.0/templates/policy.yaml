@@ -9,7 +9,8 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "keycloak.identity.name" . }}
 targetKind: secret
 targetLinks:
-  # The user-created admin credentials — reveal on exactly that one secret.
+  # Prerequisite secrets the user creates (admin login, database credentials) are
+  # granted by name, nothing broader; the startup script is chart-created.
   - //secret/{{ .Values.admin.secretName }}
   - //secret/{{ include "keycloak.secretStartup.name" . }}
   - //secret/{{ include "keycloak.db.secretName" . }}

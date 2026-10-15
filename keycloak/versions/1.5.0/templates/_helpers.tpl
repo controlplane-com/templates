@@ -44,36 +44,21 @@ Names must match the dependency charts' own helpers (pg-ha.proxy.name / postgres
 {{- end }}
 
 {{/*
-Database name for the active backing store
-*/}}
-{{- define "keycloak.db.database" -}}
-{{- .Values.postgres.credentials.database }}
-{{- end }}
-
-{{/*
-Name of the bundled database's credential secret in the single-instance path.
-This chart CREATES that secret (secret-db.yaml) and the postgres subchart only receives
-its NAME — since postgres 3.4.0 the subchart creates no secret of its own. A subchart
-value cannot be templated by its parent, so the name is a plain value that both sides
-read, which is why it is not derived from the release name.
-*/}}
-{{- define "keycloak.secret.db.name" -}}
-{{- .Values.postgres.config.credentialsSecretName }}
-{{- end }}
-
-{{/*
-Credentials secret of the ACTIVE backing store.
-Created by this chart (secret-db.yaml) in BOTH modes from postgres.credentials.*.
-HA path: named by postgresHA.config.credentialsSecretName (postgres-highly-available
-2.5.0 creates no credentials secret of its own).
+Credentials secret of the ACTIVE backing store — a PREREQUISITE the user creates
+(keys: username, password, database). Both database subcharts require it by name,
+so Keycloak requires the same secret rather than building one from plaintext
+values; the subchart and Keycloak both read it. 1.4.0 and earlier created it from
+postgres.credentials.*.
+HA path: named by postgresHA.config.credentialsSecretName.
 Single-instance path: named by postgres.config.credentialsSecretName.
-Both hold the same three keys — username, password, database.
+A subchart value cannot be templated by its parent, so each name is a plain value
+that both sides read.
 */}}
 {{- define "keycloak.db.secretName" -}}
 {{- if .Values.postgresHA.enabled -}}
 {{- .Values.postgresHA.config.credentialsSecretName }}
 {{- else -}}
-{{- include "keycloak.secret.db.name" . }}
+{{- .Values.postgres.config.credentialsSecretName }}
 {{- end }}
 {{- end }}
 
@@ -83,6 +68,7 @@ Both hold the same three keys — username, password, database.
 {{- define "keycloak.validate" -}}
 {{- include "keycloak.validateResourceKnobs" . -}}
 {{- include "keycloak.validateAdmin" . -}}
+{{- include "keycloak.validateDatabaseSecret" . -}}
 {{- $replicas := int .Values.replicas -}}
 {{- if lt $replicas 1 -}}
 {{- fail "keycloak: replicas must be at least 1" -}}
@@ -121,6 +107,23 @@ version bump IS the migration path.
 {{- end -}}
 {{- end }}
 
+
+{{/*
+The bundled database's credentials became a user-created prerequisite secret in
+1.5.0: both database subcharts require a pre-existing secret, so Keycloak requires
+the same one instead of rendering it from plaintext values. The removed key is
+named explicitly so a 1.4.0 values file fails at render with its replacement and
+the upgrade procedure. No compatibility shims — the version bump IS the migration
+path.
+*/}}
+{{- define "keycloak.validateDatabaseSecret" -}}
+{{- if hasKey .Values.postgres "credentials" -}}
+{{- fail "keycloak: postgres.credentials was REMOVED in 1.5.0. The database credentials are now a prerequisite `dictionary` secret you create (keys: username, password, database), named by postgresHA.config.credentialsSecretName (HA mode) or postgres.config.credentialsSecretName (single-instance mode). Upgrading from 1.4.0: create it under a NEW name holding your EXISTING values, set the credentialsSecretName of the mode you use to that name, and remove postgres.credentials — see \"Upgrading from 1.4.0\" in the README." -}}
+{{- end -}}
+{{- if not (include "keycloak.db.secretName" .) -}}
+{{- fail "keycloak: the database credentials secret name is required — set postgresHA.config.credentialsSecretName (HA mode) or postgres.config.credentialsSecretName (single-instance mode) to your pre-created `dictionary` secret holding username, password and database. See Prerequisites in the README." -}}
+{{- end -}}
+{{- end }}
 
 {{/* Labeling */}}
 

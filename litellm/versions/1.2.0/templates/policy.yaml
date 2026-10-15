@@ -11,7 +11,7 @@ bindings:
 targetKind: secret
 targetLinks:
   - //secret/{{ include "litellm.config.secret.name" . }}
-  - //secret/{{ include "litellm.db.secret.name" . }}
+  - //secret/{{ include "litellm.pgCredentials.secret.name" . }}
   - //secret/{{ .Values.secrets.name }}
   {{- if eq (include "litellm.redisAuthEnabled" .) "true" }}
   - //secret/{{ include "litellm.redis.secretPassword.name" . }}

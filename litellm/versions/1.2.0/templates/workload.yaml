@@ -29,12 +29,18 @@ spec:
         - name: LITELLM_SALT_KEY
           value: cpln://secret/{{ .Values.secrets.name }}.LITELLM_SALT_KEY
         # ── Database (postgres subchart) — enables virtual keys / spend / budgets ──
+        # Every DB credential comes from the user's prerequisite secret (the same one
+        # the bundled postgres initializes from). DATABASE_URL is assembled at
+        # container start: the platform expands $(VAR) in an env value, so no
+        # credential is ever rendered into the chart.
         - name: POSTGRES_USER
-          value: cpln://secret/{{ include "litellm.db.secret.name" . }}.postgresUsername
+          value: cpln://secret/{{ include "litellm.pgCredentials.secret.name" . }}.username
         - name: POSTGRES_PASSWORD
-          value: cpln://secret/{{ include "litellm.db.secret.name" . }}.postgresPassword
+          value: cpln://secret/{{ include "litellm.pgCredentials.secret.name" . }}.password
+        - name: POSTGRES_DB
+          value: cpln://secret/{{ include "litellm.pgCredentials.secret.name" . }}.database
         - name: DATABASE_URL
-          value: postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@{{ include "litellm.postgres.host" . }}:5432/{{ .Values.postgres.credentials.database }}
+          value: postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@{{ include "litellm.postgres.host" . }}:5432/$(POSTGRES_DB)
         - name: STORE_MODEL_IN_DB
           value: {{ ternary "\"True\"" "\"False\"" .Values.litellm.storeModelInDb }}
         {{- if eq (include "litellm.redisAuthEnabled" .) "true" }}

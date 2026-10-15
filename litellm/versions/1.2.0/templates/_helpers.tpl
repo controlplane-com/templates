@@ -8,18 +8,10 @@
 {{- printf "%s-litellm-config" .Release.Name }}
 {{- end }}
 
-{{- define "litellm.db.secret.name" -}}
-{{- printf "%s-litellm-db" .Release.Name }}
-{{- end }}
-
 {{/*
-Name of the bundled database's credential secret that the postgres SUBCHART
-reads. This chart CREATES that secret (secret-db-credentials.yaml) and the
-subchart only receives its NAME — since postgres 3.4.0 the subchart creates no
-secret of its own. A subchart value cannot be templated by its parent, so the
-name is a plain value that both sides read, which is why it is not derived from
-the release name. Distinct from litellm.db.secret.name, which is the app's own
-secret.
+Name of the user's PREREQUISITE dictionary secret (keys username, password,
+database). The postgres subchart initializes from it and the proxy connects
+with the same keys; this chart creates no database secret at all (1.2.0+).
 */}}
 {{- define "litellm.pgCredentials.secret.name" -}}
 {{- .Values.postgres.config.credentialsSecretName }}
@@ -80,7 +72,19 @@ true
 
 {{/* Validation */}}
 
+{{/*
+postgres.credentials was removed in 1.2.0 (the chart used to turn it into the
+database secret). The postgres subchart ignores the key, so without this guard
+an upgrade carrying it would render cleanly and silently drop the values.
+*/}}
+{{- define "litellm.validateRemovedKeys" -}}
+{{- if hasKey .Values.postgres "credentials" -}}
+  {{- fail "postgres.credentials was removed in litellm 1.2.0. The database credentials are now a prerequisite dictionary secret (keys: username, password, database) named by postgres.config.credentialsSecretName. Upgrading from 1.1.0: create it under a NEW name holding your EXISTING values, set postgres.config.credentialsSecretName to that name, and remove postgres.credentials — see \"Upgrading from 1.1.0\" in the README." -}}
+{{- end -}}
+{{- end }}
+
 {{- define "litellm.validate" -}}
+{{- include "litellm.validateRemovedKeys" . -}}
 {{- if not .Values.secrets.name -}}
 {{- fail "litellm: secrets.name is required — the name of the prerequisite dictionary secret holding LITELLM_MASTER_KEY, LITELLM_SALT_KEY and every provider key (must exist BEFORE install)" -}}
 {{- end -}}

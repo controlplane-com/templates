@@ -44,7 +44,7 @@ cpln secret create-dictionary --name my-infisical-smtp \
   --entry SMTP_USERNAME=apikey --entry SMTP_PASSWORD=...
 ```
 
-**If a secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-infisical --gvc GVC_NAME -o yaml` (and `RELEASE_NAME-postgres` for the database secret; note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own after several minutes, or skip the wait with `cpln workload force-redeployment`.
+**If a secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-infisical --gvc GVC_NAME -o yaml` (and `RELEASE_NAME-postgres` for the database secret; note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own, but Infisical can take up to about 12 minutes to serve again — poll rather than giving up — or skip the wait with `cpln workload force-redeployment`.
 
 ## Configuration
 
@@ -141,7 +141,7 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`c
 1.1.0 created the database secret itself, so **this upgrade deletes it**. Before upgrading, create a secret under a **new** name holding the values your database was initialized with — not new ones, or Infisical loses its database connection:
 
 ```bash
-cpln secret create-dictionary --name RELEASE_NAME-infisical-db \
+cpln secret create-dictionary --name RELEASE_NAME-postgres-credentials \
   --entry username=infisical --entry password=YOUR_CURRENT_PASSWORD --entry database=infisical
 ```
 
@@ -187,7 +187,7 @@ Check the object size before restoring from one.
 
 - **Both prerequisite secrets must exist before install** — the keys secret (`secrets.name`) and the database credentials secret (`postgres.config.credentialsSecretName`). A missing secret wedges the deployment with zero log lines; see Prerequisites for how to diagnose it.
 - **`ENCRYPTION_KEY` and `AUTH_SECRET` are write-once — never rotate them.** `ENCRYPTION_KEY` encrypts every stored secret; `AUTH_SECRET` signs all sessions.
-- **Changing the database password is a database change first.** Editing the secret alone does nothing to the database, and a running workload keeps the values it started with. Run `ALTER ROLE <username> PASSWORD '...'` in PostgreSQL, then `cpln secret edit SECRET_NAME`, then `cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME`, wait until it is ready, and force-redeploy `RELEASE_NAME-infisical`.
+- **Changing the database password is a database change first.** Editing the secret alone does nothing to the database, and a running workload keeps the values it started with. Run `ALTER ROLE <username> PASSWORD '...'` in PostgreSQL, then `cpln secret edit SECRET_NAME`, then `cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME`, wait until `get-deployments` no longer shows `will be restarted shortly` (`ready: true` alone can still describe the old replica), and force-redeploy `RELEASE_NAME-infisical`.
 - **The first account to sign up becomes super-admin.** There are no admin env vars — create your admin account immediately after install, then disable open sign-ups in the admin panel.
 - **Redis is required, not optional** — Infisical will not boot without it; the template hard-wires the Sentinel dependency (authless behind the same-GVC firewall by default).
 - **Stored secrets live in Postgres and survive an app restart/reinstall** — to wipe all data you must also reinstall the Postgres dependency (its volumeset).

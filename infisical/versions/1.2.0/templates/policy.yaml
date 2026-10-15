@@ -1,0 +1,20 @@
+---
+kind: policy
+name: {{ include "infisical.policy.name" . }}
+description: Infisical secret access
+tags: {{- include "infisical.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "infisical.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "infisical.db.secret.name" . }}
+  - //secret/{{ .Values.secrets.name }}
+  {{- if and .Values.smtp.enabled .Values.smtp.auth.secretName }}
+  - //secret/{{ .Values.smtp.auth.secretName }}
+  {{- end }}
+  {{- if eq (include "infisical.redisAuthEnabled" .) "true" }}
+  - //secret/{{ include "infisical.redis.secretPassword.name" . }}
+  {{- end }}

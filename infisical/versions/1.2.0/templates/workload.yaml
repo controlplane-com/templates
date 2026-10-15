@@ -1,0 +1,119 @@
+---
+kind: workload
+name: {{ include "infisical.name" . }}
+description: Infisical server — secrets-management UI + API, HTTP :8080
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "infisical.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "infisical.identity.name" . }}
+  containers:
+    - name: infisical
+      image: {{ .Values.infisical.image }}
+      # Standalone image entrypoint runs DB migrations (knex) then serves on :8080.
+      inheritEnv: false
+      minCpu: {{ .Values.infisical.resources.minCpu | quote }}
+      cpu: {{ .Values.infisical.resources.maxCpu | quote }}
+      minMemory: {{ .Values.infisical.resources.minMemory | quote }}
+      memory: {{ .Values.infisical.resources.maxMemory | quote }}
+      env:
+        # ── Root-of-trust keys (user prerequisite dictionary secret) ──
+        - name: ENCRYPTION_KEY
+          value: cpln://secret/{{ .Values.secrets.name }}.ENCRYPTION_KEY
+        - name: AUTH_SECRET
+          value: cpln://secret/{{ .Values.secrets.name }}.AUTH_SECRET
+        # ── Public base URL — empty siteUrl derives from the platform canonical endpoint ──
+        - name: SITE_URL
+          value: {{ if .Values.infisical.siteUrl }}{{ .Values.infisical.siteUrl | quote }}{{ else }}"$(CPLN_GLOBAL_ENDPOINT)"{{ end }}
+        # ── Database (postgres subchart) — durable secret store ──
+        - name: POSTGRES_USER
+          value: cpln://secret/{{ include "infisical.db.secret.name" . }}.postgresUsername
+        - name: POSTGRES_PASSWORD
+          value: cpln://secret/{{ include "infisical.db.secret.name" . }}.postgresPassword
+        - name: DB_CONNECTION_URI
+          value: postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@{{ include "infisical.postgres.host" . }}:5432/{{ .Values.postgres.credentials.database }}
+        # ── Redis (redis subchart, Sentinel-aware) — cache + BullMQ job queues ──
+        - name: REDIS_SENTINEL_HOSTS
+          value: {{ include "infisical.redis.sentinelHosts" . | quote }}
+        - name: REDIS_SENTINEL_MASTER_NAME
+          value: "mymaster"
+        {{- if eq (include "infisical.redisAuthEnabled" .) "true" }}
+        # ── Redis data-node password (redis subchart auth secret); sentinels stay authless ──
+        - name: REDIS_PASSWORD
+          value: cpln://secret/{{ include "infisical.redis.secretPassword.name" . }}.password
+        {{- end }}
+        {{- if .Values.smtp.enabled }}
+        # ── SMTP / email ──
+        - name: SMTP_HOST
+          value: {{ .Values.smtp.host | quote }}
+        - name: SMTP_PORT
+          value: {{ .Values.smtp.port | quote }}
+        - name: SMTP_FROM_ADDRESS
+          value: {{ .Values.smtp.fromAddress | quote }}
+        - name: SMTP_FROM_NAME
+          value: {{ .Values.smtp.fromName | quote }}
+        - name: SMTP_REQUIRE_TLS
+          value: {{ .Values.smtp.requireTls | quote }}
+        {{- if .Values.smtp.auth.secretName }}
+        - name: SMTP_USERNAME
+          value: cpln://secret/{{ .Values.smtp.auth.secretName }}.SMTP_USERNAME
+        - name: SMTP_PASSWORD
+          value: cpln://secret/{{ .Values.smtp.auth.secretName }}.SMTP_PASSWORD
+        {{- end }}
+        {{- end }}
+      ports:
+        - number: 8080
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /api/status
+          port: 8080
+        initialDelaySeconds: 10
+        periodSeconds: 15
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /api/status
+          port: 8080
+        initialDelaySeconds: 120
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: {{ .Values.infisical.replicas }}
+      maxScale: {{ .Values.infisical.replicas }}
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  supportDynamicTags: false

@@ -1,10 +1,7 @@
 # Listmonk
 
-> **Upgrading from 1.3.1:** resource blocks that expose both a floor and a ceiling now name the
-> ceiling `maxCpu`/`maxMemory` instead of `cpu`/`memory`, so it is no longer ambiguous which number
-> is the limit. Rename those two keys in your values; an upgrade that still carries the old names is
-> refused at render. Blocks that expose only a limit keep the bare `cpu`/`memory` names.
-
+> **Upgrading from 1.5.0:** the database credentials are now a secret you create before upgrading,
+> under a **new** name — see [Upgrading from 1.5.0](#upgrading-from-150).
 
 This app deploys [listmonk](https://listmonk.app/) — a high-performance, self-hosted newsletter and mailing list manager (AGPL-3.0). It runs the listmonk server (admin dashboard, campaign engine, public subscription pages, transactional-mail API) backed by a PostgreSQL store, with schema install and admin bootstrap fully automatic on first boot.
 
@@ -15,12 +12,25 @@ This app deploys [listmonk](https://listmonk.app/) — a high-performance, self-
 - **PostgreSQL (single-instance, default)**: The `postgres` template — holds all lists, subscribers, campaigns, and settings.
 - **PostgreSQL (HA, optional)**: The `postgres-highly-available` template instead — 3 Patroni replicas with automatic failover and an HAProxy leader endpoint, for a durable production store.
 - **Admin secret** (dictionary) — *not created by this template*; you create it before install and reference it by name. Holds the Super Admin login.
-- **Database credentials secret** (dictionary): holds the bundled database's `username`, `password` and `database`, built by *this* template from `postgres.credentials.*` in **both** store modes and handed to the active Postgres store by name (`postgres.config.credentialsSecretName` on the default path, `postgresHA.config.credentialsSecretName` on the HA path). Nothing for you to create.
+- **Database credentials secret** (dictionary) — *not created by this template*; you create it before install. The bundled database initializes from it and listmonk connects with it, in either store mode.
 - **Identity + policy**: a least-privilege policy granting the workload `reveal` on exactly two secrets — your admin secret and the active database credential secret.
 
 ## Prerequisites
 
-**One dictionary secret must exist BEFORE you install.** The Super Admin guards a login form on the public endpoint, so it is a prerequisite secret rather than a value — a value would sit in plaintext in the Helm release for the life of the install.
+**Two dictionary secrets must exist BEFORE you install.** They hold credentials, so they are prerequisite secrets rather than values — a value would sit in plaintext in the Helm release for the life of the install.
+
+**1. Database credentials** — the bundled PostgreSQL initializes with these and listmonk connects with them:
+
+```bash
+cpln secret create-dictionary --name my-listmonk-db-credentials \
+  --entry username=listmonk \
+  --entry password="$(openssl rand -hex 24)" \
+  --entry database=listmonk
+```
+
+Set its name in the key of the store you use: `postgres.config.credentialsSecretName` (single-instance, the default) or `postgresHA.config.credentialsSecretName` (HA). Secret names are org-wide, so give each listmonk release its own secret. PostgreSQL reads the secret only when its data is first initialized — see Important Notes for changing the password later.
+
+**2. Super Admin login** — it guards a login form on the public endpoint:
 
 ```bash
 cpln secret create-dictionary --name my-listmonk-admin \
@@ -37,9 +47,7 @@ Then set `admin.secretName` to that name. Read the password back with `cpln secr
 
 A value shorter than the minimum makes listmonk's own `--install` fail on every attempt; the container checks both lengths at boot and exits with a message naming this secret, rather than looping on a misleading "waiting for database".
 
-**If the secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments {release}-listmonk --gvc {gvc} -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own within roughly 5.5–10.5 minutes — poll rather than giving up — or clear it immediately with `cpln workload force-redeployment {release}-listmonk --gvc {gvc}` (~90 s).
-
-**The database password is not a prerequisite** — it is bundled plumbing no human types elsewhere, so this template creates that secret for you from `postgres.credentials.*` on either path.
+**If either secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments {release}-listmonk --gvc {gvc} -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key; a missing database secret shows the same way on the `{release}-postgres` workload). Create the missing secret and it recovers on its own within roughly 5.5–10.5 minutes — poll rather than giving up — or clear it immediately with `cpln workload force-redeployment {release}-listmonk --gvc {gvc}` (~90 s).
 
 Optional: a cloud account + bucket if you enable the Postgres backup pass-through.
 
@@ -60,6 +68,8 @@ volumeset:
   capacity: 10        # GiB — persistent media uploads at /listmonk/uploads
 
 timezone: Etc/UTC     # container TZ — governs campaign scheduling times
+
+rootUrl: ""           # public base URL for subscriber links and email; empty = the canonical endpoint
 ```
 
 ### Admin Bootstrap
@@ -78,14 +88,9 @@ Exactly one of the two stores must be enabled (the chart enforces this at render
 ```yaml
 postgres:             # default: single-instance PostgreSQL
   enabled: true
-  credentials:        # this template builds the DB credential secret from these — used on BOTH paths
-    username: listmonk
-    password: change-me-listmonk-db # change before installing
-    database: listmonk
+  image: postgres:18  # listmonk requires Postgres 12+
   config:
-    # name of the dictionary secret this template CREATES and Postgres reads;
-    # secret names are org-wide, so a second release on this name is refused at install
-    credentialsSecretName: my-listmonk-db-credentials
+    credentialsSecretName: my-listmonk-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   volumeset:
     capacity: 10      # GiB
   backup:
@@ -104,7 +109,7 @@ postgres:
 postgresHA:           # durable HA: 3-replica Patroni store with an HAProxy leader endpoint
   enabled: true
   config:
-    credentialsSecretName: my-listmonk-db-credentials # name of the secret this template CREATES from postgres.credentials.*; org-wide, unique per release
+    credentialsSecretName: my-listmonk-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   replicas: 3
   volumeset:
     capacity: 10      # GiB per replica
@@ -143,43 +148,39 @@ Public access is **on** by default and is load-bearing: subscription forms, unsu
 | Public subscription page | `https://{canonical-endpoint}/subscription/form` |
 | In-GVC (internal) | `http://{release}-listmonk.{gvc}.cpln.local:9000` |
 | Admin credentials | `username` / `password` from your `admin.secretName` secret — `cpln secret reveal my-listmonk-admin -o yaml` |
-| Database credentials | the `username` / `password` / `database` keys of the secret named by `postgres.config.credentialsSecretName` (default path) or `postgresHA.config.credentialsSecretName` (HA path) — `cpln secret reveal SECRET_NAME -o yaml` |
+| Postgres (internal, single mode) | `{release}-postgres.{gvc}.cpln.local:5432`, credentials from your `postgres.config.credentialsSecretName` secret (`cpln secret reveal SECRET_NAME -o yaml`) |
+| Postgres (internal, HA mode) | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432`, credentials from your `postgresHA.config.credentialsSecretName` secret |
+
+## Upgrading from 1.5.0
+
+`postgres.credentials` was removed: the database credentials are now a prerequisite secret, the same one the database templates require on their own. Carrying the old key forward fails the render.
+
+1.5.0 created the database secret itself, so **this upgrade deletes it**. Before upgrading, create a secret under a **new** name holding the values your database was initialized with — not new ones, or listmonk loses its database connection:
+
+```bash
+cpln secret create-dictionary --name RELEASE_NAME-listmonk-db \
+  --entry username=listmonk --entry password=YOUR_CURRENT_PASSWORD --entry database=listmonk
+```
+
+Then upgrade with `postgres.config.credentialsSecretName` (single-instance mode) or `postgresHA.config.credentialsSecretName` (HA mode) set to that name, and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.5.0 release, and also in the old secret (`cpln secret reveal my-listmonk-db-credentials -o yaml`) until the upgrade deletes it.
+
+The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so listmonk can briefly lose its database; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
+
+## Upgrading from 1.3.x
+
+Resource blocks that expose both a floor and a ceiling name the ceiling `maxCpu`/`maxMemory` instead of `cpu`/`memory`. Rename those two keys in your values; an upgrade that still carries the old names is refused at render. Then follow [Upgrading from 1.5.0](#upgrading-from-150).
 
 ## Upgrading from 1.2.x (HA path)
 
-The HA store moved to `postgres-highly-available` 2.5.0, which no longer takes database
-credentials as values. Listmonk absorbed that change too, so **there is no new prerequisite**:
+The HA store moved to `postgres-highly-available` 2.5.0, which no longer takes database credentials as values. Put the values of `postgresHA.postgres.username/password/database` **unchanged** into the database credentials secret under Prerequisites, set `postgresHA.config.credentialsSecretName` to its name, and delete the `postgresHA.postgres` block. A different password only changes the secret, and listmonk then fails to log in to its own database.
 
-| Removed key | Replacement |
-|---|---|
-| `postgresHA.postgres.username` | `postgres.credentials.username` |
-| `postgresHA.postgres.password` | `postgres.credentials.password` |
-| `postgresHA.postgres.database` | `postgres.credentials.database` |
-| `postgresHA.backup.minio.accessKey` / `.secretKey` | `postgresHA.backup.minio.credentialsSecretName` (a dictionary secret you create; MinIO backups only) |
-
-**Carry your existing HA credentials over unchanged.** This template now builds the HA
-credentials secret from `postgres.credentials.*`, named by `postgresHA.config.credentialsSecretName`.
-The password was set when the database was first initialised; a different value here only rewrites
-the secret, and listmonk then fails to log in to its own database. Carrying the old block fails the
-render with `the postgres block was REMOVED in 2.5.0`, which tells you to create a secret yourself —
-ignore that advice here; this template creates it.
+With `postgresHA.backup.provider: minio`, `postgresHA.backup.minio.accessKey`/`secretKey` are likewise removed — put them in a `dictionary` secret and set `postgresHA.backup.minio.credentialsSecretName` to its name (see Storage setup).
 
 ## Upgrading from 1.1.0
 
-The bundled Postgres moved to the `postgres` 3.4.1 template, which no longer takes database
-credentials as values. Listmonk absorbed that change rather than passing it on, so **there is
-no new prerequisite** — only a rename on the default (single-instance) path:
+`postgres.config.username/password/database` were removed. Put the values your single-instance database was initialized with into the database credentials secret under Prerequisites (keys `username`, `password`, `database`), set `postgres.config.credentialsSecretName` to its name, and remove the three keys.
 
-| Removed key | Replacement |
-|---|---|
-| `postgres.config.username` | `postgres.credentials.username` |
-| `postgres.config.password` | `postgres.credentials.password` |
-| `postgres.config.database` | `postgres.credentials.database` |
-| `postgres.backup.minio.accessKey` / `.secretKey` | `postgres.backup.minio.credentialsSecretName` (a dictionary secret you create; MinIO backups only) |
-
-Carrying an old key fails the render with the **Postgres template's** message, which tells you
-to create a dictionary secret yourself. Ignore that advice here — this template creates it.
-Move the three keys and you are done. (The `postgresHA` path changed later, in 1.3.0 — see Upgrading from 1.2.x.)
+With `postgres.backup.provider: minio`, `postgres.backup.minio.accessKey`/`secretKey` were likewise removed — put them in a `dictionary` secret and set `postgres.backup.minio.credentialsSecretName` to its name (see Storage setup). The HA path changed later, in 1.3.0 — see above.
 
 ## Upgrading from 1.0.x
 
@@ -232,10 +233,8 @@ The backing template's README has the full per-provider walkthrough.
 
 ## Important Notes
 
-- **Create the admin secret before installing.** A missing prerequisite secret leaves the workload waiting on something that does not exist, with zero log lines — see Prerequisites for how to diagnose it.
-- **Change `postgres.credentials.password` before installing** — it is bundled plumbing, used exactly as given.
-- **Changing `postgres.credentials.password` on an existing release does not change the database password** — it only rewrites the secret, so the new value no longer matches the database and logins fail.
-- **Give each listmonk release its own `postgres.config.credentialsSecretName` (default) or `postgresHA.config.credentialsSecretName` (HA).** Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
+- **Create both secrets before installing.** A missing prerequisite secret leaves the workload waiting on something that does not exist, with zero log lines — see Prerequisites for how to diagnose it.
+- **Changing the database password:** run `ALTER ROLE <username> PASSWORD '<new>'` in the database first, then `cpln secret edit` the credentials secret, then `cpln workload force-redeployment {release}-postgres` (or `{release}-postgres-ha` in HA mode), wait for it to be ready, and force-redeploy `{release}-listmonk`. A running workload keeps the values it started with, and editing the secret alone does not change the database's password.
 - **Single instance by design — do not attempt to scale.** Upstream forbids two listmonk instances on one database (duplicate campaign sends); the template pins one replica and uses a no-surge rollout, so upgrades incur a brief gap instead of overlapping instances.
 - **No mail sends until SMTP is configured** in **Admin → Settings → SMTP** — see Post-install setup.
 - **Keep `publicAccess` enabled for subscriber-facing pages to work** — subscription forms, unsubscribe links, and tracking pixels must be reachable from the internet.

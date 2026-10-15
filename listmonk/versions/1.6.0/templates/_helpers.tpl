@@ -44,36 +44,22 @@ Names must match the dependency charts' own helpers (pg-ha.proxy.name / postgres
 {{- end }}
 
 {{/*
-Database name for the active backing store
-*/}}
-{{- define "listmonk.db.database" -}}
-{{- .Values.postgres.credentials.database }}
-{{- end }}
-
-{{/*
-Name of the bundled database's credential secret in the DEFAULT (single-instance) path.
-This chart CREATES that secret (secret-db.yaml) and the postgres subchart only receives
-its NAME — since postgres 3.4.0 the subchart creates no secret of its own. A subchart
-value cannot be templated by its parent, so the name is a plain value that both sides
-read, which is why it is not derived from the release name.
-*/}}
-{{- define "listmonk.secret.db.name" -}}
-{{- .Values.postgres.config.credentialsSecretName }}
-{{- end }}
-
-{{/*
-Credentials secret of the ACTIVE backing store.
-Created by this chart (secret-db.yaml) in BOTH modes from postgres.credentials.*.
-HA path: named by postgresHA.config.credentialsSecretName (postgres-highly-available
-2.5.0 creates no credentials secret of its own).
+Credentials secret of the ACTIVE backing store — a PREREQUISITE the user creates
+(keys: username, password, database). Both database subcharts require it by name,
+so listmonk requires the same secret rather than building one from plaintext
+values; the subchart and listmonk both read it, and listmonk takes all three keys
+(user, password AND database name) from it as env vars. 1.5.0 and earlier created
+it from postgres.credentials.*.
+HA path: named by postgresHA.config.credentialsSecretName.
 Default path: named by postgres.config.credentialsSecretName.
-Both hold the same three keys — username, password, database.
+A subchart value cannot be templated by its parent, so each name is a plain value
+that both sides read.
 */}}
 {{- define "listmonk.db.secretName" -}}
 {{- if .Values.postgresHA.enabled -}}
 {{- .Values.postgresHA.config.credentialsSecretName }}
 {{- else -}}
-{{- include "listmonk.secret.db.name" . }}
+{{- .Values.postgres.config.credentialsSecretName }}
 {{- end }}
 {{- end }}
 
@@ -83,6 +69,7 @@ Both hold the same three keys — username, password, database.
 {{- define "listmonk.validate" -}}
 {{- include "listmonk.validateResourceKnobs" . -}}
 {{- include "listmonk.validateAdmin" . -}}
+{{- include "listmonk.validateDatabaseSecret" . -}}
 {{- if and .Values.postgresHA.enabled .Values.postgres.enabled -}}
 {{- fail "listmonk: enable exactly one backing store — set either postgres.enabled or postgresHA.enabled to true, not both" -}}
 {{- end -}}
@@ -115,6 +102,24 @@ and exits with a named error rather than looping forever on a failed --install.
 {{- end -}}
 {{- if not .Values.admin.secretName -}}
 {{- fail "listmonk: admin.secretName is required — it names the prerequisite `dictionary` secret holding the `username` and `password` keys. Create that secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- end }}
+
+
+{{/*
+The bundled database's credentials became a user-created prerequisite secret in
+1.6.0: both database subcharts require a pre-existing secret, so listmonk requires
+the same one instead of rendering it from plaintext values. The removed key is
+named explicitly so a 1.5.0 values file fails at render with its replacement and
+the upgrade procedure. No compatibility shims — the version bump IS the migration
+path.
+*/}}
+{{- define "listmonk.validateDatabaseSecret" -}}
+{{- if hasKey .Values.postgres "credentials" -}}
+{{- fail "listmonk: postgres.credentials was REMOVED in 1.6.0. The database credentials are now a prerequisite `dictionary` secret you create (keys: username, password, database), named by postgres.config.credentialsSecretName (single-instance mode) or postgresHA.config.credentialsSecretName (HA mode). Upgrading from 1.5.0: create it under a NEW name holding your EXISTING values, set the credentialsSecretName of the mode you use to that name, and remove postgres.credentials — see \"Upgrading from 1.5.0\" in the README." -}}
+{{- end -}}
+{{- if not (include "listmonk.db.secretName" .) -}}
+{{- fail "listmonk: the database credentials secret name is required — set postgres.config.credentialsSecretName (single-instance mode) or postgresHA.config.credentialsSecretName (HA mode) to your pre-created `dictionary` secret holding username, password and database. See Prerequisites in the README." -}}
 {{- end -}}
 {{- end }}
 

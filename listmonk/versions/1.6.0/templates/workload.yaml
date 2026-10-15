@@ -80,7 +80,7 @@ spec:
         - name: LISTMONK_db__password
           value: 'cpln://secret/{{ include "listmonk.db.secretName" . }}.password'
         - name: LISTMONK_db__database
-          value: '{{ include "listmonk.db.database" . }}'
+          value: 'cpln://secret/{{ include "listmonk.db.secretName" . }}.database'
         - name: LISTMONK_db__ssl_mode
           value: disable
         # Consumed during --install only: creates the Super Admin on first boot.

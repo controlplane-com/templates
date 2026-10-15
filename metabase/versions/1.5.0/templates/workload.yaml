@@ -36,13 +36,10 @@ spec:
           value: {{ include "metabase.postgres.host" . }}
         - name: MB_DB_PORT
           value: '5432'
+        # user, password and database all come from the prerequisite credentials
+        # secret of the active mode, as discrete env vars (no connection URL)
         - name: MB_DB_DBNAME
-          {{- if .Values.postgresHA.enabled }}
           value: 'cpln://secret/{{ include "metabase.postgres.secret.name" . }}.database'
-          {{- else }}
-          # the bundled single-instance DB name is a value of this chart — use it directly
-          value: {{ .Values.postgres.credentials.database | quote }}
-          {{- end }}
         - name: MB_DB_USER
           value: 'cpln://secret/{{ include "metabase.postgres.secret.name" . }}.username'
         - name: MB_DB_PASS

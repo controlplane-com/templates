@@ -1,10 +1,7 @@
 # Metabase
 
-> **Upgrading from 1.3.1:** resource blocks that expose both a floor and a ceiling now name the
-> ceiling `maxCpu`/`maxMemory` instead of `cpu`/`memory`, so it is no longer ambiguous which number
-> is the limit. Rename those two keys in your values; an upgrade that still carries the old names is
-> refused at render. Blocks that expose only a limit keep the bare `cpu`/`memory` names.
-
+> **Upgrading from 1.4.0:** the database credentials are now a secret you create before upgrading,
+> under a **new** name — see [Upgrading from 1.4.0](#upgrading-from-140).
 
 This app deploys [Metabase](https://www.metabase.com/) open-source BI — dashboards, a SQL editor, and scheduled report subscriptions. The bundled PostgreSQL is Metabase's own **app database** (users, dashboards, saved connections); the databases you analyze are **data sources** you connect in the app after install — they are never installed or touched by this template. The admin account is created automatically on first boot inside the container, and the workload only starts receiving traffic once setup is complete, so there is never a publicly reachable setup page.
 
@@ -15,15 +12,26 @@ This app deploys [Metabase](https://www.metabase.com/) open-source BI — dashbo
 - **PostgreSQL (dev/lightweight, optional)** (subchart): the single-instance `postgres` template instead, for lighter deployments.
 - **Admin secret** (dictionary) — *not created by this template*; you create it before install and reference it by name. Holds the admin login.
 - **Encryption-key secret** (opaque) — likewise user-created; encrypts saved database-connection details.
-- **Database credentials secret** (dictionary) — built by *this* template from `postgres.credentials.*` in **both** database modes and handed to the active Postgres store by name (`postgresHA.config.credentialsSecretName` in HA mode, `postgres.config.credentialsSecretName` in single-instance mode). Nothing for you to create.
+- **Database credentials secret** (dictionary) — *not created by this template*; you create it before install. The app database initializes from it and Metabase connects with it, in either database mode.
 - **Start script** (opaque secret) and **identity + policy**: a least-privilege policy granting the Metabase identity `reveal` on exactly the secrets it uses.
 - **Optional database backups** (subchart): logical dumps or WAL-G archiving to S3, GCS, or an S3-compatible endpoint.
 
 ## Prerequisites
 
-**Two secrets must exist BEFORE you install.** Both hold credentials or long-lived key material, so they are prerequisite secrets rather than values — a value would sit in plaintext in the Helm release for the life of the install, and the admin login is on a public endpoint.
+**Three secrets must exist BEFORE you install.** All hold credentials or long-lived key material, so they are prerequisite secrets rather than values — a value would sit in plaintext in the Helm release for the life of the install, and the admin login is on a public endpoint.
 
-**1. Admin login** (dictionary):
+**1. Database credentials** (dictionary) — the bundled PostgreSQL initializes with these and Metabase connects with them:
+
+```bash
+cpln secret create-dictionary --name my-metabase-db-credentials \
+  --entry username=metabase \
+  --entry password="$(openssl rand -hex 24)" \
+  --entry database=metabase
+```
+
+Set its name in the key of the database mode you use: `postgresHA.config.credentialsSecretName` (HA, the default) or `postgres.config.credentialsSecretName` (single-instance). Secret names are org-wide, so give each Metabase release its own secret. PostgreSQL reads the secret only when its data is first initialized — see Important Notes for changing the password later.
+
+**2. Admin login** (dictionary):
 
 ```bash
 cpln secret create-dictionary --name my-metabase-admin \
@@ -40,7 +48,7 @@ Then set `admin.secretName` to that name. Read the password back with `cpln secr
 
 **Neither value may contain a double quote (`"`) or a backslash (`\`)** — both are embedded in the first-boot setup API call. The start script checks this at boot and refuses to run setup if violated, which leaves the workload permanently unready with a `cpln-bootstrap: ERROR` log line.
 
-**2. Encryption key** (opaque, `encoding: plain`): a random string of at least 16 characters.
+**3. Encryption key** (opaque, `encoding: plain`): a random string of at least 16 characters.
 
 ```bash
 printf '%s' "$(openssl rand -hex 24)" | cpln secret create-opaque --name my-metabase-encryption-key --encoding plain -f -
@@ -48,9 +56,7 @@ printf '%s' "$(openssl rand -hex 24)" | cpln secret create-opaque --name my-meta
 
 Set its name in `encryptionKey.secretName`. Metabase uses it to encrypt saved database-connection details — **back it up; losing or changing it means re-entering every saved connection**.
 
-**If either secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments {release}-metabase --gvc {gvc} -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own within roughly 5.5–10.5 minutes — poll rather than giving up — or clear it immediately with `cpln workload force-redeployment {release}-metabase --gvc {gvc}` (~90 s).
-
-**The app database's password is not a prerequisite** — it is bundled plumbing no human types elsewhere, so this template creates that secret for you from `postgres.credentials.*` in either database mode.
+**If any of these secrets does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments {release}-metabase --gvc {gvc} -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own within roughly 5.5–10.5 minutes — poll rather than giving up — or clear it immediately with `cpln workload force-redeployment {release}-metabase --gvc {gvc}` (~90 s).
 
 For optional database backups: a bucket and access setup for one of the supported providers (see [Backup storage setup](#backup-storage-setup)).
 
@@ -99,17 +105,12 @@ Exactly one of the two databases must be enabled (the chart enforces this at ren
 postgresHA:                   # default: highly available PostgreSQL
   enabled: true
   config:
-    credentialsSecretName: my-metabase-db-credentials # name of the secret this template CREATES from postgres.credentials.*; org-wide, unique per release
+    credentialsSecretName: my-metabase-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   replicas: 3
   volumeset:
     capacity: 10              # GiB per replica
   backup:
     enabled: false            # optional — see Backup storage setup
-postgres:
-  credentials:                # HA mode also reads these — this template builds the HA credentials secret from them
-    username: metabase
-    password: change-me-metabase-db-password # change before installing
-    database: metabase
 ```
 
 ```yaml
@@ -117,14 +118,8 @@ postgresHA:
   enabled: false
 postgres:                     # dev/lightweight: single-instance PostgreSQL
   enabled: true
-  credentials:                # this template builds the DB credential secret from these
-    username: metabase
-    password: change-me-metabase-db-password # change before installing
-    database: metabase
   config:
-    # name of the dictionary secret this template CREATES and Postgres reads;
-    # secret names are org-wide, so a second release on this name is refused at install
-    credentialsSecretName: my-metabase-db-credentials
+    credentialsSecretName: my-metabase-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   volumeset:
     capacity: 10              # GiB
   backup:
@@ -138,44 +133,55 @@ postgres:                     # dev/lightweight: single-instance PostgreSQL
 | UI / API (public) | the canonical endpoint — read `status.canonicalEndpoint` from `cpln workload get {release}-metabase --gvc {gvc} -o yaml` |
 | Internal (same GVC) | `http://{release}-metabase.{gvc}.cpln.local:3000` |
 | Login | `email` / `password` from your `admin.secretName` secret — `cpln secret reveal my-metabase-admin -o yaml` |
-| Postgres (internal, HA mode) | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432`, credentials in the secret named by `postgresHA.config.credentialsSecretName` |
-| Postgres (internal, single mode) | `{release}-postgres.{gvc}.cpln.local:5432`, credentials in the secret named by `postgres.config.credentialsSecretName` |
+| Postgres (internal, HA mode) | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432`, credentials from your `postgresHA.config.credentialsSecretName` secret (`cpln secret reveal SECRET_NAME -o yaml`) |
+| Postgres (internal, single mode) | `{release}-postgres.{gvc}.cpln.local:5432`, credentials from your `postgres.config.credentialsSecretName` secret |
 
 To analyze a database running on Control Plane, add it in Metabase (Admin → Databases) using its internal endpoint, e.g. `{workload}.{gvc}.cpln.local:5432` — any database Metabase can reach, inside or outside Control Plane, works as a data source.
+
+## Upgrading from 1.4.0
+
+`postgres.credentials` was removed: the database credentials are now a prerequisite secret, the same one the database templates require on their own. Carrying the old key forward fails the render.
+
+1.4.0 created the database secret itself, so **this upgrade deletes it**. Before upgrading, create a secret under a **new** name holding the values your database was initialized with — not new ones, or Metabase loses its database connection:
+
+```bash
+cpln secret create-dictionary --name RELEASE_NAME-metabase-db \
+  --entry username=metabase --entry password=YOUR_CURRENT_PASSWORD --entry database=metabase
+```
+
+Then upgrade with `postgresHA.config.credentialsSecretName` (HA mode) or `postgres.config.credentialsSecretName` (single-instance mode) set to that name, and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.4.0 release, and also in the old secret (`cpln secret reveal my-metabase-db-credentials -o yaml`) until the upgrade deletes it.
+
+The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so Metabase can briefly lose its database; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
+
+## Upgrading from 1.3.x
+
+Resource blocks that expose both a floor and a ceiling name the ceiling `maxCpu`/`maxMemory` instead of `cpu`/`memory`. Rename those two keys in your values; an upgrade that still carries the old names is refused at render. Then follow [Upgrading from 1.4.0](#upgrading-from-140).
 
 ## Upgrading from 1.2.0 or 1.3.0 (HA path)
 
 The bundled HA Postgres moved to `postgres-highly-available` 2.5.0, which no longer takes
-credentials as values. Metabase absorbed that change too — **no new prerequisite** for the
-database password:
+credentials as values:
 
 | Removed key | Replacement |
 |---|---|
-| `postgresHA.postgres.username` / `.password` / `.database` (removed in 1.3.0) | `postgres.credentials.username` / `.password` / `.database` — copy your existing values **unchanged**; this template builds the HA credentials secret from them, named by `postgresHA.config.credentialsSecretName` |
+| `postgresHA.postgres.username` / `.password` / `.database` (removed in 1.3.0) | the database credentials secret under Prerequisites — put your existing values in it **unchanged** and set `postgresHA.config.credentialsSecretName` to its name |
 | `postgresHA.backup.minio.accessKey` / `.secretKey` (removed in 1.3.1) | `postgresHA.backup.minio.credentialsSecretName` (a dictionary secret you create; MinIO backups only) |
 
 Carrying the old `postgresHA.postgres` block fails the render with `the postgres block was
-REMOVED in 2.5.0`, which tells you to create the credentials secret yourself. Ignore that
-advice here — this template creates it. Changing `postgres.credentials.password` later does
-not change the database password (it is set once, when the volume is initialised), so keep the
-value you already have.
+REMOVED in 2.5.0`, telling you to create the credentials secret — that is correct here too.
 
 ## Upgrading from 1.1.0
 
 The bundled single-instance Postgres moved to the `postgres` 3.4.1 template, which no longer
-takes database credentials as values. Metabase absorbed that change rather than passing it on,
-so **there is no new prerequisite** — only a rename on the single-instance path:
-
-| Removed key | Replacement |
-|---|---|
-| `postgres.config.username` | `postgres.credentials.username` |
-| `postgres.config.password` | `postgres.credentials.password` |
-| `postgres.config.database` | `postgres.credentials.database` |
-| `postgres.backup.minio.accessKey` / `.secretKey` | `postgres.backup.minio.credentialsSecretName` (a dictionary secret you create; MinIO backups only) |
+takes database credentials as values. Put the values of `postgres.config.username` / `password` /
+`database` **unchanged** into the database credentials secret under Prerequisites (keys
+`username`, `password`, `database`), set `postgres.config.credentialsSecretName` to its name, and
+remove the three keys. With `postgres.backup.provider: minio`, `postgres.backup.minio.accessKey` /
+`secretKey` likewise moved to a dictionary secret named by `postgres.backup.minio.credentialsSecretName`.
 
 Carrying an old key fails the render with the **Postgres template's** message, which tells you
-to create a dictionary secret yourself. Ignore that advice here — this template creates it.
-Move the three keys and you are done. (The `postgresHA` path changed later, in 1.3.0 — see above.)
+to create a dictionary secret — that is correct here too. (The `postgresHA` path changed later,
+in 1.3.0 — see above.)
 
 ## Upgrading from 1.0.x
 
@@ -225,10 +231,9 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
 
 ## Important Notes
 
-- **Create both prerequisite secrets before installing.** A missing one leaves the workload waiting on something that does not exist, with zero log lines — see Prerequisites for how to diagnose it.
+- **Create all three prerequisite secrets before installing.** A missing one leaves the workload waiting on something that does not exist, with zero log lines — see Prerequisites for how to diagnose it.
 - **Back up the encryption-key secret** — losing or changing it means re-entering every saved database connection; rotation is only possible offline via Metabase's `rotate-encryption-key` command.
-- **Change the database password (`postgres.credentials.password`) before installing** — it is bundled plumbing, used exactly as given, and it feeds whichever store is enabled. Changing it on an existing release does not change the database password, so logins then fail.
-- **Give each metabase release its own `postgresHA.config.credentialsSecretName` (HA) or `postgres.config.credentialsSecretName` (single-instance).** Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
+- **Changing the database password takes four steps, in order:** `ALTER ROLE <username> PASSWORD '…'` in the database first, then `cpln secret edit` the credentials secret, then `cpln workload force-redeployment` the PostgreSQL workload (`{release}-postgres-ha` in HA mode, `{release}-postgres` in single-instance mode) and wait until it is ready, then force-redeploy `{release}-metabase`. Editing the secret alone changes nothing — a running workload keeps the values it started with, and PostgreSQL keeps the password it was initialized with.
 - **A too-weak admin password keeps the workload unready by design** — Metabase's server-side check requires letters and digits, 8+ characters, and a failed bootstrap is fail-closed rather than exposing an open setup page.
 - **Metabase is single-replica in this template** — the default HA Postgres backend removes the database as a failure point; upgrades restart the replica (brief UI downtime, no data loss).
 - **Uninstall deletes the database volumesets** — all questions, dashboards, and users. Enable backups if the data matters.

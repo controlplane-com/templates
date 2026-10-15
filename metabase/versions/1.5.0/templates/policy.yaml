@@ -9,8 +9,8 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "metabase.identity.name" . }}
 targetKind: secret
 targetLinks:
-  # The user-created admin credentials — reveal on exactly that one secret.
-  - //secret/{{ .Values.admin.secretName }}
   - //secret/{{ include "metabase.secretStart.name" . }}
+  # Prerequisite secrets the user creates — granted by name, nothing broader.
+  - //secret/{{ .Values.admin.secretName }}
   - //secret/{{ include "metabase.postgres.secret.name" . }}
   - //secret/{{ .Values.encryptionKey.secretName }}

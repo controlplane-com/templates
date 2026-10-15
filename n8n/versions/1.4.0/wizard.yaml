@@ -236,7 +236,7 @@ steps:
             help: >-
               PostgreSQL initializes from it and n8n connects with it. PostgreSQL reads it only when its data
               directory is first initialized, so editing it later does not change the database password.
-              In HA mode also run `ALTER ROLE repl PASSWORD` with the same new password: the replication role shares it.
+              In HA mode the order differs: move the leader to member -0 first (see the README's HA rotation steps).
             ref:
               kind: secret
               format: name

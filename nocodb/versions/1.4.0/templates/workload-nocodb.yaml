@@ -48,13 +48,20 @@ spec:
         # ── Meta database (postgres subchart, single instance) ──
         {{- end }}
         # NC_DB is parsed by metaUrlToDbConfig: the u/p/d query params map to
-        # user/password/database, so the credentials stay in the secret.
+        # user/password/database. All three come from the user's prerequisite
+        # credentials secret (the same one the active database subchart
+        # initializes from) and are spliced into NC_DB at container start by
+        # $(VAR) expansion, so nothing secret is rendered into the URL. They are
+        # not URL-encoded, so the README asks for URL-safe values. Each $(VAR)
+        # must be declared ABOVE NC_DB to be expanded.
         - name: NC_PG_USER
           value: cpln://secret/{{ include "nocodb.postgres.secret.name" . }}.username
         - name: NC_PG_PASSWORD
           value: cpln://secret/{{ include "nocodb.postgres.secret.name" . }}.password
+        - name: NC_PG_DATABASE
+          value: cpln://secret/{{ include "nocodb.postgres.secret.name" . }}.database
         - name: NC_DB
-          value: pg://{{ include "nocodb.postgres.host" . }}:5432/?u=$(NC_PG_USER)&p=$(NC_PG_PASSWORD)&d={{ include "nocodb.postgres.database" . }}
+          value: pg://{{ include "nocodb.postgres.host" . }}:5432/?u=$(NC_PG_USER)&p=$(NC_PG_PASSWORD)&d=$(NC_PG_DATABASE)
         # ── Redis (bundled single node) — one URL covers cache, jobs and rate limiting ──
         - name: NC_REDIS_PASSWORD
           value: cpln://secret/{{ include "nocodb.secret.creds.name" . }}.redisPassword

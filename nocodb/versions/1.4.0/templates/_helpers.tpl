@@ -47,47 +47,22 @@ derived name (glitchtip/unleash/twenty pattern).
 {{- end }}
 
 {{/*
-Name of the bundled database's credential secret in the SINGLE-INSTANCE path.
-This chart CREATES that secret (secret-db.yaml) and the postgres subchart only
-receives its NAME — since postgres 3.4.0 the subchart creates no secret of its
-own. A subchart value cannot be templated by its parent, so the name is a plain
-value that both sides read, which is why it is not derived from the release name.
-*/}}
-{{- define "nocodb.secret.db.name" -}}
-{{- .Values.postgres.config.credentialsSecretName }}
-{{- end }}
-
-{{/*
-Credentials secret of the ACTIVE database.
-Created by this chart (secret-db.yaml) in BOTH modes from postgres.credentials.*.
-HA path: named by postgresHA.config.credentialsSecretName (postgres-highly-available
-2.5.0 creates no credentials secret of its own).
+Credentials secret of the ACTIVE database — a PREREQUISITE the user creates
+(keys: username, password, database). Both database subcharts require it by
+name, so NocoDB requires the same secret rather than building one from
+plaintext values; the subchart and NocoDB both read it. 1.3.0 and earlier
+created it from postgres.credentials.*.
+HA path: named by postgresHA.config.credentialsSecretName.
 Single-instance path: named by postgres.config.credentialsSecretName.
-Both hold the same three keys — username, password, database.
+A subchart value cannot be templated by its parent, so each name is a plain
+value that both sides read.
 */}}
 {{- define "nocodb.postgres.secret.name" -}}
 {{- if .Values.postgresHA.enabled -}}
 {{- .Values.postgresHA.config.credentialsSecretName }}
 {{- else -}}
-{{- include "nocodb.secret.db.name" . }}
+{{- .Values.postgres.config.credentialsSecretName }}
 {{- end }}
-{{- end }}
-
-{{/*
-Database name of the active database — taken from values (not the secret) because
-it is interpolated into the NC_DB connection URL at render time, where a
-cpln://secret reference cannot be resolved.
-*/}}
-{{- define "nocodb.postgres.database" -}}
-{{- .Values.postgres.credentials.database }}
-{{- end }}
-
-{{/*
-Password of the active database — used only by validation (it is embedded in
-the NC_DB query string, so its charset matters).
-*/}}
-{{- define "nocodb.postgres.password" -}}
-{{- .Values.postgres.credentials.password }}
 {{- end }}
 
 {{/*
@@ -123,6 +98,26 @@ true
 {{- end }}
 
 
+{{/*
+The bundled database's credentials became a user-created prerequisite secret in
+1.4.0: both database subcharts require a pre-existing secret, so NocoDB requires
+the same one instead of rendering it from plaintext values. The removed key is
+named explicitly so a 1.3.x values file fails at render with its replacement and
+the upgrade procedure. No compatibility shims — the version bump IS the migration
+path. The old render-time password charset check went with the plaintext value:
+the secret is read only at container start, so the README states the URL-safe
+constraint instead.
+*/}}
+{{- define "nocodb.validateDatabaseSecret" -}}
+{{- if hasKey .Values.postgres "credentials" -}}
+{{- fail "nocodb: postgres.credentials was REMOVED in 1.4.0. The database credentials are now a prerequisite `dictionary` secret you create (keys: username, password, database), named by postgres.config.credentialsSecretName (single-instance mode) or postgresHA.config.credentialsSecretName (HA mode). Upgrading from 1.3.x: create it under a NEW name holding your EXISTING values, set the credentialsSecretName of the mode you use to that name, and remove postgres.credentials — see \"Upgrading from 1.3.x\" in the README." -}}
+{{- end -}}
+{{- if not (include "nocodb.postgres.secret.name" .) -}}
+{{- fail "nocodb: the database credentials secret name is required — set postgres.config.credentialsSecretName (single-instance mode) or postgresHA.config.credentialsSecretName (HA mode) to your pre-created `dictionary` secret holding username, password and database. See Prerequisites in the README." -}}
+{{- end -}}
+{{- end }}
+
+
 {{/* Labeling */}}
 
 {{- define "nocodb.tags" -}}
@@ -133,6 +128,7 @@ true
 {{/* Validation */}}
 
 {{- define "nocodb.validate" -}}
+{{- include "nocodb.validateDatabaseSecret" . -}}
 {{- if not .Values.secrets.name -}}
 {{- fail "nocodb: secrets.name is required — the name of the prerequisite dictionary secret holding NC_AUTH_JWT_SECRET and NC_CONNECTION_ENCRYPT_KEY (must exist BEFORE install; both keys are write-once — rotating NC_AUTH_JWT_SECRET logs out every user, and changing NC_CONNECTION_ENCRYPT_KEY makes stored external-database credentials undecryptable)" -}}
 {{- end -}}
@@ -170,9 +166,6 @@ true
 {{- end -}}
 {{- if and .Values.postgresHA.enabled (not (dig "proxy" "enabled" true .Values.postgresHA)) -}}
 {{- fail "nocodb: postgresHA.proxy.enabled must remain true — the HAProxy leader endpoint is NocoDB's stable write endpoint" -}}
-{{- end -}}
-{{- if not (regexMatch "^[A-Za-z0-9_-]+$" (include "nocodb.postgres.password" .)) -}}
-{{- fail "nocodb: the database password must contain only letters, digits, '-' and '_' — it is embedded in the NC_DB query string and other characters would need URL encoding" -}}
 {{- end -}}
 {{- if not (regexMatch "^[A-Za-z0-9_-]+$" .Values.redis.auth.password) -}}
 {{- fail "nocodb: redis.auth.password must contain only letters, digits, '-' and '_' — it is embedded in NC_REDIS_URL and other characters break the connection URL" -}}

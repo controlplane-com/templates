@@ -11,8 +11,9 @@ bindings:
 targetKind: secret
 targetLinks:
   - //secret/{{ include "nocodb.secret.creds.name" . }}
-  - //secret/{{ include "nocodb.postgres.secret.name" . }}
+  # Prerequisite secrets the user creates — granted by name, nothing broader.
   - //secret/{{ .Values.secrets.name }}
+  - //secret/{{ include "nocodb.postgres.secret.name" . }}
   {{- if .Values.admin.secretName }}
   - //secret/{{ .Values.admin.secretName }}
   {{- end }}

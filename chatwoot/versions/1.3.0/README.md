@@ -1,5 +1,8 @@
 # Chatwoot
 
+> **Upgrading from 1.2.x:** the database credentials are now a secret you create before upgrading,
+> under a **new** name — see [Upgrading from 1.2.x](#upgrading-from-12x).
+
 Chatwoot is an open-source customer engagement platform — a live-chat widget, shared email inbox, and omni-channel agent desk. This template deploys the **Community Edition** (MIT core) as a Rails web tier plus a Sidekiq worker, backed by a highly available pgvector-capable PostgreSQL and a bundled Redis, with local or object-storage attachments.
 
 ## Architecture
@@ -12,12 +15,25 @@ Chatwoot is an open-source customer engagement platform — a live-chat widget, 
 - **Redis volumeset** — AOF persistence at `/data`.
 - **Start-script secrets** — the Chatwoot image declares no entrypoint, so the web and worker containers each mount their own start script.
 - **Credentials secret** — the template-managed Redis password.
-- **Database credentials secret** — a `dictionary` secret holding the bundled database's `username`, `password` and `database`, built by this template from `postgres.credentials.*` in **both** database modes and handed to the active Postgres subchart by name (`postgresHA.config.credentialsSecretName` in HA mode, `postgres.config.credentialsSecretName` in single-instance mode). Nothing for you to create.
+- **Database credentials secret** (dictionary) — *not created by this template*; you create it before install. The bundled PostgreSQL initializes from it and Chatwoot connects with it, in either database mode.
 - **Identity + policy** — one identity shared by web and worker, granted `reveal` on exactly the secrets they mount; it also carries the AWS cloud-account link in keyless S3 mode.
 
 ## Prerequisites
 
-- **A prerequisite dictionary secret — create it BEFORE installing.** The workloads reference it by name (`secrets.name`, default `my-chatwoot-secrets`) and the deployment wedges on a missing secret. All four keys are **write-once**: rotating `SECRET_KEY_BASE` logs out every user, and rotating an `ACTIVE_RECORD_ENCRYPTION_*` key makes stored two-factor secrets undecryptable.
+**Two dictionary secrets must exist BEFORE you install.** They hold credentials, so they are prerequisite secrets rather than values — a value would sit in plaintext in the Helm release for the life of the install.
+
+- **Database credentials** — the bundled PostgreSQL initializes with these and Chatwoot connects with them:
+
+  ```bash
+  cpln secret create-dictionary --name my-chatwoot-db-credentials \
+    --entry username=chatwoot \
+    --entry password="$(openssl rand -hex 24)" \
+    --entry database=chatwoot
+  ```
+
+  Set its name in the key of the database mode you use: `postgresHA.config.credentialsSecretName` (HA, the default) or `postgres.config.credentialsSecretName` (single-instance). Secret names are org-wide, so give each chatwoot release its own secret. PostgreSQL reads the secret only when its data is first initialized — see [Rotating the database password](#rotating-the-database-password).
+
+- **Root-of-trust keys — create it BEFORE installing.** The workloads reference it by name (`secrets.name`, default `my-chatwoot-secrets`) and the deployment wedges on a missing secret. All four keys are **write-once**: rotating `SECRET_KEY_BASE` logs out every user, and rotating an `ACTIVE_RECORD_ENCRYPTION_*` key makes stored two-factor secrets undecryptable.
 
   ```bash
   cpln secret create-dictionary --name my-chatwoot-secrets \
@@ -37,7 +53,7 @@ Chatwoot is an open-source customer engagement platform — a live-chat widget, 
     --entry SMTP_USERNAME=apikey --entry SMTP_PASSWORD=...
   ```
 
-**The database password is not a prerequisite** — it is bundled plumbing, so this template creates that secret for you from `postgres.credentials.*` in either database mode.
+**If either secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the containers never start, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-chatwoot --gvc GVC_NAME -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own after several minutes — poll rather than giving up — or skip the wait with `cpln workload force-redeployment`.
 
 ## Configuration
 
@@ -129,7 +145,7 @@ Enable exactly one of `postgresHA` (default) and `postgres`.
 postgresHA:
   enabled: true
   config:
-    credentialsSecretName: my-chatwoot-db-credentials # name of the secret this template CREATES from postgres.credentials.*; org-wide, unique per release
+    credentialsSecretName: my-chatwoot-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   replicas: 3
   volumeset:
     capacity: 10              # GiB per replica (minimum 10)
@@ -141,14 +157,8 @@ postgresHA:
 postgres:                     # single-instance alternative (dev/lightweight)
   enabled: false
   image: pgvector/pgvector:pg18   # MUST carry pgvector — stock postgres:18 does not
-  credentials:                # this template builds the DB credential secret from these — used in BOTH modes
-    username: chatwoot
-    password: change-me-chatwoot-pg
-    database: chatwoot
   config:
-    # name of the dictionary secret this template CREATES and Postgres reads;
-    # secret names are org-wide; a second release on this name is refused at install
-    credentialsSecretName: my-chatwoot-db-credentials
+    credentialsSecretName: my-chatwoot-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   volumeset:
     capacity: 10              # GiB (minimum 10)
   backup:
@@ -237,9 +247,42 @@ Set `postgresHA.backup.enabled: true` (or `postgres.backup.enabled: true` in sin
 | Public UI / widget | the canonical endpoint — read `status.canonicalEndpoint` (below) | first visit runs `/installation/onboarding` and creates the super admin |
 | Internal (same GVC) | `http://{release}-chatwoot.{gvc}.cpln.local:3000` | account login |
 | Health | `GET /api` (readiness — checks Postgres + Redis), `GET /health` (liveness) | none |
-| Database | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432` (HA) or `{release}-postgres.{gvc}.cpln.local:5432` | the secret named by `postgresHA.config.credentialsSecretName` (HA) or `postgres.config.credentialsSecretName` (single-instance) — `cpln secret reveal SECRET_NAME -o yaml` |
+| Database | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432` (HA) or `{release}-postgres.{gvc}.cpln.local:5432` | your database credentials secret (`postgresHA.config.credentialsSecretName` or `postgres.config.credentialsSecretName`) — `cpln secret reveal SECRET_NAME -o yaml` |
 
 The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`cpln workload get {release}-chatwoot --gvc {gvc} -o yaml`).
+
+## Rotating the database password
+
+PostgreSQL keeps the password it was initialized with, and a running workload keeps the values it started with, so a rotation takes four steps in order:
+
+1. Change it in the database: `ALTER ROLE chatwoot PASSWORD 'NEW_PASSWORD';` (connected as that user, from inside the GVC).
+2. Update the secret: `cpln secret edit my-chatwoot-db-credentials`.
+3. Redeploy the database and wait for it to be ready: `cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME` (single-instance) or `RELEASE_NAME-postgres-ha` (HA).
+4. Redeploy Chatwoot: `cpln workload force-redeployment RELEASE_NAME-chatwoot-worker --gvc GVC_NAME`, then `RELEASE_NAME-chatwoot`.
+
+## Upgrading from 1.2.x
+
+`postgres.credentials` was removed: the database credentials are now a prerequisite secret, the same one the database templates require on their own. Carrying the old key forward fails the render.
+
+1.2.x created the database secret itself, so **this upgrade deletes it**. Before upgrading, create a secret under a **new** name holding the values your database was initialized with — not new ones, or Chatwoot loses its database connection:
+
+```bash
+cpln secret reveal my-chatwoot-db-credentials -o yaml   # the CURRENT values, until the upgrade deletes this secret
+cpln secret create-dictionary --name RELEASE_NAME-chatwoot-db \
+  --entry username=chatwoot --entry password=YOUR_CURRENT_PASSWORD --entry database=chatwoot
+```
+
+Then upgrade with `postgresHA.config.credentialsSecretName` (HA mode) or `postgres.config.credentialsSecretName` (single-instance mode) set to that name, and `postgres.credentials` removed. Your current values are also in `postgres.credentials` of the 1.2.x release.
+
+The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so Chatwoot can briefly lose its database; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
+
+## Upgrading from 1.1.x (HA mode)
+
+`postgresHA.postgres.username/password/database` were removed in 1.2.0 (postgres-highly-available 2.5.0). Put those three values **unchanged** into the database credentials secret under [Prerequisites](#prerequisites), set `postgresHA.config.credentialsSecretName` to its name, and delete the `postgresHA.postgres` block. `postgresHA.backup.minio.accessKey`/`secretKey` moved to a prerequisite secret named by `postgresHA.backup.minio.credentialsSecretName` (see Storage setup).
+
+## Upgrading from 1.0.x
+
+`postgres.config.username/password/database` were removed. Put the values your single-instance database was initialized with into the database credentials secret under [Prerequisites](#prerequisites) (keys `username`, `password`, `database`), set `postgres.config.credentialsSecretName` to its name, and remove the three keys. `postgres.backup.minio.accessKey`/`secretKey` were removed the same way (see Storage setup).
 
 ## Important Notes
 
@@ -248,7 +291,8 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`c
 
 - **Choose the database mode before installing — it cannot be switched later.** Flipping `postgresHA.enabled` / `postgres.enabled` on a live release points Chatwoot at a different, empty database (separate volume set, and a different PostgreSQL major: 17.5 for the HA path, 18 for single-instance), so the app re-runs onboarding and your existing data is orphaned rather than migrated.
 
-- **The prerequisite secret must exist before install** — a missing `secrets.name` secret wedges the deployment and looks broken.
+- **Both prerequisite secrets must exist before install** — a missing `secrets.name` or database credentials secret wedges the deployment with zero log lines; see Prerequisites for the diagnostic.
+- **Rotating the database password needs `ALTER ROLE` plus forced redeployments** — see [Rotating the database password](#rotating-the-database-password).
 - **Complete the onboarding wizard promptly** — the first browser session to reach the endpoint creates the super admin account with no email confirmation.
 - **The bundled database image must carry pgvector** — Chatwoot's schema runs `CREATE EXTENSION "vector"`. The HA path has it natively; in single-instance mode keep `postgres.image` on a pgvector build (the chart refuses to render against a stock `postgres:` image).
 - **`chatwoot.replicas > 1` requires `storage.type` `s3` or `s3-compatible`** — local attachments live on a per-replica volumeset; the chart refuses to render otherwise.
@@ -258,10 +302,6 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`c
 - **Redis is a single node and cannot be scaled** — Chatwoot's ActionCable adapter reads `REDIS_URL` directly (no Sentinel support), and Redis does not propagate pub/sub between replicas, so a second node would silently drop live updates.
 - **Self-serve signup is toggled after install, not in values** — Chatwoot stores the flag in its database, so sign in as the super admin at `/super_admin`, open **Settings**, and set `ENABLE_ACCOUNT_SIGNUP`. It is disabled on a fresh install.
 - **Enterprise features are not included** — the `-ce` image omits SSO/SAML, audit logs, agent capacity management, custom branding, SLA policies, and Captain AI.
-- **Upgrading from 1.0.x**: the single-instance database credentials moved from `postgres.config.username/password/database` to `postgres.credentials.username/password/database`, named by the new `postgres.config.credentialsSecretName`. Carrying the old keys fails the render with `config.username was REMOVED in postgres 3.4.0` — move the three keys and you are done. **Ignore that message's advice to create a secret yourself; this template creates it**, and the database password stays a value. `postgres.backup.minio.accessKey`/`secretKey` were removed the same way (see Storage setup). Redis and the `secrets.name` prerequisite secret are unchanged; for the HA path see the next note.
-- **Upgrading from 1.1.x (HA mode)**: `postgresHA.postgres.username/password/database` were removed in 1.2.0 (postgres-highly-available 2.5.0). Move those three values into `postgres.credentials.*` **unchanged** — this template now builds the HA credentials secret from them, named by `postgresHA.config.credentialsSecretName`. Carrying the old block fails the render with `the postgres block was REMOVED in 2.5.0`; **ignore that message's advice to create a secret yourself — this template creates it.** `postgresHA.backup.minio.accessKey`/`secretKey` moved to a prerequisite secret named by `postgresHA.backup.minio.credentialsSecretName` (see Storage setup).
-- **Changing `postgres.credentials.password` on an existing release does not change the database password** — it only rewrites the secret, so the new value no longer matches the database and logins fail. The password is set once, when the database volume is first initialised.
-- **Give each chatwoot release its own `postgresHA.config.credentialsSecretName` (HA) or `postgres.config.credentialsSecretName` (single-instance).** Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected; you simply cannot install the second until you give it a distinct name.
 - **Data survives reinstall** — conversations live in the database volumeset and local attachments in the storage volumeset; delete those volumesets to wipe all data.
 
 ## Links

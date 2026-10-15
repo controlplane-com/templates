@@ -177,8 +177,8 @@ steps:
         fields:
           - type: note
             text: >-
-              In a chat, open Integrations → Tools and switch on Control Plane to sign in. With vLLM, use a
-              context length (model.maxModelLen) of at least 32768 so the tool list fits.
+              In a chat, open Integrations → Tools and switch on Control Plane to sign in. The model needs a
+              context of at least 64k tokens, because the tool list alone is about 56k (see the docs for vLLM).
         rules:
           - when: oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') < 0
             rule: "false"

@@ -134,7 +134,16 @@ With `cplnMcp.enabled: true`, the Control Plane MCP server is ready to use; each
 2. Sign in to Control Plane and approve access; you return to the chat.
 3. Ask, for example, "list my GVCs".
 
-The model must support tool calling and have room for the tool list: with vLLM, keep `model.toolCallParser` set and use a `model.maxModelLen` of at least 32768.
+The model must support tool calling and a context of at least 64k tokens: the Control Plane tool list alone is about 56k tokens, sent with every message. With vLLM, keep `model.toolCallParser` set; Qwen2.5-7B-Instruct reaches 64k with YaRN:
+
+```yaml
+model:
+  name: Qwen/Qwen2.5-7B-Instruct
+  maxModelLen: 65536
+  extraArgs:
+    - --hf-overrides
+    - '{"max_position_embeddings":65536,"rope_parameters":{"rope_type":"yarn","factor":2.0,"original_max_position_embeddings":32768,"rope_theta":1000000.0}}'
+```
 
 To add the server by hand (for example after an upgrade whose admin secret did not match), open Settings → Admin → Integrations → External Tool Servers → **+**, switch Type to **MCP**, and enter Name `Control Plane`, ID `cpln`, URL `https://mcp.cpln.io/mcp`, Auth **OAuth 2.1**; click **Register Client**, then **Save**.
 

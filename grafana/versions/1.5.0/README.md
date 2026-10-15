@@ -223,7 +223,7 @@ cpln secret create-dictionary --name RELEASE_NAME-grafana-db \
 
 Then upgrade with `postgres.credentials` removed and the `credentialsSecretName` of the mode you use (`postgresHA.config.credentialsSecretName` by default) set to that name. Your current values are in `postgres.credentials` of the 1.4.1 release, and also in the old secret (`cpln secret reveal my-grafana-db-credentials -o yaml`) until the upgrade deletes it.
 
-The new version of a workload may then wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates. The previous version keeps serving meanwhile, and it clears by itself.
+The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so Grafana can briefly lose its database; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
 
 ## Backup storage setup
 

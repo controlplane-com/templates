@@ -18,12 +18,18 @@ spec:
       env:
         - name: DATABASE_TYPE
           value: postgresql
+        {{- /* All three come from the user's prerequisite credentials secret — the
+               same one the active database subchart initializes from, in either
+               mode. DATABASE_URL is assembled at container start from $(VAR)
+               placeholders, so no credential is ever rendered into the chart. */}}
         - name: DATABASE_USERNAME
           value: 'cpln://secret/{{ include "umami.db.secretName" . }}.username'
         - name: DATABASE_PASSWORD
           value: 'cpln://secret/{{ include "umami.db.secretName" . }}.password'
+        - name: DATABASE_NAME
+          value: 'cpln://secret/{{ include "umami.db.secretName" . }}.database'
         - name: DATABASE_URL
-          value: postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@{{ include "umami.db.host" . }}:5432/{{ include "umami.db.database" . }}
+          value: postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@{{ include "umami.db.host" . }}:5432/$(DATABASE_NAME)
         {{- /* Signs auth tokens and sessions; comes from a prerequisite opaque
                secret the user creates before install, so it never enters the
                Helm release. */}}

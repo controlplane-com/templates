@@ -114,7 +114,7 @@ tw render --descriptor <dir>/wizard.yaml --values <dir>/values.yaml --answers an
 | Part | What it is | Descriptor input |
 |---|---|---|
 | Header | Template name, icon, category, app version, and an always-visible "Template docs" link to `/template-catalog/templates/<template>`, on every step of install and upgrade | none (automatic) |
-| Release step (install) | Release name, target GVC and template version. The GVC picker shows each GVC's location count and disables the GVCs that do not fit, with the reason ("Has 3 locations; this template needs exactly 1"). "Create GVC" opens an embedded create limited the same way (a single-choice location list when the maximum is 1; it cannot be created with fewer than the minimum). Versions without a descriptor are marked "YAML only" | `gvc` limits (§14) |
+| Release step (install) | Release name (the console checks its format, §8.11), target GVC and template version. The GVC picker shows each GVC's location count and disables the GVCs that do not fit, with the reason ("Has 3 locations; this template needs exactly 1"). "Create GVC" opens an embedded create limited the same way (a single-choice location list when the maximum is 1; it cannot be created with fewer than the minimum). Versions without a descriptor are marked "YAML only" | `gvc` limits (§14) |
 | Config steps | One per visible descriptor step, in order, on a rail | `steps` |
 | Sections | Untitled sections are a plain column; titled ones a box with the title, description and the docs link beside the title. A toggle section has its switch as the box's header title; while it is off, the box shows only its description. The toggle's own `help` (an import override) is the switch's "?", and its own `description` follows the section's under the header. Fields marked `advanced` are collected into a collapsed "Advanced" group at the end of their section | sections, `toggle` (§5.3), `advanced` (§5.5) |
 | Fields | One control per field type and widget. A switch sits right next to its label. A field with `suggestions` is a text input with a dropdown of the suggested values beside free typing, the unit written next to it (§15). A secret reference with required keys gets a "Check keys" button (§13.3). "Create" appears next to a reference only with `allowCreate: true` (§13.2). In a table (a list of objects), the message line under a row leads each message with its column's header ("Location: Required.") | field properties |
@@ -842,11 +842,11 @@ When: any text, including images, URLs, hostnames, cron schedules, CIDRs and dur
 
 | Property | Meaning |
 |---|---|
-| `format` | `image` (Docker references with a lowercase repository, and Control Plane `//image/name:tag`), `url` (http or https with a host), `hostname` (RFC 1123), `email`, `cron` (five fields or an `@daily`-style macro), `cidr` (IPv4 or IPv6, prefix optional), `duration` (`30s`, `12h`, `7d`, `1h30m`). A failure is `FORMAT` with a message that shows an example. |
+| `format` | `image` (Docker references with a lowercase repository, and Control Plane `//image/name:tag`; never a value a YAML parser reads as a number, boolean, null or date, so `2026-1-1` and `2026-01-01` are refused), `url` (http or https with a host), `hostname` (RFC 1123), `email`, `cron` (the platform's five numeric fields: minute 0-59, hour 0-23, day 1-31, month 1-12, weekday 0-6; no names and no `@daily` macros; the value is not trimmed, so surrounding spaces or a trailing line break are refused; a range must ascend, "A range must go up, but 5-1 does not."; a step is at least 1, "A step must be at least 1."), `cidr` (IPv4 or IPv6, prefix optional), `duration` (`30s`, `12h`, `7d`, `1h30m`). A failure is `FORMAT`; most messages show an example. |
 | `pattern` | A JavaScript regular expression (not RE2), anchored by you (`^…$`), in single quotes. A failure is `PATTERN`. |
 | `patternMessage` | What the `PATTERN` issue says instead of the regex, as written: `Leave out the leading /.` Write it as an instruction, in sentence case with a full stop, without the field's label (it shows under the field, and lists add the label). |
 | `minLength`, `maxLength` | Length bounds (`MIN_LENGTH`, `MAX_LENGTH`). |
-| `multiline` | A textarea; written as a YAML block literal (`|`). |
+| `multiline` | A textarea; written as a YAML block literal (`|`), or double-quoted when the first line starts with a space or a tab (Helm's YAML reader cannot read such a block scalar reliably). |
 | `sensitive` + `widget: password` | Masked input (§6.17). |
 | `suggestions` | Values offered in a dropdown next to free typing (§15). |
 
@@ -881,6 +881,7 @@ Pitfalls:
 - `format: url` requires a scheme; use `format: hostname` for bare host names (redis `publicAccess.address`).
 - An image field's description does not repeat a rule about image versions (Round 2 removed "Needs Postgres 17 or later" from postgres; the rule on `backup.enabled` says it when it matters).
 - A value such as `yes`, `on` or `123` in a string field is written quoted, so Helm reads it as text.
+- A string, enum, ref or quantity (or a list item of those) holding only spaces is not a value (§6.21).
 
 ### 6.3 `integer` and `number`
 
@@ -1034,8 +1035,9 @@ When: a single CPU or memory value outside a `resources` block. No pilot uses it
   suggestions: [128Mi, 256Mi, 512Mi, 1Gi]
 ```
 
+- Both kinds follow the platform's CPU and memory rules: at most 20 characters, at most three decimals, and a number is read as its text (no exponent form).
 - `quantity: cpu` accepts `200m` (millicores) or cores as a number or numeric string with up to three decimals (`1`, `0.5`, `"1.5"`). The writer keeps the node's scalar type: over a number it writes a number, over a string a string.
-- `quantity: memory` accepts a number with an optional unit (`Ki`, `Mi`, `Gi`, `Ti`, `K`, `M`, `G`, `T`) or plain bytes, and is always written as a string.
+- `quantity: memory` accepts a number with an optional unit (`Ki`, `Mi`, `Gi`, `K`, `k`, `M`, `G`) or plain bytes, and is always written as a string. There is no `T` or `Ti`: write 1 TiB as `1024Gi`.
 - `min`/`max` are quantity strings. A bad value is `QUANTITY_FORMAT`.
 - Redis-style sizes (`1gb`, `2gb 512mb 300`) are not quantities: they are strings with a `pattern` (redis `redis.replication.backlogSize`).
 
@@ -1060,6 +1062,7 @@ When: a workload's resource block. The field covers every key of the block.
 - min ≤ max is built in (`RESOURCES_MIN_GT_MAX`).
 - **`maxRatio: 4` on every stateful workload**, and on sidecars that run in one (redis's exporter). The platform rejects a stateful workload whose maxCpu:minCpu or maxMemory:minMemory exceeds 4:1; exactly 4 passes. `maxRatio` checks CPU and memory separately (`RESOURCES_RATIO`, whose message names the fix: "Raise the minimum to at least 500m or lower the maximum"). It applies only to the four-key shape.
 - Use `cpu: { min: 25m }` and `memory: { min: 32Mi }` as the floor on the main workload, as the pilots do.
+- Every CPU and memory key also follows the quantity grammar of §6.6 (20 characters, three decimals, no `T` or `Ti`).
 
 Pitfalls:
 
@@ -1205,6 +1208,7 @@ A list of references with a `null` default (postgres 3.4.1; `workloads:` has onl
     ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
 ```
 
+- **`serialize: csv`** reads the text split on `,` without empty items, but the value is validated as the raw text the chart splits (it does not trim): spaces around an item are `FORMAT` ("Remove the spaces around \"b\".") and an empty item (`a,,b`, a trailing comma) is `FORMAT` ("Remove the empty entry.", once per list). The form writes clean `a,b`: it joins with `,` and drops empty items, so emptying a row removes it. Only YAML mode can produce the bad text (§6.21).
 - Lists are atomic under Helm: a list in the values replaces the default list whole. The wizard copies the default list into the document before it edits one item.
 - In CEL a declared list is never `null`: missing and `null` read as `[]`, and a csv list reads as a list.
 
@@ -1445,7 +1449,8 @@ When: the chart reads a key that `values.yaml` does not have (commented out, or 
 
 - `immutable: true`, or a reason string shown next to the read-only control. Write the reason as a fact about the system.
 - On upgrade the field is read-only when the installed value is set (not missing, not `null`, not an off block). A field added by the new version, or never set by the release, stays editable.
-- A YAML edit that changes it is `IMMUTABLE_CHANGED` (error). Carry-over pins the installed value (`pinned`).
+- A YAML edit that changes it is `IMMUTABLE_CHANGED` (error). Carry-over pins the installed value (`pinned`). The values are compared by value: an installed `"3"` equals `3` in an `integer` field.
+- **A value that still is the installed one gets no other field check** (no `PATTERN`, `FORMAT`, `TYPE_MISMATCH`, not even `info`): the user cannot edit it, so a `pattern` or `format` that a newer descriptor added never blocks the upgrade. A changed value is checked as always. The exemption covers field checks only: a rule still runs on the unchanged value, so put a new check on an immutable field in `pattern` or `format`, or start the rule with `oldSelf != null && self.x == oldSelf.x ||`.
 - For a key added in this version with an implied old value, add an `assume` migration so the check works on the first upgrade (redis `assume: { engine: redis }`, §9.2).
 
 When a change is legal but has consequences (another credentials secret, a new image), use an `info` rule over `oldSelf` instead (§8.8).
@@ -1481,6 +1486,16 @@ See §15.
 | `cron` | string with `format: cron` | text input with a humanized schedule |
 
 A widget on a type it does not fit is a `NOT_APPLICABLE` warning; an unknown name is rejected.
+
+### 6.21 Values only YAML mode can type
+
+Most of these come only from text typed in YAML mode (only spaces can also be typed in a form text field). The engine refuses them; write no rule for them.
+
+- **Only spaces is not a value.** In a `string`, `enum`, `ref` or `quantity` field, or a list item of those, it is `REQUIRED` when the field is required, else `FORMAT` ("Leave it empty or enter a value; only spaces is not a value."). It is the only issue the value gets: no `PATTERN` or `FORMAT` message on top, so a `patternMessage` does not explain it.
+- **Only spaces is not an option either**: an enum refuses a value of only spaces, `allowCustom` or not (above).
+- **An explicit `null` on a `boolean` field or a section toggle** is `TYPE_MISMATCH` ("Expected true or false, found nothing.") unless the chart default is `null`. A missing key is fine.
+- **An explicit `null` on a `string`, `ref` or `enum` (of text options) field whose chart default is not `null`** is `TYPE_MISMATCH` ("Expected text, found nothing."; on a `ref` "Expected a reference, found nothing.", on an `enum` "Expected one value, found nothing."): a `null` in the user values deletes the default, and the chart then prints or splits nothing. Not flagged: `integer`, `number` and `quantity` fields (the form clears them with `null`), `absent` fields, `resources` keys, a `null` or missing default and an optional block set to `null` (that is off). A required field reports `REQUIRED` instead. Lists and maps are not covered.
+- **`serialize: csv`** text with spaces around an item or an empty item (§6.9).
 
 ---
 
@@ -1572,6 +1587,7 @@ Custom functions:
 - `null` compares only for equality. `self.x > 1` with `x == null` is an error, so guard it: `self.x == null || self.x > 1`.
 - `size(null)` is an error: guard values that may be `null` (`context.gvcLocations`).
 - `oldSelf` is `null` on install, so every rule over it starts with `oldSelf == null ||`.
+- Once an optional block is on (a non-empty map), the maps below it that a declared path needs exist, so a declared path below it reads `null`, not "no such key". Below an absent or off block nothing exists, so guard with `self.blk == null ||`.
 - Evaluation is short-circuit: `true || <error>` is `true`, and guards on the left protect the right.
 
 ### 7.5 `int` and `double`
@@ -1642,7 +1658,7 @@ Use single quotes for string literals inside CEL, so the YAML can stay double-qu
 | `optionsFrom` fails | `OPTIONS_EVAL_ERROR` (info) | error |
 | `init`, `itemLabel`, `textExpression`, `suggestName`, `requiredKeysFrom` fail | `EXPRESSION_EVAL_ERROR` (info) | error |
 
-Expression failures never block a user. `lint` treats them as errors, which is how CI catches them:
+Expression failures never block a user. `WHEN_EVAL_ERROR` and `EXPRESSION_EVAL_ERROR` are also left out while an input the expression reads (a `self.` or `item.` path, or one below or above it) has an error-severity `REQUIRED` or `TYPE_MISMATCH`: the user fixes that input first. A `MIGRATION_EVAL_ERROR` keeps the installed value (§9.2). `lint` treats them as errors, which is how CI catches them:
 
 - It runs an install session and a same-version upgrade session (`oldSelf` = the defaults) on the chart defaults and reports every expression failure and every failing error-severity rule (`DEFAULT_RULE_FAILED`).
 - It also evaluates every expression in scopes the defaults hide (behind a `when`, a toggle that is off, an optional block that is off, an empty list) on a "scope forced visible" view: toggles on, blocks on with their `newValue`, empty lists with their `newItem`. A failure there is an error ("… fails on the chart defaults with its scope shown (install): no such overload …"). A rule that merely returns `false` there is not reported.
@@ -1805,6 +1821,7 @@ Every rule over `oldSelf` starts with `oldSelf == null ||`, so it is true on ins
 
 - **Install-time-only settings** that break a running release are errors (redis: persistence cannot be turned on for a running release, the rollout stalls).
 - **Changes with a known consequence** are `info` (a new image restarts every member; another credentials secret does not change the existing user) or `warning` when they break the running release but a path exists (redis: changing the password in values deadlocks the rollout).
+- **A stricter check on a value the release may already hold** is a rule that skips the unchanged value, not a `pattern` or `format`: those also refuse the installed value and force the user to change a value the running release uses. Only an unchanged `immutable` value is exempt from the field checks (§6.16). For other fields write `oldSelf != null && self.x == oldSelf.x || self.x == '' || self.x.matches('^…$')` (drop `self.x == ''` on a required field).
 - **Per-version upgrade advice** is a note with `when: context.mode == 'upgrade'` (§9.6).
 - For a rule that needs a value added in this version, add an `assume` migration so `oldSelf` has it (§9.2).
 
@@ -1836,6 +1853,10 @@ Every rule over `oldSelf` starts with `oldSelf == null ||`, so it is true on ins
 ### 8.10 The chart defaults must pass
 
 The chart renders with its defaults, so every error-severity rule must hold on them (`DEFAULT_RULE_FAILED`), and every visible default must pass its own field checks (`DEFAULT_INVALID`, except `REQUIRED` and `MIN_ITEMS`). A default of the wrong type is `DEFAULT_TYPE_MISMATCH`. These checks run without reference clearing, so a rule may see the chart's placeholder names in lint and empty strings in the console; write rules that hold in both.
+
+### 8.11 The release name
+
+The release step of the console checks the name before any step: required; lowercase letters, digits and dashes; starts with a letter and ends with a letter or digit ("Release Name must start with a lowercase letter, contain only lowercase letters, digits and dashes, and end with a letter or digit."); at most 53 characters ("Release Name must be at most 53 characters."). A rule that only restates what the console refuses is redundant: write none. A rule over `context.releaseName` is for what the name must satisfy beyond that, such as the length of a name built from it.
 
 ---
 
@@ -1898,7 +1919,7 @@ Rules:
 
 - **A note says where the value went and what to do**, in the user's terms: "choose it under Credentials", "mint new ones instead of copying the old values". A drop without a note leaves the user guessing.
 - A plaintext value that moved into a secret is a drop, never a rename: the value cannot follow (postgres 3.3.0 → 3.4.x, supabase 1.0.0 → 1.1.x). When the old values were public demo values, say so in the note (supabase JWT keys: "1.0.0 shipped public demo keys: mint new ones").
-- `valueExpr` sees the old values: use the old paths (`self.gvc.locations[0].name`). A failing expression is a `MIGRATION_EVAL_ERROR` warning in the carry-over report and computes nothing; lint reports it as an error when the migration applies to the previous version.
+- `valueExpr` sees the old values: use the old paths (`self.gvc.locations[0].name`). A failing expression is a `MIGRATION_EVAL_ERROR` warning in the carry-over report; it adds no change, so the release keeps its installed value (the new default only when nothing was installed); lint reports it as an error when the migration applies to the previous version.
 - `assume` cannot be combined with `from`, `to` or `valueExpr` (`CONFLICT`).
 - Migration paths have no wildcards. A map declared as a field is atomic and carried whole; surface a change inside it with a same-path note migration, and let the map's value schema require the new key (supabase's `clientSecretName` shows an error until the user picks the secret).
 
@@ -1948,7 +1969,8 @@ Operators: `<`, `<=`, `>`, `>=`, `=`. Always quote the range (it starts with `<`
 
 - A field marked `immutable` is read-only in an upgrade session when the installed value is set, and carry-over pins the installed value (`pinned`).
 - An immutable key added by this version is editable on the first upgrade unless an `assume` supplies the old value (redis `engine`).
-- A YAML edit that changes it is `IMMUTABLE_CHANGED`.
+- A YAML edit that changes it is `IMMUTABLE_CHANGED`; values compare by value (`"3"` equals `3` in an `integer` field).
+- An unchanged installed value gets no other field check, so a `pattern` or `format` added in a newer version never blocks the upgrade (§6.16). For a field that is not `immutable`, a new `pattern` or `format` also refuses the value the release holds: write the check as a rule that skips the unchanged value (§8.8).
 
 ### 9.5 Blocking an in-place upgrade
 
@@ -3238,6 +3260,12 @@ Use it for your own descriptor before committing, and for reviewing someone else
 91. An imported child's always-required prerequisite secret is excluded from the import and redeclared on the parent's prerequisite step, with the child's keys, `allowCreate`, `create` and `mustExist`; a secret the parent's chart creates is a plain string field, and the step's text says so.
 92. When an engine choice switches which image the chart uses, every image field sits in Advanced › Images with its own `when`, and none sits next to the engine picker.
 
+**Engine value checks** (§6.6, §6.16, §6.21, §8.8, §8.11)
+
+93. No rule restates the release name's format or length (§8.11).
+94. No rule or `pattern` repeats a check the engine makes itself: quantity grammar, only-spaces text, an enum's options, an explicit `null` on a boolean or text field, csv spaces and empty items (§6.6, §6.21).
+95. A `pattern` or `format` added to a field an installed release may already hold is on an `immutable` field (an unchanged value is exempt) or a rule that skips the unchanged value, never a bare check that would force the user to change a value the running release uses (§6.16, §8.8).
+
 ---
 
 ## 19. Common mistakes
@@ -3298,6 +3326,8 @@ Every finding from the Round 1 reviews, the Round 2 owner testing, the Round 2 r
 | 50 | Always-required prerequisite secrets spread over several steps, or without Create or Check keys | 3 (feedback) | The user finds out what to create while installing (`PREREQUISITES_SPLIT`, `PREREQUISITE_WITHOUT_ALLOW_CREATE`, `PREREQUISITE_WITHOUT_KEYS`) | All together on the earliest step that has one, with `allowCreate` and `requiredKeys` (§13.5) |
 | 51 | An imported child's always-required prerequisite left in an imported step | 3 (feedback) | The user meets it deep in the child's steps (`PREREQUISITE_IN_IMPORT`) | Exclude it and redeclare it on the parent's prerequisite step (§16.4) |
 | 52 | Images of alternative engines split between the engine picker and Advanced (redis's Valkey image) | 3 (feedback) | The user looks for the images in two places | Every image in Advanced › Images, each with its own `when` (§5.5) |
+| 53 | A rule for the release name's format or length | general | The release step already refuses a bad name; two messages for one mistake | None: write nothing (§8.11) |
+| 54 | A `pattern` or `format` added to an installed field that is not `immutable` | general | It refuses the value the running release holds and forces the user to change it; only an unchanged `immutable` value is exempt | A rule that skips the unchanged value (`oldSelf != null && self.x == oldSelf.x \|\| …`), or `immutable` (§8.8, §6.16) |
 
 ---
 
@@ -3546,12 +3576,12 @@ Override keys (`importOverride`; each replaces the child's value whole): `label`
 | Code | Severity | Meaning |
 |---|---|---|
 | `REQUIRED` | error | a required visible field is empty |
-| `TYPE_MISMATCH` | error | the YAML holds the wrong type (`"10"` in an integer, a map where a scalar is expected); rules reading it are suppressed |
+| `TYPE_MISMATCH` | error | the YAML holds the wrong type (`"10"` in an integer, a map where a scalar is expected, an explicit `null` where the form never writes one, §6.21); rules reading it are suppressed |
 | `PATTERN` | error | a string or map key does not match its `pattern` |
 | `MIN`, `MAX` | error | a number or quantity outside its bounds |
 | `MIN_LENGTH`, `MAX_LENGTH` | error | a string outside its length bounds |
-| `FORMAT` | error | a string fails its `format` |
-| `QUANTITY_FORMAT` | error | a quantity does not parse (`12x`) |
+| `FORMAT` | error | a string fails its `format`; only spaces in an optional text field; a `serialize: csv` value with spaces around an item or an empty item |
+| `QUANTITY_FORMAT` | error | a quantity does not parse (`12x`, `1Ti`, more than 3 decimals or 20 characters) |
 | `NOT_IN_OPTIONS` | error | an enum value or map key outside its options |
 | `MIN_ITEMS`, `MAX_ITEMS` | error | a list outside its item bounds |
 | `UNIQUE_ITEMS` | error | a duplicate item or `uniqueBy` key |
@@ -3562,9 +3592,9 @@ Override keys (`importOverride`; each replaces the child's value whole): `label`
 | `IMMUTABLE_CHANGED` | error | an immutable field differs from the installed value |
 | `RULE` | the rule's `severity` | a CEL rule failed |
 | `RULE_EVAL_ERROR` | info | a rule could not be evaluated |
-| `WHEN_EVAL_ERROR` | info | a `when` failed (the item is shown) |
+| `WHEN_EVAL_ERROR` | info | a `when` failed (the item is shown); left out while an input it reads has a `REQUIRED` or `TYPE_MISMATCH` error |
 | `OPTIONS_EVAL_ERROR` | info | `optionsFrom` failed |
-| `EXPRESSION_EVAL_ERROR` | info | `init`, `itemLabel`, `textExpression`, `messageExpression`, `suggestName` or `requiredKeysFrom` failed |
+| `EXPRESSION_EVAL_ERROR` | info | `init`, `itemLabel`, `textExpression`, `messageExpression`, `suggestName` or `requiredKeysFrom` failed; left out like `WHEN_EVAL_ERROR` |
 | `YAML_PARSE`, `YAML_ROOT`, `YAML_MULTI_DOC` | error | the YAML tab's text is not one YAML map |
 | `REF_NOT_FOUND` | the ref's `mustExist` | the object does not exist, or has another secret type or provider |
 | `REF_CHECK_FAILED` | info | the existence check could not complete |
@@ -3665,7 +3695,7 @@ Lint reports every parser diagnostic, plus:
 |---|---|---|
 | `YAML_PARSE`, `YAML_ROOT`, `YAML_MULTI_DOC` | error | a text cannot be read; `ok` is false and renderers block |
 | `YAML_DUPLICATE_KEY` | warning | a duplicate key in the release values (the last one wins, as in Helm) |
-| `MIGRATION_EVAL_ERROR` | warning | a `valueExpr` failed; nothing was computed |
+| `MIGRATION_EVAL_ERROR` | warning | a `valueExpr` failed; it adds no change, so the installed value is kept |
 | `IMPORT_FROM_UNKNOWN` | warning | an import's installed child version is unknown; the new child defaults stand in and the child's migrations are skipped |
 | `IMPORT_UNRESOLVED` | error | an import of the new descriptor was not given; `ok` is false |
 

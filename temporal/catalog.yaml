@@ -7,12 +7,12 @@ category: workflow
 topology: stateless
 
 summary: >-
-  A Temporal server running the frontend, history, matching and worker services in one process,
-  plus the Temporal Web UI, both internal to your org, backed by a bundled three-node PostgreSQL
-  cluster with Patroni failover or, optionally, a single PostgreSQL instance. Schema setup and
-  migrations run at boot, and optional scheduled database backups go to S3, GCS or an
-  S3-compatible endpoint. Pick it to run durable workflows and long-running business processes
-  written with the Temporal SDKs.
+  A Temporal server running the frontend, history, matching and worker services as one replica or an
+  optional multi-replica cluster, with an admin-tools sidecar that migrates the schema and serves the
+  temporal CLI. It exposes gRPC and an HTTP API inside your org, a Web UI that is internal or open to IP
+  ranges you list, and server metrics. State lives in a bundled three-node PostgreSQL cluster with
+  Patroni failover or a single instance, with optional backups to S3, GCS or S3-compatible storage and
+  optional workflow archival to S3. Pick it to run durable workflows written with the Temporal SDKs.
 
 keywords:
   - durable execution
@@ -29,6 +29,10 @@ keywords:
   - state machines
   - schedules
   - background jobs
+  - temporal cli
+  - http api
+  - temporal cluster
+  - high availability
 
 useCases:
   - Run long-running business processes that resume after crashes and deploys
@@ -73,7 +77,7 @@ prerequisites:
       - postgres.backup.gcp.cloudAccountName
     required: false
     when: backups enabled with provider aws or gcp
-    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy on AWS named by backup.aws.policyName.
+    description: Control Plane cloud account for the backup bucket; on AWS also a bucket-scoped IAM policy with the README's full action list, named by backup.aws.policyName.
   - kind: secret
     secretType: dictionary
     keys: [accessKey, secretKey]
@@ -81,3 +85,18 @@ prerequisites:
     required: false
     when: backups enabled with provider minio
     description: Access keys for the MinIO or S3-compatible backup endpoint.
+  - kind: bucket
+    valuesPath: archival.s3.bucket
+    required: false
+    when: archival.enabled
+    description: S3 bucket that receives archived workflow histories and visibility records (archival needs server 1.31 or later).
+  - kind: cloud-account
+    valuesPath: archival.s3.cloudAccountName
+    required: false
+    when: archival.enabled
+    description: Control Plane AWS cloud account the server identity uses to reach the archival bucket (no keys).
+  - kind: other
+    valuesPath: archival.s3.policyName
+    required: false
+    when: archival.enabled
+    description: AWS IAM policy with s3:ListBucket on the archival bucket and Put/GetObject under its prefix; the chart attaches it to the server identity.

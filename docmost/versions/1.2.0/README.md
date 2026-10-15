@@ -196,6 +196,8 @@ PostgreSQL keeps the password it was initialized with, and a running workload ke
 3. Redeploy the database and wait for it to be ready: `cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME`.
 4. Redeploy Docmost: `cpln workload force-redeployment RELEASE_NAME-docmost --gvc GVC_NAME`.
 
+Docmost cannot reach its database from step 1 until its own redeploy finishes (about 4 minutes in testing), so rotate during a quiet period.
+
 ## Upgrading from 1.1.0
 
 `postgres.credentials` was removed: the database credentials are now a prerequisite secret, the same one the `postgres` template requires on its own. Carrying the old key forward fails the render.
@@ -210,7 +212,7 @@ cpln secret create-dictionary --name RELEASE_NAME-docmost-db \
 
 Then upgrade with `postgres.config.credentialsSecretName` set to that name, and `postgres.credentials` removed. Your current values are also in `postgres.credentials` of the 1.1.0 release.
 
-The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so Docmost can briefly lose its database; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
+The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so Docmost loses its database for a couple of minutes; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
 
 ## Upgrading from 1.0.0
 

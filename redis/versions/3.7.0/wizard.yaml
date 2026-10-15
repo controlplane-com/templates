@@ -36,31 +36,6 @@ steps:
               - value: valkey
                 label: Valkey
                 description: The BSD-licensed fork of Redis 7.2, on both tiers.
-          - path: valkeyImage
-            type: string
-            format: image
-            label: Valkey image
-            required: true
-            when: self.engine == 'valkey'
-            description: Used for both tiers.
-        rules:
-          - rule: self.engine != 'valkey' || (self.valkeyImage != null && self.valkeyImage != '')
-            mirrors: redis.validateEngine
-            paths: [valkeyImage]
-            message: A Valkey image is required when the server is Valkey.
-          - when: self.engine == 'valkey'
-            rule: self.valkeyImage == null || !self.valkeyImage.contains('alpine')
-            paths: [valkeyImage]
-            message: >-
-              The -alpine Valkey tags have no bash, which the chart's health probes need. Use a Debian-based
-              tag such as valkey/valkey:8.1.9.
-          - rule: oldSelf == null || self.engine != 'valkey' || self.valkeyImage == oldSelf.valkeyImage
-            severity: info
-            paths: [valkeyImage]
-            message: >-
-              Changing the Valkey image restarts every Redis and Sentinel node. A newer major version can
-              write data files that an older image cannot load: snapshot the volume sets before a major
-              upgrade if you need a way back.
       - title: Redis
         fields:
           - path: redis.replicas
@@ -384,7 +359,7 @@ steps:
               oldSelf == null || !oldSelf.redis.persistence.enabled ||
               self.redis.persistence.volumes.data.initialCapacity >= oldSelf.redis.persistence.volumes.data.initialCapacity
             paths: [redis.persistence.volumes.data.initialCapacity]
-            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
       - title: Sentinel
         fields:
           - path: sentinel.resources
@@ -399,7 +374,6 @@ steps:
         description: >-
           Recommended in production: it keeps the post-failover primary across restarts, so replicas
           rejoin the real primary.
-        docs: /reference/volumeset
         fields:
           - path: sentinel.persistence.volumes.data.initialCapacity
             type: integer
@@ -408,7 +382,6 @@ steps:
             min: 10
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
-            docs: "/reference/volumeset#capacity-and-billing"
           - path: sentinel.persistence.volumes.data.performanceClass
             type: enum
             label: Disk class
@@ -422,7 +395,6 @@ steps:
             type: object
             optional: true
             label: Grow the volume automatically
-            docs: "/reference/volumeset#autoscaling"
             newValue: { maxCapacity: 50, minFreePercentage: 20, scalingFactor: 1.2 }
             fields:
               - path: maxCapacity
@@ -466,7 +438,6 @@ steps:
             optional: true
             label: Scheduled snapshots
             advanced: true
-            docs: "/reference/volumeset#snapshots"
             newValue: { retentionDuration: 7d, schedule: "0 0 * * *" }
             fields:
               - path: retentionDuration
@@ -518,7 +489,7 @@ steps:
               oldSelf == null || !oldSelf.sentinel.persistence.enabled ||
               self.sentinel.persistence.volumes.data.initialCapacity >= oldSelf.sentinel.persistence.volumes.data.initialCapacity
             paths: [sentinel.persistence.volumes.data.initialCapacity]
-            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
     rules:
       - rule: >-
           !has(self.redis.resources.cpu) && !has(self.redis.resources.memory) &&
@@ -548,11 +519,11 @@ steps:
             text: >-
               Setting either external CIDR list of a tier renders both; the other one becomes empty.
       - title: Redis
-        docs: "/reference/workload/firewall"
         fields:
           - path: redis.firewall.internal_inboundAllowType
             type: enum
             label: Internal access to Redis
+            docs: "/reference/workload/firewall#internal"
             widget: cards
             required: true
             description: Firewall changes take a few minutes to take effect.
@@ -625,7 +596,6 @@ steps:
               Before you install, add a TXT record `_cpln-<subdomain>` with your org name and a CNAME from
               the subdomain to `<gvc-alias>.cpln.app`, with proxying off.
       - title: Sentinel
-        docs: "/reference/workload/firewall"
         fields:
           - path: sentinel.firewall.internal_inboundAllowType
             type: enum
@@ -683,13 +653,11 @@ steps:
             type: boolean
             label: Per-replica internal endpoints
             when: "!self.sentinel.publicAccess.enabled"
-            docs: "/reference/workload/general#internal-endpoint-formatting"
             description: Public access turns this on.
       - id: sentinel-public
         title: Public TCP access to Sentinel
         toggle: sentinel.publicAccess.enabled
         description: Publishes one port per Sentinel, from 26380, and forces per-replica endpoints.
-        docs: "#public-access-and-firewall"
         fields:
           - path: sentinel.publicAccess.address
             type: string
@@ -860,7 +828,6 @@ steps:
             required: true
             example: true
             description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
-            docs: "#aws-s3"
           - path: backup.aws.prefix
             type: string
             label: Folder prefix
@@ -935,25 +902,51 @@ steps:
     description: Images, timeouts, replication tuning, health probes and extra workload settings.
     sections:
       - title: Images
-        when: self.engine == 'redis'
         fields:
           - path: redis.image
             type: string
             format: image
             label: Redis image
             required: true
+            when: self.engine == 'redis'
           - path: sentinel.image
             type: string
             format: image
             label: Sentinel image
             required: true
+            when: self.engine == 'redis'
+          - path: valkeyImage
+            type: string
+            format: image
+            label: Valkey image
+            required: true
+            when: self.engine == 'valkey'
+            description: Used for both tiers.
         rules:
-          - rule: >-
+          - when: self.engine == 'redis'
+            rule: >-
               oldSelf == null || imageMajor(self.redis.image) < 0 || imageMajor(oldSelf.redis.image) < 0 ||
               imageMajor(self.redis.image) >= imageMajor(oldSelf.redis.image)
             severity: info
             paths: [redis.image]
             message: An older Redis major version cannot load data written by the installed one.
+          - rule: self.engine != 'valkey' || (self.valkeyImage != null && self.valkeyImage != '')
+            mirrors: redis.validateEngine
+            paths: [valkeyImage]
+            message: A Valkey image is required when the server is Valkey.
+          - when: self.engine == 'valkey'
+            rule: self.valkeyImage == null || !self.valkeyImage.contains('alpine')
+            paths: [valkeyImage]
+            message: >-
+              The -alpine Valkey tags have no bash, which the chart's health probes need. Use a Debian-based
+              tag such as valkey/valkey:8.1.9.
+          - rule: oldSelf == null || self.engine != 'valkey' || self.valkeyImage == oldSelf.valkeyImage
+            severity: info
+            paths: [valkeyImage]
+            message: >-
+              Changing the Valkey image restarts every Redis and Sentinel node. A newer major version can
+              write data files that an older image cannot load: snapshot the volume sets before a major
+              upgrade if you need a way back.
       - title: Timeouts
         fields:
           - path: redis.timeoutSeconds
@@ -1087,7 +1080,7 @@ steps:
             type: object
             optional: true
             label: Request retry policy
-            docs: /reference/workload/general
+            docs: "/reference/workload/general#retryon"
             newValue:
               attempts: 2
               retryOn: [connect-failure, refused-stream, unavailable, cancelled, resource-exhausted, retriable-status-codes]
@@ -1152,7 +1145,6 @@ steps:
             type: object
             optional: true
             label: Request retry policy
-            docs: /reference/workload/general
             newValue:
               attempts: 2
               retryOn: [connect-failure, refused-stream, unavailable, cancelled, resource-exhausted, retriable-status-codes]

@@ -10,7 +10,6 @@ steps:
   - id: credentials
     title: Credentials
     description: The prerequisite secrets. None of these values passes through the release values.
-    docs: "#prerequisites"
     fields:
       - type: note
         severity: warning
@@ -76,7 +75,6 @@ steps:
   - id: database
     title: Database
     description: Postgres compute, storage and access, and the optional pooler.
-    docs: "#postgres"
     sections:
       - fields:
           - path: postgres.resources
@@ -289,7 +287,7 @@ steps:
     rules:
       - rule: oldSelf == null || self.postgres.volumeset.capacity >= oldSelf.postgres.volumeset.capacity
         paths: [postgres.volumeset.capacity]
-        message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
 
   - id: access
     title: API and auth
@@ -576,10 +574,10 @@ steps:
   - id: storage
     title: Storage
     description: Where the Storage API keeps files.
-    docs: "#storage"
     sections:
       - id: storage-api
         title: Storage API
+        docs: "#storage"
         toggle: storage.enabled
         description: File and object storage. Turn it off if your app stores no files; it saves a workload.
         fields:
@@ -826,7 +824,7 @@ steps:
       - when: self.storage.enabled && self.storage.backend == 'local'
         rule: oldSelf == null || self.storage.volumeset.capacity >= oldSelf.storage.volumeset.capacity
         paths: [storage.volumeset.capacity]
-        message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
       - when: >-
           self.storage.enabled && self.storage.backend == 's3' &&
           (self.storage.s3.endpoint == null || self.storage.s3.endpoint == '') &&
@@ -861,10 +859,10 @@ steps:
   - id: backup
     title: Backups
     description: Logical dumps or continuous WAL archiving to object storage.
-    docs: "#backing-up"
     sections:
       - id: backup
         title: Backups
+        docs: "#backup"
         toggle: backup.enabled
         fields:
           - path: backup.mode
@@ -919,7 +917,6 @@ steps:
               apply to the logical backup job.
       - title: AWS S3
         when: self.backup.enabled && self.backup.provider == 'aws'
-        docs: "#backup"
         fields:
           - type: note
             severity: warning
@@ -965,7 +962,6 @@ steps:
             patternMessage: Leave out the leading /.
       - title: Google Cloud Storage
         when: self.backup.enabled && self.backup.provider == 'gcp'
-        docs: "#backup"
         fields:
           - path: backup.gcp.bucket
             type: string
@@ -1013,6 +1009,7 @@ steps:
     description: Images, resources and replica counts of the services that always run.
     sections:
       - title: Postgres
+        docs: "#postgres"
         fields:
           - path: postgres.image
             type: string

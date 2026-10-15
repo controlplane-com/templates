@@ -10,7 +10,6 @@ steps:
   - id: nodes
     title: Nodes
     description: Where the pgEdge nodes run, how many run in each location, and their image and compute.
-    docs: "#locations-and-replicas"
     sections:
       - fields:
           - type: note
@@ -30,6 +29,7 @@ steps:
           - path: locations
             type: list
             label: Locations
+            docs: "#locations-and-replicas"
             required: true
             minItems: 1
             uniqueBy: [name]
@@ -133,7 +133,6 @@ steps:
   - id: credentials
     title: Credentials
     description: The prerequisite secret with the database user, password and name.
-    docs: "#prerequisites"
     fields:
       - type: note
         severity: warning
@@ -183,7 +182,6 @@ steps:
   - id: storage
     title: Storage
     description: The volume of each pgEdge node, its snapshots and its growth.
-    docs: "#volume-set"
     sections:
       - fields:
           - path: volumeset.capacity
@@ -265,7 +263,7 @@ steps:
     rules:
       - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
         paths: [volumeset.capacity]
-        message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
 
   - id: network
     title: Network and pooling
@@ -541,7 +539,6 @@ steps:
   - id: backup
     title: Backups
     description: Scheduled database dumps to S3 or GCS, and the job that restores them.
-    docs: "#backing-up"
     sections:
       - id: backup
         title: Scheduled backups

@@ -46,7 +46,6 @@ steps:
   - id: credentials
     title: Credentials
     description: The prerequisite secret with the database user, password and name.
-    docs: "#prerequisites"
     fields:
       - type: note
         severity: warning
@@ -89,7 +88,6 @@ steps:
   - id: storage
     title: Storage
     description: The volume set that holds the data directory.
-    docs: /reference/volumeset
     sections:
       - fields:
           - path: volumeset.capacity
@@ -141,7 +139,7 @@ steps:
     rules:
       - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
         paths: [volumeset.capacity]
-        message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
 
   - id: network
     title: Network and pooling
@@ -288,10 +286,10 @@ steps:
   - id: backup
     title: Backups
     description: Scheduled logical backups to object storage.
-    docs: "#backup"
     sections:
       - id: backup
         title: Scheduled backups
+        docs: "#backup"
         toggle: backup.enabled
         fields:
           - path: backup.provider
@@ -361,7 +359,6 @@ steps:
             required: true
             example: true
             description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
-            docs: "#aws-s3"
           - path: backup.aws.prefix
             type: string
             label: Folder prefix

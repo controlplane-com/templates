@@ -231,15 +231,41 @@ cpln secret create-dictionary --name my-listmonk-minio-credentials \
 
 The backing template's README has the full per-provider walkthrough.
 
+## Rotating the database password in HA mode
+
+The HA database (`postgresHA`) needs its own order. The replication role `repl` shares the password, and a member that restarts with the old password can be promoted to leader, which splits the cluster. Move the leader to member `-0` first, so it restarts last, after every other member already has the new password. `pgx` runs a command in one member (`LOCATION` is your GVC's location, `DB_USERNAME` the secret's `username`):
+
+```bash
+pgx() { cpln workload exec RELEASE_NAME-postgres-ha --gvc GVC_NAME --location LOCATION \
+  --container patroni-postgres --replica "RELEASE_NAME-postgres-ha-$1" -- "${@:2}"; }
+# 1. Find the leader ("role": "leader"); the other two must be "streaming" on the same "timeline"
+pgx 0 curl -s localhost:8008/cluster
+# 2. If the leader is not RELEASE_NAME-postgres-ha-0, move it there (N = current leader), then repeat step 1
+pgx 0 curl -s -XPOST -d '{"leader":"RELEASE_NAME-postgres-ha-N","candidate":"RELEASE_NAME-postgres-ha-0"}' localhost:8008/switchover
+# 3-5. Back to back: change BOTH roles on -0, put the same password in the secret, restart the members
+pgx 0 psql -h 127.0.0.1 -d postgres -c "ALTER ROLE DB_USERNAME PASSWORD 'NEW_PASSWORD'; ALTER ROLE repl PASSWORD 'NEW_PASSWORD';"
+cpln secret edit SECRET_NAME
+cpln workload force-redeployment RELEASE_NAME-postgres-ha --gvc GVC_NAME
+# 6. After ~5-6 minutes, confirm one leader and two "streaming" replicas on one timeline (repeat step 1)
+# 7. Optional: remove the install-time password Patroni keeps in its cluster config
+pgx 0 curl -s -XPATCH -d '{"postgresql":{"authentication":null}}' localhost:8008/config
+```
+
+Then force-redeploy `RELEASE_NAME-listmonk`, which keep the old password until they restart. Clients see roughly 10–60 s of connection errors during the switchovers. If a member stays `starting`, or `running` without `streaming` for several minutes, re-copy it from the leader. This copies the whole database, so it costs network traffic in proportion to its size:
+
+```bash
+pgx N curl -s -XPOST -d '{"force": true}' localhost:8008/reinitialize
+```
+
 ## Important Notes
 
 - **Create both secrets before installing.** A missing prerequisite secret leaves the workload waiting on something that does not exist, with zero log lines — see Prerequisites for how to diagnose it.
-- **Changing the database password:** run `ALTER ROLE <username> PASSWORD '<new>'` in the database first, then `cpln secret edit` the credentials secret, then `cpln workload force-redeployment {release}-postgres` (or `{release}-postgres-ha` in HA mode), wait for it to be ready, and force-redeploy `{release}-listmonk`. A running workload keeps the values it started with, and editing the secret alone does not change the database's password.
+- **Changing the database password:** run `ALTER ROLE <username> PASSWORD '<new>'` in the database first, then `cpln secret edit` the credentials secret, then `cpln workload force-redeployment {release}-postgres` (in HA mode follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode) instead), wait for it to be ready, and force-redeploy `{release}-listmonk`. A running workload keeps the values it started with, and editing the secret alone does not change the database's password.
 - **Single instance by design — do not attempt to scale.** Upstream forbids two listmonk instances on one database (duplicate campaign sends); the template pins one replica and uses a no-surge rollout, so upgrades incur a brief gap instead of overlapping instances.
 - **No mail sends until SMTP is configured** in **Admin → Settings → SMTP** — see Post-install setup.
 - **Keep `publicAccess` enabled for subscriber-facing pages to work** — subscription forms, unsubscribe links, and tracking pixels must be reachable from the internet.
 - **Database volumes survive restarts, redeploys, and upgrades; uninstalling deletes them** — all lists, subscribers, and campaigns are lost. Use `postgresHA` and/or enable the backup pass-through for durable production data.
-- **Rotating the database password in HA mode (`postgresHA`):** also run `ALTER ROLE repl PASSWORD '<new password>'` on the leader with the same new password, before redeploying. The HA database's replication role shares it, and without this the standbys stop replicating while the app keeps working on the leader alone.
+- **Rotating the database password in HA mode needs a leader switchover first** — follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode). A plain redeploy can promote a member still holding the old password and split the cluster.
 
 ## Links
 

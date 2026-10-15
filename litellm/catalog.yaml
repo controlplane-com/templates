@@ -49,6 +49,8 @@ alternativeTo:
 compatibleWith: [openai-api]
 
 pickInsteadIf:
+  - need: high-throughput serving of a Hugging Face model to many concurrent API clients
+    template: vllm
   - need: run open-weight models on your own GPU
     template: ollama
   - need: tracing, prompt management and evaluations for LLM applications
@@ -57,6 +59,9 @@ pickInsteadIf:
     template: open-webui
 
 related:
+  - template: vllm
+    relation: companion
+    note: High-throughput open-weight model server LiteLLM can route to
   - template: langfuse
     relation: companion
     note: Traces and evaluates the requests that pass through the gateway

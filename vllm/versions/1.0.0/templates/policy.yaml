@@ -1,0 +1,15 @@
+kind: policy
+name: {{ include "vllm.policy.name" . }}
+description: vLLM secret access
+tags: {{- include "vllm.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "vllm.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ .Values.apiKey.secretName }}
+  {{- if .Values.huggingFace.tokenSecretName }}
+  - //secret/{{ .Values.huggingFace.tokenSecretName }}
+  {{- end }}

@@ -39,7 +39,7 @@ LiteLLM is an OpenAI-compatible LLM gateway/proxy: one endpoint in front of 100+
   ```
 
   - **All three values must be URL-safe** (letters, digits, `_`): the proxy's `DATABASE_URL` is assembled from them at container start. The snippet's hex password is URL-safe.
-  - **Postgres reads the secret only when its data directory is first initialized.** To change the password later, run `ALTER ROLE` first, then edit the secret (`cpln secret edit my-litellm-db-credentials`), then force a redeployment of the Postgres workload, wait until `get-deployments` no longer shows `will be restarted shortly` (`ready: true` alone can still describe the old replica), and redeploy the proxy (`cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME`, then `RELEASE_NAME-litellm`). A running workload keeps the values it started with.
+  - **Postgres reads the secret only when its data directory is first initialized.** To change the password later, run `ALTER ROLE` first, then edit the secret (`cpln secret edit my-litellm-db-credentials`), then force a redeployment of the Postgres workload, wait until `get-deployments` no longer shows `will be restarted shortly` (`ready: true` alone can still describe the old replica), and redeploy the proxy (`cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME`, then `RELEASE_NAME-litellm`). A running workload keeps the values it started with. With one replica, database-backed endpoints fail for about 2–3 minutes during the rotation.
 
 ## Configuration
 
@@ -133,7 +133,7 @@ cpln secret create-dictionary --name RELEASE_NAME-postgres-credentials \
 
 Then upgrade with `postgres.config.credentialsSecretName` set to the new name and `postgres.credentials` removed. The old `{release}-litellm-db` secret is deleted too; nothing replaces it.
 
-The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so LiteLLM can briefly lose its database; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
+The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so LiteLLM loses its database for about a minute and a half; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
 
 ## Upgrading from 1.0.0
 

@@ -77,8 +77,6 @@ internalAccess:
 
 # ─── PostgreSQL ───────────────────────────────────────────────────────────────
 # Stores users, projects, API keys, prompts, datasets and eval configs.
-# Bundled plumbing: it serves Langfuse only and is unreachable from outside the
-# GVC — but the password is used AS-IS, so change it before installing.
 # The bundled PostgreSQL can back itself up on a schedule. Every knob of the
 # `postgres` template is available under this key — nothing extra to install:
 #   postgres.backup.enabled: true
@@ -92,17 +90,13 @@ postgres:
     maxCpu: 1
     minMemory: 512Mi
     maxMemory: 1Gi
-  # Langfuse CREATES the dictionary secret named by config.credentialsSecretName
-  # below out of these three values, so there is nothing to create before install.
-  credentials:
-    username: langfuse
-    password: change-me-langfuse-db
-    database: langfuse
   config:
-    # Name of the dictionary secret this chart creates and the bundled postgres reads.
-    # Secret names are org-wide: give each langfuse release its own name. A second
-    # release left on this name is REFUSED at install (it is owned by the first
-    # release) — nothing is shared, overwritten or deleted.
+    # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. If it does
+    # not exist the deployment WEDGES silently and looks like a platform fault.
+    # A `dictionary` secret holding exactly three keys: username, password, database
+    # (URL-safe values — Langfuse puts them in its connection URL). PostgreSQL reads
+    # it once, when its data directory is first initialized, and Langfuse connects
+    # with the same keys. See README Prerequisites for the command.
     credentialsSecretName: my-langfuse-db-credentials
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)

@@ -37,10 +37,10 @@
 {{- end }}
 
 {{/*
-Name of the DB-credentials secret this chart creates for the bundled postgres
-subchart. postgres 3.4.0 stopped creating its own secret and now takes only a
-NAME, and a parent cannot template a subchart value — so the name is a plain
-value that both sides read.
+Name of the PREREQUISITE DB-credentials secret (keys username, password,
+database). The user creates it before install; since 1.3.0 this chart no longer
+renders it (1.2.x built it from postgres.credentials.*). The bundled postgres
+subchart reads the same value, so both sides agree on one name.
 */}}
 {{- define "langfuse.secret.db.name" -}}
 {{- .Values.postgres.config.credentialsSecretName }}
@@ -72,7 +72,7 @@ value that both sides read.
 {{- end }}
 
 {{/*
-Keys removed in 1.1.0. An upgrader carrying a 1.0.x values file forward is told
+Keys removed in 1.1.0 and 1.3.0. An upgrader carrying a 1.0.x values file forward is told
 what to do instead of silently getting a default. There are deliberately NO
 compatibility fallbacks — the version bump IS the migration path.
 */}}
@@ -91,6 +91,9 @@ compatibility fallbacks — the version bump IS the migration path.
 {{- end -}}
 {{- if .Values.objectStore.gcp.secretAccessKey -}}
   {{- fail "objectStore.gcp.secretAccessKey was removed in 1.1.0. Put it in the prerequisite dictionary secret named by objectStore.gcp.credentialsSecretName (key: secretAccessKey) — see the README." -}}
+{{- end -}}
+{{- if hasKey .Values.postgres "credentials" -}}
+  {{- fail "postgres.credentials was removed in 1.3.0. The database credentials are now a prerequisite dictionary secret (keys: username, password, database) named by postgres.config.credentialsSecretName. Upgrading from 1.2.x: create it under a NEW name holding your EXISTING values, set postgres.config.credentialsSecretName to that name, and remove postgres.credentials — see \"Upgrading from 1.2.x\" in the README." -}}
 {{- end -}}
 {{- if .Values.langfuse.firewall -}}
   {{- fail "langfuse.firewall.inboundAllowCIDR was removed in 1.1.0. Use publicAccess.enabled (true = reachable from the internet) and internalAccess.type instead." -}}

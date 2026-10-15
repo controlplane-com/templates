@@ -13,7 +13,7 @@ LiteLLM is an OpenAI-compatible LLM gateway/proxy: one endpoint in front of 100+
 
 ## Prerequisites
 
-**Two dictionary secrets must exist BEFORE you install.** If either is missing the deployment wedges silently: `cpln logs` returns zero lines because the containers never start, and the only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-litellm --gvc GVC_NAME -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own after several minutes, or skip the wait with `cpln workload force-redeployment`.
+**Two dictionary secrets must exist BEFORE you install.** If either is missing the deployment wedges silently: `cpln logs` returns zero lines because the containers never start, and the only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-litellm --gvc GVC_NAME -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own, but LiteLLM can take up to about 12 minutes to serve again — poll rather than giving up — or skip the wait with `cpln workload force-redeployment`.
 
 - **The proxy's keys secret.** The proxy references it by name (`secrets.name`, default `my-litellm-secrets`). It must be a **dictionary** secret containing:
   - `LITELLM_MASTER_KEY` — admin key (format `sk-...`); gates the Admin API/UI and mints virtual keys.
@@ -39,7 +39,7 @@ LiteLLM is an OpenAI-compatible LLM gateway/proxy: one endpoint in front of 100+
   ```
 
   - **All three values must be URL-safe** (letters, digits, `_`): the proxy's `DATABASE_URL` is assembled from them at container start. The snippet's hex password is URL-safe.
-  - **Postgres reads the secret only when its data directory is first initialized.** To change the password later, run `ALTER ROLE` first, then edit the secret (`cpln secret edit my-litellm-db-credentials`), then force a redeployment of the Postgres workload, wait for it to be ready, and redeploy the proxy (`cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME`, then `RELEASE_NAME-litellm`). A running workload keeps the values it started with.
+  - **Postgres reads the secret only when its data directory is first initialized.** To change the password later, run `ALTER ROLE` first, then edit the secret (`cpln secret edit my-litellm-db-credentials`), then force a redeployment of the Postgres workload, wait until `get-deployments` no longer shows `will be restarted shortly` (`ready: true` alone can still describe the old replica), and redeploy the proxy (`cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME`, then `RELEASE_NAME-litellm`). A running workload keeps the values it started with.
 
 ## Configuration
 
@@ -125,7 +125,7 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`c
 
 ```bash
 cpln secret reveal my-litellm-db-credentials -o yaml
-cpln secret create-dictionary --name RELEASE_NAME-litellm-db \
+cpln secret create-dictionary --name RELEASE_NAME-postgres-credentials \
   --entry username=litellm --entry password=YOUR_CURRENT_PASSWORD --entry database=litellm
 ```
 

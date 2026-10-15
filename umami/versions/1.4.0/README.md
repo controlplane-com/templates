@@ -249,7 +249,7 @@ The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), s
 - **The first `helm upgrade` after an install re-applies the bundled Postgres** — including the upgrade that turns public access on. Expect Umami to be briefly unreachable (~2 minutes) while the database restarts; later upgrades do not do this.
 - **Ad blockers block the default `/script.js` and `/api/send`** — set `tracker.scriptName` / `tracker.collectEndpoint` to custom paths to reduce blocking.
 - **`replicas ≥ 2` is recommended for production** — replicas are independent and share the database and `appSecret`; rolling restarts cycle one at a time with no downtime.
-- **Database volumes survive reinstalls under the same release name; uninstalling deletes them** — all analytics data is lost. Use `postgresHA` and/or enable the backup pass-through for durable production data.
+- **Uninstalling deletes all data** — `helm uninstall` removes the database volumesets with the release, so all analytics data is lost. Use `postgresHA` and/or enable the backup pass-through for durable production data.
 
 ## Links
 

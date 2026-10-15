@@ -209,6 +209,7 @@ cpln secret create-dictionary --name my-n8n-minio-credentials \
 - **Synchronous webhook responses must finish within 30 seconds** (the platform edge times out longer ones) — for long-running workflows, set the Webhook node to respond immediately or use a Respond to Webhook node early; the workflow itself keeps running either way.
 - **Uninstall deletes the database and n8n volumesets** — all workflows, credentials, and execution data. Enable backups if the data matters.
 - **n8n is fair-code under the Sustainable Use License** — free to self-host, but not OSI open source.
+- **Rotating the database password in HA mode (`postgresHA`):** also run `ALTER ROLE repl PASSWORD '<new password>'` on the leader with the same new password, before redeploying. The HA database's replication role shares it, and without this the standbys stop replicating while the app keeps working on the leader alone.
 
 ## Links
 

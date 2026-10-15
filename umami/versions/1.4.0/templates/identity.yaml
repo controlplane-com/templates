@@ -1,0 +1,5 @@
+kind: identity
+name: {{ include "umami.identity.name" . }}
+description: Umami workload identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "umami.tags" . | nindent 4 }}

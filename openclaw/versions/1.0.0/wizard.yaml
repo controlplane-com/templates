@@ -14,7 +14,7 @@ steps:
     description: The prerequisite secret with your login token and model key, and the model the assistant runs on.
     sections:
       - title: Secret
-        docs: "#prerequisites"
+        docs: "#secret"
         fields:
           - type: note
             severity: warning
@@ -31,9 +31,10 @@ steps:
               and `llm-api-key` (the key for the model provider), plus the bot tokens of the channels
               you turn on.
             help: >-
-              Generate the gateway token with `openssl rand -hex 32`; a shorter token than 24 characters
+              Generate the gateway token with `openssl rand -hex 32`; a token shorter than 24 characters
               stops the Gateway at start. A changed key reaches the running Gateway only after
-              `cpln workload force-redeployment <release>-openclaw --gvc <gvc>`.
+              `cpln workload force-redeployment <release>-openclaw --gvc <gvc>`, which takes the assistant offline for
+              about 4 minutes.
             ref:
               kind: secret
               format: name
@@ -48,19 +49,18 @@ steps:
               create:
                 suggestName: "context.releaseName + '-openclaw-secret'"
                 hint: "Generate gateway-token with: openssl rand -hex 32"
-        rules:
-          - rule: self.secret.name != null && self.secret.name != ''
-            mirrors: openclaw.validate
-            paths: [secret.name]
-            message: The secret is required.
       - title: Model
         docs: "#model"
+        description: >-
+          The assistant spends model tokens on its own: OpenClaw runs a heartbeat turn every 30 minutes by
+          default, which you can change or turn off in the Control UI.
         fields:
           - type: note
             when: context.mode == 'upgrade'
             text: >-
-              The model, channel and HTTP API settings are applied again only when you change them here;
-              changes made in the Control UI persist otherwise.
+              The model, channel, HTTP API and Control Plane MCP settings are applied again only when you
+              change them here; changes made in the Control UI persist otherwise. Changing any of them restarts the
+              Gateway, which is offline for about 2 minutes.
           - path: model.provider
             type: enum
             label: Provider
@@ -82,20 +82,19 @@ steps:
             label: Model ID
             required: true
             placeholder: claude-opus-5-5
+            pattern: '^\S+$'
+            patternMessage: Enter the model ID without spaces.
             description: The model ID as your provider names it.
           - path: model.baseUrl
             type: string
             label: Base URL
+            required: true
             when: self.model.provider == 'custom' || (self.model.baseUrl != null && self.model.baseUrl != '')
             placeholder: https://openrouter.ai/api/v1
             pattern: '^https?://\S+$'
             patternMessage: Enter a URL that starts with http:// or https://.
             description: The endpoint's OpenAI-compatible base URL, usually ending in `/v1`.
         rules:
-          - rule: self.model.provider in ['anthropic', 'openai', 'custom']
-            mirrors: openclaw.validate
-            paths: [model.provider]
-            message: Choose Anthropic, OpenAI or an OpenAI-compatible endpoint.
           - rule: self.model.provider == 'custom' || !self.model.name.contains('/')
             mirrors: openclaw.validate
             paths: [model.name]
@@ -103,21 +102,36 @@ steps:
               'Give the bare model ID without "/": the chart adds the "' + self.model.provider +
               '/" prefix itself.'
             message: Give the bare model ID without "/"; the chart adds the provider prefix itself.
-          - rule: self.model.provider != 'custom' || (self.model.baseUrl != null && self.model.baseUrl != '')
-            mirrors: openclaw.validate
-            paths: [model.baseUrl]
-            message: The base URL is required for an OpenAI-compatible endpoint.
           - rule: self.model.provider == 'custom' || self.model.baseUrl == null || self.model.baseUrl == ''
             mirrors: openclaw.validate
             paths: [model.baseUrl]
             message: >-
               The base URL is only used with an OpenAI-compatible endpoint. Clear it, or choose that
               provider to route the model through it.
+          - when: self.model.provider == 'openai'
+            rule: self.model.name != 'claude-opus-5-5'
+            severity: warning
+            paths: [model.name]
+            message: >-
+              claude-opus-5-5 is the chart's default Anthropic model ID. Enter the ID of an OpenAI model.
+          - when: self.model.provider == 'custom'
+            rule: self.model.name != 'claude-opus-5-5'
+            severity: info
+            paths: [model.name]
+            message: >-
+              claude-opus-5-5 is the chart's default Anthropic model ID. Enter the ID your endpoint uses;
+              OpenRouter, for example, prefixes the vendor (`openai/gpt-4o`).
+          - rule: oldSelf == null || self.model.provider == oldSelf.model.provider
+            severity: info
+            paths: [model.provider]
+            message: >-
+              After the upgrade, rebuild the memory index with
+              `cpln workload exec <release>-openclaw --gvc <gvc> --container openclaw -- sh -c 'cd /app && node openclaw.mjs memory status --index --agent main'`;
+              until then memory search returns nothing.
 
   - id: channels
     title: Channels
-    description: The chat apps the assistant answers on.
-    docs: "#channels"
+    description: Which chat apps the assistant answers on.
     sections:
       - id: telegram
         title: Telegram
@@ -126,7 +140,9 @@ steps:
         fields:
           - type: note
             severity: warning
-            text: Add the key `telegram-bot-token` with the bot token to the secret before you install.
+            text: >-
+              Add the key `telegram-bot-token` with the bot token to the secret before you install or
+              upgrade.
       - id: slack
         title: Slack
         toggle: channels.slack.enabled
@@ -136,7 +152,7 @@ steps:
             severity: warning
             text: >-
               Add the keys `slack-bot-token` (the `xoxb-` bot token) and `slack-app-token` (the `xapp-`
-              Socket Mode app token) to the secret before you install.
+              Socket Mode app token) to the secret before you install or upgrade.
       - id: discord
         title: Discord
         toggle: channels.discord.enabled
@@ -146,14 +162,16 @@ steps:
         fields:
           - type: note
             severity: warning
-            text: Add the key `discord-bot-token` with the bot token to the secret before you install.
+            text: >-
+              Add the key `discord-bot-token` with the bot token to the secret before you install or
+              upgrade.
       - id: whatsapp
         title: WhatsApp
         toggle: channels.whatsapp.enabled
         description: >-
           Unofficial WhatsApp Web: you link a phone after install by scanning a QR code, and the account
           can be banned, so use a dedicated number. No key in the secret.
-        docs: "#connecting"
+        docs: "#connecting-chat-channels"
         fields:
           - type: note
             text: >-
@@ -161,16 +179,26 @@ steps:
               WhatsApp → Show QR**, and link it on the phone under **Linked devices**. A private install
               can print the QR in a terminal instead:
               `cpln workload exec <release>-openclaw --gvc <gvc> --container openclaw -- sh -c 'cd /app && node openclaw.mjs channels login --channel whatsapp'`.
+      - fields:
+          - type: note
+            severity: warning
+            when: >-
+              self.channels.telegram.enabled || self.channels.slack.enabled ||
+              self.channels.discord.enabled || self.channels.whatsapp.enabled
+            text: >-
+              Every new chat contact gets a pairing code and is ignored until you approve it with
+              `pairing approve <channel> <code>`. Approve only contacts you would trust as admins: an
+              approved contact can have the agent run shell commands in the container, and those
+              commands can read the gateway token and the workload's Control Plane token.
 
   - id: tools
     title: Tools and API
     description: >-
-      The agent's headless browser, the Control Plane MCP server and an OpenAI-compatible HTTP API on
-      the Gateway.
-    docs: "#browser-tool-and-http-api"
+      Which tools the agent has, and whether the Gateway serves an OpenAI-compatible HTTP API.
     sections:
       - id: browser
         title: Browser tool
+        docs: "#browser-tool-and-http-api"
         toggle: browser.enabled
         description: >-
           Headless Chromium for the agent's browser tool. It runs the `-browser` variant of the image,
@@ -181,9 +209,15 @@ steps:
         toggle: cplnMcp.enabled
         description: >-
           Registers the Control Plane MCP server, so the assistant can read and manage Control Plane
-          resources. Nobody is signed in at install; choose how sign-in works below.
-        docs: "#connecting-control-plane-tools-mcp"
+          resources. Nobody is signed in at install; the sign-in mode decides who signs in and from where.
+        docs: "#control-plane-mcp"
         fields:
+          - type: note
+            severity: warning
+            when: self.cplnMcp.signIn == 'per-requester'
+            text: >-
+              Sign-in links are single-use and connect whoever opens them, so ask for them only in a direct
+              message, never in a group chat.
           - path: cplnMcp.signIn
             type: enum
             label: Sign-in
@@ -201,17 +235,23 @@ steps:
                   Each person signs in with a link the assistant sends in a chat channel and acts as
                   themselves. Needs the public Control UI; the Control UI chat cannot sign in.
         rules:
-          - rule: self.cplnMcp.signIn in ['shared', 'per-requester']
-            mirrors: openclaw.validate
-            paths: [cplnMcp.signIn]
-            message: Choose how users sign in.
-          - when: self.cplnMcp.enabled && self.cplnMcp.signIn == 'per-requester'
-            rule: self.publicAccess.enabled
-            mirrors: openclaw.validate
+          - when: self.cplnMcp.signIn == 'per-requester'
+            rule: >-
+              self.channels.telegram.enabled || self.channels.slack.enabled ||
+              self.channels.discord.enabled || self.channels.whatsapp.enabled
+            severity: info
             paths: [cplnMcp.signIn]
             message: >-
-              Per-chat-user sign-in needs the public Control UI, because each sign-in returns to the
-              Gateway's public address. Turn on public access, or choose Shared.
+              Each user signs in from a chat channel, so turn on a channel; the Control UI chat cannot sign
+              in in this mode.
+          - rule: oldSelf == null || self.cplnMcp.signIn == oldSelf.cplnMcp.signIn
+            severity: info
+            paths: [cplnMcp.signIn]
+            message: >-
+              Links issued in the old sign-in mode do not work after the change. With Per chat user, ask
+              the assistant for a new link. With Shared, run
+              `cpln workload exec <release>-openclaw --gvc <gvc> --container openclaw -- sh -c 'cd /app && node openclaw.mjs mcp status --verbose'`
+              and sign in from a terminal if it does not read `oauth: authorized`.
       - id: http-api
         title: OpenAI-compatible HTTP API
         toggle: httpApi.enabled
@@ -224,11 +264,18 @@ steps:
               Callers inside the GVC must also send an `X-Forwarded-For` header with a non-loopback
               address (e.g. `10.0.0.1`; `127.0.0.1` is refused), or the Gateway answers
               `403 proxy_attribution_required`.
+    rules:
+      - when: "!self.cplnMcp.enabled"
+        rule: self.cplnMcp.signIn in ['shared', 'per-requester']
+        mirrors: openclaw.validate
+        paths: [cplnMcp.enabled]
+        message: >-
+          cplnMcp.signIn must be shared or per-requester: the chart checks it even with Control Plane MCP
+          off. Correct it in YAML mode.
 
   - id: storage
     title: Resources and storage
     description: The Gateway's compute, its state volume and that volume's snapshots.
-    docs: "#resources-and-storage"
     sections:
       - fields:
           - path: volumeset.capacity
@@ -236,17 +283,21 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             description: Config, chat sessions, plugins, memory and the agent's workspace.
-            help: Uninstalling the release deletes the volume set and all of the assistant's state.
+            help: >-
+              The initial capacity sizes only new volumes: an existing volume keeps its size and grows only
+              through automatic growth. Uninstalling the release deletes the volume set and all of the
+              assistant's state.
             docs: "/reference/volumeset#capacity-and-billing"
             suggestions: [10, 20, 50, 100, 250]
           - path: backup.retention
             type: string
-            format: duration
+            format: retention
             label: Snapshot retention
             required: true
-            description: How long each snapshot is kept.
+            description: How long each snapshot is kept, the final one taken at uninstall included.
             suggestions: [7d, 14d, 30d]
           - path: resources
             type: resources
@@ -260,35 +311,42 @@ steps:
           - path: image.repository
             type: string
             label: Image repository
+            format: image
             required: true
             advanced: true
+            pattern: '^(?!.*:[^/]*$)\S+$'
+            patternMessage: Enter the repository without a tag or spaces, such as ghcr.io/openclaw/openclaw.
           - path: image.tag
             type: string
             label: Image tag
             required: true
             advanced: true
+            pattern: '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'
+            patternMessage: Enter a tag such as 2026.9.8, without a colon or spaces.
             description: An exact OpenClaw release. `-browser` is appended while the browser tool is on.
         rules:
-          - rule: self.backup.retention != null && self.backup.retention != ''
-            mirrors: openclaw.validate
-            paths: [backup.retention]
-            message: The snapshot retention is required.
           - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
             paths: [volumeset.capacity]
-            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+          - when: self.browser.enabled
+            rule: "!self.image.tag.endsWith('-browser')"
+            paths: [image.tag]
+            message: "Enter the tag without `-browser`: the chart appends it while the browser tool is on."
           - rule: oldSelf == null || self.image.tag == oldSelf.image.tag
             severity: info
             paths: [image.tag]
             message: >-
               A new release migrates the state on its first start, and an older release cannot read it
-              afterwards. Take a volume snapshot before you upgrade.
+              afterwards. Take a volume snapshot before you change the tag, with
+              `cpln volumeset snapshot create <release>-openclaw-vs --gvc <gvc> --snapshot-name <name> --location <location> --volume-index 0`,
+              and do not lower the tag unless you restore a snapshot taken while the volume ran that older tag.
           - when: self.browser.enabled
             rule: memoryBytes(self.resources.maxMemory) >= memoryBytes('3Gi')
             severity: info
             paths: [resources]
             message: >-
-              With the browser tool on, keep the maximum memory at 3Gi or more: Chromium with one tab
-              uses about 1 GiB on its own.
+              With the browser tool on, keep the maximum memory at 3Gi or more: 2Gi is enough only with
+              the browser tool off.
       - id: autoscaling
         title: Grow the volume automatically
         toggle: volumeset.autoscaling.enabled
@@ -299,6 +357,7 @@ steps:
             label: Maximum capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [50, 100, 250, 500, 1000]
           - path: volumeset.autoscaling.minFreePercentage
@@ -340,10 +399,6 @@ steps:
             widget: cron
             required: true
         rules:
-          - rule: self.backup.schedule != null && self.backup.schedule != ''
-            mirrors: openclaw.validate
-            paths: [backup.schedule]
-            message: The snapshot schedule is required.
           - rule: >-
               self.backup.schedule == null || self.backup.schedule == '' ||
               self.backup.schedule.trim().matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$')
@@ -356,7 +411,6 @@ steps:
   - id: access
     title: Access
     description: Who can reach the Control UI and the Gateway, from the internet and from other workloads.
-    docs: "#access"
     sections:
       - id: public
         title: Public Control UI
@@ -365,14 +419,15 @@ steps:
           Puts the Control UI on the public HTTPS endpoint. That exposes an agent with a shell to the
           internet behind one token, the gateway token, and each new browser needs a one-time approval
           from the CLI before it connects. Without it, reach the UI with `cpln port-forward`.
-        docs: "#connecting"
+        docs: "#access"
         fields:
           - path: publicAccess.origin
             type: string
             label: Custom domain origin
+            docs: "#custom-domain"
             placeholder: https://assistant.example.com
-            pattern: '^https://[^/?#]+$'
-            patternMessage: Enter an https origin with no path or trailing slash, such as https://assistant.example.com.
+            pattern: '^https://[^/?#\s]+$'
+            patternMessage: Enter an https origin with no path, trailing slash or spaces, such as https://assistant.example.com.
             description: >-
               Set it after routing a Control Plane domain to port 18789 of this workload; the canonical
               endpoint is then refused. Empty serves the UI on the canonical endpoint.
@@ -387,7 +442,7 @@ steps:
             options:
               - value: none
                 label: Nobody
-                description: No workload can connect.
+                description: No workload can connect over the internal network.
               - value: same-gvc
                 label: Same GVC
                 description: Any workload in this GVC.
@@ -400,12 +455,20 @@ steps:
           - path: internalAccess.workloads
             type: list
             label: Allowed workloads
+            required: true
             when: self.internalAccess.type == 'workload-list'
             widget: tags
             item:
               type: ref
               ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
     rules:
+      - when: self.cplnMcp.enabled && self.cplnMcp.signIn == 'per-requester'
+        rule: self.publicAccess.enabled
+        mirrors: openclaw.validate
+        paths: [publicAccess.enabled]
+        message: >-
+          Per chat user sign-in (under Tools and API) needs the public Control UI, because each sign-in
+          returns to the Gateway's public address. Turn it on, or choose Shared there.
       - when: "!self.publicAccess.enabled"
         rule: self.publicAccess.origin == null || self.publicAccess.origin == ''
         mirrors: openclaw.validate
@@ -413,15 +476,7 @@ steps:
         message: >-
           A custom domain origin is set while the public Control UI is off. Turn it on, since the domain
           reaches the workload through its public endpoint, or clear the origin in YAML mode.
-      - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
-        mirrors: openclaw.validate
-        paths: [internalAccess.type]
-        message: Choose who can connect.
-      - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
-        mirrors: openclaw.validate
-        paths: [internalAccess.workloads]
-        message: Add at least one workload, or choose another setting.
-      - when: self.httpApi.enabled
+      - when: self.httpApi.enabled && !self.publicAccess.enabled
         rule: self.internalAccess.type != 'none'
         severity: info
         paths: [internalAccess.type]

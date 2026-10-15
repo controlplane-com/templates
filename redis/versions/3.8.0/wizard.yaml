@@ -9,7 +9,7 @@ gvc:
 steps:
   - id: topology
     title: Mode, engine and topology
-    description: Production with Sentinel failover or a single dev node, which server runs, and how many Redis nodes and Sentinels.
+    description: The mode, which server runs, and in production mode how many Redis nodes and Sentinels.
     sections:
       - title: Mode
         docs: "#mode"
@@ -35,31 +35,59 @@ steps:
                   sentinel.persistence.enabled: false
                   sentinel.auth.password.enabled: false
                   sentinel.auth.fromSecret.enabled: false
-        rules:
-          - rule: self.mode in ['production', 'dev']
-            mirrors: redis.validateMode
-            message: Mode must be production or dev.
-          - rule: >-
-              self.mode != 'dev' || (!self.sentinel.publicAccess.enabled && !self.sentinel.persistence.enabled &&
-              !self.sentinel.auth.password.enabled && !self.sentinel.auth.fromSecret.enabled)
-            mirrors: redis.validateMode
-            message: >-
-              Dev mode runs no Sentinel: Sentinel public access, persistence and authentication must be off.
-          - when: self.mode == 'dev'
-            rule: self.redis.persistence.enabled
-            severity: info
-            message: >-
-              Without a persistent volume, dev-mode data is lost on every restart and upgrade. Turn on the
-              Redis volume under Resources and persistence at install.
-          - rule: oldSelf == null || self.mode == oldSelf.mode
-            severity: info
-            message: >-
-              Switching the mode replaces the topology. To dev: stop writes first; only node 0 is kept, and
-              without persistence it restarts empty. To production: expect one Sentinel failover.
-            messageExpression: >-
-              self.mode == 'dev' ?
-              'Switching to dev mode deletes the Sentinel tier and Redis nodes 1 and up; the remaining node keeps only the data it holds. Stop writes first, and keep persistence on, or the data is lost. Clients that use Sentinel must connect to ' + context.releaseName + '-redis directly.' :
-              'Switching to production adds Sentinel and Redis replicas. The new replicas copy node 0, then node 0 restarts and Sentinel fails over to a new node, so the master moves to node 1 or 2; the data is kept and Sentinel clients see a write gap of a few seconds.'
+            rules:
+              - rule: self.mode in ['production', 'dev']
+                mirrors: redis.validateMode
+                message: Mode must be production or dev.
+              - rule: self.mode != 'dev' || !self.sentinel.publicAccess.enabled
+                mirrors: redis.validateMode
+                message: Dev mode runs no Sentinel, so there is nothing to expose. Turn Sentinel public access off, or choose Dev again.
+              - rule: self.mode != 'dev' || !self.sentinel.persistence.enabled
+                mirrors: redis.validateMode
+                message: >-
+                  Dev mode runs no Sentinel, and switching a release to dev would delete the Sentinel volume set.
+                  Turn Sentinel persistence off, or choose Dev again.
+              - rule: self.mode != 'dev' || (!self.sentinel.auth.password.enabled && !self.sentinel.auth.fromSecret.enabled)
+                mirrors: redis.validateMode
+                message: >-
+                  Dev mode runs no Sentinel. Turn Sentinel authentication off, or choose Dev again; the Redis password is set under
+                  Redis authentication.
+              - when: self.mode == 'dev'
+                rule: self.redis.persistence.enabled
+                severity: info
+                message: >-
+                  Without a persistent volume, dev-mode data is lost on every restart and upgrade. Turn on the
+                  Redis volume under Resources and persistence at install.
+              - rule: oldSelf == null || self.mode == oldSelf.mode
+                severity: info
+                message: >-
+                  Switching the mode replaces the topology. To dev: stop writes first; only node 0 is kept, and
+                  without persistence it restarts empty. To production: expect one Sentinel failover, then point clients at Sentinel.
+                messageExpression: >-
+                  self.mode == 'dev' ?
+                  'Switching to dev mode deletes the Sentinel tier and Redis nodes 1 and up. ' + (self.redis.persistence.enabled ? 'The remaining node keeps only the data it holds, so stop writes first.' : 'Persistence is off, so the remaining node restarts empty and the data is lost.') + ' Clients that use Sentinel must connect to ' + context.releaseName + '-redis directly.' +
+                  (context.gvc != null && ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-sentinel') in self.redis.firewall.inboundAllowWorkload ? ' Remove //gvc/' + context.gvc + '/workload/' + context.releaseName + '-sentinel from the Redis allowed workloads.' : '') :
+                  'Switching to production adds Sentinel and Redis replicas. The new replicas copy node 0, then node 0 restarts and Sentinel fails over to a new node, so the master moves to one of the new nodes; the data is kept and Sentinel clients see a write gap of a few seconds. Then point clients at Sentinel: ' + context.releaseName + '-sentinel, ' + (self.sentinel.publicAccess.enabled ? 'one port per Sentinel from 26380.' : 'port 26379.')
+              - when: oldSelf != null && oldSelf.mode != 'dev' && self.mode != 'dev'
+                rule: >-
+                  (!oldSelf.sentinel.publicAccess.enabled || self.sentinel.publicAccess.enabled) &&
+                  (!oldSelf.sentinel.persistence.enabled || self.sentinel.persistence.enabled) &&
+                  ((oldSelf.sentinel.persistence.enabled && self.sentinel.persistence.enabled) ||
+                  !(oldSelf.sentinel.auth.password.enabled || oldSelf.sentinel.auth.fromSecret.enabled) ||
+                  self.sentinel.auth.password.enabled || self.sentinel.auth.fromSecret.enabled)
+                severity: info
+                message: >-
+                  A Sentinel setting the release uses is now off: choosing Dev turns off Sentinel public access,
+                  persistence and authentication, and choosing Production again does not restore them. Turning off
+                  persistence or public access deletes the Sentinel volume set or domain on upgrade.
+                messageExpression: >-
+                  'A Sentinel setting the release uses is now off: ' + [
+                  (oldSelf.sentinel.publicAccess.enabled && !self.sentinel.publicAccess.enabled ? 'public access (the Sentinel domain is deleted)' : ''),
+                  (oldSelf.sentinel.persistence.enabled && !self.sentinel.persistence.enabled ? 'persistence (the Sentinel volume set is deleted)' : ''),
+                  (!(oldSelf.sentinel.persistence.enabled && self.sentinel.persistence.enabled) &&
+                  (oldSelf.sentinel.auth.password.enabled || oldSelf.sentinel.auth.fromSecret.enabled) &&
+                  !(self.sentinel.auth.password.enabled || self.sentinel.auth.fromSecret.enabled) ? 'authentication (Sentinel no longer asks for a password)' : '')
+                  ].filter(x, x != '').join(', ') + '. Choosing Dev turns these off and choosing Production again does not restore them: if that is how they went off, switch them back on under Authentication, Resources and persistence and Network.'
       - title: Engine
         docs: "#engine"
         fields:
@@ -69,9 +97,9 @@ steps:
               context.mode == 'upgrade' && context.fromVersion != null &&
               semverCompare(context.fromVersion, '3.5.0') < 0
             text: >-
-              This version moves the default image from Redis 7.4 to 8. The upgrade is one-way: once a node
-              has written its data under Redis 8, a 7.4 image cannot load it. Snapshot the volume set first
-              if you need a way back.
+              This version moves the default image to Redis 8. The upgrade is one-way: once a node
+              has written its data under Redis 8, a 7.4 image cannot load it. If you need a way back, snapshot
+              the volume set first, or keep both images at `redis:7.4` under Advanced.
           - path: engine
             type: enum
             label: Server
@@ -81,35 +109,10 @@ steps:
             options:
               - value: redis
                 label: Redis
-                description: The default. Runs the Redis image on both tiers.
+                description: The default. Runs the Redis image, and the Sentinel image in production mode.
               - value: valkey
                 label: Valkey
-                description: The BSD-licensed fork of Redis 7.2, on both tiers.
-          - path: valkeyImage
-            type: string
-            format: image
-            label: Valkey image
-            required: true
-            when: self.engine == 'valkey'
-            description: Used for both tiers.
-        rules:
-          - rule: self.engine != 'valkey' || (self.valkeyImage != null && self.valkeyImage != '')
-            mirrors: redis.validateEngine
-            paths: [valkeyImage]
-            message: A Valkey image is required when the server is Valkey.
-          - when: self.engine == 'valkey'
-            rule: self.valkeyImage == null || !self.valkeyImage.contains('alpine')
-            paths: [valkeyImage]
-            message: >-
-              The -alpine Valkey tags have no bash, which the chart's health probes need. Use a Debian-based
-              tag such as valkey/valkey:8.1.9.
-          - rule: oldSelf == null || self.engine != 'valkey' || self.valkeyImage == oldSelf.valkeyImage
-            severity: info
-            paths: [valkeyImage]
-            message: >-
-              Changing the Valkey image restarts every Redis and Sentinel node. A newer major version can
-              write data files that an older image cannot load: snapshot the volume sets before a major
-              upgrade if you need a way back.
+                description: The BSD-licensed fork of Redis 7.2. Runs the Valkey image on every tier.
       - title: Redis
         fields:
           - type: note
@@ -126,7 +129,6 @@ steps:
           - path: redis.multiZone
             type: boolean
             label: Spread Redis nodes across zones
-            description: Confirm that your locations support multiple zones.
       - title: Sentinel
         when: self.mode != 'dev'
         fields:
@@ -158,20 +160,19 @@ steps:
           - path: sentinel.multiZone
             type: boolean
             label: Spread Sentinels across zones
-            description: Confirm that your locations support multiple zones.
         rules:
           - rule: self.sentinel.replicas % 2 == 1
             severity: info
             paths: [sentinel.replicas]
             message: An odd number of Sentinels is recommended; an even number adds no fault tolerance.
           - when: "!self.sentinel.quorumAutoCalculation"
-            rule: self.sentinel.quorumOverride >= 1 && self.sentinel.quorumOverride <= self.sentinel.replicas
+            rule: self.sentinel.quorumOverride <= self.sentinel.replicas
             paths: [sentinel.quorumOverride]
-            message: The quorum must be between 1 and the number of Sentinels.
+            message: The quorum can be at most the number of Sentinels.
 
   - id: auth
     title: Authentication
-    description: How clients authenticate to Redis and to Sentinel.
+    description: How clients authenticate to Redis, and in production mode to Sentinel.
     sections:
       - title: Redis
         fields:
@@ -195,17 +196,42 @@ steps:
               - value: secret
                 label: Password from a secret
                 set: { redis.auth.fromSecret.enabled: true, redis.auth.password.enabled: false }
+            rules:
+              - rule: "!(self.redis.auth.fromSecret.enabled && self.redis.auth.password.enabled)"
+                mirrors: validateAuth
+                message: Redis has both a password in values and a password secret enabled; enable only one.
+              - when: oldSelf != null && self.mode != 'dev'
+                rule: >-
+                  (self.redis.auth.password.enabled || self.redis.auth.fromSecret.enabled) ==
+                  (oldSelf.redis.auth.password.enabled || oldSelf.redis.auth.fromSecret.enabled)
+                severity: warning
+                message: >-
+                  Turning Redis authentication on or off on a running release deadlocks the rollout: restarted
+                  nodes cannot replicate from the not-yet-restarted primary. Keep the installed setting, or reinstall.
+              - when: self.mode != 'dev'
+                rule: >-
+                  self.redis.auth.fromSecret.enabled == self.sentinel.auth.fromSecret.enabled &&
+                  self.redis.auth.password.enabled == self.sentinel.auth.password.enabled
+                severity: info
+                message: Use the same authentication method on both tiers.
+
           - path: redis.auth.password.value
             type: string
-            label: Password
+            label: Redis password
             sensitive: true
             widget: password
             required: true
             example: true
+            rules:
+              - rule: >-
+                  (oldSelf != null && oldSelf.redis.auth.password.enabled &&
+                  self.redis.auth.password.value == oldSelf.redis.auth.password.value) ||
+                  self.redis.auth.password.value.matches("^[^\\s\\x22\\x27\\\\\\x00-\\x1f\\x7f]+$")
+                message: Leave out spaces, quotes and backslashes. The chart writes the Redis password into a configuration line.
             when: ui.redisAuth == 'password'
           - path: redis.auth.fromSecret.name
             type: ref
-            label: Password secret
+            label: Redis password secret
             required: true
             when: ui.redisAuth == 'secret'
             description: A dictionary secret; the key named below holds the password.
@@ -217,12 +243,13 @@ steps:
               allowCreate: true
               requiredKeysFrom: "[self.redis.auth.fromSecret.passwordKey]"
               create:
-                secretType: dictionary
                 suggestName: "context.releaseName + '-redis-password'"
           - path: redis.auth.fromSecret.passwordKey
             type: string
-            label: Key in the secret
+            label: Redis password key
             required: true
+            pattern: '^[-._a-zA-Z0-9]+$'
+            patternMessage: Use letters, digits, -, . and _.
             when: ui.redisAuth == 'secret'
       - title: Sentinel
         when: self.mode != 'dev'
@@ -247,17 +274,46 @@ steps:
               - value: secret
                 label: Password from a secret
                 set: { sentinel.auth.fromSecret.enabled: true, sentinel.auth.password.enabled: false }
+            rules:
+              - rule: "!(self.sentinel.auth.fromSecret.enabled && self.sentinel.auth.password.enabled)"
+                mirrors: validateAuth
+                message: Sentinel has both a password in values and a password secret enabled; enable only one.
+              - when: "!(self.sentinel.auth.fromSecret.enabled && self.sentinel.auth.password.enabled)"
+                rule: >-
+                  (ui.sentinelAuth == 'password') == self.sentinel.auth.password.enabled &&
+                  (ui.sentinelAuth == 'secret') == self.sentinel.auth.fromSecret.enabled
+                severity: warning
+                message: >-
+                  Choosing Dev turned Sentinel authentication off, so this choice is no longer in the values. Pick
+                  No password, then the method you want.
+              - when: >-
+                  oldSelf != null && oldSelf.mode != 'dev' && self.mode != 'dev' &&
+                  oldSelf.sentinel.persistence.enabled && self.sentinel.persistence.enabled
+                rule: >-
+                  (self.sentinel.auth.password.enabled || self.sentinel.auth.fromSecret.enabled) ==
+                  (oldSelf.sentinel.auth.password.enabled || oldSelf.sentinel.auth.fromSecret.enabled)
+                severity: warning
+                message: >-
+                  With Sentinel persistence on, Sentinel keeps the configuration it wrote at its first start, so
+                  turning its authentication on or off does not reach it and can deadlock the rollout. Keep the
+                  installed setting, or reinstall.
           - path: sentinel.auth.password.value
             type: string
-            label: Password
+            label: Sentinel password
             sensitive: true
             widget: password
             required: true
             example: true
+            rules:
+              - rule: >-
+                  (oldSelf != null && oldSelf.sentinel.auth.password.enabled &&
+                  self.sentinel.auth.password.value == oldSelf.sentinel.auth.password.value) ||
+                  self.sentinel.auth.password.value.matches("^[^\\s\\x22\\x27\\\\\\x00-\\x1f\\x7f]+$")
+                message: Leave out spaces, quotes and backslashes. The chart writes the Sentinel password into a configuration line.
             when: ui.sentinelAuth == 'password'
           - path: sentinel.auth.fromSecret.name
             type: ref
-            label: Password secret
+            label: Sentinel password secret
             required: true
             when: ui.sentinelAuth == 'secret'
             description: A dictionary secret; the key named below holds the password.
@@ -269,23 +325,18 @@ steps:
               allowCreate: true
               requiredKeysFrom: "[self.sentinel.auth.fromSecret.passwordKey]"
               create:
-                secretType: dictionary
                 suggestName: "context.releaseName + '-sentinel-password'"
           - path: sentinel.auth.fromSecret.passwordKey
             type: string
-            label: Key in the secret
+            label: Sentinel password key
             required: true
+            pattern: '^[-._a-zA-Z0-9]+$'
+            patternMessage: Use letters, digits, -, . and _.
             when: ui.sentinelAuth == 'secret'
     rules:
-      - rule: "!(self.redis.auth.fromSecret.enabled && self.redis.auth.password.enabled)"
-        mirrors: validateAuth
-        message: Redis has both a password in values and a password secret enabled; enable only one.
-      - rule: "!(self.sentinel.auth.fromSecret.enabled && self.sentinel.auth.password.enabled)"
-        mirrors: validateAuth
-        message: Sentinel has both a password in values and a password secret enabled; enable only one.
       - rule: >-
-          oldSelf == null || !self.redis.auth.password.enabled || !oldSelf.redis.auth.password.enabled ||
-          self.redis.auth.password.value == oldSelf.redis.auth.password.value
+          oldSelf == null || self.mode == 'dev' || !self.redis.auth.password.enabled ||
+          !oldSelf.redis.auth.password.enabled || self.redis.auth.password.value == oldSelf.redis.auth.password.value
         severity: warning
         paths: [redis.auth.password.value]
         message: >-
@@ -299,16 +350,63 @@ steps:
         message: >-
           Changing the Sentinel password on a running release deadlocks the rollout. Keep the installed
           password, or reinstall.
-      - when: self.mode != 'dev'
-        rule: >-
-          self.redis.auth.fromSecret.enabled == self.sentinel.auth.fromSecret.enabled &&
-          self.redis.auth.password.enabled == self.sentinel.auth.password.enabled
+      - rule: >-
+          !self.redis.auth.password.enabled || !(self.redis.auth.password.value in ['your-password', 'change-me-sentinel-password']) ||
+          (oldSelf != null && oldSelf.redis.auth.password.enabled && oldSelf.redis.auth.password.value == self.redis.auth.password.value)
+        severity: warning
+        paths: [redis.auth.password.value]
+        messageExpression: >-
+          '`' + self.redis.auth.password.value + '` is an example Redis password that the template or its README
+          publishes. Choose your own.'
+        message: This is an example Redis password that the template or its README publishes. Choose your own.
+      - rule: >-
+          oldSelf == null || !self.redis.auth.password.enabled || oldSelf.redis.auth.password.enabled ||
+          self.redis.auth.password.value != 'change-me-redis-password' ||
+          self.redis.auth.password.value != oldSelf.redis.auth.password.value
+        severity: warning
+        paths: [redis.auth.password.value]
+        message: Still has the example password `change-me-redis-password`, which the template publishes. Replace it.
+      - rule: >-
+          !self.sentinel.auth.password.enabled || !(self.sentinel.auth.password.value in ['your-password', 'change-me-redis-password']) ||
+          (oldSelf != null && oldSelf.sentinel.auth.password.enabled && oldSelf.sentinel.auth.password.value == self.sentinel.auth.password.value)
+        severity: warning
+        paths: [sentinel.auth.password.value]
+        messageExpression: >-
+          '`' + self.sentinel.auth.password.value + '` is an example Sentinel password that the template or its README
+          publishes. Choose your own.'
+        message: This is an example Sentinel password that the template or its README publishes. Choose your own.
+      - rule: >-
+          oldSelf == null || !self.sentinel.auth.password.enabled || oldSelf.sentinel.auth.password.enabled ||
+          self.sentinel.auth.password.value != 'change-me-sentinel-password' ||
+          self.sentinel.auth.password.value != oldSelf.sentinel.auth.password.value
+        severity: warning
+        paths: [sentinel.auth.password.value]
+        message: Still has the example password `change-me-sentinel-password`, which the template publishes. Replace it.
+      - rule: >-
+          oldSelf == null || !self.redis.auth.password.enabled ||
+          !(self.redis.auth.password.value in ['change-me-redis-password', 'your-password', 'change-me-sentinel-password']) ||
+          !oldSelf.redis.auth.password.enabled || oldSelf.redis.auth.password.value != self.redis.auth.password.value
         severity: info
-        message: Use the same authentication method on both tiers.
-
+        paths: [redis.auth.password.value]
+        messageExpression: >-
+          'This release runs on the example password `' + self.redis.auth.password.value +
+          '`, which the template publishes.' + (self.mode == 'dev' ? '' : ' To change it, reinstall the release.')
+        message: >-
+          This release runs on an example Redis password the template publishes.
+      - rule: >-
+          oldSelf == null || !self.sentinel.auth.password.enabled ||
+          !(self.sentinel.auth.password.value in ['change-me-sentinel-password', 'your-password', 'change-me-redis-password']) ||
+          !oldSelf.sentinel.auth.password.enabled || oldSelf.sentinel.auth.password.value != self.sentinel.auth.password.value
+        severity: info
+        paths: [sentinel.auth.password.value]
+        messageExpression: >-
+          'This release runs on the example password `' + self.sentinel.auth.password.value +
+          '`, which the template publishes.' + (self.mode == 'dev' ? '' : ' To change it, reinstall the release.')
+        message: >-
+          This release runs on an example Sentinel password the template publishes.
   - id: resources
     title: Resources and persistence
-    description: Compute per node, and the volumes that keep data across restarts.
+    description: Compute per node, and optional volumes that keep data across restarts.
     sections:
       - title: Redis
         fields:
@@ -321,6 +419,7 @@ steps:
       - id: redis-volume
         title: Persistent volume for Redis
         toggle: redis.persistence.enabled
+        description: Persistence is decided at install; it cannot be turned on for a running release.
         docs: /reference/volumeset
         fields:
           - path: redis.persistence.volumes.data.initialCapacity
@@ -328,15 +427,17 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            help: Only sizes new volumes. An existing volume keeps its size and grows only through automatic growth.
             docs: "/reference/volumeset#capacity-and-billing"
           - path: redis.persistence.volumes.data.performanceClass
             type: enum
             label: Disk class
             widget: segmented
             required: true
-            immutable: true
+            immutable: The disk class is fixed when the volume set is created.
             options:
               - { value: general-purpose-ssd, label: General purpose SSD }
               - { value: high-throughput-ssd, label: High throughput SSD }
@@ -352,6 +453,7 @@ steps:
                 label: Maximum capacity
                 unit: GiB
                 min: 10
+                max: 65536
                 required: true
                 suggestions: [50, 100, 250, 500, 1000, 2000]
               - path: minFreePercentage
@@ -378,7 +480,7 @@ steps:
             label: File system
             widget: segmented
             required: true
-            immutable: true
+            immutable: The file system is fixed when the volume set is created.
             advanced: true
             options:
               - { value: ext4, label: ext4 }
@@ -402,6 +504,8 @@ steps:
                 format: cron
                 label: Schedule (UTC)
                 required: true
+                pattern: '^[0-5]?[0-9] [^ ]+ [^ ]+ [^ ]+ [^ ]+$'
+                patternMessage: A snapshot can run at most once an hour. Set one fixed minute, for example `0 3 * * *`.
           - path: redis.persistence.volumes.data.customEncryption
             type: object
             optional: true
@@ -418,7 +522,7 @@ steps:
                 type: ref
                 label: Location
                 required: true
-                help: AWS locations only; the key must be in the same region.
+                help: The location whose volumes this AWS KMS key encrypts.
                 ref: { kind: location, scope: gvc, format: name, mustExist: error }
               - path: keyId
                 type: string
@@ -430,17 +534,17 @@ steps:
               self.redis.persistence.volumes.data.performanceClass != 'high-throughput-ssd' ||
               self.redis.persistence.volumes.data.initialCapacity >= 200
             paths: [redis.persistence.volumes.data.initialCapacity]
-            message: A high throughput SSD needs an initial capacity of at least 200 GiB.
+            message: For Redis, a high throughput SSD needs an initial capacity of at least 200 GiB.
           - rule: >-
               self.redis.persistence.volumes.data.autoscaling == null ||
               self.redis.persistence.volumes.data.autoscaling.maxCapacity >= self.redis.persistence.volumes.data.initialCapacity
             paths: [redis.persistence.volumes.data.autoscaling.maxCapacity]
-            message: The maximum capacity must be at least the initial capacity.
+            message: The maximum Redis capacity must be at least the initial capacity.
           - rule: >-
               oldSelf == null || !oldSelf.redis.persistence.enabled ||
               self.redis.persistence.volumes.data.initialCapacity >= oldSelf.redis.persistence.volumes.data.initialCapacity
             paths: [redis.persistence.volumes.data.initialCapacity]
-            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+            message: Keep the Redis capacity at or above the installed value. Lowering it would not shrink the existing volume.
       - title: Sentinel
         when: self.mode != 'dev'
         fields:
@@ -456,23 +560,23 @@ steps:
         when: self.mode != 'dev'
         description: >-
           Recommended in production: it keeps the post-failover primary across restarts, so replicas
-          rejoin the real primary.
-        docs: /reference/volumeset
+          rejoin the real primary. Turn it on at install, or when a dev release switches to production; it cannot be turned on for a running production release.
         fields:
           - path: sentinel.persistence.volumes.data.initialCapacity
             type: integer
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
-            docs: "/reference/volumeset#capacity-and-billing"
+            help: Only sizes new volumes. An existing volume keeps its size and grows only through automatic growth.
           - path: sentinel.persistence.volumes.data.performanceClass
             type: enum
             label: Disk class
             widget: segmented
             required: true
-            immutable: true
+            immutable: The disk class is fixed when the volume set is created.
             options:
               - { value: general-purpose-ssd, label: General purpose SSD }
               - { value: high-throughput-ssd, label: High throughput SSD }
@@ -480,7 +584,6 @@ steps:
             type: object
             optional: true
             label: Grow the volume automatically
-            docs: "/reference/volumeset#autoscaling"
             newValue: { maxCapacity: 50, minFreePercentage: 20, scalingFactor: 1.2 }
             fields:
               - path: maxCapacity
@@ -488,6 +591,7 @@ steps:
                 label: Maximum capacity
                 unit: GiB
                 min: 10
+                max: 65536
                 required: true
                 suggestions: [50, 100, 250, 500, 1000, 2000]
               - path: minFreePercentage
@@ -514,7 +618,7 @@ steps:
             label: File system
             widget: segmented
             required: true
-            immutable: true
+            immutable: The file system is fixed when the volume set is created.
             advanced: true
             options:
               - { value: ext4, label: ext4 }
@@ -524,7 +628,6 @@ steps:
             optional: true
             label: Scheduled snapshots
             advanced: true
-            docs: "/reference/volumeset#snapshots"
             newValue: { retentionDuration: 7d, schedule: "0 0 * * *" }
             fields:
               - path: retentionDuration
@@ -538,6 +641,8 @@ steps:
                 format: cron
                 label: Schedule (UTC)
                 required: true
+                pattern: '^[0-5]?[0-9] [^ ]+ [^ ]+ [^ ]+ [^ ]+$'
+                patternMessage: A snapshot can run at most once an hour. Set one fixed minute, for example `0 3 * * *`.
           - path: sentinel.persistence.volumes.data.customEncryption
             type: object
             optional: true
@@ -554,7 +659,7 @@ steps:
                 type: ref
                 label: Location
                 required: true
-                help: AWS locations only; the key must be in the same region.
+                help: The location whose volumes this AWS KMS key encrypts.
                 ref: { kind: location, scope: gvc, format: name, mustExist: error }
               - path: keyId
                 type: string
@@ -566,17 +671,17 @@ steps:
               self.sentinel.persistence.volumes.data.performanceClass != 'high-throughput-ssd' ||
               self.sentinel.persistence.volumes.data.initialCapacity >= 200
             paths: [sentinel.persistence.volumes.data.initialCapacity]
-            message: A high throughput SSD needs an initial capacity of at least 200 GiB.
+            message: For Sentinel, a high throughput SSD needs an initial capacity of at least 200 GiB.
           - rule: >-
               self.sentinel.persistence.volumes.data.autoscaling == null ||
               self.sentinel.persistence.volumes.data.autoscaling.maxCapacity >= self.sentinel.persistence.volumes.data.initialCapacity
             paths: [sentinel.persistence.volumes.data.autoscaling.maxCapacity]
-            message: The maximum capacity must be at least the initial capacity.
+            message: The maximum Sentinel capacity must be at least the initial capacity.
           - rule: >-
               oldSelf == null || !oldSelf.sentinel.persistence.enabled ||
               self.sentinel.persistence.volumes.data.initialCapacity >= oldSelf.sentinel.persistence.volumes.data.initialCapacity
             paths: [sentinel.persistence.volumes.data.initialCapacity]
-            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+            message: Keep the Sentinel capacity at or above the installed value. Lowering it would not shrink the existing volume.
     rules:
       - rule: >-
           !has(self.redis.resources.cpu) && !has(self.redis.resources.memory) &&
@@ -586,15 +691,23 @@ steps:
         message: >-
           The resource keys cpu and memory were renamed to maxCpu and maxMemory in 3.6.0 (redis,
           redis.exporter and sentinel resources). Rename them in the values.
+      - rule: oldSelf == null || oldSelf.redis.persistence.enabled != true || self.redis.persistence.enabled
+        severity: info
+        paths: [redis.persistence.enabled]
+        message: >-
+          Turning persistence off deletes the Redis volume set and the data on it, and it cannot be turned on
+          again for this release.
       - rule: oldSelf == null || oldSelf.redis.persistence.enabled || !self.redis.persistence.enabled
         paths: [redis.persistence.enabled]
         message: >-
-          Persistence cannot be turned on for a running release: the rollout stalls indefinitely. Turn it
+          Redis persistence cannot be turned on for a running release: the rollout stalls indefinitely. Turn it
           on at install, or reinstall.
-      - rule: oldSelf == null || oldSelf.sentinel.persistence.enabled || !self.sentinel.persistence.enabled
+      - rule: >-
+          oldSelf == null || oldSelf.mode == 'dev' || oldSelf.sentinel.persistence.enabled ||
+          !self.sentinel.persistence.enabled
         paths: [sentinel.persistence.enabled]
         message: >-
-          Persistence cannot be turned on for a running release: the rollout stalls indefinitely. Turn it
+          Sentinel persistence cannot be turned on for a running release: the rollout stalls indefinitely. Turn it
           on at install, or reinstall.
 
   - id: network
@@ -606,17 +719,16 @@ steps:
             text: >-
               Setting either external CIDR list of a tier renders both; the other one becomes empty.
       - title: Redis
-        docs: "/reference/workload/firewall"
         fields:
           - path: redis.firewall.internal_inboundAllowType
             type: enum
             label: Internal access to Redis
+            docs: "/reference/workload/firewall#internal"
             widget: cards
             required: true
-            description: Firewall changes take a few minutes to take effect.
             options:
-              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC (recommended). }
               - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC (recommended). }
               - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
           # workload-redis.yaml writes any non-empty list into inboundAllowWorkload, whatever the type.
           - path: redis.firewall.inboundAllowWorkload
@@ -634,18 +746,18 @@ steps:
                 mustExist: warning
                 excludeTargetGvcWhen: self.redis.firewall.internal_inboundAllowType == 'same-gvc'
             rules:
-              - when: self.redis.firewall.internal_inboundAllowType == 'same-gvc' && context.gvc != null && has(self.redis.firewall.inboundAllowWorkload)
+              - when: self.redis.firewall.internal_inboundAllowType == 'same-gvc' && context.gvc != null
                 rule: "!self.redis.firewall.inboundAllowWorkload.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
                 severity: info
                 messageExpression: >-
                   'Same GVC already allows every workload in this GVC: ' +
                   self.redis.firewall.inboundAllowWorkload.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
                   ' can be removed from the list.'
-                message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+                message: Same GVC already allows every workload in this GVC, so those entries can be removed from the Redis list.
               - when: self.redis.firewall.internal_inboundAllowType == 'same-org'
                 rule: size(self.redis.firewall.inboundAllowWorkload) == 0
                 severity: info
-                message: Same org already lets every workload of the org connect, so these entries add nothing.
+                message: Same org already lets every workload of the org connect, so these Redis entries add nothing.
           - path: redis.firewall.external_inboundAllowCIDR
             type: list
             absent: true
@@ -669,32 +781,40 @@ steps:
       - id: redis-public
         title: Public TCP access to Redis
         toggle: redis.publicAccess.enabled
-        description: Publishes one port per Redis node, from 6380, and forces per-replica endpoints.
+        description: Publishes one port per Redis node, from 6380, and forces per-replica endpoints. Redis then listens only on these ports, also inside the GVC.
         docs: "#public-access-and-firewall"
         fields:
+          - type: note
+            severity: warning
+            text: >-
+              Before you install or turn this on, add a TXT record `_cpln-<subdomain>` with your org name and a CNAME from the
+              subdomain to `<gvc-alias>.cpln.app`, with proxying off. The platform refuses the domain without the TXT record, and clients cannot reach it without the CNAME.
           - path: redis.publicAccess.address
             type: string
             format: hostname
             label: Redis hostname
             required: true
             example: true
+            pattern: '^([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\.)+(?![eE][0-9]+$)[A-Za-z]([A-Za-z0-9-]*[A-Za-z0-9])?$'
+            patternMessage: Enter a host name under a domain you own, such as `redis.your-domain.com`.
             description: A subdomain you own. The chart creates a domain with this name.
-            help: >-
-              Before you install, add a TXT record `_cpln-<subdomain>` with your org name and a CNAME from
-              the subdomain to `<gvc-alias>.cpln.app`, with proxying off.
+        rules:
+          - rule: >-
+              oldSelf == null || oldSelf.redis.publicAccess.enabled || self.redis.publicAccess.address != 'redis-test.example-cpln.com'
+            severity: warning
+            paths: [redis.publicAccess.address]
+            message: Still has the example hostname `redis-test.example-cpln.com`. Enter a host name you own.
       - title: Sentinel
         when: self.mode != 'dev'
-        docs: "/reference/workload/firewall"
         fields:
           - path: sentinel.firewall.internal_inboundAllowType
             type: enum
             label: Internal access to Sentinel
             widget: cards
             required: true
-            description: Firewall changes take a few minutes to take effect.
             options:
-              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC (recommended). }
               - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC (recommended). }
               - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
           # workload-sentinel.yaml writes any non-empty list into inboundAllowWorkload, whatever the type.
           - path: sentinel.firewall.inboundAllowWorkload
@@ -712,18 +832,18 @@ steps:
                 mustExist: warning
                 excludeTargetGvcWhen: self.sentinel.firewall.internal_inboundAllowType == 'same-gvc'
             rules:
-              - when: self.sentinel.firewall.internal_inboundAllowType == 'same-gvc' && context.gvc != null && has(self.sentinel.firewall.inboundAllowWorkload)
+              - when: self.sentinel.firewall.internal_inboundAllowType == 'same-gvc' && context.gvc != null
                 rule: "!self.sentinel.firewall.inboundAllowWorkload.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
                 severity: info
                 messageExpression: >-
                   'Same GVC already allows every workload in this GVC: ' +
                   self.sentinel.firewall.inboundAllowWorkload.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
                   ' can be removed from the list.'
-                message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+                message: Same GVC already allows every workload in this GVC, so those entries can be removed from the Sentinel list.
               - when: self.sentinel.firewall.internal_inboundAllowType == 'same-org'
                 rule: size(self.sentinel.firewall.inboundAllowWorkload) == 0
                 severity: info
-                message: Same org already lets every workload of the org connect, so these entries add nothing.
+                message: Same org already lets every workload of the org connect, so these Sentinel entries add nothing.
           - path: sentinel.firewall.external_inboundAllowCIDR
             type: list
             absent: true
@@ -742,25 +862,33 @@ steps:
             type: boolean
             label: Per-replica internal endpoints
             when: "!self.sentinel.publicAccess.enabled"
-            docs: "/reference/workload/general#internal-endpoint-formatting"
             description: Public access turns this on.
       - id: sentinel-public
         title: Public TCP access to Sentinel
         toggle: sentinel.publicAccess.enabled
         when: self.mode != 'dev'
-        description: Publishes one port per Sentinel, from 26380, and forces per-replica endpoints.
-        docs: "#public-access-and-firewall"
+        description: Publishes one port per Sentinel, from 26380, and forces per-replica endpoints. Sentinel then listens only on these ports, also inside the GVC.
         fields:
+          - type: note
+            severity: warning
+            text: >-
+              Before you install or turn this on, add a TXT record `_cpln-<subdomain>` with your org name and a CNAME from the
+              subdomain to `<gvc-alias>.cpln.app`, with proxying off. The platform refuses the domain without the TXT record, and clients cannot reach it without the CNAME.
           - path: sentinel.publicAccess.address
             type: string
             format: hostname
             label: Sentinel hostname
             required: true
             example: true
+            pattern: '^([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\.)+(?![eE][0-9]+$)[A-Za-z]([A-Za-z0-9-]*[A-Za-z0-9])?$'
+            patternMessage: Enter a host name under a domain you own, such as `redis-sentinel.your-domain.com`.
             description: A subdomain you own. The chart creates a domain with this name.
-            help: >-
-              Before you install, add a TXT record `_cpln-<subdomain>` with your org name and a CNAME from
-              the subdomain to `<gvc-alias>.cpln.app`, with proxying off.
+        rules:
+          - rule: >-
+              oldSelf == null || oldSelf.sentinel.publicAccess.enabled || self.sentinel.publicAccess.address != 'redis-sentinel-test.example-cpln.com'
+            severity: warning
+            paths: [sentinel.publicAccess.address]
+            message: Still has the example hostname `redis-sentinel-test.example-cpln.com`. Enter a host name you own.
     rules:
       - when: self.redis.firewall.internal_inboundAllowType == 'workload-list' && context.gvc != null
         rule: >-
@@ -775,9 +903,8 @@ steps:
           self.mode == 'dev' ?
           'The chart does not add its own workloads to the list. Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis-backup, or the backup job cannot reach Redis.' :
           'The chart does not add its own workloads to the list. Add //gvc/' + context.gvc + '/workload/' +
-          context.releaseName + '-redis, //gvc/' + context.gvc + '/workload/' + context.releaseName + '-sentinel' +
-          (self.backup.enabled ? ' and //gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis-backup' : '') +
-          ', or replication, failover and backups cannot reach Redis.'
+          context.releaseName + '-redis' + (self.backup.enabled ? ', ' : ' and ') + '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-sentinel' +
+          (self.backup.enabled ? ' and //gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis-backup, or replication, failover and backups cannot reach Redis.' : ', or replication and failover cannot reach Redis.')
         fix:
           path: redis.firewall.inboundAllowWorkload
           items: >-
@@ -810,53 +937,139 @@ steps:
           context.gvcSpec == null || (has(context.gvcSpec.loadBalancer) &&
           has(context.gvcSpec.loadBalancer.dedicated) && context.gvcSpec.loadBalancer.dedicated)
         paths: [redis.publicAccess.enabled]
-        message: Public access needs a dedicated load balancer on the GVC. Enable it in the GVC settings first.
+        message: Redis public access needs a dedicated load balancer on the GVC. Enable it in the GVC settings first.
       - when: self.sentinel.publicAccess.enabled
         rule: >-
           context.gvcSpec == null || (has(context.gvcSpec.loadBalancer) &&
           has(context.gvcSpec.loadBalancer.dedicated) && context.gvcSpec.loadBalancer.dedicated)
         paths: [sentinel.publicAccess.enabled]
-        message: Public access needs a dedicated load balancer on the GVC. Enable it in the GVC settings first.
+        message: Sentinel public access needs a dedicated load balancer on the GVC. Enable it in the GVC settings first.
       - when: self.redis.publicAccess.enabled && self.sentinel.publicAccess.enabled
         rule: self.redis.publicAccess.address != self.sentinel.publicAccess.address
         paths: [sentinel.publicAccess.address]
         message: Redis and Sentinel need different hostnames; each tier creates its own domain.
+      - when: self.mode != 'dev' && self.redis.publicAccess.enabled
+        rule: self.redis.replicas <= 10
+        paths: [redis.replicas, redis.publicAccess.enabled]
+        message: Public access publishes one domain port per Redis node, and a domain has at most 10 ports.
+      - when: self.mode != 'dev' && self.sentinel.publicAccess.enabled
+        rule: self.sentinel.replicas <= 10
+        paths: [sentinel.replicas, sentinel.publicAccess.enabled]
+        message: Public access publishes one domain port per Sentinel, and a domain has at most 10 ports.
+      - when: oldSelf != null && oldSelf.mode != 'dev' && self.mode != 'dev' && oldSelf.sentinel.persistence.enabled && self.sentinel.persistence.enabled
+        rule: self.redis.publicAccess.enabled == oldSelf.redis.publicAccess.enabled
+        severity: warning
+        paths: [redis.publicAccess.enabled]
+        message: >-
+          With Sentinel persistence on, Sentinel keeps the Redis address it saved at its first start, so this
+          change leaves the nodes replicating from an address that no longer answers and deadlocks the rollout.
+          Keep the installed setting, or reinstall.
+      - when: oldSelf != null && oldSelf.mode != 'dev' && self.mode != 'dev' && oldSelf.sentinel.persistence.enabled && self.sentinel.persistence.enabled
+        rule: >-
+          !oldSelf.redis.publicAccess.enabled || !self.redis.publicAccess.enabled ||
+          self.redis.publicAccess.address == oldSelf.redis.publicAccess.address
+        severity: warning
+        paths: [redis.publicAccess.address]
+        message: >-
+          With Sentinel persistence on, Sentinel keeps the Redis address it saved at its first start, so a new
+          hostname leaves the nodes replicating from an address that no longer answers and deadlocks the rollout.
+          Keep the installed hostname, or reinstall.
+      - rule: >-
+          oldSelf == null || self.redis.publicAccess.enabled == oldSelf.redis.publicAccess.enabled ||
+          (oldSelf.sentinel.persistence.enabled && self.sentinel.persistence.enabled)
+        severity: info
+        paths: [redis.publicAccess.enabled]
+        message: >-
+          Turning public access on or off changes the ports Redis listens on, also inside the GVC (6379, or one
+          port per node from 6380), and creates or deletes its domain. Update every client first.
+      - when: oldSelf != null && oldSelf.mode != 'dev' && self.mode != 'dev' && oldSelf.sentinel.persistence.enabled && self.sentinel.persistence.enabled
+        rule: self.sentinel.publicAccess.enabled == oldSelf.sentinel.publicAccess.enabled
+        severity: warning
+        paths: [sentinel.publicAccess.enabled]
+        message: >-
+          With Sentinel persistence on, Sentinel keeps the configuration it wrote at its first start, so this
+          change does not reach it and deadlocks the rollout. Keep the installed setting, or reinstall.
+      - rule: >-
+          oldSelf == null || oldSelf.mode == 'dev' || self.sentinel.publicAccess.enabled == oldSelf.sentinel.publicAccess.enabled ||
+          (oldSelf.sentinel.persistence.enabled && self.sentinel.persistence.enabled)
+        severity: info
+        paths: [sentinel.publicAccess.enabled]
+        message: >-
+          Turning public access on or off changes the ports Sentinel listens on, also inside the GVC (26379, or one
+          port per Sentinel from 26380), and creates or deletes its domain. Update every client first.
       - rule: >-
           oldSelf == null || !oldSelf.redis.publicAccess.enabled || !self.redis.publicAccess.enabled ||
-          self.redis.publicAccess.address == oldSelf.redis.publicAccess.address
+          self.redis.publicAccess.address == oldSelf.redis.publicAccess.address ||
+          (oldSelf.sentinel.persistence.enabled && self.sentinel.persistence.enabled)
         severity: info
         paths: [redis.publicAccess.address]
         message: >-
-          Changing the hostname replaces the domain: the chart deletes the domain of the old hostname
+          Changing the Redis hostname replaces the domain: the chart deletes the domain of the old hostname
           and creates one for the new hostname, whose TXT and CNAME records must exist first. Clients
           of the old hostname lose access.
+      - when: self.mode != 'dev' && self.sentinel.publicAccess.enabled && !self.redis.publicAccess.enabled
+        rule: "!self.redis.replicaDirect"
+        paths: [redis.replicaDirect]
+        message: >-
+          With Sentinel public access on, the chart leaves the location out of the per-replica Redis address
+          Sentinel monitors, so Sentinel never finds the primary. Turn off per-replica endpoints for Redis, or
+          turn on Redis public access too.
+      - when: self.mode != 'dev' && self.redis.publicAccess.enabled && !self.sentinel.publicAccess.enabled
+        rule: "!self.sentinel.replicaDirect"
+        paths: [sentinel.replicaDirect]
+        message: >-
+          With Redis public access on, the chart leaves the location out of the per-replica Sentinel addresses
+          the Redis nodes query, so no Redis node starts. Turn off per-replica endpoints for Sentinel, or turn on
+          Sentinel public access too.
+      - when: oldSelf != null && oldSelf.mode != 'dev' && self.mode != 'dev' && oldSelf.sentinel.persistence.enabled && self.sentinel.persistence.enabled && !oldSelf.redis.publicAccess.enabled && !self.redis.publicAccess.enabled
+        rule: "!oldSelf.redis.replicaDirect || self.redis.replicaDirect"
+        severity: warning
+        paths: [redis.replicaDirect]
+        message: >-
+          With Sentinel persistence on, Sentinel keeps the addresses it saved at its first start, so this change leaves them pointing at names that no longer resolve and can deadlock the rollout. Keep the installed setting, or reinstall.
+      - when: oldSelf != null && oldSelf.mode != 'dev' && self.mode != 'dev' && oldSelf.sentinel.persistence.enabled && self.sentinel.persistence.enabled && !oldSelf.sentinel.publicAccess.enabled && !self.sentinel.publicAccess.enabled
+        rule: "!oldSelf.sentinel.replicaDirect || self.sentinel.replicaDirect"
+        severity: warning
+        paths: [sentinel.replicaDirect]
+        message: >-
+          With Sentinel persistence on, Sentinel keeps the addresses it saved at its first start, so this change leaves them pointing at names that no longer resolve and can deadlock the rollout. Keep the installed setting, or reinstall.
+      - when: oldSelf != null && oldSelf.mode != 'dev' && self.mode != 'dev' && oldSelf.sentinel.persistence.enabled && self.sentinel.persistence.enabled && oldSelf.sentinel.publicAccess.enabled && self.sentinel.publicAccess.enabled
+        rule: self.sentinel.publicAccess.address == oldSelf.sentinel.publicAccess.address
+        severity: warning
+        paths: [sentinel.publicAccess.address]
+        message: >-
+          With Sentinel persistence on, Sentinel keeps the addresses it saved at its first start, so this change leaves them pointing at names that no longer resolve and can deadlock the rollout. Keep the installed setting, or reinstall.
       - rule: >-
           oldSelf == null || !oldSelf.sentinel.publicAccess.enabled || !self.sentinel.publicAccess.enabled ||
-          self.sentinel.publicAccess.address == oldSelf.sentinel.publicAccess.address
+          self.sentinel.publicAccess.address == oldSelf.sentinel.publicAccess.address ||
+          (oldSelf.sentinel.persistence.enabled && self.sentinel.persistence.enabled)
         severity: info
         paths: [sentinel.publicAccess.address]
         message: >-
-          Changing the hostname replaces the domain: the chart deletes the domain of the old hostname
+          Changing the Sentinel hostname replaces the domain: the chart deletes the domain of the old hostname
           and creates one for the new hostname, whose TXT and CNAME records must exist first. Clients
           of the old hostname lose access.
       - when: self.redis.publicAccess.enabled
         rule: size(self.redis.firewall.external_inboundAllowCIDR) > 0
         severity: warning
         paths: [redis.firewall.external_inboundAllowCIDR]
-        message: Public access is on, but no inbound CIDR is allowed, so nobody can connect from outside.
+        message: Redis public access is on, but no inbound CIDR is allowed, so nobody can connect from outside.
       - when: self.sentinel.publicAccess.enabled
         rule: size(self.sentinel.firewall.external_inboundAllowCIDR) > 0
         severity: warning
         paths: [sentinel.firewall.external_inboundAllowCIDR]
-        message: Public access is on, but no inbound CIDR is allowed, so nobody can connect from outside.
+        message: Sentinel public access is on, but no inbound CIDR is allowed, so nobody can connect from outside.
 
   - id: backup
     title: Backup and monitoring
-    description: Scheduled backups to object storage, and a metrics exporter.
+    description: Optional scheduled backups to object storage and an optional metrics exporter.
     sections:
       - id: backup
         title: Scheduled backups
         toggle: backup.enabled
+        description: >-
+          Each run uploads a gzipped RDB file. The README has no verified way to restore it into a running
+          release: read its Restoring a Backup section before you rely on backups.
         docs: "#backup"
         fields:
           - path: backup.provider
@@ -895,6 +1108,12 @@ steps:
             text: >-
               This version no longer grants the backup identity `aws::ReadOnlyAccess`. Make sure your IAM
               policy has the full action list from the README before upgrading.
+          - type: note
+            severity: warning
+            when: context.mode == 'install' || (oldSelf != null && !oldSelf.backup.enabled)
+            text: >-
+              The bucket and the IAM policy, with the full action list from the README, must exist in your AWS
+              account **before** you install or turn backups on.
           - path: backup.aws.bucket
             type: string
             label: Bucket
@@ -922,22 +1141,41 @@ steps:
             label: IAM policy name
             required: true
             example: true
+            pattern: '^(aws::)?[A-Za-z0-9/+=,.@_-]+$'
+            patternMessage: Enter the policy name, not its ARN.
             description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
-            docs: "#aws-s3"
           - path: backup.aws.prefix
             type: string
             label: Folder prefix
             pattern: "^(?!/)"
             patternMessage: Leave out the leading /.
+        rules:
+          - rule: >-
+              oldSelf == null || (oldSelf.backup.enabled && oldSelf.backup.provider == 'aws') ||
+              self.backup.aws.bucket != 'my-backup-bucket'
+            severity: warning
+            paths: [backup.aws.bucket]
+            message: Still has the example AWS bucket `my-backup-bucket`. Enter your own bucket.
+          - rule: >-
+              oldSelf == null || (oldSelf.backup.enabled && oldSelf.backup.provider == 'aws') ||
+              self.backup.aws.policyName != 'my-backup-policy'
+            severity: warning
+            paths: [backup.aws.policyName]
+            message: Still has the example policy name `my-backup-policy`. Enter the IAM policy you created.
       - title: Google Cloud Storage
         when: self.backup.enabled && self.backup.provider == 'gcp'
         docs: "#gcs"
         fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'install' || (oldSelf != null && !oldSelf.backup.enabled)
+            text: The bucket must exist in your GCP account **before** you install or turn backups on.
           - path: backup.gcp.bucket
             type: string
             label: Bucket
             required: true
             example: true
+            pattern: '^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
           - path: backup.gcp.cloudAccountName
             type: ref
             label: Cloud account
@@ -955,6 +1193,13 @@ steps:
             label: Folder prefix
             pattern: "^(?!/)"
             patternMessage: Leave out the leading /.
+        rules:
+          - rule: >-
+              oldSelf == null || (oldSelf.backup.enabled && oldSelf.backup.provider == 'gcp') ||
+              self.backup.gcp.bucket != 'my-backup-bucket'
+            severity: warning
+            paths: [backup.gcp.bucket]
+            message: Still has the example GCS bucket `my-backup-bucket`. Enter your own bucket.
       - id: metrics
         title: Metrics exporter
         toggle: redis.exporter.enabled
@@ -967,7 +1212,7 @@ steps:
             type: list
             label: Drop metrics matching
             description: Regular expressions matched against metric names, e.g. `redis_commands_latencies_usec_bucket`.
-            item: { type: string }
+            item: { type: string, label: Metric pattern }
           - path: redis.exporter.image
             type: string
             format: image
@@ -982,6 +1227,13 @@ steps:
             description: A sidecar next to each Redis node.
             maxRatio: 4
     rules:
+      - when: self.backup.enabled
+        rule: "!self.redis.publicAccess.enabled"
+        severity: warning
+        paths: [backup.enabled]
+        message: >-
+          With public access on, Redis listens only on its public ports (6380 and up), but the backup job
+          connects on 6379, so every backup run fails. Turn off one of the two.
       - rule: "!self.backup.enabled || self.backup.provider in ['aws', 'gcp']"
         mirrors: redis.validateBackupConfig
         paths: [backup.provider]
@@ -998,26 +1250,52 @@ steps:
     description: Images, timeouts, replication tuning, health probes and extra workload settings.
     sections:
       - title: Images
-        when: self.engine == 'redis'
         fields:
           - path: redis.image
             type: string
             format: image
             label: Redis image
             required: true
+            when: self.engine == 'redis'
           - path: sentinel.image
             type: string
             format: image
             label: Sentinel image
             required: true
-            when: self.mode != 'dev'
+            when: self.engine == 'redis' && self.mode != 'dev'
+          - path: valkeyImage
+            type: string
+            format: image
+            label: Valkey image
+            required: true
+            when: self.engine == 'valkey'
+            description: Used for the Redis tier, and for the Sentinel tier in production mode.
         rules:
-          - rule: >-
+          - when: self.engine == 'redis'
+            rule: >-
               oldSelf == null || imageMajor(self.redis.image) < 0 || imageMajor(oldSelf.redis.image) < 0 ||
               imageMajor(self.redis.image) >= imageMajor(oldSelf.redis.image)
             severity: info
             paths: [redis.image]
             message: An older Redis major version cannot load data written by the installed one.
+          - rule: self.engine != 'valkey' || (self.valkeyImage != null && self.valkeyImage != '')
+            mirrors: redis.validateEngine
+            paths: [valkeyImage]
+            message: A Valkey image is required when the server is Valkey.
+          - when: self.engine == 'valkey'
+            rule: self.valkeyImage == null || !self.valkeyImage.contains('alpine')
+            paths: [valkeyImage]
+            message: >-
+              The -alpine Valkey tags have no bash, which the chart's health probes need. Use a Debian-based
+              tag such as valkey/valkey:8.1.9.
+          - rule: oldSelf == null || self.engine != 'valkey' || self.valkeyImage == oldSelf.valkeyImage
+            severity: info
+            paths: [valkeyImage]
+            messageExpression: >-
+              (self.mode == 'dev' ? 'Changing the Valkey image restarts the Redis node.' :
+              'Changing the Valkey image restarts every Redis and Sentinel node.') +
+              (self.redis.persistence.enabled ? ' A newer major version can write data files that an older image cannot load: snapshot the Redis volume set before a major upgrade if you need a way back.' : '')
+            message: Changing the Valkey image restarts every node that runs it.
       - title: Timeouts
         fields:
           - path: redis.timeoutSeconds
@@ -1042,6 +1320,7 @@ steps:
             label: Replication backlog size
             required: true
             pattern: '^\d+([bB]|[kKmMgG][bB]?)?$'
+            patternMessage: Enter a whole number with an optional unit (b, k, kb, m, mb, g or gb), such as `1gb`.
             description: Peak write throughput times the disconnect you want to survive without a full resync, e.g. `1gb`.
           - path: redis.replication.timeout
             type: integer
@@ -1055,7 +1334,7 @@ steps:
             label: Replica output buffer limit
             required: true
             pattern: '^\d+([bB]|[kKmMgG][bB]?)? \d+([bB]|[kKmMgG][bB]?)? \d+$'
-            description: Hard limit, soft limit and seconds, e.g. `2gb 512mb 300`.
+            patternMessage: Enter the hard limit, the soft limit and the seconds, such as `2gb 512mb 300`.
       - title: Health probes
         fields:
           - type: note
@@ -1121,16 +1400,24 @@ steps:
       - title: Redis workload
         collapsible: true
         fields:
-          - path: redis.extraArgs
-            type: string
-            absent: true
-            label: Extra server arguments
-            placeholder: --maxclients 20000 --maxmemory 200mb --maxmemory-policy allkeys-lru
+          - type: note
+            severity: warning
+            text: >-
+              Extra server arguments (`redis.extraArgs`), the server command (`redis.serverCommand`) and the
+              data directory (`redis.dataDir`) are set in YAML only. They go to the server command line as
+              written and are not checked. A wrong value stops Redis from starting.
+          - type: note
+            severity: warning
+            when: self.engine == 'valkey' && self.mode != 'dev'
+            text: >-
+              On Valkey, do not put `dual-channel-replication-enabled yes` in `redis.extraArgs`: it makes
+              Sentinel see duplicate replicas (a known upstream defect).
           - path: redis.env
             type: list
             label: Extra environment variables
             widget: table
             newItem: { name: "", value: "" }
+            itemLabel: "item.name == '' ? 'Variable ' + string(index + 1) : item.name"
             uniqueBy: [name]
             item:
               type: object
@@ -1140,6 +1427,7 @@ steps:
                   label: Name
                   required: true
                   pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+                  patternMessage: Start with a letter or _, then use letters, digits and _.
                 - path: value
                   type: string
                   label: Value
@@ -1152,7 +1440,7 @@ steps:
             type: object
             optional: true
             label: Request retry policy
-            docs: /reference/workload/general
+            docs: "/reference/workload/general#retryon"
             newValue:
               attempts: 2
               retryOn: [connect-failure, refused-stream, unavailable, cancelled, resource-exhausted, retriable-status-codes]
@@ -1172,6 +1460,7 @@ steps:
                 unique: true
                 item:
                   type: enum
+                  label: Condition
                   options:
                     - { value: connect-failure, label: connect-failure }
                     - { value: refused-stream, label: refused-stream }
@@ -1179,15 +1468,6 @@ steps:
                     - { value: cancelled, label: cancelled }
                     - { value: resource-exhausted, label: resource-exhausted }
                     - { value: retriable-status-codes, label: retriable-status-codes }
-        rules:
-          - rule: >-
-              self.engine != 'valkey' || self.redis.extraArgs == null ||
-              !self.redis.extraArgs.contains('dual-channel-replication-enabled yes')
-            severity: warning
-            paths: [redis.extraArgs]
-            message: >-
-              On Valkey, dual-channel replication makes Sentinel see duplicate replicas (a known upstream
-              defect). Remove it from the extra arguments.
       - title: Sentinel workload
         collapsible: true
         when: self.mode != 'dev'
@@ -1197,6 +1477,7 @@ steps:
             label: Extra environment variables
             widget: table
             newItem: { name: "", value: "" }
+            itemLabel: "item.name == '' ? 'Variable ' + string(index + 1) : item.name"
             uniqueBy: [name]
             item:
               type: object
@@ -1206,6 +1487,7 @@ steps:
                   label: Name
                   required: true
                   pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+                  patternMessage: Start with a letter or _, then use letters, digits and _.
                 - path: value
                   type: string
                   label: Value
@@ -1218,7 +1500,6 @@ steps:
             type: object
             optional: true
             label: Request retry policy
-            docs: /reference/workload/general
             newValue:
               attempts: 2
               retryOn: [connect-failure, refused-stream, unavailable, cancelled, resource-exhausted, retriable-status-codes]
@@ -1238,6 +1519,7 @@ steps:
                 unique: true
                 item:
                   type: enum
+                  label: Condition
                   options:
                     - { value: connect-failure, label: connect-failure }
                     - { value: refused-stream, label: refused-stream }
@@ -1246,19 +1528,47 @@ steps:
                     - { value: resource-exhausted, label: resource-exhausted }
                     - { value: retriable-status-codes, label: retriable-status-codes }
 
+rules:
+  - rule: >-
+      context.mode != 'upgrade' || context.fromVersion == null || oldSelf == null ||
+      semverCompare(context.fromVersion, '3.1.1') >= 0 ||
+      (semverCompare(context.fromVersion, '3.0.0') >= 0 &&
+      !oldSelf.redis.persistence.enabled && !oldSelf.sentinel.persistence.enabled)
+    messageExpression: >-
+      semverCompare(context.fromVersion, '3.0.0') < 0 ?
+      'Do not upgrade a ' + context.fromVersion + ' release in place: 3.x is a different chart that replaces its workloads and volume sets, so the upgrade deletes the data. Install 3.8.0 as a new release, copy the data across, then uninstall the old release. If the release set `locations`, it created its own GVCs, which this upgrade and the uninstall delete with everything inside.' :
+      'Do not upgrade this release in place: 3.1.1 renamed the volume sets (' + context.releaseName + '-redis became ' + context.releaseName + '-redis-vs, and the same for Sentinel), so the upgrade deletes the volume sets this release runs on, with their data. Install 3.8.0 as a new release, copy the data across, then uninstall the old release.'
+    message: >-
+      Do not upgrade this release in place: this version names the volume sets differently, so the upgrade
+      deletes the ones the release runs on, with their data. Install 3.8.0 as a new release, copy the data
+      across, then uninstall the old release.
+
 yamlOnly:
   - path: grafana
     reason: A Kubernetes GrafanaDashboard resource for the Grafana Operator; never reconciled on the managed platform.
   - path: redis.serverCommand
     reason: Correct for both engines; it only matters for exotic images, and a wrong value crash-loops the nodes.
   - path: redis.dataDir
-    reason: Tied to the volume mount and the temp-file cleanup hooks; there is no reason to change it.
+    reason: Tied to the volume mount and the temp-file cleanup in the start script; there is no reason to change it.
 
 migrations:
   - fromVersions: "<3.8.0"
     assume: { mode: production }
   - fromVersions: "<3.7.0"
     assume: { engine: redis }
+  - fromVersions: "<3.2.0"
+    assume: { backup.enabled: false }
+  - fromVersions: "<3.0.4"
+    assume: { redis.replicaDirect: false, sentinel.replicaDirect: false }
+  # 3.0.0 to 3.4.3 defaulted both passwords to your-password (3.5.0 changed the default): carry the one a release runs on.
+  - fromVersions: ">=3.0.0 <3.5.0"
+    to: redis.auth.password.value
+    valueExpr: "self.redis.auth.password.enabled ? self.redis.auth.password.value : null"
+    note: Redis keeps running on the installed password, so it is kept; changing it on a running release deadlocks the rollout.
+  - fromVersions: ">=3.0.0 <3.5.0"
+    to: sentinel.auth.password.value
+    valueExpr: "self.sentinel.auth.password.enabled ? self.sentinel.auth.password.value : null"
+    note: Sentinel keeps running on the installed password, so it is kept; changing it on a running release deadlocks the rollout.
   - fromVersions: "<3.6.0"
     from: redis.resources.cpu
     to: redis.resources.maxCpu

@@ -368,7 +368,8 @@
           "markdownDescription": "Plain text; inline `code` allowed."
         },
         "docs": {
-          "$ref": "#/definitions/docs"
+          "$ref": "#/definitions/docs",
+          "markdownDescription": "Not shown by the console, and lint rejects it (`DOCS_ON_STEP`). Put the link on the section or field whose label the linked heading matches."
         },
         "when": {
           "$ref": "#/definitions/cel",
@@ -432,7 +433,8 @@
           "markdownDescription": "Plain text; inline `code` allowed."
         },
         "docs": {
-          "$ref": "#/definitions/docs"
+          "$ref": "#/definitions/docs",
+          "markdownDescription": "Shown beside the section title or toggle label. A section with neither title nor toggle does not show it, and lint rejects it (`DOCS_UNTITLED_SECTION`)."
         },
         "when": {
           "$ref": "#/definitions/cel",
@@ -2244,10 +2246,6 @@
         "pattern": {
           "type": "string",
           "markdownDescription": "Regular expression keys must match."
-        },
-        "patternMessage": {
-          "type": "string",
-          "markdownDescription": "Shown instead of the regular expression when a key does not match `pattern`, e.g. \"Use lowercase letters only.\" The message is prefixed with the key: `Key \"Owner\": Use lowercase letters only.`"
         },
         "label": {
           "type": "string",

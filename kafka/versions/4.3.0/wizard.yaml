@@ -9,7 +9,6 @@ steps:
   - id: cluster
     title: Cluster
     description: The Kafka brokers in KRaft mode, their image and compute.
-    docs: "#kafka-cluster"
     sections:
       - fields:
           - path: kafka.name
@@ -183,12 +182,12 @@ steps:
   - id: listeners
     title: Listeners and security
     description: How clients reach the brokers, their SASL users, ACLs and the cluster secrets.
-    docs: "#listeners"
     sections:
       - fields:
           - path: kafka.listeners
             type: map
             label: Listeners
+            docs: "#listeners"
             widget: kv
             required: true
             description: >-
@@ -347,7 +346,6 @@ steps:
             type: boolean
             label: Allow everyone on resources without ACLs
       - title: Cluster secrets
-        docs: "#acl-and-cluster-secrets"
         fields:
           - type: note
             severity: warning
@@ -379,7 +377,6 @@ steps:
   - id: storage
     title: Storage
     description: The volume sets that hold each broker's log directories.
-    docs: "#storage"
     sections:
       - fields:
           - path: kafka.logDirs
@@ -398,7 +395,7 @@ steps:
             docs: "/reference/volumeset#capacity-and-billing"
             rules:
               - rule: oldSelf == null || self.kafka.volumes.logs.initialCapacity >= oldSelf.kafka.volumes.logs.initialCapacity
-                message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+                message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
           - path: kafka.volumes.logs.performanceClass
             type: enum
             label: Disk class
@@ -415,7 +412,9 @@ steps:
             required: true
             immutable: true
             advanced: true
-            options: [ext4, xfs]
+            options:
+              - { value: ext4, label: ext4 }
+              - { value: xfs, label: xfs }
           - path: kafka.volumes.logs.externalVolumeSets
             type: list
             label: Existing volume sets to mount
@@ -562,7 +561,9 @@ steps:
             absent: true
             label: Who can connect inside the org
             advanced: true
-            options: [same-gvc, same-org]
+            options:
+              - { value: same-gvc, label: Same GVC }
+              - { value: same-org, label: Same org }
           - path: kafbat_ui.name
             type: string
             label: Kafbat UI workload name
@@ -661,7 +662,10 @@ steps:
             absent: true
             label: Who can connect inside the org
             advanced: true
-            options: [same-gvc, same-org, workload-list]
+            options:
+              - { value: same-gvc, label: Same GVC }
+              - { value: same-org, label: Same org }
+              - { value: workload-list, label: Specific workloads }
           - path: kafka_rest_proxy.firewall.inboundAllowWorkload
             type: list
             absent: true
@@ -770,7 +774,6 @@ steps:
   - id: connect
     title: Kafka Connect
     description: Optional Kafka Connect worker groups, each with its own connector plugins.
-    docs: "#kafka-connect"
     sections:
       - fields:
           - type: note
@@ -786,6 +789,7 @@ steps:
             type: list
             absent: true
             label: Kafka Connect groups
+            docs: "#kafka-connect"
             uniqueBy: [name]
             itemLabel: item.name
             newItem:
@@ -987,9 +991,9 @@ steps:
   - id: advanced
     title: Advanced
     description: The health sidecar, the metrics exporters and the optional client workload.
-    docs: "#health-sidecar-and-exporters"
     sections:
       - title: Health sidecar
+        docs: "#health-sidecar-and-exporters"
         fields:
           - path: kafka_orchestrator
             type: object
@@ -1020,7 +1024,11 @@ steps:
               - path: logLevel
                 type: enum
                 label: Log level
-                options: [debug, info, warn, error]
+                options:
+                  - { value: debug, label: Debug }
+                  - { value: info, label: Info }
+                  - { value: warn, label: Warn }
+                  - { value: error, label: Error }
               - path: checkTimeout
                 type: string
                 format: duration

@@ -35,7 +35,6 @@ steps:
   - id: gitea
     title: Gitea
     description: The Gitea image, its compute, and the prerequisite auth secret.
-    docs: "#configuration"
     sections:
       - title: Server
         docs: "#image-and-resources"
@@ -103,7 +102,6 @@ steps:
   - id: storage
     title: Storage
     description: The volume set with repositories, LFS objects, attachments and SSH host keys.
-    docs: "#storage"
     sections:
       - fields:
           - path: volumeset.capacity
@@ -152,7 +150,7 @@ steps:
     rules:
       - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
         paths: [volumeset.capacity]
-        message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
 
   - id: access
     title: Access
@@ -186,7 +184,7 @@ steps:
             label: SSH host in clone URLs
             description: Leave empty to use the web domain.
       - title: Internal access
-        docs: /reference/workload/firewall
+        docs: "#internal-access"
         fields:
           - path: internalAccess.type
             type: enum
@@ -238,7 +236,6 @@ steps:
   - id: database
     title: Database
     description: The bundled PostgreSQL's credentials. Gitea creates the secret from them; there is nothing to create first.
-    docs: "#bundled-database"
     fields:
       - type: note
         text: >-

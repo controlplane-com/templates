@@ -10,7 +10,6 @@ steps:
   - id: cluster
     title: Cluster
     description: Where the PD, TiKV and TiDB server tiers run, how many of each, and their compute.
-    docs: "#locations"
     sections:
       - id: locations
         fields:
@@ -46,6 +45,7 @@ steps:
           - path: locations
             type: list
             label: Locations
+            docs: "#locations"
             required: true
             minItems: 1
             uniqueBy: [name]
@@ -203,7 +203,6 @@ steps:
   - id: database
     title: Database
     description: The prerequisite credentials secret, and whether TiDB sets root's password and creates the database.
-    docs: "#prerequisites"
     sections:
       - id: auto-create
         title: Set the root password and create the database
@@ -313,7 +312,6 @@ steps:
   - id: storage
     title: Storage
     description: The TiKV and PD volume sets, their snapshots, and optional TiKV autoscaling.
-    docs: "#storage"
     sections:
       - id: tikv-storage
         title: TiKV volumes
@@ -396,7 +394,6 @@ steps:
             type: integer
             label: PD initial capacity
             required: true
-            docs: "/reference/volumeset#capacity-and-billing"
             unit: GiB
             min: 10
             suggestions: [10, 20, 50, 100]
@@ -408,7 +405,6 @@ steps:
             help: >-
               Snapshots are per volume and crash-consistent: they protect against losing a single volume. Restore
               a whole cluster from a backup instead.
-            docs: "/reference/volumeset#snapshots"
             pattern: '^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$'
             patternMessage: Use 5 fields with one fixed minute, such as `0 3 * * *`; snapshots run at most hourly.
           - path: volumeset.pd.snapshots.retentionDuration
@@ -420,10 +416,10 @@ steps:
     rules:
       - rule: oldSelf == null || self.volumeset.tikv.capacity >= oldSelf.volumeset.tikv.capacity
         paths: [volumeset.tikv.capacity]
-        message: A volume set cannot shrink. Keep the TiKV capacity at or above the installed size.
+        message: Keep the TiKV capacity at or above the installed value. Lowering it would not shrink the existing volume.
       - rule: oldSelf == null || self.volumeset.pd.capacity >= oldSelf.volumeset.pd.capacity
         paths: [volumeset.pd.capacity]
-        message: A volume set cannot shrink. Keep the PD capacity at or above the installed size.
+        message: Keep the PD capacity at or above the installed value. Lowering it would not shrink the existing volume.
       - rule: >-
           self.volumeset.tikv.snapshots.schedule != null && (self.volumeset.tikv.snapshots.schedule == '' ||
           self.volumeset.tikv.snapshots.schedule.matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$'))
@@ -445,7 +441,6 @@ steps:
   - id: access
     title: Access and pooling
     description: Who can reach each tier, outbound internet access, and an optional ProxySQL pooler.
-    docs: "#access"
     sections:
       - fields:
           - type: note
@@ -457,7 +452,6 @@ steps:
         description: >-
           The MySQL endpoint on port 4000. It takes no public inbound traffic: reach it over internal GVC DNS or
           `cpln port-forward`.
-        docs: "/reference/workload/firewall"
         fields:
           - path: internal_access.server.type
             type: enum
@@ -495,7 +489,6 @@ steps:
               patternMessage: Write a leading `::` with a zero, such as `0::/0`.
       - id: tikv-access
         title: TiKV
-        docs: "/reference/workload/firewall"
         fields:
           - path: internal_access.tikv.type
             type: enum
@@ -531,7 +524,6 @@ steps:
               patternMessage: Write a leading `::` with a zero, such as `0::/0`.
       - id: pd-access
         title: PD
-        docs: "/reference/workload/firewall"
         fields:
           - path: internal_access.pd.type
             type: enum
@@ -619,7 +611,6 @@ steps:
   - id: backup
     title: Backups
     description: Scheduled full-cluster backups with `br` to object storage.
-    docs: "#backing-up"
     sections:
       - id: backup
         title: Scheduled backups
@@ -706,7 +697,6 @@ steps:
       - id: aws
         title: AWS S3
         when: self.backup.enabled && self.backup.provider == 'aws'
-        docs: "#backing-up"
         fields:
           # Chart bug: the bucket is an unquoted env value, so a name YAML reads as a number, date, boolean or
           # null (123, 1e3, 2024-01-01, true, null) comes out as another type. The pattern rejects those.
@@ -757,7 +747,6 @@ steps:
       - id: gcs
         title: Google Cloud Storage
         when: self.backup.enabled && self.backup.provider == 'gcp'
-        docs: "#backing-up"
         fields:
           # Chart bug: as for the S3 bucket.
           - path: backup.gcp.bucket
@@ -792,7 +781,6 @@ steps:
   - id: advanced
     title: Advanced
     description: The PD, TiKV and TiDB server images.
-    docs: "#images-and-resources"
     # Chart bug: every image is written unquoted, so a value YAML reads as null, a boolean or a number (null,
     # true, 1e3) comes out as another type. The patterns require a repository path, a tag or a digest.
     fields:

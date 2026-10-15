@@ -116,7 +116,7 @@ tw render --descriptor <dir>/wizard.yaml --values <dir>/values.yaml --answers an
 | Header | Template name, icon, category, app version, and an always-visible "Template docs" link to `/template-catalog/templates/<template>`, on every step of install and upgrade | none (automatic) |
 | Release step (install) | Release name, target GVC and template version. The GVC picker shows each GVC's location count and disables the GVCs that do not fit, with the reason ("Has 3 locations; this template needs exactly 1"). "Create GVC" opens an embedded create limited the same way (a single-choice location list when the maximum is 1; it cannot be created with fewer than the minimum). Versions without a descriptor are marked "YAML only" | `gvc` limits (§14) |
 | Config steps | One per visible descriptor step, in order, on a rail | `steps` |
-| Sections | Untitled sections are a plain column; titled ones a box with the title, description and docs link. A toggle section has its switch as the box's header title; while it is off, the box shows only its description. The toggle's own `help` (an import override) is the switch's "?", and its own `description` follows the section's under the header. Fields marked `advanced` are collected into a collapsed "Advanced" group at the end of their section | sections, `toggle` (§5.3), `advanced` (§5.5) |
+| Sections | Untitled sections are a plain column; titled ones a box with the title, description and the docs link beside the title. A toggle section has its switch as the box's header title; while it is off, the box shows only its description. The toggle's own `help` (an import override) is the switch's "?", and its own `description` follows the section's under the header. Fields marked `advanced` are collected into a collapsed "Advanced" group at the end of their section | sections, `toggle` (§5.3), `advanced` (§5.5) |
 | Fields | One control per field type and widget. A switch sits right next to its label. A field with `suggestions` is a text input with a dropdown of the suggested values beside free typing, the unit written next to it (§15). A secret reference with required keys gets a "Check keys" button (§13.3). "Create" appears next to a reference only with `allowCreate: true` (§13.2). In a table (a list of objects), the message line under a row leads each message with its column's header ("Location: Required.") | field properties |
 | YAML mode | The whole values document in an editor; the Wizard mode is disabled while the text does not parse | none |
 | Review | Outstanding issues and advice above two tabs, each as "<label>: <message>" (§10.1). **Visual**: every visible setting with its formatted value (option labels, On/Off, reference names, masked sensitive values), grouped by step and section, each step with an "Edit" link. A titled section's toggle is folded into the section's heading ("Scheduled backups: Off") and not repeated as a row, and a section switched off shows only that heading; on upgrade, changed rows are tagged "Changed" and a "Changes since last applied" list follows, each tagged "Edited", "New default" or "Placeholder cleared" (§12.1); changes that share a label lead with their section's title, else their step's ("AWS S3 › Cloud account", "Google Cloud Storage › Cloud account"). **YAML**: the values document; on upgrade, also a diff against the installed values. Install has no "changes from the chart defaults" list | labels, option labels, `sensitive` |
@@ -127,7 +127,7 @@ Behaviour that shapes descriptors:
 - **Next** runs the step's sync validation and its async reference checks. Errors and warnings block; `info` is shown and never blocks.
 - **Upgrade mode** opens every step for free navigation (any step can be clicked at any time), but Upgrade is still only on Review, and it validates every step first. A step not opened yet shows as waiting in the rail, with no finished or failed marker, until it is visited.
 - **References start empty** (`clearRefDefaults`, §12.1): on install, every reference that still holds its chart default; on upgrade, references new in the target version, and references in a branch hidden at load that still hold the old version's placeholder. References the running release uses are never cleared.
-- **Imported steps** (§16) sit in the rail among the parent's steps, each opening with "From the <import title> template <version> · Docs", and the review names the import in its headings (§16.13).
+- **Imported steps** (§16) sit in the rail among the parent's steps, each opening with "From the <import title> template <version>" (the title links the child template's docs page), and the review names the import in its headings (§16.13).
 - **Field messages do not name the field** ("Required.", "Must be at least 1 %."): under a field its label is right above. Where issues are listed away from their fields (the review's issues and advice, a step's footer), each leads with the field's label ("Scale up below this free space: Must be at least 1 %.") (§10.1).
 
 ### 1.3 What the descriptor never does
@@ -494,7 +494,7 @@ Then list the cross-field hazards, the prerequisites, the own workload names, th
 - **Four to seven steps.** One purpose per step. A step with one field usually belongs in another step.
 - **Title:** one to four words, sentence case ("Network and pooling", not "Network & Pooling").
 - **Description:** one sentence on what the step decides. No validations, and no optional component named as if it were always on (§10.5).
-- **`docs`:** a section of the docs page that covers the step, only if it exists (§11). The header already links the page itself.
+- **No `docs` on a step.** The console does not show a step's `docs`, and lint rejects it (`DOCS_ON_STEP`, §11). Put the link on the section or field whose label the linked heading matches. The header's "Template docs" link already reaches the page.
 - **`when`** on a step hides the whole step. Prefer toggle sections inside a step; use a step `when` only for a step that makes no sense otherwise.
 - **A step is shown only while it has at least one visible field.** A toggle counts as a field; notes do not. A step without any field is the parse error `EMPTY_STEP`.
 - **Step `rules`** are validated with that step (on its Next) and attributed to it.
@@ -523,12 +523,12 @@ Then list the cross-field hazards, the prerequisites, the own workload names, th
 | Section | Renders as | Use for |
 |---|---|---|
 | untitled (`- fields: [...]`) | a plain column | the step's main fields |
-| titled | a box with the title, description and docs link | a group of related fields ("Network access", "AWS S3") |
+| titled | a box with the title, description and, beside the title, the docs link | a group of related fields ("Network access", "AWS S3") |
 | titled with `toggle` | a box with a switch in its header (§5.3) | an optional feature and its settings |
 | `advanced: true` | a box that starts collapsed | expert settings inside an ordinary step |
 | `collapsible: true` | a box the user can fold, open at first | long groups (redis "Redis workload") |
 
-A section has `id`, `title`, `description`, `docs`, `when`, `toggle`, `advanced`, `collapsible`, `fields` (required) and `rules`. Section `description` is plain text with inline code.
+A section has `id`, `title`, `description`, `docs`, `when`, `toggle`, `advanced`, `collapsible`, `fields` (required) and `rules`. Section `description` is plain text with inline code. A section's `docs` needs a `title` or a `toggle` to sit beside: an untitled section's `docs` is not shown and is the lint error `DOCS_UNTITLED_SECTION` (§11.4).
 
 ### 5.3 The toggle rule
 
@@ -556,7 +556,7 @@ Round 2 (postgres 3.4.1):
   title: Connection pooler (PgBouncer)
   toggle: pgbouncer.enabled
   description: When on, PgBouncer becomes the endpoint your applications connect to.
-  docs: "#pgbouncer-connection-pooling"
+  docs: "#pgbouncer"
   fields:
     - type: note
       text: >-
@@ -599,10 +599,11 @@ How a toggle behaves:
       Public SSH takes over the workload's only public endpoint, so the web UI and Git over HTTPS are no
       longer served there. Turn it on only if you serve the web UI through a custom domain, or only need
       Git over SSH.
-    docs: "#the-ssh-and-https-endpoint-trade-off"
+    docs: "#git-over-ssh"
     fields: [...]
   ```
 
+- A toggle section's docs link sits beside the switch label. Set `docs` on the section, not also on the toggle through an import override (`DOCS_SECTION_AND_TOGGLE`, error).
 - The review's Visual tab folds the toggle into the section's heading ("Scheduled backups: Off"; the core marks the row with `SummaryRow.toggle`), and a section that is off shows only that heading.
 - An import can override a child toggle's `help` or `description` by the toggle's path (§16.2). The console shows the toggle's `help` as the switch's "?" (gitea's help on postgres's backups switch), and its `description` after the section's description under the header.
 - The section's own `when` must not read its toggle (`TOGGLE_WHEN_DUPLICATE`): that would hide the switch while it is off. A section `when` on something else is fine; supabase shows the local-volume autoscaling toggle only for the local backend:
@@ -725,11 +726,40 @@ The pilots after the Round 2 review:
 | supabase 1.1.1 | PgBouncer; Realtime; Studio and pg_meta; Storage (with its replica counts); backup image and resources | Postgres, Kong, PostgREST and Auth |
 | gitea 1.2.0 | none of its own; postgres's backup image and resources come with the imported backups section | none |
 
+**Images of alternative engines.** When a choice switches which image the chart uses (redis: `engine: redis|valkey`), every image field sits in Advanced › Images, each with its own `when` for the engine (and any other state) in which the chart reads it. None sits next to the engine picker. redis 3.8.0 (the Valkey image replaces both Redis images; dev mode runs no Sentinel):
+
+```yaml
+# redis 3.8.0, step advanced
+- title: Images
+  fields:
+    - path: redis.image
+      type: string
+      format: image
+      label: Redis image
+      required: true
+      when: self.engine == 'redis'
+    - path: sentinel.image
+      type: string
+      format: image
+      label: Sentinel image
+      required: true
+      when: self.engine == 'redis' && self.mode != 'dev'
+    - path: valkeyImage
+      type: string
+      format: image
+      label: Valkey image
+      required: true
+      when: self.engine == 'valkey'
+      description: Used for both tiers.
+```
+
+The rules about those images go with them in the section's `rules`, each gated on the same engine (`when: self.engine == 'redis'` on the Redis major-version rule), so a rule cannot fire for an image the chart ignores. The Engine section keeps its note and the engine picker only.
+
 ### 5.6 Order by real dependency
 
 - A field that decides whether others apply comes before them: the engine before the images, the provider before the bucket, the backups switch before the backup location.
 - Cross-step dependencies flow forward: mongodb-cluster's Locations step comes before the backup location enum whose options are the configured locations (`optionsFrom: self.locations.map(l, l.name)`).
-- Prerequisites come early. They must exist before install, and the user may have to leave the wizard to create them.
+- Prerequisites come early. They must exist before install, and the user may have to leave the wizard to create them. The always-required ones all sit together on the earliest step that has one (§13.5).
 - Within a section, follow `values.yaml` order unless a dependency says otherwise.
 
 ### 5.7 Notes
@@ -1019,7 +1049,7 @@ When: a workload's resource block. The field covers every key of the block.
   type: resources
   label: Resources
   required: true
-  docs: "#resources"
+  docs: "#server-and-resources"
   maxRatio: 4
   cpu: { min: 25m }
   memory: { min: 32Mi }
@@ -1768,8 +1798,10 @@ Every rule over `oldSelf` starts with `oldSelf == null ||`, so it is true on ins
   # postgres 3.4.1, step storage
   - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
     paths: [volumeset.capacity]
-    message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+    message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
   ```
+
+  The platform can shrink a volume (a separate command), and it accepts a lower initial capacity, which only sizes new volumes; never write that a volume set "cannot shrink".
 
 - **Install-time-only settings** that break a running release are errors (redis: persistence cannot be turned on for a running release, the rollout stalls).
 - **Changes with a known consequence** are `info` (a new image restarts every member; another credentials secret does not change the existing user) or `warning` when they break the running release but a path exists (redis: changing the password in values deadlocks the rollout).
@@ -2072,13 +2104,15 @@ The Round 2 review then moved those images and resources into the toggle section
 | `"/reference/volumeset#autoscaling"` | `<docs base>/reference/volumeset#autoscaling` |
 | `"/guides/create-cloud-account"` | a page without an anchor |
 
+`docs` is accepted on a titled section, on a toggle section, and on a field. It is accepted by the schema on a step but not shown (§11.4).
+
 - **Relative only.** The renderer supplies the base (the console passes its `DOCS_URL`), so the same descriptor works against any docs environment. An absolute URL in `docs` is `DOCS_ABSOLUTE` / `DOCS_INVALID` (parse errors); an absolute `docs.controlplane.com` link in `help`, `description` or a note is `DOCS_ABSOLUTE` in lint. Other external links in help text are allowed.
 - Quote values that start with `#` (`docs: "#backup"`); unquoted, YAML reads them as a comment.
 - Relative markdown links in `help` and `description` resolve the same way: `[cloud account](/guides/create-cloud-account)`.
 
 ### 11.2 Anchors must exist on the docs site, not in the README
 
-**The docs site is a separate rewrite with different headings from the chart README.** Round 1 took every anchor from README heading slugs, and 32 of 67 anchor uses did not exist on docs.controlplane.com (postgres `#server-and-credentials`, `#pgbouncer-connection-pooler`, `#backups`; mongodb-cluster `#locations`, `#haproxy`; redis `#engine-redis-or-valkey`; supabase `#jwt`, `#pgbouncer-optional`, `#smtp` and more). The Round 2 fixes, as examples of the real anchors:
+**The docs site is a separate rewrite with different headings from the chart README.** Round 1 took every anchor from README heading slugs, and 32 of 67 anchor uses did not exist on docs.controlplane.com (postgres `#server-and-credentials`, `#pgbouncer-connection-pooler`, `#backups`; mongodb-cluster `#locations`, `#haproxy`; redis `#engine-redis-or-valkey`; supabase `#jwt`, `#pgbouncer-optional`, `#smtp` and more). The Round 2 fixes, as examples of the real anchors at the time (the docs site keeps changing: several of these have moved since, so the right anchor is always the one `check-docs` accepts today):
 
 | Template | Wrong (README) | Right (docs site) |
 |---|---|---|
@@ -2109,10 +2143,37 @@ curl -s https://docs.controlplane.com/template-catalog/templates/postgres \
 
 ### 11.4 What to link
 
-- The console header already links the template's docs page, always. Do not add a step or section link just to reach the page; link a **specific section** that explains the setting.
-- Prefer one link per section (on the section) over a link on every field.
+A docs link appears only **beside a label**: a titled section's title, a toggle section's switch label, or a field label. Add one only when the docs heading it points to is about that label.
+
+- **No `docs` on a step.** The console does not show it, and lint rejects it (`DOCS_ON_STEP`, error).
+- **No `docs` on an untitled, untoggled section.** There is no label to sit beside (`DOCS_UNTITLED_SECTION`, error).
+- **A toggle section shows one link, beside the switch label.** Set it on the section or on the toggle through an import override, not both (`DOCS_SECTION_AND_TOGGLE`, error).
+- **Each URL at most once per step** (`DOCS_DUPLICATE`, warning). `#a` and `/template-catalog/templates/<template>#a` are the same URL. Keep the link on the label whose name the heading matches best.
+- **A field link inside a linked section** only when it points to a different heading that matches the field's label.
+- **The heading must match the label.** A link whose heading is about something else is repointed to a heading that is (check that it exists, §11.3) or dropped. redis's "Request retry policy" field links `/reference/workload/general#retryon`; postgres's "Resources" field links `#server-and-resources`.
+- **A heading that covers a whole step or several sections has no label to sit beside: drop it.** The header's "Template docs" link reaches the page, so do not add a link just to reach it.
+- The console's import caption "From the <title> template <version>" already links the child template's page (the title is the link). Add no link for that.
 - Reference pages for platform concepts: `/reference/volumeset#capacity-and-billing`, `/reference/volumeset#autoscaling`, `/reference/volumeset#snapshots`, `/reference/workload/firewall`, `/reference/workload/general#internal-endpoint-formatting`, `/guides/create-cloud-account`.
 - On imported fields, `#anchor` resolves to the **child's** page (§16.6).
+
+A section link, a toggle section link and a field link, from postgres 3.4.1:
+
+```yaml
+- title: Network access
+  docs: /reference/workload/firewall
+  fields: [...]
+- id: pgbouncer
+  title: Connection pooler (PgBouncer)
+  toggle: pgbouncer.enabled
+  docs: "#pgbouncer"
+  fields: [...]
+- path: volumeset.capacity
+  type: integer
+  label: Initial capacity
+  docs: "/reference/volumeset#capacity-and-billing"
+```
+
+Lint reports a step, an untitled section or a toggle section with two links in the child's own descriptor, not again in the parent that imports it.
 
 ---
 
@@ -2299,6 +2360,17 @@ The severity of `REF_NOT_FOUND` when the picked object does not exist (or is a s
 | `off` | no check (rare) |
 
 A check that cannot complete (403, timeout, no target GVC for a gvc-scoped kind, no DataSource in headless runs) is `REF_CHECK_FAILED`, severity `info`, and never blocks. Found objects are cached for 30 seconds; missing ones are looked up again on every check, so an object created from the wizard stops blocking at once.
+
+### 13.5 Prerequisite secrets
+
+A **prerequisite secret** is a `type: ref` field with `ref.kind: secret` and `ref.mustExist: error`. It is **always required** when no `when` applies to it (its own, an enclosing block's, its section's, its step's), it is not in a toggle section, and it is not part of a list item or map value (those exist only once the user adds one). Otherwise it is **conditional**.
+
+- **Always-required prerequisites all go together on the earliest step that has one** (`PREREQUISITES_SPLIT`, warning). The user then creates everything the release needs before install in one place, with the warning note of §13.1 above them.
+- **Conditional prerequisites stay beside the toggle or option that turns them on**, with Check keys and Create: postgres's MinIO secret in its backup branch section, supabase's per-provider OAuth client secret in the provider entry.
+- **Every prerequisite sets `allowCreate: true`** (`PREREQUISITE_WITHOUT_ALLOW_CREATE`, warning).
+- **Every prerequisite whose `filter.secretType` is absent or includes `dictionary` sets `requiredKeys` or `requiredKeysFrom`** (`PREREQUISITE_WITHOUT_KEYS`, warning). An opaque-only filter needs none.
+- The last two apply to conditional prerequisites too. They apply to a descriptor's own fields; an imported child's fields are linted by the child.
+- A secret the chart creates itself is not a prerequisite. It is a plain `string` field, and the step's text says the chart creates it (gitea's database secret, §16.4).
 
 ---
 
@@ -2508,7 +2580,6 @@ steps:
   - id: database
     title: Database
     description: The bundled PostgreSQL's credentials. Gitea creates the secret from them; there is nothing to create first.
-    docs: "#backing-database"
     fields:
       - path: postgres.config.credentialsSecretName
         type: string
@@ -2533,6 +2604,34 @@ steps:
       1.2.0. Move them to postgres.credentials, from which Gitea creates the secret, and remove them from
       postgres.config.
   ```
+
+**A prerequisite the parent needs is declared on the parent.** When an imported child has an always-required prerequisite secret (§13.5) that the parent's chart does not create, it must not stay in an imported step (`PREREQUISITE_IN_IMPORT`, warning): the user would meet it deep in the child's steps instead of with the other prerequisites. `exclude` it from the import and redeclare it on the parent's prerequisite step as a parent field on the child's path (for example `postgres.config.credentialsSecretName`), copying the child's `requiredKeys` or `requiredKeysFrom`, `allowCreate`, `create` and `mustExist`:
+
+```yaml
+imports:
+  - template: postgres
+    version: 3.4.1
+    exclude:
+      - config.credentialsSecretName
+
+steps:
+  - id: credentials
+    title: Credentials
+    fields:
+      - path: postgres.config.credentialsSecretName
+        type: ref
+        label: Database credentials secret
+        required: true
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeys: [username, password, database]
+```
+
+The exclusion also drops the child's rules on that path (see above): restate the ones the chart still performs. A secret the parent's chart creates itself is not a prerequisite: gitea's database secret is the plain string field above. Conditional child prerequisites (a backup cloud account) stay in the imported step.
 
 ### 16.5 `when` mirrors `condition`
 
@@ -2683,7 +2782,6 @@ The parent's own steps (Gitea, Storage, Access) are ordinary steps. The Access s
   - id: database
     title: Database
     description: The bundled PostgreSQL's credentials. Gitea creates the secret from them; there is nothing to create first.
-    docs: "#backing-database"
     fields:
       - type: note
         text: >-
@@ -2789,14 +2887,14 @@ What the example shows:
 - parent renames under `postgres.` beat the child's own drops for the same keys, and a computed migration carries a value whose default changed (§9.2);
 - `gvc` limits for the parent's own stateful replica.
 
-It lints with 0 diagnostics and 60/60 leaves covered, `check-docs` finds its 9 links, and `tw render` with an answers file renders the `postgres:` block the chart's `helm template` accepts (the core's helm test checks that the subchart's `.Values` equal the session's values under `postgres`).
+It lints with 0 diagnostics and 60/60 leaves covered, `check-docs` finds its 6 links, and `tw render` with an answers file renders the `postgres:` block the chart's `helm template` accepts (the core's helm test checks that the subchart's `.Values` equal the session's values under `postgres`).
 
 ### 16.13 Imports in the console
 
 The console resolves each import when it loads a version: the child's values from the marketplace (the same source the installer renders from) and the child's `wizard.yaml` (the marketplace's, else the dev endpoint's, §17.7). What the user sees:
 
 - **Rail order.** The imported steps are ordinary steps in the rail, where the composition puts them: after the `after:` step (or before the `before:` step), else after the parent's last step; in the child's order unless `steps` reorders them; several imports at one step in `imports` order. The rail shows the step title alone (the `steps` title, else the child's), with no import prefix, so rename child steps to read as part of the parent (§16.6).
-- **Caption.** An imported step's content opens with "From the <import title> template <version> · Docs": the import's `title` (else the child's `title`, else `template`), the child version, and a link to the child's docs page (`/template-catalog/templates/<child>`, accessible name "<import title> template docs"), next to the step's own Docs link. The step's description stays in the panel header and the rail, so it need not name the import.
+- **Caption.** An imported step's content opens with "From the <import title> template <version>": the import's `title` (else the child's `title`, else `template`) is a link to the child's docs page (`/template-catalog/templates/<child>`), followed by the child version. Add no docs link for the child's page yourself. The step's description stays in the panel header and the rail, so it need not name the import.
 - **`#anchor` links** in the child's steps, sections, fields and notes open the child's docs page (`#backup` → `/template-catalog/templates/postgres#backup`). An override's text, and a renamed step's description, is on the imported entry too, which is why it cannot use `#anchor` (`IMPORT_OVERRIDE_ANCHOR`, §16.2).
 - **Overridden toggle texts.** An override's `help` on a child toggle is the switch's "?" (gitea's "Adds one cron workload that runs `pg_dumpall` …" on the Database backups switch), and an override's `description` follows the section's own description.
 - **Review.** The Visual tab heads an imported step's group "<import title> › <step title>" ("Bundled PostgreSQL › Database server") and keeps its rows' own labels. The changes since the last apply label an imported field's change "<import title> › <label>" ("<import title> › <section title> › <label>" when two changes share a label), and the outstanding issues and advice put the import's title before an imported field's label ("Bundled PostgreSQL › Resources › Minimum CPU: Must be at least 25m.", §10.1).
@@ -2875,7 +2973,8 @@ What lint checks (codes in §21):
 - every expression evaluated on the defaults, in install and upgrade mode, in visible and hidden scopes (§7.9);
 - `mirrors` coverage of `_helpers.tpl`;
 - key-set changes against the previous version explained by migrations; migrations that can no longer apply;
-- boolean-like keys, aliases, toggles, `create` without `allowCreate`, absolute docs links in text.
+- boolean-like keys, aliases, toggles, `create` without `allowCreate`, absolute docs links in text;
+- docs links beside their labels (§11.4) and prerequisite secrets (§13.5).
 
 ### 17.2 `check-docs`
 
@@ -3131,11 +3230,19 @@ Use it for your own descriptor before committing, and for reviewing someone else
 
 87. After the commit, `node scripts/sync-fixtures.mjs` and `--check` in the core pass, and the core tests pass.
 
+**Docs links, prerequisites and images** (§5.5, §11.4, §13.5, §16.4)
+
+88. No step and no untitled, untoggled section has `docs`, and every docs link sits beside a label (a section title, a toggle's switch label or a field label) that the docs heading it points to is about; a heading that covers a whole step or several sections is dropped.
+89. No resolved docs URL appears more than once on a step, and a toggle section has one link, not one on the section and one on the toggle.
+90. All always-required prerequisite secrets sit together on the earliest step that has one, each with `allowCreate: true` and, for dictionary secrets, `requiredKeys` or `requiredKeysFrom` (Check keys and Create work); conditional ones stay beside the toggle or option that turns them on.
+91. An imported child's always-required prerequisite secret is excluded from the import and redeclared on the parent's prerequisite step, with the child's keys, `allowCreate`, `create` and `mustExist`; a secret the parent's chart creates is a plain string field, and the step's text says so.
+92. When an engine choice switches which image the chart uses, every image field sits in Advanced › Images with its own `when`, and none sits next to the engine picker.
+
 ---
 
 ## 19. Common mistakes
 
-Every finding from the Round 1 reviews, the Round 2 owner testing and the Round 2 review, generalised. The "Round" column says where it was found.
+Every finding from the Round 1 reviews, the Round 2 owner testing, the Round 2 review and the Round 3 feedback, generalised. The "Round" column says where it was found.
 
 | # | Mistake | Round | Why it is wrong | Do instead |
 |---|---|---|---|---|
@@ -3186,6 +3293,11 @@ Every finding from the Round 1 reviews, the Round 2 owner testing and the Round 
 | 45 | An `info` rule about a shared default limited to install (gitea's database secret name) | 2 (review) | Upgrades from a version without the key receive the same default | Gate on the value, not the mode (§12.2) |
 | 46 | A port bounded by the protocol range (1 to 65535) where the platform allows less | 2 (review) | A direct load balancer port must be 22 to 32768 | Bounds from the platform docs (`/reference/workload/load-balancing`) |
 | 47 | A `#anchor` in an imported step's description | 2 (review) | It resolves to the child's page (`IMPORT_OVERRIDE_ANCHOR`) | `/template-catalog/templates/<parent>#…` (§16.2) |
+| 48 | `docs` on a step, or on an untitled section | 3 (feedback) | The console shows neither (`DOCS_ON_STEP`, `DOCS_UNTITLED_SECTION`) | A link on the titled section, toggle section or field it is about, or none (§11.4) |
+| 49 | A docs link whose heading is about something else than its label, or the same URL twice on a step | 3 (feedback) | The link sits beside a label it does not explain (`DOCS_DUPLICATE`) | Repoint it to a heading that matches the label (`check-docs`), or drop it (§11.4) |
+| 50 | Always-required prerequisite secrets spread over several steps, or without Create or Check keys | 3 (feedback) | The user finds out what to create while installing (`PREREQUISITES_SPLIT`, `PREREQUISITE_WITHOUT_ALLOW_CREATE`, `PREREQUISITE_WITHOUT_KEYS`) | All together on the earliest step that has one, with `allowCreate` and `requiredKeys` (§13.5) |
+| 51 | An imported child's always-required prerequisite left in an imported step | 3 (feedback) | The user meets it deep in the child's steps (`PREREQUISITE_IN_IMPORT`) | Exclude it and redeclare it on the parent's prerequisite step (§16.4) |
+| 52 | Images of alternative engines split between the engine picker and Advanced (redis's Valkey image) | 3 (feedback) | The user looks for the images in two places | Every image in Advanced › Images, each with its own `when` (§5.5) |
 
 ---
 
@@ -3214,7 +3326,7 @@ Generated from the JSON Schema (`.schema/wizard.v1.schema.json`, in sync with th
 | `id` | yes | `^[a-z][a-z0-9-]*$` | unique step id; not `release` (`RESERVED_STEP_ID`) |
 | `title` | yes | string | step title |
 | `description` | | string | one sentence; inline code allowed |
-| `docs` | | docs link | relative (§11) |
+| `docs` | | docs link | accepted by the schema, not shown, and the lint error `DOCS_ON_STEP`: link a section or field instead (§11.4) |
 | `when` | | CEL bool | the step is shown while true and while it has a visible field |
 | `sections` | one of | array | sections |
 | `fields` | one of | array | shorthand for one untitled section |
@@ -3227,7 +3339,7 @@ Generated from the JSON Schema (`.schema/wizard.v1.schema.json`, in sync with th
 | `id` | | `^[a-z][a-z0-9-]*$` | default `s<n>` |
 | `title` | with `toggle` | string | box title; the toggle's label |
 | `description` | | string | plain text; inline code allowed |
-| `docs` | | docs link | |
+| `docs` | | docs link | shown beside the title, or beside the toggle's switch label; on an untitled, untoggled section it is the lint error `DOCS_UNTITLED_SECTION`; with a toggle, not also on the toggle (§11.4) |
 | `when` | | CEL bool | the section is shown while true; must not read its own toggle |
 | `toggle` | | path | a boolean values path: the section's switch (§5.3) |
 | `advanced` | | bool | starts collapsed |
@@ -3509,6 +3621,14 @@ Lint reports every parser diagnostic, plus:
 | `MIGRATION_EVAL_ERROR` | error / warning | a `valueExpr` fails on the previous version's values (error when it applies to the previous version) |
 | `TOGGLE_NOT_BOOLEAN` | error | a section `toggle` that is not a boolean in values.yaml |
 | `TOGGLE_WHEN_DUPLICATE` | error | a section `when` that reads its own toggle |
+| `DOCS_ON_STEP` | error | a step sets `docs`; move the link onto the section or field whose label the heading matches, or drop it |
+| `DOCS_UNTITLED_SECTION` | error | a section with `docs` and neither `title` nor `toggle`: no label to sit beside |
+| `DOCS_SECTION_AND_TOGGLE` | error | a toggle section whose section and toggle (an import override) both set `docs`; keep one |
+| `DOCS_DUPLICATE` | warning | the same resolved docs URL more than once on one step |
+| `PREREQUISITES_SPLIT` | warning | always-required prerequisite secrets on more than one step; put them together on the earliest |
+| `PREREQUISITE_IN_IMPORT` | warning | an imported child's always-required prerequisite still in an imported step; exclude it and redeclare it on the parent's prerequisite step |
+| `PREREQUISITE_WITHOUT_ALLOW_CREATE` | warning | a prerequisite secret without `allowCreate: true` |
+| `PREREQUISITE_WITHOUT_KEYS` | warning | a prerequisite secret that may be a dictionary, without `requiredKeys` or `requiredKeysFrom` |
 | `MIRRORS_MISSING`, `MIRRORS_UNKNOWN` | warning | a `fail` define no rule mirrors; a `mirrors` naming no define |
 | `UNUSED_MIGRATION` | warning | a migration that can no longer apply |
 | `MIGRATION_KEY_PRESENT` | warning | a drop or rename of a key this version still has |

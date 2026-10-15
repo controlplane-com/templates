@@ -5,6 +5,8 @@
 > from your values (the upgrade is refused while it is set) and manage sign-up in Settings → Admin →
 > Authentication (New Sign Ups). `publicAccess.enabled` now defaults to `true` (your existing login protects it); set it to `false` explicitly to stay private.
 > `ollama.enabled` now defaults to `false`; an existing install keeps its stored connections either way (they are read on first boot only).
+> The upgrade can stall for up to ~10 minutes while the platform grants access to the new admin secret; if `{release}-open-webui` has not moved to the new version after 5 minutes, run `cpln workload force-redeployment {release}-open-webui --gvc {gvc}`.
+> The Control Plane tools are added on upgrade only when the admin secret holds your current admin's email and password; otherwise add them by hand (see Connecting Control Plane tools).
 
 
 This app deploys [Open WebUI](https://github.com/open-webui/open-webui), a self-hosted, ChatGPT-style chat interface for LLMs with users, RAG (chat grounded in your uploaded documents), and model management. A single stateful workload keeps all of its state on a persistent volume and connects to your models via an in-GVC Ollama server and/or any OpenAI-compatible endpoint. The admin account comes from a secret you create first, so the UI is ready to sign in to on its public URL as soon as it starts.
@@ -13,7 +15,7 @@ This app deploys [Open WebUI](https://github.com/open-webui/open-webui), a self-
 
 - **Open WebUI**: stateful workload, single replica, serving the web UI and API on port 8080; `WEBUI_URL` is derived from the canonical endpoint at start.
 - **Volumeset**: 10 GiB persistent volume at `/app/backend/data` — SQLite database, uploaded files, the default Chroma vector store (RAG), and cache; a final snapshot is kept for 7 days on delete.
-- **Start-script secret**: sets `WEBUI_URL` from the canonical endpoint at boot.
+- **Start-script secret**: sets `WEBUI_URL` from the canonical endpoint at boot and, when `cplnMcp.enabled`, adds the Control Plane MCP server once per install.
 - **Identity + policy**: least-privilege `reveal` on exactly the secrets the workload reads — your session-key and admin secrets, the start script, plus your OpenAI-key secret only when configured.
 - **No template-created credential**: the session/JWT signing key lives only in your own prerequisite secret, so it never enters the Helm release.
 
@@ -46,7 +48,7 @@ image: ghcr.io/open-webui/open-webui:v0.11.0
 
 resources:
   maxCpu: 1                      # max vCPU
-  maxMemory: 2Gi                 # max memory (RAG loads a local embedding model into RAM on first use)
+  maxMemory: 2Gi                 # max memory (first boot downloads a ~900 MB RAG embedding model from huggingface.co and loads it into RAM)
   minCpu: 500m
   minMemory: 1Gi
 ```
@@ -86,6 +88,13 @@ openai:
   apiKeySecretName: ""        # your pre-created opaque secret holding the API key (see Prerequisites); empty = OpenAI backend off
 ```
 
+### Control Plane MCP
+
+```yaml
+cplnMcp:
+  enabled: true               # add the Control Plane MCP server as a tool server; each user connects their own Control Plane account
+```
+
 ### Access
 
 ```yaml
@@ -117,6 +126,18 @@ openai:
 vLLM must allow the caller (its default `internalAccess.type: same-gvc` does) and keep `model.toolCallParser` set — Open WebUI offers tools on every chat, and vLLM rejects those requests without it.
 Set these at install: the backend settings are read on first boot only (see Important Notes); change them later in Settings → Admin → Connections.
 
+### Connecting Control Plane tools (MCP)
+
+With `cplnMcp.enabled: true`, the Control Plane MCP server is ready to use; each user connects their own account, so the tools act with that user's Control Plane permissions:
+
+1. In a chat, click the **Integrations** icon (next to **+**) → **Tools**, and switch on **Control Plane**.
+2. Sign in to Control Plane and approve access; you return to the chat.
+3. Ask, for example, "list my GVCs".
+
+The model must support tool calling and have room for the tool list: with vLLM, keep `model.toolCallParser` set and use a `model.maxModelLen` of at least 32768.
+
+To add the server by hand (for example after an upgrade whose admin secret did not match), open Settings → Admin → Integrations → External Tool Servers → **+**, switch Type to **MCP**, and enter Name `Control Plane`, ID `cpln`, URL `https://mcp.cpln.io/mcp`, Auth **OAuth 2.1**; click **Register Client**, then **Save**.
+
 ## Connecting
 
 | What | Value |
@@ -133,7 +154,7 @@ Set these at install: the backend settings are read on first boot only (see Impo
 - **Create both secrets before installing.** A missing one stalls the deployment with no logs at all; `cpln workload get-deployments {release}-open-webui --gvc {gvc} -o yaml` names it under `status.versions[].message`, and once the secret exists the install recovers by itself, which took about 11 minutes in testing; keep polling. Never change the session key afterwards: it signs every session and JWT, so replacing it logs every user out.
 - **The admin secret is read on first boot only.** Open WebUI creates the admin while the database has no accounts and never touches it again, so changing the secret later changes nothing — change the password in the UI (Settings → Account). A restore to a snapshot taken before any account existed would create it again.
 - **Restoring a snapshot is a manual, deliberate operation.** `backup.enabled` takes crash-consistent volume snapshots; it does not restore them. To roll back, restore the snapshot onto the volume set from the Control Plane console or CLI and let the workload restart onto it. Measured restore: ~2.5 minutes, of which ~40 seconds is downtime, and everything written after the snapshot is gone — including accounts, so a user registered after it will no longer be able to sign in.
-- **Self-service sign-up is off.** Add users from Admin Panel → Users, or open sign-up from Settings → Admin → Authentication (New Sign Ups); the setting lives in the app database, not in this template.
+- **Self-service sign-up is off.** Add users from Admin Panel → Users, or open sign-up from Settings → Admin → Authentication (New Sign Ups); the setting lives in the app database, not in this template. New users see no models until you share them: in Settings → Admin → Models, open each model's Access and make it Public or grant it to users or groups.
 - **License / branding clause** — you must keep the "Open WebUI" branding visible in the UI unless your deployment serves 50 or fewer users, or you have enterprise permission. Removing the branding outside those cases violates the license; it is not a template setting.
 - **Single replica, by design.** The default embedded SQLite is single-writer and the volumeset is per-replica, so the workload is pinned to 1 replica. A restart or upgrade is a brief full outage (about a minute). Multi-replica HA requires an external Postgres + Redis + object store (a planned follow-up).
 - **Data lives only on the volumeset.** Uninstall deletes it (a final snapshot is taken); reinstall starts empty, including the admin account.

@@ -18,7 +18,7 @@
 |---|---|
 | workload (stateful, 1 replica) | Open WebUI server, HTTP port 8080; public only when `publicAccess.enabled: true` |
 | volumeset `-data` (10 GiB) | `/app/backend/data` — SQLite DB, uploads, RAG vector store, cache |
-| secret `-start` (opaque/plain) | Start script deriving `WEBUI_URL` from the canonical endpoint |
+| secret `-start` (opaque/plain) | Start script deriving `WEBUI_URL` from the canonical endpoint; with `cplnMcp.enabled`, also adds the Control Plane MCP server once per install |
 | identity + policy | `reveal` on the user's session-key and admin secrets, the start secret, and the OpenAI-key secret when set |
 
 - **No template-created credential** since 1.1.0: `WEBUI_SECRET_KEY` comes from the user's prerequisite opaque secret (`cpln://secret/{name}.payload`), so it never lands in the Helm release.
@@ -35,6 +35,7 @@
 | `internalAccess.type` | `none` | `same-gvc` / `same-org` / `workload-list` open the API to in-GVC callers |
 | `ollama.enabled` / `ollama.workloadName` | `false` / `""` | In-GVC Ollama workload (`{release}-ollama` from the ollama template); name required when enabled |
 | `openai.apiKeySecretName` | `""` (off) | Name of a pre-created opaque key secret to enable an OpenAI-compatible backend |
+| `cplnMcp.enabled` | `true` | Adds the Control Plane MCP server (`https://mcp.cpln.io/mcp`, OAuth 2.1) as a tool server; each user connects their own Control Plane account from a chat |
 | `volumeset.capacity` / `backup.*` | 10 GiB / daily 03:00, 7d | Data volume size + snapshot schedule |
 
 ## Troubleshooting / considerations
@@ -48,11 +49,15 @@
 - **1.3.0 defaults Ollama OFF (maintainer ruling 2026-10-14).** Through 1.2.0 the default `enabled: true` + `workloadName: ollama` pointed at a workload the ollama template never creates (it names it `{release}-ollama`). Measured on a 1.3.0 default install before the change: every model fetch logged `Connection error` and full page loads took **10–11 s, vs ~1 s** on the same chart with Ollama off. Pairing with vLLM uses the OpenAI backend instead, so Ollama is opt-in.
 - **Settings paths (v0.11.0):** admin settings are a DIALOG, not pages — sign-up switch = Settings → Admin → Authentication → "New Sign Ups"; backends = Settings → Admin → Connections. `/admin/settings*` URLs load the home page with the dialog open, so a page-content browser check reads "blank" — check the dialog.
 - **Snapshot schedule is guarded at render (1.3.0):** a schedule more frequent than hourly is refused by the chart, not left to fail at apply with a half-installed release (pgedge 3.0.0 pattern).
-- **Upgrade 1.2.0 → 1.3.0 measured:** the new `reveal` grant on the admin secret did NOT stall the rollout (ready 2m23s, 1/1); existing logins kept, secret ignored. Missing admin secret on a fresh install: recovered 662 s after the secret was created.
+- **Upgrade 1.2.0 → 1.3.0 measured:** the new `reveal` grant on the admin secret stalled the rollout in **1 of 2** runs (2026-10-15: `not allowed to reveal` for ~9 min, then no progress until a `force-redeployment` at ~11 min, after which the new version was ready in ~70 s; 2026-10-14: no stall, ready 2m23s). The README tells users to force a redeployment after 5 minutes. Existing logins kept, secret ignored. Missing admin secret on a fresh install: recovered 662 s after the secret was created.
 - **An unset backend is turned OFF explicitly (1.3.0):** without `ENABLE_OLLAMA_API=false` Open WebUI falls back to `host.docker.internal:11434` and logs a connection error on every model list; without `ENABLE_OPENAI_API=false` it points at api.openai.com with no key. Both are first-boot settings. Env is rendered sorted (the API stores it alphabetically).
 - **First login shows a "What's New" dialog** over the chat; an answer streamed behind it is saved but hidden until it is dismissed — a browser check must dismiss it.
 - **Ollama unreachable is non-fatal** — the UI boots and just shows no Ollama models. Check `OLLAMA_BASE_URL` resolves to a real in-GVC workload name and that the ollama workload is `ready`.
 - **Model-backend settings apply at install, then persist in `webui.db`** — later `helm upgrade` changes to `ollama.*`/`openai.*` are ignored; change connections in the admin UI.
-- **RAG memory**: first use of document features loads a local embedding model into RAM — the 2 GiB default max is deliberate; lowering it can OOM on RAG.
+- **RAG memory**: first BOOT downloads the ~900 MB embedding model from huggingface.co to the volume and loads it into RAM (not first use, as 1.2.0's comment said) — the 2 GiB default max is deliberate (peak 1.56 GB in the feature pass); lowering it can OOM.
+- **Control Plane MCP prewire (1.3.0, `cplnMcp.enabled`).** MCP servers are `tool_server.connections` in the DB; the `TOOL_SERVER_CONNECTIONS` env applies to a new DB only, and an `oauth_2.1` connection also needs `info.oauth_client_info` — an encrypted blob from `POST /api/v1/configs/oauth/clients/register?type=mcp` (dynamic client registration against auth.cpln.io), which upstream only does from the admin UI. Without it the server logs "Error decrypting data". So the start script, in the background, waits for `/health`, signs in as the admin from the secret, registers, saves the connection and writes the marker `/app/backend/data/.cpln-mcp-registered` — once per install, so an admin who removes the server keeps it removed. Measured: fresh install and 1.2.0 upgrade (secret matching the admin) both register (client info 2852 chars, no ERROR); a secret that does NOT match logs `cpln-mcp-register: skipped: the admin secret does not match…` and the app is unaffected; the manual path (Settings → Admin → Integrations → External Tool Servers → +, MCP, ID `cpln`, OAuth 2.1, Register Client, Save) verified in a real browser. The per-user consent at auth.cpln.io is a maintainer HANDOFF. Tool lists need context: vLLM at 8192 overflowed, 32768 is the tested size.
+- **New users see no models.** In 0.11.0 every model starts Private; a user added from Admin → Users gets an empty picker until the admin sets the model's Access to Public or grants it (Settings → Admin → Models). README says so.
+- **In-GVC webhook/webpage targets are refused** by upstream's `ENABLE_LOCAL_WEB_FETCH=false` (private-address block); MCP servers are not affected. No chart knob (maintainer decision pending).
+- **Sub-agents overflow small models**: delegation on Qwen2.5-7B (32k context) never finished in the feature pass; normal chats are fine.
 - **Health/readiness = `GET /health`** on 8080 — same endpoint the image's own Docker HEALTHCHECK uses. Cold boot to `ready: true` measured at ~60-80 s.
 - **Drift**: a no-op `helm upgrade` right after install reports the volumeset `Updated` once (the known first-upgrade re-apply); every later no-op upgrade is fully `Unchanged`, workload included.

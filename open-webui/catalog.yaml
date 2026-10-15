@@ -8,11 +8,11 @@ topology: single
 
 summary: >-
   Open WebUI, a ChatGPT-style chat interface with user accounts, chat over uploaded documents and
-  model management, as one workload keeping SQLite, uploads and its Chroma vector store on a
-  persistent volume with daily platform snapshots. It connects to an Ollama workload in the same
-  GVC and to any OpenAI-compatible API with your key, such as a vLLM workload. The admin account
-  comes from a secret you create, so it serves on a public URL from the first start. Pick it to give a team one chat UI over models you already run
-  or pay for.
+  model management, as one workload keeping its data on a persistent volume with daily snapshots.
+  It connects to an Ollama workload in the same GVC and to any OpenAI-compatible API, such as a
+  vLLM workload, and adds the Control Plane MCP server as a tool each user signs in to. The admin
+  comes from a secret you create, so it serves on a public URL from the first start. Pick it to
+  give a team one chat UI over models you already run or pay for.
 
 keywords:
   - chat ui
@@ -27,6 +27,8 @@ keywords:
   - multi-user chat
   - team ai assistant
   - webui
+  - mcp client
+  - control plane mcp
 
 useCases:
   - Private ChatGPT-style chat for a team over local or hosted models

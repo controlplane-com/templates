@@ -3,7 +3,7 @@ image: ghcr.io/open-webui/open-webui:v0.11.0
 
 resources:
   maxCpu: 1        # max vCPU
-  maxMemory: 2Gi   # max memory (RAG loads a local embedding model into RAM on first use)
+  maxMemory: 2Gi   # max memory (first boot downloads a ~900 MB RAG embedding model from huggingface.co and loads it into RAM)
   minCpu: 500m
   minMemory: 1Gi
 
@@ -50,6 +50,13 @@ ollama:
 openai:
   baseUrl: https://api.openai.com/v1 # any OpenAI-compatible endpoint
   apiKeySecretName: "" # e.g. my-openwebui-openai-key ; empty = OpenAI backend off
+
+# ─── Control Plane MCP ────────────────────────────────────────────────────────
+# Adds the Control Plane MCP server (https://mcp.cpln.io) as a tool server, once per
+# install, signing in as the admin from admin.secretName. Each user then connects their
+# own Control Plane account, so tools act with that user's permissions.
+cplnMcp:
+  enabled: true # false = no Control Plane tool server
 
 # ─── Access ───────────────────────────────────────────────────────────────────
 # Sets WEBUI_URL only — it does NOT create a cpln domain. Create and verify the

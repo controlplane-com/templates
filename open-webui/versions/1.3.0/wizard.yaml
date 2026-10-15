@@ -167,6 +167,33 @@ steps:
             description: >-
               Includes the API version path, such as `/v1`. A workload in this GVC is reached at
               `http://<workload>.<gvc>.cpln.local:<port>/v1`.
+      - id: cpln-mcp
+        title: Control Plane tools
+        toggle: cplnMcp.enabled
+        description: >-
+          Adds the Control Plane MCP server as a tool server. Each user connects their own Control Plane
+          account from a chat, so the tools act with that user's permissions. The model must support tool calling.
+        docs: "#control-plane-mcp"
+        fields:
+          - type: note
+            text: >-
+              In a chat, open Integrations → Tools and switch on Control Plane to sign in. With vLLM, use a
+              context length (model.maxModelLen) of at least 32768 so the tool list fits.
+        rules:
+          - when: oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') < 0
+            rule: "false"
+            severity: info
+            paths: [cplnMcp.enabled]
+            message: >-
+              On an existing install the server is added only if the admin secret holds your current admin's
+              email and password; otherwise add it in Settings → Admin → Integrations → External Tool Servers.
+          - when: oldSelf != null && has(oldSelf.cplnMcp) && oldSelf.cplnMcp.enabled
+            rule: self.cplnMcp.enabled
+            severity: info
+            paths: [cplnMcp.enabled]
+            message: >-
+              Turning this off does not remove a server already added; remove it in Settings → Admin →
+              Integrations → External Tool Servers.
     rules:
       - rule: >-
           self.ollama.enabled || (self.openai.apiKeySecretName != null && self.openai.apiKeySecretName != '')

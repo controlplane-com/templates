@@ -98,3 +98,9 @@ with no signal.
 {{- fail "open-webui: resources.memory was RENAMED to resources.maxMemory. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
 {{- end -}}
 {{- end -}}
+
+{{/* The Control Plane MCP tool-server connection (Open WebUI v0.11 TOOL_SERVER_CONNECTIONS schema). */}}
+{{- define "open-webui.cplnMcpConnection" -}}
+{{- $info := dict "id" "cpln" "name" "Control Plane" "description" "Manage your Control Plane org: workloads, GVCs, secrets, logs and more" -}}
+{{- dict "type" "mcp" "url" "https://mcp.cpln.io/mcp" "path" "" "auth_type" "oauth_2.1" "key" "" "config" (dict "enable" true) "info" $info | toJson -}}
+{{- end }}

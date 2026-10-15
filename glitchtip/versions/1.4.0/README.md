@@ -243,13 +243,39 @@ cpln secret create-dictionary --name my-glitchtip-minio-credentials \
   --entry secretKey=YOUR_SECRET_KEY
 ```
 
+## Rotating the database password in HA mode
+
+The HA database (`postgresHA`) needs its own order. The replication role `repl` shares the password, and a member that restarts with the old password can be promoted to leader, which splits the cluster. Move the leader to member `-0` first, so it restarts last, after every other member already has the new password. `pgx` runs a command in one member (`LOCATION` is your GVC's location, `DB_USERNAME` the secret's `username`):
+
+```bash
+pgx() { cpln workload exec RELEASE_NAME-postgres-ha --gvc GVC_NAME --location LOCATION \
+  --container patroni-postgres --replica "RELEASE_NAME-postgres-ha-$1" -- "${@:2}"; }
+# 1. Find the leader ("role": "leader"); the other two must be "streaming" on the same "timeline"
+pgx 0 curl -s localhost:8008/cluster
+# 2. If the leader is not RELEASE_NAME-postgres-ha-0, move it there (N = current leader), then repeat step 1
+pgx 0 curl -s -XPOST -d '{"leader":"RELEASE_NAME-postgres-ha-N","candidate":"RELEASE_NAME-postgres-ha-0"}' localhost:8008/switchover
+# 3-5. Back to back: change BOTH roles on -0, put the same password in the secret, restart the members
+pgx 0 psql -h 127.0.0.1 -d postgres -c "ALTER ROLE DB_USERNAME PASSWORD 'NEW_PASSWORD'; ALTER ROLE repl PASSWORD 'NEW_PASSWORD';"
+cpln secret edit SECRET_NAME
+cpln workload force-redeployment RELEASE_NAME-postgres-ha --gvc GVC_NAME
+# 6. After ~5-6 minutes, confirm one leader and two "streaming" replicas on one timeline (repeat step 1)
+# 7. Optional: remove the install-time password Patroni keeps in its cluster config
+pgx 0 curl -s -XPATCH -d '{"postgresql":{"authentication":null}}' localhost:8008/config
+```
+
+Then force-redeploy `RELEASE_NAME-glitchtip-worker` and `RELEASE_NAME-glitchtip`, which keep the old password until they restart. Clients see roughly 10–60 s of connection errors during the switchovers. If a member stays `starting`, or `running` without `streaming` for several minutes, re-copy it from the leader. This copies the whole database, so it costs network traffic in proportion to its size:
+
+```bash
+pgx N curl -s -XPOST -d '{"force": true}' localhost:8008/reinitialize
+```
+
 ## Important Notes
 
 - **The default HA stack takes about six and a half minutes to converge**, and the worker crash-loops with `Connection reset by peer` for the first several minutes while Patroni elects a database leader. This is expected and self-correcting — do not treat it as a failed install.
 - **Create both secrets before installing.** A missing prerequisite secret leaves the workloads waiting on something that does not exist, with zero log lines — see Prerequisites for how to diagnose it.
 - **Never rotate `secretKey` on a live install unless you intend to** — it logs every user out and invalidates password-reset links in flight. Nothing is corrupted, but everyone has to sign in again.
 - **Change the redis password before installing** — it is bundled plumbing used as-is.
-- **Changing the database password is a database change first.** Editing the secret alone does nothing to the database, and a running workload keeps the values it started with. Run `ALTER ROLE <username> PASSWORD '...'` in PostgreSQL, then `cpln secret edit SECRET_NAME`, then `cpln workload force-redeployment` the database workload (`RELEASE_NAME-postgres-ha` or `RELEASE_NAME-postgres`), wait until it is ready, and force-redeploy `RELEASE_NAME-glitchtip` and `RELEASE_NAME-glitchtip-worker`.
+- **Changing the database password is a database change first.** Editing the secret alone does nothing to the database, and a running workload keeps the values it started with. Run `ALTER ROLE <username> PASSWORD '...'` in PostgreSQL, then `cpln secret edit SECRET_NAME`, then `cpln workload force-redeployment RELEASE_NAME-postgres` (in HA mode follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode) instead), wait until it is ready, and force-redeploy `RELEASE_NAME-glitchtip` and `RELEASE_NAME-glitchtip-worker`.
 - **With registration closed (default), invites only work for accounts that already exist** — create teammate accounts first at `/admin/` (Django admin, superuser login), then invite them to the organization. Invite and alert emails require `email.secretName`.
 - **Do not scale the worker** — it is a fixed singleton (scheduler + boot-time migrations). Web `replicas` is the scaling knob; a worker outage pauses processing but ingest keeps accepting and catches up.
 - **First boot: the web tier stays not-ready until the worker finishes migrations** (several minutes in HA mode) — check worker logs first if it seems stuck.
@@ -257,7 +283,7 @@ cpln secret create-dictionary --name my-glitchtip-minio-credentials \
 - **DSNs embed the endpoint URL** — if you add a custom domain later, set `domain`, upgrade, and update the DSNs in your apps.
 - **Source-map/artifact uploads are ephemeral** (local disk) — lost on restart and not shared across web replicas; error ingest itself is unaffected.
 - **Uninstall deletes the database volumesets** — all issues, events, and users. Enable backups if the data matters.
-- **Rotating the database password in HA mode (`postgresHA`):** also run `ALTER ROLE repl PASSWORD '<new password>'` on the leader with the same new password, before redeploying. The HA database's replication role shares it, and without this the standbys stop replicating while the app keeps working on the leader alone.
+- **Rotating the database password in HA mode needs a leader switchover first** — follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode). A plain redeploy can promote a member still holding the old password and split the cluster.
 
 ## Links
 

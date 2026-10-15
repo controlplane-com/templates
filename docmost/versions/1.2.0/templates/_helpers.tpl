@@ -21,10 +21,12 @@
 {{- end }}
 
 {{/*
-Name of the DB-credentials secret this chart creates for the bundled postgres
-subchart. postgres 3.4.0 stopped creating its own secret and now takes only a
-NAME, and a parent cannot template a subchart value — so the name is a plain
-value that both sides read.
+Name of the database credentials secret — a PREREQUISITE the user creates (keys:
+username, password, database). The postgres subchart requires it by name, so
+Docmost requires the same secret rather than building one from plaintext values;
+the subchart initializes from it and Docmost connects with it. 1.1.0 and earlier
+created it from postgres.credentials.*. A subchart value cannot be templated by
+its parent, so the name is a plain value both sides read.
 */}}
 {{- define "docmost.secret.db.name" -}}
 {{- .Values.postgres.config.credentialsSecretName }}
@@ -77,6 +79,7 @@ true
 {{/* Validation */}}
 
 {{- define "docmost.validate" -}}
+{{- include "docmost.validateDatabaseSecret" . -}}
 {{- if not .Values.secrets.name -}}
 {{- fail "docmost: secrets.name is required — the name of the prerequisite opaque secret (encoding: plain) whose payload is APP_SECRET, a random string of at least 32 chars (must exist BEFORE install; rotating it logs out every user and invalidates invite/share links)" -}}
 {{- end -}}
@@ -110,5 +113,21 @@ true
 {{- if not .Values.smtp.fromAddress -}}
 {{- fail "docmost: smtp.fromAddress is required when smtp.enabled is true" -}}
 {{- end -}}
+{{- end -}}
+{{- end }}
+
+
+{{/*
+The bundled database's credentials became a user-created prerequisite secret in
+1.2.0: the postgres subchart requires a pre-existing secret, so Docmost requires
+the same one instead of rendering it from plaintext values. The removed key is
+named explicitly so a 1.1.0 values file fails at render with its replacement and
+the upgrade procedure. No compatibility shims — the version bump IS the migration
+path. (An empty postgres.config.credentialsSecretName is refused by the postgres
+subchart itself, which renders first.)
+*/}}
+{{- define "docmost.validateDatabaseSecret" -}}
+{{- if hasKey .Values.postgres "credentials" -}}
+{{- fail "docmost: postgres.credentials was REMOVED in 1.2.0. The database credentials are now a prerequisite `dictionary` secret you create (keys: username, password, database), named by postgres.config.credentialsSecretName. Upgrading from 1.1.0: create it under a NEW name holding your EXISTING values, set postgres.config.credentialsSecretName to that name, and remove postgres.credentials — see \"Upgrading from 1.1.0\" in the README." -}}
 {{- end -}}
 {{- end }}

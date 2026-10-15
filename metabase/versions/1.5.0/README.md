@@ -238,6 +238,7 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
 - **Metabase is single-replica in this template** — the default HA Postgres backend removes the database as a failure point; upgrades restart the replica (brief UI downtime, no data loss).
 - **Uninstall deletes the database volumesets** — all questions, dashboards, and users. Enable backups if the data matters.
 - **This template ships the open-source image only** — Pro/Enterprise features (SSO, sandboxing, config-file init) are not available.
+- **Rotating the database password in HA mode (`postgresHA`):** also run `ALTER ROLE repl PASSWORD '<new password>'` on the leader with the same new password, before redeploying. The HA database's replication role shares it, and without this the standbys stop replicating while the app keeps working on the leader alone.
 
 ## Links
 

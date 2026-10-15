@@ -243,6 +243,7 @@ steps:
               PostgreSQL reads these values only when its data is first initialized, and Metabase connects with
               them. To change the password later, change it in the database first, then update the secret and
               force a redeployment.
+              In HA mode also run `ALTER ROLE repl PASSWORD` with the same new password: the replication role shares it.
             docs: "#prerequisites"
             ref:
               kind: secret

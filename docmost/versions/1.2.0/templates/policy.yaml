@@ -1,0 +1,20 @@
+---
+kind: policy
+name: {{ include "docmost.policy.name" . }}
+description: Docmost secret access
+tags: {{- include "docmost.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "docmost.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "docmost.secret.creds.name" . }}
+  - //secret/{{ .Values.secrets.name }}
+  {{- if and (eq .Values.storage.type "s3") .Values.storage.s3.auth.secretName }}
+  - //secret/{{ .Values.storage.s3.auth.secretName }}
+  {{- end }}
+  {{- if and .Values.smtp.enabled .Values.smtp.auth.secretName }}
+  - //secret/{{ .Values.smtp.auth.secretName }}
+  {{- end }}

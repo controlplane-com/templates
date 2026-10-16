@@ -1,0 +1,637 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: PostgreSQL (highly available)
+# Patroni, etcd and their volume sets are stateful with no location handling: every extra GVC
+# location would run an unrelated cluster with its own data.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: cluster
+    title: Cluster
+    description: The Patroni-managed PostgreSQL members, their image, compute and WAL level.
+    fields:
+      - type: note
+        severity: warning
+        when: context.mode == 'upgrade'
+        text: >-
+          An upgrade that changes the members restarts them, and nothing limits the rollout of a
+          stateful workload, so plan for a short write outage.
+      - path: replicas
+        type: integer
+        label: PostgreSQL members
+        required: true
+        min: 1
+        suggestions: [1, 3, 5]
+        description: One is the leader; the others stream from it and take over if it fails.
+        docs: "#cluster-and-resources"
+      - path: image
+        type: string
+        format: image
+        label: Patroni PostgreSQL image
+        required: true
+      - path: resources
+        type: resources
+        label: Resources
+        required: true
+        description: Per member.
+        maxRatio: 4
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+      - path: multiZone
+        type: boolean
+        label: Spread across zones
+        description: >-
+          Applies to the PostgreSQL members and their HAProxy and PgBouncer workloads. Confirm that
+          your location supports multiple zones.
+      - path: walLevel
+        type: enum
+        label: WAL level
+        widget: cards
+        required: true
+        docs: "#wal-level-and-logical-replication"
+        help: >-
+          Written into the cluster's shared configuration when the cluster is first created. Changing
+          it on a running cluster needs `patronictl edit-config` and a restart of the members; the
+          README has the steps.
+        options:
+          - value: replica
+            label: Replica
+            description: Streaming replication between the members only.
+          - value: logical
+            label: Logical
+            description: Also lets clients such as Debezium read row changes through a replication slot.
+    rules:
+      - rule: self.replicas >= 3
+        severity: info
+        paths: [replicas]
+        message: With fewer than 3 members there is no standby to take over when the leader fails.
+      - rule: oldSelf == null || self.walLevel == oldSelf.walLevel
+        severity: info
+        paths: [walLevel]
+        message: >-
+          A running cluster keeps the WAL level it was created with. Change it with patronictl
+          edit-config and a restart of the members, as the README describes.
+
+  - id: credentials
+    title: Credentials
+    description: The prerequisite secret with the database user, password and name.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          The credentials secret must exist **before** you install. If it is missing, the
+          deployment waits and `cpln logs` shows nothing at all.
+      - path: config.credentialsSecretName
+        type: ref
+        label: Database credentials secret
+        required: true
+        description: A dictionary secret with the keys `username`, `password` and `database`.
+        help: >-
+          PostgreSQL reads these values only when the cluster is first created. To change the
+          password later, follow the README's rotation steps: the replication user shares it.
+        docs: "#credentials"
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeys: [username, password, database]
+          create:
+            suggestName: "context.releaseName + '-postgres-ha-credentials'"
+    rules:
+      - rule: "!has(self.postgres)"
+        mirrors: pg-ha.validate
+        paths: [config.credentialsSecretName]
+        message: >-
+          The postgres block (username, password and database) was removed in 2.5.0. Put the values in
+          a dictionary secret and remove the block from the values.
+      - rule: oldSelf == null || self.config.credentialsSecretName == oldSelf.config.credentialsSecretName
+        severity: info
+        paths: [config.credentialsSecretName]
+        message: >-
+          PostgreSQL reads the credentials only when the cluster is first created; pointing at another
+          secret does not change the existing user or password.
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds each member's data directory.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            description: >-
+              Per member. A quarter of it caps the WAL that replication slots may hold back.
+            help: >-
+              Uninstalling the release deletes the volume set, so the data does not survive a
+              reinstall.
+            docs: "/reference/volumeset#capacity-and-billing"
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: volumeset.autoscaling.enabled
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
+            paths: [volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+    rules:
+      - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volumes.
+
+  - id: etcd
+    title: Consensus (etcd)
+    description: The etcd cluster Patroni uses for leader election and its shared configuration.
+    sections:
+      - title: etcd cluster
+        docs: "#etcd-cluster"
+        fields:
+          - path: etcd.replicas
+            type: integer
+            label: etcd members
+            required: true
+            min: 3
+            suggestions: [3, 5, 7]
+          - path: etcd.resources
+            type: resources
+            label: etcd resources
+            required: true
+            description: Per member.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: etcd.multiZone
+            type: boolean
+            label: Spread etcd across zones
+          - path: etcd.volumeset.capacity
+            type: integer
+            label: etcd initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50]
+            description: Per member.
+        rules:
+          - rule: self.etcd.replicas % 2 == 1
+            paths: [etcd.replicas]
+            message: etcd needs an odd number of members (3, 5 or 7) to keep a quorum.
+          - rule: oldSelf == null || self.etcd.volumeset.capacity >= oldSelf.etcd.volumeset.capacity
+            paths: [etcd.volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volumes.
+      - title: History compaction
+        docs: "#etcd-history-compaction"
+        fields:
+          - path: etcd.tuning.autoCompactionMode
+            type: enum
+            label: Compaction mode
+            widget: segmented
+            required: true
+            options:
+              - { value: periodic, label: Periodic, description: Keep history for a duration. }
+              - { value: revision, label: Revision, description: Keep a number of revisions. }
+          - path: etcd.tuning.autoCompactionRetention
+            type: string
+            label: Retention
+            required: true
+            description: >-
+              Patroni renews its leader lease every few seconds and every renewal is a revision, so
+              etcd grows with time alone until it is compacted.
+          - path: etcd.tuning.quotaBackendBytes
+            type: integer
+            label: Backend size limit
+            unit: bytes
+            min: 0
+            required: true
+            description: 0 keeps etcd's own default of 2 GiB.
+        rules:
+          - when: self.etcd.tuning.autoCompactionMode == 'periodic'
+            rule: string(self.etcd.tuning.autoCompactionRetention).matches('^[0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h)$')
+            paths: [etcd.tuning.autoCompactionRetention]
+            message: >-
+              In periodic mode the retention needs a unit, such as 1h, 30m or 24h; etcd reads a bare
+              number as hours.
+          - when: self.etcd.tuning.autoCompactionMode == 'revision'
+            rule: string(self.etcd.tuning.autoCompactionRetention).matches('^[0-9]+$')
+            paths: [etcd.tuning.autoCompactionRetention]
+            message: In revision mode the retention is a plain revision count, such as 10000.
+          - rule: "!string(self.etcd.tuning.autoCompactionRetention).matches('^0+([a-zA-Z]*)$')"
+            paths: [etcd.tuning.autoCompactionRetention]
+            message: A retention of 0 turns compaction off, which fills the backend and makes etcd read-only.
+      - title: Who can connect to etcd
+        docs: /reference/workload/firewall
+        fields:
+          - path: etcd.internal_access.type
+            type: enum
+            label: Who can connect to etcd
+            widget: cards
+            required: true
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          - path: etcd.internal_access.workloads
+            type: list
+            label: Allowed etcd clients
+            when: self.etcd.internal_access.type in ['same-gvc', 'workload-list']
+            widget: tags
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+        rules:
+          - when: self.etcd.internal_access.type == 'workload-list' && context.gvc != null
+            rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-ha') in self.etcd.internal_access.workloads
+            severity: warning
+            paths: [etcd.internal_access.workloads]
+            messageExpression: >-
+              'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-ha, or Patroni
+              cannot reach etcd and no member becomes leader.'
+            message: Add the PostgreSQL workload to the list, or Patroni cannot reach etcd and no member becomes leader.
+
+  - id: network
+    title: Network and pooling
+    description: Who can connect, the leader endpoint and an optional connection pooler.
+    sections:
+      - title: Network access
+        docs: "#internal-access"
+        fields:
+          - path: internal_access.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: Applies to the PostgreSQL members and their HAProxy and PgBouncer workloads.
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          - path: internal_access.workloads
+            type: list
+            label: Allowed workloads
+            description: Extra workloads allowed to connect, for example from another GVC.
+            when: self.internal_access.type in ['same-gvc', 'workload-list']
+            widget: tags
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+        rules:
+          - rule: self.internal_access.type != 'workload-list' || size(self.internal_access.workloads) > 0
+            severity: warning
+            paths: [internal_access.workloads]
+            message: With "Specific workloads" and an empty list, no client can connect.
+          - when: self.internal_access.type == 'workload-list' && context.gvc != null
+            rule: >-
+              (!(self.proxy.enabled || self.pgbouncer.enabled) ||
+              ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-ha-proxy') in self.internal_access.workloads) &&
+              (!self.pgbouncer.enabled ||
+              ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgbouncer') in self.internal_access.workloads) &&
+              (!(self.backup.enabled && self.backup.mode == 'logical') ||
+              ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-ha-backup') in self.internal_access.workloads)
+            severity: warning
+            paths: [internal_access.workloads]
+            messageExpression: >-
+              'The chart does not add its own workloads to the list. Add ' +
+              ((self.proxy.enabled || self.pgbouncer.enabled ? ['-postgres-ha-proxy'] : []) +
+              (self.pgbouncer.enabled ? ['-pgbouncer'] : []) +
+              (self.backup.enabled && self.backup.mode == 'logical' ? ['-postgres-ha-backup'] : []))
+              .map(s, '//gvc/' + context.gvc + '/workload/' + context.releaseName + s).join(', ') +
+              ', or they cannot connect.'
+            message: >-
+              The chart does not add its own workloads to the list: add the HAProxy workload, and the
+              PgBouncer and logical backup workloads when they are on, or they cannot connect.
+      - id: proxy
+        title: HAProxy leader endpoint
+        toggle: proxy.enabled
+        description: >-
+          An endpoint that always routes to the current leader. Applications, PgBouncer and logical
+          backups connect through it.
+        docs: "#haproxy-leader-endpoint"
+        fields:
+          - path: proxy.minReplicas
+            type: integer
+            label: Minimum replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3, 5]
+          - path: proxy.maxReplicas
+            type: integer
+            label: Maximum replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3, 5]
+          - path: proxy.image
+            type: string
+            format: image
+            label: HAProxy image
+            required: true
+            advanced: true
+          - path: proxy.resources
+            type: resources
+            label: HAProxy resources
+            required: true
+            advanced: true
+        rules:
+          - rule: self.proxy.maxReplicas >= self.proxy.minReplicas
+            paths: [proxy.maxReplicas]
+            message: The maximum replicas must be at least the minimum.
+      - id: pgbouncer
+        title: Connection pooler (PgBouncer)
+        toggle: pgbouncer.enabled
+        description: When on, PgBouncer in front of HAProxy becomes the endpoint your applications connect to.
+        docs: "#pgbouncer-connection-pooling"
+        fields:
+          - path: pgbouncer.poolMode
+            type: enum
+            label: Pool mode
+            widget: segmented
+            required: true
+            help: >-
+              **Transaction** holds a connection for one transaction: best for most web and API
+              workloads, but not compatible with `SET` variables, temporary tables or advisory
+              locks. **Session** holds it for the whole client session: compatible with
+              everything, less reuse. **Statement** returns it after every statement:
+              transactions are not supported.
+            options:
+              - { value: session, label: Session }
+              - { value: transaction, label: Transaction }
+              - { value: statement, label: Statement }
+          - path: pgbouncer.defaultPoolSize
+            type: integer
+            label: Server connections per pool
+            min: 1
+            required: true
+            suggestions: [10, 25, 50, 100]
+            description: Per PgBouncer replica.
+          - path: pgbouncer.maxClientConn
+            type: integer
+            label: Max client connections
+            min: 1
+            required: true
+            suggestions: [100, 500, 1000, 5000]
+            description: Per PgBouncer replica.
+          - path: pgbouncer.maxDbConnections
+            type: integer
+            label: Max database connections
+            min: 1
+            required: true
+            suggestions: [25, 50, 100]
+            description: >-
+              Per PgBouncer replica: replicas do not coordinate, so the cluster can see up to this times
+              the maximum replicas.
+          - path: pgbouncer.minReplicas
+            type: integer
+            label: Minimum replicas
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 5]
+          - path: pgbouncer.maxReplicas
+            type: integer
+            label: Maximum replicas
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 5]
+          - path: pgbouncer.image
+            type: string
+            format: image
+            label: PgBouncer image
+            required: true
+            advanced: true
+          - path: pgbouncer.resources
+            type: resources
+            label: PgBouncer resources
+            required: true
+            advanced: true
+        rules:
+          - rule: self.proxy.enabled
+            severity: warning
+            paths: [pgbouncer.enabled]
+            message: >-
+              Turn the HAProxy leader endpoint on too. PgBouncer connects through it, and with the switch
+              off the HAProxy workload is created without access to its startup secret and never starts.
+          - rule: self.pgbouncer.maxReplicas >= self.pgbouncer.minReplicas
+            paths: [pgbouncer.maxReplicas]
+            message: The maximum replicas must be at least the minimum.
+          - rule: self.pgbouncer.defaultPoolSize <= self.pgbouncer.maxClientConn
+            severity: info
+            paths: [pgbouncer.defaultPoolSize]
+            message: The pool is larger than the number of client connections PgBouncer accepts.
+
+  - id: backup
+    title: Backups
+    description: Scheduled logical dumps, or continuous WAL-G archiving, to object storage.
+    sections:
+      - id: backup
+        title: Backups
+        toggle: backup.enabled
+        docs: "#backup"
+        fields:
+          - path: backup.mode
+            type: enum
+            label: Backup mode
+            widget: cards
+            required: true
+            options:
+              - { value: logical, label: Logical dumps, description: Portable SQL dumps on a schedule. }
+              - { value: wal-g, label: WAL-G, description: Continuous archiving with point-in-time recovery. }
+          - path: backup.provider
+            type: enum
+            label: Destination
+            widget: cards
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+              - { value: minio, label: MinIO or S3-compatible }
+          - path: backup.logical.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+            when: self.backup.mode == 'logical'
+          - path: backup.walg.intervalSeconds
+            type: integer
+            label: Interval between base backups
+            unit: seconds
+            min: 60
+            required: true
+            when: self.backup.mode == 'wal-g'
+            suggestions: [3600, 21600, 86400]
+          - path: backup.logical.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+            when: self.backup.mode == 'logical'
+            description: Tag 17.x.x for PostgreSQL 17, 18.x.x for PostgreSQL 18.
+          - path: backup.resources
+            type: resources
+            label: Backup resources
+            required: true
+            advanced: true
+            description: The logical backup job, or the WAL-G sidecar next to each member.
+        rules:
+          - rule: self.backup.mode in ['logical', 'wal-g']
+            mirrors: pg-ha.validateBackupMode
+            paths: [backup.mode]
+            message: Choose logical or wal-g as the backup mode.
+          - rule: self.backup.provider in ['aws', 'gcp', 'minio']
+            mirrors: pg-ha.validateBackupConfig
+            paths: [backup.provider]
+            message: Choose aws, gcp or minio as the backup destination.
+          - when: self.backup.mode == 'logical'
+            rule: self.proxy.enabled || self.pgbouncer.enabled
+            severity: warning
+            paths: [backup.mode]
+            message: Logical backups connect through the HAProxy leader endpoint; turn it on under Network and pooling.
+      - title: AWS S3
+        when: self.backup.enabled && self.backup.provider == 'aws'
+        docs: "#aws-s3"
+        fields:
+          - path: backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+          - path: backup.aws.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+      - title: Google Cloud Storage
+        when: self.backup.enabled && self.backup.provider == 'gcp'
+        docs: "#gcs"
+        fields:
+          - path: backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the
+              Storage Admin role on the bucket.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+      - title: MinIO or S3-compatible
+        when: self.backup.enabled && self.backup.provider == 'minio'
+        docs: "#minio"
+        fields:
+          - path: backup.minio.endpoint
+            type: string
+            format: url
+            label: S3 endpoint
+            required: true
+            example: true
+            placeholder: http://my-minio-workload:9000
+            description: The URL including the port.
+          - path: backup.minio.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: backup.minio.credentialsSecretName
+            type: ref
+            label: MinIO credentials secret
+            required: true
+            description: A dictionary secret with the keys `accessKey` and `secretKey`.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [accessKey, secretKey]
+          - path: backup.minio.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+        rules:
+          - rule: "!has(self.backup.minio.accessKey) && !has(self.backup.minio.secretKey)"
+            mirrors: pg-ha.validate
+            paths: [backup.minio.credentialsSecretName]
+            message: >-
+              backup.minio.accessKey and backup.minio.secretKey were removed in 2.5.0. Put them in the
+              MinIO credentials secret and remove them from the values.
+
+migrations:
+  - fromVersions: "<2.5.0"
+    from: postgres
+    note: >-
+      The username, password and database moved to a prerequisite dictionary secret (keys username,
+      password and database). Create it with the values the cluster was created with, and choose it under
+      Credentials.
+  - fromVersions: "<2.5.0"
+    from: backup.minio.accessKey
+    note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey; choose it under Backups.
+  - fromVersions: "<2.5.0"
+    from: backup.minio.secretKey
+    note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey; choose it under Backups.

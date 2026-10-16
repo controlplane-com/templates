@@ -50,6 +50,8 @@ resources:
   maxCpu: 1      # Maximum CPU per replica
   maxMemory: 2Gi # Maximum memory per replica
 
+walLevel: replica # or logical, for logical replication / CDC (Debezium); fixed when the cluster is created
+
 config:
   # REQUIRED prerequisite `dictionary` secret holding `username`, `password`
   # and `database`. It must EXIST BEFORE INSTALL — see Prerequisites.
@@ -60,6 +62,17 @@ config:
 values and create the credentials secret instead. An upgrade that still carries
 `postgres.username`, `postgres.password` or `postgres.database` is refused at
 render, before anything is applied, and the error names the replacement.
+
+<b>Upgrading from 2.7.0 or earlier:</b> those versions also wrote the install-time password into
+Patroni's shared cluster configuration, which is stored in etcd and readable without authentication on
+port 8008 (`/config`) by anything that can reach the cluster. 2.8.0 no longer writes it there, but an
+existing cluster keeps the copy until you remove it (Patroni never used it; the local configuration is
+what it reads):
+
+```bash
+cpln workload exec RELEASE_NAME-postgres-ha --gvc GVC_NAME --container patroni-postgres \
+  -- curl -s -XPATCH -d '{"postgresql":{"authentication":null}}' localhost:8008/config
+```
 
 **Volume** — set the initial storage capacity (minimum 10 GiB). Optionally enable autoscaling to expand the volume as data grows:
 
@@ -230,6 +243,39 @@ was created, and the chart is never consulted again. Run the `edit-config` comma
 existing cluster to 45 / 10 / 15.
 
 
+## WAL level and logical replication
+
+`walLevel` sets PostgreSQL's `wal_level`: `replica` (the default) is all streaming replication between
+the members needs; `logical` additionally lets a client such as Debezium read row changes through a
+logical replication slot. Anything else is refused at render. With `logical`, the cluster is also told
+to leave logical slots alone (`ignore_slots`): Patroni otherwise drops any inactive slot it does not
+manage the next time it reloads its slot list, such as after a restart, and the client silently loses
+its position.
+
+Like the timeouts above, both settings are shared cluster configuration: Patroni ignores `wal_level` in
+a member's local settings and takes it from etcd, where it is written once, when the cluster is first
+created. **Changing `walLevel` on an existing release changes nothing.** To change a running cluster,
+patch the shared configuration, wait until every member shows `*` in the Pending restart column, then
+restart them (PostgreSQL restarts in place on each member, so expect a short write outage while the
+leader restarts):
+
+```bash
+cpln workload exec RELEASE_NAME-postgres-ha --gvc GVC_NAME --container patroni-postgres \
+  -- curl -s -XPATCH -d '{"postgresql":{"parameters":{"wal_level":"logical"}},"ignore_slots":[{"type":"logical"}]}' localhost:8008/config
+cpln workload exec RELEASE_NAME-postgres-ha --gvc GVC_NAME --container patroni-postgres \
+  -- patronictl -c /tmp/patroni_config.yml list
+cpln workload exec RELEASE_NAME-postgres-ha --gvc GVC_NAME --container patroni-postgres \
+  -- patronictl -c /tmp/patroni_config.yml restart RELEASE_NAME --pending --force
+```
+
+Set `walLevel` in your values to the same value, so a cluster recreated from them matches.
+
+A logical replication slot retains WAL like the members' own slots, and the same cap applies: a
+consumer that stays away long enough to exceed `max_slot_wal_keep_size` has its slot invalidated and
+must start over. The cluster allows 10 replication slots and 10 WAL senders, which covers the members'
+own slots and a few logical consumers. A logical slot exists only on the leader: after a failover the
+consumer has to create it again on the new leader.
+
 ## Cluster metrics
 
 Patroni serves Prometheus metrics on its REST API port, and the platform scrapes them into the
@@ -277,6 +323,7 @@ release. Read them back with `cpln secret reveal SECRET_NAME -o yaml`.
 
 ## Important Notes
 
+- **`walLevel` takes effect only when the cluster is created** — changing it on an existing release does nothing; follow [WAL level and logical replication](#wal-level-and-logical-replication).
 - **A replica that stays down does not fill the primary's disk** — Patroni keeps a replication slot per member, and `max_slot_wal_keep_size` caps the WAL those slots retain at a quarter of `volumeset.capacity`. A member offline long enough to exceed that has its slot invalidated and is re-cloned automatically when it returns.
 - **Minimum Replicas**: For production use, maintain at least 3 PostgreSQL replicas and 3 etcd replicas
 - **Odd Number for etcd**: Always use an odd number of etcd replicas (3, 5, 7) for proper quorum

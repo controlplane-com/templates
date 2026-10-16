@@ -159,6 +159,9 @@ before anything is applied.
 {{- if not .Values.config.credentialsSecretName -}}
 {{- fail "postgres-highly-available: config.credentialsSecretName is required — it names the `dictionary` secret holding `username`, `password` and `database`. Create that secret BEFORE installing; see Prerequisites in the README." -}}
 {{- end -}}
+{{- if not (has .Values.walLevel (list "replica" "logical")) -}}
+{{- fail (printf "postgres-highly-available: walLevel must be 'replica' or 'logical', got '%v'. Use 'logical' only when something reads logical replication (for example Debezium change data capture)." .Values.walLevel) -}}
+{{- end -}}
 {{- if and .Values.backup.enabled (eq .Values.backup.provider "minio") -}}
 {{- if or (hasKey .Values.backup.minio "accessKey") (hasKey .Values.backup.minio "secretKey") -}}
 {{- fail "postgres-highly-available: backup.minio.accessKey and backup.minio.secretKey were REMOVED in 2.5.0. Create a `dictionary` secret holding the keys `accessKey` and `secretKey`, and set backup.minio.credentialsSecretName to its name. See Backup setup in the README." -}}

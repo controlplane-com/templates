@@ -1,7 +1,7 @@
 # ToolJet
 
-> **Upgrading from 1.2.0:** the database credentials are now a secret you create before upgrading,
-> under a **new** name — see [Upgrading from 1.2.0](#upgrading-from-120).
+> **Upgrading from 1.2.0:** the database credentials (and, if you turned it on, the Redis password) are now
+> secrets you create before upgrading, under a **new** name — see [Upgrading from 1.2.0](#upgrading-from-120).
 
 ToolJet is an open-source low-code platform for building internal tools: a visual app builder with 50+ datasource connectors, workflows, and the built-in ToolJet Database. This template deploys the ToolJet server (with its in-image PostgREST and workflow worker) backed by Postgres, with optional Redis for multi-replica scaling.
 
@@ -12,6 +12,7 @@ ToolJet is an open-source low-code platform for building internal tools: a visua
 - **Redis + Sentinel** (`redis` subchart, optional) — shared job queue + multiplayer coordination; required when `tooljet.replicas >= 2`. Pinned to one data node + one sentinel.
 - **Keys secret** (dictionary) — *not created by this template*; you create it before install. Holds ToolJet's root-of-trust keys.
 - **Database credentials secret** (dictionary) — *not created by this template*; you create it before install. Postgres initializes from it and ToolJet connects with it.
+- **Redis password secret** (dictionary, optional) — *not created by this template*; only when you turn Redis auth on.
 - **Identity + policy** — grants the server `reveal` on exactly the secrets it reads.
 
 ## Prerequisites
@@ -48,7 +49,16 @@ ToolJet is an open-source low-code platform for building internal tools: a visua
     --entry SMTP_USERNAME=apikey --entry SMTP_PASSWORD=...
   ```
 
-**If a secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-tooljet --gvc GVC_NAME -o yaml` (and `RELEASE_NAME-postgres` for the database secret; note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own, but ToolJet can take 12 minutes or more to serve again — poll rather than giving up — or skip the wait with `cpln workload force-redeployment`.
+- **(Optional, only with Redis auth on)** a dictionary secret with the key `password`, referenced via `redis.redis.auth.fromSecret.name` (with `redis.redis.auth.fromSecret.enabled: true`). Redis, its Sentinel and ToolJet all read it:
+
+  ```bash
+  cpln secret create-dictionary --name my-tooljet-redis \
+    --entry password="$(openssl rand -hex 24)"
+  ```
+
+  Redis keeps no password on disk, so changing it later follows [Rotating the Redis password](#rotating-the-redis-password).
+
+**If a secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-tooljet --gvc GVC_NAME -o yaml` (and `RELEASE_NAME-postgres` for the database secret, `RELEASE_NAME-redis` for the Redis secret; note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own, but ToolJet can take 12 minutes or more to serve again — poll rather than giving up — or skip the wait with `cpln workload force-redeployment`.
 
 ## Configuration
 
@@ -119,9 +129,9 @@ redis:
   redis:
     replicas: 1               # keep at 1 — ToolJet is not Sentinel-aware
     auth:
-      password:
-        enabled: false        # true = require AUTH; the password is wired into ToolJet as REDIS_PASSWORD
-        value: change-me-tooljet-redis
+      fromSecret:
+        enabled: false        # true = require AUTH (Redis, Sentinel and ToolJet read the secret below)
+        name: ""              # prerequisite dictionary secret (key: password); used only when enabled
   sentinel:
     replicas: 1
 ```
@@ -137,6 +147,24 @@ redis:
 
 The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`cpln workload get RELEASE_NAME-tooljet --gvc GVC_NAME -o yaml`).
 
+## Rotating the Redis password
+
+Redis keeps no password on disk: Redis and its Sentinel read the secret when they start, and restarting Redis would empty ToolJet's job queue. So change the running password in place, then redeploy ToolJet:
+
+```bash
+NEW="$(openssl rand -hex 24)"; echo "$NEW"
+cpln secret edit SECRET_NAME                      # set password to the value printed above
+cpln secret reveal SECRET_NAME -o yaml            # check it reads the new value
+cpln workload exec RELEASE_NAME-redis --gvc GVC_NAME --replica RELEASE_NAME-redis-0 --container redis -- \
+  sh -c "redis-cli --no-auth-warning -a \"\$CUSTOM_REDIS_PASSWORD\" CONFIG SET masterauth $NEW &&
+         redis-cli --no-auth-warning -a \"\$CUSTOM_REDIS_PASSWORD\" CONFIG SET requirepass $NEW"
+cpln workload exec RELEASE_NAME-sentinel --gvc GVC_NAME --replica RELEASE_NAME-sentinel-0 --container sentinel -- \
+  redis-cli -p 26379 SENTINEL SET mymaster auth-pass "$NEW"
+cpln workload force-redeployment RELEASE_NAME-tooljet --gvc GVC_NAME
+```
+
+Wait until `get-deployments` shows ToolJet at a higher version number, alone and ready. Connections ToolJet already has open keep working; new ones fail until its redeploy finishes, so rotate in a quiet window. Redis and Sentinel need no redeploy: they read the updated secret the next time they restart.
+
 ## Upgrading from 1.2.0
 
 `postgres.credentials` was removed: the database credentials are now a prerequisite secret, the same one the `postgres` template requires on its own. Carrying the old key forward fails the render.
@@ -149,6 +177,16 @@ cpln secret create-dictionary --name RELEASE_NAME-postgres-credentials \
 ```
 
 Then upgrade with `postgres.config.credentialsSecretName` set to that name and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.2.0 release, and also in the old secret named by its `postgres.config.credentialsSecretName` (`cpln secret reveal SECRET_NAME -o yaml`) until the upgrade deletes it.
+
+**If you ran 1.2.0 with Redis auth on**, `redis.redis.auth.password` was removed too (carrying it forward fails the render), and the chart-created `RELEASE_NAME-redis-auth-password` secret is deleted by the upgrade. Copy your current Redis password into a secret under a **new** name first:
+
+```bash
+cpln secret reveal RELEASE_NAME-redis-auth-password -o yaml
+cpln secret create-dictionary --name RELEASE_NAME-tooljet-redis \
+  --entry password=YOUR_CURRENT_REDIS_PASSWORD
+```
+
+Then also set `redis.redis.auth.fromSecret.enabled: true` and `redis.redis.auth.fromSecret.name` to the new name, and remove `redis.redis.auth.password`. With Redis auth off in 1.2.0 (the default), just remove `redis.redis.auth.password` from your values.
 
 The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so ToolJet loses its database for about a minute and a half; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
 
@@ -188,7 +226,7 @@ Check the object size before restoring from one.
 
 ## Important Notes
 
-- **Both prerequisite secrets must exist before install** — the keys secret (`secrets.name`) and the database credentials secret (`postgres.config.credentialsSecretName`). A missing secret wedges the deployment with zero log lines; see Prerequisites for how to diagnose it.
+- **Every prerequisite secret must exist before install** — the keys secret (`secrets.name`), the database credentials secret (`postgres.config.credentialsSecretName`) and, with Redis auth on, the Redis password secret (`redis.redis.auth.fromSecret.name`). A missing secret wedges the deployment with zero log lines; see Prerequisites for how to diagnose it.
 - **`SECRET_KEY_BASE` and `LOCKBOX_MASTER_KEY` are write-once — never rotate them.** Rotating `LOCKBOX_MASTER_KEY` corrupts every stored datasource credential.
 - **The first visitor to complete the UI onboarding becomes the instance Super Admin** — open the endpoint and create your admin account immediately after install; self-signup stays off until the Super Admin enables it.
 - **Scaling to `replicas >= 2` requires `redis.enabled: true`** — replicas coordinate the job queue and multiplayer editing through the shared Redis; the install fails validation otherwise.

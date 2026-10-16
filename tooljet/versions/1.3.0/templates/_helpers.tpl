@@ -47,11 +47,20 @@ always resolves to the writable master — safe for ToolJet's plain
 {{- end }}
 
 {{/*
-Redis auth password secret (created by the redis dependency chart when auth is
-enabled; key: password). Must match the redis chart's redis.secretPassword.name.
+Name of the user's OPTIONAL prerequisite Redis secret (dictionary, key: password).
+Set only when Redis is on AND redis.redis.auth.fromSecret.enabled is true; empty
+otherwise, and then nothing references a Redis secret. The redis subchart grants
+its own identities reveal on it; this chart's policy grants the server.
 */}}
-{{- define "tooljet.redis.secretPassword.name" -}}
-{{- printf "%s-redis-auth-password" .Release.Name }}
+{{- define "tooljet.redis.secret.name" -}}
+{{- if and .Values.redis.enabled (dig "auth" "fromSecret" "enabled" false .Values.redis.redis) -}}
+{{- dig "auth" "fromSecret" "name" "" .Values.redis.redis -}}
+{{- end -}}
+{{- end }}
+
+{{/* Key in that secret holding the password (the subchart's fromSecret.passwordKey, default password). */}}
+{{- define "tooljet.redis.secret.key" -}}
+{{- dig "auth" "fromSecret" "passwordKey" "password" .Values.redis.redis -}}
 {{- end }}
 
 {{- define "tooljet.secret.startup.name" -}}
@@ -60,10 +69,10 @@ enabled; key: password). Must match the redis chart's redis.secretPassword.name.
 
 {{/*
 Whether Redis auth (data-node password) is enabled — true only when redis is on
-AND redis.redis.auth.password.enabled is true.
+AND redis.redis.auth.fromSecret.enabled is true.
 */}}
 {{- define "tooljet.redisAuthEnabled" -}}
-{{- if and .Values.redis.enabled (dig "auth" "password" "enabled" false .Values.redis.redis) -}}
+{{- if and .Values.redis.enabled (dig "auth" "fromSecret" "enabled" false .Values.redis.redis) -}}
 true
 {{- end -}}
 {{- end }}
@@ -77,6 +86,21 @@ true
 
 
 {{/* Validation */}}
+
+{{/*
+redis.redis.auth.password (a plaintext Redis password in the values) was removed
+in 1.3.0: Redis auth now reads a prerequisite secret via redis.redis.auth.fromSecret.
+The redis subchart still accepts the old key (and would create a secret from the
+plaintext value), so refuse it here. Helm coalesces the subchart default
+(enabled: false, value: your-password) into these values, so only a value other
+than that default means the key was carried over.
+*/}}
+{{- define "tooljet.validateRedisPassword" -}}
+{{- $pw := dig "auth" "password" dict .Values.redis.redis -}}
+{{- if or (dig "enabled" false $pw) (ne (toString (dig "value" "your-password" $pw)) "your-password") -}}
+  {{- fail "redis.redis.auth.password was removed in tooljet 1.3.0: a plaintext Redis password no longer goes in the values. To require Redis AUTH, create a dictionary secret with the key `password`, then set redis.redis.auth.fromSecret.enabled: true and redis.redis.auth.fromSecret.name to its name, and remove redis.redis.auth.password. Upgrading from 1.2.0 with the password on: create it under a NEW name holding your CURRENT Redis password — see \"Upgrading from 1.2.0\" in the README." -}}
+{{- end -}}
+{{- end }}
 
 {{- define "tooljet.validate" -}}
 {{- include "tooljet.validateRemovedKeys" . -}}
@@ -108,9 +132,10 @@ true
 {{- fail (printf "tooljet: redis.sentinel.replicas must stay 1 — with a single data node there is no failover target; the sentinel is monitor-only (got '%v')" .Values.redis.sentinel.replicas) -}}
 {{- end -}}
 {{- end -}}
+{{- include "tooljet.validateRedisPassword" . -}}
 {{- if eq (include "tooljet.redisAuthEnabled" .) "true" -}}
-{{- if not (dig "auth" "password" "value" "" .Values.redis.redis) -}}
-{{- fail "tooljet: redis.redis.auth.password.value is required when redis.redis.auth.password.enabled is true — it is wired into ToolJet as REDIS_PASSWORD" -}}
+{{- if not (include "tooljet.redis.secret.name" .) -}}
+{{- fail "tooljet: redis.redis.auth.fromSecret.name is required when redis.redis.auth.fromSecret.enabled is true — the name of a prerequisite dictionary secret holding the Redis password under the key `password` (must exist BEFORE install)" -}}
 {{- end -}}
 {{- end -}}
 {{- if or (dig "auth" "password" "enabled" false .Values.redis.sentinel) (dig "auth" "fromSecret" "enabled" false .Values.redis.sentinel) -}}

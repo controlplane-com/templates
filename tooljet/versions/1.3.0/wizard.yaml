@@ -269,24 +269,49 @@ steps:
               writes to read-only replicas.
       - id: redis-auth
         title: Redis password
-        toggle: redis.redis.auth.password.enabled
+        toggle: redis.redis.auth.fromSecret.enabled
         when: self.redis.enabled
         description: >-
-          Off, Redis accepts connections from the GVC without a password. On, ToolJet sends this password to
-          the Redis node; the Sentinel stays without one.
+          Off, Redis accepts connections from the GVC without a password. On, Redis and ToolJet read the
+          password from the secret below; the Sentinel itself stays without one.
         fields:
-          - path: redis.redis.auth.password.value
-            type: string
-            label: Redis password
+          - path: redis.redis.auth.fromSecret.name
+            type: ref
+            label: Redis password secret
             required: true
-            sensitive: true
-            description: Used as-is, so change it before installing.
+            description: A dictionary secret with the key `password`. It must exist before you install.
+            help: >-
+              Redis keeps no password on disk, and restarting it empties ToolJet's job queue. To change the
+              password, follow "Rotating the Redis password" in the template README.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [password]
+              create:
+                suggestName: "context.releaseName + '-tooljet-redis'"
         rules:
-          - rule: self.redis.redis.auth.password.value != ''
+          - rule: self.redis.redis.auth.fromSecret.name != ''
             mirrors: tooljet.validate
-            paths: [redis.redis.auth.password.value]
-            message: Set the Redis password; the chart does not render without it.
+            paths: [redis.redis.auth.fromSecret.name]
+            message: Name the Redis password secret, or turn the password off.
+          # Upgrading from 1.2.0 with auth on, the upgrade deletes the chart-created <release>-redis-auth-password
+          # secret, so the prerequisite secret must have a different name (holding the same password).
+          - when: context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') < 0
+            rule: self.redis.redis.auth.fromSecret.name != context.releaseName + '-redis-auth-password'
+            paths: [redis.redis.auth.fromSecret.name]
+            message: >-
+              The previous version created this secret itself, and this upgrade deletes it. Create a secret under
+              a NEW name holding your current Redis password, and name it here.
     rules:
+      - rule: "!has(self.redis.redis.auth.password)"
+        mirrors: tooljet.validateRedisPassword
+        paths: [redis.enabled]
+        message: >-
+          redis.redis.auth.password was removed in 1.3.0: the Redis password is now a prerequisite dictionary
+          secret (key password) chosen under Redis password. Remove redis.redis.auth.password from the values.
       - when: self.redis.enabled
         rule: >-
           !has(self.redis.sentinel.auth) ||
@@ -340,6 +365,14 @@ yamlOnly:
       a Sentinel needs little.
 
 migrations:
+  - fromVersions: "<1.3.0"
+    from: redis.redis.auth.password.enabled
+    note: >-
+      The Redis password is now a prerequisite dictionary secret (key password). If it was on, create the secret
+      under a NEW name holding your current Redis password, then turn on Redis password and choose it.
+  - fromVersions: "<1.3.0"
+    from: redis.redis.auth.password.value
+    note: Put it in the Redis password secret (key password) and choose that secret under Redis password.
   - fromVersions: "<1.3.0"
     from: postgres.credentials
     note: >-

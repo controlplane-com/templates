@@ -70,6 +70,13 @@ prerequisites:
     required: false
     when: smtp.enabled at initial install with an authenticating SMTP relay
     description: SMTP login for invites and password reset. SMTP settings take effect only when set at the first install.
+  - kind: secret
+    secretType: dictionary
+    keys: [password]
+    valuesPath: redis.redis.auth.fromSecret.name
+    required: false
+    when: redis.enabled with redis.redis.auth.fromSecret.enabled (Redis auth; off by default)
+    description: Password for the bundled Redis; Redis, its Sentinel and ToolJet read it. Create it before turning Redis auth on.
   - kind: bucket
     required: false
     when: postgres.backup.enabled (pass-through to the bundled postgres template)

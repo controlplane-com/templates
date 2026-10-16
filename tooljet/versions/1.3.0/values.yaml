@@ -82,12 +82,13 @@ redis:
   redis:
     image: redis:7.4
     replicas: 1               # keep at 1 — plain-client access; see comment above
-    # Auth toggle. Default off = the redis template's proven authless default
-    # (same-GVC firewall is the boundary). enabled=true wires REDIS_PASSWORD.
+    # Auth is OFF by default (the same-GVC firewall is the boundary). To require
+    # AUTH, create a dictionary secret with the key `password` BEFORE install, then
+    # set enabled: true and name it (e.g. my-tooljet-redis). See README Prerequisites.
     auth:
-      password:
+      fromSecret:
         enabled: false
-        value: change-me-tooljet-redis
+        name: ""              # prerequisite dictionary secret (key: password); used only when enabled
     resources:
       cpu: 200m
       memory: 256Mi

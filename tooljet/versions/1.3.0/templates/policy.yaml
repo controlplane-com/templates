@@ -17,5 +17,5 @@ targetLinks:
   - //secret/{{ .Values.smtp.auth.secretName }}
   {{- end }}
   {{- if eq (include "tooljet.redisAuthEnabled" .) "true" }}
-  - //secret/{{ include "tooljet.redis.secretPassword.name" . }}
+  - //secret/{{ include "tooljet.redis.secret.name" . }}
   {{- end }}

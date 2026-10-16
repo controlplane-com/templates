@@ -82,7 +82,7 @@ spec:
           value: "6379"
         {{- if eq (include "tooljet.redisAuthEnabled" .) "true" }}
         - name: REDIS_PASSWORD
-          value: cpln://secret/{{ include "tooljet.redis.secretPassword.name" . }}.password
+          value: cpln://secret/{{ include "tooljet.redis.secret.name" . }}.{{ include "tooljet.redis.secret.key" . }}
         {{- end }}
         {{- end }}
         {{- if .Values.smtp.enabled }}

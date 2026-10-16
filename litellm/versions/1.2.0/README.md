@@ -9,11 +9,12 @@ LiteLLM is an OpenAI-compatible LLM gateway/proxy: one endpoint in front of 100+
 - **Redis + Sentinel** (`redis` subchart, optional via `redis.enabled`) — shared rate-limit/budget counters and response cache across proxy replicas.
 - **Config secret** — the model/provider list mounted as `config.yaml`.
 - **Database credentials secret** (dictionary) — *not created by this template*; you create it before install. Postgres initializes from it and the proxy builds its `DATABASE_URL` from it.
-- **Identity + policy** — grants the proxy `reveal` on its config secret and your two prerequisite secrets.
+- **Redis password secret** (dictionary, optional) — *not created by this template*; only when you turn Redis auth on.
+- **Identity + policy** — grants the proxy `reveal` on its config secret and your prerequisite secrets.
 
 ## Prerequisites
 
-**Two dictionary secrets must exist BEFORE you install.** If either is missing the deployment wedges silently: `cpln logs` returns zero lines because the containers never start, and the only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-litellm --gvc GVC_NAME -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own, but LiteLLM can take up to about 12 minutes to serve again — poll rather than giving up — or skip the wait with `cpln workload force-redeployment`.
+**Two dictionary secrets must exist BEFORE you install** (three with Redis auth on). If one is missing the deployment wedges silently: `cpln logs` returns zero lines because the containers never start, and the only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-litellm --gvc GVC_NAME -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own, but LiteLLM can take up to about 12 minutes to serve again — poll rather than giving up — or skip the wait with `cpln workload force-redeployment`.
 
 - **The proxy's keys secret.** The proxy references it by name (`secrets.name`, default `my-litellm-secrets`). It must be a **dictionary** secret containing:
   - `LITELLM_MASTER_KEY` — admin key (format `sk-...`); gates the Admin API/UI and mints virtual keys.
@@ -40,6 +41,15 @@ LiteLLM is an OpenAI-compatible LLM gateway/proxy: one endpoint in front of 100+
 
   - **All three values must be URL-safe** (letters, digits, `_`): the proxy's `DATABASE_URL` is assembled from them at container start. The snippet's hex password is URL-safe.
   - **Postgres reads the secret only when its data directory is first initialized.** To change the password later, run `ALTER ROLE` first, then edit the secret (`cpln secret edit my-litellm-db-credentials`), then right away redeploy the proxy (`cpln workload force-redeployment RELEASE_NAME-litellm --gvc GVC_NAME`) and wait until `get-deployments` shows a higher version number, alone and ready (right after the command the status may not show the restart yet, and `ready: true` alone can still describe the old replica). A running workload keeps the values it started with. Do not redeploy the database: PostgreSQL reads the secret only when it is first initialized, so restarting it only adds downtime. Connections the app already has open keep working after `ALTER ROLE`; new ones fail until its redeploy finishes, so redeploy right away and rotate in a quiet window.
+
+- **The Redis password secret — only if you turn Redis auth on** (`redis.redis.auth.fromSecret.enabled: true`). Redis, Sentinel and the proxy all read it; set `redis.redis.auth.fromSecret.name` to its name:
+
+  ```bash
+  cpln secret create-dictionary --name my-litellm-redis \
+    --entry password="$(openssl rand -hex 24)"
+  ```
+
+  Redis keeps no password on disk, so changing it later follows [Rotating the Redis password](#rotating-the-redis-password).
 
 ## Configuration
 
@@ -100,9 +110,9 @@ redis:
   redis:
     replicas: 3
     auth:
-      password:
-        enabled: false        # true = require AUTH; wires the master password into LiteLLM's cache config
-        value: change-me-litellm-redis
+      fromSecret:
+        enabled: false        # true = require AUTH (Redis, Sentinel and the proxy read the secret below)
+        name: ""              # prerequisite dictionary secret (key: password); used only when enabled
   sentinel:
     replicas: 3
 ```
@@ -116,6 +126,28 @@ redis:
 | OpenAI-compatible calls | `POST /chat/completions` with `Authorization: Bearer <key>` | master key or a minted virtual key |
 
 The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`cpln workload get {release}-litellm --gvc {gvc} -o yaml`).
+
+## Rotating the Redis password
+
+Redis keeps no password on disk: every Redis and Sentinel replica reads the secret when it starts. Restarting them one by one with a new password would leave the restarted replicas unable to replicate from the old primary, so change the running password in place first, then redeploy the proxy. Use your Redis and Sentinel replica counts (3 by default):
+
+```bash
+NEW="$(openssl rand -hex 24)"; echo "$NEW"
+cpln secret edit SECRET_NAME                      # set password to the value printed above
+cpln secret reveal SECRET_NAME -o yaml            # check it reads the new value
+for i in 0 1 2; do                                # every Redis replica: new password, authenticating with the old one
+  cpln workload exec RELEASE_NAME-redis --gvc GVC_NAME --replica RELEASE_NAME-redis-$i --container redis -- \
+    sh -c "redis-cli --no-auth-warning -a \"\$CUSTOM_REDIS_PASSWORD\" CONFIG SET masterauth $NEW &&
+           redis-cli --no-auth-warning -a \"\$CUSTOM_REDIS_PASSWORD\" CONFIG SET requirepass $NEW"
+done
+for i in 0 1 2; do                                # every Sentinel: authenticate to Redis with the new password
+  cpln workload exec RELEASE_NAME-sentinel --gvc GVC_NAME --replica RELEASE_NAME-sentinel-$i --container sentinel -- \
+    redis-cli -p 26379 SENTINEL SET mymaster auth-pass "$NEW"
+done
+cpln workload force-redeployment RELEASE_NAME-litellm --gvc GVC_NAME
+```
+
+Wait until `get-deployments` shows the proxy at a higher version number, alone and ready. Connections the proxy already has open keep working; new ones fail until its redeploy finishes, so rate limits and the cache are briefly unavailable — rotate in a quiet window. Redis and Sentinel need no redeploy: they read the updated secret the next time they restart.
 
 ## Upgrading from 1.1.0
 
@@ -134,6 +166,16 @@ cpln secret create-dictionary --name RELEASE_NAME-postgres-credentials \
 Then upgrade with `postgres.config.credentialsSecretName` set to the new name and `postgres.credentials` removed. The old `{release}-litellm-db` secret is deleted too; nothing replaces it.
 
 The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so LiteLLM loses its database for about a minute and a half; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
+
+**If you ran 1.1.0 with Redis auth on**, `redis.redis.auth.password` was removed too (carrying it forward fails the render), and the chart-created `RELEASE_NAME-redis-auth-password` secret is deleted by the upgrade. Before upgrading, copy your current Redis password into a secret under a **new** name, keeping the same value so the replicas keep replicating while they restart:
+
+```bash
+cpln secret reveal RELEASE_NAME-redis-auth-password -o yaml
+cpln secret create-dictionary --name RELEASE_NAME-litellm-redis \
+  --entry password=YOUR_CURRENT_REDIS_PASSWORD
+```
+
+Then upgrade with `redis.redis.auth.fromSecret.enabled: true`, `redis.redis.auth.fromSecret.name` set to the new name, and `redis.redis.auth.password` removed. With Redis auth off in 1.1.0 (the default), just remove `redis.redis.auth.password` from your values.
 
 ## Upgrading from 1.0.0
 
@@ -171,12 +213,12 @@ Check the object size before restoring from one.
 
 ## Important Notes
 
-- **Both prerequisite secrets must exist before install** — `secrets.name` (master key, salt key, every `providerEnv` key) and `postgres.config.credentialsSecretName` (database `username`, `password`, `database`). A missing secret wedges the deployment with zero log lines — see Prerequisites for how to diagnose it.
+- **Every prerequisite secret must exist before install** — `secrets.name` (master key, salt key, every `providerEnv` key), `postgres.config.credentialsSecretName` (database `username`, `password`, `database`) and, with Redis auth on, `redis.redis.auth.fromSecret.name` (`password`). A missing secret wedges the deployment with zero log lines — see Prerequisites for how to diagnose it.
 - **Rotating the database password needs `ALTER ROLE` plus a forced redeployment of the proxy** (not the database) — Postgres keeps the password it was initialized with, and a running workload keeps the values it started with (see Prerequisites).
 - **`LITELLM_SALT_KEY` is write-once — never rotate it.** It encrypts stored provider keys; changing it corrupts them. The master key may be rotated.
 - **The endpoint is key-gated, not open.** Public access still requires a valid master or virtual key — hand out virtual keys (with budgets/limits) rather than the master key.
 - **Keep Redis on for `replicas >= 2`.** Without it, each replica rate-limits in-memory, so the effective limit is N× the configured value.
-- **Redis ships authless by default** (same-GVC firewall is the boundary). Set `redis.redis.auth.password.enabled: true` to require AUTH; the master password is then wired into the proxy's cache config.
+- **Redis ships authless by default** (same-GVC firewall is the boundary). To require AUTH, create the Redis password secret and set `redis.redis.auth.fromSecret.enabled: true` with its name; changing it later follows [Rotating the Redis password](#rotating-the-redis-password).
 - **Postgres data survives reinstall of the proxy** — to reset virtual keys/spend you must also reinstall the database (its volumeset).
 - **First install self-heals a brief DB-timing gap.** On a cold install the proxy can start before Postgres accepts connections and log a `P1001` error with one restart; it recovers automatically once the database is ready (about 1.5–2 minutes to healthy). No action needed.
 

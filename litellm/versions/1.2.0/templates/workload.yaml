@@ -44,9 +44,11 @@ spec:
         - name: STORE_MODEL_IN_DB
           value: {{ ternary "\"True\"" "\"False\"" .Values.litellm.storeModelInDb }}
         {{- if eq (include "litellm.redisAuthEnabled" .) "true" }}
-        # ── Redis master password (redis subchart auth secret); read by config.yaml ──
+        # ── Redis master password (user prerequisite secret, the one the redis subchart
+        # also reads). config.yaml references it as os.environ/LITELLM_REDIS_PASSWORD,
+        # so the password never lands in the rendered config file. ──
         - name: LITELLM_REDIS_PASSWORD
-          value: cpln://secret/{{ include "litellm.redis.secretPassword.name" . }}.password
+          value: cpln://secret/{{ include "litellm.redis.secret.name" . }}.{{ include "litellm.redis.secret.key" . }}
         {{- end }}
         # ── Provider API keys (user prerequisite secret; referenced by config.yaml) ──
         {{- range .Values.litellm.providerEnv }}

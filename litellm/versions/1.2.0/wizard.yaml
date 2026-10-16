@@ -245,20 +245,30 @@ steps:
             min: 1
             suggestions: [3, 5]
             description: Use an odd number so the sentinels can agree on a failover.
-          - path: redis.redis.auth.password.enabled
+          - path: redis.redis.auth.fromSecret.enabled
             type: boolean
             label: Require a password
             description: >-
-              Off, the GVC firewall is the only boundary. On, the proxy sends the password with every Redis
-              connection.
-          - path: redis.redis.auth.password.value
-            type: string
-            label: Redis password
+              Off, the GVC firewall is the only boundary. On, Redis, Sentinel and the proxy read the password
+              from the secret below.
+          - path: redis.redis.auth.fromSecret.name
+            type: ref
+            label: Redis password secret
             required: true
-            sensitive: true
-            widget: password
-            when: self.redis.redis.auth.password.enabled
-            description: Stored in the release values.
+            when: self.redis.redis.auth.fromSecret.enabled
+            description: A dictionary secret with the key `password`. It must exist before you install.
+            help: >-
+              Redis keeps no password on disk, and restarting it with a new one breaks replication mid-roll. To
+              change it, follow "Rotating the Redis password" in the template README.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [password]
+              create:
+                suggestName: "context.releaseName + '-litellm-redis'"
           - path: redis.redis.image
             type: string
             format: image
@@ -320,16 +330,32 @@ steps:
             required: true
             advanced: true
         rules:
-          - when: self.redis.redis.auth.password.enabled
-            rule: self.redis.redis.auth.password.value != ''
+          - when: self.redis.redis.auth.fromSecret.enabled
+            rule: self.redis.redis.auth.fromSecret.name != ''
             mirrors: litellm.validate
-            paths: [redis.redis.auth.password.value]
-            message: Set the Redis password, or turn the password off.
+            paths: [redis.redis.auth.fromSecret.name]
+            message: Name the Redis password secret, or turn the password off.
+          - rule: "!has(self.redis.redis.auth.password)"
+            mirrors: litellm.validateRedisPassword
+            paths: [redis.redis.auth.fromSecret.enabled]
+            message: >-
+              redis.redis.auth.password was removed in 1.2.0: the Redis password is now a prerequisite dictionary
+              secret (key password) chosen here. Remove redis.redis.auth.password from the values.
+          # Upgrading from 1.1.0 with auth on, the upgrade deletes the chart-created <release>-redis-auth-password
+          # secret, so the prerequisite secret must have a different name (holding the same password).
+          - when: >-
+              self.redis.redis.auth.fromSecret.enabled && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.2.0') < 0
+            rule: self.redis.redis.auth.fromSecret.name != context.releaseName + '-redis-auth-password'
+            paths: [redis.redis.auth.fromSecret.name]
+            message: >-
+              The previous version created this secret itself, and this upgrade deletes it. Create a secret under
+              a NEW name holding your current Redis password, and name it here.
           # The chart fails only when sentinel auth is switched on; any redis.sentinel.auth block is YAML-only here.
-          - when: self.redis.redis.auth.password.enabled
+          - when: self.redis.redis.auth.fromSecret.enabled
             rule: "!has(self.redis.sentinel.auth)"
             mirrors: litellm.validate
-            paths: [redis.redis.auth.password.enabled]
+            paths: [redis.redis.auth.fromSecret.enabled]
             message: >-
               Keep Sentinel authentication off: LiteLLM sends only the Redis password, not a Sentinel password.
               Remove redis.sentinel.auth from the values.
@@ -354,6 +380,15 @@ yamlOnly:
     reason: The proxy connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
 
 migrations:
+  - fromVersions: "<1.2.0"
+    from: redis.redis.auth.password.enabled
+    note: >-
+      The Redis password is now a prerequisite dictionary secret (key password). If it was on, create the secret
+      under a NEW name holding your current Redis password, then turn on Require a password under Redis and
+      choose it.
+  - fromVersions: "<1.2.0"
+    from: redis.redis.auth.password.value
+    note: Put it in the Redis password secret (key password) and choose that secret under Redis.
   - fromVersions: "<1.2.0"
     from: postgres.credentials
     note: >-

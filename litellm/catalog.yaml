@@ -85,6 +85,13 @@ prerequisites:
     valuesPath: postgres.config.credentialsSecretName
     required: true
     description: Bundled PostgreSQL credentials (all URL-safe); the database initializes from them and the proxy connects with them. Create it before installing.
+  - kind: secret
+    secretType: dictionary
+    keys: [password]
+    valuesPath: redis.redis.auth.fromSecret.name
+    required: false
+    when: redis.redis.auth.fromSecret.enabled (Redis auth; off by default)
+    description: Password for the bundled Redis; Redis, Sentinel and the proxy read it. Create it before turning Redis auth on.
   - kind: bucket
     required: false
     when: postgres.backup.enabled (backups of the bundled PostgreSQL)

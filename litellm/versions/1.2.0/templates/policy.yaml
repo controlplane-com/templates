@@ -14,5 +14,5 @@ targetLinks:
   - //secret/{{ include "litellm.pgCredentials.secret.name" . }}
   - //secret/{{ .Values.secrets.name }}
   {{- if eq (include "litellm.redisAuthEnabled" .) "true" }}
-  - //secret/{{ include "litellm.redis.secretPassword.name" . }}
+  - //secret/{{ include "litellm.redis.secret.name" . }}
   {{- end }}

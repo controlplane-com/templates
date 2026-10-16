@@ -41,13 +41,14 @@ alternativeTo:
   - OpenAI API
   - ChatGPT
   - LM Studio
-  - vLLM
   - Hugging Face Inference Endpoints
   - Amazon Bedrock
 
 compatibleWith: [openai-api]
 
 pickInsteadIf:
+  - need: high-throughput serving of a Hugging Face model to many concurrent API clients
+    template: vllm
   - need: a multi-user chat UI with document RAG over hosted OpenAI-compatible APIs, without a GPU
     template: open-webui
   - need: one OpenAI-compatible endpoint with virtual keys and spend tracking across many providers

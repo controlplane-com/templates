@@ -8,11 +8,11 @@ topology: single
 
 summary: >-
   Open WebUI, a ChatGPT-style chat interface with user accounts, chat over uploaded documents and
-  model management, as one workload keeping SQLite, uploads and its Chroma vector store on a
-  persistent volume with daily platform snapshots. It connects to an Ollama workload in the same
-  GVC and to any OpenAI-compatible API with your key. It stays private until you register the
-  admin and turn on public access. Pick it to give a team one chat UI over models you already run
-  or pay for.
+  model management, as one workload keeping its data on a persistent volume with daily snapshots.
+  It connects to an Ollama workload in the same GVC and to any OpenAI-compatible API, such as a
+  vLLM workload, and adds the Control Plane MCP server as a tool each user signs in to. The admin
+  comes from a secret you create, so it serves on a public URL from the first start. Pick it to
+  give a team one chat UI over models you already run or pay for.
 
 keywords:
   - chat ui
@@ -27,6 +27,8 @@ keywords:
   - multi-user chat
   - team ai assistant
   - webui
+  - mcp client
+  - control plane mcp
 
 useCases:
   - Private ChatGPT-style chat for a team over local or hosted models
@@ -43,6 +45,8 @@ alternativeTo:
   - TypingMind
 
 pickInsteadIf:
+  - need: high-throughput serving of a Hugging Face model to many concurrent API clients
+    template: vllm
   - need: run open-weight models on your own GPU, with a chat UI in the same workload
     template: ollama
   - need: an OpenAI-compatible gateway with virtual keys, budgets and rate limits
@@ -51,6 +55,9 @@ pickInsteadIf:
     template: hermes-agent
 
 related:
+  - template: vllm
+    relation: companion
+    note: OpenAI-compatible model server Open WebUI can chat through
   - template: ollama
     relation: companion
     note: Runs the local models that Open WebUI chats with
@@ -62,6 +69,12 @@ related:
     note: Web search provider for chats that need live results
 
 prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [email, password]
+    valuesPath: admin.secretName
+    required: true
+    description: The admin account, created at first boot before the UI serves. Create it before installing; when it is missing the deployment waits with no logs.
   - kind: secret
     secretType: opaque
     valuesPath: auth.secretKeyName
@@ -76,7 +89,7 @@ prerequisites:
   - kind: other
     valuesPath: ollama.workloadName
     required: false
-    when: ollama.enabled (the default), to chat with local models
+    when: ollama.enabled, to chat with local models
     description: An Ollama workload in the same GVC, such as {release}-ollama from the ollama template. Without it the UI starts but lists no Ollama models.
   - kind: domain
     valuesPath: customDomain

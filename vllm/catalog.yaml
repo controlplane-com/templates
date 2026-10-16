@@ -1,0 +1,89 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: vLLM
+category: ai
+topology: stateless
+
+summary: >-
+  The vLLM inference server running one Hugging Face model on an NVIDIA GPU, either a Control Plane
+  A10G or T4 or your own GPU cluster through BYOK, with an OpenAI-compatible API protected by an
+  API key and the model cached on a persistent volume. Optional replicas each get their own GPU and
+  keep serving through restarts. Pick it to serve an open-weight model at high throughput to other
+  applications.
+
+keywords:
+  - llm inference
+  - inference server
+  - model serving
+  - gpu inference
+  - openai-compatible api
+  - pagedattention
+  - continuous batching
+  - hugging face
+  - open-weight models
+  - llama
+  - qwen
+  - mistral
+  - nvidia gpu
+  - nvidia a10g
+  - nvidia t4
+  - byok gpu
+  - private llm
+  - high-throughput inference
+
+useCases:
+  - Serve an open-weight LLM to internal applications through an OpenAI-compatible API
+  - Replace a hosted LLM API with a model running on your own GPU
+  - Run models on your own GPU cluster through BYOK
+  - Serve many concurrent LLM requests from one GPU
+
+alternativeTo:
+  - OpenAI API
+  - Hugging Face Inference Endpoints
+  - Amazon SageMaker
+  - Amazon Bedrock
+  - Text Generation Inference
+  - NVIDIA NIM
+  - Together AI
+  - Fireworks AI
+  - Baseten
+
+compatibleWith: [openai-api]
+
+pickInsteadIf:
+  - need: a bundled chat UI and one-command model pulls, including quantized GGUF models
+    template: ollama
+  - need: one OpenAI-compatible endpoint with virtual keys and budgets across many providers
+    template: litellm
+  - need: a chat UI for people to talk to models
+    template: open-webui
+
+related:
+  - template: open-webui
+    relation: companion
+    note: Chat UI that uses vLLM as its OpenAI-compatible backend
+  - template: litellm
+    relation: companion
+    note: Gateway with virtual keys and spend tracking in front of vLLM
+  - template: langfuse
+    relation: companion
+    note: Traces and evaluates the LLM calls your applications make
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: apiKey.secretName
+    required: true
+    description: API key clients send as a Bearer token. Create it before installing; when it is missing the deployment waits with no logs.
+  - kind: secret
+    secretType: opaque
+    valuesPath: huggingFace.tokenSecretName
+    required: false
+    when: model.name is a gated Hugging Face model
+    description: Hugging Face token for gated models such as Llama or Gemma. Empty downloads anonymously.
+  - kind: other
+    valuesPath: gpu.type
+    required: true
+    description: GPU quota for the org (one NVIDIA A10G by default) in a location that offers it; ask Control Plane support. With gpu.type byok, a BYOK location with NVIDIA GPU nodes instead.

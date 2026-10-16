@@ -1,0 +1,812 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Temporal
+
+# One cluster per release against one database: a second location would run another set of
+# replicas against a separate, independent bundled database, joining nothing.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.4.1
+    when: self.postgres.enabled
+    title: Single-instance PostgreSQL
+    after: database
+    steps:
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the single-instance PostgreSQL. }
+      - { id: backup, title: Database backups }
+    exclude:
+      # Chosen in the Database step below, next to the HA mode's secret, so both modes ask for it in one place.
+      - config.credentialsSecretName
+      # Temporal connects to <release>-postgres directly: a pooler in front of it would sit unused.
+      - pgbouncer
+    override:
+      internalAccess.type:
+        description: >-
+          Temporal connects to its database like any other workload: keep Same GVC, or add the Temporal
+          server workload under Allowed workloads.
+
+steps:
+  - id: server
+    title: Temporal server
+    description: The server and admin-tools images, the replica count and the cluster settings.
+    docs: "#temporal-server"
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.0.0') < 0
+            text: >-
+              Temporal upgrades one minor version at a time, so a 1.x release (server 1.29) steps through
+              1.30 and 1.31 before 1.32. This upgrade lands on 1.30.8; once it is ready, wait about 10 minutes,
+              upgrade again with 1.31.4, then with 1.32.1. Back up the database first: a migrated schema
+              cannot be rolled back.
+          - path: image
+            type: string
+            format: image
+            label: Temporal server image
+            required: true
+            description: Tags 1.30.x, 1.31.x and 1.32.x. Step one minor version per upgrade.
+            docs: "#upgrading-from-1-x"
+            rules:
+              - rule: "!self.image.contains('auto-setup')"
+                mirrors: temporal.validateImages
+                message: >-
+                  The auto-setup image is retired. Use temporalio/server with the same tag as the admin-tools
+                  image, stepping one minor version at a time from 1.30.8.
+              - rule: self.image.matches(':1[.](30|31|32)[.][0-9]+([.][0-9]+)?$')
+                mirrors: temporal.validateImages
+                message: The server image needs a 1.30.x, 1.31.x or 1.32.x tag, such as temporalio/server:1.32.1.
+          - path: replicas
+            type: integer
+            label: Server replicas
+            required: true
+            min: 1
+            max: 5
+            suggestions:
+              - { value: 1, label: "1 (default)" }
+              - { value: 3, label: "3 (survives a replica loss)" }
+              - { value: 5, label: "5" }
+            description: >-
+              Every replica runs the full server and joins one Temporal cluster. Add replicas for availability,
+              not throughput: each replica's database pools shrink as the count grows.
+            docs: "#scaling-and-availability"
+            rules:
+              - rule: self.replicas >= 1 && self.replicas <= 5
+                mirrors: temporal.validate
+                message: The server runs 1 to 5 replicas, a limit set by the bundled database's 100 connections.
+          - type: note
+            text: Each replica opens up to 40 database connections.
+            textExpression: >-
+              'Each replica opens up to ' +
+              string(4 * (((84 / (self.replicas + 1)) / 4 - ((84 / (self.replicas + 1)) / 4 / 3 < 1 ? 1 : (84 / (self.replicas + 1)) / 4 / 3)) < 2 ? 2 : ((84 / (self.replicas + 1)) / 4 - ((84 / (self.replicas + 1)) / 4 / 3 < 1 ? 1 : (84 / (self.replicas + 1)) / 4 / 3))) + 4 * ((84 / (self.replicas + 1)) / 4 / 3 < 1 ? 1 : (84 / (self.replicas + 1)) / 4 / 3)) +
+              ' database connections (main pool ' +
+              string(((84 / (self.replicas + 1)) / 4 - ((84 / (self.replicas + 1)) / 4 / 3 < 1 ? 1 : (84 / (self.replicas + 1)) / 4 / 3)) < 2 ? 2 : ((84 / (self.replicas + 1)) / 4 - ((84 / (self.replicas + 1)) / 4 / 3 < 1 ? 1 : (84 / (self.replicas + 1)) / 4 / 3))) +
+              ', visibility pool ' + string((84 / (self.replicas + 1)) / 4 / 3 < 1 ? 1 : (84 / (self.replicas + 1)) / 4 / 3) +
+              ', for each of its four services), sized so every replica plus one rolling-update replica fits in the database\'s 100 connections.'
+          - type: note
+            when: self.replicas > 1
+            text: >-
+              With more than one replica, upgrades and restarts replace one replica at a time, about 8 to 10
+              minutes per roll at 3 replicas. A new replica's worker service may restart a few times in its
+              first minutes; workflows and clients are not affected.
+          - path: resources
+            type: resources
+            label: Server resources
+            required: true
+            description: Per replica.
+          - path: historyShards
+            type: integer
+            label: History shards
+            required: true
+            immutable: The shard count is fixed when the cluster is first created and can never change.
+            min: 1
+            suggestions: [512, 1024, 2048, 4096]
+            rules:
+              - rule: self.historyShards > 0
+                mirrors: temporal.validate
+                message: The history shard count must be a positive number.
+          - path: namespaceRetention
+            type: string
+            label: Default namespace retention
+            required: true
+            pattern: '^[0-9]+h$'
+            patternMessage: Enter a number of hours, such as 72h.
+            description: How long closed workflow histories are kept in the `default` namespace.
+            help: >-
+              Applied only when the namespace is first created. Change it later with
+              `temporal operator namespace update -n default --retention <hours>h` from the admin container.
+            suggestions: [24h, 72h, 168h, 720h]
+          - path: adminTools.image
+            type: string
+            format: image
+            label: Admin tools image
+            required: true
+            advanced: true
+            description: >-
+              The sidecar that migrates the schema and serves as the `temporal` CLI. Same tag as the server image.
+            rules:
+              - rule: >-
+                  self.image.split(':')[size(self.image.split(':')) - 1] ==
+                  self.adminTools.image.split(':')[size(self.adminTools.image.split(':')) - 1]
+                mirrors: temporal.validateImages
+                message: >-
+                  The admin tools image must carry the same tag as the server image: it migrates the schema that
+                  server version expects.
+    rules:
+      - rule: >-
+          !has(self.resources.cpu) && !has(self.resources.memory) &&
+          !has(self.ui.resources.cpu) && !has(self.ui.resources.memory)
+        mirrors: temporal.validateResourceKnobs
+        paths: [resources]
+        message: >-
+          resources.cpu and resources.memory (and the same keys under ui.resources) were renamed to maxCpu and
+          maxMemory in 1.3.0. Rename them and remove the old keys from the values.
+      - when: oldSelf != null && self.replicas != oldSelf.replicas
+        rule: "false"
+        severity: info
+        paths: [replicas]
+        message: >-
+          Changing the replica count restarts every server replica, one at a time, because each replica's
+          database pools are sized from it. Shards then rebalance. Make the change under light load: old and
+          new replicas running side by side can briefly exceed the database's connection limit.
+      - when: >-
+          oldSelf != null && self.image.matches(':1[.](30|31|32)[.][0-9]+([.][0-9]+)?$') &&
+          oldSelf.image.matches(':1[.](29|30|31|32)[.][0-9]+([.][0-9]+)?$')
+        rule: >-
+          int(self.image.split(':')[size(self.image.split(':')) - 1].split('.')[1]) -
+          int(oldSelf.image.split(':')[size(oldSelf.image.split(':')) - 1].split('.')[1]) in [0, 1]
+        paths: [image]
+        message: >-
+          Temporal upgrades one minor version at a time and cannot go back after the schema moves. Choose the
+          installed minor version or the next one.
+      - when: oldSelf != null && oldSelf.image != self.image
+        rule: "false"
+        severity: info
+        paths: [image]
+        message: >-
+          The new server version migrates the database schema before it starts. Back up the database first:
+          a migrated schema cannot be rolled back.
+
+  - id: ui
+    title: Web UI
+    description: The Temporal Web UI, and which IP ranges may open it in a browser.
+    docs: "#web-ui"
+    sections:
+      - id: ui
+        title: Temporal Web UI
+        toggle: ui.enabled
+        description: >-
+          The UI has no login of its own. It is internal-only unless you list IP ranges below; for a quick
+          check without that, use `cpln port-forward RELEASE-temporal-ui 8080:8080 --gvc GVC`.
+        fields:
+          - path: ui.allowedCIDRs
+            type: list
+            label: Browser access from
+            widget: tags
+            description: >-
+              IP ranges that may open the UI on its public endpoint, for example `203.0.113.10/32` for one
+              address. The UI has no login, so this list is its only protection: list only addresses you
+              trust. Leave it empty to keep the UI internal-only. Changes take up to a few minutes to apply.
+            item:
+              type: string
+            rules:
+              - rule: >-
+                  self.ui.allowedCIDRs.all(c, (size(c.split('/')) == 2 && c.split('/')[1].matches('^[0-9]{1,3}$') && ((c.split('/')[0].matches('^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])[.]){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$') && int(c.split('/')[1]) <= 32) || (c.split('/')[0].matches('^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(:[0-9a-fA-F]{1,4}){1,6}|:((:[0-9a-fA-F]{1,4}){1,7}|:))$') && int(c.split('/')[1]) <= 128))))
+                mirrors: temporal.validateUiAccess
+                message: Every entry must be an IPv4 or IPv6 range with a prefix length, such as 203.0.113.10/32.
+                messageExpression: >-
+                  'Not an IP range with a prefix length: ' +
+                  self.ui.allowedCIDRs.filter(c, !(size(c.split('/')) == 2 && c.split('/')[1].matches('^[0-9]{1,3}$') && ((c.split('/')[0].matches('^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])[.]){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$') && int(c.split('/')[1]) <= 32) || (c.split('/')[0].matches('^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(:[0-9a-fA-F]{1,4}){1,6}|:((:[0-9a-fA-F]{1,4}){1,7}|:))$') && int(c.split('/')[1]) <= 128)))).join(', ') +
+                  '. Use a form such as 203.0.113.10/32 or 2001:db8::/48.'
+              - rule: "!self.ui.allowedCIDRs.exists(c, c.endsWith('/0'))"
+                mirrors: temporal.validateUiAccess
+                message: >-
+                  A /0 range (0.0.0.0/0 or ::/0) opens the UI to the whole internet. The UI has no login, so list
+                  specific ranges, such as your office or VPN egress address (/32).
+              - rule: >-
+                  self.ui.allowedCIDRs.all(c, !(size(c.split('/')) == 2 && c.split('/')[1].matches('^[0-9]{1,3}$') && ((c.split('/')[0].matches('^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])[.]){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$') && int(c.split('/')[1]) <= 32) || (c.split('/')[0].matches('^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(:[0-9a-fA-F]{1,4}){1,6}|:((:[0-9a-fA-F]{1,4}){1,7}|:))$') && int(c.split('/')[1]) <= 128))) || c.endsWith('/0') || (c.split('/')[0].matches('^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])[.]){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$') ? int(c.split('/')[1]) >= 8 : int(c.split('/')[1]) >= 32))
+                mirrors: temporal.validateUiAccess
+                message: >-
+                  A range is too broad for a UI with no login: IPv4 ranges must be /8 or narrower and IPv6 ranges
+                  /32 or narrower. List specific ranges, such as your office or VPN egress address (/32).
+          - path: ui.image
+            type: string
+            format: image
+            label: Web UI image
+            required: true
+            advanced: true
+          - path: ui.resources
+            type: resources
+            label: Web UI resources
+            required: true
+            advanced: true
+
+  - id: access
+    title: Access
+    description: Which workloads reach the Temporal server and the Web UI inside Control Plane.
+    docs: "#access"
+    fields:
+      - path: internalAccess.type
+        type: enum
+        label: Who can connect
+        widget: cards
+        required: true
+        description: >-
+          Applies to the gRPC frontend (7233), the HTTP API (7243) and the Web UI. With Specific workloads, the
+          server's own replicas and the Web UI are always allowed. A change restarts every server replica and
+          takes effect as the restart completes.
+        options:
+          - { value: none, label: None, description: No workload can connect. }
+          - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+          - { value: same-org, label: Same org, description: Any workload in this org. }
+          - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+        rules:
+          - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+            mirrors: temporal.validate
+            message: The internal access must be none, same-gvc, same-org or workload-list.
+      - path: internalAccess.workloads
+        type: list
+        label: Allowed workloads
+        when: self.internalAccess.type == 'workload-list'
+        description: Your workers and clients. The server and Web UI workloads are added for you.
+        widget: tags
+        item:
+          type: ref
+          ref:
+            kind: workload
+            gvc: any
+            format: relativeLink
+            mustExist: warning
+    rules:
+      - when: self.ui.enabled
+        rule: self.internalAccess.type != 'none'
+        severity: warning
+        paths: [internalAccess.type]
+        message: '"None" also blocks the Web UI, which reaches the server like any other workload.'
+      - when: oldSelf != null && self.internalAccess.type != oldSelf.internalAccess.type
+        rule: "false"
+        severity: info
+        paths: [internalAccess.type]
+        message: >-
+          Changing who can connect restarts every server replica, and the new firewall is fully in force only
+          once the last replica has restarted (several minutes with more than one replica).
+
+  - id: archival
+    title: Archival
+    description: Optional long-term copies of closed workflows in S3.
+    docs: "#archival"
+    sections:
+      - id: archival
+        title: Workflow archival to S3
+        toggle: archival.enabled
+        description: >-
+          Copies each closed workflow's history and visibility record to S3 a few minutes after it closes, so
+          it stays readable (`temporal workflow list --archived`, `workflow show`) after retention deletes it.
+          Access is keyless, through an AWS cloud account and a bucket-scoped IAM policy you create first.
+        fields:
+          - type: note
+            severity: warning
+            when: oldSelf != null && oldSelf.archival.enabled == true
+            text: >-
+              Temporal never changes an archival URI once it is enabled on a namespace, so a new bucket or
+              prefix applies only to namespaces that do not archive yet; `default` keeps its current target.
+          - path: archival.defaultNamespace
+            type: boolean
+            label: Archive the default namespace
+            description: >-
+              Turn this off to stop archiving `default`. Keep the archiver itself on: once archival has been
+              used, the namespace keeps its S3 targets and needs it.
+          - path: archival.s3.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+            patternMessage: The bare bucket name (3 to 63 lowercase letters, digits, dots and hyphens), without s3://.
+            rules:
+              - rule: self.archival.s3.bucket.matches('^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$')
+                mirrors: temporal.validateArchival
+                message: The archival bucket must be a bare S3 bucket name, without s3:// or a path.
+          - path: archival.s3.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+            patternMessage: Use an AWS region name, such as us-east-1.
+            rules:
+              - rule: self.archival.s3.region != ''
+                mirrors: temporal.validateArchival
+                message: The archival bucket's region is required.
+          - path: archival.s3.prefix
+            type: string
+            label: Folder prefix
+            description: History goes under `<prefix>/history` and visibility under `<prefix>/visibility`.
+            pattern: '^([^\s/]\S*)?$'
+            patternMessage: Leave out the leading / and spaces.
+            rules:
+              - rule: self.archival.s3.prefix == null || self.archival.s3.prefix.matches('^([^\\s/]\\S*)?$')
+                mirrors: temporal.validateArchival
+                message: The archival prefix must not start with / or contain spaces.
+          - path: archival.s3.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+            rules:
+              - rule: self.archival.s3.cloudAccountName != ''
+                mirrors: temporal.validateArchival
+                message: The AWS cloud account for archival is required.
+          - path: archival.s3.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            rules:
+              - rule: self.archival.s3.policyName != ''
+                mirrors: temporal.validateArchival
+                message: The AWS IAM policy name for archival is required.
+        rules:
+          - rule: "!self.image.matches(':1[.]30[.][0-9]+([.][0-9]+)?$')"
+            mirrors: temporal.validateArchival
+            paths: [archival.enabled]
+            message: >-
+              Archival needs Temporal server 1.31 or later, and this release runs 1.30.x. Finish the upgrade to
+              1.31 first, then turn archival on.
+    rules:
+      - when: oldSelf != null && oldSelf.archival.enabled == true
+        rule: self.archival.enabled == true
+        severity: info
+        paths: [archival.enabled]
+        message: >-
+          Turning the archiver off after archival has been used breaks the `default` namespace: it keeps its
+          S3 targets, every later update of it fails, the server retries archiving each closed workflow
+          indefinitely, and archived workflows become unreadable. To stop archiving, keep it on and turn off
+          "Archive the default namespace" instead. Turn it off only if the archive is gone for good.
+
+  - id: database
+    title: Database
+    description: Which PostgreSQL holds Temporal's data, and the prerequisite secret with its credentials.
+    sections:
+      - fields:
+          - id: dbMode
+            virtual: true
+            type: enum
+            label: Database
+            widget: cards
+            required: true
+            init: "self.postgres.enabled && !self.postgresHA.enabled ? 'single' : 'ha'"
+            options:
+              - value: ha
+                label: Highly available PostgreSQL
+                description: Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint.
+                set: { postgresHA.enabled: true, postgres.enabled: false }
+              - value: single
+                label: Single-instance PostgreSQL
+                description: One PostgreSQL replica; lighter, without failover.
+                set: { postgresHA.enabled: false, postgres.enabled: true }
+            rules:
+              - rule: self.postgresHA.enabled != self.postgres.enabled
+                mirrors: temporal.validate
+                message: Enable exactly one database, highly available or single-instance.
+          # Declared so the postgres import's condition is a field; the chooser above writes it.
+          - path: postgres.enabled
+            type: boolean
+            label: Single-instance PostgreSQL on
+            readOnly: true
+            advanced: true
+            description: Set by the database choice above.
+          - path: postgresHA.enabled
+            type: boolean
+            label: Highly available PostgreSQL on
+            readOnly: true
+            advanced: true
+            description: Set by the database choice above.
+          - type: note
+            severity: warning
+            text: >-
+              The database credentials secret must exist **before** you install; if it is missing, the
+              deployment waits and `cpln logs` shows nothing at all. Its `database` key must be `temporal`:
+              with any other value Temporal stops at boot and logs CPLN_TEMPORAL_DATABASE_GUARD.
+      - id: postgres-ha
+        title: Highly available PostgreSQL
+        when: self.postgresHA.enabled
+        docs: "#postgresql"
+        fields:
+          - path: postgresHA.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`; `database` must be
+              `temporal`.
+            help: >-
+              PostgreSQL reads these values only when its data is first initialized, and Temporal connects with
+              them. To change the password later, change it in the database first, then update the secret and
+              force a redeployment.
+              In HA mode the order differs: move the leader to member -0 first (see the README's HA rotation steps).
+            docs: "#prerequisites"
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-postgres-credentials'"
+          - path: postgresHA.replicas
+            type: integer
+            label: PostgreSQL replicas
+            required: true
+            min: 1
+            suggestions: [3, 5]
+          - path: postgresHA.volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            description: Per replica.
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+        rules:
+          - rule: oldSelf == null || self.postgresHA.volumeset.capacity >= oldSelf.postgresHA.volumeset.capacity
+            paths: [postgresHA.volumeset.capacity]
+            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+          - rule: self.postgresHA.replicas >= 3
+            severity: info
+            paths: [postgresHA.replicas]
+            message: Fewer than 3 PostgreSQL replicas cannot fail over while one of them is down.
+      - id: single
+        title: Single-instance PostgreSQL
+        when: self.postgres.enabled
+        description: >-
+          One PostgreSQL replica, for development and light use. Its server, storage, network and backups
+          follow in the next steps.
+        fields:
+          - path: postgres.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`; `database` must be
+              `temporal`.
+            help: >-
+              PostgreSQL reads these values only when its data directory is first initialized, and Temporal
+              connects with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then
+              update the secret, then right away force a redeployment of Temporal (not of the database).
+            docs: "#prerequisites"
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-postgres-credentials'"
+    rules:
+      - rule: >-
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != null &&
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != ''
+        mirrors: temporal.validateDatabaseSecret
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: The database credentials secret is required.
+      - rule: "!has(self.postgres.credentials)"
+        mirrors: temporal.validateDatabaseSecret
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: >-
+          postgres.credentials was removed in 2.1.0: the database credentials are now a prerequisite
+          dictionary secret named by the credentials secret field. Remove postgres.credentials from the values.
+      - rule: "!has(self.postgresHA.postgres)"
+        paths: [postgresHA.config.credentialsSecretName]
+        message: >-
+          postgresHA.postgres was removed in 1.2.0: put its username and password, with database temporal, in
+          the database credentials secret and remove the block from the values.
+      - rule: >-
+          !has(self.postgres.config.username) && !has(self.postgres.config.password) &&
+          !has(self.postgres.config.database)
+        paths: [postgres.config.credentialsSecretName]
+        message: >-
+          postgres.config.username, password and database were removed in 1.1.0: put the username and
+          password, with database temporal, in the database credentials secret and remove them from the values.
+      # Upgrading from 2.0.0 or earlier, the chart-created secret is deleted by the upgrade itself, so the new
+      # prerequisite secret must have a different name (holding the same username and password, database temporal).
+      - when: oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '2.1.0') < 0
+        rule: >-
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) !=
+          (oldSelf.postgresHA.enabled ? oldSelf.postgresHA.config.credentialsSecretName : oldSelf.postgres.config.credentialsSecretName)
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: >-
+          The previous version created the database secret itself, and this upgrade deletes it. Create a secret
+          under a NEW name holding the same username and password (database temporal), and name it here.
+      - when: oldSelf != null && (context.fromVersion == null || semverCompare(context.fromVersion, '2.1.0') >= 0)
+        rule: >-
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) ==
+          (oldSelf.postgresHA.enabled ? oldSelf.postgresHA.config.credentialsSecretName : oldSelf.postgres.config.credentialsSecretName)
+        severity: info
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: >-
+          PostgreSQL reads the credentials only when its data is first initialized; pointing at another secret
+          does not change the existing user or password.
+
+  - id: backups
+    title: Database backups
+    description: Optional backups of the highly available PostgreSQL to object storage.
+    docs: "#backing-up"
+    when: self.postgresHA.enabled
+    sections:
+      - id: backup
+        title: Scheduled backups
+        toggle: postgresHA.backup.enabled
+        description: >-
+          Logical dumps on a schedule, or continuous WAL-G archiving with periodic base backups. Uninstalling
+          the release deletes the database volumes, so turn this on if the workflow history matters.
+        fields:
+          - path: postgresHA.backup.mode
+            type: enum
+            label: Backup mode
+            widget: segmented
+            required: true
+            options:
+              - { value: logical, label: Logical dumps, description: A scheduled pg_dump of every database. }
+              - { value: wal-g, label: WAL-G, description: Continuous WAL archiving plus periodic base backups. }
+          - path: postgresHA.backup.provider
+            type: enum
+            label: Destination
+            widget: cards
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+              - { value: minio, label: MinIO or S3-compatible }
+          - path: postgresHA.backup.logical.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+            when: self.postgresHA.backup.mode == 'logical'
+          - path: postgresHA.backup.walg.intervalSeconds
+            type: integer
+            label: Base backup interval
+            unit: s
+            required: true
+            min: 1
+            when: self.postgresHA.backup.mode == 'wal-g'
+            suggestions:
+              - { value: 3600, label: "3600 (hourly)" }
+              - { value: 21600, label: "21600 (6 hours, default)" }
+              - { value: 86400, label: "86400 (daily)" }
+          - path: postgresHA.backup.logical.image
+            type: string
+            format: image
+            label: Logical backup image
+            required: true
+            advanced: true
+            when: self.postgresHA.backup.mode == 'logical'
+            description: Tag 17.x.x for the bundled PostgreSQL 17.
+          - path: postgresHA.backup.resources
+            type: resources
+            label: Backup resources
+            required: true
+            advanced: true
+            description: Used by whichever mode is on. WAL-G needs about 512Mi of memory.
+      - title: AWS S3
+        when: self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
+        docs: "#backing-up"
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.0.0') < 0
+            text: >-
+              The backups no longer attach the AWS ReadOnlyAccess policy. Make sure your bucket-scoped IAM
+              policy grants every action listed in the README's AWS S3 setup before you upgrade.
+          - path: postgresHA.backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+            patternMessage: Use lowercase letters, digits, dots and hyphens (3 to 63 characters).
+          - path: postgresHA.backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+            patternMessage: Use an AWS region name, such as us-east-1.
+          - path: postgresHA.backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: postgresHA.backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+          - path: postgresHA.backup.aws.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+      - title: Google Cloud Storage
+        when: self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp'
+        docs: "#backing-up"
+        fields:
+          - path: postgresHA.backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: postgresHA.backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the Storage Admin
+              role on the bucket.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: postgresHA.backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+      - title: MinIO or S3-compatible
+        when: self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio'
+        docs: "#backing-up"
+        fields:
+          - path: postgresHA.backup.minio.endpoint
+            type: string
+            format: url
+            label: S3 endpoint
+            required: true
+            example: true
+            placeholder: http://my-minio-workload:9000
+            description: The URL including the port.
+          - path: postgresHA.backup.minio.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: postgresHA.backup.minio.credentialsSecretName
+            type: ref
+            label: MinIO credentials secret
+            required: true
+            description: A dictionary secret with the keys `accessKey` and `secretKey`.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [accessKey, secretKey]
+          - path: postgresHA.backup.minio.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+        rules:
+          - rule: "!has(self.postgresHA.backup.minio.accessKey) && !has(self.postgresHA.backup.minio.secretKey)"
+            paths: [postgresHA.backup.minio.credentialsSecretName]
+            message: >-
+              postgresHA.backup.minio.accessKey and secretKey were removed in 1.2.1. Put them in a dictionary
+              secret and remove them from the values.
+
+# Rules over values outside the steps: their issues show on the fields named in paths.
+rules:
+  - rule: self.ui.enabled || size(self.ui.allowedCIDRs) == 0
+    mirrors: temporal.validateUiAccess
+    paths: [ui.enabled]
+    message: >-
+      ui.allowedCIDRs opens the Web UI, which is turned off. Turn the Web UI on, or empty the list in YAML
+      mode.
+  - rule: >-
+      context.mode != 'upgrade' || context.fromVersion == null ||
+      semverCompare(context.fromVersion, '2.0.0') >= 0 || self.image.matches(':1[.]30[.][0-9]+([.][0-9]+)?$')
+    paths: [image]
+    message: >-
+      A 1.x release runs Temporal 1.29, and Temporal upgrades one minor version at a time. Upgrade to 2.0.0
+      with a 1.30.x image first (temporalio/server:1.30.8 and temporalio/admin-tools:1.30.8), then step to 1.31
+      and 1.32.
+  - rule: >-
+      !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
+      dyn(self.postgresHA)['proxy']['enabled'] == true
+    mirrors: temporal.validate
+    paths: [postgresHA.config.credentialsSecretName]
+    message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is Temporal's database endpoint.
+  - rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks Temporal, which connects to its database like any other workload.'
+  - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-temporal') in self.postgres.internalAccess.workloads
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-temporal, or Temporal cannot reach its database.'"
+    fix:
+      path: postgres.internalAccess.workloads
+      items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-temporal']"
+    message: Add the Temporal server workload to the list, or Temporal cannot reach its database.
+
+yamlOnly:
+  - path: postgres.pgbouncer
+    reason: Temporal connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+
+migrations:
+  # Archival is new in 2.0.0: an older release had it off.
+  - fromVersions: "<2.0.0"
+    assume: { archival.enabled: false, archival.defaultNamespace: true }
+  # 2.0.0 replaces auto-setup with temporalio/server plus an admin-tools sidecar, and Temporal upgrades one
+  # minor version at a time: a 1.x release (server 1.29) must land on 1.30 first, whatever image it ran.
+  - fromVersions: "<2.0.0"
+    to: image
+    valueExpr: "'temporalio/server:1.30.8'"
+    note: >-
+      Temporal upgrades one minor version at a time, so this upgrade lands on 1.30.8. Upgrade again with
+      1.31.4, then with 1.32.1, about 10 minutes apart.
+  - fromVersions: "<2.0.0"
+    to: adminTools.image
+    valueExpr: "'temporalio/admin-tools:1.30.8'"
+    note: The admin-tools sidecar must carry the same tag as the server image.
+  # 1.3.0 renamed the resource limits.
+  - { fromVersions: "<1.3.0", from: resources.cpu, to: resources.maxCpu }
+  - { fromVersions: "<1.3.0", from: resources.memory, to: resources.maxMemory }
+  - { fromVersions: "<1.3.0", from: ui.resources.cpu, to: ui.resources.maxCpu }
+  - { fromVersions: "<1.3.0", from: ui.resources.memory, to: ui.resources.maxMemory }
+  # 2.1.0: the database credentials are a prerequisite secret; nothing plaintext carries over.
+  - fromVersions: "<2.1.0"
+    from: postgres.credentials
+    note: >-
+      The database credentials are now a prerequisite dictionary secret (username, password, database). Create
+      it under a NEW name with the username and password the database was initialized with and database
+      temporal, and choose it under Database.
+  - fromVersions: "<1.2.0"
+    from: postgresHA.postgres
+    note: >-
+      Put the username and password the HA database was initialized with, and database temporal, in the
+      database credentials secret, and choose it under Database.
+  - fromVersions: "<1.1.0"
+    from: postgres.config.username
+    note: Put it in the database credentials secret (key username); choose the secret under Database.
+  - fromVersions: "<1.1.0"
+    from: postgres.config.password
+    note: Put it in the database credentials secret (key password). PostgreSQL keeps the password it was initialized with.
+  - fromVersions: "<1.1.0"
+    from: postgres.config.database
+    note: The database credentials secret's database key must be temporal; choose the secret under Database.
+  - fromVersions: "<1.2.1"
+    from: postgresHA.backup.minio.accessKey
+    note: >-
+      The MinIO keys moved to a dictionary secret with the keys accessKey and secretKey; choose it under
+      Database backups.
+  - fromVersions: "<1.2.1"
+    from: postgresHA.backup.minio.secretKey
+    note: >-
+      The MinIO keys moved to a dictionary secret with the keys accessKey and secretKey; choose it under
+      Database backups.

@@ -102,16 +102,33 @@ internalAccess:
 
 Set `gpu.type: byok` to run on your own NVIDIA nodes. This works on any Kubernetes cluster registered as a Control Plane [BYOK location](https://docs.controlplane.com/byok/overview) — an MK8s cluster with the [BYOK add-on](https://docs.controlplane.com/mk8s/add-ons/byok) enabled, or a cluster you already run (EKS, GKE, AKS, on-premises). A cluster that is not registered as a location cannot run this template. The chart requests `nvidia.com/gpu` with runtime class `nvidia`; the built-in form cannot target BYOK nodes.
 
-Any cluster needs NVIDIA GPU nodes with driver 580 or newer (the CUDA 13 image requires it), a device plugin that exposes `nvidia.com/gpu`, a `nvidia` runtime class, and no taint on the GPU nodes (Control Plane workloads do not tolerate it). Only MK8s has been tested; on an MK8s cluster that means:
+Every cluster needs:
 
-- **NVIDIA add-on with `taintGPUNodes: false`** — Control Plane workloads do not tolerate the GPU taint, so with it on nothing can use the GPU.
-- **GPU node pool label `cpln.io/gpuUsageAutoDrain: ignore`** — otherwise BYOK drains a GPU node that has had no GPU pod for 5 minutes, including one where vLLM is still starting.
-- **An x86 NVIDIA-driver node image on AWS, plus the label `mk8s.cpln.io/accelerator: nvidia`** — the recommended `+nvidia` images currently resolve to arm64 and cannot boot GPU instances; with a custom image the device plugin only runs on nodes carrying that label.
-- **A GPU node boot disk of at least 200 GB** — the driver image, the ~10 GB vLLM image and the model otherwise fill the disk and the node evicts vLLM.
-- **One instance type per GPU node pool.**
-- **Size `resources` to the node:** a 4-vCPU / 16 GiB GPU node (g5.xlarge, g6.xlarge) cannot fit the built-in default of 6 CPU, so the replica stays pending. Use about `cpu: 2000m`, `memory: 8Gi`.
+- **NVIDIA GPU nodes with driver 580 or newer** (the CUDA 13 image requires it) and a device plugin that exposes `nvidia.com/gpu`.
+- **A RuntimeClass named `nvidia`** — the chart always requests it, and its handler differs per cluster (below). Without it the install fails with `The GPU runtime class nvidia is not supported in this cluster`. If you add it after installing BYOK, restart BYOK's actuator (`kubectl rollout restart deploy/actuator -n controlplane`); it does not see new runtime classes until then.
+- **No taint on the GPU nodes** — Control Plane workloads do not tolerate it.
+- **GPU node label `cpln.io/gpuUsageAutoDrain: ignore`** — otherwise BYOK drains a GPU node that has had no GPU pod for 5 minutes, including one where vLLM is still starting.
+- **A GPU node boot disk of at least 200 GB** — the ~10 GB image and the model otherwise fill the disk and the node evicts vLLM.
+- **`resources` sized to the node** — a 4-vCPU GPU node (g5.xlarge, g6.xlarge, g2-standard-4, NC4as_T4_v3) cannot fit the built-in default of 6 CPU and the replica stays pending; use about `cpu: 2000m`, `memory: 8Gi`.
+- **A GVC whose only location is the BYOK location** — on a Control Plane location the GPU request is ignored and vLLM cannot start.
 
-Use a GVC whose only location is the BYOK location: on a Control Plane location the GPU request is ignored and vLLM cannot start.
+```yaml
+# kubectl apply -f runtimeclass.yaml (not needed on MK8s)
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: nvidia
+handler: nvidia # EKS: nvidia, GKE: runc, AKS: nvidia-container-runtime
+```
+
+Tested per cluster type (each passed internal and public API checks):
+
+- **MK8s on AWS:** NVIDIA add-on with `taintGPUNodes: false`; an x86 NVIDIA-driver node image (DLAMI) plus the label `mk8s.cpln.io/accelerator: nvidia` — the recommended `+nvidia` images resolve to arm64, and with a custom image the device plugin only runs on nodes carrying that label; one instance type per GPU pool. The `nvidia` RuntimeClass is built in.
+- **MK8s on GCP:** NVIDIA add-on with `taintGPUNodes: false`; GPU pool `overrideImage.family` `deeplearning-platform-release/common-cu129-ubuntu-2404-nvidia-580` plus the label `mk8s.cpln.io/accelerator: nvidia`. Only machine types with a built-in GPU work (G2/L4, A2, A3) — GCP node pools have no accelerator field, so T4/V100 on N1 is not possible. The `nvidia` RuntimeClass is built in.
+- **EKS:** the AL2023 NVIDIA AMI (eksctl installs the device plugin); RuntimeClass `nvidia` with handler `nvidia`; the [AWS Load Balancer Controller](https://kubernetes-sigs.github.io/aws-load-balancer-controller/) — BYOK's ingress service requests an `external` NLB and gets no address without it (Helm needs `--disable-openapi-validation` once BYOK is installed).
+- **GKE:** GPU pool with `gpu-driver-version=latest`; RuntimeClass `nvidia` with handler **`runc`** (GKE has no `nvidia` handler and injects the driver itself). BYOK's storage classes are Hyperdisk-only, which N1 machines (the only T4 family) cannot attach — on N1 set `byok.noDefaultStorageClasses: true` in `cluster.json` of ConfigMap `kube-system/cpln-byok-current`, restart `cpln-byok-agent`, and create your own `general-purpose-ssd-ext4` class on `pd-balanced`. If BYOK's install stalls with `istiod` never created, restart `deploy/cpln-byok-agent -n kube-system`.
+- **AKS:** GPU pool with the default `--gpu-driver Install` (driver 580) **in an availability zone** (`--zones 1`) — BYOK's storage classes are Premium SSD v2, which Azure attaches only to zonal VMs; the [NVIDIA device plugin](https://github.com/NVIDIA/k8s-device-plugin) (AKS does not install it), with the pool label `nvidia.com/gpu.present=true` so its chart schedules there; RuntimeClass `nvidia` with handler **`nvidia-container-runtime`**.
+- **MK8s on Azure:** not working yet — a GPU pool with a custom NVIDIA-driver image is never created, and the stock image has no driver.
 
 ## Connecting
 

@@ -184,6 +184,8 @@ PostgreSQL keeps the password it was initialized with, and a running workload ke
 3. Redeploy the database and wait for it to be ready: `cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME`.
 4. Redeploy Umami: `cpln workload force-redeployment RELEASE_NAME-umami --gvc GVC_NAME`, and wait until `get-deployments` no longer shows `will be restarted shortly` — `ready: true` alone can still describe the old replica.
 
+Logins fail from when the database restarts in step 3 until step 4 finishes (about 2½ minutes measured with one replica), so rotate in a quiet window.
+
 ## Rotating the database password in HA mode
 
 The HA database (`postgresHA`) needs its own order. The replication role `repl` shares the password, and a member that restarts with the old password can be promoted to leader, which splits the cluster. Move the leader to member `-0` first, so it restarts last, after every other member already has the new password. `pgx` runs a command in one member (`LOCATION` is your GVC's location, `DB_USERNAME` the secret's `username`):
@@ -199,7 +201,7 @@ pgx 0 curl -s -XPOST -d '{"leader":"RELEASE_NAME-postgres-ha-N","candidate":"REL
 pgx 0 psql -h 127.0.0.1 -d postgres -c "ALTER ROLE DB_USERNAME PASSWORD 'NEW_PASSWORD'; ALTER ROLE repl PASSWORD 'NEW_PASSWORD';"
 cpln secret edit SECRET_NAME
 cpln workload force-redeployment RELEASE_NAME-postgres-ha --gvc GVC_NAME
-# 6. After ~5-6 minutes, confirm one leader and two "streaming" replicas on one timeline (repeat step 1)
+# 6. After ~5-7 minutes, confirm one leader and two "streaming" replicas on one timeline (repeat step 1)
 # 7. Optional: remove the install-time password Patroni keeps in its cluster config
 pgx 0 curl -s -XPATCH -d '{"postgresql":{"authentication":null}}' localhost:8008/config
 ```
@@ -224,7 +226,7 @@ cpln secret create-dictionary --name RELEASE_NAME-postgres-credentials \
 
 Then upgrade with `postgres.config.credentialsSecretName` (single-instance mode) or `postgresHA.config.credentialsSecretName` (HA mode) set to that name, and `postgres.credentials` removed. Your current values are also in `postgres.credentials` of the 1.3.x release. Read the old secret under the name your release set in `credentialsSecretName`, if you changed the default.
 
-The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so Umami can briefly lose its database; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
+The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so Umami loses its database for about a minute and a half; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
 
 ## Upgrading from 1.2.x (HA store)
 

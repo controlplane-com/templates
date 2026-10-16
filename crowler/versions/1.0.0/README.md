@@ -1,0 +1,196 @@
+# The CROWler
+
+The CROWler is an open-source, self-hosted platform for web crawling, scraping and content discovery that drives real Chromium browsers rather than plain HTTP fetches. This template deploys the crawl engine, a pool of browser nodes, the search and source-management API, the events manager, and a bundled PostgreSQL that stores every source and page the engine collects.
+
+## Architecture
+
+- **Engine** (`{release}-crowler-engine`, stateful) — polls the database for sources and crawls them through its own browser nodes. Each engine replica is pinned to a disjoint set of browser nodes.
+- **Browser pool** (`{release}-crowler-vdi`, stateful) — Selenium standalone Chromium, one browser per replica, addressed per replica by the engines.
+- **API** (`{release}-crowler-api`, standard) — search and source management on HTTP `:8080`.
+- **Events manager** (`{release}-crowler-events`, stateful) — events API on HTTP `:8082`; replica 0 runs the scheduled housekeeping.
+- **Schema loader** — a sidecar in the engine, API and events workloads. It loads CROWler's database schema once, then idles; the CROWler process starts only after it finishes.
+- **PostgreSQL** (`postgres` template, version 17) — all crawl data. Backups are available through that template.
+- **Pushgateway** and **Jaeger** (optional, off by default) — crawl counters into the platform's built-in metrics, and browser-session traces.
+- **Secrets, identity and policy** — this template creates the database and app credentials, the rendered `config.yaml`, the app start wrapper and the schema-loader script, and grants its identity `reveal` on exactly those.
+
+## Prerequisites
+
+- **None for a default install.** Every credential is internal plumbing that this template creates from the values below. Change the `change-me-…` passwords before installing.
+- **A single-location GVC.** Each location would get its own, separate database.
+- **Optional:** an opaque VNC-password secret, only if you want to watch the browser (see below). If `vdi.vncSecretName` names a secret that does not exist, the browser pool never starts and `cpln logs` shows nothing. The cause appears in `status.versions[].message`:
+
+  ```bash
+  cpln workload get-deployments {release}-crowler-vdi --gvc {gvc} -o yaml
+  ```
+
+  After you create the secret the pool starts on its own, which can take over 10 minutes; `cpln workload force-redeployment {release}-crowler-vdi --gvc {gvc}` starts it at once.
+
+## Configuration
+
+### Images
+
+```yaml
+images:
+  engine: zfpsystems/crowler-engine:v2.1.8   # the four CROWler images share one release tag — bump them together
+  api: zfpsystems/crowler-api:v2.1.8
+  events: zfpsystems/crowler-events:v2.1.8
+  db: zfpsystems/crowler-db:v2.1.8           # used only by the schema loader
+  vdi: zfpsystems/crowler-vdi:4.28.1-20260819
+  pushgateway: prom/pushgateway:v1.11.3
+  jaeger: jaegertracing/all-in-one:1.76.0
+timezone: UTC
+```
+
+### Engine and browser pool
+
+```yaml
+engine:
+  replicas: 1          # engine i uses browser nodes j where j mod engine.replicas == i
+  resources: { minCpu: 500m, maxCpu: 2000m, minMemory: 1Gi, maxMemory: 2Gi }
+vdi:
+  replicas: 1          # one crawl at a time per browser; must be >= engine.replicas — scale both together
+  vncSecretName: ""   # optional opaque secret with a VNC password; "" = VNC/noVNC off
+  resources: { minCpu: 500m, maxCpu: 2000m, minMemory: 2Gi, maxMemory: 4Gi }
+```
+
+### API and events
+
+```yaml
+api:
+  replicas: 1
+  enableConsole: true  # /v1/source/add and /v1/source/statuses
+  enableApiDocs: true  # /v1/openapi.json and /v1/docs
+  resources: { minCpu: 250m, maxCpu: 1000m, minMemory: 256Mi, maxMemory: 1Gi }
+events:
+  replicas: 1
+  enableApiDocs: true
+  resources: { minCpu: 250m, maxCpu: 1000m, minMemory: 256Mi, maxMemory: 1Gi }
+```
+
+### Crawler behaviour
+
+```yaml
+crawler:
+  queryTimer: 30                # seconds between polls for new sources (>= 5)
+  crawlingInterval: 3 days      # re-crawl cadence for a successful source
+  crawlingIfError: 15 minutes   # retry delay after a failed crawl
+  processingTimeout: 1 day      # max length of one crawl, and how long a crawl interrupted by an engine restart waits before retry
+  maxDepth: 3                   # link-following depth (0 = unlimited)
+  maxLinks: 0                   # links followed per page (0 = unlimited)
+  debugLevel: 1
+config:
+  existingSecretName: ""        # opaque secret with a full config.yaml that REPLACES the rendered one
+```
+
+### Database credentials and PostgreSQL
+
+```yaml
+crowlerDb:                      # app login the schema creates; engine/api/events use it
+  username: crowler
+  password: change-me-crowler-app
+postgres:
+  image: postgres:17            # must stay on 17
+  credentials:                  # superuser; this template creates the secret from these
+    username: postgres
+    password: change-me-crowler-postgres
+    database: crowler
+  config:
+    credentialsSecretName: my-crowler-db-credentials   # org-wide name — one per release
+  resources: { minCpu: 250m, maxCpu: 1000m, minMemory: 512Mi, maxMemory: 2Gi }
+  volumeset:
+    capacity: 10                # GiB
+```
+
+### Telemetry and access
+
+```yaml
+pushgateway: { enabled: false, resources: { cpu: 200m, memory: 256Mi } }
+jaeger: { enabled: false, resources: { cpu: 500m, memory: 1Gi } }
+publicAccess:
+  api: false                    # the API has no authentication at this version
+  events: false
+internalAccess:
+  type: same-gvc                # none | same-gvc | same-org | workload-list
+  workloads: []
+```
+
+## Connecting
+
+| Target | Address | Credentials |
+|---|---|---|
+| API (default, private) | port-forward, then `http://localhost:8080` | none — keep it private |
+| API (same GVC) | `http://{release}-crowler-api.{gvc}.cpln.local:8080` | none |
+| Events (same GVC) | `http://{release}-crowler-events.{gvc}.cpln.local:8082` | none |
+| PostgreSQL (same GVC) | `{release}-postgres.{gvc}.cpln.local:5432` | `crowlerDb.*` (app) or the secret named by `postgres.config.credentialsSecretName` |
+
+Reach the API from your machine, add a site to crawl, then search what was collected:
+
+```bash
+cpln port-forward {release}-crowler-api 8080:8080 --gvc {gvc}
+curl -X POST http://localhost:8080/v1/source/add -H 'Content-Type: application/json' -d '{"url":"https://example.com","restricted":2}'
+curl 'http://localhost:8080/v1/search/general?q=example'
+```
+
+`restricted: 2` lets the crawl follow links within the same site; without it only the page you added is crawled. CROWler 2.1.8 follows absolute and root-relative links (`/docs/a.html`) but not bare relative ones (`a.html`). The API's OpenAPI document is at `http://localhost:8080/v1/openapi.json`. An open port-forward drops requests for up to a minute while an upgrade restarts the API, then reconnects; re-run it if it does not.
+
+## Watching the browser (optional)
+
+VNC and noVNC are off by default, so a default install has no browser login at all. To watch a crawl, create an opaque secret holding a VNC password, set `vdi.vncSecretName` to its name, then tunnel to noVNC and open `http://localhost:7900`:
+
+```bash
+printf '%s' 'vnc8char' | cpln secret create-opaque --name my-crowler-vnc-password --encoding plain -f -
+cpln port-forward {release}-crowler-vdi 7900:7900 --gvc {gvc}
+```
+
+VNC uses only the first 8 characters of the password. The browser nodes are never public; only the engine and your tunnel can reach them.
+
+With `jaeger.enabled`, open the trace UI the same way:
+
+```bash
+cpln port-forward {release}-crowler-jaeger 16686:16686 --gvc {gvc}
+```
+
+## Backing up the database
+
+The database is the `postgres` template, so its scheduled backups work here unchanged. Enable `postgres.backup.*` and follow the Storage setup section of the [`postgres` template README](../../../postgres) for the bucket, [cloud account](https://docs.controlplane.com/guides/create-cloud-account) and IAM policy. Keep `postgres.backup.image` on the `17.1.0` tag, which matches Postgres 17.
+
+## Restoring a backup
+
+Use these steps rather than the `postgres` template's restore. CROWler's schema loader has already created every table, so replaying a backup into the existing database silently drops the rows of several index tables.
+
+1. Install the release to restore into with the **same `crowlerDb.password` and `postgres.credentials.password`** as the backed-up release. The backup carries both passwords and resets the server to them.
+2. Open a tunnel to the database, from a machine with `psql` 17.6 or newer and the AWS CLI:
+
+   ```bash
+   cpln port-forward {release}-postgres 5432:5432 --gvc {gvc}
+   ```
+
+3. In a second terminal, drop the CROWler database, then replay the backup file:
+
+   ```bash
+   export PGPASSWORD='<postgres.credentials.password>'
+   psql --host=127.0.0.1 --port=5432 --username=postgres --dbname=postgres -c 'DROP DATABASE crowler WITH (FORCE)'
+   aws s3 cp "s3://<bucket>/<prefix>/<backup-file>.sql.gz" - | gunzip | psql --host=127.0.0.1 --port=5432 --username=postgres --dbname=postgres
+   unset PGPASSWORD
+   ```
+
+   Two `role … already exists` errors are expected. The engine, API and events tiers reconnect on their own.
+
+## Important Notes
+
+- **Keep the API private.** It has no authentication at this version, and anyone who can reach it can add sources. `publicAccess.api` exposes it to the internet. Access changes take from about 30 seconds to a few minutes to apply.
+- **Do not change either database password after install.** Both are applied to the database once. A changed value reaches the containers on their next restart while the database keeps the old one, so the CROWler tiers stop starting. To rotate one, change it inside PostgreSQL first, then upgrade with the matching value.
+- **Upgrading the CROWler images can need a manual schema migration.** The schema loader never re-runs the schema on an existing database. If the new release expects a newer schema, it logs a `WARNING` and the apps start anyway; apply the matching upstream `db_migrations` script.
+- **`crawler.processingTimeout` is both the longest a crawl may run and the wait before an interrupted crawl is retried.** An upgrade that changes crawler settings restarts the engines, so a crawl in flight is retried only after this time (1 day by default). Lower it only if your crawls are always shorter, since longer ones are cut off and marked as errors.
+- **Changing any `vdi.*` value restarts the browsers.** A crawl in progress then fails and is retried after `crawler.crawlingIfError` (15 minutes by default).
+- **The first upgrade after install can restart the database.** With the default single replicas, crawling and the API may pause for a minute or two.
+- **Network reconnaissance is unavailable.** CROWler's nmap-based DNS, WHOIS and service scans need Linux capabilities the platform does not grant, so they are switched off.
+- **Uninstalling deletes all crawl data.** The database volumeset is removed with the release, so a reinstall starts empty. Back up first if you need the data.
+- **Give each release its own `postgres.config.credentialsSecretName`.** Secret names are org-wide, so a second release on the default name is refused at install.
+
+## Links
+
+- [The CROWler on GitHub](https://github.com/pzaino/thecrowler)
+- [Documentation](https://github.com/pzaino/thecrowler/tree/main/doc)
+- [Deployment support and configuration reference](https://github.com/pzaino/thecrowler-deployment-support)
+- [Ruleset schemas](https://github.com/pzaino/thecrowler/tree/main/schemas)

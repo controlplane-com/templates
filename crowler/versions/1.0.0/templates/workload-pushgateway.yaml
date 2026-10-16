@@ -1,0 +1,49 @@
+{{- if .Values.pushgateway.enabled }}
+---
+kind: workload
+name: {{ include "crowler.pushgateway.name" . }}
+description: CROWler metrics Pushgateway — engines push crawl counters, scraped natively
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "crowler.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: pushgateway
+      image: {{ .Values.images.pushgateway }}
+      # 9091 (the upstream default) is a reserved platform port.
+      args:
+        - --web.listen-address=:9092
+      inheritEnv: false
+      cpu: {{ .Values.pushgateway.resources.cpu | quote }}
+      memory: {{ .Values.pushgateway.resources.memory | quote }}
+      ports:
+        - number: 9092
+          protocol: http
+      metrics:
+        path: /metrics
+        port: 9092
+      readinessProbe:
+        httpGet:
+          path: /-/ready
+          port: 9092
+          scheme: HTTP
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        failureThreshold: 12
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions: {{- include "crowler.fixedScale" 1 | nindent 4 }}
+  firewallConfig:
+    {{- include "crowler.firewall.external" (list . false) | nindent 4 }}
+    internal:
+      inboundAllowType: workload-list
+      inboundAllowWorkload:
+        - {{ include "crowler.workloadLink" (list . (include "crowler.engine.name" .)) }}
+        - {{ include "crowler.workloadLink" (list . (include "crowler.api.name" .)) }}
+        - {{ include "crowler.workloadLink" (list . (include "crowler.events.name" .)) }}
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  supportDynamicTags: false
+{{- end }}

@@ -1,0 +1,63 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: The CROWler
+category: search
+topology: stateless
+
+summary: >-
+  The CROWler, a web crawling, scraping and content-discovery platform that renders pages in real
+  Chromium browsers. It deploys the crawl engines, a pool of Selenium browser nodes pinned to them,
+  a search and source-management API, and an events API, backed by a bundled PostgreSQL. Engines and
+  browsers scale out together, and VNC to watch the browser is optional. Pick it to crawl and index
+  chosen websites, including JavaScript-heavy pages, and query what was collected over an API.
+
+keywords:
+  - web crawler
+  - crawler
+  - web scraping
+  - scraper
+  - headless browser
+  - real browser crawling
+  - selenium
+  - chromium
+  - content discovery
+  - site indexing
+  - search api
+  - javascript rendering
+  - website monitoring
+  - osint
+
+useCases:
+  - Crawl a chosen set of websites and search the collected pages over an API
+  - Scrape JavaScript-heavy pages that a plain HTTP fetcher cannot render
+  - Build a private search index over sites relevant to research or market monitoring
+  - Collect web content for an AI or data pipeline from a self-hosted crawler
+
+alternativeTo:
+  - Firecrawl
+  - Apify
+  - ScrapingBee
+  - Browserless
+  - Zyte
+
+pickInsteadIf:
+  - need: live web search results from public search engines, without crawling sites yourself
+    template: searxng
+  - need: a search index over your own documents or product data
+    template: meilisearch
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: vdi.vncSecretName
+    required: false
+    when: you want to watch the browser over VNC or noVNC
+    description: Opaque secret holding the VNC password. When the name is set but the secret is missing, the browser pool never starts and logs nothing.
+  - kind: secret
+    secretType: opaque
+    valuesPath: config.existingSecretName
+    required: false
+    when: you replace the rendered CROWler config.yaml with your own
+    description: Opaque secret whose payload is a complete config.yaml. When the name is set but the secret is missing, the CROWler tiers never start and log nothing.

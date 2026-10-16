@@ -4,6 +4,9 @@ container args through temporal.inlineScript (every $ doubled), so the upgrade
 adds no secret and no reveal grant. It holds no credentials: the database user
 and password arrive as cpln://secret env vars.
 
+  0. Refuse to start unless the credentials secret's `database` key is
+     `temporal` — the same check as the admin sidecar's, so this container's
+     own log names the cause instead of timing out on the schema gate.
   1. Wait for the admin sidecar's /temporal-gate/schema-ready marker. The 560 s
      timeout sits inside the readiness-derived startup window (~615 s), so the
      FATAL below is always printed before the platform would kill the container.
@@ -19,6 +22,11 @@ set -u
 # sh is PID 1 and ignores signals it has no handler for: exit at once on TERM
 # while waiting (the wait sleeps as `sleep 5 & wait $!` so the trap is prompt).
 trap 'exit 143' TERM INT
+if [ "${DB_SECRET_DATABASE:-}" != "temporal" ]; then
+  echo "FATAL: CPLN_TEMPORAL_DATABASE_GUARD — the database credentials secret's 'database' key is '${DB_SECRET_DATABASE:-}', and it must be 'temporal' (the server's main store). Set it to temporal, then force a redeployment."
+  sleep 120 & wait $!
+  exit 1
+fi
 GATE=/temporal-gate/schema-ready
 waited=0
 echo "temporal: waiting for the admin container to finish database setup ($GATE)"

@@ -46,26 +46,23 @@ deterministic on .Release.Name, so the parent duplicates the derived name.
 {{- end }}
 
 {{/*
-Name of the bundled database's credential secret in the SINGLE-INSTANCE path.
-This chart CREATES that secret (secret-db.yaml) and the postgres subchart only
-receives its NAME. A subchart value cannot be templated by its parent, so the
-name is a plain value that both sides read.
-*/}}
-{{- define "temporal.secret.db.name" -}}
-{{- .Values.postgres.config.credentialsSecretName }}
-{{- end }}
-
-{{/*
-Credentials secret of the ACTIVE database, created by this chart in BOTH modes
-from postgres.credentials.*. HA: postgresHA.config.credentialsSecretName.
-Single-instance: postgres.config.credentialsSecretName. Temporal reads only
-username and password from it; its two store names are literals.
+Credentials secret of the ACTIVE database: a user-created prerequisite
+dictionary secret (keys username, password, database) since 2.1.0. Both
+database subcharts take only a credentials-secret NAME, so Temporal requires
+the same secret rather than building one from plaintext values; the subchart
+and Temporal both read it. 2.0.0 and earlier created it from postgres.credentials.*.
+HA path: named by postgresHA.config.credentialsSecretName.
+Single-instance path: named by postgres.config.credentialsSecretName.
+A subchart value cannot be templated by its parent, so each name is a plain
+value that both sides read. Temporal reads username and password to connect,
+and `database` only for the boot-time check that it is `temporal`; its two
+store names (`temporal`, `temporal_visibility`) are literals.
 */}}
 {{- define "temporal.postgres.secret.name" -}}
 {{- if .Values.postgresHA.enabled -}}
 {{- .Values.postgresHA.config.credentialsSecretName }}
 {{- else -}}
-{{- include "temporal.secret.db.name" . }}
+{{- .Values.postgres.config.credentialsSecretName }}
 {{- end }}
 {{- end }}
 
@@ -173,9 +170,7 @@ byte-identical to the script source. Copied from pgedge.inlineScript.
 {{- include "temporal.validateImages" . -}}
 {{- include "temporal.validateUiAccess" . -}}
 {{- include "temporal.validateArchival" . -}}
-{{- if ne (default "temporal" .Values.postgres.credentials.database) "temporal" -}}
-{{- fail (printf "temporal: postgres.credentials.database must be \"temporal\", got %q. It is used in BOTH database modes, and the Temporal server reads its main store as the literal database \"temporal\" — any other value creates a database nothing uses." .Values.postgres.credentials.database) -}}
-{{- end -}}
+{{- include "temporal.validateDatabaseSecret" . -}}
 {{- if not (has .Values.internalAccess.type (list "none" "same-gvc" "same-org" "workload-list")) -}}
 {{- fail (printf "temporal: internalAccess.type must be 'none', 'same-gvc', 'same-org', or 'workload-list', got '%s'" .Values.internalAccess.type) -}}
 {{- end -}}
@@ -256,6 +251,26 @@ prefix, never a whole-internet range, and the list needs the UI to exist.
 {{- if or (and (eq $family "v4") (lt $prefix 8)) (and (eq $family "v6") (lt $prefix 32)) -}}
 {{- fail (printf "temporal: ui.allowedCIDRs entry %q is too broad for a UI with no login (IPv4 ranges must be /8 or narrower, IPv6 /32 or narrower). List specific ranges, such as your office or VPN egress address (/32)." $c) -}}
 {{- end -}}
+{{- end -}}
+{{- end }}
+
+
+{{/*
+The bundled database's credentials became a user-created prerequisite secret in
+2.1.0: both database subcharts require a pre-existing secret, so Temporal
+requires the same one instead of rendering it from plaintext values. The removed
+key is named explicitly so a 2.0.0 values file fails at render with its
+replacement and the upgrade procedure. No compatibility shims — the version bump
+IS the migration path. The secret's `database` key must be `temporal`; that can
+no longer be checked at render (the value lives in the secret), so both start
+scripts check it at boot and stop with a FATAL instead.
+*/}}
+{{- define "temporal.validateDatabaseSecret" -}}
+{{- if hasKey .Values.postgres "credentials" -}}
+{{- fail "temporal: postgres.credentials was REMOVED in 2.1.0. The database credentials are now a prerequisite `dictionary` secret you create (keys: username, password, database — database must be `temporal`), named by postgresHA.config.credentialsSecretName (HA mode) or postgres.config.credentialsSecretName (single-instance mode). Upgrading from 2.0.0: create it under a NEW name holding your EXISTING values, set the credentialsSecretName of the mode you use to that name, and remove postgres.credentials — see \"Upgrading from 2.0.0\" in the README." -}}
+{{- end -}}
+{{- if not (include "temporal.postgres.secret.name" .) -}}
+{{- fail "temporal: the database credentials secret name is required — set postgresHA.config.credentialsSecretName (HA mode) or postgres.config.credentialsSecretName (single-instance mode) to your pre-created `dictionary` secret holding username, password and database (database must be `temporal`). See Prerequisites in the README." -}}
 {{- end -}}
 {{- end }}
 

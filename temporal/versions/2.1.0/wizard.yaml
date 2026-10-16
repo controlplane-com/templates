@@ -21,7 +21,7 @@ imports:
       - { id: network, title: Database network, description: Who can connect to the single-instance PostgreSQL. }
       - { id: backup, title: Database backups }
     exclude:
-      # Temporal creates this secret itself (templates/secret-db.yaml) and names it in the Database step.
+      # Chosen in the Database step below, next to the HA mode's secret, so both modes ask for it in one place.
       - config.credentialsSecretName
       # Temporal connects to <release>-postgres directly: a pooler in front of it would sit unused.
       - pgbouncer
@@ -380,7 +380,7 @@ steps:
 
   - id: database
     title: Database
-    description: The bundled PostgreSQL and its credentials. Temporal creates the secret from them.
+    description: Which PostgreSQL holds Temporal's data, and the prerequisite secret with its credentials.
     sections:
       - fields:
           - id: dbMode
@@ -410,93 +410,45 @@ steps:
             readOnly: true
             advanced: true
             description: Set by the database choice above.
-      - title: Credentials
-        fields:
-          - type: note
-            text: >-
-              Temporal creates the dictionary secret named below from these values, and the database reads it.
-              The password is used as-is, so change it.
-          - path: postgres.credentials.username
-            type: string
-            label: Database user
-            required: true
-            immutable: PostgreSQL creates this user once, when its data directory is initialized.
-          - path: postgres.credentials.password
-            type: string
-            label: Database password
-            required: true
-            sensitive: true
-            widget: password
-            example: true
-          - path: postgres.credentials.database
-            type: string
-            label: Database name
-            required: true
+          - path: postgresHA.enabled
+            type: boolean
+            label: Highly available PostgreSQL on
             readOnly: true
-            description: Temporal's main store is always the `temporal` database.
-            rules:
-              - rule: self.postgres.credentials.database == 'temporal'
-                mirrors: temporal.validate
-                message: The database name must be temporal; the server reads its main store from that database.
-          - path: postgresHA.config.credentialsSecretName
-            type: string
-            label: Credentials secret name
-            required: true
-            when: self.postgresHA.enabled
-            description: The dictionary secret Temporal creates and PostgreSQL reads. Secret names are org-wide.
-          - path: postgres.config.credentialsSecretName
-            type: string
-            label: Credentials secret name
-            required: true
-            when: self.postgres.enabled
-            description: The dictionary secret Temporal creates and PostgreSQL reads. Secret names are org-wide.
-        rules:
-          - rule: oldSelf == null || self.postgres.credentials.password == oldSelf.postgres.credentials.password
-            severity: info
-            paths: [postgres.credentials.password]
-            message: >-
-              PostgreSQL keeps the password it was initialized with. Run ALTER ROLE first, or Temporal loses its
-              database connection after this upgrade.
-          - when: self.postgresHA.enabled
-            rule: self.postgresHA.config.credentialsSecretName != 'my-temporal-db-credentials'
-            severity: info
-            paths: [postgresHA.config.credentialsSecretName]
-            messageExpression: >-
-              'Secret names are org-wide: a release on this name is refused while another release manages that
-              secret. Give each Temporal release its own name, for example ' + context.releaseName +
-              '-temporal-db-credentials.'
-            message: >-
-              Secret names are org-wide: a release on this name is refused while another release manages that
-              secret. Give each Temporal release its own name.
-          - when: self.postgres.enabled
-            rule: self.postgres.config.credentialsSecretName != 'my-temporal-db-credentials'
-            severity: info
-            paths: [postgres.config.credentialsSecretName]
-            messageExpression: >-
-              'Secret names are org-wide: a release on this name is refused while another release manages that
-              secret. Give each Temporal release its own name, for example ' + context.releaseName +
-              '-temporal-db-credentials.'
-            message: >-
-              Secret names are org-wide: a release on this name is refused while another release manages that
-              secret. Give each Temporal release its own name.
-          - rule: >-
-              !has(self.postgres.config.username) && !has(self.postgres.config.password) &&
-              !has(self.postgres.config.database)
-            paths: [postgres.credentials.username]
-            message: >-
-              postgres.config.username, postgres.config.password and postgres.config.database were removed in
-              1.1.0. Move them to postgres.credentials, from which Temporal creates the secret, and remove them
-              from postgres.config.
-          - rule: "!has(self.postgresHA.postgres)"
-            paths: [postgres.credentials.username]
-            message: >-
-              The postgresHA.postgres block was removed in 1.2.0. Move its username, password and database to
-              postgres.credentials, from which Temporal creates the secret, and remove the block.
+            advanced: true
+            description: Set by the database choice above.
+          - type: note
+            severity: warning
+            text: >-
+              The database credentials secret must exist **before** you install; if it is missing, the
+              deployment waits and `cpln logs` shows nothing at all. Its `database` key must be `temporal`:
+              with any other value Temporal stops at boot and logs CPLN_TEMPORAL_DATABASE_GUARD.
       - id: postgres-ha
         title: Highly available PostgreSQL
         when: self.postgresHA.enabled
         docs: "#postgresql"
         fields:
+          - path: postgresHA.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`; `database` must be
+              `temporal`.
+            help: >-
+              PostgreSQL reads these values only when its data is first initialized, and Temporal connects with
+              them. To change the password later, change it in the database first, then update the secret and
+              force a redeployment.
+              In HA mode the order differs: move the leader to member -0 first (see the README's HA rotation steps).
+            docs: "#prerequisites"
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-postgres-credentials'"
           - path: postgresHA.replicas
             type: integer
             label: PostgreSQL replicas
@@ -519,6 +471,78 @@ steps:
             severity: info
             paths: [postgresHA.replicas]
             message: Fewer than 3 PostgreSQL replicas cannot fail over while one of them is down.
+      - id: single
+        title: Single-instance PostgreSQL
+        when: self.postgres.enabled
+        description: >-
+          One PostgreSQL replica, for development and light use. Its server, storage, network and backups
+          follow in the next steps.
+        fields:
+          - path: postgres.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`; `database` must be
+              `temporal`.
+            help: >-
+              PostgreSQL reads these values only when its data directory is first initialized, and Temporal
+              connects with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then
+              update the secret and force a redeployment.
+            docs: "#prerequisites"
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-postgres-credentials'"
+    rules:
+      - rule: >-
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != null &&
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != ''
+        mirrors: temporal.validateDatabaseSecret
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: The database credentials secret is required.
+      - rule: "!has(self.postgres.credentials)"
+        mirrors: temporal.validateDatabaseSecret
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: >-
+          postgres.credentials was removed in 2.1.0: the database credentials are now a prerequisite
+          dictionary secret named by the credentials secret field. Remove postgres.credentials from the values.
+      - rule: "!has(self.postgresHA.postgres)"
+        paths: [postgresHA.config.credentialsSecretName]
+        message: >-
+          postgresHA.postgres was removed in 1.2.0: put its username and password, with database temporal, in
+          the database credentials secret and remove the block from the values.
+      - rule: >-
+          !has(self.postgres.config.username) && !has(self.postgres.config.password) &&
+          !has(self.postgres.config.database)
+        paths: [postgres.config.credentialsSecretName]
+        message: >-
+          postgres.config.username, password and database were removed in 1.1.0: put the username and
+          password, with database temporal, in the database credentials secret and remove them from the values.
+      # Upgrading from 2.0.0 or earlier, the chart-created secret is deleted by the upgrade itself, so the new
+      # prerequisite secret must have a different name (holding the same username and password, database temporal).
+      - when: oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '2.1.0') < 0
+        rule: >-
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) !=
+          (oldSelf.postgresHA.enabled ? oldSelf.postgresHA.config.credentialsSecretName : oldSelf.postgres.config.credentialsSecretName)
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: >-
+          The previous version created the database secret itself, and this upgrade deletes it. Create a secret
+          under a NEW name holding the same username and password (database temporal), and name it here.
+      - when: oldSelf != null && (context.fromVersion == null || semverCompare(context.fromVersion, '2.1.0') >= 0)
+        rule: >-
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) ==
+          (oldSelf.postgresHA.enabled ? oldSelf.postgresHA.config.credentialsSecretName : oldSelf.postgres.config.credentialsSecretName)
+        severity: info
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: >-
+          PostgreSQL reads the credentials only when its data is first initialized; pointing at another secret
+          does not change the existing user or password.
 
   - id: backups
     title: Database backups
@@ -755,41 +779,27 @@ migrations:
   - { fromVersions: "<1.3.0", from: resources.memory, to: resources.maxMemory }
   - { fromVersions: "<1.3.0", from: ui.resources.cpu, to: ui.resources.maxCpu }
   - { fromVersions: "<1.3.0", from: ui.resources.memory, to: ui.resources.maxMemory }
-  # The database credentials moved to postgres.credentials (single-instance in 1.1.0, HA in 1.2.0), and the
-  # running database keeps the user and password it was initialized with: carry the ACTIVE mode's values,
-  # whatever they are, from wherever that version kept them.
-  - fromVersions: "<1.1.0"
-    to: postgres.credentials.username
-    valueExpr: "self.postgresHA.enabled ? self.postgresHA.postgres.username : self.postgres.config.username"
-    note: PostgreSQL keeps the user it was initialized with, so the installed one is kept.
-  - fromVersions: ">=1.1.0 <1.2.0"
-    to: postgres.credentials.username
-    valueExpr: "self.postgresHA.enabled ? self.postgresHA.postgres.username : self.postgres.credentials.username"
-    note: PostgreSQL keeps the user it was initialized with, so the installed one is kept.
-  - fromVersions: "<1.1.0"
-    to: postgres.credentials.password
-    valueExpr: "self.postgresHA.enabled ? self.postgresHA.postgres.password : self.postgres.config.password"
-    note: PostgreSQL keeps the password it was initialized with, so the installed one is kept.
-  - fromVersions: ">=1.1.0 <1.2.0"
-    to: postgres.credentials.password
-    valueExpr: "self.postgresHA.enabled ? self.postgresHA.postgres.password : self.postgres.credentials.password"
-    note: PostgreSQL keeps the password it was initialized with, so the installed one is kept.
-  - fromVersions: "<1.2.0"
-    to: postgres.credentials.database
-    valueExpr: "'temporal'"
-    note: Temporal's main store is always the temporal database.
+  # 2.1.0: the database credentials are a prerequisite secret; nothing plaintext carries over.
+  - fromVersions: "<2.1.0"
+    from: postgres.credentials
+    note: >-
+      The database credentials are now a prerequisite dictionary secret (username, password, database). Create
+      it under a NEW name with the username and password the database was initialized with and database
+      temporal, and choose it under Database.
   - fromVersions: "<1.2.0"
     from: postgresHA.postgres
-    note: Its username and password moved to postgres.credentials, from which Temporal creates the secret.
+    note: >-
+      Put the username and password the HA database was initialized with, and database temporal, in the
+      database credentials secret, and choose it under Database.
   - fromVersions: "<1.1.0"
     from: postgres.config.username
-    note: Moved to postgres.credentials.username, from which Temporal creates the secret.
+    note: Put it in the database credentials secret (key username); choose the secret under Database.
   - fromVersions: "<1.1.0"
     from: postgres.config.password
-    note: Moved to postgres.credentials.password, from which Temporal creates the secret.
+    note: Put it in the database credentials secret (key password). PostgreSQL keeps the password it was initialized with.
   - fromVersions: "<1.1.0"
     from: postgres.config.database
-    note: Moved to postgres.credentials.database, from which Temporal creates the secret.
+    note: The database credentials secret's database key must be temporal; choose the secret under Database.
   - fromVersions: "<1.2.1"
     from: postgresHA.backup.minio.accessKey
     note: >-

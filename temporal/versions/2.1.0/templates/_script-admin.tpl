@@ -4,6 +4,11 @@ psql/curl/bash). Rendered INLINE through temporal.inlineScript, so it adds no
 secret and no grant; the database credentials arrive as cpln://secret env vars.
 Every replica runs its own sidecar:
 
+  0. Refuse to start unless the credentials secret's `database` key is
+     `temporal` (CPLN_TEMPORAL_DATABASE_GUARD). The server reads its main store as
+     that literal database, while the bundled PostgreSQL creates whatever the key
+     names; any other value would leave a database nothing uses. The value lives
+     in the user's prerequisite secret, so this cannot be checked at render.
   1. Create both databases. create-database opens a real Postgres session, so it
      doubles as the database wait (a bare TCP check is meaningless behind the
      mesh). Retried forever, logged.
@@ -56,6 +61,15 @@ retry() {
   done
   log "${label}: ok"
 }
+
+# ── Database name guard (before anything touches the database) ──────────────
+if [ "${DB_SECRET_DATABASE:-}" != "temporal" ]; then
+  log "FATAL: CPLN_TEMPORAL_DATABASE_GUARD — the database credentials secret's 'database' key is '${DB_SECRET_DATABASE:-}', and it must be 'temporal'."
+  log "FATAL:   Temporal reads its main store from the database named temporal; the bundled PostgreSQL creates the one the secret names."
+  log "FATAL:   Set the key to temporal (cpln secret edit SECRET_NAME), then force a redeployment of this workload. Nothing was changed."
+  sleep 120 & wait $!
+  exit 1
+fi
 
 log "Temporal ${TARGET_TAG}: database setup on ${SQL_HOST}:${SQL_PORT} as replica ${HOLDER}"
 retry "create database temporal" temporal-sql-tool --db temporal create-database

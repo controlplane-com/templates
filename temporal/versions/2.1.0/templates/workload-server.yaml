@@ -42,6 +42,9 @@ spec:
           value: 'cpln://secret/{{ include "temporal.postgres.secret.name" . }}.username'
         - name: POSTGRES_PWD
           value: 'cpln://secret/{{ include "temporal.postgres.secret.name" . }}.password'
+        # Read only by the start script's boot-time check that it is `temporal`.
+        - name: DB_SECRET_DATABASE
+          value: 'cpln://secret/{{ include "temporal.postgres.secret.name" . }}.database'
         - name: DBNAME
           value: temporal
         - name: VISIBILITY_DBNAME
@@ -156,6 +159,9 @@ spec:
           value: 'cpln://secret/{{ include "temporal.postgres.secret.name" . }}.username'
         - name: SQL_PASSWORD
           value: 'cpln://secret/{{ include "temporal.postgres.secret.name" . }}.password'
+        # The secret's `database` key: the start script refuses to run unless it is `temporal`.
+        - name: DB_SECRET_DATABASE
+          value: 'cpln://secret/{{ include "temporal.postgres.secret.name" . }}.database'
         # In-container `temporal` CLI target: this replica's own frontend.
         - name: TEMPORAL_ADDRESS
           value: 127.0.0.1:7233

@@ -28,7 +28,9 @@ steps:
                 set: { mode: production }
               - value: dev
                 label: Dev / testing
-                description: One Redis node, no Sentinel, no failover. Not for production.
+                description: >-
+                  One Redis node, no Sentinel, no failover. Not for production. Turns off Sentinel public access,
+                  persistence and authentication; choosing Production again does not turn them back on.
                 set:
                   mode: dev
                   sentinel.publicAccess.enabled: false
@@ -130,6 +132,7 @@ steps:
           - path: redis.multiZone
             type: boolean
             label: Spread Redis nodes across zones
+            when: self.mode != 'dev'
       - title: Sentinel
         when: self.mode != 'dev'
         fields:
@@ -797,6 +800,7 @@ steps:
                 message: Same org already lets every workload of the org connect, so these Redis entries add nothing.
           - path: redis.firewall.external_inboundAllowCIDR
             type: list
+            when: self.redis.publicAccess.enabled || size(self.redis.firewall.external_inboundAllowCIDR) > 0
             absent: true
             serialize: csv
             label: Public inbound CIDRs
@@ -883,6 +887,7 @@ steps:
                 message: Same org already lets every workload of the org connect, so these Sentinel entries add nothing.
           - path: sentinel.firewall.external_inboundAllowCIDR
             type: list
+            when: self.sentinel.publicAccess.enabled || size(self.sentinel.firewall.external_inboundAllowCIDR) > 0
             absent: true
             serialize: csv
             label: Public inbound CIDRs

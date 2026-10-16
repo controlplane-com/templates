@@ -1,0 +1,16 @@
+apiVersion: v2
+name: redis
+description: Redis or Valkey with Sentinel failover, or one node for development
+type: application
+version: 3.9.0
+appVersion: "8"
+
+annotations:
+  created: "2026-05-25"
+  lastModified: "2026-10-16"
+  createsGvc: false
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

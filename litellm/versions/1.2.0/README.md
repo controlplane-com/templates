@@ -129,25 +129,28 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`c
 
 ## Rotating the Redis password
 
-Redis keeps no password on disk: every Redis and Sentinel replica reads the secret when it starts. Restarting them one by one with a new password would leave the restarted replicas unable to replicate from the old primary, so change the running password in place first, then redeploy the proxy. Use your Redis and Sentinel replica counts (3 by default):
+Only with Redis auth on. Redis keeps no password on disk, but a running Sentinel holds the one it started with, so a new password is applied live in three places before the proxy restarts. Each Redis node first accepts both passwords, which keeps replication and every connected client working throughout. `rx` and `sx` run a command on one Redis node or Sentinel (`LOCATION` is your GVC's location; nodes and Sentinels are numbered from 0 up to `redis.redis.replicas` and `redis.sentinel.replicas` minus one):
 
 ```bash
-NEW="$(openssl rand -hex 24)"; echo "$NEW"
-cpln secret edit SECRET_NAME                      # set password to the value printed above
-cpln secret reveal SECRET_NAME -o yaml            # check it reads the new value
-for i in 0 1 2; do                                # every Redis replica: new password, authenticating with the old one
-  cpln workload exec RELEASE_NAME-redis --gvc GVC_NAME --replica RELEASE_NAME-redis-$i --container redis -- \
-    sh -c "redis-cli --no-auth-warning -a \"\$CUSTOM_REDIS_PASSWORD\" CONFIG SET masterauth $NEW &&
-           redis-cli --no-auth-warning -a \"\$CUSTOM_REDIS_PASSWORD\" CONFIG SET requirepass $NEW"
-done
-for i in 0 1 2; do                                # every Sentinel: authenticate to Redis with the new password
-  cpln workload exec RELEASE_NAME-sentinel --gvc GVC_NAME --replica RELEASE_NAME-sentinel-$i --container sentinel -- \
-    redis-cli -p 26379 SENTINEL SET mymaster auth-pass "$NEW"
-done
+rx() { cpln workload exec RELEASE_NAME-redis --gvc GVC_NAME --location LOCATION \
+  --container redis --replica "RELEASE_NAME-redis-$1" -- "${@:2}"; }
+sx() { cpln workload exec RELEASE_NAME-sentinel --gvc GVC_NAME --location LOCATION \
+  --container sentinel --replica "RELEASE_NAME-sentinel-$1" -- "${@:2}"; }
+# 1. On EVERY Redis node: accept the new password alongside the old one, and replicate with it
+rx 0 redis-cli --no-auth-warning -a OLD_PASSWORD ACL SETUSER default ">NEW_PASSWORD"
+rx 0 redis-cli --no-auth-warning -a OLD_PASSWORD CONFIG SET masterauth NEW_PASSWORD
+# 2. On EVERY Sentinel
+sx 0 redis-cli -p 26379 SENTINEL SET mymaster auth-pass NEW_PASSWORD
+# 3. Put the new password in the secret and read it back
+cpln secret edit SECRET_NAME
+cpln secret reveal SECRET_NAME -o yaml
+# 4. Restart the proxy, which keeps the old password until it restarts
 cpln workload force-redeployment RELEASE_NAME-litellm --gvc GVC_NAME
+# 5. Once get-deployments shows a higher version, alone and ready: retire the old password on EVERY Redis node
+rx 0 redis-cli --no-auth-warning -a NEW_PASSWORD ACL SETUSER default "<OLD_PASSWORD"
 ```
 
-Wait until `get-deployments` shows the proxy at a higher version number, alone and ready. Connections the proxy already has open keep working; new ones fail until its redeploy finishes, so rate limits and the cache are briefly unavailable — rotate in a quiet window. Redis and Sentinel need no redeploy: they read the updated secret the next time they restart.
+The proxy is briefly unavailable while it restarts (with `litellm.replicas` of 2 or more it rolls one replica at a time). Redis and Sentinel need no restart: when they next start they read the new password from the secret.
 
 ## Upgrading from 1.1.0
 

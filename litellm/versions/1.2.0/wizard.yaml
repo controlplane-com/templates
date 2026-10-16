@@ -258,8 +258,8 @@ steps:
             when: self.redis.redis.auth.fromSecret.enabled
             description: A dictionary secret with the key `password`. It must exist before you install.
             help: >-
-              Redis keeps no password on disk, and restarting it with a new one breaks replication mid-roll. To
-              change it, follow "Rotating the Redis password" in the template README.
+              Changing the password later takes more than a secret edit, because a running Sentinel keeps the
+              old one: follow "Rotating the Redis password" in the README.
             ref:
               kind: secret
               format: name

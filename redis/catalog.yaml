@@ -10,7 +10,7 @@ summary: >-
   Redis or Valkey as one primary with replicas plus a Sentinel quorum that promotes a replica when
   the primary fails, three of each by default, in one location. A dev mode runs a single Redis node
   with no Sentinel for development and testing. Options include password auth, persistent volumes
-  with snapshots, a redis_exporter metrics sidecar, public TCP access through your own domain and
+  with snapshots, one switch that suspends the whole release, a redis_exporter metrics sidecar, public TCP access through your own domain and
   scheduled RDB backups to Amazon S3 or Google Cloud Storage. The default Redis for caching,
   sessions, job queues and pub/sub in one location.
 

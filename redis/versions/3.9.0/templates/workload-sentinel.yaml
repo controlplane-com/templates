@@ -179,7 +179,7 @@ spec:
       target: 100
     capacityAI: false
     debug: false
-    suspend: false
+    suspend: {{ .Values.suspend | default false }}
     timeoutSeconds: {{ .Values.sentinel.timeoutSeconds }}
     {{- if .Values.sentinel.multiZone }}
     multiZone:

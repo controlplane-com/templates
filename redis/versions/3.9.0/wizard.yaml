@@ -169,6 +169,23 @@ steps:
             rule: self.sentinel.quorumOverride <= self.sentinel.replicas
             paths: [sentinel.quorumOverride]
             message: The quorum can be at most the number of Sentinels.
+      - title: Suspend
+        fields:
+          - path: suspend
+            type: boolean
+            label: Suspend the release
+            description: >-
+              Stops Redis, Sentinel and the backup job. Volume sets and secrets are kept; turn this off to
+              start the release again.
+        rules:
+          - rule: "!self.suspend"
+            severity: info
+            paths: [suspend]
+            messageExpression: >-
+              'Every node stops and Redis is unreachable until you turn this off.' +
+              (self.redis.persistence.enabled ? ' Data on the Redis volume set is reloaded at start.' :
+              ' Persistence is off, so the data in memory is lost.')
+            message: Every node stops and Redis is unreachable until you turn this off.
 
   - id: auth
     title: Authentication
@@ -419,7 +436,7 @@ steps:
       - id: redis-volume
         title: Persistent volume for Redis
         toggle: redis.persistence.enabled
-        description: Persistence is decided at install; it cannot be turned on for a running release.
+        description: Turn it on at install. To add it to a running release, suspend the release in the same upgrade.
         docs: /reference/volumeset
         fields:
           - path: redis.persistence.volumes.data.initialCapacity
@@ -560,7 +577,7 @@ steps:
         when: self.mode != 'dev'
         description: >-
           Recommended in production: it keeps the post-failover primary across restarts, so replicas
-          rejoin the real primary. Turn it on at install, or when a dev release switches to production; it cannot be turned on for a running production release.
+          rejoin the real primary. Turn it on at install, or suspend the release in the same upgrade to add it later.
         fields:
           - path: sentinel.persistence.volumes.data.initialCapacity
             type: integer
@@ -695,20 +712,19 @@ steps:
         severity: info
         paths: [redis.persistence.enabled]
         message: >-
-          Turning persistence off deletes the Redis volume set and the data on it, and it cannot be turned on
-          again for this release.
-      - rule: oldSelf == null || oldSelf.redis.persistence.enabled || !self.redis.persistence.enabled
-        paths: [redis.persistence.enabled]
+          Turning persistence off deletes the Redis volume set and the data on it.
+      - rule: oldSelf == null || oldSelf.redis.persistence.enabled || !self.redis.persistence.enabled || self.suspend
+        paths: [redis.persistence.enabled, suspend]
         message: >-
-          Redis persistence cannot be turned on for a running release: the rollout stalls indefinitely. Turn it
-          on at install, or reinstall.
+          Adding persistence to a running release only takes effect once every node stops. Turn on Suspend in
+          this upgrade, then turn it off in the next one. Data held only in memory is lost.
       - rule: >-
           oldSelf == null || oldSelf.mode == 'dev' || oldSelf.sentinel.persistence.enabled ||
-          !self.sentinel.persistence.enabled
-        paths: [sentinel.persistence.enabled]
+          !self.sentinel.persistence.enabled || self.suspend
+        paths: [sentinel.persistence.enabled, suspend]
         message: >-
-          Sentinel persistence cannot be turned on for a running release: the rollout stalls indefinitely. Turn it
-          on at install, or reinstall.
+          Adding Sentinel persistence to a running release only takes effect once every node stops. Turn on
+          Suspend in this upgrade, then turn it off in the next one.
 
   - id: network
     title: Network

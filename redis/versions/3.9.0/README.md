@@ -1,11 +1,5 @@
 ## Redis Sentinel
 
-> **Upgrading from 3.5.1:** resource blocks that expose both a floor and a ceiling now name the
-> ceiling `maxCpu`/`maxMemory` instead of `cpu`/`memory`, so it is no longer ambiguous which number
-> is the limit. Rename those two keys in your values; an upgrade that still carries the old names is
-> refused at render. Blocks that expose only a limit keep the bare `cpu`/`memory` names.
-
-
 Creates a Redis Sentinel cluster on Control Plane with automatic leader election, failover, and an optional backup configuration. With `mode: dev` it runs a single Redis node with no Sentinel instead, for development and testing.
 
 ### Architecture
@@ -24,20 +18,16 @@ This template does not create a GVC.
 ### Important Notes
 
 - **`mode: dev` has no failover and is not for production;** with persistence off its data is lost on every restart and upgrade.
-- **Do not rotate the Redis password in place.** Changing `redis.auth.password.value` on a running cluster deadlocks the rollout: the first restarted node cannot replicate from the not-yet-restarted master (`Unable to AUTH to MASTER: -WRONGPASS`), so its readiness probe never passes and the roll never advances. Re-applying the previous password recovers it. To change the password, uninstall and reinstall, or accept a brief planned outage.
-- **Turn `persistence` on at install, not on a running release.** Enabling it on a deployment that is already running stalls the rollout indefinitely: every replica sits on `Replica N will be restarted shortly (version transition: N -> N+1)`, the volume set's volumes stay `unbound`, and `/data` remains on the container overlay. Measured at 27 minutes with no progress, and a forced redeployment does not clear it. A **fresh** install with persistence enabled comes up normally (53 s), and upgrading a release that already has its volume rolls fine — so the constraint is specifically about adding the volume to a live release. This is independent of `engine`.
-- **The engine is chosen at install time and cannot be switched on a running deployment.** With persistence on, pointing an existing Redis data directory at Valkey crash-loops the pod (`# Can't handle RDB format version 15` / `Error reading the RDB base file …, AOF loading aborted`); with persistence off it silently starts empty. Migrate with dump/restore or replication, not by flipping `engine`.
-- **Switching `backup.provider` between `aws` and `gcp` leaves the previous provider's cloud binding on the workload identity.** The rendered manifest is correct, but the platform deep-merges identity updates, so the old block persists until you edit the identity or reinstall the release. Verify the identity after a provider switch if least privilege matters to you.
-
-### Upgrading from a 3.4.x release (Redis 7.4 → 8)
-
-This version moves the default image to `redis:8`. Redis 8 reads 7.4 data directly, so an upgrade with persistence enabled keeps your data — but **the upgrade is one-way**: once a node has written its data file under Redis 8, a 7.4 image can no longer load it. If you need a rollback path, snapshot the volume set before upgrading, or pin `redis.image`/`sentinel.image` back to `redis:7.4` (both remain supported values).
+- **Do not change the Redis password on a running release.** A restarted replica can no longer authenticate to the master, so the rollout stops advancing; setting the previous password back recovers it. To change the password, uninstall and reinstall.
+- **Turn persistence on at install when you can.** Adding it to a running release takes effect only once every node stops, so set `suspend: true` in the same upgrade, then `suspend: false` in the next one. Data held only in memory is lost.
+- **The engine is fixed at install.** Valkey cannot read the data files Redis 8 writes, so switching `engine` on a running release crash-loops the nodes (persistence on) or starts them empty (persistence off). Move data between engines with dump/restore or replication.
+- **Switching `backup.provider` between `aws` and `gcp` keeps the previous provider's cloud access on the Redis identity.** Remove it by editing the identity or reinstalling the release.
 
 ### Mode: production or dev
 
 - **`production`** (default): `redis.replicas` Redis nodes and a Sentinel quorum that fails over automatically.
 - **`dev`**: one Redis node that boots as a plain master. **No failover: a restart or reschedule means the database is down until it returns. Not for production.** `redis.replicas` and every `sentinel.*` setting are ignored; Sentinel public access, persistence and auth are refused at render, on install and on upgrade.
-- Turn on `redis.persistence.enabled` **at install** if dev data must survive restarts and upgrades. It cannot be turned on later.
+- Turn on `redis.persistence.enabled` if dev data must survive restarts and upgrades; see Important Notes for adding it to a running release.
 - In dev mode clients connect directly to `RELEASE_NAME-redis.GVC_NAME.cpln.local:6379`; there is no Sentinel to query.
 
 ### Moving from dev to production
@@ -49,7 +39,7 @@ Set `mode: production` with a `helm upgrade` on the same release. The new replic
 This template runs either server. `engine: redis` is the default and changes nothing.
 
 - **Valkey** is the BSD-3-Clause fork of Redis 7.2, stewarded by the Linux Foundation. There is no paid edition, so nothing — replication, Sentinel, failover — is feature-gated.
-- **Both tiers move together.** `engine: valkey` puts the Redis *and* Sentinel workloads on `valkeyImage`; `redis.image` and `sentinel.image` are then ignored. A Redis-Sentinel/Valkey-server hybrid is untested and cannot be produced with this knob.
+- **Both tiers move together.** `engine: valkey` puts the Redis *and* Sentinel workloads on `valkeyImage`; `redis.image` and `sentinel.image` are then ignored. Running different engines on the two tiers is not supported.
 - **Nothing else in the chart changes.** The Valkey image ships `redis-server`, `redis-cli` and `redis-sentinel` compatibility symlinks, so every command, config directive and health probe here is identical on both engines. `redis.serverCommand` stays `redis-server` on both.
 - **Only the Debian-based Valkey tags are supported.** The `-alpine` tags have no bash, and this chart's readiness and liveness probes are bash scripts.
 - **`INFO` reports `redis_version:7.2.4` on Valkey** for client compatibility. To see what is actually running, read `server_name` and `valkey_version`. The marketplace card still shows the Redis `appVersion` — a chart's appVersion is a constant and cannot follow a values knob.
@@ -69,6 +59,12 @@ engine: redis                     # redis | valkey
 # then ignored. Only the Debian-based tags are supported.
 valkeyImage: valkey/valkey:8.1.9
 ```
+
+**Suspend** — stops every workload in the release (Redis, Sentinel and the backup job) without deleting anything:
+```yaml
+suspend: false                    # true = stop all nodes; volume sets and secrets are kept
+```
+With persistence on, the data on the volume sets is reloaded when you set it back to `false`; without persistence, the data is lost.
 
 **Redis and Sentinel** — set replicas, resources, and timeouts for each. Sentinel replicas must be an odd number for quorum. In dev mode `redis.replicas` and the `sentinel` block are ignored:
 ```yaml
@@ -110,7 +106,7 @@ redis:
         fileSystemType: ext4
 ```
 
-When persistence is enabled, lifecycle hooks are automatically added to clean up orphaned temp RDB and AOF rewrite files on every container start and stop. These files are left behind when a pod is terminated mid-sync and can fill the volume over time if not removed.
+With persistence enabled, each node removes leftover temporary RDB and AOF-rewrite files from the volume before Redis starts, so files from an interrupted sync never accumulate.
 
 **Probe tuning for large datasets** — the startup probe window is derived from the readiness probe:
 ```
@@ -298,14 +294,6 @@ backup:
 
 #### AWS S3
 
-
-<b>Upgrading from 3.5.0:</b> this version removes <code>aws::ReadOnlyAccess</code> from the backup identity.
-That managed policy granted read access to every bucket in your AWS account and contained no write actions,
-so it was never carrying the backup itself — but it <i>was</i> silently supplying any read action your
-bucket-scoped policy happened to omit. <b>Update your IAM policy to the full action list in this section before
-upgrading</b>; if it already matches, no action is needed. Nothing else changes.
-
-
 For the backup cron job to access an S3 bucket, complete the following in your AWS account first:
 
 1. Create your bucket. Set `backup.aws.bucket` to its name and `backup.aws.region` to its region.
@@ -353,12 +341,18 @@ For the backup cron job to access a GCS bucket, complete the following in your G
 
 ### Restoring a Backup
 
-**There is no verified procedure for restoring one of these backups into a running release of this template.** Two things that look like they should work do not:
+Each backup is a standard gzipped RDB file (`redis-TIMESTAMP.rdb.gz`). This template does not provide an in-place restore into a running release.
 
-- Copying the file into the data directory as `dump.rdb` and restarting does nothing. The chart runs with `appendonly yes`, and when both AOF and RDB persistence are enabled Redis rebuilds the dataset from the AOF at startup and ignores `dump.rdb`.
-- `redis-cli --rdb FILE` *downloads* an RDB from a server; it does not load one. Running it against the cluster overwrites your downloaded backup with the live dataset.
+To use a backup, decompress it and start a standalone Redis or Valkey server with AOF disabled and the file in place as its `dump.rdb` (for example locally with Docker). From there, inspect the data or replay it into your cluster with your own tooling.
 
-What the backup is: a standard, gzipped RDB file (`redis-TIMESTAMP.rdb.gz`), and RDB files are portable. The upstream-documented way to read one is to start a standalone Redis or Valkey server with AOF disabled and the decompressed file in place as its `dump.rdb` — for example on a local machine with Docker — and from there inspect the data or replay it into your cluster with your own tooling. Loading the file into this template's cluster in place has not been tested; if you need that path, rehearse it on a throwaway release before relying on it.
+- Placing a `dump.rdb` in the cluster's data directory has no effect: the cluster runs with AOF enabled, and Redis loads the AOF at startup.
+- `redis-cli --rdb FILE` downloads a dump from a server; it does not load one, and pointing it at your backup file overwrites it.
+
+### Upgrading
+
+- **From 3.4.x:** the default image is `redis:8`, which reads 7.4 data directly. The upgrade is one-way: once a node writes under Redis 8, a 7.4 image cannot load its data. Snapshot the volume set first if you want a rollback path, or pin `redis.image` and `sentinel.image` to `redis:7.4`.
+- **From 3.5.0:** the backup identity carries only the bucket-scoped policy you supply. Make sure your IAM policy has the full action list under [AWS S3](#aws-s3) before upgrading.
+- **From 3.5.1:** resource blocks that expose both a reservation and a limit name the limit `maxCpu`/`maxMemory`. Rename `cpu`/`memory` in those blocks; an upgrade that still uses the old names is refused at render. Blocks that expose only a limit keep `cpu`/`memory`.
 
 ### Supported External Services
 - [Redis Documentation](https://redis.io/docs/)

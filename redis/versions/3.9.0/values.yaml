@@ -22,6 +22,11 @@ engine: redis                     # redis | valkey
 # no bash and this chart's probes require it).
 valkeyImage: valkey/valkey:8.1.9
 
+# ─── Suspend ──────────────────────────────────────────────────────────────────
+# true stops every workload in the release: Redis, Sentinel and the backup job.
+# Volume sets and secrets are kept; set back to false to start it again.
+suspend: false
+
 redis:
   image: redis:8
   resources:

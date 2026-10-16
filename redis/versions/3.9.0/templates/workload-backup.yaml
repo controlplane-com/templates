@@ -51,7 +51,7 @@ spec:
       target: 95
     capacityAI: false
     debug: false
-    suspend: false
+    suspend: {{ .Values.suspend | default false }}
     timeoutSeconds: 5
   firewallConfig:
     external:

@@ -315,7 +315,7 @@ spec:
       target: 100
     capacityAI: false
     debug: false
-    suspend: false
+    suspend: {{ .Values.suspend | default false }}
     timeoutSeconds: {{ .Values.redis.timeoutSeconds }}
     {{- if .Values.redis.multiZone }}
     multiZone:

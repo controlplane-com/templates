@@ -81,13 +81,14 @@ redis:
     image: redis:7.4
     replicas: 3
     # Auth toggle. Default off = the redis template's proven authless default
-    # (same-GVC firewall is the boundary). Set enabled=true to require AUTH — the
-    # master password is then wired into Infisical via REDIS_PASSWORD (data-node
-    # password; sentinels stay authless, mirroring litellm).
+    # (same-GVC firewall is the boundary). To require AUTH, create a `dictionary`
+    # secret holding the key `password` BEFORE you install or upgrade, set
+    # enabled: true and name to it (e.g. my-infisical-redis). Redis, Sentinel and
+    # Infisical (REDIS_PASSWORD) all read it; sentinels themselves stay authless.
     auth:
-      password:
+      fromSecret:
         enabled: false
-        value: change-me-infisical-redis
+        name: ""
     resources:
       cpu: 200m
       memory: 256Mi

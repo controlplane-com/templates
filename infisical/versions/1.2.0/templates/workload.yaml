@@ -43,9 +43,9 @@ spec:
         - name: REDIS_SENTINEL_MASTER_NAME
           value: "mymaster"
         {{- if eq (include "infisical.redisAuthEnabled" .) "true" }}
-        # ── Redis data-node password (redis subchart auth secret); sentinels stay authless ──
+        # ── Redis data-node password (prerequisite secret); sentinels stay authless ──
         - name: REDIS_PASSWORD
-          value: cpln://secret/{{ include "infisical.redis.secretPassword.name" . }}.password
+          value: cpln://secret/{{ include "infisical.redis.secret.name" . }}.{{ include "infisical.redis.secret.key" . }}
         {{- end }}
         {{- if .Values.smtp.enabled }}
         # ── SMTP / email ──

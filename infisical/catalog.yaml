@@ -78,6 +78,13 @@ prerequisites:
     required: false
     when: smtp.enabled with an authenticated SMTP server
     description: SMTP login for sending invites, verification and password reset email. Leave smtp.auth.secretName empty for an unauthenticated relay.
+  - kind: secret
+    secretType: dictionary
+    keys: [password]
+    valuesPath: redis.redis.auth.fromSecret.name
+    required: false
+    when: redis.redis.auth.fromSecret.enabled (Redis auth; off by default)
+    description: Password that the bundled Redis requires and that Sentinel and Infisical connect with. Create before turning auth on; when missing the Redis, Sentinel and Infisical workloads wait with no logs.
   - kind: bucket
     required: false
     when: postgres.backup.enabled

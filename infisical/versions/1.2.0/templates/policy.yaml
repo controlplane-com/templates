@@ -16,5 +16,5 @@ targetLinks:
   - //secret/{{ .Values.smtp.auth.secretName }}
   {{- end }}
   {{- if eq (include "infisical.redisAuthEnabled" .) "true" }}
-  - //secret/{{ include "infisical.redis.secretPassword.name" . }}
+  - //secret/{{ include "infisical.redis.secret.name" . }}
   {{- end }}

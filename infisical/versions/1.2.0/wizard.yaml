@@ -231,28 +231,58 @@ steps:
             suggestions: [1, 3, 5]
       - id: redis-auth
         title: Redis password
-        toggle: redis.redis.auth.password.enabled
+        toggle: redis.redis.auth.fromSecret.enabled
         description: >-
-          Off, Redis accepts connections from the GVC without a password. On, Infisical sends this password
-          to the Redis nodes; Sentinels stay without one.
+          Off, Redis accepts connections from the GVC without a password. On, Redis requires the password in
+          the secret below and Infisical sends it to the Redis nodes; Sentinels stay without one.
         fields:
-          - path: redis.redis.auth.password.value
-            type: string
-            label: Redis password
+          - path: redis.redis.auth.fromSecret.name
+            type: ref
+            label: Redis password secret
             required: true
-            sensitive: true
-            description: Used as-is, so change it before installing.
+            description: A dictionary secret with the key `password`. Redis, Sentinel and Infisical all read it.
+            help: >-
+              Create it before you install; if it is missing, the deployment waits and `cpln logs` shows nothing.
+              Changing the password later takes more than a secret edit, because a running Sentinel keeps the
+              old one: follow "Rotating the Redis password" in the README.
+            docs: "#prerequisites"
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [password]
+              create:
+                suggestName: "context.releaseName + '-infisical-redis'"
         rules:
           - rule: >-
-              self.redis.redis.auth.password.value != '' &&
+              self.redis.redis.auth.fromSecret.name != null && self.redis.redis.auth.fromSecret.name != '' &&
               (!has(self.redis.sentinel.auth) ||
               ((!has(self.redis.sentinel.auth.password) || !has(self.redis.sentinel.auth.password.enabled)) &&
               (!has(self.redis.sentinel.auth.fromSecret) || !has(self.redis.sentinel.auth.fromSecret.enabled))))
             mirrors: infisical.validate
-            paths: [redis.redis.auth.password.value]
+            paths: [redis.redis.auth.fromSecret.name]
             message: >-
-              Set the Redis password, and keep Sentinel authentication off (remove redis.sentinel.auth from the
-              values): Infisical authenticates only to the Redis nodes.
+              Choose the Redis password secret, and keep Sentinel authentication off (remove redis.sentinel.auth
+              from the values): Infisical authenticates only to the Redis nodes.
+          # Upgrading from 1.1.0 with auth on, the redis chart's own {release}-redis-auth-password secret is
+          # deleted by the upgrade itself, so the new prerequisite secret must have a different name.
+          - when: oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.2.0') < 0
+            rule: self.redis.redis.auth.fromSecret.name != context.releaseName + '-redis-auth-password'
+            paths: [redis.redis.auth.fromSecret.name]
+            message: >-
+              The previous version created the Redis password secret itself, and this upgrade deletes it. Create a
+              secret under a NEW name holding the CURRENT Redis password, and name it here.
+          - when: >-
+              oldSelf != null && (context.fromVersion == null || semverCompare(context.fromVersion, '1.2.0') >= 0) &&
+              has(oldSelf.redis.redis.auth.fromSecret.enabled) && oldSelf.redis.redis.auth.fromSecret.enabled == true
+            rule: self.redis.redis.auth.fromSecret.name == oldSelf.redis.redis.auth.fromSecret.name
+            severity: warning
+            paths: [redis.redis.auth.fromSecret.name]
+            message: >-
+              Pointing at another secret changes the Redis password, and a running Sentinel keeps the old one.
+              Follow "Rotating the Redis password" in the README instead.
       - title: Images
         advanced: true
         fields:
@@ -269,6 +299,12 @@ steps:
 
 # Rules over the imported values: their issues show on the imported fields' step.
 rules:
+  - rule: "!has(self.redis.redis.auth.password)"
+    mirrors: infisical.validateRedisSecret
+    paths: [redis.redis.auth.fromSecret.name]
+    message: >-
+      redis.redis.auth.password was removed in 1.2.0: the Redis password is now an optional prerequisite
+      dictionary secret (key password) chosen under Redis password. Remove redis.redis.auth.password from the values.
   - rule: "!has(self.postgres.credentials)"
     mirrors: infisical.validateRemovedKeys
     paths: [postgres.config.credentialsSecretName]
@@ -309,6 +345,14 @@ yamlOnly:
       a Sentinel needs little.
 
 migrations:
+  - fromVersions: "<1.2.0"
+    from: redis.redis.auth.password.enabled
+    to: redis.redis.auth.fromSecret.enabled
+  - fromVersions: "<1.2.0"
+    from: redis.redis.auth.password.value
+    note: >-
+      The Redis password is now a prerequisite dictionary secret (key password). If Redis auth was on, create it
+      under a NEW name holding your CURRENT Redis password, and choose it under Redis password.
   - fromVersions: "<1.2.0"
     from: postgres.credentials
     note: >-

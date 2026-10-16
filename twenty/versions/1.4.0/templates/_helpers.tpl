@@ -20,10 +20,6 @@
 {{- printf "%s-twenty-redis-vs" .Release.Name }}
 {{- end }}
 
-{{- define "twenty.secret.creds.name" -}}
-{{- printf "%s-twenty-creds" .Release.Name }}
-{{- end }}
-
 {{- define "twenty.secret.workerStart.name" -}}
 {{- printf "%s-twenty-worker-start" .Release.Name }}
 {{- end }}
@@ -204,9 +200,11 @@ DB-backed and editable in Settings → Admin Panel → Configuration Variables.
   value: postgres://$(PG_USER):$(PG_PASSWORD)@{{ include "twenty.postgres.host" . }}:5432/$(PG_DATABASE)
 - name: PG_POOL_MAX_CONNECTIONS
   value: {{ .Values.twenty.dbPoolMaxConnections | quote }}
-# ── Redis (bundled single node) — BullMQ queues + cache ──
+# ── Redis (bundled single node) — BullMQ queues + cache. The password comes
+# from the user's prerequisite Redis secret and is spliced into REDIS_URL at
+# container start (unencoded: URL-safe values only). ──
 - name: REDIS_PASSWORD
-  value: cpln://secret/{{ include "twenty.secret.creds.name" . }}.redisPassword
+  value: cpln://secret/{{ .Values.redis.credentialsSecretName }}.password
 - name: REDIS_URL
   value: redis://:$(REDIS_PASSWORD)@{{ include "twenty.redis.host" . }}:6379
 # ── Attachment storage ──
@@ -247,6 +245,7 @@ DB-backed and editable in Settings → Admin Panel → Configuration Variables.
 
 {{- define "twenty.validate" -}}
 {{- include "twenty.validateDatabaseSecret" . -}}
+{{- include "twenty.validateRedisSecret" . -}}
 {{- if not .Values.secrets.name -}}
 {{- fail "twenty: secrets.name is required — the name of the prerequisite opaque secret (encoding: plain) whose payload is the app key used as APP_SECRET and ENCRYPTION_KEY (must exist BEFORE install; changing it without secrets.fallbackName makes stored OAuth/TOTP secrets undecryptable and logs everyone out)" -}}
 {{- end -}}
@@ -285,9 +284,6 @@ DB-backed and editable in Settings → Admin Panel → Configuration Variables.
 {{- if and .Values.postgresHA.enabled (not (dig "proxy" "enabled" true .Values.postgresHA)) -}}
 {{- fail "twenty: postgresHA.proxy.enabled must remain true — the HAProxy leader endpoint is Twenty's stable write endpoint" -}}
 {{- end -}}
-{{- if not (regexMatch "^[A-Za-z0-9_-]+$" .Values.redis.auth.password) -}}
-{{- fail "twenty: redis.auth.password must contain only letters, digits, '-' and '_' — it is embedded in REDIS_URL and other characters break the connection URL" -}}
-{{- end -}}
 {{- end }}
 
 
@@ -306,5 +302,23 @@ value: the password now lives only in the secret, so that constraint is README p
 {{- end -}}
 {{- if not (include "twenty.postgres.secret.name" .) -}}
 {{- fail "twenty: the database credentials secret name is required — set postgres.config.credentialsSecretName (single-instance mode) or postgresHA.config.credentialsSecretName (HA mode) to your pre-created `dictionary` secret holding username, password and database. See Prerequisites in the README." -}}
+{{- end -}}
+{{- end }}
+
+
+{{/*
+The Redis password became a user-created prerequisite secret in 1.4.0 (1.3.x
+rendered it from redis.auth.password into the chart-created
+{release}-twenty-creds secret, which this version no longer creates). Redis
+reads it at every start (requirepass; nothing is kept on disk) and the server
+and worker splice it into REDIS_URL by $(VAR) expansion at container start, so
+the README states the URL-safe constraint the render can no longer check.
+*/}}
+{{- define "twenty.validateRedisSecret" -}}
+{{- if hasKey .Values.redis "auth" -}}
+{{- fail "twenty: redis.auth was REMOVED in 1.4.0. The Redis password is now a prerequisite `dictionary` secret you create (key: password), named by redis.credentialsSecretName. Upgrading from 1.3.x: create it under a NEW name holding your CURRENT Redis password (do not reuse RELEASE_NAME-twenty-creds, which this upgrade deletes), set redis.credentialsSecretName to that name, and remove redis.auth — see \"Upgrading from 1.3.x\" in the README." -}}
+{{- end -}}
+{{- if not .Values.redis.credentialsSecretName -}}
+{{- fail "twenty: redis.credentialsSecretName is required — the name of your pre-created `dictionary` secret holding the Redis password under the key `password`. See Prerequisites in the README." -}}
 {{- end -}}
 {{- end }}

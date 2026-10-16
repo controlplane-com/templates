@@ -70,6 +70,12 @@ prerequisites:
     required: true
     description: Credentials the bundled PostgreSQL initializes with and Twenty connects with (URL-safe characters only); set the key of the database mode in use. When it is missing the deployment waits with no logs.
   - kind: secret
+    secretType: dictionary
+    keys: [password]
+    valuesPath: redis.credentialsSecretName
+    required: true
+    description: Password the bundled Redis requires and the Twenty server and worker connect with (URL-safe characters only). When it is missing the deployment waits with no logs.
+  - kind: secret
     secretType: opaque
     valuesPath: secrets.fallbackName
     required: false

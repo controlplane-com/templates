@@ -10,12 +10,12 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "twenty.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "twenty.secret.creds.name" . }}
   - //secret/{{ include "twenty.secret.workerStart.name" . }}
   - //secret/{{ include "twenty.secret.serverStart.name" . }}
   # Prerequisite secrets the user creates — granted by name, nothing broader.
   - //secret/{{ .Values.secrets.name }}
   - //secret/{{ include "twenty.postgres.secret.name" . }}
+  - //secret/{{ .Values.redis.credentialsSecretName }}
   {{- if .Values.secrets.fallbackName }}
   - //secret/{{ .Values.secrets.fallbackName }}
   {{- end }}

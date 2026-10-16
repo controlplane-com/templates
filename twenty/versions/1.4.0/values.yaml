@@ -81,8 +81,10 @@ internalAccess:
 # mandatory: an evicted key silently drops queued jobs.
 redis:
   image: redis:8.10.0
-  auth:
-    password: change-me-twenty-redis   # template-managed; wired into REDIS_URL — letters/digits/-/_ only
+  # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL, or the deployment
+  # WEDGES silently. A `dictionary` secret with one key, `password` (letters,
+  # digits, - and _ only: it goes into REDIS_URL unencoded; openssl rand -hex 24).
+  credentialsSecretName: my-twenty-redis
   resources:
     minCpu: 100m
     maxCpu: 400m

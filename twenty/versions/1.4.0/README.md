@@ -1,7 +1,7 @@
 # Twenty
 
-> **Upgrading from 1.3.x:** the database credentials are now a secret you create before upgrading,
-> under a **new** name — see [Upgrading from 1.3.x](#upgrading-from-13x).
+> **Upgrading from 1.3.x:** the database credentials and the Redis password are now secrets you create
+> before upgrading, under **new** names — see [Upgrading from 1.3.x](#upgrading-from-13x).
 
 [Twenty](https://twenty.com) is an open-source CRM — customizable objects, pipelines, views and workflows, with a REST and GraphQL API. This template deploys the Twenty server, its background worker, a bundled Redis job queue, and a PostgreSQL database (single-instance by default, or highly available), reachable over HTTPS on the platform's automatic endpoint.
 
@@ -13,12 +13,13 @@
 - **PostgreSQL** — the `postgres` template (single instance, PostgreSQL 18) by default, or the `postgres-highly-available` template (3 Patroni replicas, 3 etcd replicas, HAProxy leader endpoint, PostgreSQL 17) as an opt-in.
 - **Volume sets** — Redis AOF at `/data`; local attachment storage at `/app/packages/twenty-server/.local-storage` (*only* in `storage.type: local`).
 - **Identity + policy** — one identity shared by the three workloads, granted `reveal` on exactly the secrets they mount.
-- **Secrets** — a template-created dictionary secret for the bundled Redis password, and the server and worker start scripts; the app key, the database credentials and any S3 static keys come from secrets you create.
+- **Secrets** — template-created secrets for the server and worker start scripts; the app key, the database credentials, the Redis password and any S3 static keys come from secrets you create.
 - **Database credentials secret** (dictionary) — *not created by this template*; you create it before install. The bundled PostgreSQL initializes from it and Twenty connects with it, in either database mode.
+- **Redis credentials secret** (dictionary) — *not created by this template*; you create it before install. Redis requires its password and the server and worker connect with it.
 
 ## Prerequisites
 
-**Two secrets must exist BEFORE you install.** They hold credentials, so they are prerequisite secrets rather than values — a value would sit in plaintext in the Helm release for the life of the install.
+**Three secrets must exist BEFORE you install.** They hold credentials, so they are prerequisite secrets rather than values — a value would sit in plaintext in the Helm release for the life of the install.
 
 - **Database credentials** — a dictionary secret; the bundled PostgreSQL initializes with these and Twenty connects with them:
 
@@ -31,6 +32,15 @@
 
   Set its name in the key of the database mode you use: `postgres.config.credentialsSecretName` (single-instance, the default) or `postgresHA.config.credentialsSecretName` (HA). Use only letters, digits, `-` and `_` in all three values — Twenty puts them in its database connection URL, and other characters break it (the `openssl rand -hex` password above is safe). Secret names are org-wide, so give each twenty release its own secret. PostgreSQL reads the secret only when its data is first initialized — see [Rotating the database password](#rotating-the-database-password).
 
+- **Redis password** — a dictionary secret; the bundled Redis requires it and the server and worker connect with it:
+
+  ```bash
+  cpln secret create-dictionary --name my-twenty-redis \
+    --entry password="$(openssl rand -hex 24)"
+  ```
+
+  Set its name in `redis.credentialsSecretName`. Use only letters, digits, `-` and `_`: Twenty receives the password inside its `REDIS_URL`, unencoded. Give each twenty release its own secret. To change it later, see [Rotating the Redis password](#rotating-the-redis-password).
+
 - **An opaque secret holding the app key.** Twenty uses it as both `APP_SECRET` and `ENCRYPTION_KEY` (at-rest encryption of OAuth tokens, TOTP secrets and app variables). Reference it with `secrets.name`.
 
   ```bash
@@ -42,7 +52,7 @@
 - **(Only during a key rotation)** a second opaque secret holding the *previous* app key, referenced via `secrets.fallbackName`.
 - **(Only for database backups)** a bucket on AWS S3, Google Cloud Storage or a MinIO/S3-compatible server, plus a Control Plane cloud account — see Storage setup.
 
-**If either secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the containers never start, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-twenty --gvc GVC_NAME -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own, but Twenty can take up to about 12 minutes to serve again — poll rather than giving up — or skip the wait with `cpln workload force-redeployment`.
+**If any of these secrets does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the containers never start, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-twenty --gvc GVC_NAME -o yaml` — for the Redis secret, also `RELEASE_NAME-twenty-redis` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own, but Twenty can take up to about 12 minutes to serve again — poll rather than giving up — or skip the wait with `cpln workload force-redeployment`.
 
 ## Configuration
 
@@ -126,8 +136,7 @@ internalAccess:
 ```yaml
 redis:
   image: redis:8.10.0
-  auth:
-    password: change-me-twenty-redis   # template-managed; wired into REDIS_URL — letters/digits/-/_ only
+  credentialsSecretName: my-twenty-redis   # PREREQUISITE dictionary secret (key: password; letters/digits/-/_ only) — must exist BEFORE install
   resources:
     minCpu: 100m
     maxCpu: 400m
@@ -253,7 +262,7 @@ The backing database template's own README carries the full per-provider walkthr
 | Web UI + REST + GraphQL (public) | the workload's canonical `cpln.app` HTTPS endpoint — read it from `status.canonicalEndpoint` in `cpln workload get {release}-twenty --gvc {gvc} -o yaml` |
 | Health check | `GET /healthz` on the same endpoint |
 | From another workload in the GVC | `http://{release}-twenty.{gvc}.cpln.local:3000` |
-| Redis (internal only) | `{release}-twenty-redis.{gvc}.cpln.local:6379`, password from `redis.auth.password` |
+| Redis (internal only) | `{release}-twenty-redis.{gvc}.cpln.local:6379`, `password` key of the secret named by `redis.credentialsSecretName` |
 | Database (internal only) | `{release}-postgres.{gvc}.cpln.local:5432`, or `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432` in HA mode |
 | Database credentials | `username` / `password` / `database` keys of the secret named by `postgres.config.credentialsSecretName` (HA mode: `postgresHA.config.credentialsSecretName`) — `cpln secret reveal SECRET_NAME -o yaml` |
 | First login | there is no seeded account — **the first person to sign up becomes the workspace admin** |
@@ -294,9 +303,18 @@ Then force-redeploy `RELEASE_NAME-twenty-worker`, then `RELEASE_NAME-twenty`, wh
 pgx N curl -s -XPOST -d '{"force": true}' localhost:8008/reinitialize
 ```
 
+## Rotating the Redis password
+
+Redis keeps no password on disk: it takes the password from the secret each time it starts, and the server and worker do the same. So rotation is the secret and then the restarts:
+
+1. Update the secret: `cpln secret edit SECRET_NAME` (letters, digits, `-` and `_` only), and check the new value with `cpln secret reveal SECRET_NAME -o yaml`.
+2. Redeploy Redis, the worker and the server together: `cpln workload force-redeployment RELEASE_NAME-twenty-redis --gvc GVC_NAME`, then the same for `RELEASE_NAME-twenty-worker` and `RELEASE_NAME-twenty`. None of them picks up the change without its redeploy.
+
+Expect a short interruption: until all three have restarted, Redis and the app hold different passwords, so queued jobs wait and the server cannot reach its cache.
+
 ## Upgrading from 1.3.x
 
-`postgres.credentials` was removed: the database credentials are now a prerequisite secret, the same one the database templates require on their own. Carrying the old key forward fails the render.
+`postgres.credentials` was removed: the database credentials are now a prerequisite secret, the same one the database templates require on their own. `redis.auth.password` was removed the same way: the Redis password is now a prerequisite secret named by `redis.credentialsSecretName`. Carrying either old key forward fails the render.
 
 1.3.x created the database secret itself, so **this upgrade deletes it**. Before upgrading, create a secret under a **new** name holding the values your database was initialized with — not new ones, or Twenty loses its database connection. `OLD_SECRET_NAME` is the `credentialsSecretName` of the mode you use (default `my-twenty-db-credentials`):
 
@@ -306,9 +324,17 @@ cpln secret create-dictionary --name RELEASE_NAME-postgres-credentials \
   --entry username=YOUR_CURRENT_USERNAME --entry password=YOUR_CURRENT_PASSWORD --entry database=YOUR_CURRENT_DATABASE
 ```
 
-Then upgrade with `postgres.config.credentialsSecretName` (single-instance mode) or `postgresHA.config.credentialsSecretName` (HA mode) set to that name, and `postgres.credentials` removed. Your current values are also in `postgres.credentials` of the 1.3.x release.
+1.3.x also kept the Redis password in a secret it created, `RELEASE_NAME-twenty-creds` (key `redisPassword`), which this upgrade deletes too. Create the Redis secret under a different name, holding the **current** Redis password:
 
-The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so Twenty loses its database for up to about 3 minutes; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
+```bash
+cpln secret reveal RELEASE_NAME-twenty-creds -o yaml   # redisPassword is the CURRENT Redis password
+cpln secret create-dictionary --name RELEASE_NAME-twenty-redis \
+  --entry password=YOUR_CURRENT_REDIS_PASSWORD
+```
+
+Then upgrade with `postgres.config.credentialsSecretName` (single-instance mode) or `postgresHA.config.credentialsSecretName` (HA mode) set to the database secret's name, `redis.credentialsSecretName` set to the Redis secret's name, and `postgres.credentials` and `redis.auth` removed. Your current values are also in `postgres.credentials` and `redis.auth.password` of the 1.3.x release.
+
+The upgrade restarts the bundled PostgreSQL and Redis too (they now read the new secrets), so Twenty loses its database for up to about 3 minutes and Redis briefly; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
 
 ## Upgrading from 1.0.x
 
@@ -324,8 +350,9 @@ The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), s
 
 - **`local` storage uses a shared (read-write-many) volume mounted by both the server and the worker**, so attachments are visible to background jobs. Shared volumes support expansion only — **no snapshots** — and exist in a single location, so `storage.type: s3` remains the durable choice for production and is required for `twenty.replicas > 1`.
 
-- **Both prerequisite secrets must exist before install** — a missing app-key or database credentials secret wedges the deployment with zero log lines; see Prerequisites for the diagnostic.
+- **All three prerequisite secrets must exist before install** — a missing app-key, database credentials or Redis secret wedges the deployment with zero log lines; see Prerequisites for the diagnostic.
 - **Changing the database credentials secret does not change the database password** — PostgreSQL keeps the password it was initialized with. Rotate with `ALTER ROLE` plus a forced redeployment of Twenty (not the database) — see [Rotating the database password](#rotating-the-database-password).
+- **Rotating the Redis password needs a forced redeployment of Redis, the worker and the server** — see [Rotating the Redis password](#rotating-the-redis-password).
 - **Rotating the database password in HA mode needs a leader switchover first** — follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode). A plain redeploy can promote a member still holding the old password and split the cluster.
 - **On a public endpoint, whoever reaches the URL first owns the CRM.** Sign up immediately after install, or set `publicAccess.enabled: false` until you are ready.
 - **Treat the app key as write-once.** Changing `secrets.name` without pointing `secrets.fallbackName` at the old key makes stored OAuth tokens, TOTP secrets and app variables undecryptable and logs everyone out.

@@ -26,8 +26,9 @@ spec:
         - --maxmemory-policy
         - noeviction
       env:
+        # The user's prerequisite Redis secret; read at every start (nothing on disk).
         - name: REDIS_PASSWORD
-          value: cpln://secret/{{ include "twenty.secret.creds.name" . }}.redisPassword
+          value: cpln://secret/{{ .Values.redis.credentialsSecretName }}.password
       ports:
         - number: 6379
           protocol: tcp

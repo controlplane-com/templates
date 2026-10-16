@@ -488,7 +488,7 @@ steps:
             help: >-
               PostgreSQL reads these values only when its data directory is first initialized, and Temporal
               connects with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then
-              update the secret and force a redeployment.
+              update the secret, then right away force a redeployment of Temporal (not of the database).
             docs: "#prerequisites"
             ref:
               kind: secret

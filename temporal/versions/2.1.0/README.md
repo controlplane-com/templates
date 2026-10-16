@@ -299,12 +299,13 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
 
 ## Rotating the database password
 
-PostgreSQL keeps the password it was initialized with, and a running workload keeps the values it started with, so a rotation takes four steps in order (single-instance; in HA mode follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode) instead):
+PostgreSQL keeps the password it was initialized with, and a running workload keeps the values it started with, so a rotation takes three steps in order (single-instance; in HA mode follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode) instead):
 
 1. Change it in the database: `ALTER ROLE DB_USERNAME PASSWORD 'NEW_PASSWORD';` (connected as that user, from inside the GVC).
 2. Update the secret: `cpln secret edit SECRET_NAME`. Keep `database` at `temporal`.
-3. Redeploy the database and wait for it to be ready: `cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME`. Wait until `get-deployments` no longer shows `will be restarted shortly`; `ready: true` alone can still describe the old replica.
-4. Redeploy Temporal: `cpln workload force-redeployment RELEASE_NAME-temporal --gvc GVC_NAME`.
+3. Right away, redeploy Temporal: `cpln workload force-redeployment RELEASE_NAME-temporal --gvc GVC_NAME`, and wait until `get-deployments` shows a higher version number, alone and ready (right after the command the status may not show the restart yet, and `ready: true` alone can still describe the old replica). Do not redeploy the database: PostgreSQL reads the secret only when it is first initialized, so restarting it only adds downtime.
+
+Temporal keeps serving on the database connections it already has open, so this order had no failed requests in testing. Do step 3 right away: if those connections drop before Temporal restarts, it cannot open new ones.
 
 ## Rotating the database password in HA mode
 
@@ -335,10 +336,10 @@ pgx N curl -s -XPOST -d '{"force": true}' localhost:8008/reinitialize
 ## Important Notes
 
 - **Create the database credentials secret before installing**, with `database` set to `temporal`. A missing secret leaves the workload waiting with zero log lines — see Prerequisites for how to diagnose it.
-- **Rotating the database password needs `ALTER ROLE` plus forced redeployments** — see [Rotating the database password](#rotating-the-database-password); editing the secret alone changes nothing.
+- **Rotating the database password needs `ALTER ROLE` plus a forced redeployment of Temporal** — see [Rotating the database password](#rotating-the-database-password); editing the secret alone changes nothing.
 - **`historyShards` is permanent**: it is fixed at the cluster's first boot, and a later change is ignored (the server keeps the original count and only logs the mismatch). 512 suits most deployments.
 - **The Web UI has no login**: anyone who can reach it can view and act on every workflow. List only addresses you trust in `ui.allowedCIDRs` (whole-internet ranges are refused), and allow up to a few minutes for a change to apply.
-- **A replica that stays not ready:** read its `admin` container's logs. "another replica is migrating the schema" is normal during an upgrade with several replicas; `CPLN_TEMPORAL_SKIP_GUARD` means the image skips a minor version; `CPLN_TEMPORAL_DATABASE_GUARD` means the credentials secret's `database` key is not `temporal` (fix it, then force a redeployment).
+- **A replica that stays not ready:** read its `admin` container's logs. "another replica is migrating the schema" is normal during an upgrade with several replicas; `CPLN_TEMPORAL_SKIP_GUARD` means the image skips a minor version; `CPLN_TEMPORAL_DATABASE_GUARD` means the credentials secret's `database` key is not `temporal` (fix it, then force a redeployment; the database PostgreSQL created under the wrong name is unused and can be dropped).
 - **Features that need no configuration:** Nexus endpoints that target a namespace and task queue in this Temporal cluster (create them with `temporal operator nexus endpoint create` or the UI's Nexus page); endpoints that target an external URL are not supported. Worker Deployments (versioning) work; the UI's worker list relies on worker heartbeats, which need a recent SDK.
 - **Keep the GVC to one location.** Each location would run its own servers against its own database.
 - **Uninstall deletes the database volumesets**, with all workflow histories. Enable backups if the data matters.

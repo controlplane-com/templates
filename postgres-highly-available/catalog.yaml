@@ -12,7 +12,7 @@ summary: >-
   quorum for leader election and automatic failover, and an HAProxy endpoint that always routes
   to the current primary. Options: multi-zone placement, a PgBouncer pooler, and backups to S3,
   GCS or MinIO as scheduled logical dumps or continuous WAL-G archiving with point-in-time
-  recovery. Pick it for a production Postgres that must keep accepting writes when a replica or
+  recovery, and logical WAL for change data capture. Pick it for a production Postgres that must keep accepting writes when a replica or
   node fails.
 
 keywords:
@@ -36,12 +36,14 @@ keywords:
   - point-in-time recovery
   - pitr
   - database backups
+  - logical replication
 
 useCases:
   - Production relational database that survives a replica or node failure
   - Postgres for an app that cannot tolerate a single-server outage
   - Postgres replicas spread across availability zones in one region
   - Restore a Postgres database to a point in time from continuous WAL archives
+  - Source database for change data capture with Debezium
 
 alternativeTo:
   - Amazon RDS for PostgreSQL
@@ -72,6 +74,9 @@ related:
   - template: dbeaver
     relation: companion
     note: Browser-based SQL client for querying and administering the database
+  - template: debezium-server
+    relation: companion
+    note: Streams row changes from the cluster to Kafka and other sinks (set walLevel to logical)
 
 prerequisites:
   - kind: secret

@@ -22,8 +22,8 @@
 | secret `{release}-postgres-ha-config` | Non-sensitive backup config only; gated on `backup.enabled` |
 | identity + policy | `reveal` on the startup secrets and the user's prerequisite secrets |
 
-## Key knobs (shipped 2.6.0 defaults)
-`replicas` (3) | `config.credentialsSecretName` (`my-postgres-ha-credentials`, **must exist before install**) | `image` | `resources.*` (500m-1 / 1-2Gi) | `volumeset.capacity` (10) | `multiZone` (false) | `proxy.enabled` | `pgbouncer.enabled` (false) | `backup.enabled` (false) / `backup.mode` (`logical` | `wal-g`) / `backup.provider` (`aws` | `gcp` | `minio`) | `backup.minio.credentialsSecretName`
+## Key knobs (shipped 2.8.0 defaults)
+`replicas` (3) | `config.credentialsSecretName` (`my-postgres-ha-credentials`, **must exist before install**) | `walLevel` (`replica` \| `logical`; render `fail` on anything else) | `image` | `resources.*` (500m-1 / 1-2Gi) | `volumeset.capacity` (10) | `multiZone` (false) | `proxy.enabled` | `pgbouncer.enabled` (false) | `backup.enabled` (false) / `backup.mode` (`logical` | `wal-g`) / `backup.provider` (`aws` | `gcp` | `minio`) | `backup.minio.credentialsSecretName`
 
 ## Troubleshooting / considerations
 - **Patroni metrics are scraped from port 8008, and that port MUST stay `protocol: tcp`.**
@@ -100,3 +100,32 @@
 - **A missing prerequisite secret wedges the deployment silently** — `cpln logs` returns zero lines. Diagnose with `status.versions[].message` via `get-deployments`, not plain `get`.
 - Drift gate clean on 2.5.0: the first no-op upgrade reported `Updated` on identities and volumesets, but the stored specs differed only in the release tag and platform-computed health fields; the second upgrade was fully `Unchanged`.
 - **`aws::ReadOnlyAccess` was removed from the backup identity in 2.5.1.** It granted read access to every bucket in the AWS account and contains no write actions, so it was never carrying the backup — what it did carry was account-wide read. The identity is now `cpln-connector` plus the user's bucket-scoped policy only. The documented IAM policy was widened to ten actions at the same time, because `ReadOnlyAccess` had been silently supplying any read action a user's policy omitted; **an upgrading user must update their IAM policy first**.
+- **`walLevel` (2.8.0) restores the knob 2.2.0 had and 2.3.0-2.7.0 lost** (they hardcoded `wal_level: replica`, which left `cdc-pipeline` unable to deliver a single change event). It is rendered into both the local `postgresql.parameters` and `bootstrap.dcs.postgresql.parameters`, but **only the DCS copy does anything**: Patroni 4.0.4 (the pinned image) treats `wal_level`, `max_connections`, `max_wal_senders`, `max_replication_slots` and friends as `CMDLINE_OPTIONS` and discards them from LOCAL config (`_process_postgresql_parameters(..., is_local=True)`, read from the image's own `patroni/config.py`). So changing `walLevel` on an existing release does nothing; the README's procedure is `patronictl edit-config --force -p wal_level=logical`, wait for "Pending restart", then `patronictl restart <scope> --pending --force` (scope = release name). Run live on a 2.8.0 cluster 2026-10-16 (PATCH → 3/3 pending in 21 s → `restart --pending` in place, leader unchanged): works.
+- **Replication slot capacity:** Patroni defaults `max_replication_slots` and `max_wal_senders` to 10 when the DCS does not set them. A 3-member cluster uses 2 physical slots on the leader, so one Debezium connector (1 logical slot, 1 sender) fits with room to spare; the chart does not raise them. `max_slot_wal_keep_size` (a quarter of `volumeset.capacity`) also caps a logical slot, so a consumer offline long enough loses its slot and must re-snapshot.
+- **Patroni DROPS replication slots it does not manage** — any inactive slot not in its desired set (members' physical slots + DCS `slots:`) on the next slot reload (Postgres start/restart, promotion), unless matched by `ignore_slots` (`patroni/postgresql/slots.py` `_drop_incorrect_slots`, read from the pinned image). A Debezium slot is exactly that, so with `walLevel: logical` 2.8.0 also writes `ignore_slots: [{type: logical}]` into `bootstrap.dcs` (only then, so the default render is unchanged). Existing clusters need it patched in with the wal_level change (the README's PATCH sets both). Proven live: with it the slot survives an in-place restart; with it PATCHed out Patroni dropped the slot. It must stay even with failover slots — `_drop_incorrect_slots` runs on replicas too and would try to drop the synchronized copies.
+- **Logical slots follow a switchover through PostgreSQL 17 failover slots, not Patroni permanent slots.** With
+  `walLevel: logical` the chart sets `hot_standby_feedback` and `sync_replication_slots` (local AND bootstrap DCS
+  parameters; local alone is enough — measured with them removed from the DCS); Patroni 4.0.4 already puts
+  `dbname=postgres` in `primary_conninfo` (`config.py`), and its `repl` user is enough for the slot-sync worker.
+  The client must create the slot with failover (debezium-server 1.3.0 `slot.failover`). Permanent slots were
+  rejected: Patroni would create the logical slot at bootstrap, before any publication exists — the same
+  "slot older than its publication" wedge debezium-server 1.2.0 had. Measured locally (rendered start script,
+  Patroni 4.0.4 + PG 17.5 from the pinned image, etcd, HAProxy, Debezium 3.0.8): 400 rows across switchover →
+  switchover back onto the former leader → leader container stop: 0 missing, 2 duplicates; the same switchover
+  with a non-failover slot lost 12 rows (≈6 s), which is what the live test saw. [UNPROVEN live]
+- **A former leader's own logical slots are dropped once it is a replica.** PG 17 refuses to sync over a
+  non-synchronized slot of the same name (`exiting from slot synchronization because same name slot … already
+  exists on the standby`, measured), and the stale slot is what wedged Debezium in the 1.1.0 live test
+  (`can no longer get changes from replication slot`). A background loop in the start script (30 s, only with
+  `walLevel: logical`) drops `logical AND NOT synced AND NOT active` slots when `pg_is_in_recovery()`; a synced
+  slot cannot be dropped on a standby anyway. A promoted synced copy keeps `synced = true`, so it simply resumes
+  syncing after the next demotion.
+- **`synchronized_standby_slots` is deliberately NOT set.** It would stop a failover slot from getting ahead of
+  the standbys (the only guard for an UNPLANNED failover with replication lag, where the client may already have
+  read changes the new leader never received), but PG 17 has no quorum form: the leader's logical walsenders
+  wait for every listed standby, so any replica being down stalls CDC, and the list differs per member. Planned
+  leader changes (switchover, rolling restart, the preStop switchover) lose nothing without it. Open decision.
+- **2.8.0 stopped writing the password into `bootstrap.dcs.postgresql.authentication`.** Everything under `bootstrap.dcs` lands in etcd and is served by `GET :8008/config` with no authentication (no `restapi.authentication` is configured), so through 2.7.0 the superuser password was readable by anything that could reach port 8008. Patroni drops `authentication` from the dynamic config anyway (`_safe_copy_dynamic_configuration`), so removing it changes nothing functionally; the LOCAL `postgresql.authentication` (still rendered) is what Patroni uses. Existing clusters keep the stored copy until `PATCH /config {"postgresql":{"authentication":null}}` (README). Note the REST API is also unauthenticated for writes (`PATCH /config`, `/switchover`, `/restart`) — a pre-existing exposure limited only by `internal_access`, not addressed.
+- **Pre-existing, not fixed in 2.8.0:** `pgbouncer.enabled: true` with `proxy.enabled: false` creates the HAProxy workload (its `if` is `proxy OR pgbouncer`) but the policy grants `reveal` on its startup secret only `if proxy.enabled`, so HAProxy never starts. The 2.8.0 wizard blocks that combination with a warning rule.
+- **2.8.0 is the first version with a `wizard.yaml`.** It binds `etcd.*` as ordinary fields (no etcd import), so a parent such as `cdc-pipeline` can import it (nested imports are not supported).
+

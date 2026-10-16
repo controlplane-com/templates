@@ -16,8 +16,12 @@
 {{- printf "%s-docmost-redis-vs" .Release.Name }}
 {{- end }}
 
-{{- define "docmost.secret.creds.name" -}}
-{{- printf "%s-docmost-creds" .Release.Name }}
+{{/*
+Name of the Redis password secret — a PREREQUISITE the user creates (key: password).
+Up to 1.1.0 the chart created {release}-docmost-creds from redis.auth.password.
+*/}}
+{{- define "docmost.secret.redis.name" -}}
+{{- .Values.redis.credentialsSecretName }}
 {{- end }}
 
 {{/*
@@ -80,6 +84,7 @@ true
 
 {{- define "docmost.validate" -}}
 {{- include "docmost.validateDatabaseSecret" . -}}
+{{- include "docmost.validateRedisSecret" . -}}
 {{- if not .Values.secrets.name -}}
 {{- fail "docmost: secrets.name is required — the name of the prerequisite opaque secret (encoding: plain) whose payload is APP_SECRET, a random string of at least 32 chars (must exist BEFORE install; rotating it logs out every user and invalidates invite/share links)" -}}
 {{- end -}}
@@ -129,5 +134,20 @@ subchart itself, which renders first.)
 {{- define "docmost.validateDatabaseSecret" -}}
 {{- if hasKey .Values.postgres "credentials" -}}
 {{- fail "docmost: postgres.credentials was REMOVED in 1.2.0. The database credentials are now a prerequisite `dictionary` secret you create (keys: username, password, database), named by postgres.config.credentialsSecretName. Upgrading from 1.1.0: create it under a NEW name holding your EXISTING values, set postgres.config.credentialsSecretName to that name, and remove postgres.credentials — see \"Upgrading from 1.1.0\" in the README." -}}
+{{- end -}}
+{{- end }}
+
+
+{{/*
+The bundled Redis password became a user-created prerequisite secret in 1.2.0, like
+the database credentials. A values file still carrying redis.auth.password fails at
+render, naming its replacement and the upgrade procedure.
+*/}}
+{{- define "docmost.validateRedisSecret" -}}
+{{- if and (hasKey .Values.redis "auth") (hasKey (.Values.redis.auth | default dict) "password") -}}
+{{- fail "docmost: redis.auth.password was REMOVED in 1.2.0. The Redis password is now a prerequisite `dictionary` secret you create (key: password), named by redis.credentialsSecretName. Upgrading from 1.1.0: create it under a NEW name holding your CURRENT Redis password, set redis.credentialsSecretName to that name, and remove redis.auth — see \"Upgrading from 1.1.0\" in the README." -}}
+{{- end -}}
+{{- if not .Values.redis.credentialsSecretName -}}
+{{- fail "docmost: redis.credentialsSecretName is required — the name of the prerequisite dictionary secret holding the Redis password (key: password; letters, digits, - and _ only). It must exist BEFORE install." -}}
 {{- end -}}
 {{- end }}

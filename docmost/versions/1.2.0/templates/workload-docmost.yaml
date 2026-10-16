@@ -37,7 +37,7 @@ spec:
           value: postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@{{ include "docmost.postgres.host" . }}:5432/$(POSTGRES_DB)?schema=public
         # ── Redis (bundled) — BullMQ queues + socket.io adapter + collab sync ──
         - name: REDIS_PASSWORD
-          value: cpln://secret/{{ include "docmost.secret.creds.name" . }}.redisPassword
+          value: cpln://secret/{{ include "docmost.secret.redis.name" . }}.password
         - name: REDIS_URL
           value: redis://:$(REDIS_PASSWORD)@{{ include "docmost.redis.host" . }}:6379
         # ── Attachment storage ──

@@ -101,8 +101,10 @@ postgres:
 # persistence; Docmost has no Sentinel support, so the HA redis template is not used.
 redis:
   image: redis:8
-  auth:
-    password: change-me-docmost-redis   # template-managed; wired into REDIS_URL — change before install
+  # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL (the deployment WEDGES
+  # silently without it). A `dictionary` secret with one key, `password`: Redis requires
+  # it and Docmost puts it in REDIS_URL, so use letters, digits, - and _ only.
+  credentialsSecretName: my-docmost-redis
   resources:
     minCpu: 100m
     maxCpu: 400m

@@ -10,10 +10,10 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "docmost.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "docmost.secret.creds.name" . }}
   # Prerequisite secrets the user creates — granted by name, nothing broader.
   - //secret/{{ .Values.secrets.name }}
   - //secret/{{ include "docmost.secret.db.name" . }}
+  - //secret/{{ include "docmost.secret.redis.name" . }}
   {{- if and (eq .Values.storage.type "s3") .Values.storage.s3.auth.secretName }}
   - //secret/{{ .Values.storage.s3.auth.secretName }}
   {{- end }}

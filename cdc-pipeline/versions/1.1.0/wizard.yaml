@@ -38,7 +38,7 @@ imports:
       - { id: cluster, title: Kafka cluster }
       - { id: listeners, title: Kafka listeners and security }
       - { id: storage, title: Kafka storage }
-      - { id: ui, title: Kafka UI and REST Proxy }
+      - { id: ui, title: Kafka UI, description: "An optional web console for topics, consumer groups and messages." }
       - { id: connect, title: Kafka Connect }
       - { id: advanced, title: Kafka advanced }
     exclude:
@@ -51,6 +51,8 @@ imports:
       - kafka_orchestrator
       - kafka_exporter
       - kafka_ui
+      # Its Kafka login (jaas_conf) carries the password inline in kafka 4.3.0; the chart refuses it.
+      - kafka_rest_proxy
     override:
       kafka.listeners:
         description: >-
@@ -206,6 +208,12 @@ steps:
           kafka.kafka_orchestrator, kafka.kafka_exporter and kafka.kafka_ui log in with the Kafka admin password
           as a plain value, which this pipeline keeps only in the credentials secret: remove them from the values
           (Kafbat UI is the supported UI).
+      - rule: self.kafka.kafka_rest_proxy.enabled != true
+        mirrors: cdc.validateKafkaSecretRefs
+        paths: [kafka.kafka_rest_proxy.enabled]
+        message: >-
+          kafka.kafka_rest_proxy must stay off: in kafka 4.3.0 its Kafka login (jaas_conf) carries the password
+          inline in the values, and this pipeline keeps every Kafka password only in the credentials secret.
       - rule: >-
           'client' in self.kafka.kafka.listeners && self.kafka.kafka.listeners['client'].sasl != null &&
           self.kafka.kafka.listeners['client'].sasl.admin != null &&
@@ -474,6 +482,10 @@ yamlOnly:
     reason: >-
       Off, and refused by the chart: this UI writes the Kafka admin password into its settings as a plain value.
       Kafbat UI (Kafka UI and REST Proxy) is the supported UI.
+  - path: kafka.kafka_rest_proxy
+    reason: >-
+      Off, and refused by the chart: in kafka 4.3.0 the REST Proxy's Kafka login (jaas_conf) carries the password
+      inline in the values, which this pipeline does not allow.
   - path: debezium-server.source.type
     reason: The pipeline's source is the bundled PostgreSQL.
   - path: debezium-server.source.database.hostname

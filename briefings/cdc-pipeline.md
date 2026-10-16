@@ -69,8 +69,10 @@ database.
   `kafka_ui` (provectus) inlines the admin password the same way, so it is refused too. The JMX exporter needs
   no password and still runs. Kafbat UI reads the user's own config file, which must carry the admin password
   from the secret.
-- **What remains plaintext, optional and off by default:** `kafka_rest_proxy.jaas_conf`/`password_properties`
-  and any credentials a user puts into `kafka_connectors` — kafka-chart features this pipeline does not use.
+- **`kafka_rest_proxy` is refused too** (render `fail` + wizard rule, excluded from the import): in kafka 4.3.0
+  its `jaas_conf` carries the Kafka password inline in values. `kafka_connectors` stays available: its `env`
+  takes `cpln://secret/…` references (the kafka chart adds the reveal grant itself), and the README says to
+  use them rather than inline credentials.
 - **Kafka 4.0.1 → 4.3.0** for the 4.2.0 fix (brokers on the 3.x image wrote an undeleted `server.log` and
   were evicted after ~10 days) and because 4.3.0 has a wizard the cdc wizard imports. Its values are a
   superset of 4.0.1's, so the umbrella block carried over unchanged.

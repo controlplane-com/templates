@@ -238,7 +238,7 @@ kafka:
       external_outboundAllowCIDR: "0.0.0.0/0"
 
   kafka_rest_proxy:
-    enabled: false
+    enabled: false # refused: in kafka 4.3.0 it needs its Kafka password inline in values
 
   kafka_client:
     name: client

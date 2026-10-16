@@ -122,6 +122,9 @@ the subchart's own helper.
 {{- if ($k.kafka_ui).enabled -}}
 {{- fail "cdc-pipeline: kafka.kafka_ui must stay off. It writes the Kafka admin password into its own settings as a plain value, and this template keeps that password only in the credentials secret. Use Kafbat UI (kafka.kafbat_ui) instead; see the README." -}}
 {{- end -}}
+{{- if ($k.kafka_rest_proxy).enabled -}}
+{{- fail "cdc-pipeline: kafka.kafka_rest_proxy must stay off. In kafka 4.3.0 the REST Proxy takes its Kafka login (jaas_conf) with the password inline in values, so cdc-pipeline does not offer it: every Kafka password here lives only in the credentials secret. Remove kafka_rest_proxy from your values." -}}
+{{- end -}}
 {{- /* 2. Every password value is the broker-resolved reference, never a password. */ -}}
 {{- $client := ($k.kafka.listeners).client | default dict -}}
 {{- $sasl := $client.sasl | default dict -}}

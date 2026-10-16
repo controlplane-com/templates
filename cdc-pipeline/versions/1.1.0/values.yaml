@@ -7,12 +7,13 @@
 #   - Debezium Server (CDC connector: postgres -> kafka)
 #
 # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. One `dictionary`
-# secret holds the database credentials for PostgreSQL AND Debezium's
-# credentials: keys `username`, `password`, `database`, `sourcePassword` (the
-# same value as `password`) and `kafkaSaslPassword` (the debezium user's Kafka
-# password below). Name it in BOTH credentialsSecretName values below (they
-# must be equal). If it does not exist the deployment WEDGES silently —
-# `cpln logs` returns nothing. See Prerequisites in the README.
+# secret holds every credential of the pipeline: keys `username`, `password`,
+# `database`, `sourcePassword` (the same value as `password`),
+# `kafkaSaslPassword` (the debezium user's Kafka password), `kafkaAdminPassword`,
+# `kafkaInterBrokerPassword` and `kafkaControllerPassword`. Its name appears in
+# BOTH credentialsSecretName values AND in the four kafka.kafka.env entries
+# below; all six must name the same secret. If it does not exist the deployment
+# WEDGES silently — `cpln logs` returns nothing. See Prerequisites in the README.
 #
 # Internal DNS names are computed automatically from the release name:
 #   PostgreSQL: <release>-postgres-ha-proxy.<gvc>.cpln.local:5432
@@ -95,7 +96,17 @@ kafka:
     debug: false
     multiZone: false
     logDirs: /opt/kafka/logs-0,/opt/kafka/logs-1
-    env: []
+    # The brokers read their SASL passwords from the credentials secret through these variables (the
+    # `${env:...}` references below). Keep all four; the secret name must equal credentialsSecretName.
+    env:
+      - name: CDC_KAFKA_ADMIN_PASSWORD
+        value: cpln://secret/my-cdc-pipeline-credentials.kafkaAdminPassword
+      - name: CDC_KAFKA_DEBEZIUM_PASSWORD
+        value: cpln://secret/my-cdc-pipeline-credentials.kafkaSaslPassword
+      - name: CDC_KAFKA_INTER_BROKER_PASSWORD
+        value: cpln://secret/my-cdc-pipeline-credentials.kafkaInterBrokerPassword
+      - name: CDC_KAFKA_CONTROLLER_PASSWORD
+        value: cpln://secret/my-cdc-pipeline-credentials.kafkaControllerPassword
     volumes:
       logs:
         initialCapacity: 10
@@ -123,31 +134,29 @@ kafka:
         sasl:
           admin:
             username: admin
-            password: "change-me-cdc-pipeline-kafka-admin"
+            password: "${env:CDC_KAFKA_ADMIN_PASSWORD}"     # resolved by the broker from the env above; not a value
           users: "debezium"
-          passwords: "change-me-cdc-pipeline-kafka-debezium"
+          passwords: "${env:CDC_KAFKA_DEBEZIUM_PASSWORD}"  # the secret's kafkaSaslPassword
     acl:
       # The debezium user is a super user so it can create and write its topics (the kafka chart has no way to declare ACLs).
       superUsers: "User:admin;User:debezium"
       allowEveryoneIfNoAclFound: false
     secrets:
       kraft_cluster_id: "change-me-cdc-pipeline-kraft-cluster-id"
-      inter_broker_password: "change-me-cdc-pipeline-inter-broker"
-      controller_password: "change-me-cdc-pipeline-controller"
+      inter_broker_password: "${env:CDC_KAFKA_INTER_BROKER_PASSWORD}"
+      controller_password: "${env:CDC_KAFKA_CONTROLLER_PASSWORD}"
     extra_configurations:
+      # Kafka's env config provider resolves the `${env:...}` password references above. Keep both lines.
+      config.providers: env
+      config.providers.env.class: org.apache.kafka.common.config.provider.EnvVarConfigProvider
       default.replication.factor: 3
       auto.create.topics.enable: true
       log.retention.hours: 168
 
-  kafka_exporter:
-    name: exporter
-    image: danielqsj/kafka-exporter:v1.9.0
-    debug: false
-    cpu: 50m
-    memory: 128Mi
-    listener: client
-    env: []
-    dropMetrics: []
+  # Off: the health sidecar and the Kafka exporter need the admin password as a plain value, which this
+  # template no longer holds. The chart refuses them.
+  kafka_orchestrator: null
+  kafka_exporter: null
 
   jmx_exporter:
     name: jmx-exporter

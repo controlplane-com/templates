@@ -12,16 +12,18 @@ each component's own README is the reference for its knobs, storage and backups:
 - **`postgres-highly-available`** — the CDC source: three Patroni-managed PostgreSQL members with
   `wal_level = logical`, etcd, and an HAProxy endpoint that always reaches the leader.
 - **`kafka`** — the transport: a three-broker KRaft cluster with SASL users, the `debezium` user among its
-  super users, and a client workload. Kafbat UI is available but off (optional).
+  super users, and a client workload. Its SASL passwords come from the credentials secret. Kafbat UI is
+  available but off (optional).
 - **`debezium-server`** — the connector: reads the replication stream through HAProxy and writes each
   change to the topic `<serverName>.<schema>.<table>`. Its offsets live on a volume set.
 
-The chart itself creates nothing; it checks the components' values against each other at render.
+The chart itself creates one policy, letting the Kafka brokers read the credentials secret, and checks the
+components' values against each other at render.
 
 ## Prerequisites
 
-**One `dictionary` secret must exist BEFORE you install.** PostgreSQL initializes with it and Debezium
-connects with it, so it holds five keys:
+**One `dictionary` secret must exist BEFORE you install.** PostgreSQL initializes with it, the Kafka brokers
+take their SASL passwords from it, and Debezium connects with it, so it holds eight keys:
 
 ```bash
 DB_PASSWORD="$(openssl rand -hex 24)"
@@ -30,22 +32,28 @@ cpln secret create-dictionary --name RELEASE_NAME-cdc-credentials \
   --entry password="$DB_PASSWORD" \
   --entry sourcePassword="$DB_PASSWORD" \
   --entry database=cdcdb \
-  --entry kafkaSaslPassword='THE_DEBEZIUM_KAFKA_PASSWORD'
+  --entry kafkaSaslPassword="$(openssl rand -hex 24)" \
+  --entry kafkaAdminPassword="$(openssl rand -hex 24)" \
+  --entry kafkaInterBrokerPassword="$(openssl rand -hex 24)" \
+  --entry kafkaControllerPassword="$(openssl rand -hex 24)"
 ```
 
 - `sourcePassword` must equal `password` (Debezium reads that key), and `username`/`database` must equal
   `debezium-server.source.database.user`/`.name`. `database` is used unquoted, so keep it to lowercase
   letters, digits and underscores.
-- `kafkaSaslPassword` must equal the `debezium` entry of `kafka.kafka.listeners.client.sasl.passwords`.
-  Kafka's SASL passwords are still plain values (the kafka template has no secret support).
-- Set the name in **both** `postgres-highly-available.config.credentialsSecretName` and
-  `debezium-server.credentialsSecretName`; the chart refuses two different names. Secret names are
-  org-wide, so give each release its own, and do not use `RELEASE_NAME-debezium-credentials`, which Debezium
-  creates itself.
+- `kafkaSaslPassword` is the password of Kafka's `debezium` user, on the broker side and in Debezium alike.
+  `kafkaAdminPassword` is the Kafka `admin` user's; the other two secure the brokers' own connections. Keep
+  the Kafka passwords to letters and digits, as generated above: they are placed inside Kafka's login
+  configuration, where a `"` or `;` breaks it.
+- The secret's name appears in six values: `postgres-highly-available.config.credentialsSecretName`,
+  `debezium-server.credentialsSecretName` and the four `kafka.kafka.env` entries (see Kafka below). **All six
+  must name the same secret**; the chart refuses anything else. Secret names are org-wide, so give each
+  release its own, and do not use `RELEASE_NAME-debezium-credentials`, which Debezium creates itself.
 
 **If the secret does not exist at install time, the deployment wedges silently.** `cpln logs` returns zero
 lines — the containers never start. The only diagnostic is `status.versions[].message` in
-`cpln workload get-deployments RELEASE_NAME-postgres-ha --gvc GVC_NAME -o yaml` (and `RELEASE_NAME-debezium`);
+`cpln workload get-deployments RELEASE_NAME-postgres-ha --gvc GVC_NAME -o yaml` (and `RELEASE_NAME-cluster`,
+`RELEASE_NAME-debezium`);
 plain `cpln workload get` has no `versions` key. Create the secret and it recovers on its own, but it can take
 up to about 12 minutes to serve again — poll rather than giving up — or skip the wait with
 `cpln workload force-redeployment`.
@@ -61,6 +69,17 @@ postgres-highly-available:
     credentialsSecretName: my-cdc-pipeline-credentials # REQUIRED prerequisite secret, must exist BEFORE install
 debezium-server:
   credentialsSecretName: my-cdc-pipeline-credentials # the SAME secret
+kafka:
+  kafka:
+    env: # the SAME secret again, in all four entries; keep the variable names and keys
+      - name: CDC_KAFKA_ADMIN_PASSWORD
+        value: cpln://secret/my-cdc-pipeline-credentials.kafkaAdminPassword
+      - name: CDC_KAFKA_DEBEZIUM_PASSWORD
+        value: cpln://secret/my-cdc-pipeline-credentials.kafkaSaslPassword
+      - name: CDC_KAFKA_INTER_BROKER_PASSWORD
+        value: cpln://secret/my-cdc-pipeline-credentials.kafkaInterBrokerPassword
+      - name: CDC_KAFKA_CONTROLLER_PASSWORD
+        value: cpln://secret/my-cdc-pipeline-credentials.kafkaControllerPassword
 ```
 
 ### PostgreSQL highly available
@@ -79,6 +98,9 @@ postgres-highly-available:
 
 ### Kafka
 
+Every Kafka password is a `${env:VAR}` reference, never the password: the broker resolves it from one of
+the `CDC_KAFKA_*` variables above (Kafka's `EnvVarConfigProvider`). The chart refuses a plain password.
+
 ```yaml
 kafka:
   kafka:
@@ -86,19 +108,28 @@ kafka:
     listeners:
       client:
         sasl:
-          admin: { username: admin, password: "change-me-cdc-pipeline-kafka-admin" }
+          admin: { username: admin, password: "${env:CDC_KAFKA_ADMIN_PASSWORD}" } # the secret's kafkaAdminPassword
           users: "debezium"
-          passwords: "change-me-cdc-pipeline-kafka-debezium" # = the secret's kafkaSaslPassword
+          passwords: "${env:CDC_KAFKA_DEBEZIUM_PASSWORD}" # the secret's kafkaSaslPassword
     acl:
       superUsers: "User:admin;User:debezium" # keep User:debezium: the chart cannot grant ACLs
       allowEveryoneIfNoAclFound: false
     secrets:
       kraft_cluster_id: "change-me-cdc-pipeline-kraft-cluster-id" # set to `kafka-storage.sh random-uuid` output; fixed after first start
-      inter_broker_password: "change-me-cdc-pipeline-inter-broker"
-      controller_password: "change-me-cdc-pipeline-controller"
+      inter_broker_password: "${env:CDC_KAFKA_INTER_BROKER_PASSWORD}" # the secret's kafkaInterBrokerPassword
+      controller_password: "${env:CDC_KAFKA_CONTROLLER_PASSWORD}" # the secret's kafkaControllerPassword
+    extra_configurations:
+      config.providers: env # keep both provider lines: they resolve the references
+      config.providers.env.class: org.apache.kafka.common.config.provider.EnvVarConfigProvider
+  kafka_orchestrator: null # keep off: needs the admin password as a plain value
+  kafka_exporter: null # keep off: needs the admin password as a plain value
   kafbat_ui:
     enabled: false # see Kafbat UI below
 ```
+
+To add another Kafka user, put its password in the credentials secret under a new key, add a `kafka.kafka.env`
+entry reading it (`cpln://secret/SECRET_NAME.NEW_KEY`), and append the user and `${env:THAT_VARIABLE}` to
+`users` and `passwords`.
 
 ### Debezium Server
 
@@ -125,7 +156,8 @@ debezium-server:
 
 Off by default: it mounts a Kafbat configuration file from an opaque secret you create first, and it is
 public when on. Write the config (see the kafka README's example, with
-`bootstrapServers: RELEASE_NAME-cluster.GVC_NAME.cpln.local:9092` and the Kafka admin user), then:
+`bootstrapServers: RELEASE_NAME-cluster.GVC_NAME.cpln.local:9092` and the Kafka admin user; the admin
+password is the credentials secret's `kafkaAdminPassword`, from `cpln secret reveal SECRET_NAME -o yaml`), then:
 
 ```bash
 cpln secret create-opaque --name RELEASE_NAME-kafbat-ui-config --encoding plain -f kafbat-config.yaml
@@ -144,7 +176,7 @@ kafka:
 
 | What | Where | Credentials |
 |---|---|---|
-| Change events | Kafka topics `<serverName>.<schema>.<table>` at `RELEASE_NAME-cluster.GVC_NAME.cpln.local:9092` (SASL_PLAINTEXT, PLAIN) | a user from `kafka.kafka.listeners.client.sasl` |
+| Change events | Kafka topics `<serverName>.<schema>.<table>` at `RELEASE_NAME-cluster.GVC_NAME.cpln.local:9092` (SASL_PLAINTEXT, PLAIN) | `admin` with the secret's `kafkaAdminPassword`, or another user of `kafka.kafka.listeners.client.sasl` |
 | Source database | `RELEASE_NAME-postgres-ha-proxy.GVC_NAME.cpln.local:5432` | `username`/`password`/`database` of the credentials secret |
 
 ## Upgrading from 1.0.4
@@ -153,20 +185,30 @@ kafka:
 **a fresh install of 1.1.0 is the simplest path**: install it as a new release, move any data the database
 holds, then uninstall the old release. To upgrade in place instead:
 
-1. 1.0.4 created the database secret itself, and **this upgrade deletes it**. Create the new secret under a
-   **new** name holding the values the database was created with, not new ones:
+1. 1.0.4 created the database secret itself, and **this upgrade deletes it**; it also kept Kafka's passwords
+   as values, which 1.1.0 reads from the secret instead. **Before upgrading**, create the new secret under a
+   **new** name holding the values the database and the Kafka cluster run with today, not new ones — the
+   running cluster keeps its passwords, and nothing changes on it:
 
    ```bash
-   cpln secret reveal my-cdc-pipeline-db-credentials -o yaml   # the CURRENT values (postgres-highly-available.config.credentialsSecretName)
+   cpln secret reveal my-cdc-pipeline-db-credentials -o yaml   # database: username, password, database (postgres-highly-available.config.credentialsSecretName)
+   cpln secret reveal RELEASE_NAME-secrets -o yaml             # Kafka: client-admin-password, inter-broker-password, controller-password
+   cpln secret reveal RELEASE_NAME-debezium-credentials -o yaml # Debezium's Kafka password: kafka-sasl-password
    cpln secret create-dictionary --name RELEASE_NAME-cdc-credentials \
      --entry username=YOUR_CURRENT_USERNAME --entry password=YOUR_CURRENT_PASSWORD \
      --entry sourcePassword=YOUR_CURRENT_PASSWORD --entry database=YOUR_CURRENT_DATABASE \
-     --entry kafkaSaslPassword=YOUR_DEBEZIUM_KAFKA_PASSWORD
+     --entry kafkaSaslPassword=CURRENT_KAFKA_SASL_PASSWORD \
+     --entry kafkaAdminPassword=CURRENT_CLIENT_ADMIN_PASSWORD \
+     --entry kafkaInterBrokerPassword=CURRENT_INTER_BROKER_PASSWORD \
+     --entry kafkaControllerPassword=CURRENT_CONTROLLER_PASSWORD
    ```
 
 2. In your values, delete the `database:` block, `debezium-server.source.database.password` and
    `debezium-server.sink.kafka.saslPassword`; set both `credentialsSecretName` keys to the new name; and if
-   you changed `kafka.kafka.acl.superUsers`, add `User:debezium`. The chart refuses the old keys at render.
+   you changed `kafka.kafka.acl.superUsers`, add `User:debezium`. Replace every Kafka password with its
+   reference and add the `kafka.kafka.env` entries and provider lines exactly as in [Kafka](#kafka) and
+   [Credentials](#credentials), naming the new secret; delete any `kafka.kafka_exporter` block (1.1.0 runs no
+   Kafka exporter or health sidecar). The chart refuses the old keys and any plain Kafka password at render.
 3. **Before upgrading**, switch the running cluster to `wal_level = logical` — 1.0.4 created it with
    `replica`, and 1.1.0's replicas refuse to start on a `replica` cluster, which stalls the upgrade. The same
    command tells Patroni to leave logical slots alone and removes the install-time password 1.0.4 stored in
@@ -186,7 +228,8 @@ holds, then uninstall the old release. To upgrade in place instead:
 
    Run the `cluster` call again: every member should be `running` or `streaming` with no `pending_restart`.
 4. Upgrade. The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so Debezium can
-   briefly lose its database; it reconnects by itself. The new version of a workload can also wait about
+   briefly lose its database; it reconnects by itself. The Kafka brokers restart as well, now reading their
+   passwords from the secret. The new version of a workload can also wait about
    10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret
    propagates; the previous version keeps serving meanwhile, and it clears by itself.
 5. Confirm Debezium's slot is a failover slot: `pgx N psql -h 127.0.0.1 -d postgres -c "SELECT slot_name, failover FROM
@@ -228,19 +271,46 @@ container then restarts by itself and reads the new `sourcePassword`, so it need
 it still logs `password authentication failed` a few minutes after the edit, run
 `cpln workload force-redeployment RELEASE_NAME-debezium --gvc GVC_NAME`.
 
-**Any `helm upgrade` after the secret has been edited restarts `RELEASE_NAME-postgres-ha` and
-`RELEASE_NAME-debezium` again** (one more rolling restart of the database, with its leader changes), even
-when no value changed, because they are rolled whenever the secret they read has changed since the last
-upgrade. Plan the next upgrade, such as a Kafka password rotation, into the same window. If a member stays `starting`, or `running` without `streaming` for several minutes, re-copy it from the leader. This copies the whole database, so it costs network traffic in proportion to its size:
+**Any `helm upgrade` after the secret has been edited restarts `RELEASE_NAME-postgres-ha`,
+`RELEASE_NAME-cluster` and `RELEASE_NAME-debezium` again** (one more rolling restart of the database, with
+its leader changes), even when no value changed, because they are rolled whenever the secret they read has
+changed since the last upgrade. Plan the next upgrade into the same window. If a member stays `starting`, or `running` without `streaming` for several minutes, re-copy it from the leader. This copies the whole database, so it costs network traffic in proportion to its size:
 
 ```bash
 pgx N curl -s -XPOST -d '{"force": true}' localhost:8008/reinitialize
 ```
 
+## Rotating the Kafka passwords
+
+All four Kafka passwords live only in the credentials secret, so a rotation is a secret edit and two
+redeployments, with no `helm upgrade`. The brokers and Debezium keep the passwords they started with until
+they restart, so run the steps back to back: a broker that restarts on its own in between comes back with
+passwords its peers do not have yet.
+
+<!-- [UNPROVEN] for the test round: this order and the client behaviour below are expected, not measured.
+Expected: the broker redeploy restarts all brokers together, so Kafka is unavailable until they are ready
+again and every client reconnects. Between steps 3 and 4 Debezium's producer is refused
+(SaslAuthenticationException) because it still holds the old kafkaSaslPassword; it retries, nothing is lost
+(its replication slot holds the changes), and some events can be delivered twice after step 4. Any other
+client logging in with a rotated password is refused until it is given the new one. Also unmeasured for the
+brokers: that a container restart alone re-resolves the secret (measured for Debezium in round 2). -->
+
+```bash
+cpln secret edit SECRET_NAME                    # 1. new values for any of kafkaSaslPassword, kafkaAdminPassword, kafkaInterBrokerPassword, kafkaControllerPassword
+cpln secret reveal SECRET_NAME -o yaml          # 2. confirm the new values BEFORE redeploying
+cpln workload force-redeployment RELEASE_NAME-cluster --gvc GVC_NAME    # 3. the brokers restart with the new passwords
+cpln workload force-redeployment RELEASE_NAME-debezium --gvc GVC_NAME   # 4. only when kafkaSaslPassword changed; right after step 3
+```
+
+Kafka is unavailable while the brokers restart, and Debezium is refused from step 3 until step 4, then
+resumes from its replication slot; events around the switch can be delivered twice. Any other client that
+logs in as `admin` or `debezium` needs the new password too.
+
 ## Important Notes
 
 - **Rotating the database password in HA mode needs a leader switchover first** — follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode). A plain redeploy can promote a member still holding the old password and split the cluster.
-- **Rotating Debezium's Kafka password means changing it in two places** — the `debezium` entry of `kafka.kafka.listeners.client.sasl.passwords` (a `helm upgrade`, which rolls the brokers by itself) and the secret's `kafkaSaslPassword`, then `cpln workload force-redeployment RELEASE_NAME-debezium`. If the secret was edited since the last upgrade, that upgrade also restarts the database and Debezium.
+- **Rotating a Kafka password needs both redeployments** — edit the secret, then redeploy `RELEASE_NAME-cluster` and `RELEASE_NAME-debezium` as in [Rotating the Kafka passwords](#rotating-the-kafka-passwords), straight after the edit.
+- **This template runs no Kafka exporter or health sidecar** (`kafka.kafka_exporter`, `kafka.kafka_orchestrator` stay `null`); broker metrics come from the JMX exporter.
 - **A replication slot is left behind when the connector is removed.** PostgreSQL retains WAL for it until `max_slot_wal_keep_size` (a quarter of the volume) invalidates it; drop it explicitly (`SELECT pg_drop_replication_slot('debezium');`).
 - **Debezium's replication slot follows a database switchover.** It is a PostgreSQL 17 failover slot (`debezium-server.source.postgres.slotFailover`), so every replica holds a synchronized copy and Debezium resumes on the new leader; changes around a leader change can be delivered twice, so consumers must tolerate duplicates.
 - **Dependency versions are pinned in `Chart.yaml`** and move only with a new version of this template.

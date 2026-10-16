@@ -10,8 +10,8 @@ summary: >-
   A wired change data capture stack in one install: a three-node PostgreSQL cluster with Patroni
   failover and logical WAL as the source, a three-broker Apache Kafka cluster in KRaft mode as the
   transport, and Debezium Server streaming the database's row changes into Kafka topics. One
-  prerequisite secret holds the database and connector credentials, Debezium's Kafka user is set up
-  to write its topics, and internal hostnames are wired for you; Kafbat UI is optional. Pick it for a
+  prerequisite secret holds every credential, Kafka's SASL passwords included, Debezium's Kafka user
+  is set up to write its topics, and internal hostnames are wired for you; Kafbat UI is optional. Pick it for a
   new Postgres whose changes stream into Kafka, not to add CDC to a database you already run.
 
 keywords:
@@ -58,10 +58,18 @@ pickInsteadIf:
 prerequisites:
   - kind: secret
     secretType: dictionary
-    keys: [username, password, database, sourcePassword, kafkaSaslPassword]
+    keys:
+      - username
+      - password
+      - database
+      - sourcePassword
+      - kafkaSaslPassword
+      - kafkaAdminPassword
+      - kafkaInterBrokerPassword
+      - kafkaControllerPassword
     valuesPath: [postgres-highly-available.config.credentialsSecretName, debezium-server.credentialsSecretName]
     required: true
-    description: Database and Debezium credentials; set its name in both keys, sourcePassword equal to password. When it is missing the workloads wait with no logs.
+    description: Database, Debezium and Kafka credentials; set its name in both keys and in the four kafka.kafka.env entries, sourcePassword equal to password. When it is missing the workloads wait with no logs.
   - kind: secret
     secretType: opaque
     valuesPath: kafka.kafbat_ui.configuration_secret

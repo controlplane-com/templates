@@ -2,3 +2,4 @@
 {{- include "cdc.validateCredentialsSecret" . -}}
 {{- include "cdc.validateWalLevel" . -}}
 {{- include "cdc.validateKafkaCredentials" . -}}
+{{- include "cdc.validateKafkaSecretRefs" . -}}

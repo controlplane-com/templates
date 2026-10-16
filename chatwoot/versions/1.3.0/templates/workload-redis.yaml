@@ -27,7 +27,7 @@ spec:
         - noeviction
       env:
         - name: REDIS_PASSWORD
-          value: cpln://secret/{{ include "chatwoot.secret.creds.name" . }}.redisPassword
+          value: cpln://secret/{{ include "chatwoot.secret.redis.name" . }}.password
       ports:
         - number: 6379
           protocol: tcp

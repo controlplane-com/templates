@@ -191,8 +191,10 @@ postgres:
 # replicas, so a multi-node topology silently drops live updates.
 redis:
   image: redis:8
-  auth:
-    password: change-me-chatwoot-redis   # template-managed; wired into REDIS_URL — letters/digits/-/_ only
+  # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL (the deployment WEDGES
+  # silently without it). A `dictionary` secret with one key, `password`: Redis requires
+  # it and Chatwoot puts it in REDIS_URL, so use letters, digits, - and _ only.
+  credentialsSecretName: my-chatwoot-redis
   resources:
     minCpu: 100m
     maxCpu: 400m

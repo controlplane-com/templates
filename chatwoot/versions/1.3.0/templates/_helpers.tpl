@@ -55,10 +55,11 @@ Redis AOF persistence volumeset name (/data)
 {{- end }}
 
 {{/*
-Template-managed credentials secret (bundled Redis password)
+Redis password secret — a PREREQUISITE the user creates (key: password). Up to
+1.2.x the chart created {release}-chatwoot-creds from redis.auth.password.
 */}}
-{{- define "chatwoot.secret.creds.name" -}}
-{{- printf "%s-chatwoot-creds" .Release.Name }}
+{{- define "chatwoot.secret.redis.name" -}}
+{{- .Values.redis.credentialsSecretName }}
 {{- end }}
 
 {{/*
@@ -174,7 +175,7 @@ configured entirely through env vars — there is no config file to mount.
 # resolvable URL is also the only way pub/sub stays on one authoritative node —
 # Redis does not propagate published messages from a replica.
 - name: REDIS_PASSWORD
-  value: cpln://secret/{{ include "chatwoot.secret.creds.name" . }}.redisPassword
+  value: cpln://secret/{{ include "chatwoot.secret.redis.name" . }}.password
 - name: REDIS_URL
   value: redis://:$(REDIS_PASSWORD)@{{ include "chatwoot.redis.host" . }}:6379
 # ── Public base URL (widget snippet, email links, callbacks) ──
@@ -249,6 +250,7 @@ configured entirely through env vars — there is no config file to mount.
 
 {{- define "chatwoot.validate" -}}
 {{- include "chatwoot.validateDatabaseSecret" . -}}
+{{- include "chatwoot.validateRedisSecret" . -}}
 {{- if not .Values.secrets.name -}}
 {{- fail "chatwoot: secrets.name is required — the name of the prerequisite dictionary secret holding SECRET_KEY_BASE and the three ACTIVE_RECORD_ENCRYPTION_* keys (must exist BEFORE install)" -}}
 {{- end -}}
@@ -312,11 +314,21 @@ configured entirely through env vars — there is no config file to mount.
 {{- if and .Values.postgres.enabled (hasPrefix "postgres:" .Values.postgres.image) -}}
 {{- fail (printf "chatwoot: postgres.image '%s' is the stock PostgreSQL image, which does not ship pgvector — Chatwoot's schema load runs CREATE EXTENSION \"vector\" and would fail. Use a pgvector-carrying image (default: pgvector/pgvector:pg18) or switch to postgresHA.enabled" .Values.postgres.image) -}}
 {{- end -}}
-{{- if not .Values.redis.auth.password -}}
-{{- fail "chatwoot: redis.auth.password is required — it secures the bundled Redis and is embedded in REDIS_URL" -}}
+{{- end }}
+
+
+{{/*
+The bundled Redis password became a user-created prerequisite secret in 1.3.0, like
+the database credentials. A values file still carrying redis.auth.password fails at
+render, naming its replacement and the upgrade procedure. The value never reaches
+Helm any more, so its URL-safe character set is documented rather than checked.
+*/}}
+{{- define "chatwoot.validateRedisSecret" -}}
+{{- if and (hasKey .Values.redis "auth") (hasKey (.Values.redis.auth | default dict) "password") -}}
+{{- fail "chatwoot: redis.auth.password was REMOVED in 1.3.0. The Redis password is now a prerequisite `dictionary` secret you create (key: password), named by redis.credentialsSecretName. Upgrading from 1.2.x: create it under a NEW name holding your CURRENT Redis password, set redis.credentialsSecretName to that name, and remove redis.auth — see \"Upgrading from 1.2.x\" in the README." -}}
 {{- end -}}
-{{- if not (regexMatch "^[A-Za-z0-9_-]+$" .Values.redis.auth.password) -}}
-{{- fail "chatwoot: redis.auth.password must contain only letters, digits, '-' and '_' — it is embedded in REDIS_URL and other characters break the connection URL" -}}
+{{- if not .Values.redis.credentialsSecretName -}}
+{{- fail "chatwoot: redis.credentialsSecretName is required — the name of the prerequisite dictionary secret holding the Redis password (key: password; letters, digits, - and _ only). It must exist BEFORE install." -}}
 {{- end -}}
 {{- end }}
 

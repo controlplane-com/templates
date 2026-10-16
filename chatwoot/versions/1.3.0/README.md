@@ -1,7 +1,7 @@
 # Chatwoot
 
-> **Upgrading from 1.2.x:** the database credentials are now a secret you create before upgrading,
-> under a **new** name — see [Upgrading from 1.2.x](#upgrading-from-12x).
+> **Upgrading from 1.2.x:** the database credentials and the Redis password are now secrets you create
+> before upgrading, under **new** names — see [Upgrading from 1.2.x](#upgrading-from-12x).
 
 Chatwoot is an open-source customer engagement platform — a live-chat widget, shared email inbox, and omni-channel agent desk. This template deploys the **Community Edition** (MIT core) as a Rails web tier plus a Sidekiq worker, backed by a highly available pgvector-capable PostgreSQL and a bundled Redis, with local or object-storage attachments.
 
@@ -14,13 +14,13 @@ Chatwoot is an open-source customer engagement platform — a live-chat widget, 
 - **Attachment volumeset** — local attachment storage at `/app/storage`; rendered only when `storage.type: local`.
 - **Redis volumeset** — AOF persistence at `/data`.
 - **Start-script secrets** — the Chatwoot image declares no entrypoint, so the web and worker containers each mount their own start script.
-- **Credentials secret** — the template-managed Redis password.
+- **Redis password secret** (dictionary) — *not created by this template*; you create it before install. Redis requires the password and Chatwoot puts it in `REDIS_URL`.
 - **Database credentials secret** (dictionary) — *not created by this template*; you create it before install. The bundled PostgreSQL initializes from it and Chatwoot connects with it, in either database mode.
 - **Identity + policy** — one identity shared by web and worker, granted `reveal` on exactly the secrets they mount; it also carries the AWS cloud-account link in keyless S3 mode.
 
 ## Prerequisites
 
-**Two dictionary secrets must exist BEFORE you install.** They hold credentials, so they are prerequisite secrets rather than values — a value would sit in plaintext in the Helm release for the life of the install.
+**Three dictionary secrets must exist BEFORE you install.** They hold credentials, so they are prerequisite secrets rather than values — a value would sit in plaintext in the Helm release for the life of the install.
 
 - **Database credentials** — the bundled PostgreSQL initializes with these and Chatwoot connects with them:
 
@@ -32,6 +32,15 @@ Chatwoot is an open-source customer engagement platform — a live-chat widget, 
   ```
 
   Set its name in the key of the database mode you use: `postgresHA.config.credentialsSecretName` (HA, the default) or `postgres.config.credentialsSecretName` (single-instance). Secret names are org-wide, so give each chatwoot release its own secret. PostgreSQL reads the secret only when its data is first initialized — see [Rotating the database password](#rotating-the-database-password).
+
+- **Redis password** — one key, `password`; the bundled Redis requires it and Chatwoot connects with it:
+
+  ```bash
+  cpln secret create-dictionary --name my-chatwoot-redis \
+    --entry password="$(openssl rand -hex 24)"
+  ```
+
+  Set its name in `redis.credentialsSecretName`. The password is part of Chatwoot's Redis URL, so use letters, digits, `-` and `_` only. See [Rotating the Redis password](#rotating-the-redis-password).
 
 - **Root-of-trust keys — create it BEFORE installing.** The workloads reference it by name (`secrets.name`, default `my-chatwoot-secrets`) and the deployment wedges on a missing secret. All four keys are **write-once**: rotating `SECRET_KEY_BASE` logs out every user, and rotating an `ACTIVE_RECORD_ENCRYPTION_*` key makes stored two-factor secrets undecryptable.
 
@@ -53,7 +62,7 @@ Chatwoot is an open-source customer engagement platform — a live-chat widget, 
     --entry SMTP_USERNAME=apikey --entry SMTP_PASSWORD=...
   ```
 
-**If either secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the containers never start, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-chatwoot --gvc GVC_NAME -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own, but Chatwoot can take up to about 12 minutes to serve again — poll rather than giving up — or skip the wait with `cpln workload force-redeployment`.
+**If any of these secrets does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the containers never start, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-chatwoot --gvc GVC_NAME -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own, but Chatwoot can take up to about 12 minutes to serve again — poll rather than giving up — or skip the wait with `cpln workload force-redeployment`.
 
 ## Configuration
 
@@ -171,8 +180,7 @@ postgres:                     # single-instance alternative (dev/lightweight)
 ```yaml
 redis:
   image: redis:8
-  auth:
-    password: change-me-chatwoot-redis   # wired into REDIS_URL — letters/digits/-/_ only; change before install
+  credentialsSecretName: my-chatwoot-redis   # PREREQUISITE dictionary secret (key: password; letters, digits, - and _) — must exist BEFORE install
   resources:
     minCpu: 100m
     maxCpu: 400m
@@ -287,6 +295,16 @@ Then force-redeploy `RELEASE_NAME-chatwoot-worker`, then `RELEASE_NAME-chatwoot`
 pgx N curl -s -XPOST -d '{"force": true}' localhost:8008/reinitialize
 ```
 
+## Rotating the Redis password
+
+Redis keeps no password on disk: it takes the password from the secret each time it starts, and so do the Chatwoot workloads.
+
+1. Update the secret: `cpln secret edit SECRET_NAME`, then check it with `cpln secret reveal SECRET_NAME -o yaml`.
+2. Redeploy Redis: `cpln workload force-redeployment RELEASE_NAME-chatwoot-redis --gvc GVC_NAME`, and wait until `get-deployments` shows a higher version number, alone and ready.
+3. Then redeploy `RELEASE_NAME-chatwoot-worker`, then `RELEASE_NAME-chatwoot`, the same way. The web workload must restart after Redis in any case (see Important Notes).
+
+Chatwoot cannot reach Redis from step 2 until its own redeploys finish, so expect a few minutes of interruption and rotate in a quiet window.
+
 ## Upgrading from 1.2.x
 
 `postgres.credentials` was removed: the database credentials are now a prerequisite secret, the same one the database templates require on their own. Carrying the old key forward fails the render.
@@ -301,15 +319,25 @@ cpln secret create-dictionary --name RELEASE_NAME-chatwoot-db \
 
 Then upgrade with `postgresHA.config.credentialsSecretName` (HA mode) or `postgres.config.credentialsSecretName` (single-instance mode) set to that name, and `postgres.credentials` removed. Your current values are also in `postgres.credentials` of the 1.2.x release.
 
+`redis.auth.password` was removed too: the Redis password is now a prerequisite secret. 1.2.x kept it in `RELEASE_NAME-chatwoot-creds` (key `redisPassword`), which this upgrade also deletes. Create a secret under a different name holding the **current** password:
+
+```bash
+cpln secret reveal RELEASE_NAME-chatwoot-creds -o yaml   # redisPassword is the CURRENT Redis password
+cpln secret create-dictionary --name RELEASE_NAME-chatwoot-redis \
+  --entry password=YOUR_CURRENT_REDIS_PASSWORD
+```
+
+Then set `redis.credentialsSecretName` to that name and remove `redis.auth`. The current password is also in `redis.auth.password` of the 1.2.x release.
+
 The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so Chatwoot can briefly lose its database; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
 
 ## Upgrading from 1.1.x (HA mode)
 
-`postgresHA.postgres.username/password/database` were removed in 1.2.0 (postgres-highly-available 2.5.0). Put those three values **unchanged** into the database credentials secret under [Prerequisites](#prerequisites), set `postgresHA.config.credentialsSecretName` to its name, and delete the `postgresHA.postgres` block. `postgresHA.backup.minio.accessKey`/`secretKey` moved to a prerequisite secret named by `postgresHA.backup.minio.credentialsSecretName` (see Storage setup).
+`postgresHA.postgres.username/password/database` were removed in 1.2.0 (postgres-highly-available 2.5.0). Put those three values **unchanged** into the database credentials secret under [Prerequisites](#prerequisites), set `postgresHA.config.credentialsSecretName` to its name, and delete the `postgresHA.postgres` block. `postgresHA.backup.minio.accessKey`/`secretKey` moved to a prerequisite secret named by `postgresHA.backup.minio.credentialsSecretName` (see Storage setup). Then move the Redis password as described in [Upgrading from 1.2.x](#upgrading-from-12x).
 
 ## Upgrading from 1.0.x
 
-`postgres.config.username/password/database` were removed. Put the values your single-instance database was initialized with into the database credentials secret under [Prerequisites](#prerequisites) (keys `username`, `password`, `database`), set `postgres.config.credentialsSecretName` to its name, and remove the three keys. `postgres.backup.minio.accessKey`/`secretKey` were removed the same way (see Storage setup).
+`postgres.config.username/password/database` were removed. Put the values your single-instance database was initialized with into the database credentials secret under [Prerequisites](#prerequisites) (keys `username`, `password`, `database`), set `postgres.config.credentialsSecretName` to its name, and remove the three keys. `postgres.backup.minio.accessKey`/`secretKey` were removed the same way (see Storage setup). Then move the Redis password as described in [Upgrading from 1.2.x](#upgrading-from-12x).
 
 ## Important Notes
 
@@ -318,8 +346,8 @@ The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), s
 
 - **Choose the database mode before installing — it cannot be switched later.** Flipping `postgresHA.enabled` / `postgres.enabled` on a live release points Chatwoot at a different, empty database (separate volume set, and a different PostgreSQL major: 17.5 for the HA path, 18 for single-instance), so the app re-runs onboarding and your existing data is orphaned rather than migrated.
 
-- **Both prerequisite secrets must exist before install** — a missing `secrets.name` or database credentials secret wedges the deployment with zero log lines; see Prerequisites for the diagnostic.
-- **Rotating the database password needs `ALTER ROLE` plus a forced redeployment of Chatwoot** (not the database) — see [Rotating the database password](#rotating-the-database-password).
+- **All three prerequisite secrets must exist before install** — a missing `secrets.name`, database credentials or Redis password secret wedges the deployment with zero log lines; see Prerequisites for the diagnostic.
+- **Rotating the database password needs `ALTER ROLE` plus a forced redeployment of Chatwoot** (not the database) — see [Rotating the database password](#rotating-the-database-password). Rotating the Redis password needs a forced redeployment of Redis, then the worker and web — see [Rotating the Redis password](#rotating-the-redis-password).
 - **Complete the onboarding wizard promptly** — the first browser session to reach the endpoint creates the super admin account with no email confirmation.
 - **The bundled database image must carry pgvector** — Chatwoot's schema runs `CREATE EXTENSION "vector"`. The HA path has it natively; in single-instance mode keep `postgres.image` on a pgvector build (the chart refuses to render against a stock `postgres:` image).
 - **`chatwoot.replicas > 1` requires `storage.type` `s3` or `s3-compatible`** — local attachments live on a per-replica volumeset; the chart refuses to render otherwise.

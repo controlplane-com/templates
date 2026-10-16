@@ -12,10 +12,10 @@ targetKind: secret
 targetLinks:
   - //secret/{{ include "chatwoot.secret.webStart.name" . }}
   - //secret/{{ include "chatwoot.secret.workerStart.name" . }}
-  - //secret/{{ include "chatwoot.secret.creds.name" . }}
   # Prerequisite secrets the user creates — granted by name, nothing broader.
   - //secret/{{ .Values.secrets.name }}
   - //secret/{{ include "chatwoot.postgres.secret.name" . }}
+  - //secret/{{ include "chatwoot.secret.redis.name" . }}
   {{- if eq .Values.storage.type "s3-compatible" }}
   - //secret/{{ .Values.storage.s3Compatible.auth.secretName }}
   {{- end }}

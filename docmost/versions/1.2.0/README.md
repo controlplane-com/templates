@@ -193,7 +193,7 @@ PostgreSQL keeps the password it was initialized with, and a running workload ke
 
 1. Change it in the database: `ALTER ROLE DB_USERNAME PASSWORD 'NEW_PASSWORD';` (`DB_USERNAME` is the secret's `username`; connect as that user from inside the GVC).
 2. Update the secret: `cpln secret edit SECRET_NAME`.
-3. Right away, redeploy Docmost: `cpln workload force-redeployment RELEASE_NAME-docmost --gvc GVC_NAME`, and wait until `get-deployments` no longer shows `will be restarted shortly` — `ready: true` alone can still describe the old replica. Do not redeploy the database: PostgreSQL reads the secret only when it is first initialized, so restarting it only adds downtime.
+3. Right away, redeploy Docmost: `cpln workload force-redeployment RELEASE_NAME-docmost --gvc GVC_NAME`, and wait until `get-deployments` shows a higher version number, alone and ready (right after the command the status may not show the restart yet, and `ready: true` alone can still describe the old replica). Do not redeploy the database: PostgreSQL reads the secret only when it is first initialized, so restarting it only adds downtime.
 
 Connections the app already has open keep working after `ALTER ROLE`; new ones fail until its redeploy finishes, so redeploy right away and rotate in a quiet window.
 

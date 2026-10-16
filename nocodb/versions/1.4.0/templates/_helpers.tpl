@@ -16,10 +16,6 @@
 {{- printf "%s-nocodb-redis-vs" .Release.Name }}
 {{- end }}
 
-{{- define "nocodb.secret.creds.name" -}}
-{{- printf "%s-nocodb-creds" .Release.Name }}
-{{- end }}
-
 {{- define "nocodb.identity.name" -}}
 {{- printf "%s-nocodb-identity" .Release.Name }}
 {{- end }}
@@ -118,6 +114,24 @@ constraint instead.
 {{- end }}
 
 
+{{/*
+The Redis password became a user-created prerequisite secret in 1.4.0 (1.3.x
+rendered it from redis.auth.password into the chart-created
+{release}-nocodb-creds secret, which this version no longer creates). Redis
+reads it at every start (requirepass; nothing is kept on disk) and NocoDB
+splices it into NC_REDIS_URL by $(VAR) expansion at container start, so the
+README states the URL-safe constraint the render can no longer check.
+*/}}
+{{- define "nocodb.validateRedisSecret" -}}
+{{- if hasKey .Values.redis "auth" -}}
+{{- fail "nocodb: redis.auth was REMOVED in 1.4.0. The Redis password is now a prerequisite `dictionary` secret you create (key: password), named by redis.credentialsSecretName. Upgrading from 1.3.x: create it under a NEW name holding your CURRENT Redis password (do not reuse RELEASE_NAME-nocodb-creds, which this upgrade deletes), set redis.credentialsSecretName to that name, and remove redis.auth — see \"Upgrading from 1.3.x\" in the README." -}}
+{{- end -}}
+{{- if not .Values.redis.credentialsSecretName -}}
+{{- fail "nocodb: redis.credentialsSecretName is required — the name of your pre-created `dictionary` secret holding the Redis password under the key `password`. See Prerequisites in the README." -}}
+{{- end -}}
+{{- end }}
+
+
 {{/* Labeling */}}
 
 {{- define "nocodb.tags" -}}
@@ -129,6 +143,7 @@ constraint instead.
 
 {{- define "nocodb.validate" -}}
 {{- include "nocodb.validateDatabaseSecret" . -}}
+{{- include "nocodb.validateRedisSecret" . -}}
 {{- if not .Values.secrets.name -}}
 {{- fail "nocodb: secrets.name is required — the name of the prerequisite dictionary secret holding NC_AUTH_JWT_SECRET and NC_CONNECTION_ENCRYPT_KEY (must exist BEFORE install; both keys are write-once — rotating NC_AUTH_JWT_SECRET logs out every user, and changing NC_CONNECTION_ENCRYPT_KEY makes stored external-database credentials undecryptable)" -}}
 {{- end -}}
@@ -166,9 +181,6 @@ constraint instead.
 {{- end -}}
 {{- if and .Values.postgresHA.enabled (not (dig "proxy" "enabled" true .Values.postgresHA)) -}}
 {{- fail "nocodb: postgresHA.proxy.enabled must remain true — the HAProxy leader endpoint is NocoDB's stable write endpoint" -}}
-{{- end -}}
-{{- if not (regexMatch "^[A-Za-z0-9_-]+$" .Values.redis.auth.password) -}}
-{{- fail "nocodb: redis.auth.password must contain only letters, digits, '-' and '_' — it is embedded in NC_REDIS_URL and other characters break the connection URL" -}}
 {{- end -}}
 {{- if .Values.smtp.enabled -}}
 {{- if or (not .Values.smtp.host) (not .Values.smtp.port) (not .Values.smtp.from) -}}

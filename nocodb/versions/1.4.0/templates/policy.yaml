@@ -10,10 +10,10 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "nocodb.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "nocodb.secret.creds.name" . }}
   # Prerequisite secrets the user creates — granted by name, nothing broader.
   - //secret/{{ .Values.secrets.name }}
   - //secret/{{ include "nocodb.postgres.secret.name" . }}
+  - //secret/{{ .Values.redis.credentialsSecretName }}
   {{- if .Values.admin.secretName }}
   - //secret/{{ .Values.admin.secretName }}
   {{- end }}

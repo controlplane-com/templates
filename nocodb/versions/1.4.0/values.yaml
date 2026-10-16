@@ -102,8 +102,10 @@ internalAccess:
 # is not used. noeviction is mandatory — an evicted key silently drops job events.
 redis:
   image: redis:8.10.0
-  auth:
-    password: change-me-nocodb-redis   # template-managed; embedded in NC_REDIS_URL — letters/digits/-/_ only
+  # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL, or the deployment
+  # WEDGES silently. A `dictionary` secret with one key, `password` (letters,
+  # digits, - and _ only: it goes into NC_REDIS_URL unencoded; openssl rand -hex 24).
+  credentialsSecretName: my-nocodb-redis
   resources:
     minCpu: 100m
     maxCpu: 400m

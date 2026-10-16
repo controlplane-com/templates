@@ -62,9 +62,11 @@ spec:
           value: cpln://secret/{{ include "nocodb.postgres.secret.name" . }}.database
         - name: NC_DB
           value: pg://{{ include "nocodb.postgres.host" . }}:5432/?u=$(NC_PG_USER)&p=$(NC_PG_PASSWORD)&d=$(NC_PG_DATABASE)
-        # ── Redis (bundled single node) — one URL covers cache, jobs and rate limiting ──
+        # ── Redis (bundled single node) — one URL covers cache, jobs and rate limiting.
+        #    The password comes from the user's prerequisite Redis secret and is
+        #    spliced into the URL at container start (unencoded: URL-safe values only). ──
         - name: NC_REDIS_PASSWORD
-          value: cpln://secret/{{ include "nocodb.secret.creds.name" . }}.redisPassword
+          value: cpln://secret/{{ .Values.redis.credentialsSecretName }}.password
         - name: NC_REDIS_URL
           value: redis://:$(NC_REDIS_PASSWORD)@{{ include "nocodb.redis.host" . }}:6379
         # ── Tool dir: local attachments and thumbnails resolve under this ──

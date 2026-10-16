@@ -1,7 +1,7 @@
 # NocoDB
 
-> **Upgrading from 1.3.x:** the database credentials are now a secret you create before upgrading,
-> under a **new** name — see [Upgrading from 1.3.x](#upgrading-from-13x).
+> **Upgrading from 1.3.x:** the database credentials and the Redis password are now secrets you create
+> before upgrading, under **new** names — see [Upgrading from 1.3.x](#upgrading-from-13x).
 
 NocoDB is a no-code database and spreadsheet-style app builder — the self-hosted Airtable alternative with grid, kanban, gallery and calendar views, forms, automations and a REST API. This template deploys NocoDB Community Edition backed by Postgres (all metadata), Redis (realtime, cache, rate limiting) and local or S3 attachment storage.
 
@@ -11,13 +11,13 @@ NocoDB is a no-code database and spreadsheet-style app builder — the self-host
 - **PostgreSQL** — the metadata store holding every base, table, view, user and automation. Either the `postgres` subchart (single instance, default) or the `postgres-highly-available` subchart (3 Patroni replicas + 3 etcd + HAProxy, opt-in).
 - **Redis** — bundled single-node workload with AOF persistence; job/event pub-sub, metadata cache and rate limiter. Required — it is what makes more than one replica coherent. Live updates reach the browser over HTTP long-poll (`POST /jobs/listen`) backed by this pub-sub, not over websockets.
 - **Attachment volumeset** — local attachment storage at `/usr/app/data`; created only when `storage.type: local`.
-- **Creds secret** — template-created dictionary secret holding the bundled Redis password used to assemble `NC_REDIS_URL`.
 - **Database credentials secret** (dictionary) — *not created by this template*; you create it before install. The bundled PostgreSQL initializes from it and NocoDB connects with it, in either database mode.
+- **Redis credentials secret** (dictionary) — *not created by this template*; you create it before install. Redis requires its password and NocoDB connects with it.
 - **Identity + policy** — grants the workloads `reveal` on exactly the secrets they mount; carries the AWS cloud-account link in keyless S3 mode.
 
 ## Prerequisites
 
-**Two dictionary secrets must exist BEFORE you install.** They hold credentials, so they are prerequisite secrets rather than values — a value would sit in plaintext in the Helm release for the life of the install.
+**Three dictionary secrets must exist BEFORE you install.** They hold credentials, so they are prerequisite secrets rather than values — a value would sit in plaintext in the Helm release for the life of the install.
 
 - **Database credentials** — the bundled PostgreSQL initializes with these and NocoDB connects with them:
 
@@ -29,6 +29,15 @@ NocoDB is a no-code database and spreadsheet-style app builder — the self-host
   ```
 
   Set its name in the key of the database mode you use: `postgres.config.credentialsSecretName` (single-instance, the default) or `postgresHA.config.credentialsSecretName` (HA). Use only letters, digits, `-` and `_` in all three values: NocoDB receives them inside its `NC_DB` connection URL, unencoded, so other characters break the connection. Secret names are org-wide, so give each nocodb release its own secret. PostgreSQL reads the secret only when its data is first initialized — see [Rotating the database password](#rotating-the-database-password).
+
+- **Redis password** — the bundled Redis requires it and NocoDB connects with it:
+
+  ```bash
+  cpln secret create-dictionary --name my-nocodb-redis \
+    --entry password="$(openssl rand -hex 24)"
+  ```
+
+  Set its name in `redis.credentialsSecretName`. Use only letters, digits, `-` and `_`: NocoDB receives the password inside its `NC_REDIS_URL`, unencoded. Give each nocodb release its own secret. To change it later, see [Rotating the Redis password](#rotating-the-redis-password).
 
 - **Root-of-trust keys — create it BEFORE installing.** The server references it by name (`secrets.name`, default `my-nocodb-secrets`) and the deployment wedges on a missing secret. It holds NocoDB's two root-of-trust keys, both **write-once**: rotating `NC_AUTH_JWT_SECRET` logs out every user, and changing `NC_CONNECTION_ENCRYPT_KEY` makes the stored credentials of external data sources undecryptable (upstream has no re-encryption path).
 
@@ -54,7 +63,7 @@ NocoDB is a no-code database and spreadsheet-style app builder — the self-host
     --entry NC_SMTP_USERNAME=apikey --entry NC_SMTP_PASSWORD=changeme
   ```
 
-**If either secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the containers never start, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-nocodb --gvc GVC_NAME -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own, which can take around 10 minutes — poll rather than giving up — or skip the wait with `cpln workload force-redeployment`.
+**If any of these secrets does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the containers never start, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-nocodb --gvc GVC_NAME -o yaml` — for the Redis secret, also `RELEASE_NAME-nocodb-redis` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own, which can take around 10 minutes — poll rather than giving up — or skip the wait with `cpln workload force-redeployment`.
 
 ## Configuration
 
@@ -137,8 +146,7 @@ internalAccess:
 ```yaml
 redis:
   image: redis:8.10.0
-  auth:
-    password: change-me-nocodb-redis   # change before installing; letters/digits/-/_ only
+  credentialsSecretName: my-nocodb-redis   # PREREQUISITE dictionary secret (key: password; letters/digits/-/_ only) — must exist BEFORE install
   resources:
     minCpu: 100m
     maxCpu: 400m
@@ -289,9 +297,18 @@ Then force-redeploy `RELEASE_NAME-nocodb`, which keeps the old password until it
 pgx N curl -s -XPOST -d '{"force": true}' localhost:8008/reinitialize
 ```
 
+## Rotating the Redis password
+
+Redis keeps no password on disk: it takes the password from the secret each time it starts, and NocoDB does the same. So rotation is the secret and then both restarts:
+
+1. Update the secret: `cpln secret edit SECRET_NAME` (letters, digits, `-` and `_` only), and check the new value with `cpln secret reveal SECRET_NAME -o yaml`.
+2. Redeploy Redis and NocoDB together: `cpln workload force-redeployment RELEASE_NAME-nocodb-redis --gvc GVC_NAME` and `cpln workload force-redeployment RELEASE_NAME-nocodb --gvc GVC_NAME`. Neither picks up the change without its redeploy.
+
+Expect a short interruption: until both have restarted, one side holds the old password and NocoDB cannot reach Redis.
+
 ## Upgrading from 1.3.x
 
-`postgres.credentials` was removed: the database credentials are now a prerequisite secret, the same one the database templates require on their own. Carrying the old key forward fails the render.
+`postgres.credentials` was removed: the database credentials are now a prerequisite secret, the same one the database templates require on their own. `redis.auth.password` was removed the same way: the Redis password is now a prerequisite secret named by `redis.credentialsSecretName`. Carrying either old key forward fails the render.
 
 1.3.x created the database secret itself, so **this upgrade deletes it**. Before upgrading, create a secret under a **new** name holding the values your database was initialized with — not new ones, or NocoDB loses its database connection:
 
@@ -301,9 +318,17 @@ cpln secret create-dictionary --name RELEASE_NAME-nocodb-db \
   --entry username=YOUR_CURRENT_USERNAME --entry password=YOUR_CURRENT_PASSWORD --entry database=YOUR_CURRENT_DATABASE
 ```
 
-Then upgrade with `postgres.config.credentialsSecretName` (single-instance mode) or `postgresHA.config.credentialsSecretName` (HA mode) set to that name, and `postgres.credentials` removed. Your current values are also in `postgres.credentials` of the 1.3.x release.
+1.3.x also kept the Redis password in a secret it created, `RELEASE_NAME-nocodb-creds` (key `redisPassword`), which this upgrade deletes too. Create the Redis secret under a different name, holding the **current** Redis password:
 
-The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so NocoDB can briefly lose its database; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
+```bash
+cpln secret reveal RELEASE_NAME-nocodb-creds -o yaml   # redisPassword is the CURRENT Redis password
+cpln secret create-dictionary --name RELEASE_NAME-nocodb-redis \
+  --entry password=YOUR_CURRENT_REDIS_PASSWORD
+```
+
+Then upgrade with `postgres.config.credentialsSecretName` (single-instance mode) or `postgresHA.config.credentialsSecretName` (HA mode) set to the database secret's name, `redis.credentialsSecretName` set to the Redis secret's name, and `postgres.credentials` and `redis.auth` removed. Your current values are also in `postgres.credentials` and `redis.auth.password` of the 1.3.x release.
+
+The upgrade restarts the bundled PostgreSQL and Redis too (they now read the new secrets), so NocoDB can briefly lose its database and Redis; it recovers by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
 
 ## Upgrading from 1.1.x (HA mode)
 
@@ -315,7 +340,7 @@ The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), s
 
 ## Important Notes
 
-- **Both prerequisite secrets must exist before install** — a missing `secrets.name` or database credentials secret wedges the deployment with zero log lines; see Prerequisites for the diagnostic. The `secrets.name` keys are write-once: rotating `NC_AUTH_JWT_SECRET` logs out every user, and changing `NC_CONNECTION_ENCRYPT_KEY` makes stored external-data-source credentials undecryptable.
+- **All three prerequisite secrets must exist before install** — a missing `secrets.name`, database credentials or Redis secret wedges the deployment with zero log lines; see Prerequisites for the diagnostic. The `secrets.name` keys are write-once: rotating `NC_AUTH_JWT_SECRET` logs out every user, and changing `NC_CONNECTION_ENCRYPT_KEY` makes stored external-data-source credentials undecryptable.
 - **Signup is open by default** — with public access on, anyone who reaches the URL can create an account. Invite-only is an in-app setting (Team & Settings), not an environment variable, so turn it on in the UI right after install.
 - **`admin.secretName` re-applies on every boot** — if set, the password in that secret is re-imposed at each restart, silently reverting a password changed in the UI. Either leave it empty or treat the secret as the source of truth.
 - **`nocodb.replicas > 1` requires `storage.type: s3`** — local attachments live on per-replica volumes and would 404 across replicas; the chart refuses to render otherwise.
@@ -326,6 +351,7 @@ The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), s
 - **`nocodb.siteUrl` must match the URL browsers use** — it drives invite/reset links and the auth cookie secure flag; leave it empty unless a custom domain is in play.
 - **With SMTP off, invitations and password resets cannot be delivered** — configure `smtp.*` before inviting collaborators.
 - **Webhooks to same-GVC targets are blocked by default** — NocoDB's SSRF guard refuses private-network addresses, so a webhook aimed at another workload in your GVC (e.g. an internal n8n at `<workload>.<gvc>.cpln.local`) is rejected with a message to set `NC_ALLOW_LOCAL_HOOKS=true`. Set `nocodb.allowLocalWebhooks: true` to allow it. Leave it off if webhooks only ever call the public internet.
+- **Rotating the Redis password needs a forced redeployment of both Redis and NocoDB** — see [Rotating the Redis password](#rotating-the-redis-password).
 - **Rotating the database password needs `ALTER ROLE` plus a forced redeployment of NocoDB** (not the database) — see [Rotating the database password](#rotating-the-database-password).
 - **Rotating the database password in HA mode needs a leader switchover first** — follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode). A plain redeploy can promote a member still holding the old password and split the cluster.
 - **Uninstalling deletes all data** — `helm uninstall` removes the database and storage volumesets with the release, so bases and local attachments are gone. Back up first if you need them.

@@ -77,6 +77,12 @@ prerequisites:
     description: Credentials the bundled PostgreSQL initializes with and NocoDB connects with; set the key of the database mode in use. URL-safe values only. When missing, the deployment waits with no logs.
   - kind: secret
     secretType: dictionary
+    keys: [password]
+    valuesPath: redis.credentialsSecretName
+    required: true
+    description: Password the bundled Redis requires and NocoDB connects with. URL-safe value only. When missing, the deployment waits with no logs.
+  - kind: secret
+    secretType: dictionary
     keys: [NC_ADMIN_EMAIL, NC_ADMIN_PASSWORD]
     valuesPath: admin.secretName
     required: false

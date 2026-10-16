@@ -262,6 +262,8 @@ PostgreSQL keeps the password it was initialized with, and a running workload ke
 3. Redeploy the database and wait for it to be ready: `cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME`.
 4. Redeploy NocoDB: `cpln workload force-redeployment RELEASE_NAME-nocodb --gvc GVC_NAME`.
 
+NocoDB cannot reach its database from step 1 until step 4 finishes (about 6–7 minutes measured with one replica), so rotate in a quiet window.
+
 ## Rotating the database password in HA mode
 
 The HA database (`postgresHA`) needs its own order. The replication role `repl` shares the password, and a member that restarts with the old password can be promoted to leader, which splits the cluster. Move the leader to member `-0` first, so it restarts last, after every other member already has the new password. `pgx` runs a command in one member (`LOCATION` is your GVC's location, `DB_USERNAME` the secret's `username`):
@@ -282,7 +284,7 @@ cpln workload force-redeployment RELEASE_NAME-postgres-ha --gvc GVC_NAME
 pgx 0 curl -s -XPATCH -d '{"postgresql":{"authentication":null}}' localhost:8008/config
 ```
 
-Then force-redeploy `RELEASE_NAME-nocodb`, which keep the old password until they restart. Clients see roughly 10–60 s of connection errors during the switchovers. If a member stays `starting`, or `running` without `streaming` for several minutes, re-copy it from the leader. This copies the whole database, so it costs network traffic in proportion to its size:
+Then force-redeploy `RELEASE_NAME-nocodb`, which keep the old password until they restart. The database itself drops connections for roughly 10–60 s at each switchover, but the app cannot open new connections from the `ALTER ROLE` until its own redeploy finishes (about 9 minutes measured with one replica), so rotate in a quiet window. If a member stays `starting`, or `running` without `streaming` for several minutes, re-copy it from the leader. This copies the whole database, so it costs network traffic in proportion to its size:
 
 ```bash
 pgx N curl -s -XPOST -d '{"force": true}' localhost:8008/reinitialize

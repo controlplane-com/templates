@@ -262,10 +262,12 @@ The backing database template's own README carries the full per-provider walkthr
 
 PostgreSQL keeps the password it was initialized with, and a running workload keeps the values it started with, so a rotation takes four steps in order (single-instance; in HA mode follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode) instead):
 
-1. Change it in the database: `ALTER ROLE twenty PASSWORD 'NEW_PASSWORD';` (connected as that user, from inside the GVC; letters, digits, `-` and `_` only).
-2. Update the secret: `cpln secret edit my-twenty-db-credentials`.
+1. Change it in the database: `ALTER ROLE DB_USERNAME PASSWORD 'NEW_PASSWORD';` (connected as that user, from inside the GVC; letters, digits, `-` and `_` only).
+2. Update the secret: `cpln secret edit SECRET_NAME`.
 3. Redeploy the database and wait for it to be ready: `cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME`. Wait until `cpln workload get-deployments` no longer shows `will be restarted shortly`; `ready: true` alone can still describe the old replica.
 4. Redeploy Twenty: `cpln workload force-redeployment RELEASE_NAME-twenty-worker --gvc GVC_NAME`, then `RELEASE_NAME-twenty`.
+
+Twenty cannot reach its database from the database restart in step 3 until its own redeploy is serving (about 7 minutes measured with one replica), so rotate in a quiet window.
 
 ## Rotating the database password in HA mode
 
@@ -287,7 +289,7 @@ cpln workload force-redeployment RELEASE_NAME-postgres-ha --gvc GVC_NAME
 pgx 0 curl -s -XPATCH -d '{"postgresql":{"authentication":null}}' localhost:8008/config
 ```
 
-Then force-redeploy `RELEASE_NAME-twenty-worker`, then `RELEASE_NAME-twenty`,, which keep the old password until they restart. The database itself drops connections for roughly 10–60 s at each switchover, but the app cannot open new connections from the `ALTER ROLE` until its own redeploy finishes (several minutes in all), so rotate in a quiet window. If a member stays `starting`, or `running` without `streaming` for several minutes, re-copy it from the leader. This copies the whole database, so it costs network traffic in proportion to its size:
+Then force-redeploy `RELEASE_NAME-twenty-worker`, then `RELEASE_NAME-twenty`, which keep the old password until they restart. The database itself drops connections for roughly 10–60 s at each switchover, but the app cannot open new connections from the `ALTER ROLE` until its own redeploy finishes (several minutes in all), so rotate in a quiet window. If a member stays `starting`, or `running` without `streaming` for several minutes, re-copy it from the leader. This copies the whole database, so it costs network traffic in proportion to its size:
 
 ```bash
 pgx N curl -s -XPOST -d '{"force": true}' localhost:8008/reinitialize
@@ -307,7 +309,7 @@ cpln secret create-dictionary --name RELEASE_NAME-postgres-credentials \
 
 Then upgrade with `postgres.config.credentialsSecretName` (single-instance mode) or `postgresHA.config.credentialsSecretName` (HA mode) set to that name, and `postgres.credentials` removed. Your current values are also in `postgres.credentials` of the 1.3.x release.
 
-The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so Twenty can briefly lose its database; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
+The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so Twenty loses its database for up to about 3 minutes; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
 
 ## Upgrading from 1.0.x
 

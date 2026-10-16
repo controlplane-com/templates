@@ -179,7 +179,7 @@ The backing template's README has the full per-provider walkthrough.
 
 PostgreSQL keeps the password it was initialized with, and a running workload keeps the values it started with, so a rotation takes four steps in order (single-instance; in HA mode follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode) instead):
 
-1. Change it in the database: `ALTER ROLE umami PASSWORD 'NEW_PASSWORD';` (connected as that user, from inside the GVC).
+1. Change it in the database: `ALTER ROLE DB_USERNAME PASSWORD 'NEW_PASSWORD';` (connected as that user, from inside the GVC).
 2. Update the secret: `cpln secret edit SECRET_NAME`.
 3. Redeploy the database and wait for it to be ready: `cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME`.
 4. Redeploy Umami: `cpln workload force-redeployment RELEASE_NAME-umami --gvc GVC_NAME`, and wait until `get-deployments` no longer shows `will be restarted shortly` — `ready: true` alone can still describe the old replica.

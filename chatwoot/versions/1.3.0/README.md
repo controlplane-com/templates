@@ -255,8 +255,8 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`c
 
 PostgreSQL keeps the password it was initialized with, and a running workload keeps the values it started with, so a rotation takes four steps in order (single-instance; in HA mode follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode) instead):
 
-1. Change it in the database: `ALTER ROLE chatwoot PASSWORD 'NEW_PASSWORD';` (connected as that user, from inside the GVC).
-2. Update the secret: `cpln secret edit my-chatwoot-db-credentials`.
+1. Change it in the database: `ALTER ROLE DB_USERNAME PASSWORD 'NEW_PASSWORD';` (connected as that user, from inside the GVC).
+2. Update the secret: `cpln secret edit SECRET_NAME`.
 3. Redeploy the database and wait for it to be ready: `cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME`.
 4. Redeploy Chatwoot: `cpln workload force-redeployment RELEASE_NAME-chatwoot-worker --gvc GVC_NAME`, then `RELEASE_NAME-chatwoot`.
 

@@ -270,7 +270,9 @@ cpln workload exec RELEASE_NAME-postgres-ha --gvc GVC_NAME --container patroni-p
 ```
 
 Then set `walLevel` to the same value in your values and upgrade the release: that turns slot
-synchronization on, and the members restart one at a time to apply it.
+synchronization on, and the members restart one at a time to apply it. Keep this order: upgrading with
+`walLevel: logical` before the cluster runs `wal_level = logical` crash-loops the first replica that restarts
+(`replication slot synchronization requires "wal_level" >= "logical"`) and stalls the upgrade until you patch.
 
 A logical replication slot retains WAL like the members' own slots, and the same cap applies: a
 consumer that stays away long enough to exceed `max_slot_wal_keep_size` has its slot invalidated and

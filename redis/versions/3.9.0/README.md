@@ -102,7 +102,7 @@ redis:
     volumes:
       data:
         initialCapacity: 10
-        performanceClass: general-purpose-ssd  # or high-throughput-ssd (min 1000 GiB)
+        performanceClass: general-purpose-ssd  # or high-throughput-ssd (min 200 GB)
         fileSystemType: ext4
 ```
 

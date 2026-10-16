@@ -113,7 +113,7 @@ redis:
     volumes:
       data:
         initialCapacity: 10 # In GB
-        performanceClass: general-purpose-ssd # general-purpose-ssd / high-throughput-ssd (Min 1000GB)
+        performanceClass: general-purpose-ssd # general-purpose-ssd / high-throughput-ssd (min 200 GB)
         fileSystemType: ext4 # ext4 / xfs
         snapshots:
           retentionDuration: 7d
@@ -181,7 +181,7 @@ sentinel:                         # production mode only; ignored in dev mode
     volumes:
       data:
         initialCapacity: 10 # In GB
-        performanceClass: general-purpose-ssd # general-purpose-ssd / high-throughput-ssd (Min 1000GB)
+        performanceClass: general-purpose-ssd # general-purpose-ssd / high-throughput-ssd (min 200 GB)
         fileSystemType: ext4 # ext4 / xfs
         snapshots:
           retentionDuration: 7d

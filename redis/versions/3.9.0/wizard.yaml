@@ -106,6 +106,7 @@ steps:
             widget: cards
             required: true
             immutable: The engine is chosen at install and cannot change afterwards.
+            description: Fixed at install. An existing data directory cannot move between engines.
             options:
               - value: redis
                 label: Redis
@@ -169,23 +170,6 @@ steps:
             rule: self.sentinel.quorumOverride <= self.sentinel.replicas
             paths: [sentinel.quorumOverride]
             message: The quorum can be at most the number of Sentinels.
-      - title: Suspend
-        fields:
-          - path: suspend
-            type: boolean
-            label: Suspend the release
-            description: >-
-              Stops Redis, Sentinel and the backup job. Volume sets and secrets are kept; turn this off to
-              start the release again.
-        rules:
-          - rule: "!self.suspend"
-            severity: info
-            paths: [suspend]
-            messageExpression: >-
-              'Every node stops and Redis is unreachable until you turn this off.' +
-              (self.redis.persistence.enabled ? ' Data on the Redis volume set is reloaded at start.' :
-              ' Persistence is off, so the data in memory is lost.')
-            message: Every node stops and Redis is unreachable until you turn this off.
 
   - id: auth
     title: Authentication
@@ -246,6 +230,12 @@ steps:
                   self.redis.auth.password.value.matches("^[^\\s\\x22\\x27\\\\\\x00-\\x1f\\x7f]+$")
                 message: Leave out spaces, quotes and backslashes. The chart writes the Redis password into a configuration line.
             when: ui.redisAuth == 'password'
+          - type: note
+            severity: warning
+            when: ui.redisAuth == 'secret'
+            text: >-
+              The Redis password secret must exist **before** you install. Pick it below, or create it with
+              **Create**.
           - path: redis.auth.fromSecret.name
             type: ref
             label: Redis password secret
@@ -328,6 +318,12 @@ steps:
                   self.sentinel.auth.password.value.matches("^[^\\s\\x22\\x27\\\\\\x00-\\x1f\\x7f]+$")
                 message: Leave out spaces, quotes and backslashes. The chart writes the Sentinel password into a configuration line.
             when: ui.sentinelAuth == 'password'
+          - type: note
+            severity: warning
+            when: ui.sentinelAuth == 'secret'
+            text: >-
+              The Sentinel password secret must exist **before** you install. Pick it below, or create it with
+              **Create**.
           - path: sentinel.auth.fromSecret.name
             type: ref
             label: Sentinel password secret
@@ -423,7 +419,7 @@ steps:
           This release runs on an example Sentinel password the template publishes.
   - id: resources
     title: Resources and persistence
-    description: Compute per node, and optional volumes that keep data across restarts.
+    description: Compute per node, optional volumes that keep data across restarts, and suspending a running release.
     sections:
       - title: Redis
         fields:
@@ -455,6 +451,7 @@ steps:
             widget: segmented
             required: true
             immutable: The disk class is fixed when the volume set is created.
+            description: Fixed when the volume set is created.
             options:
               - { value: general-purpose-ssd, label: General purpose SSD }
               - { value: high-throughput-ssd, label: High throughput SSD }
@@ -498,6 +495,7 @@ steps:
             widget: segmented
             required: true
             immutable: The file system is fixed when the volume set is created.
+            description: Fixed when the volume set is created.
             advanced: true
             options:
               - { value: ext4, label: ext4 }
@@ -529,6 +527,7 @@ steps:
             absent: true
             label: Encrypt with your own KMS key
             immutable: Encryption is chosen when the volume set is created.
+            description: Chosen when the volume set is created; it cannot be added or removed later.
             advanced: true
             newValue: { enabled: true, region: "", keyId: "" }
             fields:
@@ -594,6 +593,7 @@ steps:
             widget: segmented
             required: true
             immutable: The disk class is fixed when the volume set is created.
+            description: Fixed when the volume set is created.
             options:
               - { value: general-purpose-ssd, label: General purpose SSD }
               - { value: high-throughput-ssd, label: High throughput SSD }
@@ -636,6 +636,7 @@ steps:
             widget: segmented
             required: true
             immutable: The file system is fixed when the volume set is created.
+            description: Fixed when the volume set is created.
             advanced: true
             options:
               - { value: ext4, label: ext4 }
@@ -666,6 +667,7 @@ steps:
             absent: true
             label: Encrypt with your own KMS key
             immutable: Encryption is chosen when the volume set is created.
+            description: Chosen when the volume set is created; it cannot be added or removed later.
             advanced: true
             newValue: { enabled: true, region: "", keyId: "" }
             fields:
@@ -699,6 +701,24 @@ steps:
               self.sentinel.persistence.volumes.data.initialCapacity >= oldSelf.sentinel.persistence.volumes.data.initialCapacity
             paths: [sentinel.persistence.volumes.data.initialCapacity]
             message: Keep the Sentinel capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - title: Suspend
+        when: context.mode == 'upgrade' || self.suspend
+        fields:
+          - path: suspend
+            type: boolean
+            label: Suspend the release
+            description: >-
+              Stops Redis, Sentinel and the backup job. Volume sets and secrets are kept; turn this off to
+              start the release again.
+        rules:
+          - rule: "!self.suspend"
+            severity: info
+            paths: [suspend]
+            messageExpression: >-
+              'Every node stops and Redis is unreachable until you turn this off.' +
+              (self.redis.persistence.enabled ? ' Data on the Redis volume set is reloaded at start.' :
+              ' Persistence is off, so the data in memory is lost.')
+            message: Every node stops and Redis is unreachable until you turn this off.
     rules:
       - rule: >-
           !has(self.redis.resources.cpu) && !has(self.redis.resources.memory) &&
@@ -733,7 +753,8 @@ steps:
       - fields:
           - type: note
             text: >-
-              Setting either external CIDR list of a tier renders both; the other one becomes empty.
+              Setting either external CIDR list of a tier also sets the other one: left empty, that direction
+              is closed to the internet.
       - title: Redis
         fields:
           - path: redis.firewall.internal_inboundAllowType
@@ -803,7 +824,7 @@ steps:
           - type: note
             severity: warning
             text: >-
-              Before you install or turn this on, add a TXT record `_cpln-<subdomain>` with your org name and a CNAME from the
+              Before you install or turn this on, enable the dedicated load balancer in the GVC settings, and add a TXT record `_cpln-<subdomain>` with your org name and a CNAME from the
               subdomain to `<gvc-alias>.cpln.app`, with proxying off. The platform refuses the domain without the TXT record, and clients cannot reach it without the CNAME.
           - path: redis.publicAccess.address
             type: string
@@ -888,7 +909,7 @@ steps:
           - type: note
             severity: warning
             text: >-
-              Before you install or turn this on, add a TXT record `_cpln-<subdomain>` with your org name and a CNAME from the
+              Before you install or turn this on, enable the dedicated load balancer in the GVC settings, and add a TXT record `_cpln-<subdomain>` with your org name and a CNAME from the
               subdomain to `<gvc-alias>.cpln.app`, with proxying off. The platform refuses the domain without the TXT record, and clients cannot reach it without the CNAME.
           - path: sentinel.publicAccess.address
             type: string
@@ -1084,8 +1105,8 @@ steps:
         title: Scheduled backups
         toggle: backup.enabled
         description: >-
-          Each run uploads a gzipped RDB file. The README has no verified way to restore it into a running
-          release: read its Restoring a Backup section before you rely on backups.
+          Each run uploads a gzipped RDB file (`redis-TIMESTAMP.rdb.gz`). A restore is manual: load the file
+          into a separate Redis server, then copy the data into this release with your own tooling.
         docs: "#backup"
         fields:
           - path: backup.provider
@@ -1122,14 +1143,20 @@ steps:
               context.mode == 'upgrade' && context.fromVersion != null &&
               semverCompare(context.fromVersion, '3.5.1') < 0
             text: >-
-              This version no longer grants the backup identity `aws::ReadOnlyAccess`. Make sure your IAM
-              policy has the full action list from the README before upgrading.
+              This version no longer grants the backup identity `aws::ReadOnlyAccess`. Before upgrading, make
+              sure your IAM policy allows every action listed below.
           - type: note
             severity: warning
             when: context.mode == 'install' || (oldSelf != null && !oldSelf.backup.enabled)
             text: >-
-              The bucket and the IAM policy, with the full action list from the README, must exist in your AWS
-              account **before** you install or turn backups on.
+              The bucket and the IAM policy must exist in your AWS account **before** you install or turn
+              backups on.
+          - type: note
+            text: >-
+              The IAM policy must allow `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket`,
+              `s3:GetObjectVersion`, `s3:DeleteObjectVersion`, `s3:GetBucketLocation`,
+              `s3:AbortMultipartUpload`, `s3:ListBucketMultipartUploads` and `s3:ListMultipartUploadParts`
+              on `arn:aws:s3:::<bucket>` and `arn:aws:s3:::<bucket>/*`.
           - path: backup.aws.bucket
             type: string
             label: Bucket
@@ -1185,7 +1212,9 @@ steps:
           - type: note
             severity: warning
             when: context.mode == 'install' || (oldSelf != null && !oldSelf.backup.enabled)
-            text: The bucket must exist in your GCP account **before** you install or turn backups on.
+            text: >-
+              The bucket must exist in your GCP account **before** you install or turn backups on, and the
+              cloud account's service account needs the `Storage Admin` role.
           - path: backup.gcp.bucket
             type: string
             label: Bucket
@@ -1330,6 +1359,7 @@ steps:
             required: true
             when: self.mode != 'dev'
       - title: Replication tuning
+        when: self.mode != 'dev'
         fields:
           - path: redis.replication.backlogSize
             type: string
@@ -1552,11 +1582,11 @@ rules:
       !oldSelf.redis.persistence.enabled && !oldSelf.sentinel.persistence.enabled)
     messageExpression: >-
       semverCompare(context.fromVersion, '3.0.0') < 0 ?
-      'Do not upgrade a ' + context.fromVersion + ' release in place: 3.x is a different chart that replaces its workloads and volume sets, so the upgrade deletes the data. Install 3.8.0 as a new release, copy the data across, then uninstall the old release. If the release set `locations`, it created its own GVCs, which this upgrade and the uninstall delete with everything inside.' :
-      'Do not upgrade this release in place: 3.1.1 renamed the volume sets (' + context.releaseName + '-redis became ' + context.releaseName + '-redis-vs, and the same for Sentinel), so the upgrade deletes the volume sets this release runs on, with their data. Install 3.8.0 as a new release, copy the data across, then uninstall the old release.'
+      'Do not upgrade a ' + context.fromVersion + ' release in place: 3.x is a different chart that replaces its workloads and volume sets, so the upgrade deletes the data. Install ' + context.version + ' as a new release, copy the data across, then uninstall the old release. If the release set `locations`, it created its own GVCs, which this upgrade and the uninstall delete with everything inside.' :
+      'Do not upgrade this release in place: 3.1.1 renamed the volume sets (' + context.releaseName + '-redis became ' + context.releaseName + '-redis-vs, and the same for Sentinel), so the upgrade deletes the volume sets this release runs on, with their data. Install this version as a new release, copy the data across, then uninstall the old release.'
     message: >-
       Do not upgrade this release in place: this version names the volume sets differently, so the upgrade
-      deletes the ones the release runs on, with their data. Install 3.8.0 as a new release, copy the data
+      deletes the ones the release runs on, with their data. Install this version as a new release, copy the data
       across, then uninstall the old release.
 
 yamlOnly:

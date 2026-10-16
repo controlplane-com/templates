@@ -60,9 +60,13 @@ redis:
   redis:
     replicas: 2
     auth:
-      password:
-        enabled: true
-        value: change-me-glitchtip-redis # change before installing (any characters OK — the boot script percent-encodes it)
+      fromSecret:
+        enabled: true # required when redis is enabled (the chart enforces this)
+        # REQUIRED PREREQUISITE SECRET (when redis is enabled) — CREATE IT BEFORE
+        # YOU INSTALL. A `dictionary` secret holding exactly one key: password.
+        # Redis, Sentinel and GlitchTip all read it; any characters work (the boot
+        # script percent-encodes it). See README Prerequisites for the command.
+        name: my-glitchtip-redis
     firewall:
       internal_inboundAllowType: same-gvc
     persistence:

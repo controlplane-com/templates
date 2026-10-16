@@ -64,6 +64,13 @@ prerequisites:
     required: true
     description: Credentials the bundled PostgreSQL initializes with and GlitchTip connects with; set the key of the database mode in use. When it is missing the deployment waits with no logs.
   - kind: secret
+    secretType: dictionary
+    keys: [password]
+    valuesPath: redis.redis.auth.fromSecret.name
+    required: false
+    when: redis.enabled (the default)
+    description: Password that the bundled Redis requires and that Sentinel and GlitchTip connect with. When it is missing the Redis, Sentinel and GlitchTip workloads wait with no logs.
+  - kind: secret
     secretType: opaque
     valuesPath: email.secretName
     required: false

@@ -92,11 +92,20 @@ redis.sentinel.name helper ({release}-sentinel), which is deterministic on
 {{- end }}
 
 {{/*
-Redis auth password secret (created by the redis dependency chart; key:
-password). Must match the redis chart's redis.secretPassword.name helper.
+Redis password secret — a user-created PREREQUISITE `dictionary` secret since
+1.4.0 (key: password), named by redis.redis.auth.fromSecret.name. The redis
+subchart's own fromSecret method points Redis (requirepass/masterauth) and
+Sentinel (auth-pass) at it and grants their identities reveal; GlitchTip reads
+the same key as an env var and percent-encodes it into the sentinel URL in its
+start scripts. 1.3.x and earlier had the subchart create
+{release}-redis-auth-password from a plaintext value.
 */}}
-{{- define "glitchtip.redis.secretPassword.name" -}}
-{{- printf "%s-redis-auth-password" .Release.Name }}
+{{- define "glitchtip.redis.secret.name" -}}
+{{- dig "auth" "fromSecret" "name" "" .Values.redis.redis }}
+{{- end }}
+
+{{- define "glitchtip.redis.secret.key" -}}
+{{- dig "auth" "fromSecret" "passwordKey" "password" .Values.redis.redis }}
 {{- end }}
 
 
@@ -139,7 +148,7 @@ CPLN_GLOBAL_ENDPOINT at runtime.
 - name: GLITCHTIP_REDIS_SENTINEL_ADDR
   value: {{ include "glitchtip.redis.sentinelAddr" . }}
 - name: GLITCHTIP_REDIS_PASSWORD
-  value: 'cpln://secret/{{ include "glitchtip.redis.secretPassword.name" . }}.password'
+  value: 'cpln://secret/{{ include "glitchtip.redis.secret.name" . }}.{{ include "glitchtip.redis.secret.key" . }}'
 {{- end }}
 {{- if .Values.email.secretName }}
 # ── Outbound email (prerequisite opaque secret holding the smtp:// URL) ──
@@ -204,9 +213,24 @@ IS the migration path.
 {{- end -}}
 {{- end }}
 
+{{/*
+The Redis password became a user-created prerequisite secret in 1.4.0 (the
+redis subchart's fromSecret method). A plaintext password carried forward from
+a 1.3.x values file fails at render, naming the replacement. The subchart's own
+default for password.value is "your-password" (it is merged into these values),
+so only a value other than that default counts as "set".
+*/}}
+{{- define "glitchtip.validateRedisSecret" -}}
+{{- $pw := dig "auth" "password" dict (.Values.redis.redis | default dict) -}}
+{{- if or (dig "enabled" false $pw) (not (has (dig "value" "your-password" $pw) (list "" "your-password"))) -}}
+{{- fail "glitchtip: redis.redis.auth.password was REMOVED in 1.4.0. The Redis password is now a prerequisite `dictionary` secret you create (key: password), named by redis.redis.auth.fromSecret.name. Upgrading from 1.3.x: create it under a NEW name holding your CURRENT Redis password, set redis.redis.auth.fromSecret.name to that name, and remove redis.redis.auth.password — see \"Upgrading from 1.3.1\" in the README." -}}
+{{- end -}}
+{{- end }}
+
 {{- define "glitchtip.validate" -}}
 {{- include "glitchtip.validateRemovedKeys" . -}}
 {{- include "glitchtip.validateDatabaseSecret" . -}}
+{{- include "glitchtip.validateRedisSecret" . -}}
 {{- if not .Values.auth.secretName -}}
 {{- fail "glitchtip: auth.secretName is required — it names the prerequisite dictionary secret holding secretKey, adminEmail and adminPassword. Create the secret BEFORE installing." -}}
 {{- end -}}
@@ -229,11 +253,11 @@ IS the migration path.
 {{- fail "glitchtip: postgresHA.proxy.enabled must remain true — the HAProxy leader endpoint is GlitchTip's stable database endpoint" -}}
 {{- end -}}
 {{- if .Values.redis.enabled -}}
-{{- if not (dig "auth" "password" "enabled" false .Values.redis.redis) -}}
-{{- fail "glitchtip: redis.redis.auth.password.enabled must be true with a value — GlitchTip's sentinel URL embeds this password (the fromSecret method is not supported by this template)" -}}
+{{- if not (dig "auth" "fromSecret" "enabled" false .Values.redis.redis) -}}
+{{- fail "glitchtip: redis.redis.auth.fromSecret.enabled must be true when redis is enabled — GlitchTip's sentinel URL carries the Redis password, read from the prerequisite secret named by redis.redis.auth.fromSecret.name" -}}
 {{- end -}}
-{{- if not (dig "auth" "password" "value" "" .Values.redis.redis) -}}
-{{- fail "glitchtip: redis.redis.auth.password.value is required when redis is enabled" -}}
+{{- if not (include "glitchtip.redis.secret.name" .) -}}
+{{- fail "glitchtip: redis.redis.auth.fromSecret.name is required when redis is enabled — the name of your pre-created `dictionary` secret holding the key `password`. Create the secret BEFORE installing; see Prerequisites in the README." -}}
 {{- end -}}
 {{- if or (dig "auth" "password" "enabled" false .Values.redis.sentinel) (dig "auth" "fromSecret" "enabled" false .Values.redis.sentinel) -}}
 {{- fail "glitchtip: redis.sentinel.auth must stay disabled — GlitchTip does not send a sentinel password; the same-gvc firewall is the boundary" -}}

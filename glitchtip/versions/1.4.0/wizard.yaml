@@ -229,13 +229,26 @@ steps:
           A Redis master with replicas, watched by Sentinels; GlitchTip connects through Sentinel. Turn it off for a
           lighter shape with lower throughput.
         fields:
-          - path: redis.redis.auth.password.value
-            type: string
-            label: Redis password
+          - path: redis.redis.auth.fromSecret.name
+            type: ref
+            label: Redis password secret
             required: true
-            sensitive: true
-            description: Used as-is, so change it before installing. Any characters work.
-          - path: redis.redis.auth.password.enabled
+            description: A dictionary secret with the key `password`. Redis, Sentinel and GlitchTip all read it.
+            help: >-
+              Create it before you install; if it is missing, the deployment waits and `cpln logs` shows nothing.
+              Changing the password later takes more than a secret edit, because the Sentinels keep the old one:
+              follow "Rotating the Redis password" in the README.
+            docs: "#prerequisites"
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [password]
+              create:
+                suggestName: "context.releaseName + '-glitchtip-redis'"
+          - path: redis.redis.auth.fromSecret.enabled
             type: boolean
             label: Redis password on
             readOnly: true
@@ -281,15 +294,42 @@ steps:
               - { value: same-org, label: Same org }
         rules:
           - rule: >-
-              self.redis.redis.auth.password.enabled == true &&
+              self.redis.redis.auth.fromSecret.enabled == true &&
+              self.redis.redis.auth.fromSecret.name != null && self.redis.redis.auth.fromSecret.name != '' &&
               (!has(self.redis.sentinel.auth) ||
               ((!has(self.redis.sentinel.auth.password) || !has(self.redis.sentinel.auth.password.enabled)) &&
               (!has(self.redis.sentinel.auth.fromSecret) || !has(self.redis.sentinel.auth.fromSecret.enabled))))
             mirrors: glitchtip.validate
-            paths: [redis.redis.auth.password.value]
+            paths: [redis.redis.auth.fromSecret.name]
             message: >-
-              The Redis password must stay on, and Sentinel authentication off (remove redis.sentinel.auth from the
-              values): GlitchTip sends the Redis password in its Sentinel URL and does not send a Sentinel password.
+              The Redis password secret is required, and Sentinel authentication must stay off (remove
+              redis.sentinel.auth from the values): GlitchTip sends the Redis password in its Sentinel URL and does
+              not send a Sentinel password.
+          - rule: "!has(self.redis.redis.auth.password)"
+            mirrors: glitchtip.validateRedisSecret
+            paths: [redis.redis.auth.fromSecret.name]
+            message: >-
+              redis.redis.auth.password was removed in 1.4.0: the Redis password is now a prerequisite dictionary
+              secret (key password) named by the Redis password secret field. Remove redis.redis.auth.password from
+              the values.
+          # Upgrading from 1.3.x or earlier, the redis chart's own {release}-redis-auth-password secret is deleted
+          # by the upgrade itself, so the new prerequisite secret must have a different name (same password).
+          - when: oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.4.0') < 0
+            rule: self.redis.redis.auth.fromSecret.name != context.releaseName + '-redis-auth-password'
+            paths: [redis.redis.auth.fromSecret.name]
+            message: >-
+              The previous version created the Redis password secret itself, and this upgrade deletes it. Create a
+              secret under a NEW name holding the CURRENT Redis password (not a new one: the Sentinels keep the
+              password they started with), and name it here.
+          - when: >-
+              oldSelf != null && (context.fromVersion == null || semverCompare(context.fromVersion, '1.4.0') >= 0) &&
+              has(oldSelf.redis.redis.auth.fromSecret.name)
+            rule: self.redis.redis.auth.fromSecret.name == oldSelf.redis.redis.auth.fromSecret.name
+            severity: warning
+            paths: [redis.redis.auth.fromSecret.name]
+            message: >-
+              Pointing at another secret changes the Redis password, and the Sentinels keep the old one. Follow
+              "Rotating the Redis password" in the README instead.
 
   - id: database
     title: Database
@@ -631,6 +671,11 @@ yamlOnly:
     reason: GlitchTip connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
 
 migrations:
+  - fromVersions: "<1.4.0"
+    from: redis.redis.auth.password
+    note: >-
+      The Redis password is now a prerequisite dictionary secret (key password). Create it under a NEW name
+      holding your CURRENT Redis password, and choose it under Redis.
   - fromVersions: "<1.4.0"
     from: postgres.credentials
     note: >-

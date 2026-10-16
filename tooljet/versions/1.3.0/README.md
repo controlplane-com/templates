@@ -48,7 +48,7 @@ ToolJet is an open-source low-code platform for building internal tools: a visua
     --entry SMTP_USERNAME=apikey --entry SMTP_PASSWORD=...
   ```
 
-**If a secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-tooljet --gvc GVC_NAME -o yaml` (and `RELEASE_NAME-postgres` for the database secret; note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own, but ToolJet can take up to about 12 minutes to serve again — poll rather than giving up — or skip the wait with `cpln workload force-redeployment`.
+**If a secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-tooljet --gvc GVC_NAME -o yaml` (and `RELEASE_NAME-postgres` for the database secret; note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own, but ToolJet can take 12 minutes or more to serve again — poll rather than giving up — or skip the wait with `cpln workload force-redeployment`.
 
 ## Configuration
 
@@ -150,7 +150,7 @@ cpln secret create-dictionary --name RELEASE_NAME-postgres-credentials \
 
 Then upgrade with `postgres.config.credentialsSecretName` set to that name and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.2.0 release, and also in the old secret named by its `postgres.config.credentialsSecretName` (`cpln secret reveal SECRET_NAME -o yaml`) until the upgrade deletes it.
 
-The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so ToolJet can briefly lose its database; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
+The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so ToolJet loses its database for about a minute and a half; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
 
 ## Upgrading from 1.0.0
 
@@ -194,7 +194,7 @@ Check the object size before restoring from one.
 - **Scaling to `replicas >= 2` requires `redis.enabled: true`** — replicas coordinate the job queue and multiplayer editing through the shared Redis; the install fails validation otherwise.
 - **Keep `redis.redis.replicas` at 1** — ToolJet's Redis client is not Sentinel-aware; more data nodes would route writes to read-only replicas.
 - **First boot takes several minutes** — the entrypoint waits for Postgres, creates both databases, and runs all migrations before serving. Subsequent boots are much faster.
-- **Changing the database password is a database change first.** Editing the secret alone does nothing to the database, and a running workload keeps the values it started with. Run `ALTER ROLE <username> PASSWORD '...'` in PostgreSQL, then `cpln secret edit SECRET_NAME`, then `cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME`, wait until `get-deployments` no longer shows `will be restarted shortly` (`ready: true` alone can still describe the old replica), and force-redeploy `RELEASE_NAME-tooljet`.
+- **Changing the database password is a database change first.** Editing the secret alone does nothing to the database, and a running workload keeps the values it started with. Run `ALTER ROLE <username> PASSWORD '...'` in PostgreSQL, then `cpln secret edit SECRET_NAME`, then `cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME`, wait until `get-deployments` no longer shows `will be restarted shortly` (`ready: true` alone can still describe the old replica), and force-redeploy `RELEASE_NAME-tooljet`. ToolJet cannot log anyone in from the `ALTER ROLE` until its redeploy finishes (about 4 minutes measured with one replica), so rotate in a quiet window.
 - **All ToolJet state lives in Postgres and survives an app restart/reinstall** — to wipe all data you must also reinstall the Postgres dependency (its volumeset).
 
 ## Links

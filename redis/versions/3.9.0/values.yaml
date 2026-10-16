@@ -4,8 +4,8 @@
 # dev: ONE Redis node and NO Sentinel. No failover; for development and
 #   testing, not production. redis.replicas and every sentinel.* setting are
 #   ignored; Sentinel public access, persistence and auth must stay off (the
-#   chart refuses them). Turn on redis.persistence at install to keep data
-#   across restarts and upgrades.
+#   chart refuses them). Turn on redis.persistence to keep data across
+#   restarts and upgrades.
 mode: production                  # production | dev
 
 # ─── Engine ───────────────────────────────────────────────────────────────────
@@ -107,8 +107,8 @@ redis:
     dropMetrics: []  # e.g., ["redis_command_.*", "redis_keyspace_.*"]
   dataDir: /data
   persistence:
-    # Set at INSTALL time. Enabling this on an already-running release stalls
-    # the rollout indefinitely (volumes stay unbound) — see the README.
+    # Best set at install. To add it to a running release, set suspend: true in
+    # the same upgrade, then false; data held only in memory is lost.
     enabled: false
     volumes:
       data:
@@ -175,8 +175,8 @@ sentinel:                         # production mode only; ignored in dev mode
   # CONFIG REWRITE. Replicas query sentinel at startup, so persisted state lets
   # them rejoin the real master rather than redis-0. Recommended ON in prod.
   persistence:
-    # Set at INSTALL time. Enabling this on an already-running release stalls
-    # the rollout indefinitely (volumes stay unbound) — see the README.
+    # Best set at install. To add it to a running release, set suspend: true in
+    # the same upgrade, then false; data held only in memory is lost.
     enabled: false
     volumes:
       data:

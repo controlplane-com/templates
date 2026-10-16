@@ -10,12 +10,13 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "langfuse.identity.name" . }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "langfuse.secret.name" . }}
   - //secret/{{ include "langfuse.clickhouse.startup.secret.name" . }}
   - //secret/{{ include "langfuse.clickhouse.storage.secret.name" . }}
   # Prerequisite secrets the user creates — granted by name, nothing broader.
   - //secret/{{ .Values.langfuse.auth.secretName }}
   - //secret/{{ include "langfuse.secret.db.name" . }}
+  - //secret/{{ include "langfuse.secret.redis.name" . }}
+  - //secret/{{ include "langfuse.secret.clickhouse.name" . }}
   {{- if eq .Values.objectStore.provider "gcp" }}
   - //secret/{{ .Values.objectStore.gcp.credentialsSecretName }}
   {{- end }}

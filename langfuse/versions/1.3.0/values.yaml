@@ -102,8 +102,7 @@ postgres:
     capacity: 10 # initial capacity in GiB (minimum is 10)
 
 # ─── Redis ────────────────────────────────────────────────────────────────────
-# BullMQ ingestion queue and API key/prompt cache. Bundled plumbing — change the
-# password before installing.
+# BullMQ ingestion queue and API key/prompt cache.
 redis:
   image: redis:7.4
   resources:
@@ -111,15 +110,16 @@ redis:
     maxCpu: 400m
     minMemory: 256Mi
     maxMemory: 512Mi
-  auth:
-    password: change-me-langfuse-redis
+  # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL, or the deployment
+  # WEDGES silently. A `dictionary` secret with one key: password. Redis and
+  # Langfuse read it at every start. See README Prerequisites for the command.
+  credentialsSecretName: my-langfuse-redis
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)
 
 # ─── ClickHouse ───────────────────────────────────────────────────────────────
 # Stores all traces, observations and scores; powers the dashboards. Data parts
 # live in the object store above; the volumeset holds local metadata only.
-# Bundled plumbing — change the password before installing.
 clickhouse:
   image: clickhouse/clickhouse-server:25.10
   resources:
@@ -127,8 +127,12 @@ clickhouse:
     maxCpu: 2
     minMemory: 2Gi
     maxMemory: 4Gi
+  # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL, or the deployment
+  # WEDGES silently. A `dictionary` secret with two keys: username (e.g. default),
+  # password. URL-safe values: Langfuse puts them in its migration URL. ClickHouse
+  # and Langfuse read it at every start. See README Prerequisites for the command.
+  credentialsSecretName: my-langfuse-clickhouse
   config:
-    password: change-me-langfuse-clickhouse
     database: langfuse
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)

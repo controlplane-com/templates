@@ -43,7 +43,7 @@ steps:
           - type: note
             severity: warning
             text: >-
-              Both secrets must exist **before** you install. If one is missing, the deployment waits and
+              All four secrets must exist **before** you install. If one is missing, the deployment waits and
               `cpln logs` shows nothing at all.
           - path: langfuse.auth.secretName
             type: ref
@@ -88,6 +88,46 @@ steps:
               create:
                 suggestName: "context.releaseName + '-langfuse-db-credentials'"
                 hint: "username and database: langfuse. password: openssl rand -hex 24."
+          - path: redis.credentialsSecretName
+            type: ref
+            label: Redis credentials secret
+            required: true
+            description: A dictionary secret with the key `password`.
+            help: >-
+              Redis and Langfuse read it at every start. To change it, update the secret, then force a redeployment
+              of Redis and both Langfuse workloads together; see "Rotating the Redis and ClickHouse passwords" in
+              the README.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [password]
+              create:
+                suggestName: "context.releaseName + '-langfuse-redis-credentials'"
+                hint: "password: openssl rand -hex 24."
+          - path: clickhouse.credentialsSecretName
+            type: ref
+            label: ClickHouse credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username` and `password`, both URL-safe: Langfuse puts them in its
+              migration URL.
+            help: >-
+              ClickHouse defines this user at every start, so no ALTER USER is needed to change it: update the
+              secret, then force a redeployment of ClickHouse and both Langfuse workloads together; see "Rotating
+              the Redis and ClickHouse passwords" in the README.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password]
+              create:
+                suggestName: "context.releaseName + '-langfuse-clickhouse-credentials'"
+                hint: "username: default. password: openssl rand -hex 24."
         rules:
           - rule: oldSelf == null || self.langfuse.auth.secretName == oldSelf.langfuse.auth.secretName
             severity: info
@@ -344,13 +384,6 @@ steps:
             label: Resources
             required: true
             maxRatio: 4
-          - path: redis.auth.password
-            type: string
-            label: Password
-            widget: password
-            required: true
-            sensitive: true
-            description: Reachable only from inside the GVC, but used exactly as written.
           - path: redis.volumeset.capacity
             type: integer
             label: Initial capacity
@@ -360,11 +393,6 @@ steps:
             suggestions: [10, 20, 50]
             docs: "/reference/volumeset#capacity-and-billing"
         rules:
-          # Install only: whether a live install survives a password change here is untested.
-          - rule: "oldSelf != null || !self.redis.auth.password.startsWith('change-me-')"
-            severity: warning
-            paths: [redis.auth.password]
-            message: Replace the placeholder password.
           - rule: oldSelf == null || self.redis.volumeset.capacity >= oldSelf.redis.volumeset.capacity
             paths: [redis.volumeset.capacity]
             message: A volume set cannot shrink. Keep the capacity at or above the installed size.
@@ -381,13 +409,6 @@ steps:
             label: Resources
             required: true
             maxRatio: 4
-          - path: clickhouse.config.password
-            type: string
-            label: Password
-            widget: password
-            required: true
-            sensitive: true
-            description: Reachable only from inside the GVC, but used exactly as written.
           - path: clickhouse.config.database
             type: string
             label: Database
@@ -403,11 +424,6 @@ steps:
             suggestions: [10, 20, 50]
             description: Local metadata only; the trace data lives in the bucket.
         rules:
-          # Install only: whether a live install survives a password change here is untested.
-          - rule: "oldSelf != null || !self.clickhouse.config.password.startsWith('change-me-')"
-            severity: warning
-            paths: [clickhouse.config.password]
-            message: Replace the placeholder password.
           - rule: oldSelf == null || self.clickhouse.volumeset.capacity >= oldSelf.clickhouse.volumeset.capacity
             paths: [clickhouse.volumeset.capacity]
             message: A volume set cannot shrink. Keep the capacity at or above the installed size.
@@ -428,6 +444,34 @@ rules:
     message: >-
       The previous version created the database secret itself, and this upgrade deletes it. Create a secret
       under a NEW name holding the same username, password and database, and name it here.
+  - rule: "!has(self.redis.auth)"
+    mirrors: langfuse.validateRemovedKeys
+    paths: [redis.credentialsSecretName]
+    message: >-
+      redis.auth.password was removed in 1.3.0: the Redis password is now a prerequisite dictionary secret (key
+      password) named by the Redis credentials secret field. Remove redis.auth from the values.
+  - rule: "!has(self.clickhouse.config.password)"
+    mirrors: langfuse.validateRemovedKeys
+    paths: [clickhouse.credentialsSecretName]
+    message: >-
+      clickhouse.config.password was removed in 1.3.0: the ClickHouse credentials are now a prerequisite dictionary
+      secret (keys username, password) named by the ClickHouse credentials secret field. Remove
+      clickhouse.config.password from the values.
+  - rule: self.redis.credentialsSecretName != '' && self.clickhouse.credentialsSecretName != ''
+    mirrors: langfuse.validateDatastores
+    paths: [redis.credentialsSecretName, clickhouse.credentialsSecretName]
+    message: Name the Redis and ClickHouse credentials secrets.
+  # Upgrading from 1.2.x or earlier, the chart-created <release>-langfuse-config secret that held both passwords
+  # is deleted by the upgrade itself, so neither new prerequisite secret may reuse that name.
+  - when: oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') < 0
+    rule: >-
+      self.redis.credentialsSecretName != context.releaseName + '-langfuse-config' &&
+      self.clickhouse.credentialsSecretName != context.releaseName + '-langfuse-config'
+    paths: [redis.credentialsSecretName, clickhouse.credentialsSecretName]
+    message: >-
+      The previous version kept the Redis and ClickHouse passwords in a secret it created itself, and this upgrade
+      deletes it. Create the new secrets under other names, holding the current passwords (ClickHouse username:
+      default).
   - rule: >-
       !has(self.langfuse.auth.nextAuthSecret) && !has(self.langfuse.auth.encryptionKey) &&
       !has(self.langfuse.auth.salt)
@@ -472,3 +516,13 @@ migrations:
     note: >-
       The database credentials are now a prerequisite dictionary secret (username, password, database). Create it
       under a NEW name with the values the database was initialized with, and choose it under Langfuse.
+  - fromVersions: "<1.3.0"
+    from: redis.auth
+    note: >-
+      The Redis password is now a prerequisite dictionary secret (key password). Create it under a new name holding
+      the current password, and choose it under Langfuse.
+  - fromVersions: "<1.3.0"
+    from: clickhouse.config.password
+    note: >-
+      The ClickHouse credentials are now a prerequisite dictionary secret (keys username, password). Create it under
+      a new name holding username default and the current password, and choose it under Langfuse.

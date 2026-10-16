@@ -11,8 +11,8 @@ Langfuse is an open-source LLM observability and evaluation platform — traces,
 - **ClickHouse** (`stateful`) — all traces, observations and scores; powers the dashboards. Its data parts live in the object store; the volumeset holds local metadata only.
 - **Object storage** — AWS S3 or GCS, one bucket shared by ClickHouse (`clickhouse/`) and Langfuse (`events/`, `media/`).
 - **Database credentials secret** (dictionary) — *not created by this template*; you create it before install. PostgreSQL initializes from it and Langfuse connects with it.
-- **Datastore credentials secret** — template-created, holding only the Redis and ClickHouse passwords.
-- **Identity + policy** — grants the workloads `reveal` on exactly the secrets they mount: the Redis/ClickHouse credentials, the ClickHouse config, your auth secret, your database credentials secret, and (on GCS) your storage credentials secret.
+- **Redis and ClickHouse credentials secrets** (dictionary) — *not created by this template*; you create them before install. Each datastore and both Langfuse workloads read them at every start.
+- **Identity + policy** — grants the workloads `reveal` on exactly the secrets they mount: the ClickHouse config, your auth secret, your database, Redis and ClickHouse credentials secrets, and (on GCS) your storage credentials secret.
 
 ## Prerequisites
 
@@ -52,13 +52,24 @@ cpln secret create-dictionary --name my-langfuse-db-credentials \
 
 Set `postgres.config.credentialsSecretName` to that name. Keep all three values URL-safe (letters, digits, `-`, `_`): Langfuse puts them in its connection URL. PostgreSQL reads the secret only when its data directory is first initialized. To change the password later, run `ALTER ROLE` in the database first, then edit the secret (`cpln secret edit my-langfuse-db-credentials`), then right away force a redeployment of `RELEASE_NAME-langfuse-web` and `RELEASE_NAME-langfuse-worker`. A running workload keeps the values it started with. Do not redeploy the database: PostgreSQL reads the secret only when it is first initialized, so restarting it only adds downtime. Connections the app already has open keep working after `ALTER ROLE`; new ones fail until its redeploy finishes, so redeploy right away and rotate in a quiet window.
 
-**If either secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-langfuse-web --gvc GVC_NAME -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own after several minutes, or skip the wait with `cpln workload force-redeployment` on each waiting workload.
+### 3. Redis and ClickHouse credentials — REQUIRED, must exist BEFORE you install
 
-The Redis and ClickHouse passwords are **not** prerequisites — they are bundled plumbing no human
-types elsewhere, so this template creates that secret for you from `redis.auth.password` and
-`clickhouse.config.password`.
+One dictionary secret per datastore. Both datastores and both Langfuse workloads read them at every start:
 
-### 3. Object storage
+```bash
+cpln secret create-dictionary --name my-langfuse-redis \
+  --entry password="$(openssl rand -hex 24)"
+
+cpln secret create-dictionary --name my-langfuse-clickhouse \
+  --entry username=default \
+  --entry password="$(openssl rand -hex 24)"
+```
+
+Set `redis.credentialsSecretName` and `clickhouse.credentialsSecretName` to those names. Keep the ClickHouse values URL-safe (letters, digits, `-`, `_`; the username must also start with a letter): Langfuse puts them in its migration URL. To change a password later, see [Rotating the Redis and ClickHouse passwords](#rotating-the-redis-and-clickhouse-passwords).
+
+**If any of these secrets does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-langfuse-web --gvc GVC_NAME -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own after several minutes, or skip the wait with `cpln workload force-redeployment` on each waiting workload.
+
+### 4. Object storage
 
 Both ClickHouse and Langfuse use one bucket with separate key prefixes (`clickhouse/`, `events/`, `media/`). Pick **one** provider and follow its section under [Storage setup](#storage-setup) below. AWS is keyless (a Control Plane cloud account); GCS needs an HMAC key pair supplied as a second prerequisite secret.
 
@@ -196,8 +207,6 @@ internalAccess:
 
 ### Datastores
 
-The Redis and ClickHouse passwords serve Langfuse's own datastores, which are unreachable from outside the GVC — but they are used exactly as written, so change them before installing.
-
 ```yaml
 postgres:
   image: postgres:18
@@ -218,8 +227,7 @@ redis:
     maxCpu: 400m
     minMemory: 256Mi
     maxMemory: 512Mi
-  auth:
-    password: change-me-langfuse-redis
+  credentialsSecretName: my-langfuse-redis # PREREQUISITE dictionary secret (password) — must exist BEFORE install
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)
 
@@ -230,8 +238,8 @@ clickhouse:
     maxCpu: 2
     minMemory: 2Gi
     maxMemory: 4Gi
+  credentialsSecretName: my-langfuse-clickhouse # PREREQUISITE dictionary secret (username, password) — must exist BEFORE install
   config:
-    password: change-me-langfuse-clickhouse
     database: langfuse
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)
@@ -245,7 +253,7 @@ clickhouse:
 | Internal HTTP | `RELEASE_NAME-langfuse-web.GVC_NAME.cpln.local:3000` |
 | First login | `adminEmail` / `adminPassword` from your auth secret |
 | Langfuse API keys | Created in the UI under **Settings → API Keys** per project |
-| ClickHouse / Redis | Internal only; passwords come from `clickhouse.config.password` and `redis.auth.password` |
+| ClickHouse / Redis | Internal only; credentials come from your `clickhouse.credentialsSecretName` and `redis.credentialsSecretName` secrets |
 | PostgreSQL | Internal only, `RELEASE_NAME-postgres.GVC_NAME.cpln.local:5432`; `username` / `password` / `database` from your `postgres.config.credentialsSecretName` secret |
 
 Send traces with the public API once you have a project key pair:
@@ -272,6 +280,18 @@ cpln secret create-dictionary --name RELEASE_NAME-langfuse-db \
 
 Then upgrade with `postgres.config.credentialsSecretName` set to that name and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.2.x release, and also in the old secret, the one named by `postgres.config.credentialsSecretName` in 1.2.x (`cpln secret reveal SECRET_NAME -o yaml`), until the upgrade deletes it.
 
+`redis.auth.password` and `clickhouse.config.password` were removed too: each datastore now reads a prerequisite secret, and carrying either old key forward fails the render. 1.2.x kept both passwords in `RELEASE_NAME-langfuse-config` (keys `redisPassword`, `clickhousePassword`), which **this upgrade also deletes**, so use other names. Create them holding your current passwords, so the old and new versions keep talking to each other during the rollout:
+
+```bash
+cpln secret create-dictionary --name RELEASE_NAME-langfuse-redis-credentials \
+  --entry password=YOUR_CURRENT_REDIS_PASSWORD
+
+cpln secret create-dictionary --name RELEASE_NAME-langfuse-clickhouse-credentials \
+  --entry username=default --entry password=YOUR_CURRENT_CLICKHOUSE_PASSWORD
+```
+
+Your current values are `redis.auth.password` and `clickhouse.config.password` of the 1.2.x release, and also in `cpln secret reveal RELEASE_NAME-langfuse-config -o yaml` until the upgrade deletes it. Upgrade with `redis.credentialsSecretName` and `clickhouse.credentialsSecretName` set to those names and `redis.auth` and `clickhouse.config.password` removed.
+
 The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so Langfuse loses its database for about a minute and a half; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
 
 ## Upgrading from 1.1.0
@@ -280,7 +300,25 @@ The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), s
 database was initialized with into a database credentials secret as under Prerequisites
 (keys `username`, `password`, `database`), under any name except `RELEASE_NAME-pg-config` (the
 secret 1.1.0 created, which this upgrade deletes). Set `postgres.config.credentialsSecretName` to
-it and remove the three keys. The auth, Redis and ClickHouse paths are unchanged.
+it and remove the three keys. The Redis and ClickHouse passwords move to prerequisite secrets
+too: follow [Upgrading from 1.2.x](#upgrading-from-12x) for them (1.1.0 keeps them in the same
+`RELEASE_NAME-langfuse-config` secret). The auth path is unchanged.
+
+## Rotating the Redis and ClickHouse passwords
+
+Neither datastore keeps its password in its data: Redis takes it on the command line and ClickHouse defines its user from the secret at every start. So a rotation is an edit and a redeploy, with no `ALTER` first:
+
+1. Edit the secret: `cpln secret edit SECRET_NAME` (the Redis or the ClickHouse secret).
+2. Check the new value is stored: `cpln secret reveal SECRET_NAME -o yaml`.
+3. Force a redeployment of the datastore and of everything that connects to it, together:
+
+```bash
+cpln workload force-redeployment RELEASE_NAME-langfuse-redis --gvc GVC_NAME   # or RELEASE_NAME-langfuse-clickhouse
+cpln workload force-redeployment RELEASE_NAME-langfuse-web --gvc GVC_NAME
+cpln workload force-redeployment RELEASE_NAME-langfuse-worker --gvc GVC_NAME
+```
+
+A running workload keeps the password it started with, so nothing changes until step 3. Between the datastore restarting and the Langfuse workloads coming back, Langfuse cannot reach that datastore: expect a short interruption, and rotate in a quiet window. Changing the ClickHouse `username` works the same way.
 
 ## Backing up the bundled database
 
@@ -314,14 +352,14 @@ Check the object size before restoring from one.
 
 ## Important Notes
 
-- Create the auth and database credentials secrets **before** installing — a missing one leaves the workloads waiting on a secret that does not exist, with zero log lines (see Prerequisites for how to diagnose it).
-- Rotating either secret needs a forced redeployment — a running workload keeps the values it started with. The database password also needs `ALTER ROLE` first; see Prerequisites for the order.
+- Create the auth, database, Redis and ClickHouse credentials secrets **before** installing — a missing one leaves the workloads waiting on a secret that does not exist, with zero log lines (see Prerequisites for how to diagnose it).
+- Rotating any of these secrets needs a forced redeployment — a running workload keeps the values it started with. The database password also needs `ALTER ROLE` first (see Prerequisites); Redis and ClickHouse need none (see [Rotating the Redis and ClickHouse passwords](#rotating-the-redis-and-clickhouse-passwords)).
 - `encryptionKey` can never be changed: it encrypts every LLM provider key your users add under **Settings → LLM Connections**, and rotating it makes all of them unreadable.
 - Sign-up is closed by default and the owner account is provisioned from your auth secret. Set `langfuse.auth.disableSignup: false` if you want anyone who can reach the UI to register their own account and organization.
 - Back up PostgreSQL: it holds users, projects, API keys, prompts and datasets. Enable snapshots on its volumeset. ClickHouse data already lives in your bucket, and Redis holds only the transient queue.
 - Serving Langfuse on your own domain requires `langfuse.publicUrl` (include the scheme). Auth redirects and the session cookie's Secure flag are derived from it; left empty, the auto-assigned platform endpoint is used.
 - Changing `publicAccess` or `internalAccess` takes up to a couple of minutes to propagate — re-test before concluding the knob did not work.
-- Give each Langfuse release its own database credentials secret. Secret names are org-wide, so two releases pointed at one secret share a password, and rotating it for one breaks the other.
+- Give each Langfuse release its own database, Redis and ClickHouse secrets. Secret names are org-wide, so two releases pointed at one secret share a password, and rotating it for one breaks the other.
 - The first `helm upgrade` after an install re-applies the bundled PostgreSQL, which briefly interrupts the app while it restarts.
 
 ## Links

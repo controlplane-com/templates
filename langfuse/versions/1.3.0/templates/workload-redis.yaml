@@ -23,7 +23,7 @@ spec:
         - "yes"
       env:
         - name: REDIS_PASSWORD
-          value: cpln://secret/{{ include "langfuse.secret.name" . }}.redisPassword
+          value: cpln://secret/{{ include "langfuse.secret.redis.name" . }}.password
       ports:
         - number: 6379
           protocol: tcp

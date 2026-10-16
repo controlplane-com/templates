@@ -26,15 +26,16 @@ spec:
           value: cpln://secret/{{ include "langfuse.secret.db.name" . }}.database
         - name: DATABASE_URL
           value: postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@{{ printf "%s-postgres" .Release.Name }}.{{ .Values.global.cpln.gvc }}.cpln.local:5432/$(POSTGRES_DB)
-        # ClickHouse
+        # ClickHouse — username and password come from the prerequisite secret;
+        # the migration URL is assembled at container start through $(VAR) expansion.
+        - name: CLICKHOUSE_USER
+          value: cpln://secret/{{ include "langfuse.secret.clickhouse.name" . }}.username
         - name: CLICKHOUSE_PASSWORD
-          value: cpln://secret/{{ include "langfuse.secret.name" . }}.clickhousePassword
+          value: cpln://secret/{{ include "langfuse.secret.clickhouse.name" . }}.password
         - name: CLICKHOUSE_URL
           value: http://{{ include "langfuse.clickhouse.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:8123
         - name: CLICKHOUSE_MIGRATION_URL
-          value: clickhouse://default:$(CLICKHOUSE_PASSWORD)@{{ include "langfuse.clickhouse.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:9000/{{ .Values.clickhouse.config.database }}
-        - name: CLICKHOUSE_USER
-          value: default
+          value: clickhouse://$(CLICKHOUSE_USER):$(CLICKHOUSE_PASSWORD)@{{ include "langfuse.clickhouse.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:9000/{{ .Values.clickhouse.config.database }}
         - name: CLICKHOUSE_CLUSTER_ENABLED
           value: "false"
         # Redis
@@ -43,7 +44,7 @@ spec:
         - name: REDIS_PORT
           value: "6379"
         - name: REDIS_AUTH
-          value: cpln://secret/{{ include "langfuse.secret.name" . }}.redisPassword
+          value: cpln://secret/{{ include "langfuse.secret.redis.name" . }}.password
         # Auth
         - name: AUTH_TRUST_HOST
           value: "true"

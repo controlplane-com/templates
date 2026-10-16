@@ -32,8 +32,17 @@
 {{- printf "%s-langfuse-clickhouse-storage" .Release.Name }}
 {{- end }}
 
-{{- define "langfuse.secret.name" -}}
-{{- printf "%s-langfuse-config" .Release.Name }}
+{{/*
+Names of the PREREQUISITE Redis and ClickHouse credentials secrets (since 1.3.0).
+1.2.x rendered both passwords into a chart-created `{release}-langfuse-config`
+secret (keys redisPassword, clickhousePassword); this version no longer does.
+*/}}
+{{- define "langfuse.secret.redis.name" -}}
+{{- .Values.redis.credentialsSecretName }}
+{{- end }}
+
+{{- define "langfuse.secret.clickhouse.name" -}}
+{{- .Values.clickhouse.credentialsSecretName }}
 {{- end }}
 
 {{/*
@@ -68,6 +77,7 @@ subchart reads the same value, so both sides agree on one name.
 {{- include "langfuse.validateRemovedKeys" . -}}
 {{- include "langfuse.validateObjectStore" . -}}
 {{- include "langfuse.validateAuth" . -}}
+{{- include "langfuse.validateDatastores" . -}}
 {{- include "langfuse.validateAccess" . -}}
 {{- end }}
 
@@ -95,6 +105,12 @@ compatibility fallbacks — the version bump IS the migration path.
 {{- if hasKey .Values.postgres "credentials" -}}
   {{- fail "postgres.credentials was removed in 1.3.0. The database credentials are now a prerequisite dictionary secret (keys: username, password, database) named by postgres.config.credentialsSecretName. Upgrading from 1.2.x: create it under a NEW name holding your EXISTING values, set postgres.config.credentialsSecretName to that name, and remove postgres.credentials — see \"Upgrading from 1.2.x\" in the README." -}}
 {{- end -}}
+{{- if hasKey .Values.redis "auth" -}}
+  {{- fail "redis.auth.password was removed in 1.3.0. The Redis password is now a prerequisite dictionary secret (key: password) named by redis.credentialsSecretName. Upgrading from 1.2.x: create it under a NEW name (not RELEASE-langfuse-config, which the upgrade deletes) holding your CURRENT password, set redis.credentialsSecretName to that name, and remove redis.auth — see \"Upgrading from 1.2.x\" in the README." -}}
+{{- end -}}
+{{- if hasKey .Values.clickhouse.config "password" -}}
+  {{- fail "clickhouse.config.password was removed in 1.3.0. The ClickHouse credentials are now a prerequisite dictionary secret (keys: username, password) named by clickhouse.credentialsSecretName. Upgrading from 1.2.x: create it under a NEW name (not RELEASE-langfuse-config, which the upgrade deletes) holding username=default and your CURRENT password, set clickhouse.credentialsSecretName to that name, and remove clickhouse.config.password — see \"Upgrading from 1.2.x\" in the README." -}}
+{{- end -}}
 {{- if .Values.langfuse.firewall -}}
   {{- fail "langfuse.firewall.inboundAllowCIDR was removed in 1.1.0. Use publicAccess.enabled (true = reachable from the internet) and internalAccess.type instead." -}}
 {{- end -}}
@@ -109,6 +125,15 @@ compatibility fallbacks — the version bump IS the migration path.
 {{- end -}}
 {{- if not .Values.langfuse.auth.organizationName -}}
   {{- fail "langfuse.auth.organizationName is required — it names the organization created for the first-run admin." -}}
+{{- end -}}
+{{- end }}
+
+{{- define "langfuse.validateDatastores" -}}
+{{- if not .Values.redis.credentialsSecretName -}}
+  {{- fail "redis.credentialsSecretName is required: it names the prerequisite dictionary secret holding the Redis password (key: password). Create the secret BEFORE installing." -}}
+{{- end -}}
+{{- if not .Values.clickhouse.credentialsSecretName -}}
+  {{- fail "clickhouse.credentialsSecretName is required: it names the prerequisite dictionary secret holding the ClickHouse username and password (keys: username, password). Create the secret BEFORE installing." -}}
 {{- end -}}
 {{- end }}
 

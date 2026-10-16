@@ -62,7 +62,9 @@ steps:
             description: Streaming replication between the members only.
           - value: logical
             label: Logical
-            description: Also lets clients such as Debezium read row changes through a replication slot.
+            description: >-
+              Also lets clients such as Debezium read row changes through a replication slot. The replicas
+              keep a synchronized copy of failover slots, so the slot survives a switchover.
     rules:
       - rule: self.replicas >= 3
         severity: info

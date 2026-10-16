@@ -250,11 +250,12 @@ the members needs; `logical` additionally lets a client such as Debezium read ro
 logical replication slot. Anything else is refused at render. With `logical`, the cluster is also told
 to leave logical slots alone (`ignore_slots`): Patroni otherwise drops any inactive slot it does not
 manage the next time it reloads its slot list, such as after a restart, and the client silently loses
-its position.
+its position. The replicas also synchronize failover slots (`sync_replication_slots` with
+`hot_standby_feedback`), see [Logical slots across a leader change](#logical-slots-across-a-leader-change).
 
 Like the timeouts above, both settings are shared cluster configuration: Patroni ignores `wal_level` in
 a member's local settings and takes it from etcd, where it is written once, when the cluster is first
-created. **Changing `walLevel` on an existing release changes nothing.** To change a running cluster,
+created. **Changing `walLevel` on an existing release does not change `wal_level`.** To change a running cluster,
 patch the shared configuration, wait until every member shows `*` in the Pending restart column, then
 restart them (PostgreSQL restarts in place on each member, so expect a short write outage while the
 leader restarts):
@@ -268,13 +269,33 @@ cpln workload exec RELEASE_NAME-postgres-ha --gvc GVC_NAME --container patroni-p
   -- patronictl -c /tmp/patroni_config.yml restart RELEASE_NAME --pending --force
 ```
 
-Set `walLevel` in your values to the same value, so a cluster recreated from them matches.
+Then set `walLevel` to the same value in your values and upgrade the release: that turns slot
+synchronization on, and the members restart one at a time to apply it.
 
 A logical replication slot retains WAL like the members' own slots, and the same cap applies: a
 consumer that stays away long enough to exceed `max_slot_wal_keep_size` has its slot invalidated and
 must start over. The cluster allows 10 replication slots and 10 WAL senders, which covers the members'
-own slots and a few logical consumers. A logical slot exists only on the leader: after a failover the
-consumer has to create it again on the new leader.
+own slots and a few logical consumers.
+
+### Logical slots across a leader change
+
+A client that creates its slot as a PostgreSQL 17 **failover slot** (Debezium's `slot.failover`, on by
+default in the `debezium-server` template from 1.3.0) keeps its position across a switchover: every replica
+holds a synchronized copy (`synced = true` in `pg_replication_slots`), and the new leader already has the
+slot, so the client resumes without missing the changes made in between. A slot created without failover
+exists only on the leader, and the client must create a new one after a leader change, losing what was
+written in between. Changes can be delivered twice around a leader change.
+
+A member that stops being the leader keeps the slots it held. Within about 30 seconds of it running as a
+replica, its non-synchronized logical slots are dropped, so PostgreSQL can replace them with synchronized
+copies (it refuses to synchronize over a slot of the same name). Do not create logical slots on a replica.
+
+To check a member:
+
+```bash
+cpln workload exec RELEASE_NAME-postgres-ha --gvc GVC_NAME --container patroni-postgres \
+  -- psql -h 127.0.0.1 -d postgres -c 'SELECT slot_name, failover, synced, active FROM pg_replication_slots'
+```
 
 ## Cluster metrics
 
@@ -323,7 +344,7 @@ release. Read them back with `cpln secret reveal SECRET_NAME -o yaml`.
 
 ## Important Notes
 
-- **`walLevel` takes effect only when the cluster is created** — changing it on an existing release does nothing; follow [WAL level and logical replication](#wal-level-and-logical-replication).
+- **`walLevel` sets `wal_level` only when the cluster is created** — on an existing release follow [WAL level and logical replication](#wal-level-and-logical-replication).
 - **A replica that stays down does not fill the primary's disk** — Patroni keeps a replication slot per member, and `max_slot_wal_keep_size` caps the WAL those slots retain at a quarter of `volumeset.capacity`. A member offline long enough to exceed that has its slot invalidated and is re-cloned automatically when it returns.
 - **Minimum Replicas**: For production use, maintain at least 3 PostgreSQL replicas and 3 etcd replicas
 - **Odd Number for etcd**: Always use an odd number of etcd replicas (3, 5, 7) for proper quorum

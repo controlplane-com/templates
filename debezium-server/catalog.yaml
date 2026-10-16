@@ -19,6 +19,7 @@ keywords:
   - change data capture
   - logical replication
   - replication slot
+  - failover slot
   - wal
   - binlog
   - postgres cdc

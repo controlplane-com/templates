@@ -1,0 +1,944 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Debezium Server
+
+# One connector per release: the workload is pinned to one replica and keeps its offsets on a volume set
+# (file storage) with no location handling, so every extra location would run a second connector on the
+# same replication slot or binlog.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: source
+    title: Source database
+    description: The database Debezium captures changes from, and which tables.
+    sections:
+      - title: Connection
+        docs: "#source-connection"
+        fields:
+          - path: source.type
+            type: enum
+            label: Database type
+            required: true
+            options:
+              - { value: postgres, label: PostgreSQL }
+              - { value: mysql, label: MySQL }
+              - { value: mongodb, label: MongoDB }
+              - { value: sqlserver, label: SQL Server }
+              - { value: oracle, label: Oracle }
+          - path: source.database.hostname
+            type: string
+            label: Hostname
+            required: true
+            example: true
+            placeholder: my-postgres.my-gvc.cpln.local
+            description: A workload in the GVC (`<workload>.<gvc>.cpln.local`) or an external host.
+          - path: source.database.port
+            type: integer
+            label: Port
+            min: 1
+            max: 65535
+            required: true
+            suggestions:
+              - { value: 1433, label: "1433 (SQL Server)" }
+              - { value: 1521, label: "1521 (Oracle)" }
+              - { value: 3306, label: "3306 (MySQL)" }
+              - { value: 5432, label: "5432 (PostgreSQL)" }
+              - { value: 27017, label: "27017 (MongoDB)" }
+          - path: source.database.name
+            type: string
+            label: Database
+            required: true
+            example: true
+            description: For Oracle, the SID.
+          - path: source.database.user
+            type: string
+            label: User
+            required: true
+            example: true
+            description: Its password is the `sourcePassword` key of the credentials secret.
+          - path: source.serverName
+            type: string
+            label: Topic prefix
+            required: true
+            description: Debezium's logical server name, the first part of every topic or stream it writes to.
+          - path: source.tableIncludeList
+            type: string
+            label: Tables to capture
+            placeholder: public.users,public.orders
+            description: Comma-separated `schema.table` names; empty captures every table.
+          - path: source.tableExcludeList
+            type: string
+            label: Tables to skip
+            placeholder: public.audit_log
+            description: Comma-separated `schema.table` names.
+        rules:
+          - rule: >-
+              self.source.type in ['postgres', 'mysql', 'mongodb', 'sqlserver', 'oracle'] &&
+              self.source.database.name != '' && self.source.database.user != ''
+            mirrors: debezium.validateSource
+            paths: [source.type]
+            message: The database type, database and user are required.
+          - rule: self.source.tableIncludeList == '' || self.source.tableExcludeList == ''
+            severity: warning
+            paths: [source.tableExcludeList]
+            message: Debezium accepts either tables to capture or tables to skip, not both; clear one of them.
+          - when: self.source.database.port != null
+            rule: >-
+              self.source.database.port == (self.source.type == 'postgres' ? 5432 :
+              self.source.type == 'mysql' ? 3306 : self.source.type == 'mongodb' ? 27017 :
+              self.source.type == 'sqlserver' ? 1433 : 1521)
+            severity: info
+            paths: [source.database.port]
+            message: This is not the usual port for the chosen database type; check that the database listens on it.
+
+      - title: PostgreSQL
+        when: self.source.type == 'postgres'
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.3.0') < 0
+            text: >-
+              A replication slot created by an earlier version is not converted to a failover slot. The
+              README's "Failover slots" section shows how to convert it with `ALTER_REPLICATION_SLOT`.
+          - path: source.postgres.slotName
+            type: string
+            label: Replication slot
+            required: true
+          - path: source.postgres.publicationName
+            type: string
+            label: Publication
+            required: true
+            description: Debezium creates it on first start, then the slot.
+          - path: source.postgres.pluginName
+            type: enum
+            label: Decoding plugin
+            required: true
+            options:
+              - { value: pgoutput, label: pgoutput, description: Built into PostgreSQL. }
+              - { value: decoderbufs, label: decoderbufs, description: A server extension with Protocol Buffers output. }
+          - path: source.postgres.slotDropOnStop
+            type: boolean
+            label: Drop the slot when the connector stops
+            description: Off keeps the connector's position across restarts and failovers.
+          - path: source.postgres.slotFailover
+            type: boolean
+            label: Create a failover slot
+            description: >-
+              PostgreSQL 17 and later: replicas that sync replication slots keep a copy, so the connector
+              resumes after a switchover. Ignored before 17.
+          - path: source.postgres.heartbeatIntervalMs
+            type: integer
+            label: Heartbeat interval
+            unit: ms
+            min: 0
+            required: true
+            suggestions: [0, 5000, 10000]
+            description: >-
+              0 turns heartbeats off. With them on, a quiet database still advances the slot, so it does not
+              hold WAL back.
+          - path: source.postgres.heartbeatActionQuery
+            type: string
+            label: Heartbeat query
+            when: self.source.postgres.heartbeatIntervalMs != null && self.source.postgres.heartbeatIntervalMs > 0
+            placeholder: UPDATE debezium_heartbeat SET ts = now() WHERE id = 1
+            description: >-
+              Run on every heartbeat. A startup step creates the `debezium_heartbeat` table, with row `1`,
+              before Debezium starts.
+        rules:
+          - rule: "!self.source.postgres.slotDropOnStop"
+            severity: info
+            paths: [source.postgres.slotDropOnStop]
+            message: >-
+              The slot is dropped every time the connector stops, so changes made while it is down are not
+              captured.
+          - when: oldSelf != null && oldSelf.source.type == 'postgres'
+            rule: >-
+              self.source.postgres.pluginName == oldSelf.source.postgres.pluginName ||
+              self.source.postgres.slotName != oldSelf.source.postgres.slotName
+            severity: info
+            paths: [source.postgres.pluginName]
+            message: >-
+              The existing replication slot was created for the other plugin. Drop it first, or name a new
+              slot.
+
+      - title: MySQL
+        when: self.source.type == 'mysql'
+        fields:
+          - path: source.mysql.serverId
+            type: integer
+            label: Server ID
+            min: 1
+            required: true
+            description: Debezium joins the replication topology under this ID; no other server or client may use it.
+          - path: source.mysql.includeSchemaChanges
+            type: boolean
+            label: Publish schema changes
+            description: Also publishes DDL events.
+
+      - title: MongoDB
+        when: self.source.type == 'mongodb'
+        fields:
+          - path: source.mongodb.useConnectionString
+            type: boolean
+            label: Connect with a connection string
+            description: The string is the `mongodbConnectionString` key of the credentials secret.
+          - path: source.mongodb.replicaSet
+            type: string
+            label: Replica set
+            placeholder: rs0
+
+      - title: SQL Server
+        when: self.source.type == 'sqlserver'
+        fields:
+          - path: source.sqlserver.databaseNames
+            type: string
+            label: Databases to capture
+            placeholder: inventory,orders
+            description: Comma-separated database names.
+          - path: source.sqlserver.snapshotMode
+            type: enum
+            label: Snapshot mode
+            required: true
+            options:
+              - { value: initial, label: Initial, description: "Snapshot the schema and data, then stream changes." }
+              - { value: schema_only, label: Schema only, description: "Snapshot the schema, then stream changes." }
+              - { value: initial_only, label: Initial only, description: "Snapshot the schema and data, then stop." }
+
+      - title: Oracle
+        when: self.source.type == 'oracle'
+        fields:
+          - path: source.oracle.pdbName
+            type: string
+            label: Pluggable database
+            placeholder: ORCLPDB1
+          - path: source.oracle.logMiningStrategy
+            type: enum
+            label: Log mining strategy
+            required: true
+            options:
+              - { value: online_catalog, label: Online catalog }
+              - { value: redo_log_catalog, label: Redo log catalog }
+
+      - title: Error retries
+        advanced: true
+        docs: "#error-retries"
+        fields:
+          - path: source.errors.retryDelayInitialMs
+            type: integer
+            label: First retry delay
+            unit: ms
+            min: 0
+            required: true
+          - path: source.errors.retryDelayMaxMs
+            type: integer
+            label: Longest retry delay
+            unit: ms
+            min: 0
+            required: true
+          - path: source.errors.maxRetries
+            type: integer
+            label: Retries before giving up
+            min: -1
+            required: true
+            description: -1 retries forever.
+        rules:
+          - rule: >-
+              self.source.errors.retryDelayInitialMs == null || self.source.errors.retryDelayMaxMs == null ||
+              self.source.errors.retryDelayInitialMs <= self.source.errors.retryDelayMaxMs
+            severity: info
+            paths: [source.errors.retryDelayMaxMs]
+            message: The longest retry delay is shorter than the first one.
+
+  - id: sink
+    title: Sink
+    description: Where Debezium writes the change events, and in which format.
+    sections:
+      - fields:
+          - path: sink.type
+            type: enum
+            label: Sink
+            required: true
+            docs: "#sink"
+            options:
+              - { value: kafka, label: Kafka }
+              - { value: redis, label: Redis Streams }
+              - { value: nats-jetstream, label: NATS JetStream }
+              - { value: http, label: HTTP webhook }
+              - { value: kinesis, label: Amazon Kinesis }
+              - { value: pubsub, label: Google Cloud Pub/Sub }
+              - { value: pulsar, label: Apache Pulsar }
+              - { value: eventhubs, label: Azure Event Hubs }
+        rules:
+          - rule: >-
+              self.sink.type in ['kafka', 'redis', 'nats-jetstream', 'http', 'kinesis', 'pubsub', 'pulsar',
+              'eventhubs']
+            mirrors: debezium.validateSink
+            paths: [sink.type]
+            message: Choose one of the supported sinks.
+
+      - title: Kafka
+        when: self.sink.type == 'kafka'
+        fields:
+          - path: sink.kafka.bootstrapServers
+            type: string
+            label: Bootstrap servers
+            required: true
+            example: true
+            placeholder: my-kafka.my-gvc.cpln.local:9092
+            description: Comma-separated `host:port` pairs.
+          - path: sink.kafka.securityProtocol
+            type: enum
+            label: Security protocol
+            required: true
+            options: [PLAINTEXT, SSL, SASL_PLAINTEXT, SASL_SSL]
+          - path: sink.kafka.saslMechanism
+            type: enum
+            label: SASL mechanism
+            options:
+              - { value: "", label: None }
+              - { value: PLAIN, label: PLAIN }
+              - { value: SCRAM-SHA-256, label: SCRAM-SHA-256 }
+              - { value: SCRAM-SHA-512, label: SCRAM-SHA-512 }
+          - path: sink.kafka.saslUsername
+            type: string
+            label: SASL user
+            required: true
+            when: self.sink.kafka.saslMechanism != ''
+            description: Its password is the `kafkaSaslPassword` key of the credentials secret.
+        rules:
+          - rule: "!self.sink.kafka.securityProtocol.startsWith('SASL_') || self.sink.kafka.saslMechanism != ''"
+            paths: [sink.kafka.saslMechanism]
+            message: A SASL security protocol needs a SASL mechanism.
+          - rule: self.sink.kafka.saslMechanism in ['', 'PLAIN']
+            severity: warning
+            paths: [sink.kafka.saslMechanism]
+            message: The chart writes a PLAIN login for every mechanism, so only PLAIN can authenticate.
+          - rule: self.sink.kafka.saslMechanism == '' || self.sink.kafka.securityProtocol.startsWith('SASL_')
+            severity: info
+            paths: [sink.kafka.securityProtocol]
+            message: Kafka uses the SASL mechanism only with SASL_PLAINTEXT or SASL_SSL.
+
+      - title: Redis Streams
+        when: self.sink.type == 'redis'
+        fields:
+          - path: sink.redis.address
+            type: string
+            label: Address
+            required: true
+            placeholder: my-redis.my-gvc.cpln.local:6379
+          - path: sink.redis.streamName
+            type: string
+            label: Stream name prefix
+          - path: sink.redis.authEnabled
+            type: boolean
+            label: Authenticate with a password
+            description: The password is the `sinkRedisPassword` key of the credentials secret.
+          - path: sink.redis.ssl
+            type: boolean
+            label: Connect over TLS
+
+      - title: NATS JetStream
+        when: self.sink.type == 'nats-jetstream'
+        fields:
+          - path: sink.nats.url
+            type: string
+            label: URL
+            required: true
+            placeholder: nats://my-nats.my-gvc.cpln.local:4222
+          - path: sink.nats.subject
+            type: string
+            label: Subject prefix
+          - path: sink.nats.username
+            type: string
+            label: User
+            description: >-
+              Empty connects without credentials. With a user, its password is the `natsPassword` key of the
+              credentials secret.
+
+      - title: HTTP webhook
+        when: self.sink.type == 'http'
+        fields:
+          - path: sink.http.url
+            type: string
+            format: url
+            label: URL
+            required: true
+            placeholder: https://hooks.my-app.com/cdc
+          - id: httpAuth
+            virtual: true
+            type: enum
+            label: Authentication
+            widget: segmented
+            required: true
+            init: "self.sink.http.authType == 'basic' ? 'basic' : self.sink.http.authType == 'bearer' ? 'bearer' : 'none'"
+            options:
+              - value: none
+                label: None
+                set: { sink.http.authType: "" }
+              - value: basic
+                label: Basic
+                description: A user, and the `httpPassword` key of the credentials secret.
+                set: { sink.http.authType: basic }
+              - value: bearer
+                label: Bearer token
+                description: The `httpBearerToken` key of the credentials secret.
+                set: { sink.http.authType: bearer }
+          - path: sink.http.username
+            type: string
+            label: User
+            required: true
+            when: ui.httpAuth == 'basic'
+          - path: sink.http.headers
+            type: map
+            label: Extra headers
+            widget: kv
+            keys:
+              label: Header
+            values: { type: string }
+        rules:
+          - rule: self.sink.http.authType in ['', 'none', 'basic', 'bearer']
+            severity: warning
+            paths: [sink.http.url]
+            message: sink.http.authType must be none, basic or bearer; any other value sends no credentials.
+
+      - title: Amazon Kinesis
+        when: self.sink.type == 'kinesis'
+        fields:
+          - path: sink.kinesis.region
+            type: string
+            label: Region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: sink.kinesis.streamName
+            type: string
+            label: Stream
+            required: true
+          - path: sink.kinesis.credentialsProvider
+            type: string
+            label: Credentials provider
+            required: true
+            advanced: true
+            description: "`default` uses the cloud account linked below."
+      - id: kinesis-cloud-account
+        title: AWS cloud account
+        toggle: sink.kinesis.cloudAccount.enabled
+        when: self.sink.type == 'kinesis'
+        description: >-
+          Links an AWS cloud account to the workload identity, so Debezium needs no keys. The template grants
+          no IAM policy: give the identity access to the stream yourself.
+        fields:
+          - path: sink.kinesis.cloudAccount.name
+            type: ref
+            label: Cloud account
+            required: true
+            help: "[Create a cloud account](/guides/create-cloud-account) first if you have none."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+
+      - title: Google Cloud Pub/Sub
+        when: self.sink.type == 'pubsub'
+        fields:
+          - path: sink.pubsub.projectId
+            type: string
+            label: Project ID
+            required: true
+            placeholder: my-gcp-project
+          - path: sink.pubsub.topic
+            type: string
+            label: Topic prefix
+      - id: pubsub-cloud-account
+        title: GCP cloud account
+        toggle: sink.pubsub.cloudAccount.enabled
+        when: self.sink.type == 'pubsub'
+        description: >-
+          Links a GCP cloud account to the workload identity with the Pub/Sub scope. The template grants no
+          role: give the identity access to the topics yourself.
+        fields:
+          - path: sink.pubsub.cloudAccount.name
+            type: ref
+            label: Cloud account
+            required: true
+            help: "[Create a cloud account](/guides/create-cloud-account) first if you have none."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+
+      - title: Apache Pulsar
+        when: self.sink.type == 'pulsar'
+        fields:
+          - path: sink.pulsar.serviceUrl
+            type: string
+            label: Service URL
+            required: true
+            placeholder: pulsar://my-pulsar.my-gvc.cpln.local:6650
+          - path: sink.pulsar.topic
+            type: string
+            label: Topic prefix
+          - path: sink.pulsar.authEnabled
+            type: boolean
+            label: Authenticate with a token
+            description: The token is the `pulsarAuthToken` key of the credentials secret.
+          - path: sink.pulsar.authPluginClassName
+            type: string
+            label: Authentication plugin class
+            required: true
+            when: self.sink.pulsar.authEnabled
+            suggestions: [org.apache.pulsar.client.impl.auth.AuthenticationToken]
+        rules:
+          - rule: self.sink.pulsar.authEnabled || self.sink.pulsar.authPluginClassName == ''
+            paths: [sink.pulsar.authEnabled]
+            message: >-
+              An authentication plugin class is set, but token authentication is off, so the token is never
+              read. Turn it on, or clear sink.pulsar.authPluginClassName.
+
+      - title: Azure Event Hubs
+        when: self.sink.type == 'eventhubs'
+        fields:
+          - type: note
+            text: The connection string is the `eventhubsConnectionString` key of the credentials secret.
+          - path: sink.eventhubs.hubName
+            type: string
+            label: Event hub
+            required: true
+
+      - title: Serialization format
+        docs: "#serialization-format"
+        fields:
+          - path: format.key
+            type: enum
+            label: Key format
+            widget: segmented
+            required: true
+            options:
+              - { value: json, label: JSON }
+              - { value: avro, label: Avro }
+              - { value: protobuf, label: Protobuf }
+          - path: format.value
+            type: enum
+            label: Value format
+            widget: segmented
+            required: true
+            options:
+              - { value: json, label: JSON }
+              - { value: avro, label: Avro }
+              - { value: protobuf, label: Protobuf }
+          - path: format.schemaRegistry.url
+            type: string
+            format: url
+            label: Schema registry URL
+            required: true
+            when: self.format.key != 'json' || self.format.value != 'json'
+            placeholder: http://my-schema-registry.my-gvc.cpln.local:8081
+          - path: format.schemaRegistry.username
+            type: string
+            label: Schema registry user
+            when: self.format.key != 'json' || self.format.value != 'json'
+            description: >-
+              Empty connects without credentials. With a user, its password is the `schemaRegistryPassword`
+              key of the credentials secret.
+
+  - id: state
+    title: Offsets and history
+    description: Where Debezium keeps its position, so it resumes instead of snapshotting again.
+    sections:
+      - title: Offset storage
+        docs: "#offset-storage"
+        fields:
+          - path: source.offset.storage
+            type: enum
+            label: Keep offsets in
+            widget: cards
+            required: true
+            options:
+              - { value: file, label: A file, description: On a volume set the template creates. }
+              - { value: redis, label: Redis, description: A Redis you already run. }
+              - { value: jdbc, label: A database, description: "A table in a database you already run, over JDBC." }
+          - path: source.offset.file.filename
+            type: string
+            label: Offsets file
+            required: true
+            advanced: true
+            when: self.source.offset.storage == 'file'
+          - path: source.offset.flushIntervalMs
+            type: integer
+            label: Flush interval
+            unit: ms
+            min: 1
+            required: true
+            advanced: true
+            description: How often the position is saved; a restart replays at most this much.
+          - path: source.offset.flushTimeoutMs
+            type: integer
+            label: Flush timeout
+            unit: ms
+            min: 1
+            required: true
+            advanced: true
+        rules:
+          - rule: >-
+              self.source.offset.storage in ['file', 'redis', 'jdbc'] &&
+              (self.source.offset.storage != 'redis' || self.source.offset.redis.address != '') &&
+              (self.source.offset.storage != 'jdbc' || self.source.offset.jdbc.url != '')
+            mirrors: debezium.validateOffsetStorage
+            paths: [source.offset.storage]
+            message: Choose file, Redis or a database, and give its address or JDBC URL.
+          - rule: >-
+              self.source.offset.storage != 'file' || self.source.offset.file.filename == null ||
+              self.source.offset.file.filename.startsWith('/debezium/data/')
+            severity: warning
+            paths: [source.offset.file.filename]
+            message: Keep the file under /debezium/data/, the volume set's mount; anywhere else it is lost on restart.
+          - when: oldSelf != null
+            rule: self.source.offset.storage == oldSelf.source.offset.storage
+            severity: info
+            paths: [source.offset.storage]
+            message: >-
+              The stored offsets do not move to the new storage, so the connector starts again as if new and
+              snapshots the tables again.
+
+      - title: Redis offsets
+        when: self.source.offset.storage == 'redis'
+        fields:
+          - path: source.offset.redis.address
+            type: string
+            label: Address
+            required: true
+            placeholder: my-redis.my-gvc.cpln.local:6379
+          - path: source.offset.redis.key
+            type: string
+            label: Key
+            required: true
+          - path: source.offset.redis.authEnabled
+            type: boolean
+            label: Authenticate with a password
+            description: The password is the `offsetRedisPassword` key of the credentials secret.
+          - path: source.offset.redis.ssl
+            type: boolean
+            label: Connect over TLS
+
+      - title: Database offsets
+        when: self.source.offset.storage == 'jdbc'
+        fields:
+          - path: source.offset.jdbc.url
+            type: string
+            label: JDBC URL
+            required: true
+            placeholder: jdbc:postgresql://my-postgres.my-gvc.cpln.local:5432/offsets
+          - path: source.offset.jdbc.user
+            type: string
+            label: User
+            description: Its password is the `offsetJdbcPassword` key of the credentials secret.
+          - path: source.offset.jdbc.tableName
+            type: string
+            label: Table
+            required: true
+
+      - title: Schema history
+        when: self.source.type in ['mysql', 'sqlserver']
+        docs: "#schema-history"
+        description: MySQL and SQL Server connectors record every DDL change here.
+        fields:
+          - path: source.schemaHistory.storage
+            type: enum
+            label: Keep schema history in
+            widget: cards
+            required: true
+            options:
+              - { value: file, label: A file, description: On a volume set the template creates. }
+              - { value: redis, label: Redis, description: A Redis you already run. }
+              - { value: jdbc, label: A database, description: "A table in a database you already run, over JDBC." }
+          - path: source.schemaHistory.file.filename
+            type: string
+            label: Schema history file
+            required: true
+            advanced: true
+            when: self.source.schemaHistory.storage == 'file'
+        rules:
+          - rule: >-
+              self.source.schemaHistory.storage != 'file' || self.source.schemaHistory.file.filename == null ||
+              self.source.schemaHistory.file.filename.startsWith('/debezium/data/')
+            severity: warning
+            paths: [source.schemaHistory.file.filename]
+            message: Keep the file under /debezium/data/, the volume set's mount; anywhere else it is lost on restart.
+      - title: Redis schema history
+        when: self.source.type in ['mysql', 'sqlserver'] && self.source.schemaHistory.storage == 'redis'
+        fields:
+          - path: source.schemaHistory.redis.address
+            type: string
+            label: Address
+            required: true
+            placeholder: my-redis.my-gvc.cpln.local:6379
+          - path: source.schemaHistory.redis.key
+            type: string
+            label: Key
+            required: true
+          - path: source.schemaHistory.redis.authEnabled
+            type: boolean
+            label: Authenticate with a password
+            description: The password is the `schemaHistoryRedisPassword` key of the credentials secret.
+          - path: source.schemaHistory.redis.ssl
+            type: boolean
+            label: Connect over TLS
+      - title: Database schema history
+        when: self.source.type in ['mysql', 'sqlserver'] && self.source.schemaHistory.storage == 'jdbc'
+        fields:
+          - path: source.schemaHistory.jdbc.url
+            type: string
+            label: JDBC URL
+            required: true
+            placeholder: jdbc:postgresql://my-postgres.my-gvc.cpln.local:5432/debezium
+          - path: source.schemaHistory.jdbc.user
+            type: string
+            label: User
+            description: Its password is the `schemaHistoryJdbcPassword` key of the credentials secret.
+          - path: source.schemaHistory.jdbc.tableName
+            type: string
+            label: Table
+            required: true
+
+      - title: Volume set
+        when: >-
+          self.source.offset.storage == 'file' ||
+          (self.source.type in ['mysql', 'sqlserver'] && self.source.schemaHistory.storage == 'file')
+        docs: "#storage"
+        description: Holds the files above. Deleting it makes the connector snapshot every table again.
+        fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50]
+            docs: "/reference/volumeset#capacity-and-billing"
+          - path: volumeset.performanceClass
+            type: enum
+            label: Performance class
+            required: true
+            immutable: A volume set's performance class cannot change.
+            options:
+              - { value: general-purpose-ssd, label: General purpose SSD }
+              - { value: high-throughput-ssd, label: High throughput SSD }
+        rules:
+          - rule: >-
+              oldSelf == null || !(oldSelf.source.offset.storage == 'file' ||
+              (oldSelf.source.type in ['mysql', 'sqlserver'] && oldSelf.source.schemaHistory.storage == 'file')) ||
+              self.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+            paths: [volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: credentials
+    title: Credentials
+    description: The one prerequisite secret that holds every password this connector uses.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          The credentials secret must exist **before** you install. If it is missing, the deployment waits
+          and `cpln logs` shows nothing at all.
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '1.2.0') < 0
+        text: >-
+          Every credential moved out of the values into this secret in 1.2.0. Put each password you set
+          before into the secret under the key listed below, and remove it from the values.
+      - path: credentialsSecretName
+        type: ref
+        label: Credentials secret
+        required: true
+        docs: "#prerequisites"
+        description: >-
+          A dictionary secret. `sourcePassword` is always needed; the other keys depend on the source, sink
+          and storage you chose, and Check keys lists them.
+        help: >-
+          Possible keys: `sourcePassword`, `mongodbConnectionString`, `offsetRedisPassword`,
+          `offsetJdbcPassword`, `schemaHistoryRedisPassword`, `schemaHistoryJdbcPassword`,
+          `kafkaSaslPassword`, `sinkRedisPassword`, `natsPassword`, `httpPassword`, `httpBearerToken`,
+          `pulsarAuthToken`, `eventhubsConnectionString` and `schemaRegistryPassword`. The secret is read
+          when the workload starts: after changing a value, force a redeployment of the workload.
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeysFrom: >-
+            ['sourcePassword'] +
+            (self.source.type == 'mongodb' && self.source.mongodb.useConnectionString ? ['mongodbConnectionString'] : []) +
+            (self.source.offset.storage == 'redis' && self.source.offset.redis.authEnabled ? ['offsetRedisPassword'] : []) +
+            (self.source.offset.storage == 'jdbc' ? ['offsetJdbcPassword'] : []) +
+            (self.source.type in ['mysql', 'sqlserver'] && self.source.schemaHistory.storage == 'redis' &&
+            self.source.schemaHistory.redis.authEnabled ? ['schemaHistoryRedisPassword'] : []) +
+            (self.source.type in ['mysql', 'sqlserver'] && self.source.schemaHistory.storage == 'jdbc' ?
+            ['schemaHistoryJdbcPassword'] : []) +
+            (self.sink.type == 'kafka' && self.sink.kafka.saslUsername != '' ? ['kafkaSaslPassword'] : []) +
+            (self.sink.type == 'redis' && self.sink.redis.authEnabled ? ['sinkRedisPassword'] : []) +
+            (self.sink.type == 'nats-jetstream' && self.sink.nats.username != '' ? ['natsPassword'] : []) +
+            (self.sink.type == 'http' && self.sink.http.authType == 'basic' ? ['httpPassword'] : []) +
+            (self.sink.type == 'http' && self.sink.http.authType == 'bearer' ? ['httpBearerToken'] : []) +
+            (self.sink.type == 'pulsar' && self.sink.pulsar.authEnabled ? ['pulsarAuthToken'] : []) +
+            (self.sink.type == 'eventhubs' ? ['eventhubsConnectionString'] : []) +
+            (self.format.schemaRegistry.url != '' && self.format.schemaRegistry.username != '' ?
+            ['schemaRegistryPassword'] : [])
+          create:
+            suggestName: "context.releaseName + '-debezium-creds'"
+    rules:
+      - rule: self.credentialsSecretName != null && self.credentialsSecretName != ''
+        mirrors: debezium.validateCredentials
+        paths: [credentialsSecretName]
+        message: The credentials secret is required.
+      - rule: >-
+          !has(self.source.database.password) && !has(self.source.mongodb.connectionString) &&
+          !has(self.source.offset.redis.password) && !has(self.source.offset.jdbc.password) &&
+          !has(self.source.schemaHistory.redis.password) && !has(self.source.schemaHistory.jdbc.password) &&
+          !has(self.sink.kafka.saslPassword) && !has(self.sink.redis.password) && !has(self.sink.nats.password) &&
+          !has(self.sink.http.password) && !has(self.sink.http.bearerToken) && !has(self.sink.pulsar.authToken) &&
+          !has(self.sink.eventhubs.connectionString) && !has(self.format.schemaRegistry.password)
+        mirrors: debezium.validateCredentials
+        paths: [credentialsSecretName]
+        message: >-
+          Plaintext credentials were removed in 1.2.0 (source.database.password, sink.kafka.saslPassword and
+          the other password, token and connection string keys). Put them in the credentials secret and remove
+          them from the values.
+      - rule: >-
+          !(self.credentialsSecretName in [context.releaseName + '-debezium-credentials',
+          context.releaseName + '-debezium-config', context.releaseName + '-debezium-entrypoint'])
+        paths: [credentialsSecretName]
+        message: The chart creates a secret with this name itself; choose another name for the prerequisite secret.
+
+  - id: workload
+    title: Workload and network
+    description: The Debezium Server image, its compute, and its firewall.
+    sections:
+      - title: Debezium Server
+        docs: "#image-and-resources"
+        fields:
+          - path: image
+            type: string
+            format: image
+            label: Debezium Server image
+            required: true
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            description: A single replica.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+      - title: Firewall
+        docs: "#firewall"
+        fields:
+          - path: firewall.internal.inboundAllowType
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: Only the health endpoint listens. Firewall changes take 30 to 150 seconds to take effect.
+            options:
+              - { value: none, label: Nobody, description: No workload can connect. }
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          - path: firewall.internal.workloads
+            type: list
+            label: Allowed workloads
+            when: self.firewall.internal.inboundAllowType in ['same-gvc', 'workload-list']
+            widget: tags
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+          - path: firewall.external.outboundAllowCIDR
+            type: list
+            label: Outbound CIDRs
+            description: >-
+              Addresses Debezium may reach outside the GVC: an external database or sink, or a cloud service
+              API.
+            item: { type: string, format: cidr }
+        rules:
+          - rule: size(self.firewall.external.outboundAllowCIDR) > 0
+            severity: info
+            paths: [firewall.external.outboundAllowCIDR]
+            message: With no outbound CIDRs Debezium reaches only workloads inside Control Plane.
+
+yamlOnly:
+  - path: sink.kafka.topic
+    reason: >-
+      Topics are named by the topic prefix (Source database). This value is passed to the Kafka producer as
+      topic.prefix, which has not been verified to change topic names.
+
+migrations:
+  - fromVersions: "<1.2.0"
+    from: source.database.password
+    note: Put it in the credentials secret as sourcePassword, and choose the secret under Credentials.
+  - fromVersions: "<1.2.0"
+    from: source.mongodb.connectionString
+    note: Put it in the credentials secret as mongodbConnectionString.
+  - fromVersions: "<1.2.0"
+    to: source.mongodb.useConnectionString
+    valueExpr: self.source.mongodb.connectionString != null && self.source.mongodb.connectionString != ''
+    note: On when the release set a connection string; the string is now the mongodbConnectionString key of the credentials secret.
+  - fromVersions: "<1.2.0"
+    from: source.offset.redis.password
+    note: Put it in the credentials secret as offsetRedisPassword.
+  - fromVersions: "<1.2.0"
+    to: source.offset.redis.authEnabled
+    valueExpr: self.source.offset.redis.password != null && self.source.offset.redis.password != ''
+    note: On when the release set a password; the password is now the offsetRedisPassword key of the credentials secret.
+  - fromVersions: "<1.2.0"
+    from: source.offset.jdbc.password
+    note: Put it in the credentials secret as offsetJdbcPassword.
+  - fromVersions: "<1.2.0"
+    from: source.schemaHistory.redis.password
+    note: Put it in the credentials secret as schemaHistoryRedisPassword.
+  - fromVersions: "<1.2.0"
+    to: source.schemaHistory.redis.authEnabled
+    valueExpr: self.source.schemaHistory.redis.password != null && self.source.schemaHistory.redis.password != ''
+    note: On when the release set a password; the password is now the schemaHistoryRedisPassword key of the credentials secret.
+  - fromVersions: "<1.2.0"
+    from: source.schemaHistory.jdbc.password
+    note: Put it in the credentials secret as schemaHistoryJdbcPassword.
+  - fromVersions: "<1.2.0"
+    from: sink.kafka.saslPassword
+    note: Put it in the credentials secret as kafkaSaslPassword.
+  - fromVersions: "<1.2.0"
+    from: sink.redis.password
+    note: Put it in the credentials secret as sinkRedisPassword.
+  - fromVersions: "<1.2.0"
+    to: sink.redis.authEnabled
+    valueExpr: self.sink.redis.password != null && self.sink.redis.password != ''
+    note: On when the release set a password; the password is now the sinkRedisPassword key of the credentials secret.
+  - fromVersions: "<1.2.0"
+    from: sink.nats.password
+    note: Put it in the credentials secret as natsPassword.
+  - fromVersions: "<1.2.0"
+    from: sink.http.password
+    note: Put it in the credentials secret as httpPassword.
+  - fromVersions: "<1.2.0"
+    from: sink.http.bearerToken
+    note: Put it in the credentials secret as httpBearerToken.
+  - fromVersions: "<1.2.0"
+    from: sink.pulsar.authToken
+    note: Put it in the credentials secret as pulsarAuthToken.
+  - fromVersions: "<1.2.0"
+    to: sink.pulsar.authEnabled
+    valueExpr: self.sink.pulsar.authToken != null && self.sink.pulsar.authToken != ''
+    note: On when the release set a token; the token is now the pulsarAuthToken key of the credentials secret.
+  - fromVersions: "<1.2.0"
+    from: sink.eventhubs.connectionString
+    note: Put it in the credentials secret as eventhubsConnectionString.
+  - fromVersions: "<1.2.0"
+    from: format.schemaRegistry.password
+    note: Put it in the credentials secret as schemaRegistryPassword.

@@ -70,6 +70,12 @@ were previously inferred from a credential simply being set now have explicit sw
 `source.schemaHistory.redis.authEnabled`, `sink.redis.authEnabled` and `sink.pulsar.authEnabled`. An upgrade
 that still carries any removed credential is refused at render.
 
+<b>Upgrading from 1.2.0:</b> the image is pinned to `3.0.8.Final` (the same build the moving `3.0` tag served),
+and the heartbeat startup step no longer creates the replication slot — on a fresh database it created the slot
+before Debezium created its publication, and the connector then stopped on `publication "dbz_publication" does
+not exist`. An existing slot keeps working but is not converted to a failover slot; see
+[Failover slots](#failover-slots-postgresql-17) to convert it.
+
 ## Quick Start
 
 ### PostgreSQL to Kafka
@@ -151,7 +157,7 @@ sink:
 
 | Database | Connector | Default Port | Key Configuration |
 |----------|-----------|--------------|-------------------|
-| PostgreSQL | PostgresConnector | 5432 | `slotName`, `publicationName`, `pluginName` |
+| PostgreSQL | PostgresConnector | 5432 | `slotName`, `publicationName`, `pluginName`, `slotFailover` |
 | MySQL | MySqlConnector | 3306 | `serverId`, `includeSchemaChanges` |
 | MongoDB | MongoDbConnector | 27017 | `useConnectionString` (string from the `mongodbConnectionString` secret key), `replicaSet` |
 | SQL Server | SqlServerConnector | 1433 | `databaseNames`, `snapshotMode` |
@@ -166,15 +172,15 @@ sink:
    max_wal_senders = 4
    ```
 
-2. Create the publication named in `source.postgres.publicationName`:
+2. Debezium creates the publication named in `source.postgres.publicationName` and then the replication slot
+   (`source.postgres.slotName`) on first start. If its user may not create a publication, create it yourself first:
    ```sql
    CREATE PUBLICATION dbz_publication FOR ALL TABLES;
-   -- The replication slot (source.postgres.slotName) is created automatically
    ```
 
    With `source.postgres.heartbeatIntervalMs` above `0`, a startup step also creates a `debezium_heartbeat` table
-   (seeded with row `1`, the target of the `heartbeatActionQuery` example) and the replication slot before the
-   server starts. If that step fails it logs a warning and Debezium Server starts anyway.
+   (seeded with row `1`, the target of the `heartbeatActionQuery` example) before the server starts. If that step
+   fails it logs a warning and Debezium Server starts anyway.
 
 3. Grant permissions:
    ```sql
@@ -182,6 +188,23 @@ sink:
    GRANT SELECT ON ALL TABLES IN SCHEMA public TO debezium;
    ALTER USER debezium REPLICATION;
    ```
+
+### Failover slots (PostgreSQL 17)
+
+With `source.postgres.slotFailover: true` (the default) the slot is created as a PostgreSQL 17 failover slot.
+On a cluster whose replicas run `sync_replication_slots = on` with `hot_standby_feedback = on` (the
+`postgres-highly-available` template does this with `walLevel: logical`), every replica keeps a synchronized
+copy, so after a switchover the connector resumes from the new leader's copy instead of creating a new slot
+and missing the changes in between. On PostgreSQL 16 and earlier the setting is ignored.
+
+A slot created before 1.3.0 is not converted. To convert it, stop the connector, run this from any `psql`
+that reaches the database's current primary (the slot must be inactive), then start the connector again:
+
+```bash
+cpln workload stop RELEASE_NAME-debezium --gvc GVC_NAME
+psql "host=DB_HOST user=DB_USER dbname=DB_NAME replication=database" -c 'ALTER_REPLICATION_SLOT debezium ( FAILOVER true )'
+cpln workload start RELEASE_NAME-debezium --gvc GVC_NAME
+```
 
 ### MySQL Prerequisites
 

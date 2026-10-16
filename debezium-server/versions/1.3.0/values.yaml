@@ -1,7 +1,7 @@
 # Debezium Server CDC Template
 # Documentation: https://debezium.io/documentation/reference/stable/operations/debezium-server.html
 
-image: quay.io/debezium/server:3.0
+image: quay.io/debezium/server:3.0.8.Final
 
 # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL.
 # A `dictionary` secret holding every credential this connector needs. Which keys
@@ -45,6 +45,7 @@ source:
     publicationName: "dbz_publication"    # Publication name
     pluginName: "pgoutput"                # Logical decoding plugin: pgoutput (default), decoderbufs
     slotDropOnStop: false                 # Keep replication slot on stop (required for HA/failover)
+    slotFailover: true                    # PostgreSQL 17+: create a failover slot that replicas keep in sync; ignored before 17
     heartbeatIntervalMs: 0               # Heartbeat interval in ms (0=disabled; set 5000 for HA)
     heartbeatActionQuery: ""              # SQL executed on heartbeat (e.g., "UPDATE debezium_heartbeat SET ts = now() WHERE id = 1")
 

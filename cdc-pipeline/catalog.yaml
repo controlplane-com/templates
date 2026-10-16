@@ -8,11 +8,11 @@ topology: distributed
 
 summary: >-
   A wired change data capture stack in one install: a three-node PostgreSQL cluster with Patroni
-  failover as the source, a three-broker Apache Kafka cluster in KRaft mode with the Kafbat UI as
-  the transport, and Debezium Server streaming the database's row changes into Kafka topics.
-  Database and SASL credentials are set once and cross-checked at install, and internal hostnames
-  are wired for you. Pick it for a new Postgres whose changes stream into Kafka, not to add CDC to
-  a database you already run.
+  failover and logical WAL as the source, a three-broker Apache Kafka cluster in KRaft mode as the
+  transport, and Debezium Server streaming the database's row changes into Kafka topics. One
+  prerequisite secret holds the database and connector credentials, Debezium's Kafka user is set up
+  to write its topics, and internal hostnames are wired for you; Kafbat UI is optional. Pick it for a
+  new Postgres whose changes stream into Kafka, not to add CDC to a database you already run.
 
 keywords:
   - cdc
@@ -57,11 +57,14 @@ pickInsteadIf:
 
 prerequisites:
   - kind: secret
+    secretType: dictionary
+    keys: [username, password, database, sourcePassword, kafkaSaslPassword]
+    valuesPath: [postgres-highly-available.config.credentialsSecretName, debezium-server.credentialsSecretName]
+    required: true
+    description: Database and Debezium credentials; set its name in both keys, sourcePassword equal to password. When it is missing the workloads wait with no logs.
+  - kind: secret
     secretType: opaque
     valuesPath: kafka.kafbat_ui.configuration_secret
-    required: true
-    description: Kafbat UI config file for the bundled Kafka (see the kafka README). The UI is on by default and waits until it exists; set kafka.kafbat_ui.enabled false to skip it.
-  - kind: other
-    valuesPath: debezium-server.source.postgres.heartbeatActionQuery
-    required: true
-    description: Right after install, create the debezium_heartbeat table in the bundled Postgres (SQL in the README), or clear heartbeatActionQuery; heartbeats are on by default.
+    required: false
+    when: kafka.kafbat_ui.enabled
+    description: Kafbat UI configuration file (see the kafka README); the UI waits until it exists.

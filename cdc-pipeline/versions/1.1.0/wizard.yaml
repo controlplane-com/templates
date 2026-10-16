@@ -1,0 +1,400 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: CDC Pipeline
+
+# Debezium keeps its offsets on a volume set, and the bundled PostgreSQL and Kafka bring the same limit
+# with their imports: none of them handles locations, so every extra location would run its own copy.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres-highly-available
+    version: 2.8.0
+    title: Bundled PostgreSQL
+    after: capture
+    steps:
+      - { id: cluster, title: Database cluster, description: The Patroni-managed PostgreSQL members Debezium reads changes from. }
+      - { id: storage, title: Database storage }
+      - { id: etcd, title: Database consensus }
+      - { id: network, title: Database network }
+      - { id: backup, title: Database backups }
+    exclude:
+      # The pipeline's single prerequisite secret is chosen in the Credentials step below.
+      - config.credentialsSecretName
+      # Fixed to logical: Debezium cannot decode changes otherwise (a read-only field in Change capture).
+      - walLevel
+    override:
+      internal_access.type:
+        description: >-
+          Debezium connects to the database through the HAProxy endpoint like any other workload: keep
+          Same GVC, or add the Debezium workload under Allowed workloads.
+  - template: kafka
+    version: 4.3.0
+    title: Bundled Kafka
+    after: capture
+    steps:
+      - { id: cluster, title: Kafka cluster }
+      - { id: listeners, title: Kafka listeners and security }
+      - { id: storage, title: Kafka storage }
+      - { id: ui, title: Kafka UI and REST Proxy }
+      - { id: connect, title: Kafka Connect }
+      - { id: advanced, title: Kafka advanced }
+    override:
+      kafka.acl.superUsers:
+        description: >-
+          Separate principals with `;`. Keep `User:debezium` (Debezium's user) in the list: Kafka enforces
+          ACLs and the chart grants none, so Debezium writes as a super user.
+
+steps:
+  - id: credentials
+    title: Credentials
+    description: The one prerequisite secret PostgreSQL and Debezium both read.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          The credentials secret must exist **before** you install. If it is missing, the deployment waits
+          and `cpln logs` shows nothing at all.
+      - path: postgres-highly-available.config.credentialsSecretName
+        type: ref
+        label: Pipeline credentials secret
+        required: true
+        description: >-
+          A dictionary secret with the keys `username`, `password`, `database`, `sourcePassword` (the same
+          value as `password`) and `kafkaSaslPassword` (Debezium's Kafka password).
+        help: >-
+          PostgreSQL reads `username`, `password` and `database` only when the cluster is first created;
+          Debezium connects with `username` and `sourcePassword`. To change the password later, follow the
+          README's HA rotation steps and update both `password` and `sourcePassword`.
+        docs: "#prerequisites"
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeys: [username, password, database, sourcePassword, kafkaSaslPassword]
+          create:
+            suggestName: "context.releaseName + '-cdc-credentials'"
+      - path: debezium-server.credentialsSecretName
+        type: string
+        label: Same secret, for Debezium
+        required: true
+        description: Debezium reads the same secret; enter the same name.
+    rules:
+      - rule: >-
+          self['postgres-highly-available'].config.credentialsSecretName == '' ||
+          self['debezium-server'].credentialsSecretName == self['postgres-highly-available'].config.credentialsSecretName
+        mirrors: cdc.validateCredentialsSecret
+        paths: [debezium-server.credentialsSecretName]
+        messageExpression: >-
+          'PostgreSQL and Debezium read one secret: set this to ' +
+          self['postgres-highly-available'].config.credentialsSecretName + '.'
+        message: PostgreSQL and Debezium read one secret; set this to the same name as the pipeline credentials secret.
+      - rule: >-
+          self['postgres-highly-available'].config.credentialsSecretName != context.releaseName + '-debezium-credentials'
+        mirrors: cdc.validateCredentialsSecret
+        paths: [postgres-highly-available.config.credentialsSecretName]
+        message: >-
+          Debezium creates a secret with this name itself (its derived settings); choose another name for the
+          prerequisite secret.
+      - rule: >-
+          !has(self.database) && !('password' in self['debezium-server'].source.database) &&
+          !('saslPassword' in self['debezium-server'].sink.kafka)
+        mirrors: cdc.validateRemovedKeys
+        paths: [postgres-highly-available.config.credentialsSecretName]
+        message: >-
+          database, debezium-server.source.database.password and debezium-server.sink.kafka.saslPassword were
+          removed in 1.1.0. Put the values in the credentials secret (username, password, database,
+          sourcePassword, kafkaSaslPassword) and remove them from the values.
+      - rule: "!('postgres' in self['postgres-highly-available'])"
+        paths: [postgres-highly-available.config.credentialsSecretName]
+        message: >-
+          postgres-highly-available.postgres was removed: put its username, password and database in the
+          credentials secret and remove the block from the values.
+      # Upgrading from 1.0.x, the chart-created database secret is deleted by the upgrade itself, so the new
+      # prerequisite secret must have a different name (holding the same username, password and database).
+      - when: oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.1.0') < 0
+        rule: >-
+          self['postgres-highly-available'].config.credentialsSecretName !=
+          oldSelf['postgres-highly-available'].config.credentialsSecretName
+        paths: [postgres-highly-available.config.credentialsSecretName]
+        message: >-
+          The previous version created the database secret itself, and this upgrade deletes it. Create a secret
+          under a NEW name holding the same username, password and database plus sourcePassword and
+          kafkaSaslPassword, and name it here.
+      - when: oldSelf != null && (context.fromVersion == null || semverCompare(context.fromVersion, '1.1.0') >= 0)
+        rule: >-
+          self['postgres-highly-available'].config.credentialsSecretName ==
+          oldSelf['postgres-highly-available'].config.credentialsSecretName
+        severity: info
+        paths: [postgres-highly-available.config.credentialsSecretName]
+        message: >-
+          PostgreSQL reads the credentials only when the cluster is first created; pointing at another secret
+          does not change the existing user or password.
+
+  - id: capture
+    title: Change capture
+    description: What Debezium captures from the bundled PostgreSQL and how it writes it to Kafka.
+    sections:
+      - title: Source tables
+        docs: "#debezium-server"
+        fields:
+          - path: debezium-server.source.database.name
+            type: string
+            label: Database
+            required: true
+            immutable: The connector's slot and publication live in this database.
+            description: The same value as the secret's `database` key.
+          - path: debezium-server.source.database.user
+            type: string
+            label: Database user
+            required: true
+            description: The same value as the secret's `username` key.
+          - path: debezium-server.source.tableIncludeList
+            type: string
+            label: Tables to capture
+            placeholder: public.orders,public.customers
+            description: Comma-separated `schema.table` names; empty captures every table.
+          - path: debezium-server.source.tableExcludeList
+            type: string
+            label: Tables to skip
+            placeholder: public.audit_log
+            description: Comma-separated `schema.table` names.
+          - path: postgres-highly-available.walLevel
+            type: enum
+            label: WAL level
+            readOnly: true
+            advanced: true
+            description: Fixed to logical, which Debezium's decoding needs.
+            options:
+              - { value: logical, label: Logical }
+        rules:
+          - rule: self['postgres-highly-available'].walLevel == 'logical'
+            mirrors: cdc.validateWalLevel
+            paths: [postgres-highly-available.walLevel]
+            message: postgres-highly-available.walLevel must be logical; Debezium cannot decode changes otherwise.
+      - title: Kafka topics
+        fields:
+          - path: debezium-server.source.serverName
+            type: string
+            label: Topic prefix
+            required: true
+            description: Change events go to `<prefix>.<schema>.<table>`.
+          - path: debezium-server.sink.kafka.saslUsername
+            type: string
+            label: Debezium's Kafka user
+            required: true
+            description: >-
+              A user of the client listener. Its password is the `kafkaSaslPassword` key of the credentials
+              secret.
+        rules:
+          - rule: >-
+              !('client' in self.kafka.kafka.listeners) || self.kafka.kafka.listeners['client'].sasl == null ||
+              self.kafka.kafka.listeners['client'].sasl.users == null ||
+              self.kafka.kafka.listeners['client'].sasl.users.split(',').exists(u, u.trim() == self['debezium-server'].sink.kafka.saslUsername)
+            mirrors: cdc.validateKafkaCredentials
+            paths: [debezium-server.sink.kafka.saslUsername]
+            message: Debezium's Kafka user must be one of the client listener's SASL users (Kafka listeners and security).
+          - rule: >-
+              self.kafka.kafka.acl.allowEveryoneIfNoAclFound ||
+              (self.kafka.kafka.acl.superUsers != null &&
+              self.kafka.kafka.acl.superUsers.split(';').exists(u, u.trim() == 'User:' + self['debezium-server'].sink.kafka.saslUsername))
+            mirrors: cdc.validateKafkaCredentials
+            paths: [debezium-server.sink.kafka.saslUsername]
+            messageExpression: >-
+              'Kafka enforces ACLs and the chart grants none: add User:' +
+              self['debezium-server'].sink.kafka.saslUsername + ' to the Kafka super users, or every write is refused.'
+            message: Kafka enforces ACLs and the chart grants none; add Debezium's user to the Kafka super users.
+      - title: Replication slot and heartbeat
+        fields:
+          - path: debezium-server.source.postgres.slotName
+            type: string
+            label: Replication slot
+            required: true
+            immutable: The connector's position lives in this slot.
+          - path: debezium-server.source.postgres.publicationName
+            type: string
+            label: Publication
+            required: true
+          - path: debezium-server.source.postgres.pluginName
+            type: enum
+            label: Decoding plugin
+            required: true
+            immutable: The replication slot is created for one plugin.
+            options:
+              - { value: pgoutput, label: pgoutput, description: Built into PostgreSQL. }
+              - { value: decoderbufs, label: decoderbufs, description: Protocol Buffers output. }
+          - path: debezium-server.source.postgres.slotDropOnStop
+            type: boolean
+            label: Drop the slot when the connector stops
+            description: Off keeps the connector's position across restarts.
+          - path: debezium-server.source.postgres.slotFailover
+            type: boolean
+            label: Keep the slot on the replicas
+            description: >-
+              On, the database replicas keep a synchronized copy of the slot, so after a switchover the
+              connector resumes on the new leader without missing changes. Off, each leader change loses the
+              changes made before the connector creates a new slot.
+          - path: debezium-server.source.postgres.heartbeatIntervalMs
+            type: integer
+            label: Heartbeat interval
+            unit: ms
+            min: 0
+            required: true
+            suggestions: [0, 5000, 10000]
+            description: >-
+              0 turns heartbeats off. With them on, a quiet database still advances the slot, so it does not
+              hold WAL back.
+          - path: debezium-server.source.postgres.heartbeatActionQuery
+            type: string
+            label: Heartbeat query
+            when: self['debezium-server'].source.postgres.heartbeatIntervalMs > 0
+            description: Debezium creates the `debezium_heartbeat` table before it starts.
+      - title: Debezium Server
+        advanced: true
+        fields:
+          - path: debezium-server.image
+            type: string
+            format: image
+            label: Debezium Server image
+            required: true
+          - path: debezium-server.resources
+            type: resources
+            label: Debezium resources
+            required: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: debezium-server.volumeset.capacity
+            type: integer
+            label: Offsets volume capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50]
+            help: Holds the connector's offsets; deleting it makes the connector snapshot every table again.
+          - path: debezium-server.volumeset.performanceClass
+            type: enum
+            label: Offsets volume class
+            required: true
+            immutable: A volume set's performance class cannot change.
+            options:
+              - { value: general-purpose-ssd, label: General purpose SSD }
+              - { value: high-throughput-ssd, label: High throughput SSD }
+        rules:
+          - rule: oldSelf == null || self['debezium-server'].volumeset.capacity >= oldSelf['debezium-server'].volumeset.capacity
+            paths: [debezium-server.volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+# Rules over the imported values: their issues show on the imported fields' steps.
+rules:
+  - rule: self['postgres-highly-available'].internal_access.type != 'none'
+    paths: [postgres-highly-available.internal_access.type]
+    message: '"None" also blocks Debezium, which connects to the database like any other workload.'
+  - when: self['postgres-highly-available'].internal_access.type == 'workload-list' && context.gvc != null
+    rule: >-
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-debezium') in
+      self['postgres-highly-available'].internal_access.workloads
+    severity: warning
+    paths: [postgres-highly-available.internal_access.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-debezium, or Debezium cannot reach the database.'"
+    message: Add the Debezium workload to the list, or Debezium cannot reach the database.
+  - rule: self['postgres-highly-available'].proxy.enabled || self['postgres-highly-available'].pgbouncer.enabled
+    paths: [postgres-highly-available.proxy.enabled]
+    message: Debezium connects through the HAProxy leader endpoint; keep it on.
+  - rule: self.kafka.kafka.firewall.internal_inboundAllowType != 'none'
+    paths: [kafka.kafka.firewall.internal_inboundAllowType]
+    message: '"Nobody" also blocks Debezium, which writes to Kafka like any other workload.'
+  - when: self.kafka.kafka.firewall.internal_inboundAllowType == 'workload-list' && context.gvc != null
+    rule: >-
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-debezium') in
+      self.kafka.kafka.firewall.inboundAllowWorkload
+    severity: warning
+    paths: [kafka.kafka.firewall.inboundAllowWorkload]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-debezium, or Debezium cannot reach Kafka.'"
+    message: Add the Debezium workload to the list, or Debezium cannot reach Kafka.
+
+yamlOnly:
+  - path: debezium-server.source.type
+    reason: The pipeline's source is the bundled PostgreSQL.
+  - path: debezium-server.source.database.hostname
+    reason: Computed from the release name (the bundled HAProxy leader endpoint); set it only to read from another database.
+  - path: debezium-server.source.database.port
+    reason: The bundled PostgreSQL listens on 5432.
+  - path: debezium-server.sink.kafka.topic
+    reason: >-
+      Topics are named by the topic prefix (Change capture). This value is passed to the Kafka producer as
+      topic.prefix, which this pipeline has not verified to change topic names.
+  - path: debezium-server.source.offset
+    reason: Offsets are kept in a file on Debezium's volume set; the other stores need services this pipeline does not run.
+  - path: debezium-server.source.schemaHistory
+    reason: Kept in a file on Debezium's volume set; PostgreSQL captures do not use schema history.
+  - path: debezium-server.source.errors
+    reason: Retry timings; the defaults retry forever with backoff.
+  - path: debezium-server.sink.type
+    reason: The pipeline's sink is the bundled Kafka.
+  - path: debezium-server.sink.kafka.bootstrapServers
+    reason: Computed from the release name (the bundled Kafka); set it only to write to another cluster.
+  - path: debezium-server.sink.kafka.securityProtocol
+    reason: Matches the bundled Kafka's SASL_PLAINTEXT client listener.
+  - path: debezium-server.sink.kafka.saslMechanism
+    reason: The Debezium chart renders a PLAIN login only.
+  - path: debezium-server.firewall
+    reason: Debezium serves only its health endpoint; nothing connects to it, and it needs outbound access to reach the database and Kafka.
+
+migrations:
+  - fromVersions: "<1.1.0"
+    from: database
+    note: >-
+      The database credentials are now a prerequisite dictionary secret (username, password, database,
+      sourcePassword = password, kafkaSaslPassword). Create it under a NEW name with the values the database
+      was created with, and choose it under Credentials. walLevel is now postgres-highly-available.walLevel.
+  # 1.0.4 turned Kafbat UI on by default and 1.1.0 turns it off: keep what the release runs with.
+  - fromVersions: "<1.1.0"
+    to: kafka.kafbat_ui.enabled
+    valueExpr: self.kafka.kafbat_ui.enabled
+    note: Kafbat UI is off by default from 1.1.0; this release keeps the setting it runs with.
+  - fromVersions: "<1.1.0"
+    from: debezium-server.source.database.password
+    note: Put it in the credentials secret as sourcePassword (the same value as password).
+  - fromVersions: "<1.1.0"
+    from: debezium-server.sink.kafka.saslPassword
+    note: Put it in the credentials secret as kafkaSaslPassword.
+  - fromVersions: "<1.1.0"
+    from: debezium-server.source.offset.redis
+    note: This pipeline keeps offsets in a file on Debezium's volume set; the Debezium chart's defaults apply.
+  - fromVersions: "<1.1.0"
+    from: debezium-server.source.offset.jdbc
+    note: This pipeline keeps offsets in a file on Debezium's volume set; the Debezium chart's defaults apply.
+  - fromVersions: "<1.1.0"
+    from: debezium-server.source.schemaHistory.redis
+    note: Schema history is kept in a file on Debezium's volume set; the Debezium chart's defaults apply.
+  - fromVersions: "<1.1.0"
+    from: debezium-server.source.schemaHistory.jdbc
+    note: Schema history is kept in a file on Debezium's volume set; the Debezium chart's defaults apply.
+  - fromVersions: "<1.1.0"
+    from: debezium-server.sink.redis
+    note: The pipeline writes to Kafka only; the other sinks' settings were unused.
+  - fromVersions: "<1.1.0"
+    from: debezium-server.sink.nats
+    note: The pipeline writes to Kafka only; the other sinks' settings were unused.
+  - fromVersions: "<1.1.0"
+    from: debezium-server.sink.http
+    note: The pipeline writes to Kafka only; the other sinks' settings were unused.
+  - fromVersions: "<1.1.0"
+    from: debezium-server.sink.kinesis
+    note: The pipeline writes to Kafka only; the other sinks' settings were unused.
+  - fromVersions: "<1.1.0"
+    from: debezium-server.sink.pubsub
+    note: The pipeline writes to Kafka only; the other sinks' settings were unused.
+  - fromVersions: "<1.1.0"
+    from: debezium-server.sink.pulsar
+    note: The pipeline writes to Kafka only; the other sinks' settings were unused.
+  - fromVersions: "<1.1.0"
+    from: debezium-server.sink.eventhubs
+    note: The pipeline writes to Kafka only; the other sinks' settings were unused.
+  - fromVersions: "<1.1.0"
+    from: debezium-server.format
+    note: Change events are JSON (the Debezium chart's default); Avro and Protobuf need a schema registry this pipeline does not run.

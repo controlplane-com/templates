@@ -2,11 +2,18 @@
 # CDC Pipeline Meta-Template
 # =============================================================================
 # Deploys a complete Change Data Capture pipeline:
-#   - PostgreSQL HA (Patroni + etcd + HAProxy)
-#   - Kafka (KRaft cluster + Kafbat UI)
+#   - PostgreSQL HA (Patroni + etcd + HAProxy), wal_level logical
+#   - Kafka (KRaft cluster)
 #   - Debezium Server (CDC connector: postgres -> kafka)
 #
-# Shared credentials are defined once here and wired to each component.
+# REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. One `dictionary`
+# secret holds the database credentials for PostgreSQL AND Debezium's
+# credentials: keys `username`, `password`, `database`, `sourcePassword` (the
+# same value as `password`) and `kafkaSaslPassword` (the debezium user's Kafka
+# password below). Name it in BOTH credentialsSecretName values below (they
+# must be equal). If it does not exist the deployment WEDGES silently —
+# `cpln logs` returns nothing. See Prerequisites in the README.
+#
 # Internal DNS names are computed automatically from the release name:
 #   PostgreSQL: <release>-postgres-ha-proxy.<gvc>.cpln.local:5432
 #   Kafka:      <release>-cluster.<gvc>.cpln.local:9092
@@ -16,24 +23,6 @@
 # =============================================================================
 # PostgreSQL HA
 # =============================================================================
-# ─── CDC database credentials ─────────────────────────────────────────────────
-# Internal plumbing: the bundled database exists only to serve this pipeline, so
-# these stay values and the chart creates the secret from them. They must match
-# the debezium-server.source.database.* values below, which the chart enforces
-# at render.
-database:
-  username: cdc_user
-  password: "change-me-cdc-pipeline-postgres"
-  name: cdcdb
-  # Debezium uses the `pgoutput` logical-decoding plugin, which requires
-  # PostgreSQL to run with wal_level = logical.
-  #
-  # KNOWN ISSUE: postgres-highly-available hardcodes `wal_level: replica` and
-  # does not read this value. It is validated here as a guard against someone
-  # setting it to something else, but the backing store does NOT currently
-  # honour it — see the README.
-  walLevel: logical
-
 postgres-highly-available:
   replicas: 3
 
@@ -45,11 +34,13 @@ postgres-highly-available:
 
   image: controlplanecorporation/patroni-postgres:0.7
 
+  # Debezium's pgoutput decoding needs wal_level = logical; the chart refuses anything else.
+  walLevel: logical
+
   config:
-    # Name of the dictionary secret THIS chart creates and the bundled
-    # postgres-highly-available reads. Since pgHA 2.5.0 the subchart creates no
-    # credentials secret of its own; the values live in `database:` below.
-    credentialsSecretName: my-cdc-pipeline-db-credentials
+    # REQUIRED PREREQUISITE SECRET (see the top of this file). Must equal
+    # debezium-server.credentialsSecretName.
+    credentialsSecretName: my-cdc-pipeline-credentials
 
   multiZone: false
 
@@ -136,7 +127,8 @@ kafka:
           users: "debezium"
           passwords: "change-me-cdc-pipeline-kafka-debezium"
     acl:
-      superUsers: "User:admin"
+      # The debezium user is a super user so it can create and write its topics (the kafka chart has no way to declare ACLs).
+      superUsers: "User:admin;User:debezium"
       allowEveryoneIfNoAclFound: false
     secrets:
       kraft_cluster_id: "change-me-cdc-pipeline-kraft-cluster-id"
@@ -220,7 +212,8 @@ kafka:
           pattern: java.lang<type=(.+)><>(.+)
 
   kafbat_ui:
-    enabled: true
+    # Off by default: it needs an opaque config secret you create first (see the README), and it is public when on.
+    enabled: false
     deletionProtection: false
     name: kafbat-ui
     image: ghcr.io/kafbat/kafka-ui
@@ -256,7 +249,11 @@ kafka:
 # the release name when left empty. Override only if connecting to
 # external instances not managed by this meta-template.
 debezium-server:
-  image: quay.io/debezium/server:3.0
+  image: quay.io/debezium/server:3.0.8.Final
+
+  # REQUIRED PREREQUISITE SECRET (see the top of this file). Must equal
+  # postgres-highly-available.config.credentialsSecretName.
+  credentialsSecretName: my-cdc-pipeline-credentials
 
   resources:
     cpu: 500m
@@ -268,9 +265,9 @@ debezium-server:
     database:
       hostname: ""  # Auto-computed: <release>-postgres-ha-proxy.<gvc>.cpln.local
       port: 5432
-      name: cdcdb                           # Must match database.name
-      user: cdc_user                        # Must match database.username
-      password: "change-me-cdc-pipeline-postgres" # Must match database.password
+      name: cdcdb       # Must equal the secret's `database` key
+      user: cdc_user    # Must equal the secret's `username` key
+      # password: the secret's `sourcePassword` key (the same value as `password`)
 
     serverName: "dbserver1"
     tableIncludeList: ""
@@ -281,6 +278,7 @@ debezium-server:
       publicationName: "dbz_publication"
       pluginName: "pgoutput"
       slotDropOnStop: false
+      slotFailover: true  # replicas keep a synchronized copy, so the slot survives a database switchover
       heartbeatIntervalMs: 5000
       heartbeatActionQuery: "UPDATE debezium_heartbeat SET ts = now() WHERE id = 1"
 
@@ -290,31 +288,11 @@ debezium-server:
       flushTimeoutMs: 60000
       file:
         filename: "/debezium/data/offsets.dat"
-      redis:
-        address: ""
-        key: "debezium:offsets"
-        password: ""
-        ssl: false
-      jdbc:
-        url: ""
-        user: ""
-        password: ""
-        tableName: "debezium_offsets"
 
     schemaHistory:
       storage: file
       file:
         filename: "/debezium/data/schema-history.dat"
-      redis:
-        address: ""
-        key: "debezium:schema-history"
-        password: ""
-        ssl: false
-      jdbc:
-        url: ""
-        user: ""
-        password: ""
-        tableName: "debezium_schema_history"
 
     errors:
       retryDelayInitialMs: 300
@@ -324,65 +302,12 @@ debezium-server:
   sink:
     type: kafka
     kafka:
-      bootstrapServers: ""                          # Auto-computed: <release>-cluster.<gvc>.cpln.local:9092
+      bootstrapServers: ""         # Auto-computed: <release>-cluster.<gvc>.cpln.local:9092
       topic: ""
       securityProtocol: "SASL_PLAINTEXT"
       saslMechanism: "PLAIN"
-      saslUsername: "debezium"                       # Must match kafka.kafka.listeners.client.sasl.users
-      saslPassword: "change-me-cdc-pipeline-kafka-debezium" # Must match kafka.kafka.listeners.client.sasl.passwords
-
-    redis:
-      address: ""
-      password: ""
-      ssl: false
-      streamName: ""
-
-    nats:
-      url: ""
-      subject: ""
-      username: ""
-      password: ""
-
-    http:
-      url: ""
-      headers: {}
-      authType: ""
-      username: ""
-      password: ""
-      bearerToken: ""
-
-    kinesis:
-      region: ""
-      streamName: ""
-      credentialsProvider: "default"
-      cloudAccount:
-        enabled: false
-        name: ""
-
-    pubsub:
-      projectId: ""
-      topic: ""
-      cloudAccount:
-        enabled: false
-        name: ""
-
-    pulsar:
-      serviceUrl: ""
-      topic: ""
-      authPluginClassName: ""
-      authToken: ""
-
-    eventhubs:
-      connectionString: ""
-      hubName: ""
-
-  format:
-    key: json
-    value: json
-    schemaRegistry:
-      url: ""
-      username: ""
-      password: ""
+      saslUsername: "debezium"      # Must be in kafka.kafka.listeners.client.sasl.users and acl.superUsers
+      # saslPassword: the secret's `kafkaSaslPassword` key (the debezium entry of sasl.passwords)
 
   volumeset:
     capacity: 10

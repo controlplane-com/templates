@@ -260,14 +260,13 @@ The backing database template's own README carries the full per-provider walkthr
 
 ## Rotating the database password
 
-PostgreSQL keeps the password it was initialized with, and a running workload keeps the values it started with, so a rotation takes four steps in order (single-instance; in HA mode follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode) instead):
+PostgreSQL keeps the password it was initialized with, and a running workload keeps the values it started with, so a rotation takes three steps in order (single-instance; in HA mode follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode) instead):
 
 1. Change it in the database: `ALTER ROLE DB_USERNAME PASSWORD 'NEW_PASSWORD';` (connected as that user, from inside the GVC; letters, digits, `-` and `_` only).
 2. Update the secret: `cpln secret edit SECRET_NAME`.
-3. Redeploy the database and wait for it to be ready: `cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME`. Wait until `cpln workload get-deployments` no longer shows `will be restarted shortly`; `ready: true` alone can still describe the old replica.
-4. Redeploy Twenty: `cpln workload force-redeployment RELEASE_NAME-twenty-worker --gvc GVC_NAME`, then `RELEASE_NAME-twenty`.
+3. Right away, redeploy Twenty: `cpln workload force-redeployment RELEASE_NAME-twenty-worker --gvc GVC_NAME`, then `RELEASE_NAME-twenty`, and wait until `get-deployments` no longer shows `will be restarted shortly` — `ready: true` alone can still describe the old replica. Do not redeploy the database: PostgreSQL reads the secret only when it is first initialized, so restarting it only adds downtime.
 
-Twenty cannot reach its database from the database restart in step 3 until its own redeploy is serving (about 7 minutes measured with one replica), so rotate in a quiet window.
+Connections the app already has open keep working after `ALTER ROLE`; new ones fail until its redeploy finishes, so redeploy right away and rotate in a quiet window.
 
 ## Rotating the database password in HA mode
 
@@ -326,7 +325,7 @@ The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), s
 - **`local` storage uses a shared (read-write-many) volume mounted by both the server and the worker**, so attachments are visible to background jobs. Shared volumes support expansion only — **no snapshots** — and exist in a single location, so `storage.type: s3` remains the durable choice for production and is required for `twenty.replicas > 1`.
 
 - **Both prerequisite secrets must exist before install** — a missing app-key or database credentials secret wedges the deployment with zero log lines; see Prerequisites for the diagnostic.
-- **Changing the database credentials secret does not change the database password** — PostgreSQL keeps the password it was initialized with. Rotate with `ALTER ROLE` plus forced redeployments — see [Rotating the database password](#rotating-the-database-password).
+- **Changing the database credentials secret does not change the database password** — PostgreSQL keeps the password it was initialized with. Rotate with `ALTER ROLE` plus a forced redeployment of Twenty (not the database) — see [Rotating the database password](#rotating-the-database-password).
 - **Rotating the database password in HA mode needs a leader switchover first** — follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode). A plain redeploy can promote a member still holding the old password and split the cluster.
 - **On a public endpoint, whoever reaches the URL first owns the CRM.** Sign up immediately after install, or set `publicAccess.enabled: false` until you are ready.
 - **Treat the app key as write-once.** Changing `secrets.name` without pointing `secrets.fallbackName` at the old key makes stored OAuth tokens, TOTP secrets and app variables undecryptable and logs everyone out.

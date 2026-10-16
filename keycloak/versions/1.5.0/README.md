@@ -33,7 +33,7 @@ cpln secret create-dictionary --name my-keycloak-db-credentials \
 Set its name in the key of the store you use: `postgresHA.config.credentialsSecretName` (HA, the default) or `postgres.config.credentialsSecretName` (single-instance). Secret names are org-wide, so give each keycloak release its own secret.
 
 - **`database` must be URL-safe** (letters, digits, `_`): Keycloak's JDBC URL is assembled from it at container start. The snippet's hex password needs no escaping either.
-- **PostgreSQL reads the secret only when its data is first initialized.** To change the password later, run `ALTER ROLE` first, then edit the secret (`cpln secret edit my-keycloak-db-credentials`), then force a redeployment of the database, wait for it to be ready, and redeploy Keycloak: `cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME` (single-instance), then `RELEASE_NAME-keycloak`. In HA mode follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode) instead. A running workload keeps the values it started with.
+- **PostgreSQL reads the secret only when its data is first initialized.** To change the password later, run `ALTER ROLE` first, then edit the secret (`cpln secret edit my-keycloak-db-credentials`), then right away redeploy Keycloak: `cpln workload force-redeployment RELEASE_NAME-keycloak --gvc GVC_NAME`. Do not redeploy the database: PostgreSQL reads the secret only when it is first initialized, so restarting it only adds downtime. In HA mode follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode) instead. A running workload keeps the values it started with.
 
 **2. Admin login** — the bootstrap admin guards a login form on the public endpoint:
 

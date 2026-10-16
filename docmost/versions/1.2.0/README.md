@@ -189,14 +189,13 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`c
 
 ## Rotating the database password
 
-PostgreSQL keeps the password it was initialized with, and a running workload keeps the values it started with, so a rotation takes four steps in order:
+PostgreSQL keeps the password it was initialized with, and a running workload keeps the values it started with, so a rotation takes three steps in order:
 
 1. Change it in the database: `ALTER ROLE DB_USERNAME PASSWORD 'NEW_PASSWORD';` (`DB_USERNAME` is the secret's `username`; connect as that user from inside the GVC).
 2. Update the secret: `cpln secret edit SECRET_NAME`.
-3. Redeploy the database and wait for it to be ready: `cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME`.
-4. Redeploy Docmost: `cpln workload force-redeployment RELEASE_NAME-docmost --gvc GVC_NAME`.
+3. Right away, redeploy Docmost: `cpln workload force-redeployment RELEASE_NAME-docmost --gvc GVC_NAME`, and wait until `get-deployments` no longer shows `will be restarted shortly` — `ready: true` alone can still describe the old replica. Do not redeploy the database: PostgreSQL reads the secret only when it is first initialized, so restarting it only adds downtime.
 
-Docmost cannot reach its database from step 1 until its own redeploy finishes (about 4 minutes in testing), so rotate during a quiet period.
+Connections the app already has open keep working after `ALTER ROLE`; new ones fail until its redeploy finishes, so redeploy right away and rotate in a quiet window.
 
 ## Upgrading from 1.1.0
 
@@ -251,7 +250,7 @@ Check the object size before restoring from one.
 ## Important Notes
 
 - **Both prerequisite secrets must exist before install** — a missing `secrets.name` or database credentials secret wedges the deployment with zero log lines; see Prerequisites for the diagnostic.
-- **Rotating the database password needs `ALTER ROLE` plus forced redeployments** — see [Rotating the database password](#rotating-the-database-password).
+- **Rotating the database password needs `ALTER ROLE` plus a forced redeployment of Docmost** (not the database) — see [Rotating the database password](#rotating-the-database-password).
 - **`APP_SECRET` is write-once** — rotating it logs out every user and invalidates outstanding invite/share links; stored documents are unaffected.
 - **Secure your workspace on first visit** — the first browser session to reach the UI creates the admin account and workspace; install and set it up promptly.
 - **`replicas > 1` requires `storage.type: s3`** — local attachments live on per-replica volumes and would 404 across replicas; the chart refuses to render otherwise.

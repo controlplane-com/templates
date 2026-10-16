@@ -32,8 +32,8 @@ imports:
         help: >-
           PostgreSQL reads these values only when its data directory is first initialized, and ToolJet
           connects with them (it creates its `tooljet_db` database alongside). To change the password later,
-          run `ALTER ROLE ... PASSWORD` first, then update the secret and force a redeployment of the
-          database and then ToolJet. Keep the password URL-safe (letters, digits, `-`, `_`): it is placed in
+          run `ALTER ROLE ... PASSWORD` first, then update the secret and right away force a
+          redeployment of ToolJet (not the database). Keep the password URL-safe (letters, digits, `-`, `_`): it is placed in
           a connection URL as-is.
       internalAccess.type:
         description: >-

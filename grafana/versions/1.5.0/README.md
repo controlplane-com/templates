@@ -25,7 +25,7 @@ This app deploys [Grafana](https://grafana.com/oss/grafana/) OSS — dashboards 
      --entry database=grafana
    ```
 
-   Postgres reads it only when its data directory is first initialized; to change the password later, run `ALTER ROLE` first, then update the secret and force a redeployment of the database and Grafana workloads.
+   Postgres reads it only when its data directory is first initialized; to change the password later, run `ALTER ROLE` first, then update the secret and right away force a redeployment of the Grafana workload (single-instance; in HA mode see the README's HA rotation steps). Do not redeploy the database: PostgreSQL reads the secret only when it is first initialized, so restarting it only adds downtime.
 
 2. **Admin password** (`admin.passwordSecretName`) — the first-boot password for the `admin` login, which is reachable from the public internet while `publicAccess.enabled: true`. Use your own strong password. Needed only for the initial install: after your first login you can set `admin.applyPassword: false` and delete it.
 

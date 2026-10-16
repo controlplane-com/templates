@@ -255,14 +255,13 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`c
 
 ## Rotating the database password
 
-PostgreSQL keeps the password it was initialized with, and a running workload keeps the values it started with, so a rotation takes four steps in order (single-instance; in HA mode follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode) instead):
+PostgreSQL keeps the password it was initialized with, and a running workload keeps the values it started with, so a rotation takes three steps in order (single-instance; in HA mode follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode) instead):
 
 1. Change it in the database: `ALTER ROLE DB_USERNAME PASSWORD 'NEW_PASSWORD';` (connected as that user, from inside the GVC; letters, digits, `-` and `_` only).
 2. Update the secret: `cpln secret edit SECRET_NAME`.
-3. Redeploy the database and wait for it to be ready: `cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME`.
-4. Redeploy NocoDB: `cpln workload force-redeployment RELEASE_NAME-nocodb --gvc GVC_NAME`.
+3. Right away, redeploy NocoDB: `cpln workload force-redeployment RELEASE_NAME-nocodb --gvc GVC_NAME`, and wait until `get-deployments` no longer shows `will be restarted shortly` — `ready: true` alone can still describe the old replica. Do not redeploy the database: PostgreSQL reads the secret only when it is first initialized, so restarting it only adds downtime.
 
-NocoDB cannot reach its database from step 1 until step 4 finishes (about 6–7 minutes measured with one replica), so rotate in a quiet window.
+Connections the app already has open keep working after `ALTER ROLE`; new ones fail until its redeploy finishes, so redeploy right away and rotate in a quiet window.
 
 ## Rotating the database password in HA mode
 
@@ -327,7 +326,7 @@ The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), s
 - **`nocodb.siteUrl` must match the URL browsers use** — it drives invite/reset links and the auth cookie secure flag; leave it empty unless a custom domain is in play.
 - **With SMTP off, invitations and password resets cannot be delivered** — configure `smtp.*` before inviting collaborators.
 - **Webhooks to same-GVC targets are blocked by default** — NocoDB's SSRF guard refuses private-network addresses, so a webhook aimed at another workload in your GVC (e.g. an internal n8n at `<workload>.<gvc>.cpln.local`) is rejected with a message to set `NC_ALLOW_LOCAL_HOOKS=true`. Set `nocodb.allowLocalWebhooks: true` to allow it. Leave it off if webhooks only ever call the public internet.
-- **Rotating the database password needs `ALTER ROLE` plus forced redeployments** — see [Rotating the database password](#rotating-the-database-password).
+- **Rotating the database password needs `ALTER ROLE` plus a forced redeployment of NocoDB** (not the database) — see [Rotating the database password](#rotating-the-database-password).
 - **Rotating the database password in HA mode needs a leader switchover first** — follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode). A plain redeploy can promote a member still holding the old password and split the cluster.
 - **Uninstalling deletes all data** — `helm uninstall` removes the database and storage volumesets with the release, so bases and local attachments are gone. Back up first if you need them.
 - **SSO/SAML/OIDC, audit logs and row-level security are Enterprise features** — they are in the same image but need a purchased licence key that this template never sets.

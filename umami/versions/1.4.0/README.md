@@ -177,14 +177,13 @@ The backing template's README has the full per-provider walkthrough.
 
 ## Rotating the database password
 
-PostgreSQL keeps the password it was initialized with, and a running workload keeps the values it started with, so a rotation takes four steps in order (single-instance; in HA mode follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode) instead):
+PostgreSQL keeps the password it was initialized with, and a running workload keeps the values it started with, so a rotation takes three steps in order (single-instance; in HA mode follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode) instead):
 
 1. Change it in the database: `ALTER ROLE DB_USERNAME PASSWORD 'NEW_PASSWORD';` (connected as that user, from inside the GVC).
 2. Update the secret: `cpln secret edit SECRET_NAME`.
-3. Redeploy the database and wait for it to be ready: `cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME`.
-4. Redeploy Umami: `cpln workload force-redeployment RELEASE_NAME-umami --gvc GVC_NAME`, and wait until `get-deployments` no longer shows `will be restarted shortly` — `ready: true` alone can still describe the old replica.
+3. Right away, redeploy Umami: `cpln workload force-redeployment RELEASE_NAME-umami --gvc GVC_NAME`, and wait until `get-deployments` no longer shows `will be restarted shortly` — `ready: true` alone can still describe the old replica. Do not redeploy the database: PostgreSQL reads the secret only when it is first initialized, so restarting it only adds downtime.
 
-Logins fail from when the database restarts in step 3 until step 4 finishes (about 2½ minutes measured with one replica), so rotate in a quiet window.
+Umami keeps serving on the database connections it already has open, so with one replica logins failed only for a few seconds while its replica was swapped (measured). Do step 3 right away: if those connections drop before Umami restarts, it cannot open new ones.
 
 ## Rotating the database password in HA mode
 
@@ -246,7 +245,7 @@ The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), s
   Firewall changes take up to a couple of minutes (30–150 s) to propagate, so re-test the public URL rather than trusting the first response.
 - **Tracking does not collect anything until `publicAccess.enabled: true`** — browsers on the sites you track must reach `/script.js` and `/api/send`. Public access is a deliberate second step, not an optional one, if you are collecting analytics.
 - **Create both prerequisite secrets before installing.** A missing app secret or database credentials secret leaves the workload waiting on something that does not exist, with zero log lines — see Prerequisites for the diagnostic.
-- **Rotating the database password needs `ALTER ROLE` plus forced redeployments** — editing the secret alone changes nothing; see [Rotating the database password](#rotating-the-database-password).
+- **Rotating the database password needs `ALTER ROLE` plus a forced redeployment of Umami** (not the database) — editing the secret alone changes nothing; see [Rotating the database password](#rotating-the-database-password).
 - **Rotating the database password in HA mode needs a leader switchover first** — follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode). A plain redeploy can promote a member still holding the old password and split the cluster.
 - **The first `helm upgrade` after an install re-applies the bundled Postgres** — including the upgrade that turns public access on. Expect Umami to be briefly unreachable (~2 minutes) while the database restarts; later upgrades do not do this.
 - **Ad blockers block the default `/script.js` and `/api/send`** — set `tracker.scriptName` / `tracker.collectEndpoint` to custom paths to reduce blocking.

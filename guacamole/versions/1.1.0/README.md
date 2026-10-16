@@ -26,7 +26,7 @@ cpln secret create-dictionary --name my-guacamole-db-credentials \
   --entry database=guacamole
 ```
 
-Set `postgres.config.credentialsSecretName` to that name. Postgres reads it only when its data directory is first initialized; to change the password later, run `ALTER ROLE` first, then update the secret and force a redeployment of both workloads.
+Set `postgres.config.credentialsSecretName` to that name. Postgres reads it only when its data directory is first initialized; to change the password later, run `ALTER ROLE` first, then update the secret and right away force a redeployment of the Guacamole workload. Do not redeploy the database: PostgreSQL reads the secret only when it is first initialized, so restarting it only adds downtime.
 
 **2. Admin login** — exactly `username` and `password`. It replaces Guacamole's well-known `guacadmin`/`guacadmin` account before Tomcat ever serves a request:
 
@@ -166,7 +166,7 @@ For the bucket, [cloud account](https://docs.controlplane.com/guides/create-clou
 - **`guacadmin`/`guacadmin` is never valid here** — the stock account is renamed and re-hashed before Tomcat binds a port.
 - **Single replica by design.** Guacamole keeps auth tokens in each Tomcat's memory with no cross-instance sharing, and the platform offers no session affinity, so a second replica would randomly log users out. Any restart — an upgrade, a replica reschedule, or rotating any referenced secret — **drops active desktop sessions and logs everyone out**. Nothing persisted is lost.
 - **Public access is off by default.** This gateway fronts your internal machines, so expose it deliberately (see Connecting) rather than by default. Firewall changes take ~30 s to a few minutes to propagate.
-- **Rotating the database secret needs `ALTER ROLE` first and a forced redeployment** (`cpln workload force-redeployment`) of both workloads — a running workload keeps the values it started with.
+- **Rotating the database secret needs `ALTER ROLE` first and a forced redeployment** (`cpln workload force-redeployment`) of the Guacamole workload, not the database — a running workload keeps the values it started with.
 - **Connections, users and history survive reinstall** in the Postgres volumeset; delete that volumeset to wipe everything.
 
 ## Links

@@ -26,7 +26,7 @@ cpln secret create-dictionary --name my-gitea-db-credentials \
   --entry database=gitea
 ```
 
-Set `postgres.config.credentialsSecretName` to that name. Postgres reads it only when its data directory is first initialized; to change the password later, run `ALTER ROLE` first, then update the secret and force a redeployment of both workloads.
+Set `postgres.config.credentialsSecretName` to that name. Postgres reads it only when its data directory is first initialized; to change the password later, run `ALTER ROLE` first, then update the secret and right away force a redeployment of the Gitea workload. Do not redeploy the database: PostgreSQL reads the secret only when it is first initialized, so restarting it only adds downtime.
 
 **2. Gitea auth** — the admin login and signing keys, with exactly these six keys:
 

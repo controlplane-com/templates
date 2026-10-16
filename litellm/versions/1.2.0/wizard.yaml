@@ -70,7 +70,7 @@ steps:
         help: >-
           PostgreSQL reads these values only when its data directory is first initialized, and the proxy
           connects with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then update
-          the secret and force a redeployment of PostgreSQL, then of the proxy.
+          the secret and right away force a redeployment of the proxy (not the database).
         ref:
           kind: secret
           format: name

@@ -28,7 +28,7 @@ imports:
         help: >-
           PostgreSQL reads these values only when its data directory is first initialized, and Infisical
           connects with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then update
-          the secret and force a redeployment of the database and then Infisical. Keep the password and
+          the secret and right away force a redeployment of Infisical (not the database). Keep the password and
           database name URL-safe (letters, digits, `-`, `_`): they are placed in a connection URL as-is.
       internalAccess.type:
         description: >-

@@ -77,7 +77,7 @@ steps:
             help: >-
               PostgreSQL reads these values only when its data directory is first initialized, and Langfuse
               connects with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then update
-              the secret and force a redeployment of PostgreSQL, then of the Langfuse workloads.
+              the secret and right away force a redeployment of the Langfuse workloads (not the database).
             ref:
               kind: secret
               format: name

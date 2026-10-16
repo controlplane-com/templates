@@ -39,7 +39,7 @@ LiteLLM is an OpenAI-compatible LLM gateway/proxy: one endpoint in front of 100+
   ```
 
   - **All three values must be URL-safe** (letters, digits, `_`): the proxy's `DATABASE_URL` is assembled from them at container start. The snippet's hex password is URL-safe.
-  - **Postgres reads the secret only when its data directory is first initialized.** To change the password later, run `ALTER ROLE` first, then edit the secret (`cpln secret edit my-litellm-db-credentials`), then force a redeployment of the Postgres workload, wait until `get-deployments` no longer shows `will be restarted shortly` (`ready: true` alone can still describe the old replica), and redeploy the proxy (`cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME`, then `RELEASE_NAME-litellm`). A running workload keeps the values it started with. With one replica, database-backed endpoints fail for about 2–3 minutes during the rotation.
+  - **Postgres reads the secret only when its data directory is first initialized.** To change the password later, run `ALTER ROLE` first, then edit the secret (`cpln secret edit my-litellm-db-credentials`), then right away redeploy the proxy (`cpln workload force-redeployment RELEASE_NAME-litellm --gvc GVC_NAME`) and wait until `get-deployments` no longer shows `will be restarted shortly` (`ready: true` alone can still describe the old replica). A running workload keeps the values it started with. Do not redeploy the database: PostgreSQL reads the secret only when it is first initialized, so restarting it only adds downtime. Connections the app already has open keep working after `ALTER ROLE`; new ones fail until its redeploy finishes, so redeploy right away and rotate in a quiet window.
 
 ## Configuration
 
@@ -172,7 +172,7 @@ Check the object size before restoring from one.
 ## Important Notes
 
 - **Both prerequisite secrets must exist before install** — `secrets.name` (master key, salt key, every `providerEnv` key) and `postgres.config.credentialsSecretName` (database `username`, `password`, `database`). A missing secret wedges the deployment with zero log lines — see Prerequisites for how to diagnose it.
-- **Rotating the database password needs `ALTER ROLE` plus forced redeployments** — Postgres keeps the password it was initialized with, and a running workload keeps the values it started with (see Prerequisites).
+- **Rotating the database password needs `ALTER ROLE` plus a forced redeployment of the proxy** (not the database) — Postgres keeps the password it was initialized with, and a running workload keeps the values it started with (see Prerequisites).
 - **`LITELLM_SALT_KEY` is write-once — never rotate it.** It encrypts stored provider keys; changing it corrupts them. The master key may be rotated.
 - **The endpoint is key-gated, not open.** Public access still requires a valid master or virtual key — hand out virtual keys (with budgets/limits) rather than the master key.
 - **Keep Redis on for `replicas >= 2`.** Without it, each replica rate-limits in-memory, so the effective limit is N× the configured value.

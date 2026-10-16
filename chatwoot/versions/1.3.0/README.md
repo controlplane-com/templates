@@ -253,12 +253,13 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`c
 
 ## Rotating the database password
 
-PostgreSQL keeps the password it was initialized with, and a running workload keeps the values it started with, so a rotation takes four steps in order (single-instance; in HA mode follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode) instead):
+PostgreSQL keeps the password it was initialized with, and a running workload keeps the values it started with, so a rotation takes three steps in order (single-instance; in HA mode follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode) instead):
 
 1. Change it in the database: `ALTER ROLE DB_USERNAME PASSWORD 'NEW_PASSWORD';` (connected as that user, from inside the GVC).
 2. Update the secret: `cpln secret edit SECRET_NAME`.
-3. Redeploy the database and wait for it to be ready: `cpln workload force-redeployment RELEASE_NAME-postgres --gvc GVC_NAME`.
-4. Redeploy Chatwoot: `cpln workload force-redeployment RELEASE_NAME-chatwoot-worker --gvc GVC_NAME`, then `RELEASE_NAME-chatwoot`.
+3. Right away, redeploy Chatwoot: `cpln workload force-redeployment RELEASE_NAME-chatwoot-worker --gvc GVC_NAME`, then `RELEASE_NAME-chatwoot`, and wait until `get-deployments` no longer shows `will be restarted shortly` — `ready: true` alone can still describe the old replica. Do not redeploy the database: PostgreSQL reads the secret only when it is first initialized, so restarting it only adds downtime.
+
+Connections the app already has open keep working after `ALTER ROLE`; new ones fail until its redeploy finishes, so redeploy right away and rotate in a quiet window.
 
 ## Rotating the database password in HA mode
 
@@ -318,7 +319,7 @@ The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), s
 - **Choose the database mode before installing — it cannot be switched later.** Flipping `postgresHA.enabled` / `postgres.enabled` on a live release points Chatwoot at a different, empty database (separate volume set, and a different PostgreSQL major: 17.5 for the HA path, 18 for single-instance), so the app re-runs onboarding and your existing data is orphaned rather than migrated.
 
 - **Both prerequisite secrets must exist before install** — a missing `secrets.name` or database credentials secret wedges the deployment with zero log lines; see Prerequisites for the diagnostic.
-- **Rotating the database password needs `ALTER ROLE` plus forced redeployments** — see [Rotating the database password](#rotating-the-database-password).
+- **Rotating the database password needs `ALTER ROLE` plus a forced redeployment of Chatwoot** (not the database) — see [Rotating the database password](#rotating-the-database-password).
 - **Complete the onboarding wizard promptly** — the first browser session to reach the endpoint creates the super admin account with no email confirmation.
 - **The bundled database image must carry pgvector** — Chatwoot's schema runs `CREATE EXTENSION "vector"`. The HA path has it natively; in single-instance mode keep `postgres.image` on a pgvector build (the chart refuses to render against a stock `postgres:` image).
 - **`chatwoot.replicas > 1` requires `storage.type` `s3` or `s3-compatible`** — local attachments live on a per-replica volumeset; the chart refuses to render otherwise.

@@ -1,3 +1,12 @@
+# Release Notes - Version 3.9.0
+
+## What's New
+
+- **Suspend switch**: `suspend: true` stops every workload in the release (Redis, Sentinel and the backup job) while keeping its volume sets and secrets; set it back to `false` to start again. With persistence on, the data is reloaded at start.
+- **Adding persistence to a running release**: turn on `redis.persistence.enabled` (and `sentinel.persistence.enabled`) together with `suspend: true`, then set `suspend: false` in the next upgrade. Data held only in memory is lost, so turn persistence on at install when you can.
+- **README**: reorganized around how the template works and how to set it up, with all version-upgrade notes in one Upgrading section.
+
+
 # Release Notes - Version 3.8.0
 
 ## What's New

@@ -1,0 +1,815 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: CockroachDB
+# The chart lists its locations and scales every other GVC location to zero (defaultOptions 0/0).
+gvc:
+  minLocations: 1
+
+steps:
+  - id: locations
+    title: Locations
+    description: Where the CockroachDB nodes run, and how many run in each location.
+    fields:
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '2.0.0') < 0
+        text: >-
+          This release runs a 1.x version, which created its own GVC. Upgrading it to 2.0.0 would delete
+          that GVC with every workload, volume set and identity in it, so the upgrade is blocked. Back up
+          the cluster, install 2.0.0 as a new release under another name (secret names are org-wide),
+          restore into it, move your applications to the new release's endpoint, then uninstall the old
+          release against the GVC you first installed it into.
+      - type: note
+        text: Surviving the loss of a whole location needs at least three locations.
+        textExpression: >-
+          size(self.locations) >= 3 ?
+          'With three or more locations, the first deploy makes every location a region of the database and sets the survival goal to REGION: the cluster keeps serving when a whole location is lost. If that setup does not complete, the start log of the first node says so.' :
+          'Surviving the loss of a whole location needs at least three locations. With one or two, the first deploy skips the region setup.'
+      - type: note
+        when: >-
+          context.gvcLocations != null && self.locations.exists(l, l.name != '') &&
+          context.gvcLocations.exists(g, !(g in self.locations.map(l, l.name)))
+        text: GVC locations not listed here run nothing.
+        textExpression: >-
+          'GVC locations not listed here run nothing: ' +
+          context.gvcLocations.filter(g, !(g in self.locations.map(l, l.name))).join(', ') + '.'
+      - type: note
+        severity: warning
+        when: context.mode == 'upgrade'
+        text: >-
+          Check that every node is live first, with `cockroach node status --insecure` from a node: if the
+          nodes of a location are down, wait for them to come back before you upgrade. Restarting nodes in
+          the remaining locations during the outage exceeds the cluster's fault tolerance, and the ranges
+          on those nodes are briefly unavailable.
+      - path: locations
+        type: list
+        label: Locations
+        required: true
+        minItems: 1
+        uniqueBy: [name]
+        widget: table
+        newItem: { name: "", replicas: 3 }
+        itemLabel: "item.replicas == null ? item.name : item.name + ' × ' + string(item.replicas)"
+        description: One entry per location; replicas are the CockroachDB nodes in that location.
+        docs: "#locations"
+        help: >-
+          Every location you list must already be in the GVC: a node with no data yet refuses to
+          initialise when the GVC lacks one of them. Removing a location does not drain its nodes, and
+          they refuse to start again: decommission them before you remove the location.
+        item:
+          type: object
+          fields:
+            - path: name
+              type: ref
+              label: Location
+              required: true
+              ref: { kind: location, scope: gvc, format: name, mustExist: error }
+            - path: replicas
+              type: integer
+              label: Replicas
+              required: true
+              min: 1
+              widget: stepper
+          rules:
+            - rule: context.gvcLocations == null || item.name == '' || item.name in context.gvcLocations
+              paths: [name]
+              message: >-
+                This location is not in the target GVC. Add it to the GVC first: no node can run there, and
+                nodes that hold no data yet refuse to start while it is missing.
+            - rule: item.replicas == null || item.replicas >= 1
+              mirrors: cockroach.validateReplicas
+              paths: [replicas]
+              message: >-
+                Every location needs at least 1 replica. To stop running in a location, remove it from
+                the list.
+      - path: multiZone
+        type: boolean
+        label: Spread nodes across zones
+        description: >-
+          Spreads the nodes across the availability zones of each location. Confirm that every location
+          of the GVC supports it first: one that does not wedges the workload with no error.
+        help: >-
+          Measured on `aws-us-west-2`, where a stateful workload with a block volume set wedges, while
+          `aws-us-east-1` and `aws-us-east-2` were unaffected. Check with your Control Plane contact if
+          you are unsure, and leave it off if you are.
+        docs: "#image-and-multi-zone-placement"
+    rules:
+      - rule: size(self.locations) > 0
+        mirrors: cockroach.validateLocations
+        paths: [locations]
+        message: List at least one location.
+      - rule: isUnique(self.locations.filter(l, l.name != '').map(l, l.name))
+        mirrors: cockroach.validateUniqueLocations
+        paths: [locations]
+        message: >-
+          List each location once. A duplicate produces duplicate join hosts and a failing `ADD REGION`.
+      - rule: >-
+          self.locations.exists(l, l.replicas == null) ||
+          sum(self.locations.map(l, l.replicas)) != 1
+        mirrors: cockroach.validateNotSingleNode
+        paths: [locations]
+        message: >-
+          A single node cannot start: each node joins every other node, so one node has nothing to
+          join. Use at least 3 replicas in total; 3 in one location is the smallest supported shape.
+      - rule: >-
+          self.locations.exists(l, l.replicas == null) ||
+          sum(self.locations.map(l, l.replicas)) != 2
+        severity: info
+        paths: [locations]
+        message: >-
+          Use at least 3 replicas in total, matching CockroachDB's default replication factor of 3;
+          3 in one location is the smallest supported shape.
+      # secret.yaml: PRIMARY REGION, ADD REGION and SURVIVE REGION FAILURE run on the first deploy only (FRESH_INIT),
+      # and only with three or more locations.
+      # A 1.x upgrade is blocked by the root rule, and its carried locations are the new default, not the user's edit.
+      - when: >-
+          size(self.locations.filter(l, l.name != '')) >= 3 &&
+          (context.fromVersion == null || semverCompare(context.fromVersion, '2.0.0') >= 0)
+        rule: >-
+          oldSelf == null ||
+          self.locations.all(l, l.name == '' || oldSelf.locations.exists(o, o.name == l.name))
+        severity: info
+        paths: [locations]
+        messageExpression: >-
+          'The regions and the survival goal are set on the first deploy only, so ' + self.database.name +
+          ' gets no region for ' +
+          self.locations.filter(l, l.name != '' && !oldSelf.locations.exists(o, o.name == l.name)).map(l, l.name).join(', ') +
+          '. Run `SHOW REGIONS FROM DATABASE "' + self.database.name + '";` on a node. If it lists regions, add the new ones with ' +
+          self.locations.filter(l, l.name != '' && !oldSelf.locations.exists(o, o.name == l.name)).map(l, '`ALTER DATABASE "' + self.database.name + '" ADD REGION "' + l.name + '";`').join(' ') +
+          '. If it lists none, run `ALTER DATABASE "' + self.database.name + '" PRIMARY REGION "' +
+          self.locations.filter(l, l.name != '')[0].name + '";` and ' +
+          self.locations.filter(l, l.name != '' && l.name != self.locations.filter(f, f.name != '')[0].name).map(l, '`ALTER DATABASE "' + self.database.name + '" ADD REGION "' + l.name + '";`').join(' ') +
+          '. Then run `ALTER DATABASE "' + self.database.name + '" SURVIVE REGION FAILURE;`.'
+        message: >-
+          The regions and the survival goal are set on the first deploy only, so the database gets no region
+          for an added location. Run `SHOW REGIONS FROM DATABASE` on a node. If it lists regions, add the new
+          ones with `ALTER DATABASE ... ADD REGION`; if it lists none, set `PRIMARY REGION` to the first
+          location and `ADD REGION` for each other one. Then run `ALTER DATABASE ... SURVIVE REGION FAILURE`.
+      - when: context.fromVersion == null || semverCompare(context.fromVersion, '2.0.0') >= 0
+        rule: >-
+          oldSelf == null ||
+          oldSelf.locations.all(o, self.locations.exists(l, l.name == o.name))
+        severity: info
+        paths: [locations]
+        messageExpression: >-
+          'Removing a location does not drain its nodes, and they refuse to start again. Decommission the nodes in ' +
+          oldSelf.locations.filter(o, !self.locations.exists(l, l.name == o.name)).map(o, o.name).join(', ') +
+          ' before you apply this change: `cockroach node status --insecure` on a node lists their ids with their locality, then run `cockroach node decommission <ids> --insecure`.'
+        message: >-
+          Removing a location does not drain its nodes, and they refuse to start again. Decommission them
+          before you apply this change: `cockroach node status --insecure` on a node lists their ids with
+          their locality, then run `cockroach node decommission <ids> --insecure`.
+      # Every location and replica count is in CRDB_LOCATIONS / CRDB_REPLICAS, which both the CockroachDB and the
+      # PgBouncer containers read (_helpers.tpl cockroach.locationEnv).
+      - when: context.fromVersion == null || semverCompare(context.fromVersion, '2.0.0') >= 0
+        rule: oldSelf == null || self.locations == oldSelf.locations
+        severity: info
+        paths: [locations]
+        messageExpression: >-
+          'Changing the locations or their replica counts restarts every CockroachDB node' +
+          (self.pgbouncer.enabled ? ' and every PgBouncer replica.' : '.')
+        message: Changing the locations or their replica counts restarts every CockroachDB node.
+
+  - id: cluster
+    title: Cluster
+    description: The CockroachDB image, the compute of each node, and the database the first deploy creates.
+    fields:
+      - type: note
+        text: >-
+          The cluster runs in insecure mode: there are no SQL passwords, and the firewall settings under
+          Access and pooling are the only access control. See [Connecting](#connecting).
+      - type: note
+        text: >-
+          Your application must retry transient errors: they reach clients during failover events, such
+          as a location outage or a rolling restart, while connections move and leader elections complete.
+      - path: image
+        type: string
+        format: image
+        label: CockroachDB image
+        required: true
+        # The chart writes the image unquoted (workload-cockroach.yaml:12); `format: image` refuses every value
+        # YAML would read as another type, so no pattern of its own (guide 17.3.1).
+        docs: "#image-and-multi-zone-placement"
+        rules:
+          - rule: oldSelf == null || self.image == oldSelf.image
+            severity: info
+            message: Changing the CockroachDB image restarts every node.
+      - path: resources
+        type: resources
+        label: Node resources
+        required: true
+        description: Per node.
+        docs: "#resources"
+        maxRatio: 4
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+        rules:
+          - rule: >-
+              oldSelf == null ||
+              (cpuMillicores(self.resources.cpu) == cpuMillicores(oldSelf.resources.cpu) &&
+              memoryBytes(self.resources.memory) == memoryBytes(oldSelf.resources.memory))
+            severity: info
+            message: Changing the node resources restarts every CockroachDB node.
+      - path: database.name
+        type: string
+        label: Database name
+        required: true
+        immutable: >-
+          CockroachDB creates the database on the first deploy only, and the optional PgBouncer and
+          backup job connect to it by this name.
+        help: >-
+          With three or more locations the region setup uses the name unquoted, so it must not be a reserved
+          SQL keyword such as `order` or `user`.
+        docs: "#database"
+        rules:
+          # The start script runs ALTER DATABASE with the name unquoted once bash joins the words (secret.yaml), and
+          # PgBouncer's readiness check puts it inside a double-quoted YAML string (workload-pgbouncer.yaml). A rule,
+          # not a `pattern` (§8.11 exception): the field is immutable, so a release installed outside the wizard
+          # with a name the chart accepted keeps it; only a new value is checked.
+          - rule: >-
+              (oldSelf != null && self.database.name == oldSelf.database.name) ||
+              self.database.name.matches('^[a-z_][a-z0-9_]*$')
+            message: Use lowercase letters, digits and underscores, starting with a letter or an underscore.
+      - path: database.user
+        type: string
+        label: Database user
+        required: true
+        immutable: CockroachDB creates this user on the first deploy only.
+        description: Granted ALL on the database. Like `root`, it has no password.
+        rules:
+          # PgBouncer's start script writes the user into a single-quoted printf format (secret-pgbouncer-startup.yaml).
+          # A rule, not a `pattern`, for the same reason as the database name: only a new value is checked.
+          - rule: >-
+              (oldSelf != null && self.database.user == oldSelf.database.user) ||
+              self.database.user.matches('^[a-z0-9_][a-z0-9_.-]*$')
+            message: >-
+              Use lowercase letters, digits, underscores, dots and hyphens, starting with a letter, a digit or
+              an underscore.
+
+  - id: storage
+    title: Storage
+    description: The volume each node keeps its data on.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity per node
+            unit: GiB
+            min: 10
+            # general-purpose-ssd: 10 to 65536 GiB (nodelibs/schema volumeSet.ts).
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            help: >-
+              Uninstalling the release deletes the volume set, after a final snapshot that is kept for 7
+              days.
+            docs: "/reference/volumeset#capacity-and-billing"
+        rules:
+          - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+            paths: [volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: volumeset.autoscaling.enabled
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
+            paths: [volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+
+  - id: access
+    title: Access and pooling
+    description: The optional PgBouncer pooler, and who can connect.
+    sections:
+      - id: pgbouncer
+        title: Connection pooler (PgBouncer)
+        toggle: pgbouncer.enabled
+        description: >-
+          While it is on, clients connect to PgBouncer, which pools connections to every node in every
+          location, and the nodes accept connections from this release's own workloads only. While it is
+          off, clients connect to the nodes directly.
+        docs: "#pgbouncer"
+        fields:
+          - type: note
+            text: Clients connect to `RELEASE_NAME-cockroach-pgbouncer.GVC_NAME.cpln.local` on port 5432.
+            textExpression: >-
+              'Clients connect to `' + context.releaseName + '-cockroach-pgbouncer.' +
+              (context.gvc == null ? 'GVC_NAME' : context.gvc) + '.cpln.local` on port 5432.'
+          - path: pgbouncer.internal_access.type
+            type: enum
+            label: Who can connect to PgBouncer
+            widget: cards
+            required: true
+            description: A firewall change can take a few minutes to take effect.
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          # Shown with every type: workload-pgbouncer.yaml:93-94 writes a non-empty list into the firewall
+          # whatever the type, and the platform checks each entry also with Same org (guide 6.8).
+          - path: pgbouncer.internal_access.workloads
+            type: list
+            label: Allowed workloads
+            widget: tags
+            description: >-
+              With Same GVC, workloads in other GVCs to allow as well; with Specific workloads, every client.
+              The chart adds this release's own workloads to a Specific workloads list itself.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.pgbouncer.internal_access.type == 'same-gvc'
+          - path: pgbouncer.poolMode
+            type: enum
+            label: Pool mode
+            widget: segmented
+            required: true
+            help: >-
+              **Transaction** holds a server connection for one transaction: best for most web and API
+              workloads, but not compatible with `SET` variables, temporary tables or advisory locks.
+              **Session** holds it for the whole client session: compatible with everything, less reuse.
+              **Statement** returns it after every statement: transactions are not supported.
+            options:
+              - { value: session, label: Session }
+              - { value: transaction, label: Transaction }
+              - { value: statement, label: Statement }
+          - path: pgbouncer.defaultPoolSize
+            type: integer
+            label: Server connections per pool
+            required: true
+            description: Per PgBouncer replica.
+            min: 1
+            suggestions: [10, 25, 50, 100]
+          - path: pgbouncer.maxClientConn
+            type: integer
+            label: Max client connections
+            required: true
+            description: Per PgBouncer replica.
+            min: 1
+            suggestions: [100, 250, 500, 1000, 5000]
+          - path: pgbouncer.maxDbConnections
+            type: integer
+            label: Max database connections
+            required: true
+            # Each replica writes it into its own pgbouncer.ini (secret-pgbouncer-startup.yaml), so the cap applies per
+            # replica; the README's "shared across all PgBouncer pods" is not what the template does.
+            description: >-
+              PgBouncer's `max_db_connections`, a hard cap on the connections a PgBouncer replica opens to
+              the database. Set it to what your cluster can safely accept.
+            min: 1
+            suggestions: [50, 100, 200, 500]
+          - path: pgbouncer.minReplicas
+            type: integer
+            label: Minimum replicas per location
+            # Inferred from the platform code, not measured: the schema accepts minScale 0 with rps, but scale to
+            # zero on rps is kata-only ("the actuator gates kata behavior on the cpln/kata tag, so non-kata is inert",
+            # nodelibs/schema workloadOptions.ts), and this chart's PgBouncer workload has no cpln/kata tag.
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 5]
+          - path: pgbouncer.maxReplicas
+            type: integer
+            label: Maximum replicas per location
+            required: true
+            description: In each location, PgBouncer scales between the two by requests per second.
+            min: 1
+            suggestions: [2, 4, 6, 8]
+          - type: note
+            text: >-
+              At full scale, PgBouncer can open up to the maximum replicas times the locations times the max
+              database connections to CockroachDB.
+            textExpression: >-
+              'At full scale, PgBouncer can open up to ' +
+              string(self.pgbouncer.maxReplicas * size(self.locations) * self.pgbouncer.maxDbConnections) +
+              ' connections to CockroachDB: ' + string(self.pgbouncer.maxReplicas) + ' replicas ' +
+              (size(self.locations) == 1 ? 'in 1 location' : 'in each of ' + string(size(self.locations)) + ' locations') + ', ' +
+              string(self.pgbouncer.maxDbConnections) + ' each.'
+          - path: pgbouncer.serverCheckDelay
+            type: integer
+            label: Server check delay
+            unit: seconds
+            min: 0
+            required: true
+            advanced: true
+            description: Time between health checks of idle server connections (PgBouncer's default is 30).
+          - path: pgbouncer.serverConnectTimeout
+            type: integer
+            label: Server connect timeout
+            unit: seconds
+            min: 0
+            required: true
+            advanced: true
+            description: How long a new server connection may take (PgBouncer's default is 15).
+          - path: pgbouncer.serverLoginRetry
+            type: integer
+            label: Server login retry
+            unit: seconds
+            min: 0
+            required: true
+            advanced: true
+            description: >-
+              Wait before retrying a failed server login; 0 does not cache failures (PgBouncer's default
+              is 15).
+          - path: pgbouncer.clientLoginTimeout
+            type: integer
+            label: Client login timeout
+            unit: seconds
+            min: 0
+            required: true
+            advanced: true
+            description: How long a client may take to log in (PgBouncer's default is 60).
+          - path: pgbouncer.queryWaitTimeout
+            type: integer
+            label: Query wait timeout
+            unit: seconds
+            min: 0
+            required: true
+            advanced: true
+            description: >-
+              How long a logged-in client may wait for a server connection (PgBouncer's default is 120).
+          - path: pgbouncer.image
+            type: string
+            format: image
+            label: PgBouncer image
+            required: true
+            advanced: true
+            description: The start script runs `pgbouncer`, and the readiness check runs `psql`.
+          - path: pgbouncer.resources
+            type: resources
+            label: PgBouncer resources
+            required: true
+            advanced: true
+            description: Per PgBouncer replica.
+        rules:
+          - rule: self.pgbouncer.minReplicas <= self.pgbouncer.maxReplicas
+            paths: [pgbouncer.minReplicas]
+            message: The minimum replicas must not be greater than the maximum.
+          - rule: self.pgbouncer.defaultPoolSize <= self.pgbouncer.maxClientConn
+            severity: info
+            paths: [pgbouncer.defaultPoolSize]
+            message: The pool is larger than the number of client connections PgBouncer accepts.
+          - rule: self.pgbouncer.defaultPoolSize <= self.pgbouncer.maxDbConnections
+            severity: info
+            paths: [pgbouncer.defaultPoolSize]
+            message: The pool is larger than the cap on database connections, so it never fills.
+          - when: self.pgbouncer.internal_access.type == 'same-gvc' && context.gvc != null
+            rule: >-
+              !self.pgbouncer.internal_access.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))
+            severity: info
+            paths: [pgbouncer.internal_access.workloads]
+            messageExpression: >-
+              'Same GVC already allows every workload in this GVC: ' +
+              self.pgbouncer.internal_access.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+              ' can be removed from the list.'
+            message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+          - when: self.pgbouncer.internal_access.type == 'same-org'
+            rule: size(self.pgbouncer.internal_access.workloads) == 0
+            severity: info
+            paths: [pgbouncer.internal_access.workloads]
+            message: >-
+              Same org already lets every workload of the org connect to PgBouncer, so the workloads listed
+              for PgBouncer add nothing.
+          - rule: >-
+              self.pgbouncer.internal_access.type != 'workload-list' ||
+              size(self.pgbouncer.internal_access.workloads) > 0
+            severity: warning
+            paths: [pgbouncer.internal_access.workloads]
+            message: With "Specific workloads" and an empty list, no client can connect to PgBouncer.
+      - id: direct-access
+        title: Direct access to CockroachDB
+        when: "!self.pgbouncer.enabled"
+        description: Who can connect to the CockroachDB nodes on port 26257 while PgBouncer is off.
+        docs: "#internal-access"
+        fields:
+          - type: note
+            text: Clients connect to `RELEASE_NAME-cockroach.GVC_NAME.cpln.local` on port 26257.
+            textExpression: >-
+              'Clients connect to `' + context.releaseName + '-cockroach.' +
+              (context.gvc == null ? 'GVC_NAME' : context.gvc) + '.cpln.local` on port 26257.'
+          - path: internal_access.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: A firewall change can take a few minutes to take effect.
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          # Shown with every type: workload-cockroach.yaml:119-120 writes a non-empty list into the firewall
+          # whatever the type while PgBouncer is off, and the platform checks each entry also with Same org.
+          - path: internal_access.workloads
+            type: list
+            label: Allowed workloads
+            widget: tags
+            description: >-
+              With Same GVC, workloads in other GVCs to allow as well; with Specific workloads, every client.
+              The chart adds this release's own workloads to a Specific workloads list itself.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internal_access.type == 'same-gvc'
+        rules:
+          - when: self.internal_access.type == 'same-gvc' && context.gvc != null
+            rule: "!self.internal_access.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+            severity: info
+            paths: [internal_access.workloads]
+            messageExpression: >-
+              'Same GVC already allows every workload in this GVC: ' +
+              self.internal_access.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+              ' can be removed from the list.'
+            message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+          - when: self.internal_access.type == 'same-org'
+            rule: size(self.internal_access.workloads) == 0
+            severity: info
+            paths: [internal_access.workloads]
+            message: >-
+              Same org already lets every workload of the org connect to CockroachDB, so the workloads listed
+              for CockroachDB add nothing.
+          - rule: self.internal_access.type != 'workload-list' || size(self.internal_access.workloads) > 0
+            severity: warning
+            paths: [internal_access.workloads]
+            message: With "Specific workloads" and an empty list, no client can connect to CockroachDB.
+    rules:
+      - rule: oldSelf == null || self.pgbouncer.enabled == oldSelf.pgbouncer.enabled
+        severity: info
+        paths: [pgbouncer.enabled]
+        messageExpression: >-
+          self.pgbouncer.enabled ?
+          'Turning PgBouncer on closes direct client access to the nodes: move your clients to `' + context.releaseName + '-cockroach-pgbouncer.' + (context.gvc == null ? 'GVC_NAME' : context.gvc) + '.cpln.local` on port 5432.' :
+          'Turning PgBouncer off removes ' + context.releaseName + '-cockroach-pgbouncer, and the nodes accept clients as set under Direct access only once this upgrade is applied: then move your clients to `' + context.releaseName + '-cockroach.' + (context.gvc == null ? 'GVC_NAME' : context.gvc) + '.cpln.local` on port 26257.'
+        message: >-
+          Turning PgBouncer on or off changes the endpoint your clients connect to once this upgrade is
+          applied: `RELEASE_NAME-cockroach-pgbouncer.GVC_NAME.cpln.local` on port 5432, or
+          `RELEASE_NAME-cockroach.GVC_NAME.cpln.local` on port 26257.
+      # validateResourceKnobs fails on any value Helm treats as true (`if (.Values.pgbouncer.resources).cpu`): a
+      # non-empty string ("0" included), a non-zero number, true, or a non-empty list or map.
+      - rule: >-
+          !has(self.pgbouncer.resources.cpu) || self.pgbouncer.resources.cpu == null ||
+          (type(self.pgbouncer.resources.cpu) == string ? self.pgbouncer.resources.cpu == '' :
+          type(self.pgbouncer.resources.cpu) == bool ? !self.pgbouncer.resources.cpu :
+          type(self.pgbouncer.resources.cpu) == int ? self.pgbouncer.resources.cpu == 0 :
+          type(self.pgbouncer.resources.cpu) == double ? self.pgbouncer.resources.cpu == 0.0 :
+          size(self.pgbouncer.resources.cpu) == 0)
+        mirrors: cockroach.validateResourceKnobs
+        paths: [pgbouncer.enabled]
+        message: >-
+          `pgbouncer.resources.cpu` was renamed to `pgbouncer.resources.maxCpu` in 1.5.0, and the chart
+          refuses it even with PgBouncer off. Rename it in the values.
+      - rule: >-
+          !has(self.pgbouncer.resources.memory) || self.pgbouncer.resources.memory == null ||
+          (type(self.pgbouncer.resources.memory) == string ? self.pgbouncer.resources.memory == '' :
+          type(self.pgbouncer.resources.memory) == bool ? !self.pgbouncer.resources.memory :
+          type(self.pgbouncer.resources.memory) == int ? self.pgbouncer.resources.memory == 0 :
+          type(self.pgbouncer.resources.memory) == double ? self.pgbouncer.resources.memory == 0.0 :
+          size(self.pgbouncer.resources.memory) == 0)
+        mirrors: cockroach.validateResourceKnobs
+        paths: [pgbouncer.enabled]
+        message: >-
+          `pgbouncer.resources.memory` was renamed to `pgbouncer.resources.maxMemory` in 1.5.0, and the
+          chart refuses it even with PgBouncer off. Rename it in the values.
+
+  - id: backup
+    title: Backups
+    description: Optional scheduled full-cluster backups to S3 or GCS.
+    sections:
+      - id: backup
+        title: Scheduled backups
+        toggle: backup.enabled
+        description: >-
+          A cron workload runs `BACKUP INTO` on the schedule, and the CockroachDB nodes write a
+          full-cluster backup to your bucket themselves, through the release's identity. The bucket and
+          the cloud account must exist first.
+        docs: "#backup"
+        fields:
+          - type: note
+            text: >-
+              To restore into this cluster, use `RESTORE DATABASE … WITH new_db_name`: a full-cluster
+              restore needs a cluster with no user databases, and this template creates one on the first
+              deploy. The optional PgBouncer serves only the database named under Cluster, so reach a database
+              restored under another name on a node directly. See [Restoring a backup](#restoring-a-backup).
+          - path: backup.provider
+            type: enum
+            label: Destination
+            widget: segmented
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+          - path: backup.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+            # The platform's job schedule (nodelibs/schema workload.ts ScheduleType, checkCronValues) takes five numeric
+            # fields only, each value within its range: no macros such as @daily, no day or month names, no weekday 7.
+            # Not caught here: a range whose end is not above its start (`5-1`, `5-5`), which the API also refuses.
+            pattern: '^(\*(/[0-5]?\d)?|[0-5]?\d(-[0-5]?\d)?(/\d+)?)(,(\*(/[0-5]?\d)?|[0-5]?\d(-[0-5]?\d)?(/\d+)?))* (\*(/([01]?\d|2[0-3]))?|([01]?\d|2[0-3])(-([01]?\d|2[0-3]))?(/\d+)?)(,(\*(/([01]?\d|2[0-3]))?|([01]?\d|2[0-3])(-([01]?\d|2[0-3]))?(/\d+)?))* (\*(/(0?[1-9]|[12]\d|3[01]))?|(0?[1-9]|[12]\d|3[01])(-(0?[1-9]|[12]\d|3[01]))?(/\d+)?)(,(\*(/(0?[1-9]|[12]\d|3[01]))?|(0?[1-9]|[12]\d|3[01])(-(0?[1-9]|[12]\d|3[01]))?(/\d+)?))* (\*(/(0?[1-9]|1[0-2]))?|(0?[1-9]|1[0-2])(-(0?[1-9]|1[0-2]))?(/\d+)?)(,(\*(/(0?[1-9]|1[0-2]))?|(0?[1-9]|1[0-2])(-(0?[1-9]|1[0-2]))?(/\d+)?))* (\*(/0?[0-6])?|0?[0-6](-0?[0-6])?(/\d+)?)(,(\*(/0?[0-6])?|0?[0-6](-0?[0-6])?(/\d+)?))*$'
+            patternMessage: >-
+              Use five numeric fields separated by single spaces, such as `0 2 * * *`: minute 0-59, hour 0-23,
+              day 1-31, month 1-12 and weekday 0-6. Macros such as `@daily` and day or month
+              names are not supported.
+          - path: backup.location
+            type: enum
+            label: Run the backup job in
+            required: true
+            optionsFrom: self.locations.filter(l, l.name != '').map(l, l.name)
+            description: >-
+              The one location the job runs in; it is suspended everywhere else. Pick the location
+              nearest your bucket to avoid cross-region egress.
+          - path: backup.activeDeadlineSeconds
+            type: integer
+            label: Stop a backup run after
+            required: true
+            advanced: true
+            description: A run still going after this long is stopped.
+            unit: seconds
+            min: 1
+            # The platform caps a job's activeDeadlineSeconds at 86400 (nodelibs/schema workload.ts JobSpec).
+            max: 86400
+            suggestions: [3600, 7200, 14400, 28800]
+          - path: backup.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+          - path: backup.resources
+            type: resources
+            label: Backup job resources
+            required: true
+            advanced: true
+        rules:
+          - rule: self.backup.location in self.locations.map(l, l.name)
+            mirrors: cockroach.validateBackupLocation
+            paths: [backup.location]
+            message: >-
+              The backup location must be one of the configured locations, or the job never runs
+              anywhere.
+          - rule: self.backup.provider in ['aws', 'gcp']
+            mirrors: cockroach.validateBackupConfig
+            paths: [backup.provider]
+            message: Choose AWS S3 or Google Cloud Storage.
+      - id: aws
+        title: AWS S3
+        when: self.backup.enabled && self.backup.provider == 'aws'
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Create the bucket, an AWS cloud account and an AWS IAM policy scoped to the bucket
+              **before** you install. [Backing up](#backing-up) lists the policy's actions. A policy
+              written from the README of a version before 1.4.1 lacks `s3:GetBucketLocation`,
+              `s3:AbortMultipartUpload`, `s3:ListBucketMultipartUploads` and `s3:ListMultipartUploadParts`:
+              add them before you reuse it.
+          - path: backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            # The chart writes AWS_BUCKET unquoted (workload-backup.yaml): a name YAML reads as a number, a boolean or
+            # null (`123`, `1e3`, `true`), or as a date (`2024-01-01`), would reach the job as another type, so those
+            # names are refused.
+            pattern: '^(?![0-9][0-9_]*(\.[0-9_]*)?(e[-+]?[0-9]+)?$)(?!0[xob][0-9a-f]+$)(?![0-9]{4}-[0-9]{1,2}-[0-9]{1,2}$)(?!(true|false|null|yes|off)$)[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+            patternMessage: >-
+              Use 3 to 63 lowercase letters, digits, dots and hyphens, starting and ending with a letter or a
+              digit. A name that YAML reads as a number, a date, a boolean (`true`, `yes`, `off`) or null is not supported.
+          - path: backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) for the bucket's AWS account."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: >-
+              An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy). The
+              release's identity uses it to reach the bucket.
+            # The platform accepts an AWS policy reference only in this shape (nodelibs/schema identity.ts).
+            pattern: '^(aws::)?[A-Za-z0-9/+=,.@_-]+$'
+            patternMessage: >-
+              Use letters, digits and `/ + = , . @ _ -` only, with no spaces, such as `my-backup-policy`.
+          - path: backup.aws.prefix
+            type: string
+            label: Folder prefix
+            pattern: '^(?!/)'
+            patternMessage: Leave out the leading /.
+      - id: gcs
+        title: Google Cloud Storage
+        when: self.backup.enabled && self.backup.provider == 'gcp'
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Create the bucket and a GCP cloud account, and add the `Storage Admin` role to the cloud
+              account's service account, **before** you install.
+          - path: backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            # GCP_BUCKET is written unquoted too (workload-backup.yaml).
+            pattern: '^(?![0-9][0-9_]*(\.[0-9_]*)?(e[-+]?[0-9]+)?$)(?!0[xob][0-9a-f]+$)(?![0-9]{4}-[0-9]{1,2}-[0-9]{1,2}$)(?!(true|false|null|yes|off)$)[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
+            patternMessage: >-
+              Use lowercase letters, digits, dots, hyphens and underscores, starting and ending with a letter
+              or a digit. A name that YAML reads as a number, a date, a boolean (`true`, `yes`, `off`) or null is not supported.
+          - path: backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account). Add the `Storage Admin` role to its
+              service account.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            pattern: '^(?!/)'
+            patternMessage: Leave out the leading /.
+
+rules:
+  - rule: context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '2.0.0') >= 0
+    message: >-
+      Do not upgrade a 1.x release to 2.0.0: the upgrade deletes the GVC the 1.x release created, with
+      every workload, volume set and identity in it, including your data. Install 2.0.0 as a new release
+      under another name, restore a backup into it, move your applications to its endpoint, then uninstall
+      the old release against the GVC you first installed it into. See
+      [Upgrading from 1.x](#upgrading-from-1-x).
+  - rule: "!has(self.gvc)"
+    mirrors: cockroach.validateNoLegacyGvc
+    paths: [locations]
+    message: >-
+      The `gvc` key was removed in 2.0.0: the chart deploys into the GVC you install into, and
+      `gvc.locations` moved to `locations`. Remove `gvc` from the values.
+
+migrations:
+  - fromVersions: "<2.0.0"
+    from: gvc.locations
+    to: locations
+  - fromVersions: "<2.0.0"
+    from: gvc.name
+    note: 2.0.0 deploys into the GVC you install into and no longer creates one.
+  - fromVersions: ">=1.4.0 <1.5.0"
+    from: pgbouncer.resources.cpu
+    to: pgbouncer.resources.maxCpu
+  - fromVersions: ">=1.4.0 <1.5.0"
+    from: pgbouncer.resources.memory
+    to: pgbouncer.resources.maxMemory
+  - fromVersions: "<1.2.0"
+    from: cockroach_defaults
+    note: The SQL and HTTP ports are fixed at 26257 and 8080 since 1.2.0.

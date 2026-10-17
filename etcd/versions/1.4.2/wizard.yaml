@@ -1,0 +1,471 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: etcd
+# Every member builds its peer list from its own location (secret.yaml:15,40-51), so each GVC location
+# would run its own independent cluster.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: cluster
+    title: Cluster
+    description: The number of members in the quorum and how they are spread.
+    fields:
+      # Measured: from 1.3.0 and older the rendered workload changes (the startup secret's volume uri lost its
+      # `.payload` suffix in 1.4.0), so the upgrade itself restarts the members; secret.yaml:55-59 makes each
+      # member with a data directory start with --initial-cluster-state existing.
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '1.4.0') < 0
+        text: >-
+          Upgrading from etcd template versions before 1.4.0 changes the workload itself, so every member
+          restarts during the upgrade and rejoins the cluster from its own volume. Plan the upgrade for a time
+          when every member may restart.
+      - path: replicas
+        type: integer
+        label: Members
+        widget: stepper
+        required: true
+        immutable: >-
+          Each member builds its peer list from the member count when it first starts, and the chart never
+          adds or removes members.
+        description: The number of etcd members in the quorum, each on its own volume.
+        help: >-
+          Choose the count now: each member builds its peer list from it when the cluster first starts, and the
+          chart never adds or removes members.
+        docs: "#scaling-and-availability"
+        min: 3
+      - path: multiZone
+        type: boolean
+        label: Spread members across zones
+        required: true
+        description: Confirm that your location supports multiple zones.
+        docs: "#multi-zone"
+      # _helpers.tpl:46-56 and secret.yaml:25-38: a non-empty global.locations switches the chart to one member
+      # per listed location. Declared only so the root rule below can read it; shown only while it is set.
+      - path: global.locations
+        type: list
+        label: Locations (multi-location)
+        readOnly: true
+        absent: true
+        when: size(self.global.locations) > 0
+        description: Set in YAML mode.
+        item: { type: string }
+    rules:
+      - rule: self.replicas % 2 == 1
+        mirrors: etcd.validateReplicas
+        paths: [replicas]
+        message: The number of members must be odd. An even count gains no fault tolerance and risks split votes.
+
+  - id: compute
+    title: Compute
+    description: The resources and the image of each member.
+    fields:
+      - path: resources
+        type: resources
+        label: Resources
+        docs: "#resources"
+        required: true
+        description: Per member. The defaults can be lowered for lighter usage.
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+      # workload.yaml:15 renders the image unquoted; `format: image` refuses every value YAML would read as
+      # another type (`true`, `null`, `1e3`, the YAML 1.1 sexagesimal `1:20`), so no pattern of its own
+      # (guide 17.3.1).
+      - path: image
+        type: string
+        format: image
+        label: etcd image
+        required: true
+        advanced: true
+        docs: "#image"
+        rules:
+          - rule: oldSelf == null || self.image == oldSelf.image
+            severity: info
+            # secret.yaml:55-59: a member with a data directory restarts with --initial-cluster-state existing.
+            message: A new image restarts every member. Each rejoins the cluster from its own volume.
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds each member's data directory.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            required: true
+            description: Per member.
+            help: >-
+              Uninstalling the release deletes the volume set, and with it the keyspace; a final snapshot is
+              taken first and kept for 7 days.
+            docs: "/reference/volumeset#capacity-and-billing"
+            unit: GiB
+            min: 10
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+    rules:
+      - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: compaction
+    title: Compaction
+    description: How etcd discards old revisions, and the backend size at which it stops accepting writes.
+    sections:
+      - fields:
+          # README: If the backend quota is already full (compaction does not shrink the backend or clear
+          # NOSPACE; the two etcdctl commands; DB SIZE near 2.1 GB). CHANGELOG 2026-08 etcd 1.4.2.
+          # secret.yaml:65-80: the flags are part of the startup script that `exec etcd` reads at start;
+          # secret.yaml:55-59: a member with a data directory restarts with --initial-cluster-state existing.
+          # Measured: from 1.4.0 and 1.4.1 the rendered workload is unchanged apart from tags, so nothing
+          # restarts the members during the upgrade.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.4.2') < 0
+            text: >-
+              etcd template versions before 1.4.2 passed no compaction flags, so this cluster may already be
+              close to its backend quota. Compaction stops further growth, but it does not shrink the backend or
+              clear a `NOSPACE` alarm: check the cluster first, as
+              [If the backend quota is already full](#if-the-backend-quota-is-already-full) describes (a database
+              that uses etcd for coordination restart-looping with `exitCode: 0` is the usual sign). The flags
+              are in the startup script, which each member reads only when it starts, so once the upgrade is
+              applied, run `cpln workload force-redeployment` on the etcd workload so that every member restarts
+              with compaction on; each rejoins the cluster from its own volume. See
+              [Upgrading from a version before 1.4.2](#upgrading-from-a-version-before-1-4-2).
+            textExpression: >-
+              'etcd template versions before 1.4.2 passed no compaction flags, so this cluster may already be
+              close to its backend quota. Compaction stops further growth, but it does not shrink the backend or
+              clear a `NOSPACE` alarm. Check the cluster first with `cpln workload exec ' + context.releaseName +
+              '-etcd --gvc ' + (context.gvc == null ? 'GVC_NAME' : context.gvc) +
+              ' --container etcd -- etcdctl endpoint status --cluster -w table` and the same command with
+              `etcdctl alarm list`: a `DB SIZE` near 2.1 GB on every member with `NOSPACE` in the alarm list
+              needs the recovery in [If the backend quota is already full](#if-the-backend-quota-is-already-full)
+              first; a database that uses etcd for coordination restart-looping with `exitCode: 0` and
+              `reason: Completed` is the usual sign of it. The flags are in the startup script, which each
+              member reads only when it starts, so once the upgrade is applied, run
+              `cpln workload force-redeployment ' + context.releaseName + '-etcd --gvc ' +
+              (context.gvc == null ? 'GVC_NAME' : context.gvc) + '` so that every member restarts with
+              compaction on; each rejoins the cluster from its own volume. See
+              [Upgrading from a version before 1.4.2](#upgrading-from-a-version-before-1-4-2).'
+          - type: note
+            text: >-
+              etcd keeps every superseded revision until it is compacted, so the backend grows with time alone.
+          - path: tuning.autoCompactionMode
+            type: enum
+            label: Compaction mode
+            docs: "#compaction-and-backend-growth"
+            widget: segmented
+            required: true
+            options:
+              - value: periodic
+                label: Periodic
+                description: Keep a time window of history.
+              - value: revision
+                label: Revision
+                description: Keep a fixed number of revisions.
+          - path: tuning.autoCompactionRetention
+            type: string
+            label: History kept
+            required: true
+            description: How much history stays before old revisions are discarded.
+            help: >-
+              The `1h` default keeps the backend flat. A longer window keeps more history at the cost of a
+              larger backend.
+            rules:
+              - when: self.tuning.autoCompactionMode == 'periodic'
+                rule: self.tuning.autoCompactionRetention.matches('^[0-9]+([.][0-9]+)?(ns|us|ms|s|m|h)$')
+                mirrors: etcd.validateCompaction
+                paths: [tuning.autoCompactionRetention]
+                message: >-
+                  In periodic mode the retention is a number with one of the units `ns`, `us`, `ms`, `s`, `m` or
+                  `h`, such as `1h`, `30m` or `24h`. etcd reads a bare number as hours.
+              - when: self.tuning.autoCompactionMode == 'revision'
+                rule: self.tuning.autoCompactionRetention.matches('^[0-9]+$')
+                mirrors: etcd.validateCompaction
+                paths: [tuning.autoCompactionRetention]
+                message: In revision mode the retention is a plain revision count, such as `10000`.
+              # The chart's zero check (^0+([a-zA-Z]*)$) misses decimals such as `0.0h`; this one covers them.
+              - when: >-
+                  self.tuning.autoCompactionMode == 'periodic' ?
+                  self.tuning.autoCompactionRetention.matches('^[0-9]+([.][0-9]+)?(ns|us|ms|s|m|h)$') :
+                  self.tuning.autoCompactionRetention.matches('^[0-9]+$')
+                rule: "!self.tuning.autoCompactionRetention.matches('^0+([.]0+)?[a-zA-Z]*$')"
+                mirrors: etcd.validateCompaction
+                paths: [tuning.autoCompactionRetention]
+                message: >-
+                  A retention of 0 disables compaction, which fills the backend quota and takes the cluster
+                  read-only. Use a duration such as `1h`, or a revision count.
+              # etcd parses the periodic retention with Go's time.ParseDuration (int64 nanoseconds, at most
+              # 2562047h) and compacts every retention/10: below 10ns that is 0, which disables compaction or stops
+              # etcd at start (embed/etcd.go, v3compactor/periodic.go). The chart's zero check only sees literal
+              # zeros.
+              - when: >-
+                  self.tuning.autoCompactionMode == 'periodic' &&
+                  self.tuning.autoCompactionRetention.matches('^[0-9]+([.][0-9]+)?(ns|us|ms|s|m|h)$') &&
+                  !self.tuning.autoCompactionRetention.matches('^0+([.]0+)?[a-zA-Z]*$')
+                rule: >-
+                  duration(self.tuning.autoCompactionRetention) >= duration('10ns') &&
+                  duration(self.tuning.autoCompactionRetention) <= duration('2562047h')
+                paths: [tuning.autoCompactionRetention]
+                message: >-
+                  The retention must be between `10ns` and `2562047h`: a shorter one disables compaction or stops
+                  etcd from starting, and etcd cannot read a longer one. Use a duration such as `1h`.
+              # etcd reads the revision count as an int64; a larger count stops etcd from starting.
+              - when: >-
+                  self.tuning.autoCompactionMode == 'revision' &&
+                  self.tuning.autoCompactionRetention.matches('^[0-9]+$')
+                rule: self.tuning.autoCompactionRetention.matches('^0*[0-9]{1,18}$')
+                paths: [tuning.autoCompactionRetention]
+                message: In revision mode the retention has at most 18 digits; etcd cannot read a larger count.
+          # A virtual enum: Helm renders an unquoted number of 1000000 or more as `1e+06`, which
+          # etcd.validateCompaction rejects, so the presets are written as quoted strings. The default 0 is a
+          # number, so a string field would not fit it.
+          - id: quotaLimit
+            virtual: true
+            type: enum
+            label: Backend size limit
+            widget: select
+            required: true
+            description: Writes are rejected once the backend reaches this size.
+            help: >-
+              When the limit is reached etcd raises a cluster-wide `NOSPACE` alarm and every member goes
+              read-only until the alarm is cleared. Leave it at etcd's own limit unless the keyspace outgrows
+              2 GiB; 8 GiB is etcd's own suggested maximum, above which it warns at startup. Any other byte
+              count is set in YAML mode, as a quoted string such as `"6442450944"`.
+            init: >-
+              self.tuning.quotaBackendBytes == null ? 'other' :
+              string(self.tuning.quotaBackendBytes) == '0' ? 'default' :
+              type(self.tuning.quotaBackendBytes) == string && self.tuning.quotaBackendBytes == '4294967296' ? 'gib4' :
+              type(self.tuning.quotaBackendBytes) == string && self.tuning.quotaBackendBytes == '8589934592' ? 'gib8' :
+              'other'
+            options:
+              - value: default
+                label: etcd default (2 GiB)
+                set: { tuning.quotaBackendBytes: 0 }
+              - value: gib4
+                label: 4 GiB
+                set: { tuning.quotaBackendBytes: "4294967296" }
+              - value: gib8
+                label: 8 GiB
+                set: { tuning.quotaBackendBytes: "8589934592" }
+              - value: other
+                label: Other byte count
+                description: Set the byte count in YAML mode.
+            rules:
+              - rule: >-
+                  self.tuning.quotaBackendBytes == null || type(self.tuning.quotaBackendBytes) == string ||
+                  self.tuning.quotaBackendBytes < 1000000
+                mirrors: etcd.validateCompaction
+                messageExpression: >-
+                  'The backend size limit must be written as a quoted string, such as `"' +
+                  string(self.tuning.quotaBackendBytes) + '"`. Helm renders the unquoted number ' +
+                  string(self.tuning.quotaBackendBytes) + ' as a float such as `6.442450944e+09`, which the chart
+                  rejects. Pick a Backend size limit preset, or quote the number in YAML mode.'
+                message: >-
+                  The backend size limit must be written as a quoted string, such as `"6442450944"`. Helm
+                  renders a large unquoted number as `6.442450944e+09`, which the chart rejects. Pick a Backend
+                  size limit preset, or quote the number in YAML mode.
+              - rule: >-
+                  self.tuning.quotaBackendBytes != null &&
+                  string(self.tuning.quotaBackendBytes).matches('^[0-9]+$')
+                mirrors: etcd.validateCompaction
+                message: >-
+                  The backend size limit is a plain, non-negative byte count with no unit, such as
+                  `"6442450944"`.
+              # etcd parses the flag as a base-prefixed int64: a leading 0 is read as octal, and a value past
+              # the int64 range stops etcd from starting. The chart's int64 check reads both as 0 and passes them.
+              - rule: >-
+                  self.tuning.quotaBackendBytes == null ||
+                  !string(self.tuning.quotaBackendBytes).matches('^[0-9]+$') ||
+                  string(self.tuning.quotaBackendBytes).matches('^(0|[1-9][0-9]{0,17})$')
+                message: >-
+                  Write the backend size limit with no leading zero and at most 18 digits. etcd reads a leading 0
+                  as an octal number, and cannot start with a value past its 64-bit limit.
+              - rule: >-
+                  self.tuning.quotaBackendBytes == null ||
+                  !string(self.tuning.quotaBackendBytes).matches('^(0|[1-9][0-9]{0,17})$') ||
+                  int(string(self.tuning.quotaBackendBytes)) <= 8589934592
+                severity: info
+                # README: Storage growth and compaction (8 GiB is etcd's own suggested maximum)
+                messageExpression: >-
+                  'The backend size limit is ' + string(self.tuning.quotaBackendBytes) +
+                  " bytes, above 8 GiB (`8589934592`), etcd's own suggested maximum; etcd warns at startup."
+                message: >-
+                  The backend size limit is above 8 GiB (`8589934592`), etcd's own suggested maximum; etcd warns
+                  at startup.
+              # The backend file lives on the member's volume (workload.yaml: /var/lib/etcd on the volume set).
+              - rule: >-
+                  self.tuning.quotaBackendBytes == null ||
+                  !string(self.tuning.quotaBackendBytes).matches('^(0|[1-9][0-9]{0,17})$') ||
+                  self.volumeset.capacity == null ||
+                  int(string(self.tuning.quotaBackendBytes)) < self.volumeset.capacity * 1073741824
+                severity: info
+                messageExpression: >-
+                  'The backend size limit (' + string(self.tuning.quotaBackendBytes) + ' bytes) is not below the ' +
+                  string(self.volumeset.capacity) + ' GiB volume of each member, so the volume fills up before the
+                  limit applies. Lower the limit or raise the initial capacity.'
+                message: >-
+                  The backend size limit is not below the volume capacity of each member, so the volume fills up
+                  before the limit applies. Lower the limit or raise the initial capacity.
+          - type: note
+            when: ui.quotaLimit == 'other'
+            text: >-
+              Set the byte count in YAML mode, as a quoted string such as `"6442450944"`. Until then the values
+              keep the limit they hold now.
+            textExpression: >-
+              'Set the byte count in YAML mode, as a quoted string such as `"6442450944"`. The values hold ' +
+              (self.tuning.quotaBackendBytes == null ? 'no value' :
+              string(self.tuning.quotaBackendBytes) == '0' ? '`0` (etcd\'s own 2 GiB limit)' :
+              '`' + string(self.tuning.quotaBackendBytes) + '`') + ' now.'
+
+    rules:
+      # secret.yaml:65-80: these flags are read when a member starts, and they live only in the startup secret
+      # (measured: helm template with other tuning values changes the secret, not the workload), so changing
+      # them restarts nothing. A new image or new resources restart the members anyway.
+      - when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '1.4.2') >= 0
+        rule: >-
+          oldSelf == null ||
+          (self.tuning.autoCompactionMode == oldSelf.tuning.autoCompactionMode &&
+          string(self.tuning.autoCompactionRetention) == string(oldSelf.tuning.autoCompactionRetention) &&
+          string(self.tuning.quotaBackendBytes) == string(oldSelf.tuning.quotaBackendBytes)) ||
+          self.image != oldSelf.image ||
+          string(self.resources.cpu) != string(oldSelf.resources.cpu) ||
+          string(self.resources.memory) != string(oldSelf.resources.memory)
+        severity: info
+        messageExpression: >-
+          'etcd reads the compaction settings and the backend size limit only when a member starts, and this
+          change alone does not restart the members. Once the upgrade is applied, run `cpln workload
+          force-redeployment ' + context.releaseName + '-etcd --gvc ' + (context.gvc == null ? 'GVC_NAME' :
+          context.gvc) + '`; each member rejoins the cluster from its own volume.'
+        message: >-
+          etcd reads the compaction settings and the backend size limit only when a member starts, and this
+          change alone does not restart the members. Once the upgrade is applied, run `cpln workload
+          force-redeployment` on the etcd workload; each member rejoins the cluster from its own volume.
+
+  - id: access
+    title: Access
+    description: Who can reach the cluster.
+    sections:
+      - id: network-access
+        title: Network access
+        docs: /reference/workload/firewall
+        fields:
+          # secret.yaml:68-69: plain HTTP on 2379 and no authentication flags. README: Connecting.
+          - type: note
+            text: >-
+              Clients connect on port `2379` over plain HTTP with no authentication, so anything this firewall
+              admits can read and write the whole keyspace.
+            textExpression: >-
+              'Clients connect to `' + context.releaseName + '-etcd.' +
+              (context.gvc == null ? 'GVC_NAME' : context.gvc) +
+              '.cpln.local:2379` over plain HTTP with no authentication, so anything this firewall admits can read
+              and write the whole keyspace. Use the fully-qualified hostname; the bare workload name is not
+              reliably resolvable.'
+          - path: internal_access.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            options:
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          # Shown with every type: workload.yaml:55-57 writes a non-empty list into the firewall whatever the type,
+          # and the platform checks each entry (LocalLink) also with Same org (guide 6.8).
+          - path: internal_access.workloads
+            type: list
+            label: Allowed workloads
+            widget: tags
+            description: Extra workloads allowed to connect, for example from another GVC.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internal_access.type == 'same-gvc'
+            rules:
+              - when: self.internal_access.type == 'same-gvc' && context.gvc != null
+                rule: "!self.internal_access.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+                severity: info
+                messageExpression: >-
+                  'Same GVC already allows every workload in this GVC: ' +
+                  self.internal_access.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))
+                  .map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+                  ' can be removed from the list.'
+                message: >-
+                  Same GVC already allows every workload in this GVC, so those entries can be removed from the
+                  list.
+              - when: self.internal_access.type == 'same-org'
+                rule: size(self.internal_access.workloads) == 0
+                severity: info
+                message: Same org already lets every workload of the org connect, so these entries add nothing.
+    rules:
+      # The internal firewall also governs the members' peer traffic on 2380: etcd-multi-location 2.0.0
+      # templates/workload.yaml:90-98 (measured quorum loss when the list omits the workload itself), its README
+      # (Internal access: "The members reach each other over the same internal firewall") and its CHANGELOG
+      # entry (2026-08). This chart does not add its own workload (workload.yaml:54-57).
+      - when: self.internal_access.type == 'workload-list' && context.gvc != null
+        rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-etcd') in self.internal_access.workloads
+        severity: warning
+        paths: [internal_access.workloads]
+        messageExpression: >-
+          'The members also reach each other through Allowed workloads. Add //gvc/' + context.gvc + '/workload/' +
+          context.releaseName + '-etcd, or they cannot form a quorum.'
+        message: >-
+          The members also reach each other through Allowed workloads. Add the etcd workload itself, or they
+          cannot form a quorum.
+        fix:
+          path: internal_access.workloads
+          items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-etcd']"
+
+rules:
+  # _helpers.tpl:46-56: with global.locations set the chart wants replicas 1 and 3 or more locations in an odd
+  # count, one member per location (secret.yaml:25-38). This template allows one location (gvc above) and
+  # needs at least 3 members, so no setting passes both: refuse the mode. Helm treats an empty list as unset.
+  - rule: size(self.global.locations) == 0
+    mirrors: etcd.validateReplicas
+    paths: [global.locations]
+    message: >-
+      `global.locations` puts one member in each listed location, but this template runs all its members in
+      the one location of its GVC. Remove `global.locations` in YAML mode. For a cluster that spans
+      locations, use the etcd Multi-Location template.
+  # etcd.validateReplicas arrived in 1.3.0; older releases may run 1, 2 or an even number of members. The count
+  # is immutable (docs: Scaling and Availability), so say how to get out instead of only "must be odd".
+  - when: context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') < 0
+    rule: oldSelf == null || (oldSelf.replicas >= 3 && oldSelf.replicas % 2 == 1)
+    messageExpression: >-
+      'This release runs ' + string(oldSelf.replicas) + (oldSelf.replicas == 1 ? ' member' : ' members') +
+      '. etcd template versions before 1.3.0
+      accepted any count; this version needs an odd count of at least 3, and the count cannot change on a
+      running cluster. Install a new release with 3, 5 or 7 members and move the clients over.'
+    message: >-
+      etcd template versions before 1.3.0 accepted any member count; this version needs an odd count of at
+      least 3, and the count cannot change on a running cluster. Install a new release with 3, 5 or 7 members
+      and move the clients over.
+
+migrations:
+  - fromVersions: "<1.1.0"
+    assume: { volumeset.capacity: 10 }
+  # Before 1.3.0 the image was fixed in workload.yaml, not a value: the image-change advice compares with it.
+  - fromVersions: "<1.3.0"
+    assume: { image: controlplanecorporation/etcd:0.1 }
+  # multiZone defaulted to true before 1.2.0: keep what a release on the old default runs with.
+  - fromVersions: "<1.2.0"
+    to: multiZone
+    valueExpr: self.multiZone
+    note: Zone spreading was on by default before 1.2.0, so the installed setting is kept.

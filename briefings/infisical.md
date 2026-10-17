@@ -16,8 +16,7 @@
 | `{release}-infisical` (standard workload, :8080) | Infisical server — UI + API; `replicas` knob (1 default, ≥2 = HA) |
 | `{release}-postgres` (postgres subchart) | Durable secret store — all persistent state lives here |
 | `{release}-redis` + `{release}-sentinel` (redis subchart) | Cache + BullMQ job queues; connected Sentinel-aware (master `mymaster`) |
-| `{release}-infisical-db` secret (dictionary) | Bundled-DB creds (`postgresUsername`/`postgresPassword`) → assembles `DB_CONNECTION_URI` |
-| secret named by `postgres.config.credentialsSecretName` (dictionary) | The SAME creds in the shape the postgres subchart reads (`username`/`password`/`database`); created by this chart since postgres 3.4.0 stopped creating its own |
+| user secret `postgres.config.credentialsSecretName` (dictionary, prerequisite since 1.2.0) | DB creds `username`/`password`/`database`: postgres initializes from it, the app reads the same keys as env vars and assembles `DB_CONNECTION_URI` from `$(VAR)` placeholders at container start |
 | user secret `secrets.name` (dictionary, prerequisite) | Root-of-trust: `ENCRYPTION_KEY` + `AUTH_SECRET` |
 | identity + policy | `reveal` on exactly the secrets above (least privilege) |
 
@@ -32,8 +31,7 @@
 | `secrets.name` | `my-infisical-secrets` | Prerequisite dictionary secret — MUST exist before install |
 | `smtp.enabled` (+ `host/port/fromAddress/…`) | `false` | Optional outbound email (invites, verification, reset); optional auth via `smtp.auth.secretName` dictionary secret (`SMTP_USERNAME`/`SMTP_PASSWORD`), empty = unauthenticated (mail-catcher) |
 | `publicAccess.enabled` / `internalAccess.type` | `true` / `same-gvc` | Standard exposure pattern |
-| `postgres.credentials.*` | `infisical` / `change-me-infisical-pg` / `infisical` | Bundled-DB plumbing; still plain values — this chart turns them into both secrets |
-| `postgres.config.credentialsSecretName` | `my-infisical-db-credentials` | Name of the secret this chart CREATES for the subchart; org-wide, so one per release |
+| `postgres.config.credentialsSecretName` | `my-infisical-db-credentials` | REQUIRED prerequisite dictionary secret (`username`/`password`/`database`) — must exist before install. `postgres.credentials` was removed in 1.2.0 and now fails the render |
 | `postgres.*` / `redis.*` | bundled | Pass-through to the dependency templates; `redis.redis.auth.password.enabled: true` = require AUTH |
 
 ## Troubleshooting / considerations
@@ -46,6 +44,9 @@
 - **Secret data survives an app restart/reinstall but lives in Postgres** — to wipe all stored secrets you must also reinstall the Postgres dependency (its volumeset), not just the app.
 - **Redis holds only cache/queue state, not secrets** — a Redis blip degrades background jobs briefly but never risks stored secrets (those are in Postgres). Redis ships authless behind the same-GVC firewall; `redis.redis.auth.password.enabled: true` requires AUTH.
 - **`SITE_URL` drives cookies and links.** If login cookies or UI links look wrong, check `siteUrl`/the derived canonical endpoint — a mismatched `SITE_URL` breaks Secure-cookie login behind the HTTPS LB.
-- **Two secrets carry the same DB credentials, by design (1.1.0, postgres 3.4.1).** `{release}-infisical-db` keeps `postgresUsername`/`postgresPassword` for the app; the new `postgres.config.credentialsSecretName` secret carries `username`/`password`/`database` because those key names are fixed by the subchart. Renaming the app's keys would break `DB_CONNECTION_URI`; the app secret also has no `database` key. Do not try to collapse them.
-- **`postgres.config.credentialsSecretName` is org-wide.** Two infisical releases left on the default name: the second is REFUSED at install (`cannot be updated because it is being managed by a different release`) and creates nothing. Not data loss — the first release is untouched.
+- **DB credentials are a prerequisite secret since 1.2.0 (work item 5284).** Rule (maintainer 2026-10-14): when the bundled `postgres` subchart takes only a credentials-secret NAME, the parent requires the user to create that same secret — no plaintext `postgres.credentials`. 1.1.0's two chart-built secrets (the subchart's and a duplicate `{release}-infisical-db` with `postgresUsername`/`postgresPassword`) are both gone; the app now reads `username`/`password`/`database` from the user's secret.
+- **`DB_CONNECTION_URI` is assembled at container start**, `postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@host:5432/$(POSTGRES_DB)` over `cpln://secret/...` env vars (plane/langfuse/fusionauth precedent). The values are not URL-encoded, so the password and database must be URL-safe — the README says so; `openssl rand -hex` passwords are. [UNPROVEN for infisical until the 1.2.0 test round: the database name moving from a rendered literal to `$(POSTGRES_DB)`.]
+- **Upgrade 1.1.0 → 1.2.0 deletes the chart-created DB secret.** The user must create a NEW-name secret holding the CURRENT values and point `credentialsSecretName` at it; reusing the old name races the delete. The wizard blocks an unchanged name on an upgrade from <1.2.0. Expect a postgres restart and up to ~10 min of `is not allowed to reveal the secret` on the new version while the grant propagates (old version keeps serving).
+- **Password rotation:** `ALTER ROLE` first, then `cpln secret edit`, then right away force-redeploy `{release}-infisical` (not postgres). (Single-instance; measured on umami 2026-10-16: skipping the postgres redeploy cut the outage from ~135 s to a few seconds. Postgres reads the secret only at first init; open app connections survive `ALTER ROLE`, only new ones fail.) Editing the secret alone changes nothing (references resolve at replica start; the data dir keeps the initial password).
+- **Missing DB secret wedges silently** (zero log lines) — diagnose via `status.versions[].message` in `cpln workload get-deployments`.
 - **Availability posture:** app tier is multi-instance-capable in the free MIT core and cpln-feasible → HA is offered via `replicas`. Default is the proven single-replica shape; set ≥2 for near-zero-downtime.

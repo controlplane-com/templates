@@ -1,0 +1,687 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: GlitchTip
+
+# GlitchTip's web tier and worker are stateless, but both bundled databases and the Redis + Sentinel tier are
+# single-location stateful workloads with no location handling: postgres brings this limit with its import,
+# and postgres-highly-available and redis 3.4.3 (no descriptors of their own, so their keys are parent fields
+# below) need the same.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.4.1
+    when: self.postgres.enabled
+    title: Single-instance PostgreSQL
+    after: database
+    steps:
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
+      - { id: backup, title: Database backups }
+    exclude:
+      # Chosen in the Database step below, next to the HA mode's secret, so both modes ask for it in one place.
+      - config.credentialsSecretName
+      # GlitchTip connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      internalAccess.type:
+        description: >-
+          GlitchTip connects to its database like any other workload: keep Same GVC, or add the GlitchTip web
+          and worker workloads under Allowed workloads.
+
+steps:
+  - id: glitchtip
+    title: GlitchTip
+    description: The GlitchTip image, the web tier and the background worker, and the prerequisite auth secret.
+    sections:
+      - title: Web tier
+        docs: "#glitchtip-web-and-worker"
+        fields:
+          - path: image
+            type: string
+            format: image
+            label: GlitchTip image
+            required: true
+            description: Used by both the web tier and the worker.
+          - path: replicas
+            type: integer
+            label: Web replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+            description: The web tier is stateless; every replica serves the UI, the API and SDK event ingest.
+          - path: resources
+            type: resources
+            label: Web resources
+            required: true
+            description: Per web replica.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: >-
+              !has(self.resources.cpu) && !has(self.resources.memory) &&
+              !has(self.worker.resources.cpu) && !has(self.worker.resources.memory)
+            mirrors: glitchtip.validateRemovedKeys
+            paths: [resources]
+            message: >-
+              resources.cpu/memory and worker.resources.cpu/memory were renamed to maxCpu and maxMemory in 1.1.0.
+              Remove the old keys from the values.
+      - title: Background worker
+        docs: "#glitchtip-web-and-worker"
+        description: >-
+          One replica that processes events, alerts, emails and scheduled jobs, and runs database migrations at
+          boot. It is a fixed singleton.
+        fields:
+          - path: worker.resources
+            type: resources
+            label: Worker resources
+            required: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: worker.concurrency
+            type: integer
+            label: Concurrent tasks
+            required: true
+            min: 1
+            suggestions: [10, 20, 40]
+            description: Async tasks the worker processes in parallel.
+      - title: Auth and sign-up
+        docs: "#authentication-and-registration"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The auth secret must exist **before** you install. If it is missing, the deployment waits and
+              `cpln logs` shows nothing at all.
+          - path: auth.secretName
+            type: ref
+            label: Auth secret
+            required: true
+            description: A dictionary secret with the keys `secretKey`, `adminEmail` and `adminPassword`.
+            help: >-
+              `secretKey` signs sessions and tokens: changing it logs every user out. The superuser login is seeded
+              on first boot only, so change its password in the UI, not in the secret.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [secretKey, adminEmail, adminPassword]
+              create:
+                suggestName: "context.releaseName + '-glitchtip-auth'"
+          - path: registration.enabled
+            type: boolean
+            label: Open self-signup
+            description: >-
+              Anyone who can reach the endpoint can create an account. Users created by an admin and invites work
+              either way.
+        rules:
+          - rule: >-
+              (!has(self.django) || !has(self.django.secretKey)) &&
+              (!has(self.admin) || (!has(self.admin.email) && !has(self.admin.password)))
+            mirrors: glitchtip.validateRemovedKeys
+            paths: [auth.secretName]
+            message: >-
+              django.secretKey, admin.email and admin.password were removed in 1.1.0. Put them in the auth secret
+              (keys secretKey, adminEmail and adminPassword) and remove them from the values.
+      - id: email
+        title: Outbound email
+        docs: "#email"
+        description: Invites, alerts and password resets.
+        fields:
+          - path: email.secretName
+            type: ref
+            label: Email secret
+            description: >-
+              Optional. An opaque secret whose payload is an email URL such as
+              `smtp://user:password@smtp.example.com:587`. Leave empty to run without email.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                suggestName: "context.releaseName + '-glitchtip-email'"
+          - path: email.fromAddress
+            type: string
+            label: From address
+            format: email
+            when: self.email.secretName != null && self.email.secretName != ''
+            required: true
+
+  - id: access
+    title: Access
+    description: The public endpoint, the URL in DSNs, and which workloads can reach GlitchTip inside Control Plane.
+    docs: "#access"
+    fields:
+      - path: publicAccess.enabled
+        type: boolean
+        label: Serve on the public HTTPS endpoint
+        description: >-
+          The UI and SDK event ingest on the canonical endpoint. Browser SDKs and apps outside the GVC report
+          through it.
+      - path: domain
+        type: string
+        format: url
+        label: Custom URL
+        placeholder: https://errors.example.com
+        description: >-
+          Optional. The full URL used in DSNs and email links; leave empty to use the canonical endpoint. Changing
+          it later changes every DSN.
+      - path: internalAccess.type
+        type: enum
+        label: Who can connect internally
+        widget: cards
+        required: true
+        description: Firewall changes take 30 seconds to a few minutes to take effect.
+        options:
+          - value: none
+            label: None
+            description: No workload can connect.
+          - value: same-gvc
+            label: Same GVC
+            description: Any workload in this GVC.
+          - value: same-org
+            label: Same org
+            description: Any workload in this org.
+          - value: workload-list
+            label: Specific workloads
+            description: Only the workloads listed below.
+      - path: internalAccess.workloads
+        type: list
+        label: Allowed workloads
+        when: self.internalAccess.type == 'workload-list'
+        widget: tags
+        item:
+          type: ref
+          ref:
+            kind: workload
+            gvc: any
+            format: relativeLink
+            mustExist: warning
+    rules:
+      - rule: >-
+          self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list'] && self.replicas >= 1 &&
+          self.worker.concurrency >= 1
+        mirrors: glitchtip.validate
+        paths: [internalAccess.type]
+        message: Choose who can connect internally.
+      - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+        severity: info
+        paths: [internalAccess.workloads]
+        message: With "Specific workloads" and an empty list, no workload inside Control Plane can connect.
+
+  - id: redis
+    title: Redis
+    description: The task queue, cache and sessions. Turned off, PostgreSQL carries them instead.
+    sections:
+      - id: redis
+        title: Redis with Sentinel
+        toggle: redis.enabled
+        docs: "#redis"
+        description: >-
+          A Redis master with replicas, watched by Sentinels; GlitchTip connects through Sentinel. Turn it off for a
+          lighter shape with lower throughput.
+        fields:
+          - path: redis.redis.auth.password.value
+            type: string
+            label: Redis password
+            required: true
+            sensitive: true
+            description: Used as-is, so change it before installing. Any characters work.
+          - path: redis.redis.auth.password.enabled
+            type: boolean
+            label: Redis password on
+            readOnly: true
+            advanced: true
+            description: GlitchTip's Sentinel URL carries this password, so it stays on.
+          - path: redis.redis.replicas
+            type: integer
+            label: Redis nodes
+            min: 1
+            required: true
+            suggestions: [1, 2, 3]
+          - path: redis.sentinel.replicas
+            type: integer
+            label: Sentinels
+            min: 1
+            required: true
+            suggestions: [1, 3, 5]
+          - path: redis.redis.persistence.enabled
+            type: boolean
+            label: Redis persistence
+            advanced: true
+            description: Keep Redis data on a volume set across restarts.
+          - path: redis.sentinel.persistence.enabled
+            type: boolean
+            label: Sentinel persistence
+            advanced: true
+            description: Keep the Sentinel state, including the current master, across restarts.
+          - path: redis.redis.firewall.internal_inboundAllowType
+            type: enum
+            label: Who can connect to Redis
+            advanced: true
+            required: true
+            options:
+              - { value: same-gvc, label: Same GVC }
+              - { value: same-org, label: Same org }
+          - path: redis.sentinel.firewall.internal_inboundAllowType
+            type: enum
+            label: Who can connect to Sentinel
+            advanced: true
+            required: true
+            options:
+              - { value: same-gvc, label: Same GVC }
+              - { value: same-org, label: Same org }
+        rules:
+          - rule: >-
+              self.redis.redis.auth.password.enabled == true &&
+              (!has(self.redis.sentinel.auth) ||
+              ((!has(self.redis.sentinel.auth.password) || !has(self.redis.sentinel.auth.password.enabled)) &&
+              (!has(self.redis.sentinel.auth.fromSecret) || !has(self.redis.sentinel.auth.fromSecret.enabled))))
+            mirrors: glitchtip.validate
+            paths: [redis.redis.auth.password.value]
+            message: >-
+              The Redis password must stay on, and Sentinel authentication off (remove redis.sentinel.auth from the
+              values): GlitchTip sends the Redis password in its Sentinel URL and does not send a Sentinel password.
+
+  - id: database
+    title: Database
+    description: Which PostgreSQL holds GlitchTip's issues and events, and the prerequisite secret with its credentials.
+    docs: "#database"
+    sections:
+      - fields:
+          - id: dbMode
+            virtual: true
+            type: enum
+            label: Database
+            widget: cards
+            required: true
+            init: "self.postgres.enabled && !self.postgresHA.enabled ? 'single' : 'ha'"
+            options:
+              - value: ha
+                label: Highly available PostgreSQL
+                description: Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint.
+                set: { postgresHA.enabled: true, postgres.enabled: false }
+              - value: single
+                label: Single-instance PostgreSQL
+                description: One PostgreSQL replica; lighter, without failover.
+                set: { postgresHA.enabled: false, postgres.enabled: true }
+          # Declared so the postgres import's condition is a field; the chooser above writes it.
+          - path: postgres.enabled
+            type: boolean
+            label: Single-instance PostgreSQL on
+            readOnly: true
+            advanced: true
+            description: Set by the database choice above.
+          - path: postgresHA.enabled
+            type: boolean
+            label: Highly available PostgreSQL on
+            readOnly: true
+            advanced: true
+            description: Set by the database choice above.
+          - type: note
+            severity: warning
+            text: >-
+              The database credentials secret must exist **before** you install; if it is missing, the
+              deployment waits and `cpln logs` shows nothing at all.
+      - id: ha
+        title: Highly available PostgreSQL
+        when: self.postgresHA.enabled
+        description: >-
+          3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that GlitchTip connects through.
+          Recommended for production.
+        fields:
+          - path: postgresHA.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: A dictionary secret with the keys `username`, `password` and `database`.
+            help: >-
+              PostgreSQL reads these values only when its data is first initialized, and GlitchTip connects with
+              them. To change the password later, change it in the database first, then update the secret and
+              force a redeployment.
+              In HA mode the order differs: move the leader to member -0 first (see the README's HA rotation steps).
+            docs: "#prerequisites"
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-glitchtip-db-credentials'"
+          - path: postgresHA.replicas
+            type: integer
+            label: PostgreSQL replicas
+            required: true
+            min: 1
+            suggestions: [3, 5]
+            description: Patroni replicas; one is the leader, the others are standbys ready to take over.
+          - path: postgresHA.volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            description: Per replica.
+            help: Uninstalling the release deletes the volume sets, so the data does not survive a reinstall.
+            docs: "/reference/volumeset#capacity-and-billing"
+        rules:
+          - rule: oldSelf == null || self.postgresHA.volumeset.capacity >= oldSelf.postgresHA.volumeset.capacity
+            paths: [postgresHA.volumeset.capacity]
+            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+      - id: single
+        title: Single-instance PostgreSQL
+        when: self.postgres.enabled
+        description: >-
+          One PostgreSQL replica, for development and light use. Its server, storage, network and backups
+          follow in the next steps.
+        fields:
+          - path: postgres.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: A dictionary secret with the keys `username`, `password` and `database`.
+            help: >-
+              PostgreSQL reads these values only when its data directory is first initialized, and GlitchTip
+              connects with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then
+              update the secret and force a redeployment.
+            docs: "#prerequisites"
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-glitchtip-db-credentials'"
+      - id: ha-backup
+        title: Database backups
+        toggle: postgresHA.backup.enabled
+        when: self.postgresHA.enabled
+        description: Logical dumps on a schedule, or continuous WAL-G archiving, to object storage.
+        docs: "#backing-up"
+        fields:
+          - path: postgresHA.backup.mode
+            type: enum
+            label: Backup mode
+            widget: segmented
+            required: true
+            options:
+              - { value: logical, label: Logical dumps }
+              - { value: wal-g, label: WAL-G }
+          - path: postgresHA.backup.provider
+            type: enum
+            label: Destination
+            widget: cards
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+              - { value: minio, label: MinIO or S3-compatible }
+          - path: postgresHA.backup.logical.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+            when: self.postgresHA.backup.mode == 'logical'
+          - path: postgresHA.backup.walg.intervalSeconds
+            type: integer
+            label: Interval between base backups
+            unit: s
+            min: 60
+            required: true
+            when: self.postgresHA.backup.mode == 'wal-g'
+            suggestions: [3600, 21600, 86400]
+          - path: postgresHA.backup.logical.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+            when: self.postgresHA.backup.mode == 'logical'
+            description: Tag 17.x.x for the bundled PostgreSQL 17.
+          - path: postgresHA.backup.resources
+            type: resources
+            label: Backup resources
+            required: true
+            advanced: true
+      - title: AWS S3
+        when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
+        docs: "#backing-up"
+        fields:
+          - path: postgresHA.backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: postgresHA.backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: postgresHA.backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: postgresHA.backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+          - path: postgresHA.backup.aws.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+      - title: Google Cloud Storage
+        when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp'
+        docs: "#backing-up"
+        fields:
+          - path: postgresHA.backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: postgresHA.backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the Storage Admin
+              role on the bucket.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: postgresHA.backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+      - title: MinIO or S3-compatible
+        when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio'
+        docs: "#backing-up"
+        fields:
+          - path: postgresHA.backup.minio.endpoint
+            type: string
+            format: url
+            label: S3 endpoint
+            required: true
+            example: true
+            placeholder: http://my-minio-workload:9000
+            description: The URL including the port.
+          - path: postgresHA.backup.minio.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: postgresHA.backup.minio.credentialsSecretName
+            type: ref
+            label: MinIO credentials secret
+            required: true
+            description: A dictionary secret with the keys `accessKey` and `secretKey`.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [accessKey, secretKey]
+          - path: postgresHA.backup.minio.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+        rules:
+          - rule: "!has(self.postgresHA.backup.minio.accessKey) && !has(self.postgresHA.backup.minio.secretKey)"
+            paths: [postgresHA.backup.minio.credentialsSecretName]
+            message: >-
+              postgresHA.backup.minio.accessKey and secretKey were removed in 1.3.1. Put them in the MinIO
+              credentials secret and remove them from the values.
+    rules:
+      - rule: self.postgresHA.enabled != self.postgres.enabled
+        mirrors: glitchtip.validate
+        paths: [postgresHA.enabled, postgres.enabled]
+        message: Enable exactly one database, either the highly available or the single-instance PostgreSQL.
+      - rule: >-
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != null &&
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != ''
+        mirrors: glitchtip.validateDatabaseSecret
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: The database credentials secret is required.
+      - rule: "!has(self.postgres.credentials)"
+        mirrors: glitchtip.validateDatabaseSecret
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: >-
+          postgres.credentials was removed in 1.4.0: the database credentials are now a prerequisite
+          dictionary secret named by the credentials secret field. Remove postgres.credentials from the values.
+      - rule: "!has(self.postgresHA.postgres)"
+        paths: [postgresHA.config.credentialsSecretName]
+        message: >-
+          postgresHA.postgres was removed in 1.3.0: put its username, password and database in the database
+          credentials secret and remove the block from the values.
+      - rule: >-
+          !has(self.postgres.config.username) && !has(self.postgres.config.password) &&
+          !has(self.postgres.config.database)
+        paths: [postgres.config.credentialsSecretName]
+        message: >-
+          postgres.config.username, password and database were removed in 1.2.0: put them in the database
+          credentials secret and remove them from the values.
+      # Upgrading from 1.3.x or earlier, the chart-created secret is deleted by the upgrade itself, so the new
+      # prerequisite secret must have a different name (holding the same username, password and database).
+      - when: oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.4.0') < 0
+        rule: >-
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) !=
+          (oldSelf.postgresHA.enabled ? oldSelf.postgresHA.config.credentialsSecretName : oldSelf.postgres.config.credentialsSecretName)
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: >-
+          The previous version created the database secret itself, and this upgrade deletes it. Create a secret
+          under a NEW name holding the same username, password and database, and name it here.
+      - when: oldSelf != null && (context.fromVersion == null || semverCompare(context.fromVersion, '1.4.0') >= 0)
+        rule: >-
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) ==
+          (oldSelf.postgresHA.enabled ? oldSelf.postgresHA.config.credentialsSecretName : oldSelf.postgres.config.credentialsSecretName)
+        severity: info
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: >-
+          PostgreSQL reads the credentials only when its data is first initialized; pointing at another secret
+          does not change the existing user or password.
+
+
+# Rules over the imported values: their issues show on the imported fields' step (postgres:network).
+rules:
+  - when: self.postgres.enabled
+    rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks GlitchTip, which connects to its database like any other workload.'
+  - when: self.postgres.enabled && self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: >-
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-glitchtip') in self.postgres.internalAccess.workloads &&
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-glitchtip-worker') in self.postgres.internalAccess.workloads
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: >-
+      'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-glitchtip and //gvc/' + context.gvc +
+      '/workload/' + context.releaseName + '-glitchtip-worker, or GlitchTip cannot reach its database.'
+    message: Add the GlitchTip web and worker workloads to the list, or GlitchTip cannot reach its database.
+
+yamlOnly:
+  - path: postgres.pgbouncer
+    reason: GlitchTip connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+
+migrations:
+  - fromVersions: "<1.4.0"
+    from: postgres.credentials
+    note: >-
+      The database credentials are now a prerequisite dictionary secret (username, password, database). Create
+      it under a NEW name with the values the database was initialized with, and choose it under Database.
+  - fromVersions: "<1.3.1"
+    from: postgresHA.backup.minio.accessKey
+    note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey; choose it under Database backups.
+  - fromVersions: "<1.3.1"
+    from: postgresHA.backup.minio.secretKey
+    note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey; choose it under Database backups.
+  - fromVersions: "<1.3.0"
+    from: postgresHA.postgres
+    note: >-
+      Put the username, password and database the HA database was initialized with in the database
+      credentials secret, and choose it under Database.
+  - fromVersions: "<1.2.0"
+    from: postgres.config.username
+    note: Put it in the database credentials secret (key username); choose the secret under Database.
+  - fromVersions: "<1.2.0"
+    from: postgres.config.password
+    note: Put it in the database credentials secret (key password). PostgreSQL keeps the password it was initialized with.
+  - fromVersions: "<1.2.0"
+    from: postgres.config.database
+    note: Put it in the database credentials secret (key database); choose the secret under Database.
+  - fromVersions: "<1.2.0"
+    from: postgres.backup.minio.accessKey
+    note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey; choose it under Database backups.
+  - fromVersions: "<1.2.0"
+    from: postgres.backup.minio.secretKey
+    note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey; choose it under Database backups.
+  - fromVersions: "<1.1.0"
+    from: resources.cpu
+    to: resources.maxCpu
+  - fromVersions: "<1.1.0"
+    from: resources.memory
+    to: resources.maxMemory
+  - fromVersions: "<1.1.0"
+    from: worker.resources.cpu
+    to: worker.resources.maxCpu
+  - fromVersions: "<1.1.0"
+    from: worker.resources.memory
+    to: worker.resources.maxMemory
+  - fromVersions: "<1.1.0"
+    from: django.secretKey
+    note: >-
+      Put it in the auth secret (key secretKey) and choose it under GlitchTip. Reuse the same value: a new one logs
+      every user out.
+  - fromVersions: "<1.1.0"
+    from: admin.email
+    note: The superuser login moved into the auth secret (keys adminEmail and adminPassword); choose it under GlitchTip.
+  - fromVersions: "<1.1.0"
+    from: admin.password
+    note: The superuser login moved into the auth secret (keys adminEmail and adminPassword); choose it under GlitchTip.

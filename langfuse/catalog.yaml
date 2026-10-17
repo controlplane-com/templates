@@ -73,6 +73,12 @@ prerequisites:
     valuesPath: langfuse.auth.secretName
     required: true
     description: Session, encryption and hashing keys plus the first admin's login. Create it before installing; when it is missing the workloads wait. encryptionKey can never change.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: postgres.config.credentialsSecretName
+    required: true
+    description: Credentials of the bundled PostgreSQL, which initializes from them and Langfuse connects with. Create it before installing; use URL-safe values.
   - kind: bucket
     valuesPath: [objectStore.aws.bucket, objectStore.gcp.bucket]
     required: true

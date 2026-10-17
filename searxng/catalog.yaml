@@ -47,6 +47,8 @@ pickInsteadIf:
     template: meilisearch
   - need: full-text search and log analytics over your own data at scale
     template: opensearch
+  - need: crawl and index chosen websites yourself, rendering pages in a real browser
+    template: crowler
 
 related:
   - template: open-webui

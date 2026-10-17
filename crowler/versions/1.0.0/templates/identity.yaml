@@ -1,0 +1,7 @@
+{{- include "crowler.validate" . }}
+---
+kind: identity
+name: {{ include "crowler.identity.name" . }}
+description: CROWler identity
+tags: {{- include "crowler.tags" . | nindent 4 }}
+gvc: {{ .Values.global.cpln.gvc }}

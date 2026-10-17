@@ -59,6 +59,12 @@ prerequisites:
     description: ToolJet's root keys; SECRET_KEY_BASE and LOCKBOX_MASTER_KEY are write-once. When it is missing the deployment waits with no logs.
   - kind: secret
     secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: postgres.config.credentialsSecretName
+    required: true
+    description: Credentials of the bundled PostgreSQL; it initializes from them and ToolJet connects with them. Create before installing, with a URL-safe password; when missing the deployment waits with no logs.
+  - kind: secret
+    secretType: dictionary
     keys: [SMTP_USERNAME, SMTP_PASSWORD]
     valuesPath: smtp.auth.secretName
     required: false

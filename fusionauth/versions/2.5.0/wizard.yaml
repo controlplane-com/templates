@@ -1,0 +1,156 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: FusionAuth
+
+# FusionAuth keeps all state in one bundled single-instance PostgreSQL: every extra GVC location would
+# run its own FusionAuth against its own, separate database.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.4.1
+    title: Bundled PostgreSQL
+    after: access
+    steps:
+      - { id: credentials, title: Database credentials }
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
+      - { id: backup, title: Database backups }
+    exclude:
+      # FusionAuth connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      config.credentialsSecretName:
+        description: >-
+          A dictionary secret with the keys `username`, `password` and `database`. PostgreSQL initializes
+          from it and FusionAuth connects with the same keys.
+      internalAccess.type:
+        description: >-
+          FusionAuth connects to its database like any other workload: keep Same GVC, or add the FusionAuth
+          workload under Allowed workloads.
+      backup.enabled:
+        help: Adds one cron workload that runs `pg_dumpall` and uploads a gzipped dump to the bucket.
+
+steps:
+  - id: fusionauth
+    title: FusionAuth
+    description: The FusionAuth image and the compute of each replica.
+    docs: "#image-and-resources"
+    fields:
+      - path: image
+        type: string
+        format: image
+        label: FusionAuth image
+        required: true
+      - path: resources
+        type: resources
+        label: Resources
+        required: true
+
+  - id: access
+    title: Access
+    description: Who reaches FusionAuth from the internet and from inside the GVC, and where it may connect out to.
+    docs: "#firewall"
+    sections:
+      - title: Internet
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              FusionAuth has no administrator until its setup wizard is finished, and whoever reaches it first
+              creates that account. With inbound open to `0.0.0.0/0`, complete the setup wizard right after
+              installing.
+          - path: firewall.external.inboundAllowCIDR
+            type: list
+            label: Inbound CIDRs
+            widget: tags
+            description: >-
+              Internet addresses that can reach the admin UI and login pages. Empty keeps FusionAuth off the
+              internet.
+            item:
+              type: string
+              format: cidr
+          - path: firewall.external.outboundAllowCIDR
+            type: list
+            label: Outbound CIDRs
+            widget: tags
+            description: >-
+              Internet addresses FusionAuth may connect to. Empty blocks all egress; open it (for example
+              `0.0.0.0/0`) to federate with an external identity provider.
+            item:
+              type: string
+              format: cidr
+      - title: Internal access
+        docs: /reference/workload/firewall
+        fields:
+          - path: firewall.internal.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          # workload.yaml writes any non-empty list into inboundAllowWorkload, whatever the type.
+          - path: firewall.internal.workloads
+            type: list
+            label: Allowed workloads
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.firewall.internal.type == 'same-gvc'
+            rules:
+              - when: self.firewall.internal.type == 'same-org'
+                rule: size(self.firewall.internal.workloads) == 0
+                severity: info
+                message: Same org already lets every workload of the org connect, so these entries add nothing.
+
+# Rules over the imported values: their issues show on the imported fields' steps.
+rules:
+  - rule: "!has(self.postgres.credentials)"
+    mirrors: fusionauth.validateRemovedKeys
+    paths: [postgres.config.credentialsSecretName]
+    message: >-
+      postgres.credentials was removed in 2.5.0: the database credentials are now a prerequisite dictionary
+      secret named by the credentials secret field. Remove postgres.credentials from the values.
+  # Upgrading from 2.4.x, the chart-created secret is deleted by the upgrade itself, so the new
+  # prerequisite secret must have a different name (holding the same username, password and database).
+  - when: oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '2.5.0') < 0
+    rule: self.postgres.config.credentialsSecretName != oldSelf.postgres.config.credentialsSecretName
+    paths: [postgres.config.credentialsSecretName]
+    message: >-
+      2.4.x created the database secret itself, and this upgrade deletes it. Create a secret under a NEW
+      name holding the same username, password and database, and name it here.
+  - rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks FusionAuth, which connects to its database like any other workload.'
+  - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-fusionauth') in self.postgres.internalAccess.workloads
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-fusionauth, or FusionAuth cannot reach its database.'"
+    fix:
+      path: postgres.internalAccess.workloads
+      items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-fusionauth']"
+    message: Add the FusionAuth workload to the list, or FusionAuth cannot reach its database.
+
+yamlOnly:
+  - path: postgres.pgbouncer
+    reason: FusionAuth connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+
+migrations:
+  - fromVersions: "<2.5.0"
+    from: postgres.credentials
+    note: >-
+      The database credentials are now a prerequisite dictionary secret (username, password, database). Create it
+      under a NEW name with the values the database was initialized with, and choose it under Database credentials.

@@ -1,0 +1,325 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Infisical
+
+# The Infisical tier is stateless, but the bundled PostgreSQL (brings this limit with its import) and the
+# Redis + Sentinel tier (redis 3.4.3 has no descriptor, so its keys are parent fields below) are
+# single-location stateful workloads with no location handling.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.4.1
+    title: Bundled PostgreSQL
+    after: redis
+    steps:
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
+      - { id: backup, title: Database backups }
+    exclude:
+      # Infisical connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      config.credentialsSecretName:
+        help: >-
+          PostgreSQL reads these values only when its data directory is first initialized, and Infisical
+          connects with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then update
+          the secret and right away force a redeployment of Infisical (not the database). Keep the password and
+          database name URL-safe (letters, digits, `-`, `_`): they are placed in a connection URL as-is.
+      internalAccess.type:
+        description: >-
+          Infisical connects to its database like any other workload: keep Same GVC, or add the Infisical
+          workload under Allowed workloads.
+      backup.enabled:
+        help: Adds one cron workload that runs `pg_dumpall` and uploads a gzipped dump to the bucket.
+
+steps:
+  - id: infisical
+    title: Infisical
+    description: The Infisical server, its root-of-trust keys and outbound email.
+    docs: "#configuration"
+    sections:
+      - title: Server
+        docs: "#infisical-server"
+        fields:
+          - path: infisical.image
+            type: string
+            format: image
+            label: Infisical image
+            required: true
+            description: The standalone image; it runs database migrations on every boot.
+          - path: infisical.replicas
+            type: integer
+            label: Replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+            description: The server is stateless over PostgreSQL and Redis; 2 or more keep it up through restarts.
+          - path: infisical.siteUrl
+            type: string
+            format: url
+            label: Site URL
+            placeholder: https://secrets.example.com
+            description: >-
+              Optional. The public URL used for links and cookies, with `https://`. Leave empty to use the
+              canonical endpoint.
+          - path: infisical.resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per replica. Keep at least 2Gi of memory; boot migrations run out of memory at 1Gi.
+            maxRatio: 4
+            cpu: { min: 100m }
+            memory: { min: 256Mi }
+      - title: Root-of-trust keys
+        docs: "#prerequisite-secret"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The secret must exist **before** you install. If it is missing, the deployment waits and
+              `cpln logs` shows nothing at all.
+          - path: secrets.name
+            type: ref
+            label: Keys secret
+            required: true
+            description: A dictionary secret with the keys `ENCRYPTION_KEY` and `AUTH_SECRET`.
+            help: >-
+              Both are write-once. A new `ENCRYPTION_KEY` makes every stored secret unreadable; a new
+              `AUTH_SECRET` logs everyone out.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [ENCRYPTION_KEY, AUTH_SECRET]
+              create:
+                secretType: dictionary
+                suggestName: "context.releaseName + '-infisical-secrets'"
+                hint: "ENCRYPTION_KEY: openssl rand -hex 16. AUTH_SECRET: openssl rand -base64 32"
+        rules:
+          - rule: oldSelf == null || self.secrets.name == oldSelf.secrets.name
+            severity: info
+            paths: [secrets.name]
+            message: >-
+              The new secret must hold the same ENCRYPTION_KEY and AUTH_SECRET as the installed one, or stored
+              secrets become unreadable.
+      - id: smtp
+        title: Outbound email
+        toggle: smtp.enabled
+        docs: "#email"
+        description: Invites, email verification and password reset. Off, the first sign-up becomes the admin.
+        fields:
+          - path: smtp.host
+            type: string
+            format: hostname
+            label: SMTP host
+            required: true
+            example: true
+          - path: smtp.port
+            type: integer
+            label: SMTP port
+            required: true
+            min: 1
+            max: 65535
+            suggestions: [25, 465, 587, 1025, 2525]
+          - path: smtp.fromAddress
+            type: string
+            format: email
+            label: From address
+            required: true
+            example: true
+          - path: smtp.fromName
+            type: string
+            label: From name
+          - path: smtp.requireTls
+            type: boolean
+            label: Require STARTTLS
+            description: Turn off only for a plaintext mail catcher such as Mailpit on port 1025.
+          - path: smtp.auth.secretName
+            type: ref
+            label: SMTP login secret
+            description: >-
+              Optional. A dictionary secret with the keys `SMTP_USERNAME` and `SMTP_PASSWORD`. Leave empty for a
+              relay without authentication.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [SMTP_USERNAME, SMTP_PASSWORD]
+              create:
+                secretType: dictionary
+                suggestName: "context.releaseName + '-infisical-smtp'"
+    rules:
+      - rule: >-
+          self.secrets.name != '' && self.infisical.replicas >= 1 &&
+          self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list'] &&
+          (!self.smtp.enabled || (self.smtp.host != '' && self.smtp.fromAddress != ''))
+        mirrors: infisical.validate
+        paths: [secrets.name]
+        message: >-
+          Name the keys secret, keep at least one replica, and with email on set the SMTP host and from
+          address; the chart does not render otherwise.
+
+  - id: access
+    title: Access
+    description: Who reaches the UI and API, from the internet and from inside the GVC.
+    docs: "#access"
+    sections:
+      - fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Public HTTPS endpoint
+            description: >-
+              The UI and API on the workload's `*.cpln.app` endpoint. The first account to sign up becomes the
+              admin, so sign up right after install.
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect internally
+            widget: cards
+            required: true
+            description: Firewall changes take 30 seconds to a few minutes to take effect.
+            options:
+              - { value: none, label: None, description: No workload can reach Infisical internally. }
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          # workload.yaml writes this list only when the type is workload-list.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type == 'workload-list'
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+    rules:
+      - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+        severity: info
+        paths: [internalAccess.workloads]
+        message: With "Specific workloads" and an empty list, no workload inside Control Plane can connect.
+
+  - id: redis
+    title: Redis
+    description: Cache and background-job queues. Required; Infisical connects through Sentinel.
+    docs: "#bundled-redis"
+    sections:
+      - title: Redis with Sentinel
+        fields:
+          - path: redis.redis.replicas
+            type: integer
+            label: Redis nodes
+            required: true
+            min: 1
+            suggestions: [1, 3]
+          - path: redis.sentinel.replicas
+            type: integer
+            label: Sentinels
+            required: true
+            min: 1
+            suggestions: [1, 3, 5]
+      - id: redis-auth
+        title: Redis password
+        toggle: redis.redis.auth.password.enabled
+        description: >-
+          Off, Redis accepts connections from the GVC without a password. On, Infisical sends this password
+          to the Redis nodes; Sentinels stay without one.
+        fields:
+          - path: redis.redis.auth.password.value
+            type: string
+            label: Redis password
+            required: true
+            sensitive: true
+            description: Used as-is, so change it before installing.
+        rules:
+          - rule: >-
+              self.redis.redis.auth.password.value != '' &&
+              (!has(self.redis.sentinel.auth) ||
+              ((!has(self.redis.sentinel.auth.password) || !has(self.redis.sentinel.auth.password.enabled)) &&
+              (!has(self.redis.sentinel.auth.fromSecret) || !has(self.redis.sentinel.auth.fromSecret.enabled))))
+            mirrors: infisical.validate
+            paths: [redis.redis.auth.password.value]
+            message: >-
+              Set the Redis password, and keep Sentinel authentication off (remove redis.sentinel.auth from the
+              values): Infisical authenticates only to the Redis nodes.
+      - title: Images
+        advanced: true
+        fields:
+          - path: redis.redis.image
+            type: string
+            format: image
+            label: Redis image
+            required: true
+          - path: redis.sentinel.image
+            type: string
+            format: image
+            label: Sentinel image
+            required: true
+
+# Rules over the imported values: their issues show on the imported fields' step.
+rules:
+  - rule: "!has(self.postgres.credentials)"
+    mirrors: infisical.validateRemovedKeys
+    paths: [postgres.config.credentialsSecretName]
+    message: >-
+      postgres.credentials was removed in 1.2.0: the database credentials are now a prerequisite dictionary
+      secret named by the credentials secret field. Remove postgres.credentials from the values.
+  # Upgrading from 1.1.0 or earlier, the chart-created secret is deleted by the upgrade itself, so the new
+  # prerequisite secret must have a different name (holding the same username, password and database).
+  - when: oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.2.0') < 0
+    rule: self.postgres.config.credentialsSecretName != oldSelf.postgres.config.credentialsSecretName
+    paths: [postgres.config.credentialsSecretName]
+    message: >-
+      The previous version created the database secret itself, and this upgrade deletes it. Create a secret
+      under a NEW name holding the same username, password and database, and name it here.
+  - rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks Infisical, which connects to its database like any other workload.'
+  - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-infisical') in self.postgres.internalAccess.workloads
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-infisical, or Infisical cannot reach its database.'"
+    fix:
+      path: postgres.internalAccess.workloads
+      items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-infisical']"
+    message: Add the Infisical workload to the list, or Infisical cannot reach its database.
+
+yamlOnly:
+  - path: postgres.pgbouncer
+    reason: Infisical connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+  - path: redis.redis.resources
+    reason: >-
+      redis 3.4.3 names its limits cpu/memory beside minCpu/minMemory, a shape the resources field cannot bind;
+      the defaults suit the cache and job queues.
+  - path: redis.sentinel.resources
+    reason: >-
+      redis 3.4.3 names its limits cpu/memory beside minCpu/minMemory, a shape the resources field cannot bind;
+      a Sentinel needs little.
+
+migrations:
+  - fromVersions: "<1.2.0"
+    from: postgres.credentials
+    note: >-
+      The database credentials are now a prerequisite dictionary secret (username, password, database). Create it
+      under a NEW name with the values the database was initialized with, and choose it under Bundled PostgreSQL.
+  - fromVersions: "<1.1.0"
+    from: postgres.config.username
+    note: Put it in the database credentials secret (key username).
+  - fromVersions: "<1.1.0"
+    from: postgres.config.password
+    note: Put it in the database credentials secret (key password). PostgreSQL keeps the password it was initialized with.
+  - fromVersions: "<1.1.0"
+    from: postgres.config.database
+    note: Put it in the database credentials secret (key database).

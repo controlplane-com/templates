@@ -71,6 +71,12 @@ prerequisites:
     valuesPath: owner.secretName
     required: true
     description: Instance owner login; passwordHash is a bcrypt hash, never plaintext. Re-applied on every start. A missing secret leaves n8n waiting with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+    required: true
+    description: Credentials the bundled PostgreSQL initializes with and n8n connects with; set the name for the database mode in use. A missing secret leaves the deployment waiting with no logs.
   - kind: bucket
     valuesPath:
       - postgresHA.backup.aws.bucket

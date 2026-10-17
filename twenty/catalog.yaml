@@ -64,6 +64,12 @@ prerequisites:
     required: true
     description: Opaque app key used as APP_SECRET and ENCRYPTION_KEY (write-once). When it is missing the deployment waits with no logs.
   - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: [postgres.config.credentialsSecretName, postgresHA.config.credentialsSecretName]
+    required: true
+    description: Credentials the bundled PostgreSQL initializes with and Twenty connects with (URL-safe characters only); set the key of the database mode in use. When it is missing the deployment waits with no logs.
+  - kind: secret
     secretType: opaque
     valuesPath: secrets.fallbackName
     required: false

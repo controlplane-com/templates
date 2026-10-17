@@ -79,6 +79,12 @@ prerequisites:
     valuesPath: secrets.name
     required: true
     description: Master key, write-once salt key and one entry per name in litellm.providerEnv (default OPENAI_API_KEY). Create it before installing; when it is missing the deployment waits.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: postgres.config.credentialsSecretName
+    required: true
+    description: Bundled PostgreSQL credentials (all URL-safe); the database initializes from them and the proxy connects with them. Create it before installing.
   - kind: bucket
     required: false
     when: postgres.backup.enabled (backups of the bundled PostgreSQL)

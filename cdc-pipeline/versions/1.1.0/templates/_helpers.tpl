@@ -114,10 +114,10 @@ the subchart's own helper.
 {{- $readme := "See \"Upgrading from 1.0.4\" in the README." -}}
 {{- /* 1. Components that need the admin password in clear. */ -}}
 {{- if $k.kafka_orchestrator -}}
-{{- fail "cdc-pipeline: kafka.kafka_orchestrator must stay null. The health sidecar logs in with the Kafka admin password as a plain value, and this template keeps that password only in the credentials secret (resolved by the broker itself). Remove kafka_orchestrator from your values." -}}
+{{- fail "cdc-pipeline: kafka.kafka_orchestrator must stay false. The health sidecar logs in with the Kafka admin password as a plain value, and this template keeps that password only in the credentials secret (resolved by the broker itself). Set kafka_orchestrator to false (or remove it from your values)." -}}
 {{- end -}}
 {{- if $k.kafka_exporter -}}
-{{- fail "cdc-pipeline: kafka.kafka_exporter must stay null. The Kafka exporter logs in with the Kafka admin password as a plain value, and this template keeps that password only in the credentials secret (resolved by the broker itself). Remove kafka_exporter from your values." -}}
+{{- fail "cdc-pipeline: kafka.kafka_exporter must stay false. The Kafka exporter logs in with the Kafka admin password as a plain value, and this template keeps that password only in the credentials secret (resolved by the broker itself). Set kafka_exporter to false (or remove it from your values)." -}}
 {{- end -}}
 {{- if ($k.kafka_ui).enabled -}}
 {{- fail "cdc-pipeline: kafka.kafka_ui must stay off. It writes the Kafka admin password into its own settings as a plain value, and this template keeps that password only in the credentials secret. Use Kafbat UI (kafka.kafbat_ui) instead; see the README." -}}

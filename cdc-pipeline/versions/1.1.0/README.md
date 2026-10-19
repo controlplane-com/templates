@@ -121,8 +121,8 @@ kafka:
     extra_configurations:
       config.providers: env # keep both provider lines: they resolve the references
       config.providers.env.class: org.apache.kafka.common.config.provider.EnvVarConfigProvider
-  kafka_orchestrator: null # keep off: needs the admin password as a plain value
-  kafka_exporter: null # keep off: needs the admin password as a plain value
+  kafka_orchestrator: false # keep off: needs the admin password as a plain value
+  kafka_exporter: false # keep off: needs the admin password as a plain value
   kafbat_ui:
     enabled: false # see Kafbat UI below
 ```
@@ -310,7 +310,7 @@ logs in as `admin` or `debezium` needs the new password too.
 
 - **Rotating the database password in HA mode needs a leader switchover first** — follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode). A plain redeploy can promote a member still holding the old password and split the cluster.
 - **Rotating a Kafka password needs both redeployments** — edit the secret, then redeploy `RELEASE_NAME-cluster` and `RELEASE_NAME-debezium` as in [Rotating the Kafka passwords](#rotating-the-kafka-passwords), straight after the edit.
-- **This template runs no Kafka exporter, health sidecar or REST Proxy** (`kafka.kafka_exporter`, `kafka.kafka_orchestrator` stay `null`, `kafka.kafka_rest_proxy.enabled` stays `false`); broker metrics come from the JMX exporter. Kafka Connect connectors (`kafka.kafka_connectors`) must reference their credentials as `cpln://secret/SECRET_NAME.KEY` in their `env`, never inline them.
+- **This template runs no Kafka exporter, health sidecar or REST Proxy** (`kafka.kafka_exporter`, `kafka.kafka_orchestrator` stay `false`, `kafka.kafka_rest_proxy.enabled` stays `false`); broker metrics come from the JMX exporter. Kafka Connect connectors (`kafka.kafka_connectors`) must reference their credentials as `cpln://secret/SECRET_NAME.KEY` in their `env`, never inline them.
 - **A replication slot is left behind when the connector is removed.** PostgreSQL retains WAL for it until `max_slot_wal_keep_size` (a quarter of the volume) invalidates it; drop it explicitly (`SELECT pg_drop_replication_slot('debezium');`).
 - **Debezium's replication slot follows a database switchover.** It is a PostgreSQL 17 failover slot (`debezium-server.source.postgres.slotFailover`), so every replica holds a synchronized copy and Debezium resumes on the new leader; changes around a leader change can be delivered twice, so consumers must tolerate duplicates.
 - **Dependency versions are pinned in `Chart.yaml`** and move only with a new version of this template.

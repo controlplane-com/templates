@@ -30,7 +30,7 @@ database.
 | `kafka.kafka.listeners.client.sasl.admin.password` / `.passwords` | `${env:CDC_KAFKA_ADMIN_PASSWORD}` / `${env:CDC_KAFKA_DEBEZIUM_PASSWORD}` | references, not passwords; render `fail` on anything plain |
 | `kafka.kafka.secrets.inter_broker_password` / `controller_password` | `${env:CDC_KAFKA_INTER_BROKER_PASSWORD}` / `${env:CDC_KAFKA_CONTROLLER_PASSWORD}` | same; read-only in the wizard |
 | `kafka.kafka.extra_configurations` `config.providers*` | `env` + `EnvVarConfigProvider` | resolves the references; render `fail` if removed |
-| `kafka.kafka_orchestrator` / `kafka.kafka_exporter` | `null` | render `fail` if set (they log in with the admin password in clear); `kafka_ui` refused too |
+| `kafka.kafka_orchestrator` / `kafka.kafka_exporter` | `false` (not `null`: under Helm 4, which CI runs, a `null` in the parent's own values.yaml keeps the kafka chart's defaults and both sidecars render) | render `fail` if set (they log in with the admin password in clear); `kafka_ui` refused too |
 | `kafka.kafka.secrets.kraft_cluster_id` | `change-me-cdc-pipeline-kraft-cluster-id` | NOT a UUID, but Kafka 3.9.1 accepts it (see below) |
 | `kafka.kafbat_ui.enabled` | `false` (was `true`) | needs an opaque config secret the user creates |
 | `debezium-server.source.database.name` / `.user` | `cdcdb` / `cdc_user` | must equal the secret's `database` / `username` |

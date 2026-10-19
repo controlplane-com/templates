@@ -154,9 +154,10 @@ kafka:
       log.retention.hours: 168
 
   # Off: the health sidecar and the Kafka exporter need the admin password as a plain value, which this
-  # template no longer holds. The chart refuses them.
-  kafka_orchestrator: null
-  kafka_exporter: null
+  # template no longer holds. The chart refuses them. `false`, not `null`: Helm 4 ignores a `null` in a
+  # parent chart's own values and keeps the kafka chart's defaults, which would turn both back on.
+  kafka_orchestrator: false
+  kafka_exporter: false
 
   jmx_exporter:
     name: jmx-exporter

@@ -198,10 +198,10 @@ steps:
 
       # Kafka's passwords come from the credentials secret (cdc.validateKafkaSecretRefs).
       - rule: >-
-          self.kafka.kafka_orchestrator == null && self.kafka.kafka_exporter.name == null &&
-          self.kafka.kafka_exporter.image == null && self.kafka.kafka_exporter.listener == null &&
-          self.kafka.kafka_exporter.cpu == null && self.kafka.kafka_exporter.memory == null &&
-          self.kafka.kafka_ui.enabled != true
+          (self.kafka.kafka_orchestrator == null || self.kafka.kafka_orchestrator == false) &&
+          self.kafka.kafka_exporter.name == null && self.kafka.kafka_exporter.image == null &&
+          self.kafka.kafka_exporter.listener == null && self.kafka.kafka_exporter.cpu == null &&
+          self.kafka.kafka_exporter.memory == null && self.kafka.kafka_ui.enabled != true
         mirrors: cdc.validateKafkaSecretRefs
         paths: [kafka.kafka_orchestrator, kafka.kafka_exporter, kafka.kafka_ui.enabled]
         message: >-

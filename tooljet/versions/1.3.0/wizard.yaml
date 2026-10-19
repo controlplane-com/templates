@@ -367,12 +367,12 @@ yamlOnly:
 migrations:
   - fromVersions: "<1.3.0"
     from: redis.redis.auth.password.enabled
-    note: >-
-      The Redis password is now a prerequisite dictionary secret (key password). If it was on, create the secret
-      under a NEW name holding your current Redis password, then turn on Redis password and choose it.
+    to: redis.redis.auth.fromSecret.enabled
   - fromVersions: "<1.3.0"
     from: redis.redis.auth.password.value
-    note: Put it in the Redis password secret (key password) and choose that secret under Redis password.
+    note: >-
+      The Redis password is now a prerequisite dictionary secret (key password). If Redis auth was on, create it
+      under a NEW name holding your CURRENT Redis password, and choose it under Redis password.
   - fromVersions: "<1.3.0"
     from: postgres.credentials
     note: >-

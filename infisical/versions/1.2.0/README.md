@@ -150,7 +150,7 @@ The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`c
 
 ```bash
 cpln secret create-dictionary --name RELEASE_NAME-postgres-credentials \
-  --entry username=infisical --entry password=YOUR_CURRENT_PASSWORD --entry database=infisical
+  --entry username=infisical --entry password='YOUR_CURRENT_PASSWORD' --entry database=infisical
 ```
 
 Then upgrade with `postgres.config.credentialsSecretName` set to that name and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.1.0 release, and also in the old secret (`cpln secret reveal my-infisical-db-credentials -o yaml`) until the upgrade deletes it.
@@ -158,12 +158,12 @@ Then upgrade with `postgres.config.credentialsSecretName` set to that name and `
 `redis.redis.auth.password` was removed the same way. With Redis auth off (the default) just delete the block. With it on, this upgrade deletes the `RELEASE_NAME-redis-auth-password` secret 1.1.0 had the redis chart create, so first create one under a **new** name holding your **current** Redis password:
 
 ```bash
-cpln secret create-dictionary --name RELEASE_NAME-infisical-redis --entry password=YOUR_CURRENT_REDIS_PASSWORD
+cpln secret create-dictionary --name RELEASE_NAME-infisical-redis --entry password='YOUR_CURRENT_REDIS_PASSWORD'
 ```
 
 Your current password is `redis.redis.auth.password.value` of the 1.1.0 release, and also in `cpln secret reveal RELEASE_NAME-redis-auth-password -o yaml` until the upgrade deletes it. Upgrade with `redis.redis.auth.fromSecret.enabled: true`, `redis.redis.auth.fromSecret.name` set to the new name, and the `redis.redis.auth.password` block removed.
 
-The upgrade restarts the bundled PostgreSQL (and, with auth on, Redis) too, since they now read the new secrets, so Infisical can briefly lose its database; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
+The upgrade restarts the bundled PostgreSQL (and, with auth on, Redis) too, since they now read the new secrets, so Infisical loses its database for up to about two minutes; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
 
 ## Upgrading from 1.0.0
 

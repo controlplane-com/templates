@@ -230,8 +230,8 @@ steps:
               - rule: >-
                   (oldSelf != null && oldSelf.redis.auth.password.enabled &&
                   self.redis.auth.password.value == oldSelf.redis.auth.password.value) ||
-                  self.redis.auth.password.value.matches("^[^\\s\\x22\\x27\\\\\\x00-\\x1f\\x7f]+$")
-                message: Leave out spaces, quotes and backslashes. The chart writes the Redis password into a configuration line.
+                  self.redis.auth.password.value.matches("^[^\\x00-\\x1f\\x7f]+$")
+                message: Leave out line breaks and other control characters; the Redis password is written on one configuration line.
             when: ui.redisAuth == 'password'
           - type: note
             severity: warning
@@ -318,8 +318,8 @@ steps:
               - rule: >-
                   (oldSelf != null && oldSelf.sentinel.auth.password.enabled &&
                   self.sentinel.auth.password.value == oldSelf.sentinel.auth.password.value) ||
-                  self.sentinel.auth.password.value.matches("^[^\\s\\x22\\x27\\\\\\x00-\\x1f\\x7f]+$")
-                message: Leave out spaces, quotes and backslashes. The chart writes the Sentinel password into a configuration line.
+                  self.sentinel.auth.password.value.matches("^[^\\x00-\\x1f\\x7f]+$")
+                message: Leave out line breaks and other control characters; the Sentinel password is written on one configuration line.
             when: ui.sentinelAuth == 'password'
           - type: note
             severity: warning

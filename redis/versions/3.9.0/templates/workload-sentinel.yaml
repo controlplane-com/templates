@@ -7,12 +7,11 @@ tags:
   {{- if .Values.sentinel.tags }}
 {{ toYaml .Values.sentinel.tags | indent 2 }}
   {{- end }}
-  # Currently a no-op: the sentinel readiness probe is a plain `redis-cli ping`, so
-  # pods become Ready as soon as the port answers and the headless service exposes
-  # them anyway. Set here as a hedge — if the probe is ever tightened (e.g. to
-  # require quorum visibility or a known master), peers must still resolve each
-  # other via `<pod>.<workload>` during cold start to form the quorum, otherwise
-  # they deadlock: NotReady because no peers, no peers because NotReady.
+  # A no-op: the platform refuses inbound connections to a NotReady pod whether or
+  # not this tag is set. It is harmless here because the sentinel readiness probe
+  # only checks its own port (PONG), so a sentinel is ready without its peers.
+  # Never make that probe depend on peers or quorum: NotReady sentinels cannot
+  # reach each other, so they would deadlock.
   cpln/publishNotReadyAddresses: "true"
   {{- include "redis.tags" . | nindent 2 }}
 spec:
@@ -51,12 +50,15 @@ spec:
             echo "Bootstrapping sentinel.conf from static config"
             cp /config/sentinel.conf /etc/sentinel/sentinel.conf
 
+            # A password is written as a quoted Redis config string, so a space, quote,
+            # backslash or # in it cannot break the config (or be mangled by echo).
+            redis_quote() { printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"; }
             if [ -n "$CUSTOM_REDIS_PASSWORD" ]; then
-              echo "\nsentinel auth-pass mymaster $CUSTOM_REDIS_PASSWORD" >> /etc/sentinel/sentinel.conf
+              printf '\nsentinel auth-pass mymaster %s\n' "$(redis_quote "$CUSTOM_REDIS_PASSWORD")" >> /etc/sentinel/sentinel.conf
             fi
 
             if [ -n "$CUSTOM_SENTINEL_PASSWORD" ]; then
-              echo "\nrequirepass $CUSTOM_SENTINEL_PASSWORD" >> /etc/sentinel/sentinel.conf
+              printf '\nrequirepass %s\n' "$(redis_quote "$CUSTOM_SENTINEL_PASSWORD")" >> /etc/sentinel/sentinel.conf
             fi
 
             {{- if and (hasKey .Values.sentinel "publicAccess") .Values.sentinel.publicAccess.enabled }}
@@ -137,10 +139,11 @@ spec:
                 {{- else }}
                 PORT=26379
                 {{- end }}
+                # redis-cli exits 0 on an error reply (NOAUTH, WRONGPASS), so require the PONG.
                 if [ ! -z "$CUSTOM_SENTINEL_PASSWORD" ]; then
-                  redis-cli -p $PORT --no-auth-warning -a "$CUSTOM_SENTINEL_PASSWORD" ping;
+                  [ "$(redis-cli -p $PORT --no-auth-warning -a "$CUSTOM_SENTINEL_PASSWORD" ping 2>/dev/null | tr -d '\r')" = "PONG" ]
                 else
-                  redis-cli -p $PORT ping;
+                  [ "$(redis-cli -p $PORT ping 2>/dev/null | tr -d '\r')" = "PONG" ]
                 fi
         failureThreshold: 10
         initialDelaySeconds: 10

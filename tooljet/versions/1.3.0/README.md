@@ -180,7 +180,7 @@ ToolJet is briefly unavailable while it restarts (with `tooljet.replicas` of 2 o
 
 ```bash
 cpln secret create-dictionary --name RELEASE_NAME-postgres-credentials \
-  --entry username=YOUR_CURRENT_USERNAME --entry password=YOUR_CURRENT_PASSWORD --entry database=YOUR_CURRENT_DATABASE
+  --entry username='YOUR_CURRENT_USERNAME' --entry password='YOUR_CURRENT_PASSWORD' --entry database='YOUR_CURRENT_DATABASE'
 ```
 
 Then upgrade with `postgres.config.credentialsSecretName` set to that name and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.2.0 release, and also in the old secret named by its `postgres.config.credentialsSecretName` (`cpln secret reveal SECRET_NAME -o yaml`) until the upgrade deletes it.
@@ -190,7 +190,7 @@ Then upgrade with `postgres.config.credentialsSecretName` set to that name and `
 ```bash
 cpln secret reveal RELEASE_NAME-redis-auth-password -o yaml
 cpln secret create-dictionary --name RELEASE_NAME-tooljet-redis \
-  --entry password=YOUR_CURRENT_REDIS_PASSWORD
+  --entry password='YOUR_CURRENT_REDIS_PASSWORD'
 ```
 
 Then also set `redis.redis.auth.fromSecret.enabled: true` and `redis.redis.auth.fromSecret.name` to the new name, and remove `redis.redis.auth.password`. With Redis auth off in 1.2.0 (the default), just remove `redis.redis.auth.password` from your values.

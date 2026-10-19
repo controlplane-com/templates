@@ -518,7 +518,8 @@ migrations:
     from: database
     note: >-
       The database credentials are now a prerequisite dictionary secret (username, password, database,
-      sourcePassword = password, kafkaSaslPassword). Create it under a NEW name with the values the database
+      sourcePassword = password, kafkaSaslPassword, kafkaAdminPassword, kafkaInterBrokerPassword,
+      kafkaControllerPassword). Create it under a NEW name with the values the database
       was created with, and choose it under Credentials. walLevel is now postgres-highly-available.walLevel.
   # 1.0.4 turned Kafbat UI on by default and 1.1.0 turns it off: keep what the release runs with.
   - fromVersions: "<1.1.0"

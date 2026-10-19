@@ -113,18 +113,23 @@ database.
   cluster now reads the same secret, so it is expected to roll too [UNPROVEN live].
 - **Kafka password rotation (1.1.0 shape):** edit the secret → `cpln secret reveal` → force-redeploy
   `<release>-cluster` → force-redeploy `<release>-debezium` (only for `kafkaSaslPassword`). No `helm upgrade`.
-  The stateful brokers restart together (`scalingPolicy: Parallel`; the API drops `maxUnavailableReplicas`),
-  so the inter-broker and controller passwords never disagree for long; Kafka is down while they restart and
-  Debezium is refused until its own redeploy. Do the steps back to back: a broker that restarts by itself after
-  the edit re-resolves the secret and comes back with passwords its peers do not share yet. [UNPROVEN live:
-  the order, Debezium's behaviour in the gap, and whether a container restart alone re-resolves the env.]
+  Measured 2026-10-19 (test-gvc-3, all four rotated, 5000/5000 events, 0 lost/dup): the brokers roll ONE AT A
+  TIME (-2 → -1 → -0, ~3 min each, ~10 min total) — not together; readiness is only a TCP check on 9093, so a
+  restarted broker that cannot rejoin (new inter-broker/controller password vs peers on the old one) is marked
+  ready and the roll moves on. Kafka refused writes ~5 min, no partition had a leader ~3 min, Debezium delivered
+  nothing ~9 min. Old passwords refused after, new accepted. A plain force-redeploy of the brokers (no secret
+  change) lost nothing and the ISR was full again 34-73 s before each broker turned ready (timing, not a guarantee).
+- **1.0.4 → 1.1.0 upgrade (round 3):** brokers come back on the carried passwords with 0 auth failures, no reveal
+  stall; Debezium threw `ClassCastException: String cannot be cast to [B` in the snapshot path three times during
+  the Kafka roll (1.0.4's Debezium once just before), recovered by itself, nothing lost. Cause not found.
 - **Upgrading from 1.0.4:** the secret must hold the passwords the cluster runs with — admin, inter-broker and
   controller from `<release>-secrets`, Debezium's from `<release>-debezium-credentials` (`kafka-sasl-password`),
   revealed BEFORE the upgrade rewrites them. The brokers then restart onto the same passwords. The wizard's
   computed migrations rewrite the values to the references (the listeners map only for the stock one-client,
   debezium-only shape; anything else is kept and the rules ask for the references).
 - **The kafka identity's new `reveal` grant arrives with the upgrade**, so the new broker version can wait on
-  `is not allowed to reveal the secret` like the other workloads (README step 4) [UNPROVEN live for Kafka].
+  `is not allowed to reveal the secret` like the other workloads (README step 4); round 3 (2026-10-19) saw no
+  stall on the 1.0.4 → 1.1.0 upgrade, so it is possible, not certain.
 - **Debezium recovers from a DB password rotation without a redeploy**: it fails auth, its container restarts and
   the restart re-resolves `cpln://secret` (measured live: the restarted JVM held the new password).
 - **The secret must not be named `<release>-debezium-credentials`** — debezium-server creates that one. Refused at render (`cdc.validateCredentialsSecret`) and by the wizard.

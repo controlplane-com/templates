@@ -11,7 +11,7 @@ chart turns a plaintext value into a secret any more.
 */}}
 {{- define "cdc.validateRemovedKeys" -}}
 {{- if hasKey .Values "database" -}}
-{{- fail "cdc-pipeline: the `database:` block was REMOVED in 1.1.0. The database credentials are now a `dictionary` secret you create, holding the keys `username`, `password`, `database`, `sourcePassword` (the same value as `password`) and `kafkaSaslPassword`. Name it in BOTH postgres-highly-available.config.credentialsSecretName and debezium-server.credentialsSecretName, set postgres-highly-available.walLevel instead of database.walLevel, and delete the `database:` block. See Prerequisites in the README." -}}
+{{- fail "cdc-pipeline: the `database:` block was REMOVED in 1.1.0. The database credentials are now a `dictionary` secret you create, holding the keys `username`, `password`, `database`, `sourcePassword` (the same value as `password`), `kafkaSaslPassword`, `kafkaAdminPassword`, `kafkaInterBrokerPassword` and `kafkaControllerPassword`. Name it in BOTH postgres-highly-available.config.credentialsSecretName and debezium-server.credentialsSecretName, set postgres-highly-available.walLevel instead of database.walLevel, and delete the `database:` block. See Prerequisites in the README." -}}
 {{- end -}}
 {{- $dbz := index .Values "debezium-server" -}}
 {{- if (($dbz.source).database).password -}}
@@ -30,13 +30,13 @@ two subcharts, so both keys exist and must hold the same name.
 {{- $pg := index .Values "postgres-highly-available" "config" "credentialsSecretName" | default "" -}}
 {{- $dbz := index .Values "debezium-server" "credentialsSecretName" | default "" -}}
 {{- if not $pg -}}
-{{- fail "cdc-pipeline: postgres-highly-available.config.credentialsSecretName is required — it names the `dictionary` secret with the keys `username`, `password`, `database`, `sourcePassword` and `kafkaSaslPassword`. Create it BEFORE installing; see Prerequisites in the README." -}}
+{{- fail "cdc-pipeline: postgres-highly-available.config.credentialsSecretName is required — it names the `dictionary` secret with the keys `username`, `password`, `database`, `sourcePassword`, `kafkaSaslPassword`, `kafkaAdminPassword`, `kafkaInterBrokerPassword` and `kafkaControllerPassword`. Create it BEFORE installing; see Prerequisites in the README." -}}
 {{- end -}}
 {{- if eq $pg (printf "%s-debezium-credentials" .Release.Name) -}}
 {{- fail (printf "cdc-pipeline: the credentials secret cannot be named '%s': debezium-server creates a secret with that name itself (its derived settings), and the two would overwrite each other. Choose another name, for example %s-cdc-credentials." $pg .Release.Name) -}}
 {{- end -}}
 {{- if ne $pg $dbz -}}
-{{- fail (printf "cdc-pipeline: postgres-highly-available.config.credentialsSecretName ('%s') and debezium-server.credentialsSecretName ('%s') must name the SAME secret: it holds the database credentials (username, password, database) and Debezium's (sourcePassword, kafkaSaslPassword)." $pg $dbz) -}}
+{{- fail (printf "cdc-pipeline: postgres-highly-available.config.credentialsSecretName ('%s') and debezium-server.credentialsSecretName ('%s') must name the SAME secret: it holds the database credentials (username, password, database) Debezium's (sourcePassword, kafkaSaslPassword) and Kafka's (kafkaAdminPassword, kafkaInterBrokerPassword, kafkaControllerPassword)." $pg $dbz) -}}
 {{- end -}}
 {{- end -}}
 

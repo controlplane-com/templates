@@ -287,13 +287,6 @@ redeployments, with no `helm upgrade`. The brokers and Debezium keep the passwor
 they restart, so run the steps back to back: a broker that restarts on its own in between comes back with
 passwords its peers do not have yet.
 
-<!-- [UNPROVEN] for the test round: this order and the client behaviour below are expected, not measured.
-Expected: the broker redeploy restarts all brokers together, so Kafka is unavailable until they are ready
-again and every client reconnects. Between steps 3 and 4 Debezium's producer is refused
-(SaslAuthenticationException) because it still holds the old kafkaSaslPassword; it retries, nothing is lost
-(its replication slot holds the changes), and some events can be delivered twice after step 4. Any other
-client logging in with a rotated password is refused until it is given the new one. Also unmeasured for the
-brokers: that a container restart alone re-resolves the secret (measured for Debezium in round 2). -->
 
 ```bash
 cpln secret edit SECRET_NAME                    # 1. new values for any of kafkaSaslPassword, kafkaAdminPassword, kafkaInterBrokerPassword, kafkaControllerPassword
@@ -302,9 +295,12 @@ cpln workload force-redeployment RELEASE_NAME-cluster --gvc GVC_NAME    # 3. the
 cpln workload force-redeployment RELEASE_NAME-debezium --gvc GVC_NAME   # 4. only when kafkaSaslPassword changed; right after step 3
 ```
 
-Kafka is unavailable while the brokers restart, and Debezium is refused from step 3 until step 4, then
-resumes from its replication slot; events around the switch can be delivered twice. Any other client that
-logs in as `admin` or `debezium` needs the new password too.
+The brokers restart one at a time. When `kafkaInterBrokerPassword` or `kafkaControllerPassword` changed, a
+restarted broker cannot rejoin the brokers still on the old passwords, so partway through the roll Kafka
+refuses writes for several minutes until the last broker has restarted; rotate those two in a quiet window.
+Debezium is refused from step 3 until step 4, then resumes from its replication slot, so nothing is lost and
+events around the switch can be delivered twice. Any other client that logs in as `admin` or `debezium`
+needs the new password too.
 
 ## Important Notes
 

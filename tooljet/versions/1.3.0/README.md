@@ -235,6 +235,7 @@ Check the object size before restoring from one.
 
 - **Every prerequisite secret must exist before install** — the keys secret (`secrets.name`), the database credentials secret (`postgres.config.credentialsSecretName`) and, with Redis auth on, the Redis password secret (`redis.redis.auth.fromSecret.name`). A missing secret wedges the deployment with zero log lines; see Prerequisites for how to diagnose it.
 - **`SECRET_KEY_BASE` and `LOCKBOX_MASTER_KEY` are write-once — never rotate them.** Rotating `LOCKBOX_MASTER_KEY` corrupts every stored datasource credential.
+- **Without a ToolJet license the free tier allows 2 apps** — creating a third is refused with `You have reached your maximum limit for apps.`
 - **The first visitor to complete the UI onboarding becomes the instance Super Admin** — open the endpoint and create your admin account immediately after install; self-signup stays off until the Super Admin enables it.
 - **Scaling to `replicas >= 2` requires `redis.enabled: true`** — replicas coordinate the job queue and multiplayer editing through the shared Redis; the install fails validation otherwise.
 - **Keep `redis.redis.replicas` at 1** — ToolJet's Redis client is not Sentinel-aware; more data nodes would route writes to read-only replicas.

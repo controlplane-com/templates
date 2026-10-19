@@ -2,7 +2,7 @@
 
 ## What it is
 - Open-source low-code platform (visual builder: drag-and-drop UIs over databases/APIs) for internal tools and admin panels; ~38k GitHub stars.
-- License: AGPL-3.0 (strong open source: anyone offering a modified version as a service must share their changes) — fine per catalog precedent (metabase, mimir). Image is the EE build but runs the free tier with no license key (`/api/health` reports `license: {valid:false, expired:true}` — that is the free tier, not a fault).
+- License: AGPL-3.0 (strong open source: anyone offering a modified version as a service must share their changes) — fine per catalog precedent (metabase, mimir). Image is the EE build but runs the free tier with no license key (`/api/health` reports `license: {valid:false, expired:true}` — that is the free tier, not a fault). The free tier allows 2 apps: a third `POST /api/apps` returns `451 You have reached your maximum limit for apps.` (measured 2026-10-19).
 
 ## Common use cases
 - CRUD admin panels over existing Postgres/MySQL/Mongo/APIs.

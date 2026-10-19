@@ -1,6 +1,6 @@
 # ─── ToolJet server ───────────────────────────────────────────────
 tooljet:
-  # Official LTS image (EE build — runs the free tier, no license key needed).
+  # Official LTS image (EE build — runs the free tier, no license key needed; the free tier allows 2 apps).
   # PostgREST and a single-instance fallback Redis are bundled in-image.
   image: tooljet/tooljet:v3.20.204-lts
   replicas: 1                 # >=2 requires redis.enabled=true (shared job queue + multiplayer coordination)

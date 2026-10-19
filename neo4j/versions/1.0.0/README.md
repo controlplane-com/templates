@@ -132,7 +132,7 @@ when the snapshot was taken.
 
 ## Important Notes
 
-- The secret's password is used only on the first start. To change it, run `ALTER CURRENT USER SET PASSWORD FROM 'old' TO 'new'`, then update the secret so it matches.
+- The secret's password is used only on the first start. To change it, run `ALTER CURRENT USER SET PASSWORD FROM 'old' TO 'new'`, update the secret so it matches, then `cpln workload force-redeployment` every app that reads it (a changed secret reaches no running workload on its own).
 - Every upgrade or configuration change restarts the only server, so Neo4j is briefly unavailable.
 - Keep `heapSize` + `pageCacheSize` to about three quarters of `maxMemory`; the JVM needs the rest, and an over-committed container is OOM-killed.
 - `volumeset.capacity` only sizes a new volume; grow a live one with `volumeset.autoscaling` or `cpln volumeset expand`.

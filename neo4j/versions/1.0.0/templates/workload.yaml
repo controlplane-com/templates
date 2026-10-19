@@ -2,7 +2,7 @@ kind: workload
 name: {{ include "neo4j.name" . }}
 gvc: {{ .Values.global.cpln.gvc }}
 description: Neo4j Community graph database
-tags: {{- include "neo4j.tags" . | nindent 2 }}
+tags: {{- include "neo4j.tags" . | nindent 4 }}
 spec:
   type: stateful
   identityLink: //identity/{{ include "neo4j.identity.name" . }}

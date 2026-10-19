@@ -3,4 +3,4 @@ kind: identity
 name: {{ include "neo4j.identity.name" . }}
 description: Neo4j identity
 gvc: {{ .Values.global.cpln.gvc }}
-tags: {{- include "neo4j.tags" . | nindent 2 }}
+tags: {{- include "neo4j.tags" . | nindent 4 }}

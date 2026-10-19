@@ -1,7 +1,7 @@
 kind: policy
 name: {{ include "neo4j.policy.name" . }}
 description: Neo4j reveal on the credentials secret
-tags: {{- include "neo4j.tags" . | nindent 2 }}
+tags: {{- include "neo4j.tags" . | nindent 4 }}
 bindings:
   - permissions:
       - reveal

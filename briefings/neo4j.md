@@ -32,7 +32,7 @@
   - but a **short password in the secret crashes the bare entrypoint even on an existing store**, so a bad secret edit would take a live database down. The wrapper ignores the secret there, so that cannot happen;
   - on a fresh store a password under 8 characters makes upstream exit too; the wrapper exits first with a clear `FATAL` line.
 - The password env var is `ADMIN_PASSWORD`, **not** `NEO4J_*`: the entrypoint turns every `NEO4J_*` variable into a `neo4j.conf` setting, and strict validation refuses unknown ones. Never add a `NEO4J_` env var that is not a real setting.
-- Rotation: `ALTER CURRENT USER SET PASSWORD FROM … TO …` in Neo4j, then update the secret to match. Changing the secret alone changes nothing.
+- Rotation: `ALTER CURRENT USER SET PASSWORD FROM … TO …` in Neo4j, update the secret to match, then force-redeploy the client apps that read it (a rotated `cpln://` secret reaches no running workload). Changing the secret alone changes nothing in Neo4j.
 
 ## Troubleshooting / traps
 - Nothing starts, logs empty → the credentials secret is missing; `status.versions[].message` in `cpln workload get-deployments`.

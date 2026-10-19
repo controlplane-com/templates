@@ -2,7 +2,7 @@ kind: volumeset
 name: {{ include "neo4j.volume.name" . }}
 gvc: {{ .Values.global.cpln.gvc }}
 description: Neo4j data (stores and transaction logs)
-tags: {{- include "neo4j.tags" . | nindent 2 }}
+tags: {{- include "neo4j.tags" . | nindent 4 }}
 spec:
   fileSystemType: ext4
   initialCapacity: {{ .Values.volumeset.capacity }}

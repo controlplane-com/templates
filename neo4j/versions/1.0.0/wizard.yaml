@@ -37,6 +37,7 @@ steps:
           create:
             secretType: dictionary
             suggestName: "context.releaseName + '-neo4j-credentials'"
+            hint: "Generate the password with: openssl rand -hex 24"
     rules:
       - rule: self.auth.credentialsSecretName != null && self.auth.credentialsSecretName != ''
         mirrors: neo4j.validateCredentials

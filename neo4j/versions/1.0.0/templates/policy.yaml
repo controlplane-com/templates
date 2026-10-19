@@ -1,0 +1,13 @@
+kind: policy
+name: {{ include "neo4j.policy.name" . }}
+description: Neo4j reveal on the credentials secret
+tags: {{- include "neo4j.tags" . | nindent 2 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "neo4j.identity.name" . }}
+targetKind: secret
+targetLinks:
+  # The user-created credentials secret, and nothing else.
+  - //secret/{{ .Values.auth.credentialsSecretName }}

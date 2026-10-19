@@ -1,0 +1,14 @@
+apiVersion: v2
+name: neo4j
+description: Neo4j Community graph database on persistent, snapshotted storage with Bolt access
+type: application
+version: 1.0.0
+appVersion: "2026.09.0-community"
+annotations:
+  created: "2026-10-19"
+  lastModified: "2026-10-19"
+  createsGvc: false
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

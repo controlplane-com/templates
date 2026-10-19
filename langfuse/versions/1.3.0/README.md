@@ -318,7 +318,7 @@ cpln workload force-redeployment RELEASE_NAME-langfuse-web --gvc GVC_NAME
 cpln workload force-redeployment RELEASE_NAME-langfuse-worker --gvc GVC_NAME
 ```
 
-A running workload keeps the password it started with, so nothing changes until step 3. Between the datastore restarting and the Langfuse workloads coming back, Langfuse cannot reach that datastore: expect a short interruption, and rotate in a quiet window. Changing the ClickHouse `username` works the same way.
+A running workload keeps the password it started with, so nothing changes until step 3. Between the datastore restarting and the Langfuse workloads coming back, Langfuse cannot reach that datastore: expect a few minutes of errors, and rotate in a quiet window. Changing the ClickHouse `username` works the same way.
 
 ## Backing up the bundled database
 

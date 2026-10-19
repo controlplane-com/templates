@@ -148,7 +148,7 @@ postgres:
 
 ```bash
 cpln secret create-dictionary --name RELEASE_NAME-gitea-db \
-  --entry username=gitea --entry password=YOUR_CURRENT_PASSWORD --entry database=gitea
+  --entry username=gitea --entry password='YOUR_CURRENT_PASSWORD' --entry database=gitea
 ```
 
 Then upgrade with `postgres.config.credentialsSecretName` set to that name and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.2.0 release, and also in the old secret (`cpln secret reveal my-gitea-db-credentials -o yaml`) until the upgrade deletes it.

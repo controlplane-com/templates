@@ -220,7 +220,7 @@ pgx N curl -s -XPOST -d '{"force": true}' localhost:8008/reinitialize
 ```bash
 cpln secret reveal my-umami-db-credentials -o yaml   # the CURRENT values, until the upgrade deletes this secret
 cpln secret create-dictionary --name RELEASE_NAME-postgres-credentials \
-  --entry username=YOUR_CURRENT_USERNAME --entry password=YOUR_CURRENT_PASSWORD --entry database=YOUR_CURRENT_DATABASE
+  --entry username='YOUR_CURRENT_USERNAME' --entry password='YOUR_CURRENT_PASSWORD' --entry database='YOUR_CURRENT_DATABASE'
 ```
 
 Then upgrade with `postgres.config.credentialsSecretName` (single-instance mode) or `postgresHA.config.credentialsSecretName` (HA mode) set to that name, and `postgres.credentials` removed. Your current values are also in `postgres.credentials` of the 1.3.x release. Read the old secret under the name your release set in `credentialsSecretName`, if you changed the default.

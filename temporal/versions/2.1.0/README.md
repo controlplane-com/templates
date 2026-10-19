@@ -194,7 +194,7 @@ postgres: # dev/lightweight: single-instance PostgreSQL
 ```bash
 cpln secret reveal OLD_SECRET_NAME -o yaml   # the CURRENT values, until the upgrade deletes this secret
 cpln secret create-dictionary --name RELEASE_NAME-postgres-credentials \
-  --entry username=YOUR_CURRENT_USERNAME --entry password=YOUR_CURRENT_PASSWORD --entry database=temporal
+  --entry username='YOUR_CURRENT_USERNAME' --entry password='YOUR_CURRENT_PASSWORD' --entry database=temporal
 ```
 
 `OLD_SECRET_NAME` is the `credentialsSecretName` of the mode you use in the 2.0.0 release (default `my-temporal-db-credentials`). Then upgrade with `postgresHA.config.credentialsSecretName` (HA mode) or `postgres.config.credentialsSecretName` (single-instance mode) set to the new name, and `postgres.credentials` removed. Your current values are also in `postgres.credentials` of the 2.0.0 release.

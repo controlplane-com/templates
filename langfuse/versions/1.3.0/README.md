@@ -275,7 +275,7 @@ Or use a [Langfuse SDK](https://langfuse.com/docs/sdk/overview).
 
 ```bash
 cpln secret create-dictionary --name RELEASE_NAME-langfuse-db \
-  --entry username=YOUR_CURRENT_USERNAME --entry password=YOUR_CURRENT_PASSWORD --entry database=YOUR_CURRENT_DATABASE
+  --entry username='YOUR_CURRENT_USERNAME' --entry password='YOUR_CURRENT_PASSWORD' --entry database='YOUR_CURRENT_DATABASE'
 ```
 
 Then upgrade with `postgres.config.credentialsSecretName` set to that name and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.2.x release, and also in the old secret, the one named by `postgres.config.credentialsSecretName` in 1.2.x (`cpln secret reveal SECRET_NAME -o yaml`), until the upgrade deletes it.
@@ -284,10 +284,10 @@ Then upgrade with `postgres.config.credentialsSecretName` set to that name and `
 
 ```bash
 cpln secret create-dictionary --name RELEASE_NAME-langfuse-redis-credentials \
-  --entry password=YOUR_CURRENT_REDIS_PASSWORD
+  --entry password='YOUR_CURRENT_REDIS_PASSWORD'
 
 cpln secret create-dictionary --name RELEASE_NAME-langfuse-clickhouse-credentials \
-  --entry username=default --entry password=YOUR_CURRENT_CLICKHOUSE_PASSWORD
+  --entry username=default --entry password='YOUR_CURRENT_CLICKHOUSE_PASSWORD'
 ```
 
 Your current values are `redis.auth.password` and `clickhouse.config.password` of the 1.2.x release, and also in `cpln secret reveal RELEASE_NAME-langfuse-config -o yaml` until the upgrade deletes it. Upgrade with `redis.credentialsSecretName` and `clickhouse.credentialsSecretName` set to those names and `redis.auth` and `clickhouse.config.password` removed.

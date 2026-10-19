@@ -218,7 +218,7 @@ This complements the built-in workload dashboards rather than replacing them —
 
 ```bash
 cpln secret create-dictionary --name RELEASE_NAME-grafana-db \
-  --entry username=grafana --entry password=YOUR_CURRENT_PASSWORD --entry database=grafana
+  --entry username=grafana --entry password='YOUR_CURRENT_PASSWORD' --entry database=grafana
 ```
 
 Then upgrade with `postgres.credentials` removed and the `credentialsSecretName` of the mode you use (`postgresHA.config.credentialsSecretName` by default) set to that name. Your current values are in `postgres.credentials` of the 1.4.1 release, and also in the old secret (`cpln secret reveal my-grafana-db-credentials -o yaml`) until the upgrade deletes it.

@@ -314,7 +314,7 @@ Chatwoot cannot reach Redis from step 2 until its own redeploys finish, so expec
 ```bash
 cpln secret reveal my-chatwoot-db-credentials -o yaml   # the CURRENT values, until the upgrade deletes this secret
 cpln secret create-dictionary --name RELEASE_NAME-chatwoot-db \
-  --entry username=YOUR_CURRENT_USERNAME --entry password=YOUR_CURRENT_PASSWORD --entry database=YOUR_CURRENT_DATABASE
+  --entry username='YOUR_CURRENT_USERNAME' --entry password='YOUR_CURRENT_PASSWORD' --entry database='YOUR_CURRENT_DATABASE'
 ```
 
 Then upgrade with `postgresHA.config.credentialsSecretName` (HA mode) or `postgres.config.credentialsSecretName` (single-instance mode) set to that name, and `postgres.credentials` removed. Your current values are also in `postgres.credentials` of the 1.2.x release.
@@ -324,7 +324,7 @@ Then upgrade with `postgresHA.config.credentialsSecretName` (HA mode) or `postgr
 ```bash
 cpln secret reveal RELEASE_NAME-chatwoot-creds -o yaml   # redisPassword is the CURRENT Redis password
 cpln secret create-dictionary --name RELEASE_NAME-chatwoot-redis \
-  --entry password=YOUR_CURRENT_REDIS_PASSWORD
+  --entry password='YOUR_CURRENT_REDIS_PASSWORD'
 ```
 
 Then set `redis.credentialsSecretName` to that name and remove `redis.auth`. The current password is also in `redis.auth.password` of the 1.2.x release.

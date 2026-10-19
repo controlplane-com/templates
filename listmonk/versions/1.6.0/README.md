@@ -159,7 +159,7 @@ Public access is **on** by default and is load-bearing: subscription forms, unsu
 
 ```bash
 cpln secret create-dictionary --name RELEASE_NAME-listmonk-db \
-  --entry username=listmonk --entry password=YOUR_CURRENT_PASSWORD --entry database=listmonk
+  --entry username=listmonk --entry password='YOUR_CURRENT_PASSWORD' --entry database=listmonk
 ```
 
 Then upgrade with `postgres.config.credentialsSecretName` (single-instance mode) or `postgresHA.config.credentialsSecretName` (HA mode) set to that name, and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.5.0 release, and also in the old secret (`cpln secret reveal my-listmonk-db-credentials -o yaml`) until the upgrade deletes it.

@@ -149,7 +149,7 @@ postgres:                     # dev/lightweight: single-instance PostgreSQL
 
 ```bash
 cpln secret create-dictionary --name RELEASE_NAME-n8n-db \
-  --entry username=n8n --entry password=YOUR_CURRENT_PASSWORD --entry database=n8n
+  --entry username=n8n --entry password='YOUR_CURRENT_PASSWORD' --entry database=n8n
 ```
 
 Then upgrade with the `credentialsSecretName` of your database mode (`postgresHA.config.` or `postgres.config.`) set to that name and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.3.1 release, and also in the old secret (`cpln secret reveal my-n8n-db-credentials -o yaml`, or whatever name you gave it) until the upgrade deletes it.

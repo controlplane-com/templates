@@ -146,7 +146,7 @@ To analyze a database running on Control Plane, add it in Metabase (Admin → Da
 
 ```bash
 cpln secret create-dictionary --name RELEASE_NAME-metabase-db \
-  --entry username=metabase --entry password=YOUR_CURRENT_PASSWORD --entry database=metabase
+  --entry username=metabase --entry password='YOUR_CURRENT_PASSWORD' --entry database=metabase
 ```
 
 Then upgrade with `postgresHA.config.credentialsSecretName` (HA mode) or `postgres.config.credentialsSecretName` (single-instance mode) set to that name, and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.4.0 release, and also in the old secret (`cpln secret reveal my-metabase-db-credentials -o yaml`) until the upgrade deletes it.

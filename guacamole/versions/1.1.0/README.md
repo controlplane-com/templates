@@ -131,7 +131,7 @@ cpln port-forward {release}-guacamole 8080:8080 --gvc {gvc}
 
 ```bash
 cpln secret create-dictionary --name {release}-guacamole-db \
-  --entry username=guacamole --entry password=YOUR_CURRENT_PASSWORD --entry database=guacamole
+  --entry username=guacamole --entry password='YOUR_CURRENT_PASSWORD' --entry database=guacamole
 ```
 
 Then upgrade with `postgres.config.credentialsSecretName` set to that name and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.0.0 release, and also in the old secret (`cpln secret reveal my-guacamole-db-credentials -o yaml`, or the name you gave it) until the upgrade deletes it.

@@ -328,7 +328,7 @@ cpln secret create-dictionary --name my-polaris-minio-credentials \
 
 ```bash
 cpln secret create-dictionary --name RELEASE_NAME-postgres-credentials \
-  --entry username=polaris --entry password=YOUR_CURRENT_PASSWORD --entry database=polaris
+  --entry username=polaris --entry password='YOUR_CURRENT_PASSWORD' --entry database=polaris
 ```
 
 Your current values are in `postgres.credentials` of the 1.2.1 release, and also in the old secret (`cpln secret reveal my-polaris-db-credentials -o yaml`, or whatever name your release set) until the upgrade deletes it. Then upgrade with `postgres.config.credentialsSecretName` (single-instance mode) or `postgresHA.config.credentialsSecretName` (HA mode) set to the new name, and `postgres.credentials` removed.

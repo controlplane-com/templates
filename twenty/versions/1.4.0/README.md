@@ -321,7 +321,7 @@ Expect a short interruption: until all three have restarted, Redis and the app h
 ```bash
 cpln secret reveal OLD_SECRET_NAME -o yaml   # the CURRENT values, until the upgrade deletes this secret
 cpln secret create-dictionary --name RELEASE_NAME-postgres-credentials \
-  --entry username=YOUR_CURRENT_USERNAME --entry password=YOUR_CURRENT_PASSWORD --entry database=YOUR_CURRENT_DATABASE
+  --entry username='YOUR_CURRENT_USERNAME' --entry password='YOUR_CURRENT_PASSWORD' --entry database='YOUR_CURRENT_DATABASE'
 ```
 
 1.3.x also kept the Redis password in a secret it created, `RELEASE_NAME-twenty-creds` (key `redisPassword`), which this upgrade deletes too. Create the Redis secret under a different name, holding the **current** Redis password:
@@ -329,7 +329,7 @@ cpln secret create-dictionary --name RELEASE_NAME-postgres-credentials \
 ```bash
 cpln secret reveal RELEASE_NAME-twenty-creds -o yaml   # redisPassword is the CURRENT Redis password
 cpln secret create-dictionary --name RELEASE_NAME-twenty-redis \
-  --entry password=YOUR_CURRENT_REDIS_PASSWORD
+  --entry password='YOUR_CURRENT_REDIS_PASSWORD'
 ```
 
 Then upgrade with `postgres.config.credentialsSecretName` (single-instance mode) or `postgresHA.config.credentialsSecretName` (HA mode) set to the database secret's name, `redis.credentialsSecretName` set to the Redis secret's name, and `postgres.credentials` and `redis.auth` removed. Your current values are also in `postgres.credentials` and `redis.auth.password` of the 1.3.x release.

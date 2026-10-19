@@ -174,7 +174,7 @@ unset PGPASSWORD
 
 ```bash
 cpln secret create-dictionary --name RELEASE_NAME-fusionauth-db \
-  --entry username=username --entry password=YOUR_CURRENT_PASSWORD --entry database=test
+  --entry username=username --entry password='YOUR_CURRENT_PASSWORD' --entry database=test
 ```
 
 (`username` and `test` were the 2.4.x defaults; use your own values if you overrode them.) Your current values are in `postgres.credentials` of the installed release, and also in the old secret (`cpln secret reveal my-fusionauth-db-credentials -o yaml`) until the upgrade deletes it. **If you installed 2.4.0 and never overrode the password, it is literally `password`** — put that in the new secret, and rotate it afterwards as described under [Prerequisites](#prerequisites).

@@ -134,7 +134,7 @@ Public access is **on** by default: browsers must reach Keycloak's login and OID
 
 ```bash
 cpln secret create-dictionary --name RELEASE_NAME-keycloak-db \
-  --entry username=keycloak --entry password=YOUR_CURRENT_PASSWORD --entry database=keycloak
+  --entry username=keycloak --entry password='YOUR_CURRENT_PASSWORD' --entry database=keycloak
 ```
 
 Your current values are in `postgres.credentials` of the 1.4.0 release, and also in the old secret (`cpln secret reveal my-keycloak-db-credentials -o yaml`) until the upgrade deletes it. Then upgrade with `postgresHA.config.credentialsSecretName` (HA mode) or `postgres.config.credentialsSecretName` (single-instance mode) set to the new name, and `postgres.credentials` removed.

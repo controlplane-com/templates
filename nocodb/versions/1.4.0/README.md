@@ -315,7 +315,7 @@ Expect a short interruption: until both have restarted, one side holds the old p
 ```bash
 cpln secret reveal my-nocodb-db-credentials -o yaml   # the CURRENT values, until the upgrade deletes this secret
 cpln secret create-dictionary --name RELEASE_NAME-nocodb-db \
-  --entry username=YOUR_CURRENT_USERNAME --entry password=YOUR_CURRENT_PASSWORD --entry database=YOUR_CURRENT_DATABASE
+  --entry username='YOUR_CURRENT_USERNAME' --entry password='YOUR_CURRENT_PASSWORD' --entry database='YOUR_CURRENT_DATABASE'
 ```
 
 1.3.x also kept the Redis password in a secret it created, `RELEASE_NAME-nocodb-creds` (key `redisPassword`), which this upgrade deletes too. Create the Redis secret under a different name, holding the **current** Redis password:
@@ -323,7 +323,7 @@ cpln secret create-dictionary --name RELEASE_NAME-nocodb-db \
 ```bash
 cpln secret reveal RELEASE_NAME-nocodb-creds -o yaml   # redisPassword is the CURRENT Redis password
 cpln secret create-dictionary --name RELEASE_NAME-nocodb-redis \
-  --entry password=YOUR_CURRENT_REDIS_PASSWORD
+  --entry password='YOUR_CURRENT_REDIS_PASSWORD'
 ```
 
 Then upgrade with `postgres.config.credentialsSecretName` (single-instance mode) or `postgresHA.config.credentialsSecretName` (HA mode) set to the database secret's name, `redis.credentialsSecretName` set to the Redis secret's name, and `postgres.credentials` and `redis.auth` removed. Your current values are also in `postgres.credentials` and `redis.auth.password` of the 1.3.x release.

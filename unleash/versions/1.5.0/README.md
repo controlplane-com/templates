@@ -144,7 +144,7 @@ postgres:                     # dev/lightweight: single-instance PostgreSQL
 
 ```bash
 cpln secret create-dictionary --name RELEASE_NAME-unleash-db \
-  --entry username=unleash --entry password=YOUR_CURRENT_PASSWORD --entry database=unleash
+  --entry username=unleash --entry password='YOUR_CURRENT_PASSWORD' --entry database=unleash
 ```
 
 Then upgrade with `postgresHA.config.credentialsSecretName` (HA mode) or `postgres.config.credentialsSecretName` (single-instance mode) set to that name, and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.4.0 release, and also in the old secret (`cpln secret reveal my-unleash-db-credentials -o yaml`) until the upgrade deletes it.

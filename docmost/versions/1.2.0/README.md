@@ -223,7 +223,7 @@ Docmost cannot reach Redis between the two redeploys, so expect a short interrup
 ```bash
 cpln secret reveal my-docmost-db-credentials -o yaml   # the CURRENT values, until the upgrade deletes this secret
 cpln secret create-dictionary --name RELEASE_NAME-docmost-db \
-  --entry username=YOUR_CURRENT_USERNAME --entry password=YOUR_CURRENT_PASSWORD --entry database=YOUR_CURRENT_DATABASE
+  --entry username='YOUR_CURRENT_USERNAME' --entry password='YOUR_CURRENT_PASSWORD' --entry database='YOUR_CURRENT_DATABASE'
 ```
 
 Then upgrade with `postgres.config.credentialsSecretName` set to that name, and `postgres.credentials` removed. Your current values are also in `postgres.credentials` of the 1.1.0 release.
@@ -233,7 +233,7 @@ Then upgrade with `postgres.config.credentialsSecretName` set to that name, and 
 ```bash
 cpln secret reveal RELEASE_NAME-docmost-creds -o yaml   # redisPassword is the CURRENT Redis password
 cpln secret create-dictionary --name RELEASE_NAME-docmost-redis \
-  --entry password=YOUR_CURRENT_REDIS_PASSWORD
+  --entry password='YOUR_CURRENT_REDIS_PASSWORD'
 ```
 
 Then set `redis.credentialsSecretName` to that name and remove `redis.auth`. The current password is also in `redis.auth.password` of the 1.1.0 release.

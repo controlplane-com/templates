@@ -239,8 +239,6 @@ clickhouse:
     minMemory: 2Gi
     maxMemory: 4Gi
   credentialsSecretName: my-langfuse-clickhouse # PREREQUISITE dictionary secret (username, password) — must exist BEFORE install
-  config:
-    database: langfuse
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)
 ```

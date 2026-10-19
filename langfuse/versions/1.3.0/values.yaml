@@ -132,7 +132,5 @@ clickhouse:
   # password. URL-safe values: Langfuse puts them in its migration URL. ClickHouse
   # and Langfuse read it at every start. See README Prerequisites for the command.
   credentialsSecretName: my-langfuse-clickhouse
-  config:
-    database: langfuse
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)

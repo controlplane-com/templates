@@ -409,12 +409,6 @@ steps:
             label: Resources
             required: true
             maxRatio: 4
-          - path: clickhouse.config.database
-            type: string
-            label: Database
-            required: true
-            immutable: true
-            description: Langfuse creates its tables here on first boot.
           - path: clickhouse.volumeset.capacity
             type: integer
             label: Initial capacity
@@ -450,7 +444,7 @@ rules:
     message: >-
       redis.auth.password was removed in 1.3.0: the Redis password is now a prerequisite dictionary secret (key
       password) named by the Redis credentials secret field. Remove redis.auth from the values.
-  - rule: "!has(self.clickhouse.config.password)"
+  - rule: "!has(self.clickhouse.config) || !has(self.clickhouse.config.password)"
     mirrors: langfuse.validateRemovedKeys
     paths: [clickhouse.credentialsSecretName]
     message: >-
@@ -526,3 +520,8 @@ migrations:
     note: >-
       The ClickHouse credentials are now a prerequisite dictionary secret (keys username, password). Create it under
       a new name holding username default and the current password, and choose it under Langfuse.
+  - fromVersions: "<1.3.0"
+    from: clickhouse.config.database
+    note: >-
+      Removed: Langfuse always kept its data in the ClickHouse database default, whatever this was set to, so nothing
+      moves. The empty database it created can be left alone.

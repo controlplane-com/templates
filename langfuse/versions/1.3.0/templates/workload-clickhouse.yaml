@@ -26,8 +26,6 @@ spec:
           value: cpln://secret/{{ include "langfuse.secret.clickhouse.name" . }}.username
         - name: CLICKHOUSE_PASSWORD
           value: cpln://secret/{{ include "langfuse.secret.clickhouse.name" . }}.password
-        - name: CLICKHOUSE_DATABASE
-          value: {{ .Values.clickhouse.config.database | quote }}
         {{- if eq .Values.objectStore.provider "gcp" }}
         # Read by storage.xml via ClickHouse's `from_env` substitution, so the
         # HMAC pair never appears in a rendered config file or in Helm values.

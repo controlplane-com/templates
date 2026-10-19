@@ -35,7 +35,7 @@ spec:
         - name: CLICKHOUSE_URL
           value: http://{{ include "langfuse.clickhouse.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:8123
         - name: CLICKHOUSE_MIGRATION_URL
-          value: clickhouse://$(CLICKHOUSE_USER):$(CLICKHOUSE_PASSWORD)@{{ include "langfuse.clickhouse.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:9000/{{ .Values.clickhouse.config.database }}
+          value: clickhouse://$(CLICKHOUSE_USER):$(CLICKHOUSE_PASSWORD)@{{ include "langfuse.clickhouse.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:9000/default
         - name: CLICKHOUSE_CLUSTER_ENABLED
           value: "false"
         # Redis

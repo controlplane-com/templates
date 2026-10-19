@@ -108,7 +108,7 @@ compatibility fallbacks — the version bump IS the migration path.
 {{- if hasKey .Values.redis "auth" -}}
   {{- fail "redis.auth.password was removed in 1.3.0. The Redis password is now a prerequisite dictionary secret (key: password) named by redis.credentialsSecretName. Upgrading from 1.2.x: create it under a NEW name (not RELEASE-langfuse-config, which the upgrade deletes) holding your CURRENT password, set redis.credentialsSecretName to that name, and remove redis.auth — see \"Upgrading from 1.2.x\" in the README." -}}
 {{- end -}}
-{{- if hasKey .Values.clickhouse.config "password" -}}
+{{- if hasKey (.Values.clickhouse.config | default dict) "password" -}}
   {{- fail "clickhouse.config.password was removed in 1.3.0. The ClickHouse credentials are now a prerequisite dictionary secret (keys: username, password) named by clickhouse.credentialsSecretName. Upgrading from 1.2.x: create it under a NEW name (not RELEASE-langfuse-config, which the upgrade deletes) holding username=default and your CURRENT password, set clickhouse.credentialsSecretName to that name, and remove clickhouse.config.password — see \"Upgrading from 1.2.x\" in the README." -}}
 {{- end -}}
 {{- if .Values.langfuse.firewall -}}

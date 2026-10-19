@@ -38,7 +38,7 @@ Three datastores is not optional — Langfuse requires all of Postgres, Redis an
 | `langfuse.web.image` | `langfuse/langfuse:3.225.2` | Pinned concrete; 1.0.x floated on `:3`. |
 | `postgres.config.credentialsSecretName` | `my-langfuse-db-credentials` | **1.3.0: REQUIRED prerequisite** dictionary secret (`username`, `password`, `database`), must exist before install. `postgres.credentials` fails the render. |
 | `redis.credentialsSecretName` / `clickhouse.credentialsSecretName` | `my-langfuse-redis` / `my-langfuse-clickhouse` | **1.3.0: REQUIRED prerequisites** (maintainer decision 2026-10-16: one secret per datastore). `redis.auth` / `clickhouse.config.password` fail the render. |
-| `clickhouse.config.database` | `langfuse` | Only the migration URL and the startup `CREATE DATABASE` use it; Langfuse's runtime `CLICKHOUSE_DB` is never set (defaults to `default`). Suspected dead/mismatched knob, not touched in 1.3.0. |
+| ~~`clickhouse.config.database`~~ | removed in 1.3.0 | It never worked: Langfuse reads `CLICKHOUSE_DB` (unset, so `default`) and upstream appends `&database=default` to the migration URL, so the knob only created an empty database (measured 2026-10-19 with `lfdb`: 0 tables there, all 12 in `default`). 1.3.0 drops it and pins the URL to `/default`; old installs keep a harmless empty `langfuse` database. Do not "wire" `CLICKHOUSE_DB` to a new name: existing data lives in `default`. |
 
 ## Troubleshooting traps
 

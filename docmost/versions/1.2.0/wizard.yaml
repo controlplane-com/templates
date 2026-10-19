@@ -244,7 +244,7 @@ steps:
       - title: SMTP
         toggle: smtp.enabled
         docs: "#email"
-        description: Off, member invites cannot be delivered, and no invite link is logged. Configure it before inviting members.
+        description: Member invites are sent by email; without SMTP they cannot be delivered and no invite link is logged. Configure it before inviting members.
         fields:
           - path: smtp.host
             type: string

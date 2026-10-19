@@ -99,7 +99,7 @@ steps:
             cpu: { min: 25m }
             memory: { min: 32Mi }
         rules:
-          - rule: self.chatwoot.replicas >= 1 && self.worker.concurrency >= 1
+          - rule: self.worker.concurrency >= 1
             mirrors: chatwoot.validate
             paths: [worker.concurrency]
             message: Concurrency must be at least 1.
@@ -263,7 +263,7 @@ steps:
       - title: SMTP
         toggle: smtp.enabled
         docs: "#email"
-        description: Off, no mail is delivered, so agent invites and password resets fail. Configure it before inviting agents.
+        description: Agent invites and password resets are sent by email; without SMTP they fail. Configure it before inviting agents.
         fields:
           - path: smtp.address
             type: string
@@ -817,8 +817,9 @@ migrations:
   - fromVersions: "<1.3.0"
     from: postgres.credentials
     note: >-
-      The database credentials are now a prerequisite dictionary secret (username, password, database). Create
-      it under a NEW name with the values the database was initialized with, and choose it under Database.
+      In 1.2.x these credentials served both database modes (single-instance and HA). They are now a prerequisite
+      dictionary secret (username, password, database): create it under a NEW name with the values the database
+      was initialized with, and choose it under Database.
   - fromVersions: "<1.2.0"
     from: postgresHA.postgres
     note: >-

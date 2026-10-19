@@ -277,7 +277,7 @@ steps:
       - title: SMTP
         toggle: smtp.enabled
         docs: "#email"
-        description: Off, no mail is delivered, so invitations and password resets fail. Configure it before inviting collaborators.
+        description: Invitations and password resets are sent by email; without SMTP they fail. Configure it before inviting collaborators.
         fields:
           - path: smtp.host
             type: string

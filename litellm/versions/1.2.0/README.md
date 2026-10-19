@@ -161,7 +161,7 @@ The proxy is briefly unavailable while it restarts (with `litellm.replicas` of 2
 ```bash
 cpln secret reveal my-litellm-db-credentials -o yaml
 cpln secret create-dictionary --name RELEASE_NAME-postgres-credentials \
-  --entry username=litellm --entry password=YOUR_CURRENT_PASSWORD --entry database=litellm
+  --entry username=litellm --entry password='YOUR_CURRENT_PASSWORD' --entry database=litellm
 ```
 
 (`litellm` / `litellm` were the 1.1.0 defaults; use your own values if you overrode them.) **If you never overrode the password, it is literally `change-me-litellm-pg`** — put that in the new secret, and rotate it afterwards as described under [Prerequisites](#prerequisites).
@@ -175,7 +175,7 @@ The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), s
 ```bash
 cpln secret reveal RELEASE_NAME-redis-auth-password -o yaml
 cpln secret create-dictionary --name RELEASE_NAME-litellm-redis \
-  --entry password=YOUR_CURRENT_REDIS_PASSWORD
+  --entry password='YOUR_CURRENT_REDIS_PASSWORD'
 ```
 
 Then upgrade with `redis.redis.auth.fromSecret.enabled: true`, `redis.redis.auth.fromSecret.name` set to the new name, and `redis.redis.auth.password` removed. With Redis auth off in 1.1.0 (the default), just remove `redis.redis.auth.password` from your values.

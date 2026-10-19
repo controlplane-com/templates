@@ -48,7 +48,7 @@ Then set `auth.secretName` to that name. Read it back later with `cpln secret re
 | `secretKey` | Django's `SECRET_KEY` — signs sessions and tokens. Keep it for the life of the install: changing it logs every user out. |
 | `adminEmail` / `adminPassword` | The initial superuser, seeded on first boot only. Afterwards manage accounts in the UI; editing the secret does not change the existing login. |
 
-**3. Redis password** — Redis requires it, and Sentinel and GlitchTip connect with it. Any characters work (GlitchTip percent-encodes it):
+**3. Redis password** — Redis requires it, and Sentinel and GlitchTip connect with it. No spaces, backslashes or double quotes: Redis writes it into its config file and will not start on them (the hex value below is safe):
 
 ```bash
 cpln secret create-dictionary --name my-glitchtip-redis \
@@ -181,15 +181,15 @@ postgres: # dev/lightweight: single-instance PostgreSQL
 
 ```bash
 cpln secret create-dictionary --name RELEASE_NAME-glitchtip-db \
-  --entry username=glitchtip --entry password=YOUR_CURRENT_PASSWORD --entry database=glitchtip
+  --entry username=glitchtip --entry password='YOUR_CURRENT_PASSWORD' --entry database=glitchtip
 ```
 
-Then upgrade with `postgresHA.config.credentialsSecretName` (HA mode) or `postgres.config.credentialsSecretName` (single-instance mode) set to that name, and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.3.x release, and also in the old secret (`cpln secret reveal my-glitchtip-db-credentials -o yaml`) until the upgrade deletes it.
+Then upgrade with `postgresHA.config.credentialsSecretName` (HA mode) or `postgres.config.credentialsSecretName` (single-instance mode) set to that name, and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.3.x release, and also in the old secret (`cpln secret reveal SECRET_NAME -o yaml`, the name in `credentialsSecretName`, `my-glitchtip-db-credentials` by default) until the upgrade deletes it.
 
 `redis.redis.auth.password` was removed the same way (Redis enabled only): the Redis password is now a prerequisite secret too, and this upgrade deletes the `RELEASE_NAME-redis-auth-password` secret 1.3.x had the redis chart create. Create one under a **new** name holding your **current** Redis password — a new one would leave the Sentinels, which keep the password they started with on their volume, unable to reach Redis:
 
 ```bash
-cpln secret create-dictionary --name RELEASE_NAME-glitchtip-redis --entry password=YOUR_CURRENT_REDIS_PASSWORD
+cpln secret create-dictionary --name RELEASE_NAME-glitchtip-redis --entry password='YOUR_CURRENT_REDIS_PASSWORD'
 ```
 
 Your current password is `redis.redis.auth.password.value` of the 1.3.x release, and also in `cpln secret reveal RELEASE_NAME-redis-auth-password -o yaml` until the upgrade deletes it. Upgrade with `redis.redis.auth.fromSecret.name` set to the new name and the whole `redis.redis.auth.password` block removed.

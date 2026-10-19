@@ -221,7 +221,7 @@ Docmost cannot reach Redis between the two redeploys, so expect a short interrup
 1.1.0 created the database secret itself, so **this upgrade deletes it**. Before upgrading, create a secret under a **new** name holding the values your database was initialized with — not new ones, or Docmost loses its database connection:
 
 ```bash
-cpln secret reveal my-docmost-db-credentials -o yaml   # the CURRENT values, until the upgrade deletes this secret
+cpln secret reveal my-docmost-db-credentials -o yaml   # default name: use your credentialsSecretName if you changed it
 cpln secret create-dictionary --name RELEASE_NAME-docmost-db \
   --entry username='YOUR_CURRENT_USERNAME' --entry password='YOUR_CURRENT_PASSWORD' --entry database='YOUR_CURRENT_DATABASE'
 ```

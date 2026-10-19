@@ -149,7 +149,7 @@ cpln secret create-dictionary --name RELEASE_NAME-metabase-db \
   --entry username=metabase --entry password='YOUR_CURRENT_PASSWORD' --entry database=metabase
 ```
 
-Then upgrade with `postgresHA.config.credentialsSecretName` (HA mode) or `postgres.config.credentialsSecretName` (single-instance mode) set to that name, and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.4.0 release, and also in the old secret (`cpln secret reveal my-metabase-db-credentials -o yaml`) until the upgrade deletes it.
+Then upgrade with `postgresHA.config.credentialsSecretName` (HA mode) or `postgres.config.credentialsSecretName` (single-instance mode) set to that name, and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.4.0 release, and also in the old secret (`cpln secret reveal my-metabase-db-credentials -o yaml`, or the name your release set in `credentialsSecretName`) until the upgrade deletes it.
 
 The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so Metabase can briefly lose its database; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
 

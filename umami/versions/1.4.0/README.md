@@ -218,7 +218,7 @@ pgx N curl -s -XPOST -d '{"force": true}' localhost:8008/reinitialize
 1.3.x created the database secret itself, so **this upgrade deletes it**. Before upgrading, create a secret under a **new** name holding the values your database was initialized with — not new ones, or Umami loses its database connection:
 
 ```bash
-cpln secret reveal my-umami-db-credentials -o yaml   # the CURRENT values, until the upgrade deletes this secret
+cpln secret reveal my-umami-db-credentials -o yaml   # default name: use your credentialsSecretName if you changed it
 cpln secret create-dictionary --name RELEASE_NAME-postgres-credentials \
   --entry username='YOUR_CURRENT_USERNAME' --entry password='YOUR_CURRENT_PASSWORD' --entry database='YOUR_CURRENT_DATABASE'
 ```

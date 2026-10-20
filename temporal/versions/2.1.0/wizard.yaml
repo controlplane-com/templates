@@ -783,9 +783,9 @@ migrations:
   - fromVersions: "<2.1.0"
     from: postgres.credentials
     note: >-
-      The database credentials are now a prerequisite dictionary secret (username, password, database). Create
-      it under a NEW name with the username and password the database was initialized with and database
-      temporal, and choose it under Database.
+      This setting served both database modes (single-instance and HA). The database credentials are now a
+      prerequisite dictionary secret (username, password, database). Create it under a NEW name with the username and
+      password the database was initialized with and database temporal, and choose it under Database.
   - fromVersions: "<1.2.0"
     from: postgresHA.postgres
     note: >-

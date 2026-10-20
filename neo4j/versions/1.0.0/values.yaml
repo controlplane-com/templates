@@ -35,6 +35,10 @@ volumeset:
     schedule: "0 3 * * *" # daily at 03:00 UTC; at most hourly; "" turns scheduled snapshots off
     retentionDuration: 7d # how long each snapshot is kept
 
+# ─── Public Access ───────────────────────────────────────────────────────────
+publicAccess:
+  enabled: false # Neo4j Browser and the HTTP API on the workload's public HTTPS endpoint; Bolt stays private
+
 # ─── Internal Access ─────────────────────────────────────────────────────────
 internalAccess:
   type: same-gvc # none, same-gvc, same-org or workload-list

@@ -9,7 +9,7 @@ topology: single
 summary: >-
   A single Neo4j Community Edition graph database server on a persistent volume with daily volume
   snapshots, serving Bolt to applications in the GVC and the bundled Neo4j Browser and HTTP Query
-  API on the same private endpoint, with the APOC procedures loaded. A property graph or knowledge
+  API on the same endpoint (private by default, optionally public over HTTPS), with the APOC procedures loaded. A property graph or knowledge
   graph queried with Cypher by apps in one location, with no clustering or failover.
 
 keywords:

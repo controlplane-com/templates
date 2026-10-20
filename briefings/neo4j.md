@@ -19,7 +19,9 @@
 | identity + policy | `reveal` on the user's credentials secret only |
 
 - **No HA:** clustering is Enterprise-only, so there is no `replicas` knob. Every upgrade or value change is a full restart.
-- **Private only, by maintainer decision (2026-10-19).** A public Browser also needs public Bolt; the platform's TLS covers only the first HTTP port, and an HTTPS page cannot open a plain `ws://` Bolt socket, so the only working public shape would be all plaintext on a direct LB. Humans use `cpln port-forward {release}-neo4j 7474:7474 7687:7687` and `bolt://localhost:7687`.
+- **`publicAccess.enabled` (default false, added 2026-10-20).** Browser 2026.x can connect over its `https://` protocol (HTTP Query API) without Bolt, so the canonical HTTPS endpoint on 7474 is a complete public UI. Bolt (7687) is never reachable on the canonical host (real handshake bytes: no reply). Private users use `cpln port-forward {release}-neo4j 7474:7474 7687:7687`.
+- **Public auth surface (probed 2026-10-20):** unauthenticated only `/` (discovery: version + edition) and `/browser/`; every `/db/*` path 401; error body is just `Invalid credential.`; 3 bad logins → 429 for 5 s (`auth_max_failed_attempts`/`auth_lock_time` defaults). **The canonical endpoint also serves plain `http://` (200, no redirect, no HSTS)** and Neo4j accepts credentials there — maintainer ruled README warning ("always use https://"), same exposure as every public catalog template; a platform HTTP→HTTPS redirect would close it. `X-Forwarded-Host` is reflected in discovery (`server.http.x_forward.allow_hosts` unset): requester-only, left as is.
+- A wrong password over the `https://` transport triggers Chrome's native Basic-auth prompt (`www-authenticate: Basic`) and hangs the connect screen until reload; upstream behaviour.
 - No GVC is created; the wizard limits the GVC to one location (each extra location would be a separate empty Neo4j).
 
 ## Key knobs (shipped defaults)
@@ -46,4 +48,4 @@
 - The image logs two `SECURITY WARNING: X-Forward headers …` lines at start; they are upstream defaults and harmless here.
 
 ## Follow-ups (not in 1.0.0)
-Public access with TLS; offline dump/load to object storage; plugins beyond APOC Core (GDS, GenAI); custom `neo4j.conf` passthrough.
+Public Bolt (needs a direct LB + Neo4j TLS certs); offline dump/load to object storage; plugins beyond APOC Core (GDS, GenAI); custom `neo4j.conf` passthrough.

@@ -227,9 +227,25 @@ steps:
 
   - id: network
     title: Network access
-    description: Which workloads can connect. Nothing is exposed to the internet.
+    description: Who can reach Neo4j. Bolt always stays private.
     sections:
-      - docs: "#internal-access"
+      - title: Public access
+        docs: "#public-access"
+        fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Public HTTPS endpoint
+            description: >-
+              Serve Neo4j Browser and the HTTP API on the workload's public endpoint, protected by the
+              `neo4j` password. Apps using Bolt still connect from inside the GVC.
+          - type: note
+            severity: warning
+            when: self.publicAccess.enabled
+            text: >-
+              Always use the `https://` address. The endpoint also answers plain `http://`, which
+              sends the password unencrypted. Firewall changes can take a few minutes to apply.
+      - title: Internal access
+        docs: "#internal-access"
         fields:
           - type: note
             textExpression: >-

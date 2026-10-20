@@ -90,7 +90,12 @@ spec:
   firewallConfig:
     {{- /* Every field is declared: the API backfills them, so omitting one drifts. */}}
     external:
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
       inboundAllowCIDR: []
+      {{- end }}
       inboundBlockedCIDR: []
       # Outbound stays open for LOAD CSV from URLs and APOC HTTP procedures.
       outboundAllowCIDR:

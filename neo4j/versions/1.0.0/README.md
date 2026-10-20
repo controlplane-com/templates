@@ -1,8 +1,8 @@
 # Neo4j
 
 A single Neo4j Community Edition graph database server on a persistent, snapshotted volume. It
-serves Bolt to applications in the GVC and the bundled Neo4j Browser and HTTP Query API on the same
-private endpoint, with the APOC procedures loaded.
+serves Bolt to applications in the GVC and the bundled Neo4j Browser and HTTP Query API, privately
+by default or on a public HTTPS endpoint, with the APOC procedures loaded.
 
 ## Architecture
 
@@ -11,7 +11,7 @@ private endpoint, with the APOC procedures loaded.
 - **Identity and policy**: `reveal` on exactly your credentials secret.
 
 Single instance: Neo4j clustering and online backup are Enterprise-only, so there is no failover.
-Nothing is exposed to the internet.
+Nothing is exposed to the internet unless you turn on `publicAccess`, and Bolt always stays private.
 
 ## Prerequisites
 
@@ -91,6 +91,17 @@ volumeset:
     retentionDuration: 7d # how long each snapshot is kept
 ```
 
+### Public Access
+
+```yaml
+publicAccess:
+  enabled: false # Neo4j Browser and the HTTP API on the workload's public HTTPS endpoint; Bolt stays private
+```
+
+Install privately first and log in through port-forward, then turn this on. Logins are protected by
+the `neo4j` password, and Neo4j locks an account for 5 seconds after 3 wrong attempts. A firewall
+change can take a few minutes to take effect.
+
 ### Internal Access
 
 ```yaml
@@ -108,6 +119,8 @@ internalAccess:
 | Bolt, from a workload in the GVC | `bolt://RELEASE_NAME-neo4j.GVC_NAME.cpln.local:7687` (`neo4j://` also works) |
 | HTTP Query API, from a workload in the GVC | `http://RELEASE_NAME-neo4j.GVC_NAME.cpln.local:7474/db/neo4j/query/v2` |
 | Neo4j Browser, from your computer | `cpln port-forward RELEASE_NAME-neo4j 7474:7474 7687:7687 --gvc GVC_NAME`, then open `http://localhost:7474/browser/` and connect to `bolt://localhost:7687` |
+| Neo4j Browser, with `publicAccess` on | open `https://CANONICAL_ENDPOINT/browser/` (`status.canonicalEndpoint` of `cpln workload get RELEASE_NAME-neo4j --gvc GVC_NAME -o yaml`) and connect with the `https://` protocol |
+| HTTP Query API, with `publicAccess` on | `https://CANONICAL_ENDPOINT/db/neo4j/query/v2` |
 | Credentials | user `neo4j`, and the `password` key of your credentials secret |
 
 ## Backup and restore
@@ -133,6 +146,7 @@ when the snapshot was taken.
 - Every upgrade or configuration change restarts the only server, so Neo4j is briefly unavailable.
 - Keep `heapSize` + `pageCacheSize` to about three quarters of `maxMemory`; the JVM needs the rest, and an over-committed container is OOM-killed.
 - `volumeset.capacity` only sizes a new volume; grow a live one with `volumeset.autoscaling` or `cpln volumeset expand`.
+- With `publicAccess` on, always use the `https://` address: the endpoint also answers plain `http://`, which sends the password unencrypted.
 - If Neo4j Browser hangs through port-forward, restart the tunnel and fully quit the browser.
 
 ## Links

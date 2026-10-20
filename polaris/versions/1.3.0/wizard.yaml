@@ -77,6 +77,10 @@ steps:
             mirrors: polaris.validate.resources
             paths: [resources]
             message: The maximum CPU can be at most 4 times the minimum. Raise the minimum or lower the maximum.
+          - rule: "[self.resources.minMemory, self.resources.maxMemory].all(m, string(m).matches('^[0-9]+(Mi|Gi)$'))"
+            mirrors: polaris.validate.resources
+            paths: [resources]
+            message: Give memory in Mi or Gi (for example 512Mi or 2Gi).
           - rule: self.replicas >= 1 && self.jvm.maxRAMPercentage >= 40 && self.jvm.maxRAMPercentage <= 80
             mirrors: polaris.validate
             paths: [replicas, jvm.maxRAMPercentage]
@@ -586,6 +590,10 @@ steps:
         mirrors: polaris.validate.resources
         paths: [bootstrap.resources]
         message: The maximum CPU can be at most 4 times the minimum. Raise the minimum or lower the maximum.
+      - rule: "[self.bootstrap.resources.minMemory, self.bootstrap.resources.maxMemory].all(m, string(m).matches('^[0-9]+(Mi|Gi)$'))"
+        mirrors: polaris.validate.resources
+        paths: [bootstrap.resources]
+        message: Give memory in Mi or Gi (for example 512Mi or 2Gi).
 
 # Rules over the imported values: their issues show on the imported fields' step (postgres:network).
 rules:

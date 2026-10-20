@@ -302,7 +302,7 @@ steps:
 rules:
   - rule: "!has(self.redis.redis.auth.password)"
     mirrors: infisical.validateRedisSecret
-    paths: [redis.redis.auth.fromSecret.name]
+    paths: [redis.redis.auth.fromSecret.enabled]
     message: >-
       redis.redis.auth.password was removed in 1.2.0: the Redis password is now an optional prerequisite
       dictionary secret (key password) chosen under Redis password. Remove redis.redis.auth.password from the values.

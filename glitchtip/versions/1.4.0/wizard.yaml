@@ -307,7 +307,7 @@ steps:
               not send a Sentinel password.
           - rule: "!has(self.redis.redis.auth.password)"
             mirrors: glitchtip.validateRedisSecret
-            paths: [redis.redis.auth.fromSecret.name]
+            paths: [redis.redis.auth.fromSecret.enabled]
             message: >-
               redis.redis.auth.password was removed in 1.4.0: the Redis password is now a prerequisite dictionary
               secret (key password) named by the Redis password secret field. Remove redis.redis.auth.password from

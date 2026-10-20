@@ -335,12 +335,6 @@ steps:
             mirrors: litellm.validate
             paths: [redis.redis.auth.fromSecret.name]
             message: Name the Redis password secret, or turn the password off.
-          - rule: "!has(self.redis.redis.auth.password)"
-            mirrors: litellm.validateRedisPassword
-            paths: [redis.redis.auth.fromSecret.enabled]
-            message: >-
-              redis.redis.auth.password was removed in 1.2.0: the Redis password is now a prerequisite dictionary
-              secret (key password) chosen here. Remove redis.redis.auth.password from the values.
           # Upgrading from 1.1.0 with auth on, the upgrade deletes the chart-created <release>-redis-auth-password
           # secret, so the prerequisite secret must have a different name (holding the same password).
           - when: >-
@@ -362,6 +356,13 @@ steps:
 
 # Rules over the imported values: their issues show on the imported fields' steps.
 rules:
+  # Top level, not in the Redis section: the chart refuses the removed key even with Redis off.
+  - rule: "!has(self.redis.redis.auth.password)"
+    mirrors: litellm.validateRedisPassword
+    paths: [redis.enabled]
+    message: >-
+      redis.redis.auth.password was removed in 1.2.0: the Redis password is now a prerequisite dictionary secret
+      (key password) chosen under Bundled Redis. Remove redis.redis.auth.password from the values.
   - rule: self.postgres.internalAccess.type != 'none'
     paths: [postgres.internalAccess.type]
     message: '"None" also blocks the proxy, which connects to its database like any other workload.'

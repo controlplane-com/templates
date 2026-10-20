@@ -326,6 +326,14 @@ steps:
 
 # Rules over the imported values: their issues show on the imported fields' step.
 rules:
+  # The postgres import's own rule for these keys is dropped with the excluded secret field, so it is repeated here.
+  - rule: >-
+      !has(self.postgres.config.username) && !has(self.postgres.config.password) &&
+      !has(self.postgres.config.database)
+    paths: [postgres.config.credentialsSecretName]
+    message: >-
+      postgres.config.username, password and database are no longer read: put them in the database credentials
+      secret and remove them from the values.
   - rule: "!has(self.postgres.credentials)"
     mirrors: tooljet.validateRemovedKeys
     paths: [postgres.config.credentialsSecretName]

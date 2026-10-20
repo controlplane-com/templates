@@ -15,7 +15,7 @@
 | Resource | Purpose |
 |---|---|
 | workload `{release}-neo4j` (stateful, 1 replica) | Bolt 7687/tcp, Browser + HTTP API 7474/http |
-| volumeset `{release}-neo4j-data` (ext4, 10 GiB) | `/data`: stores + transaction logs; daily snapshots 03:00 UTC, 7 d, final snapshot on delete |
+| volumeset `{release}-neo4j-data` (ext4, 10 GiB) | `/data`: stores + transaction logs; daily snapshots 03:00 UTC, 7 d; `createFinalSnapshot: true` is set, but after uninstall no snapshot is listable or restorable (404) |
 | identity + policy | `reveal` on the user's credentials secret only |
 
 - **No HA:** clustering is Enterprise-only, so there is no `replicas` knob. Every upgrade or value change is a full restart.
@@ -37,7 +37,8 @@
 ## Troubleshooting / traps
 - Nothing starts, logs empty → the credentials secret is missing; `status.versions[].message` in `cpln workload get-deployments`.
 - `neo4j-start: FATAL …` at first boot → the secret's password is under 8 characters, contains `/`, or is `neo4j`.
-- Browser through port-forward: connect with `bolt://`, not `neo4j://` (routing returns the internal FQDN). A hang is usually the tunnel's leaked sockets (CLAUDE.md port-forward caveat 2).
+- Browser through port-forward: it pre-fills the internal FQDN; change it to `bolt://localhost:7687` (`neo4j://localhost:7687` also works on 2026.09: routing returns the address the client dialled). A hang is usually the tunnel's leaked sockets (CLAUDE.md port-forward caveat 2).
+- Measured outages (2026-10-19): helm-upgrade restart ~92 s, force-redeploy ~116 s (66 s is volume reattach), snapshot restore ~113 s; every `internalAccess` change restarts Neo4j. Missing secret self-healed in 9 min 24 s.
 - `server.default_advertised_address` is the internal FQDN so `neo4j://` routing works for same-GVC drivers.
 - OOMKilled → heap + page cache too close to `maxMemory`; the wizard warns above 3/4.
 - Backups are volume snapshots only; restore with `cpln volumeset snapshot restore`. Community's only native backup (`neo4j-admin database dump`) needs the server stopped; an offline dump/load "maintenance mode" is a follow-up.

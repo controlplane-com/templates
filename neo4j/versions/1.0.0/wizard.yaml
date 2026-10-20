@@ -145,13 +145,13 @@ steps:
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             help: >-
-              Uninstalling the release deletes the volume set; a final snapshot is taken first.
+              Uninstalling the release deletes the volume set and its restorable snapshots.
             docs: "/reference/volumeset#capacity-and-billing"
       - id: snapshots
         title: Volume snapshots
         description: >-
-          Snapshots of the data volume, the backup for this template. A final snapshot is taken
-          when the volume set is deleted, with or without a schedule.
+          Snapshots of the data volume, the backup for this template. They are deleted with the
+          volume set when you uninstall.
         docs: "#backup-and-restore"
         fields:
           - path: volumeset.snapshots.schedule

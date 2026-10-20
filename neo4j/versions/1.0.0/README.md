@@ -7,7 +7,7 @@ private endpoint, with the APOC procedures loaded.
 ## Architecture
 
 - **Neo4j workload** (`{release}-neo4j`, stateful): one server, Bolt on 7687, Browser and HTTP API on 7474.
-- **Volume set** (`{release}-neo4j-data`): `/data` (the stores and their transaction logs) on `ext4`, daily snapshots, and a final snapshot when it is deleted.
+- **Volume set** (`{release}-neo4j-data`): `/data` (the stores and their transaction logs) on `ext4`, with daily snapshots.
 - **Identity and policy**: `reveal` on exactly your credentials secret.
 
 Single instance: Neo4j clustering and online backup are Enterprise-only, so there is no failover.
@@ -110,14 +110,14 @@ internalAccess:
 | Neo4j Browser, from your computer | `cpln port-forward RELEASE_NAME-neo4j 7474:7474 7687:7687 --gvc GVC_NAME`, then open `http://localhost:7474/browser/` and connect to `bolt://localhost:7687` |
 | Credentials | user `neo4j`, and the `password` key of your credentials secret |
 
-Through port-forward, connect with `bolt://localhost:7687`, not `neo4j://`: a `neo4j://` connection
-asks the server for its address and gets the internal name, which your computer cannot resolve.
+Through port-forward, Neo4j Browser pre-fills the server's internal name, which your computer cannot
+resolve: change the connect URL to `bolt://localhost:7687`.
 
 ## Backup and restore
 
-Backups are volume snapshots: daily by default, kept for `retentionDuration`, plus a final snapshot
-when the volume set is deleted. They stay with the volume set in Control Plane and are not copied
-off-site. Neo4j Community cannot back up a running database, so there is no backup job.
+Backups are volume snapshots: daily by default, kept for `retentionDuration`. They stay with the
+volume set in Control Plane and are not copied off-site, and uninstalling deletes the volume set
+along with every snapshot you can restore. Neo4j Community cannot back up a running database, so there is no backup job.
 
 To restore, list the snapshots and restore one onto the volume. Neo4j restarts on the restored data:
 

@@ -430,6 +430,13 @@ steps:
         mirrors: keycloak.validate
         paths: [postgresHA.enabled, postgres.enabled]
         message: Enable exactly one database, either the highly available or the single-instance PostgreSQL.
+      - when: self.postgresHA.enabled
+        rule: "!has(self.postgresHA.proxy)"
+        mirrors: keycloak.validate
+        paths: [postgresHA.config.credentialsSecretName]
+        message: >-
+          postgresHA.proxy.enabled must stay true: Keycloak connects through the HAProxy leader endpoint.
+          Remove postgresHA.proxy from the values.
       - rule: >-
           (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != null &&
           (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != ''

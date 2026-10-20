@@ -441,6 +441,12 @@ steps:
         paths: [postgresHA.enabled, postgres.enabled]
         message: Enable exactly one database, either the highly available or the single-instance PostgreSQL.
       - rule: >-
+          !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
+          dyn(self.postgresHA)['proxy']['enabled'] == true
+        mirrors: unleash.validate
+        paths: [postgresHA.enabled]
+        message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is Unleash's database endpoint.
+      - rule: >-
           (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != null &&
           (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != ''
         mirrors: unleash.validateDatabaseSecret

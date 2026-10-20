@@ -446,6 +446,12 @@ steps:
         paths: [postgresHA.enabled, postgres.enabled]
         message: Enable exactly one database, either the single-instance or the highly available PostgreSQL.
       - rule: >-
+          !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
+          dyn(self.postgresHA)['proxy']['enabled'] == true
+        mirrors: listmonk.validate
+        paths: [postgresHA.enabled]
+        message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is listmonk's database endpoint.
+      - rule: >-
           (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != null &&
           (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != ''
         mirrors: listmonk.validateDatabaseSecret

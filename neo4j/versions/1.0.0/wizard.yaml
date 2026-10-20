@@ -109,11 +109,13 @@ steps:
             label: Load APOC Core
             description: The standard procedure library, bundled in the image; LangChain and LlamaIndex need it.
         rules:
-          - rule: >-
-              self.neo4j.heapSize.matches('^[0-9]+[kKmMgG]$') &&
-              self.neo4j.pageCacheSize.matches('^[0-9]+[kKmMgG]$')
+          - rule: self.neo4j.heapSize.matches('^[0-9]+[kKmMgG]$')
             mirrors: neo4j.validateMemory
-            paths: [neo4j.heapSize, neo4j.pageCacheSize]
+            paths: [neo4j.heapSize]
+            message: Use a number followed by k, m or g, such as 512m or 2g.
+          - rule: self.neo4j.pageCacheSize.matches('^[0-9]+[kKmMgG]$')
+            mirrors: neo4j.validateMemory
+            paths: [neo4j.pageCacheSize]
             message: Use a number followed by k, m or g, such as 512m or 2g.
           - when: >-
               self.neo4j.heapSize.matches('^[0-9]+[kKmMgG]$') &&

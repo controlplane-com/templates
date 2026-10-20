@@ -74,17 +74,25 @@ spec:
         timeoutSeconds: 10
         failureThreshold: 5
         successThreshold: 1
+  {{- /* The full blocks are declared: the API fills in any field a partial block omits, which shows as drift. */}}
   defaultOptions:
     autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
       metric: disabled
       minScale: 1
-      maxScale: 1
+      scaleToZeroDelay: 300
+      target: 95
     capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
   rolloutOptions:
     {{- /*
     maxUnavailableReplicas is deliberately NOT set: the API drops it on a
     stateful workload. 120 s lets Neo4j checkpoint on shutdown.
     */}}
+    minReadySeconds: 0
     scalingPolicy: OrderedReady
     terminationGracePeriodSeconds: 120
   firewallConfig:

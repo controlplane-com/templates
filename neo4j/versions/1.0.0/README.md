@@ -119,7 +119,7 @@ internalAccess:
 | Bolt, from a workload in the GVC | `bolt://RELEASE_NAME-neo4j.GVC_NAME.cpln.local:7687` (`neo4j://` also works) |
 | HTTP Query API, from a workload in the GVC | `http://RELEASE_NAME-neo4j.GVC_NAME.cpln.local:7474/db/neo4j/query/v2` |
 | Neo4j Browser, from your computer | `cpln port-forward RELEASE_NAME-neo4j 7474:7474 7687:7687 --gvc GVC_NAME`, then open `http://localhost:7474/browser/` and connect to `bolt://localhost:7687` |
-| Neo4j Browser, with `publicAccess` on | open `https://CANONICAL_ENDPOINT/browser/` (`status.canonicalEndpoint` of `cpln workload get RELEASE_NAME-neo4j --gvc GVC_NAME -o yaml`) and connect with the `https://` protocol |
+| Neo4j Browser, with `publicAccess` on | open `https://CANONICAL_ENDPOINT/browser/?dbms=https://CANONICAL_ENDPOINT:443` (`status.canonicalEndpoint` of `cpln workload get RELEASE_NAME-neo4j --gvc GVC_NAME -o yaml`); opened without `?dbms=`, set the protocol to `https://` and change the pre-filled `:7687` to `:443`, or Connect hangs |
 | HTTP Query API, with `publicAccess` on | `https://CANONICAL_ENDPOINT/db/neo4j/query/v2` |
 | Credentials | user `neo4j`, and the `password` key of your credentials secret |
 

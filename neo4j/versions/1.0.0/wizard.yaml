@@ -243,7 +243,9 @@ steps:
             when: self.publicAccess.enabled
             text: >-
               Always use the `https://` address. The endpoint also answers plain `http://`, which
-              sends the password unencrypted. Firewall changes can take a few minutes to apply.
+              sends the password unencrypted. Open Browser as
+              `https://ENDPOINT/browser/?dbms=https://ENDPOINT:443`: Bolt's port 7687 is not public,
+              so a pre-filled `:7687` makes Connect hang. Firewall changes can take a few minutes to apply.
       - title: Internal access
         docs: "#internal-access"
         fields:

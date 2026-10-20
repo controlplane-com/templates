@@ -27,6 +27,11 @@ spec:
         - name: NEO4J_PLUGINS
           value: '["apoc"]'
         {{- end }}
+        # No anonymous usage data to Neo4j, from the server or from Neo4j Browser.
+        - name: NEO4J_client_allow__telemetry
+          value: "false"
+        - name: NEO4J_dbms_usage__report_enabled
+          value: "false"
         - name: NEO4J_server_default__advertised__address
           value: {{ include "neo4j.advertisedAddress" . | quote }}
         - name: NEO4J_server_memory_heap_initial__size

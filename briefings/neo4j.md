@@ -42,6 +42,7 @@
 - `server.default_advertised_address` is the internal FQDN so `neo4j://` routing works for same-GVC drivers.
 - OOMKilled → heap + page cache too close to `maxMemory`; the wizard warns above 3/4.
 - Backups are volume snapshots only; restore with `cpln volumeset snapshot restore`. Community's only native backup (`neo4j-admin database dump`) needs the server stopped; an offline dump/load "maintenance mode" is a follow-up.
+- Usage data is off: `NEO4J_dbms_usage__report_enabled=false` (server) and `NEO4J_client_allow__telemetry=false` (Browser analytics), both accepted by strict validation at the pinned tag (maintainer, 2026-10-20). Note the env mapping: `_` → `.`, `__` → `_`; `usage__report__enabled` is refused as `dbms.usage_report_enabled`.
 - The image logs two `SECURITY WARNING: X-Forward headers …` lines at start; they are upstream defaults and harmless here.
 
 ## Follow-ups (not in 1.0.0)

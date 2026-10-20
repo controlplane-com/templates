@@ -43,13 +43,25 @@ steps:
         text: >-
           Both secrets must exist **before** you install. If one is missing, the deployment waits and
           `cpln logs` shows nothing at all.
+      - path: litellm.providerEnv
+        type: list
+        label: Provider key variables
+        widget: tags
+        description: >-
+          Environment variable names the proxy reads from the keys secret (for example `OPENAI_API_KEY`), so
+          the secret below must hold each one. Reference them in the model list as `os.environ/NAME`.
+        item:
+          type: string
+          pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+          patternMessage: Letters, digits and underscores, not starting with a digit.
       - path: secrets.name
         type: ref
         label: Keys secret
         required: true
         description: >-
-          A dictionary secret with `LITELLM_MASTER_KEY`, `LITELLM_SALT_KEY` and one key per provider
-          variable listed under Provider key variables.
+          A dictionary secret with `LITELLM_MASTER_KEY`, `LITELLM_SALT_KEY` and one key per provider key
+          variable above. The master key must start with `sk-`, and it is also the Admin UI password for
+          user `admin`.
         help: >-
           `LITELLM_SALT_KEY` encrypts the provider keys stored in the database: never change it once models
           or keys are stored. The master key can be rotated.
@@ -116,6 +128,14 @@ steps:
         message: >-
           PostgreSQL reads the credentials only when its data directory is first initialized; pointing at
           another secret does not change the existing user or password.
+      - when: oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.2.0') < 0
+        rule: "false"
+        severity: info
+        paths: [postgres.config.credentialsSecretName]
+        message: >-
+          This upgrade restarts the bundled PostgreSQL, so LiteLLM loses its database for a minute or two and
+          reconnects by itself. A new workload version can also wait up to about 10 minutes for access to the
+          new secrets; the previous version keeps serving meanwhile.
 
   - id: litellm
     title: LiteLLM proxy
@@ -154,7 +174,7 @@ steps:
           - when: self.litellm.replicas >= 2
             rule: self.redis.enabled
             severity: info
-            paths: [litellm.replicas]
+            paths: [litellm.replicas, redis.enabled]
             message: >-
               Without Redis every replica rate-limits on its own, so the effective limit is the replica count
               times the configured one.
@@ -168,17 +188,6 @@ steps:
               The `model_list` of LiteLLM's config. Reference provider keys as `os.environ/NAME`, never as
               literal keys.
             help: "See [model configuration](https://docs.litellm.ai/docs/proxy/configs) in the LiteLLM docs."
-          - path: litellm.providerEnv
-            type: list
-            label: Provider key variables
-            widget: tags
-            description: >-
-              Environment variable names the proxy reads from the keys secret; each must be a key of that
-              secret.
-            item:
-              type: string
-              pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
-              patternMessage: Letters, digits and underscores, not starting with a digit.
           - path: litellm.storeModelInDb
             type: boolean
             label: Manage models in the Admin UI too
@@ -393,7 +402,10 @@ migrations:
     from: postgres.credentials
     note: >-
       The database credentials are now a prerequisite dictionary secret (username, password, database). Create
-      it under a NEW name with the values the database was initialized with, and choose it under Secrets.
+      it under a NEW name with the values the database was initialized with, and choose it under Secrets. Read
+      them before upgrading with `cpln secret reveal` on the installed release's
+      postgres.config.credentialsSecretName (the upgrade deletes that secret); a password never overridden is
+      `change-me-litellm-pg`.
   - fromVersions: "<1.1.0"
     from: postgres.config.username
     note: Put it in the database credentials secret (key username); choose the secret under Secrets.

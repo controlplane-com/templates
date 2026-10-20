@@ -484,7 +484,8 @@ rules:
       (reuse the SAME values) and remove them from the values.
   - rule: "!has(self.objectStore.gcp.accessKeyId) && !has(self.objectStore.gcp.secretAccessKey)"
     mirrors: langfuse.validateRemovedKeys
-    paths: [objectStore.gcp.credentialsSecretName]
+    # The chart refuses these whatever the provider, and the secret field is hidden unless it is gcp.
+    paths: [objectStore.provider]
     message: >-
       objectStore.gcp.accessKeyId and secretAccessKey were removed in 1.1.0: put them in the HMAC key secret
       and remove them from the values.

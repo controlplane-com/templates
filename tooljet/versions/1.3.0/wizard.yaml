@@ -41,7 +41,10 @@ imports:
           ToolJet connects to its database like any other workload: keep Same GVC, or add the ToolJet
           workload under Allowed workloads.
       backup.enabled:
-        help: Adds one cron workload that runs `pg_dumpall` and uploads a gzipped dump to the bucket.
+        help: >-
+          Adds one cron workload that runs `pg_dumpall` and uploads a gzipped dump to the bucket. Backups need a
+          PostgreSQL 17 or later image, and ToolJet's bundled PostgREST is proven only against 16, so switching
+          the image to enable them is untested.
 
 steps:
   - id: tooljet
@@ -313,8 +316,7 @@ steps:
         message: >-
           redis.redis.auth.password was removed in 1.3.0: the Redis password is now a prerequisite dictionary
           secret (key password) chosen under Redis password. Remove redis.redis.auth.password from the values.
-      - when: self.redis.enabled
-        rule: >-
+      - rule: >-
           !has(self.redis.sentinel.auth) ||
           ((!has(self.redis.sentinel.auth.password) || !has(self.redis.sentinel.auth.password.enabled)) &&
           (!has(self.redis.sentinel.auth.fromSecret) || !has(self.redis.sentinel.auth.fromSecret.enabled)))

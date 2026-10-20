@@ -14,6 +14,7 @@ imports:
     title: Bundled PostgreSQL
     after: access
     steps:
+      - { id: credentials, title: Database credentials }
       - { id: server, title: Database server }
       - { id: storage, title: Database storage }
       - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
@@ -233,7 +234,7 @@ steps:
                   The chart still writes these workloads into the firewall, where the platform checks every
                   entry, but "None" lets none of them connect. Remove them.
 
-# Rules over the imported values: their issues show on the imported fields' step (postgres:network).
+# Rules over the imported values: their issues show on the imported fields' steps (postgres:credentials, postgres:network).
 rules:
   - rule: "!has(self.gitea.admin) && !has(self.gitea.security)"
     mirrors: gitea.validateRemovedKeys

@@ -16,6 +16,7 @@ imports:
     title: Bundled PostgreSQL
     after: tooljet
     steps:
+      - { id: credentials, title: Database credentials }
       - { id: server, title: Database server }
       - { id: storage, title: Database storage }
       - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }

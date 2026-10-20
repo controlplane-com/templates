@@ -281,7 +281,8 @@ steps:
               self.storage.type != 's3' || self.storage.s3.auth.secretName == '' ||
               self.storage.s3.endpoint != ''
             mirrors: twenty.validate
-            paths: [storage.s3.auth.secretName]
+            # The secret field is hidden when the endpoint is empty, so the bucket carries the issue too.
+            paths: [storage.s3.auth.secretName, storage.s3.bucket]
             message: >-
               Static keys are only for S3-compatible servers. For AWS S3, choose AWS S3 above and use a cloud
               account.

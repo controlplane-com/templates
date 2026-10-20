@@ -1,0 +1,47 @@
+# ─── Image ───────────────────────────────────────────────────────────────────
+# Neo4j Community Edition (GPLv3). Enterprise images are refused: they need a paid license.
+image: neo4j:2026.09.0-community
+
+# ─── Credentials ─────────────────────────────────────────────────────────────
+auth:
+  # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL.
+  # A dictionary secret with the key `password` (8+ characters, no `/`); the user is always `neo4j`.
+  # If it does not exist at install time the deployment waits silently and `cpln logs` shows nothing.
+  # Used only on the FIRST start; to change the password later, see the README.
+  credentialsSecretName: my-neo4j-credentials
+
+# ─── Resources ───────────────────────────────────────────────────────────────
+resources:
+  minCpu: 250m
+  maxCpu: 1000m   # at most 4× minCpu
+  minMemory: 2Gi
+  maxMemory: 2Gi  # keep heapSize + pageCacheSize to about 3/4 of this
+
+# ─── Neo4j Memory and Plugins ────────────────────────────────────────────────
+neo4j:
+  heapSize: 512m      # JVM heap (initial = max), Neo4j size syntax: 512m, 2g
+  pageCacheSize: 512m # graph store cache outside the heap
+  apoc: true          # load the bundled APOC Core procedures
+
+# ─── Storage ─────────────────────────────────────────────────────────────────
+volumeset:
+  capacity: 10 # initial capacity in GiB (minimum 10)
+  autoscaling:
+    enabled: false # grow the volume automatically as it fills
+    maxCapacity: 100 # GiB ceiling when autoscaling
+    minFreePercentage: 10
+    scalingFactor: 1.2
+  snapshots:
+    schedule: "0 3 * * *" # daily at 03:00 UTC; at most hourly; "" turns scheduled snapshots off
+    retentionDuration: 7d # how long each snapshot is kept
+
+# ─── Public Access ───────────────────────────────────────────────────────────
+publicAccess:
+  enabled: false # Neo4j Browser and the HTTP API on the workload's public HTTPS endpoint; Bolt stays private
+
+# ─── Internal Access ─────────────────────────────────────────────────────────
+internalAccess:
+  type: same-gvc # none, same-gvc, same-org or workload-list
+  workloads: [] # extra allowed clients, used with same-gvc or workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME

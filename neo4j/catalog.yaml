@@ -1,0 +1,64 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Neo4j
+category: database
+topology: single
+
+summary: >-
+  A single Neo4j Community Edition graph database server on a persistent volume with daily volume
+  snapshots, serving Bolt to applications in the GVC and the bundled Neo4j Browser and HTTP Query
+  API on the same endpoint (private by default, optionally public over HTTPS), with the APOC procedures loaded. A property graph or knowledge
+  graph queried with Cypher by apps in one location, with no clustering or failover.
+
+keywords:
+  - graph database
+  - cypher
+  - bolt
+  - property graph
+  - knowledge graph
+  - graphrag
+  - apoc
+  - neo4j browser
+  - graph queries
+  - relationships
+  - vector index
+  - volume snapshots
+
+useCases:
+  - Knowledge graph behind a GraphRAG or LLM application
+  - Recommendations and relationship queries over connected data
+  - Fraud, identity or network analysis with multi-hop queries
+  - Dependency, lineage or IT-asset graphs queried with Cypher
+  - Development or staging database that mirrors a Neo4j AuraDB project
+
+alternativeTo:
+  - Neo4j AuraDB
+  - Amazon Neptune
+  - Memgraph
+  - ArangoDB
+
+pickInsteadIf:
+  - need: relational tables and SQL
+    template: postgres
+  - need: a dedicated vector database for embeddings and similarity search
+    template: qdrant
+  - need: a JSON document database
+    template: mongodb
+
+related:
+  - template: ollama
+    relation: companion
+    note: Runs local models for a GraphRAG application that stores its knowledge graph in Neo4j
+  - template: litellm
+    relation: companion
+    note: OpenAI-compatible gateway for the generation step of a GraphRAG application
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [password]
+    valuesPath: auth.credentialsSecretName
+    required: true
+    description: Admin password for the neo4j user (8+ characters, no slash), used on first start. Create it before installing; when it is missing the workload waits with no logs.

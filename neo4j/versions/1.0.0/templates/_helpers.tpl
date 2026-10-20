@@ -21,14 +21,6 @@
 {{- end }}
 
 {{/*
-Internal FQDN advertised to drivers, so a neo4j:// routing table names a host
-same-GVC clients can resolve (the default would be the replica's own hostname).
-*/}}
-{{- define "neo4j.advertisedAddress" -}}
-{{- printf "%s.%s.cpln.local" (include "neo4j.name" .) .Values.global.cpln.gvc }}
-{{- end }}
-
-{{/*
 Render a shell script as a single container arg. The platform expands $(VAR) and
 collapses $$ to $ in args, so every $ is doubled to arrive intact.
 */}}

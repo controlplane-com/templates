@@ -32,8 +32,6 @@ spec:
           value: "false"
         - name: NEO4J_dbms_usage__report_enabled
           value: "false"
-        - name: NEO4J_server_default__advertised__address
-          value: {{ include "neo4j.advertisedAddress" . | quote }}
         - name: NEO4J_server_memory_heap_initial__size
           value: {{ .Values.neo4j.heapSize | quote }}
         - name: NEO4J_server_memory_heap_max__size

@@ -110,9 +110,6 @@ internalAccess:
 | Neo4j Browser, from your computer | `cpln port-forward RELEASE_NAME-neo4j 7474:7474 7687:7687 --gvc GVC_NAME`, then open `http://localhost:7474/browser/` and connect to `bolt://localhost:7687` |
 | Credentials | user `neo4j`, and the `password` key of your credentials secret |
 
-Through port-forward, Neo4j Browser pre-fills the server's internal name, which your computer cannot
-resolve: change the connect URL to `bolt://localhost:7687`.
-
 ## Backup and restore
 
 Backups are volume snapshots: daily by default, kept for `retentionDuration`. They stay with the

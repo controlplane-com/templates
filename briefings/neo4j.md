@@ -37,9 +37,9 @@
 ## Troubleshooting / traps
 - Nothing starts, logs empty → the credentials secret is missing; `status.versions[].message` in `cpln workload get-deployments`.
 - `neo4j-start: FATAL …` at first boot → the secret's password is under 8 characters, contains `/`, or is `neo4j`.
-- Browser through port-forward: it pre-fills the internal FQDN; change it to `bolt://localhost:7687` (`neo4j://localhost:7687` also works on 2026.09: routing returns the address the client dialled). A hang is usually the tunnel's leaked sockets (CLAUDE.md port-forward caveat 2).
+- Browser through port-forward pre-fills `localhost:7687` and connects with no edits. A hang is usually the tunnel's leaked sockets (CLAUDE.md port-forward caveat 2).
 - Measured outages (2026-10-19): helm-upgrade restart ~92 s, force-redeploy ~116 s (66 s is volume reattach), snapshot restore ~113 s; every `internalAccess` change restarts Neo4j. Missing secret self-healed in 9 min 24 s.
-- `server.default_advertised_address` is the internal FQDN so `neo4j://` routing works for same-GVC drivers.
+- **Do not set `server.default_advertised_address`.** Unset, Browser's discovery (`GET /`) echoes the request Host and a `neo4j://` routing table echoes the address the driver dialled, so both the tunnel and same-GVC drivers just work. Set to the internal FQDN (1.0.0 pre-release), it forced Browser to pre-fill a name the user's laptop cannot resolve (measured 2026-10-20).
 - OOMKilled → heap + page cache too close to `maxMemory`; the wizard warns above 3/4.
 - Backups are volume snapshots only; restore with `cpln volumeset snapshot restore`. Community's only native backup (`neo4j-admin database dump`) needs the server stopped; an offline dump/load "maintenance mode" is a follow-up.
 - Usage data is off: `NEO4J_dbms_usage__report_enabled=false` (server) and `NEO4J_client_allow__telemetry=false` (Browser analytics), both accepted by strict validation at the pinned tag (maintainer, 2026-10-20). Note the env mapping: `_` → `.`, `__` → `_`; `usage__report__enabled` is refused as `dbms.usage_report_enabled`.

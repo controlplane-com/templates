@@ -13,135 +13,143 @@ gvc:
 steps:
   - id: secrets
     title: Secrets
-    description: The prerequisite secrets the gateway and its Redis read.
+    description: The prerequisite secrets the gateway and its Redis read, including your APIs and policies.
     docs: "#prerequisites"
-    fields:
-      - type: note
-        severity: warning
-        text: >-
-          Every secret named here must exist **before** you install. If one is missing, the deployment waits
-          and `cpln logs` shows nothing at all.
-      - path: adminSecretName
-        type: ref
-        label: Admin API key secret
-        required: true
-        description: >-
-          An opaque secret (encoding plain) holding the key for the Gateway admin API (`/tyk/*`, sent as
-          `X-Tyk-Authorization`). Whoever holds it can create and revoke every API key.
-        ref:
-          kind: secret
-          format: name
-          filter: { secretType: [opaque] }
-          mustExist: error
-          allowCreate: true
-          create:
-            encoding: plain
-            suggestName: "context.releaseName + '-tyk-admin'"
-            hint: "Generate the content with: openssl rand -hex 32"
-      - path: redis.redis.auth.fromSecret.enabled
-        type: boolean
-        label: Require a Redis password
-        description: >-
-          Off, the GVC firewall is the only boundary in front of Redis. On, Redis and the gateway read the
-          password from the secret below.
-      - path: redis.redis.auth.fromSecret.name
-        type: ref
-        label: Redis password secret
-        required: true
-        when: self.redis.redis.auth.fromSecret.enabled
-        description: A dictionary secret with the key `password`.
-        help: >-
-          Upgrading from 1.3.0, it must hold the password Redis runs with today, under a new name: see
-          "Upgrading from 1.3.0" in the README.
-        ref:
-          kind: secret
-          format: name
-          filter: { secretType: [dictionary] }
-          mustExist: error
-          allowCreate: true
-          requiredKeysFrom: "[self.redis.redis.auth.fromSecret.passwordKey]"
-          create:
-            suggestName: "context.releaseName + '-tyk-redis'"
-      - path: redis.sentinel.auth.fromSecret.enabled
-        type: boolean
-        label: Require a Sentinel password
-        description: >-
-          Off, the GVC firewall is the only boundary in front of Sentinel. On, Sentinel and the gateway read
-          the password from the secret below.
-      - path: redis.sentinel.auth.fromSecret.name
-        type: ref
-        label: Sentinel password secret
-        required: true
-        when: self.redis.sentinel.auth.fromSecret.enabled
-        description: A dictionary secret with the key `password`.
-        help: >-
-          Sentinel keeps the password it first started with on its volume, so on an upgrade from 1.3.0 this
-          secret must hold the Sentinel password in use today, under a new name.
-        ref:
-          kind: secret
-          format: name
-          filter: { secretType: [dictionary] }
-          mustExist: error
-          allowCreate: true
-          requiredKeysFrom: "[self.redis.sentinel.auth.fromSecret.passwordKey]"
-          create:
-            suggestName: "context.releaseName + '-tyk-sentinel'"
-    rules:
-      - rule: self.adminSecretName != ''
-        mirrors: tyk.validate
-        paths: [adminSecretName]
-        message: Name the admin API key secret; the chart does not render without it.
-      - when: self.redis.redis.auth.fromSecret.enabled
-        rule: self.redis.redis.auth.fromSecret.name != '' && self.redis.redis.auth.fromSecret.passwordKey != ''
-        mirrors: tyk.validate
-        paths: [redis.redis.auth.fromSecret.name]
-        message: Name the Redis password secret, or turn the Redis password off.
-      - when: self.redis.sentinel.auth.fromSecret.enabled
-        rule: self.redis.sentinel.auth.fromSecret.name != '' && self.redis.sentinel.auth.fromSecret.passwordKey != ''
-        mirrors: tyk.validate
-        paths: [redis.sentinel.auth.fromSecret.name]
-        message: Name the Sentinel password secret, or turn the Sentinel password off.
-      # Upgrading from 1.3.0, the upgrade deletes the chart-created <release>-redis-auth-password and
-      # <release>-sentinel-auth-password secrets, so the prerequisites must have different names.
-      - when: >-
-          self.redis.redis.auth.fromSecret.enabled && context.fromVersion != null &&
-          semverCompare(context.fromVersion, '1.4.0') < 0
-        rule: self.redis.redis.auth.fromSecret.name != context.releaseName + '-redis-auth-password'
-        paths: [redis.redis.auth.fromSecret.name]
-        message: >-
-          The previous version created this secret itself, and this upgrade deletes it. Create a secret under a
-          NEW name holding your current Redis password, and name it here.
-      - when: >-
-          self.redis.sentinel.auth.fromSecret.enabled && context.fromVersion != null &&
-          semverCompare(context.fromVersion, '1.4.0') < 0
-        rule: self.redis.sentinel.auth.fromSecret.name != context.releaseName + '-sentinel-auth-password'
-        paths: [redis.sentinel.auth.fromSecret.name]
-        message: >-
-          The previous version created this secret itself, and this upgrade deletes it. Create a secret under a
-          NEW name holding your current Sentinel password, and name it here.
-      - when: oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.4.0') < 0
-        rule: "false"
-        severity: info
-        paths: [redis.redis.auth.fromSecret.name]
-        message: >-
-          Put the passwords Redis and Sentinel run with today into the new secrets, not new ones: Sentinel keeps
-          its first password on its volume, so a new one locks the gateway out. Read them with
-          `cpln secret reveal` before upgrading, because the upgrade deletes the old secrets.
-
-  - id: gateway
-    title: Gateway
-    description: The gateway image and port, your APIs and policies, and its compute.
-    docs: "#configuration"
     sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.4.0') < 0
+            text: >-
+              Put the passwords Redis and Sentinel run with **today** into the two new secrets, not new ones. Read
+              them first with `cpln secret reveal RELEASE_NAME-redis-auth-password` and
+              `cpln secret reveal RELEASE_NAME-sentinel-auth-password`, because this upgrade deletes those secrets.
+              Sentinel keeps its first password on its volume, so a new one locks the gateway out of its store and
+              stalls the Redis restart. The upgrade restarts Redis, Sentinel and the gateway, briefly interrupting
+              key and rate-limit lookups, and a new version can wait up to about 10 minutes on "not allowed to
+              reveal the secret" while access to the new secrets propagates; the previous version keeps serving
+              meanwhile.
+            textExpression: >-
+              'Put the passwords Redis and Sentinel run with **today** into the two new secrets, not new ones. ' +
+              'Read them first with `cpln secret reveal ' + context.releaseName + '-redis-auth-password` and ' +
+              '`cpln secret reveal ' + context.releaseName + '-sentinel-auth-password`, because this upgrade ' +
+              'deletes those secrets. Sentinel keeps its first password on its volume, so a new one locks the ' +
+              'gateway out of its store and stalls the Redis restart. The upgrade restarts Redis, Sentinel and ' +
+              'the gateway, briefly interrupting key and rate-limit lookups, and a new version can wait up to ' +
+              'about 10 minutes on "not allowed to reveal the secret" while access to the new secrets ' +
+              'propagates; the previous version keeps serving meanwhile.'
+          - type: note
+            severity: warning
+            text: >-
+              Every secret named here must exist **before** you install or upgrade. If one is missing, the
+              deployment waits and `cpln logs` shows nothing at all.
+          - path: adminSecretName
+            type: ref
+            label: Admin API key secret
+            required: true
+            description: >-
+              An opaque secret (encoding plain) holding the key for the Gateway admin API (`/tyk/*`, sent as
+              `X-Tyk-Authorization`). Whoever holds it can create and revoke every API key.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-tyk-admin'"
+                hint: "Generate the content with: openssl rand -hex 32"
+      - id: redis-password
+        title: Redis password
+        toggle: redis.redis.auth.fromSecret.enabled
+        description: >-
+          On, Redis and the gateway read the Redis password from a secret. Off, the GVC firewall is the only
+          boundary in front of Redis.
+        fields:
+          - path: redis.redis.auth.fromSecret.name
+            type: ref
+            label: Redis password secret
+            required: true
+            description: A dictionary secret with the key `password`.
+            help: >-
+              Upgrading from 1.3.0, it must hold the password Redis runs with today, under a new name: see
+              "Upgrading from 1.3.0" in the README.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeysFrom: "[self.redis.redis.auth.fromSecret.passwordKey]"
+              create:
+                suggestName: "context.releaseName + '-tyk-redis'"
+        rules:
+          - rule: self.redis.redis.auth.fromSecret.name != '' && self.redis.redis.auth.fromSecret.passwordKey != ''
+            mirrors: tyk.validate
+            paths: [redis.redis.auth.fromSecret.name]
+            message: Name the Redis password secret, or turn the Redis password off.
+          # Upgrading from 1.3.0, the upgrade deletes the chart-created <release>-redis-auth-password secret,
+          # so the prerequisite must have a different name.
+          - when: context.fromVersion != null && semverCompare(context.fromVersion, '1.4.0') < 0
+            rule: self.redis.redis.auth.fromSecret.name != context.releaseName + '-redis-auth-password'
+            paths: [redis.redis.auth.fromSecret.name]
+            message: >-
+              The previous version created this secret itself, and this upgrade deletes it. Create a secret under a
+              NEW name holding your current Redis password, and name it here.
+      - id: sentinel-password
+        title: Sentinel password
+        toggle: redis.sentinel.auth.fromSecret.enabled
+        description: >-
+          On, Sentinel and the gateway read the Sentinel password from a secret. Off, the GVC firewall is the
+          only boundary in front of Sentinel.
+        fields:
+          - path: redis.sentinel.auth.fromSecret.name
+            type: ref
+            label: Sentinel password secret
+            required: true
+            description: >-
+              A dictionary secret with the key `password`. Sentinel keeps the password it first starts with, and
+              it cannot be changed later.
+            help: >-
+              Sentinel keeps the password it first started with on its volume, so on an upgrade from 1.3.0 this
+              secret must hold the Sentinel password in use today, under a new name.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeysFrom: "[self.redis.sentinel.auth.fromSecret.passwordKey]"
+              create:
+                suggestName: "context.releaseName + '-tyk-sentinel'"
+        rules:
+          - rule: self.redis.sentinel.auth.fromSecret.name != '' && self.redis.sentinel.auth.fromSecret.passwordKey != ''
+            mirrors: tyk.validate
+            paths: [redis.sentinel.auth.fromSecret.name]
+            message: Name the Sentinel password secret, or turn the Sentinel password off.
+          - when: context.fromVersion != null && semverCompare(context.fromVersion, '1.4.0') < 0
+            rule: self.redis.sentinel.auth.fromSecret.name != context.releaseName + '-sentinel-auth-password'
+            paths: [redis.sentinel.auth.fromSecret.name]
+            message: >-
+              The previous version created this secret itself, and this upgrade deletes it. Create a secret under a
+              NEW name holding your current Sentinel password, and name it here.
       - title: APIs and policies
         docs: "#api-definitions-and-policies"
         fields:
+          - type: note
+            severity: warning
+            when: self.apiSecretName == null || self.apiSecretName == ''
+            text: >-
+              No API definitions: the gateway serves Tyk's built-in demo API ("Tyk Test API"), not yours.
           - path: apiSecretName
             type: ref
             label: API definitions secret
             description: >-
-              A dictionary secret with one Tyk API definition per `*.json` key. Leave empty and the gateway
-              serves the demo API built into the image instead of yours.
+              A dictionary secret with one Tyk API definition per `*.json` key. The gateway's egress is closed, so
+              each API's `target_url` must be inside this GVC (`*.cpln.local`).
             help: Read at boot. After editing the secret, force a redeployment of the gateway.
             ref:
               kind: secret
@@ -173,6 +181,12 @@ steps:
             description: >-
               On, a key created without an `access_rights` section can call every API on this gateway. Off
               matches upstream Tyk.
+
+  - id: gateway
+    title: Gateway
+    description: The gateway image and port, its compute and its autoscaling.
+    docs: "#configuration"
+    sections:
       - title: Server
         docs: "#image-and-port"
         fields:
@@ -213,6 +227,7 @@ steps:
             label: Minimum replicas
             required: true
             min: 0
+            description: 0 lets the gateway scale to zero, which only Requests per second supports.
           - path: autoscaling.maxScale
             type: integer
             label: Maximum replicas
@@ -225,7 +240,6 @@ steps:
             options:
               - { value: cpu, label: CPU }
               - { value: memory, label: Memory }
-              - { value: concurrency, label: Concurrent requests }
               - { value: rps, label: Requests per second }
               - { value: latency, label: Latency }
           - path: autoscaling.target
@@ -238,13 +252,20 @@ steps:
             type: integer
             label: Scale-to-zero delay (seconds)
             required: true
-            min: 0
+            when: self.autoscaling.minScale == 0
+            min: 30
+            max: 3600
             advanced: true
-            description: Used only when the minimum is 0.
+            description: How long the gateway waits without traffic before it scales to zero.
         rules:
           - rule: self.autoscaling.maxScale >= self.autoscaling.minScale
             paths: [autoscaling.maxScale]
             message: The maximum must be at least the minimum.
+          - rule: self.autoscaling.minScale >= 1 || self.autoscaling.metric == 'rps'
+            paths: [autoscaling.minScale]
+            message: >-
+              Only Requests per second can scale the gateway to zero; set the minimum to 1 or more, or scale on
+              Requests per second.
 
   - id: access
     title: Access
@@ -273,7 +294,9 @@ steps:
         label: Allowed workloads
         when: self.internalAccess.type == 'workload-list' || self.internalAccess.type == 'same-gvc'
         widget: tags
-        description: Workload links such as `//gvc/GVC_NAME/workload/WORKLOAD_NAME`.
+        description: >-
+          Workload links such as `//gvc/GVC_NAME/workload/WORKLOAD_NAME`. With Same GVC, these are extra
+          workloads from other GVCs that may also connect.
         item:
           type: ref
           ref:
@@ -332,6 +355,29 @@ steps:
             options:
               - { value: same-gvc, label: Same GVC }
               - { value: same-org, label: Same org }
+        rules:
+          # Redis is a stateful workload, and the redis subchart reserves minCpu 80m and minMemory 128Mi, which
+          # this chart does not expose. The API refuses a limit above 4 times the reservation, and memory (MiB) at
+          # 8 times the CPU (millicores) or more.
+          - rule: cpuMillicores(self.redis.redis.resources.cpu) <= 320
+            paths: [redis.redis.resources.cpu]
+            message: >-
+              Redis is a stateful workload that reserves 80m CPU, and Control Plane allows a limit of at most 4
+              times the reservation: set the Redis CPU limit to 320m or less.
+          - rule: memoryBytes(self.redis.redis.resources.memory) <= 4 * memoryBytes('128Mi')
+            paths: [redis.redis.resources.memory]
+            message: >-
+              Redis is a stateful workload that reserves 128Mi of memory, and Control Plane allows a limit of at
+              most 4 times the reservation: set the Redis memory limit to 512Mi or less.
+          - rule: memoryBytes(self.redis.redis.resources.memory) < 8 * 1048576 * cpuMillicores(self.redis.redis.resources.cpu)
+            paths: [redis.redis.resources.memory]
+            message: >-
+              The Redis memory limit in Mi must be less than 8 times its CPU limit in millicores: raise the CPU
+              limit or lower the memory limit.
+            messageExpression: >-
+              'The Redis memory limit must be under ' + string(8 * cpuMillicores(self.redis.redis.resources.cpu)) +
+              'Mi with a CPU limit of ' + string(cpuMillicores(self.redis.redis.resources.cpu)) +
+              'm (less than 8 Mi per millicore): raise the CPU limit or lower the memory limit.'
       - title: Sentinel
         fields:
           - path: redis.sentinel.replicas
@@ -365,6 +411,29 @@ steps:
             options:
               - { value: same-gvc, label: Same GVC }
               - { value: same-org, label: Same org }
+        rules:
+          # Sentinel is a stateful workload, and the redis subchart reserves minCpu 80m and minMemory 128Mi, which
+          # this chart does not expose. The API refuses a limit above 4 times the reservation, and memory (MiB) at
+          # 8 times the CPU (millicores) or more.
+          - rule: cpuMillicores(self.redis.sentinel.resources.cpu) <= 320
+            paths: [redis.sentinel.resources.cpu]
+            message: >-
+              Sentinel is a stateful workload that reserves 80m CPU, and Control Plane allows a limit of at most 4
+              times the reservation: set the Sentinel CPU limit to 320m or less.
+          - rule: memoryBytes(self.redis.sentinel.resources.memory) <= 4 * memoryBytes('128Mi')
+            paths: [redis.sentinel.resources.memory]
+            message: >-
+              Sentinel is a stateful workload that reserves 128Mi of memory, and Control Plane allows a limit of at
+              most 4 times the reservation: set the Sentinel memory limit to 512Mi or less.
+          - rule: memoryBytes(self.redis.sentinel.resources.memory) < 8 * 1048576 * cpuMillicores(self.redis.sentinel.resources.cpu)
+            paths: [redis.sentinel.resources.memory]
+            message: >-
+              The Sentinel memory limit in Mi must be less than 8 times its CPU limit in millicores: raise the CPU
+              limit or lower the memory limit.
+            messageExpression: >-
+              'The Sentinel memory limit must be under ' + string(8 * cpuMillicores(self.redis.sentinel.resources.cpu)) +
+              'Mi with a CPU limit of ' + string(cpuMillicores(self.redis.sentinel.resources.cpu)) +
+              'm (less than 8 Mi per millicore): raise the CPU limit or lower the memory limit.'
 
 # Rules over removed keys: the chart refuses them whatever else is set.
 rules:

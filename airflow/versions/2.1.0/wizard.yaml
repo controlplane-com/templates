@@ -16,8 +16,19 @@ steps:
           - type: note
             severity: warning
             text: >-
-              Both secrets must exist **before** you install. If one is missing, the deployment waits and
+              Both secrets must exist **before** you install or upgrade. If one is missing, the deployment waits and
               `cpln logs` shows nothing at all.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.1.0') < 0
+            text: >-
+              Put the CURRENT database username, password and database in the new secret, not new ones (read them
+              with `cpln secret reveal RELEASE_NAME-airflow-config -o yaml`; the database is `airflow` unless you
+              changed it). This upgrade restarts PostgreSQL, the webserver and the workers, so Airflow is
+              unavailable for a few minutes. A new workload version can wait about 10 minutes on `is not allowed
+              to reveal the secret` while the old one keeps serving; it clears by itself.
           - path: airflow.auth.secretName
             type: ref
             label: Auth secret
@@ -88,10 +99,6 @@ steps:
               postgres.config.username, postgres.config.password and postgres.config.database were removed in
               2.1.0. Put them in a dictionary secret, choose it as the database credentials secret, and remove
               them from the values.
-          - rule: self.postgres.config.credentialsSecretName != ''
-            mirrors: airflow.validateDbCredentials
-            paths: [postgres.config.credentialsSecretName]
-            message: The database credentials secret is required.
           # 2.0.0 created <release>-airflow-config itself, and the 2.1.0 upgrade deletes it; the chart refuses
           # the name on every render.
           - rule: self.postgres.config.credentialsSecretName != context.releaseName + '-airflow-config'
@@ -127,7 +134,9 @@ steps:
             label: Location
             required: true
             immutable: Moving Airflow to another location starts it on new, empty volumes there.
-            description: The one location of the GVC that every Airflow workload runs in.
+            description: >-
+              The one location of the GVC that every Airflow workload runs in. It cannot be changed later:
+              another location starts Airflow on new, empty volumes.
             ref: { kind: location, scope: gvc, format: name, mustExist: error }
         rules:
           - rule: self.location != '' && !has(self.locations)
@@ -200,13 +209,6 @@ steps:
             format: image
             label: Worker image
             required: true
-          - path: airflow.celeryWorker.replicas
-            type: integer
-            label: Workers
-            min: 1
-            required: true
-            when: "!self.keda.enabled"
-            suggestions: [1, 2, 3, 5]
           - path: airflow.celery.workerConcurrency
             type: integer
             label: Tasks per worker
@@ -220,11 +222,10 @@ steps:
             description: Per worker.
             cpu: { min: 25m }
             memory: { min: 32Mi }
-        rules:
-          - rule: self.keda.enabled || self.airflow.celeryWorker.replicas >= 1
-            mirrors: airflow.validateKeda
-            paths: [airflow.celeryWorker.replicas]
-            message: At least one worker is required; scale to zero is what KEDA autoscaling is for.
+          - type: note
+            text: >-
+              Avoid wide simultaneous task fan-outs, or stagger task submission: a race in the worker image's
+              Redis transport can drop tasks without any error in the UI.
       - id: keda
         title: KEDA autoscaling
         toggle: keda.enabled
@@ -284,14 +285,32 @@ steps:
             mirrors: airflow.validateKeda
             paths: [keda.minScale]
             message: The minimum number of workers cannot exceed the maximum.
-          - rule: >-
+          - when: context.mode == 'install'
+            rule: >-
+              context.gvcSpec == null || (has(context.gvcSpec.keda) && has(context.gvcSpec.keda.enabled) &&
+              context.gvcSpec.keda.enabled)
+            paths: [keda.enabled]
+            message: >-
+              KEDA is not enabled on the target GVC, so the webserver refuses to start a fresh install. Enable
+              KEDA in the GVC settings first, or turn autoscaling off.
+          - when: context.mode == 'upgrade'
+            rule: >-
               context.gvcSpec == null || (has(context.gvcSpec.keda) && has(context.gvcSpec.keda.enabled) &&
               context.gvcSpec.keda.enabled)
             severity: warning
             paths: [keda.enabled]
             message: >-
-              KEDA is not enabled on the target GVC, so the workers would never scale. Enable it in the GVC
-              settings first.
+              KEDA is not enabled on the target GVC, so the workers would never scale and stay at the minimum.
+              Enable it in the GVC settings first.
+      - title: Fixed worker count
+        when: "!self.keda.enabled"
+        fields:
+          - path: airflow.celeryWorker.replicas
+            type: integer
+            label: Workers
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 5]
 
   - id: storage
     title: Storage
@@ -371,7 +390,8 @@ steps:
           - path: internalAccess.workloads
             type: list
             label: Allowed workloads
-            when: self.internalAccess.type == 'workload-list'
+            when: self.internalAccess.type == 'workload-list' || size(self.internalAccess.workloads) > 0
+            description: Used only with Specific workloads; with another choice, remove every entry.
             widget: tags
             item:
               type: ref
@@ -381,7 +401,7 @@ steps:
               self.internalAccess.type != 'none' &&
               (self.internalAccess.type == 'workload-list' || size(self.internalAccess.workloads) == 0)
             mirrors: airflow.validateInternalAccess
-            paths: [internalAccess.type]
+            paths: [internalAccess.type, internalAccess.workloads]
             message: >-
               Allowed workloads apply only to Specific workloads; remove them from the values or choose
               Specific workloads.
@@ -445,6 +465,7 @@ steps:
             format: image
             label: PostgreSQL image
             required: true
+            description: The major version cannot be changed after install; a new one cannot start on the existing data.
           - path: postgres.resources
             type: resources
             label: PostgreSQL resources
@@ -504,7 +525,7 @@ migrations:
     note: >-
       The database credentials are now a prerequisite dictionary secret (username, password, database). Create
       it under a NEW name with the values the database was initialized with (the username and password are in
-      the <release>-airflow-config secret, which this upgrade deletes), and choose it under Credentials.
+      the RELEASE_NAME-airflow-config secret, which this upgrade deletes), and choose it under Credentials.
   - fromVersions: "<2.1.0"
     from: postgres.config.password
     note: >-

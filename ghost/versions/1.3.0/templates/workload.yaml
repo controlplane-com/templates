@@ -24,7 +24,7 @@ spec:
       env:
         - name: NODE_ENV
           value: production
-        # ── Database (mysql subchart, MySQL 8) ──
+        # ── Database (mysql subchart, MySQL 8; prerequisite credentials secret) ──
         - name: database__client
           value: mysql
         - name: database__connection__host
@@ -32,11 +32,11 @@ spec:
         - name: database__connection__port
           value: "3306"
         - name: database__connection__user
-          value: 'cpln://secret/{{ include "ghost.mysql.secretName" . }}.user'
+          value: 'cpln://secret/{{ include "ghost.mysql.credentialsSecretName" . }}.username'
         - name: database__connection__password
-          value: 'cpln://secret/{{ include "ghost.mysql.secretName" . }}.password'
+          value: 'cpln://secret/{{ include "ghost.mysql.credentialsSecretName" . }}.password'
         - name: database__connection__database
-          value: 'cpln://secret/{{ include "ghost.mysql.secretName" . }}.database'
+          value: 'cpln://secret/{{ include "ghost.mysql.credentialsSecretName" . }}.database'
         {{- if .Values.mail.secretName }}
         # ── Mail (optional prerequisite dictionary secret: user, password) ──
         - name: mail__transport

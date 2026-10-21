@@ -45,12 +45,13 @@ internalAccess:
 # Ghost supports ONLY MySQL 8 (not MySQL 9, not MariaDB) — image pinned to mysql:8.
 mysql:
   image: mysql:8
-  enablePhpMyAdmin: false # keep the footprint to Ghost + its DB
-  config:
-    db: ghost
-    user: ghost
-    password: change-me-ghost-db      # change before installing
-    rootPassword: change-me-mysql-root # change before installing
+  # BOTH SECRETS MUST EXIST BEFORE YOU INSTALL — the deployment waits silently on a
+  # secret that does not exist. See README Prerequisites for the exact commands.
+  # `dictionary` secret with keys `username`, `password`, `database`: MySQL is
+  # initialized with it on first boot, and Ghost connects with the same keys.
+  credentialsSecretName: my-ghost-db-credentials
+  # `opaque` secret (encoding: plain) holding the MySQL root password.
+  rootPasswordSecretName: my-ghost-mysql-root-password
   resources:
     minCpu: 150m        # keep cpu:minCpu ratio under the platform's 4:1 (500/150 = 3.3:1)
     maxCpu: 500m
@@ -59,7 +60,8 @@ mysql:
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)
   internalAccess:
-    type: same-gvc
+    type: same-gvc # Ghost connects like any workload: never none; with workload-list, list the Ghost workload
+    workloads: []  # only used when type is workload-list, e.g. //gvc/GVC_NAME/workload/RELEASE_NAME-ghost
   # Scheduled DB backups to object storage (off by default) — pass-through to the
   # mysql template's native backup. See README "Storage setup" for provider setup.
   backup:

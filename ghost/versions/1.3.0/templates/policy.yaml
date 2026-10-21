@@ -10,7 +10,8 @@ bindings:
 targetKind: secret
 targetLinks:
   - //secret/{{ include "ghost.secretStart.name" . }}
-  - //secret/{{ include "ghost.mysql.secretName" . }}
+  # The database credentials only — never the root password secret.
+  - //secret/{{ include "ghost.mysql.credentialsSecretName" . }}
   {{- if .Values.mail.secretName }}
   - //secret/{{ .Values.mail.secretName }}
   {{- end }}

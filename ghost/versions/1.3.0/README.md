@@ -153,11 +153,11 @@ Then set `mysql.backup.provider: aws` and `mysql.backup.aws.{bucket,region,cloud
 cpln secret reveal RELEASE_NAME-mysql-config -o yaml
 ```
 
-Then create the two secrets from them (`user` becomes `username`; `rootPassword` gets its own secret):
+Then create the two secrets from them (`user` becomes `username`; `rootPassword` gets its own secret). Use your current user and database names too, not `ghost`, if you changed them:
 
 ```bash
 cpln secret create-dictionary --name my-ghost-db-credentials \
-  --entry username=ghost --entry password='YOUR_CURRENT_PASSWORD' --entry database=ghost
+  --entry username='YOUR_CURRENT_USER' --entry password='YOUR_CURRENT_PASSWORD' --entry database='YOUR_CURRENT_DATABASE'
 printf '%s' 'YOUR_CURRENT_ROOT_PASSWORD' | cpln secret create-opaque --name my-ghost-mysql-root-password --encoding plain -f -
 ```
 
@@ -172,7 +172,7 @@ Resource blocks that expose both a floor and a ceiling name the ceiling `maxCpu`
 - **Single replica by design.** Ghost has no upstream clustering — there is no `replicas` knob. Durability comes from the durable MySQL backend + content volumeset; put a CDN in front of a public site to absorb the brief restart blip.
 - **MySQL 8 only.** Ghost does not support MySQL 9 or MariaDB — keep `mysql.image: mysql:8`.
 - **Create the owner first.** After deploy, visit `/ghost` to create the owner account; until then the site shows the default theme with no admin.
-- **The database secrets seed MySQL on first boot only.** Editing them later does not change the passwords stored in the database: change the password inside MySQL first, then update the secret and run `cpln workload force-redeployment RELEASE_NAME-mysql RELEASE_NAME-ghost --gvc GVC_NAME` (a secret change is not picked up until the workloads redeploy).
+- **The database secrets seed MySQL on first boot only.** Editing them later does not change the passwords stored in the database: change the password inside MySQL first, then update the secret's `password` key (`cpln secret edit my-ghost-db-credentials`) and run `cpln workload force-redeployment RELEASE_NAME-mysql RELEASE_NAME-ghost --gvc GVC_NAME` (a secret change is not picked up until the workloads redeploy).
 - **SMTP is a prerequisite secret**, not a value — create the dictionary secret (`user`, `password`) and set `mail.secretName`/`host`/`from`; leaving `mail.secretName` empty keeps email fully off. After rotating it, force a redeployment of `RELEASE_NAME-ghost`.
 - **Admin is at `/ghost`; staff 2FA is off by default.** Ghost 6 emails a verification code on every new-device admin login, which needs SMTP — so the default (mail-off) install ships with `staffDeviceVerification: false` to keep `/ghost` reachable. Set it `true` after configuring mail to re-enable the check.
 - **Set `publicUrl` for a custom domain** so links and emails point at the right host; empty derives the canonical `*.cpln.app` endpoint.

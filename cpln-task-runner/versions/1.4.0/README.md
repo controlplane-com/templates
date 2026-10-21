@@ -222,10 +222,14 @@ cpln workload force-redeployment RELEASE_NAME-task-runner-api RELEASE_NAME-task-
 # 5. Once get-deployments shows both at a higher version, alone and ready, retire the old passwords.
 #    FLUSHCONFIG writes Sentinel's own password change to its volume, so it survives a restart
 for n in 0 1 2; do rx $n redis-cli --no-auth-warning -a NEW_REDIS_PASSWORD ACL SETUSER default "<OLD_REDIS_PASSWORD"; done
+# Sentinels authenticate to each other with this password; without it they lose quorum once the old one is retired
+for n in 0 1 2; do sx $n redis-cli -p 26379 --no-auth-warning -a NEW_SENTINEL_PASSWORD SENTINEL CONFIG SET sentinel-pass NEW_SENTINEL_PASSWORD; done
 for n in 0 1 2; do
   sx $n redis-cli -p 26379 --no-auth-warning -a NEW_SENTINEL_PASSWORD ACL SETUSER default "<OLD_SENTINEL_PASSWORD"
   sx $n redis-cli -p 26379 --no-auth-warning -a NEW_SENTINEL_PASSWORD SENTINEL FLUSHCONFIG
 done
+# 6. Check that the Sentinels can still fail over: this prints OK 3 usable Sentinels
+sx 0 redis-cli -p 26379 --no-auth-warning -a NEW_SENTINEL_PASSWORD SENTINEL CKQUORUM mymaster
 ```
 
 If both `fromSecret.name` values point at one secret, edit that one secret in step 3, each password under its own key.

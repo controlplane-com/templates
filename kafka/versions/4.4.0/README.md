@@ -70,7 +70,7 @@ KafkaClient {
   password="THE_CLIENT_ADMIN_PASSWORD";
 };
 KafkaRest {
-  org.eclipse.jetty.jaas.spi.PropertyFileLoginModule required
+  org.eclipse.jetty.security.jaas.spi.PropertyFileLoginModule required
   debug="true"
   file="/etc/kafka-rest/password.properties";
 };
@@ -95,6 +95,8 @@ kafka_connectors:
       config.providers.env.class: org.apache.kafka.common.config.provider.EnvVarConfigProvider
       sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"admin\" password=\"${env:CONNECT_ADMIN_PASSWORD}\";"
 ```
+
+In a plugin's `config`, write values with single quotes instead (`username='admin' password='${env:VAR}'`): plugin values are placed into the connector's JSON as they are, and a double quote breaks it.
 
 ### How to connect to the cluster
 

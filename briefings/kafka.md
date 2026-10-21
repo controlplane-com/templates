@@ -115,5 +115,8 @@ non-working `your-…` placeholders.
 - **Rollback to 4.2.x works** (connectors stay RUNNING), but 4.2.x writes `<plugin>/<plugin>.jar` again
   beside the 4.3.0 `<plugin>/<key>/` dirs (one classloader), re-extracts archives at the folder root, and its
   60 s startup race returns. Re-upgrading retires those files again.
-- **Stock `apache/kafka:3.9.1` ships `connect-file-3.9.1.jar` in `/opt/kafka/libs`**, so FileStream always
-  resolves from the classpath; test plugin loading with another connector (e.g. Datagen).
+- **FileStream connectors are NOT on the Connect worker's classpath** on `apache/kafka:3.9.1` (measured 2026-10-21:
+  `Failed to find any class that implements Connector … FileStreamSinkConnector`); test with MirrorHeartbeat or Datagen.
+- **REST Proxy basic auth on `confluentinc/cp-kafka-rest:latest` (kafka-rest 8.3.x, Jetty 12)** needs
+  `org.eclipse.jetty.security.jaas.spi.PropertyFileLoginModule`; the old `org.eclipse.jetty.jaas.spi.…` class returns
+  401 for every request (measured 2026-10-21).

@@ -40,7 +40,7 @@ imports:
       - { id: storage, title: Kafka storage }
       - { id: ui, title: Kafka UI, description: "An optional web console for topics, consumer groups and messages." }
       - { id: connect, title: Kafka Connect }
-      - { id: advanced, title: Kafka advanced }
+      - { id: advanced, title: Kafka advanced, description: "The JMX exporter and other advanced settings. The health sidecar and the Kafka exporter stay off in this pipeline." }
     exclude:
       # Bound in the Credentials step: the passwords are references to the credentials secret.
       - kafka.secrets.kraft_cluster_id
@@ -60,6 +60,7 @@ imports:
           admin password is `${env:CDC_KAFKA_ADMIN_PASSWORD}` and Debezium's is
           `${env:CDC_KAFKA_DEBEZIUM_PASSWORD}`, which the brokers resolve from the credentials secret.
       kafka.env:
+        advanced: false
         description: >-
           Keep the four `CDC_KAFKA_*` entries: they hand the brokers their passwords from the credentials
           secret, and each names that secret (the same name as under Credentials).
@@ -83,6 +84,15 @@ steps:
         text: >-
           The credentials secret must exist **before** you install. If it is missing, the deployment waits
           and `cpln logs` shows nothing at all.
+      - type: note
+        severity: warning
+        when: context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.1.0') < 0
+        text: >-
+          Upgrading from 1.0.x: follow the README's "Upgrading from 1.0.4" **before** you upgrade. Put the
+          values the database and the Kafka cluster run with today in the new secret (not new ones), and
+          switch the running cluster to `wal_level = logical` and restart its members, or the upgrade stalls.
+          The upgrade then restarts the database, Kafka and Debezium, and a new workload version can wait up
+          to about 10 minutes for access to the new secret.
       - path: postgres-highly-available.config.credentialsSecretName
         type: ref
         label: Pipeline credentials secret
@@ -94,7 +104,9 @@ steps:
         help: >-
           PostgreSQL reads `username`, `password` and `database` only when the cluster is first created;
           Debezium connects with `username` and `sourcePassword`. The Kafka brokers read the four `kafka*`
-          keys at every start. To change a password later, follow the README's rotation steps.
+          keys at every start. Keep `database` to lowercase letters, digits and underscores, and the Kafka
+          passwords to letters and digits (they sit inside Kafka's login configuration). To change a password
+          later, follow the README's rotation steps.
         docs: "#prerequisites"
         ref:
           kind: secret
@@ -168,8 +180,9 @@ steps:
         paths: [postgres-highly-available.config.credentialsSecretName]
         message: >-
           database, debezium-server.source.database.password and debezium-server.sink.kafka.saslPassword were
-          removed in 1.1.0. Put the values in the credentials secret (username, password, database,
-          sourcePassword, kafkaSaslPassword) and remove them from the values.
+          removed in 1.1.0. Put the values the release runs with today in the credentials secret (username,
+          password, database, sourcePassword, kafkaSaslPassword, kafkaAdminPassword, kafkaInterBrokerPassword,
+          kafkaControllerPassword) and remove them from the values.
       - rule: "!('postgres' in self['postgres-highly-available'])"
         paths: [postgres-highly-available.config.credentialsSecretName]
         message: >-
@@ -184,8 +197,9 @@ steps:
         paths: [postgres-highly-available.config.credentialsSecretName]
         message: >-
           The previous version created the database secret itself, and this upgrade deletes it. Create a secret
-          under a NEW name holding the same username, password and database plus sourcePassword and
-          kafkaSaslPassword, and name it here.
+          under a NEW name holding the values the release runs with today: username, password, database,
+          sourcePassword, kafkaSaslPassword, kafkaAdminPassword, kafkaInterBrokerPassword and
+          kafkaControllerPassword, and name it here.
       - when: oldSelf != null && (context.fromVersion == null || semverCompare(context.fromVersion, '1.1.0') >= 0)
         rule: >-
           self['postgres-highly-available'].config.credentialsSecretName ==
@@ -196,59 +210,21 @@ steps:
           PostgreSQL reads the credentials only when the cluster is first created; pointing at another secret
           does not change the existing user or password.
 
-      # Kafka's passwords come from the credentials secret (cdc.validateKafkaSecretRefs).
-      - rule: >-
-          (self.kafka.kafka_orchestrator == null || self.kafka.kafka_orchestrator == false) &&
-          self.kafka.kafka_exporter.name == null && self.kafka.kafka_exporter.image == null &&
-          self.kafka.kafka_exporter.listener == null && self.kafka.kafka_exporter.cpu == null &&
-          self.kafka.kafka_exporter.memory == null && self.kafka.kafka_ui.enabled != true
+      # Kafka's passwords come from the credentials secret (cdc.validateKafkaSecretRefs). kafka_orchestrator and
+      # kafka_exporter (true, or a non-empty block) are refused by the chart only: a rule's self holds the kafka
+      # template's default block at these excluded paths, whatever the values say, so a rule cannot see them.
+      - rule: self.kafka.kafka_ui.enabled != true
         mirrors: cdc.validateKafkaSecretRefs
-        paths: [kafka.kafka_orchestrator, kafka.kafka_exporter, kafka.kafka_ui.enabled]
+        paths: [kafka.kafka_ui.enabled]
         message: >-
-          kafka.kafka_orchestrator, kafka.kafka_exporter and kafka.kafka_ui log in with the Kafka admin password
-          as a plain value, which this pipeline keeps only in the credentials secret: remove them from the values
-          (Kafbat UI is the supported UI).
+          kafka.kafka_ui must stay off: it writes the Kafka admin password into its settings as a plain value.
+          Kafbat UI is the supported UI.
       - rule: self.kafka.kafka_rest_proxy.enabled != true
         mirrors: cdc.validateKafkaSecretRefs
         paths: [kafka.kafka_rest_proxy.enabled]
         message: >-
           kafka.kafka_rest_proxy must stay off: in kafka 4.3.0 its Kafka login (jaas_conf) carries the password
           inline in the values, and this pipeline keeps every Kafka password only in the credentials secret.
-      - rule: >-
-          'client' in self.kafka.kafka.listeners && self.kafka.kafka.listeners['client'].sasl != null &&
-          self.kafka.kafka.listeners['client'].sasl.admin != null &&
-          self.kafka.kafka.listeners['client'].sasl.admin.password == '${env:CDC_KAFKA_ADMIN_PASSWORD}'
-        mirrors: cdc.validateKafkaSecretRefs
-        paths: [kafka.kafka.listeners]
-        message: >-
-          The client listener's admin password must be ${env:CDC_KAFKA_ADMIN_PASSWORD}: put the password itself in
-          the credentials secret's kafkaAdminPassword key.
-      - rule: >-
-          !('client' in self.kafka.kafka.listeners) || self.kafka.kafka.listeners['client'].sasl == null ||
-          self.kafka.kafka.listeners['client'].sasl.users == null ||
-          [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].all(i,
-          i >= size(self.kafka.kafka.listeners['client'].sasl.users.split(',')) ||
-          self.kafka.kafka.listeners['client'].sasl.users.split(',')[i].trim() != self['debezium-server'].sink.kafka.saslUsername ||
-          (self.kafka.kafka.listeners['client'].sasl.passwords != null &&
-          i < size(self.kafka.kafka.listeners['client'].sasl.passwords.split(',')) &&
-          self.kafka.kafka.listeners['client'].sasl.passwords.split(',')[i].trim() == '${env:CDC_KAFKA_DEBEZIUM_PASSWORD}'))
-        mirrors: cdc.validateKafkaSecretRefs
-        paths: [kafka.kafka.listeners]
-        message: >-
-          Debezium's entry in the client listener's passwords must be ${env:CDC_KAFKA_DEBEZIUM_PASSWORD}: put the
-          password itself in the credentials secret's kafkaSaslPassword key, which Debezium reads too.
-      - rule: >-
-          self.kafka.kafka.listeners.all(k, self.kafka.kafka.listeners[k].sasl == null ||
-          ((self.kafka.kafka.listeners[k].sasl.admin == null ||
-          string(self.kafka.kafka.listeners[k].sasl.admin.password).matches('^\\$\\{env:[A-Za-z_][A-Za-z0-9_]*\\}$')) &&
-          (self.kafka.kafka.listeners[k].sasl.passwords == null || self.kafka.kafka.listeners[k].sasl.passwords == '' ||
-          self.kafka.kafka.listeners[k].sasl.passwords.split(',').all(p, p.trim().matches('^\\$\\{env:[A-Za-z_][A-Za-z0-9_]*\\}$')))))
-        mirrors: cdc.validateKafkaSecretRefs
-        paths: [kafka.kafka.listeners]
-        message: >-
-          Every Kafka SASL password is a ${env:VAR} reference, never the password: put the password in the
-          credentials secret, add a VAR entry to Kafka's extra environment variables that reads it
-          (cpln://secret/<credentials secret>.<key>), and write ${env:VAR} here.
       - rule: >-
           self.kafka.kafka.secrets.inter_broker_password == '${env:CDC_KAFKA_INTER_BROKER_PASSWORD}' &&
           self.kafka.kafka.secrets.controller_password == '${env:CDC_KAFKA_CONTROLLER_PASSWORD}'
@@ -258,35 +234,6 @@ steps:
           The inter-broker and controller passwords must be ${env:CDC_KAFKA_INTER_BROKER_PASSWORD} and
           ${env:CDC_KAFKA_CONTROLLER_PASSWORD}: put the passwords themselves in the credentials secret
           (kafkaInterBrokerPassword, kafkaControllerPassword).
-      - rule: >-
-          [['CDC_KAFKA_ADMIN_PASSWORD', 'kafkaAdminPassword'], ['CDC_KAFKA_DEBEZIUM_PASSWORD', 'kafkaSaslPassword'],
-          ['CDC_KAFKA_INTER_BROKER_PASSWORD', 'kafkaInterBrokerPassword'],
-          ['CDC_KAFKA_CONTROLLER_PASSWORD', 'kafkaControllerPassword']].all(v,
-          size(self.kafka.kafka.env.filter(e, e.name == v[0])) == 1 &&
-          self.kafka.kafka.env.filter(e, e.name == v[0])[0].value ==
-          'cpln://secret/' + self['postgres-highly-available'].config.credentialsSecretName + '.' + v[1])
-        mirrors: cdc.validateKafkaSecretRefs
-        paths: [kafka.kafka.env]
-        messageExpression: >-
-          'Kafka extra environment variables need exactly these four entries (the credentials secret name in each): ' +
-          [['CDC_KAFKA_ADMIN_PASSWORD', 'kafkaAdminPassword'], ['CDC_KAFKA_DEBEZIUM_PASSWORD', 'kafkaSaslPassword'],
-          ['CDC_KAFKA_INTER_BROKER_PASSWORD', 'kafkaInterBrokerPassword'],
-          ['CDC_KAFKA_CONTROLLER_PASSWORD', 'kafkaControllerPassword']].map(v, '{name: ' + v[0] +
-          ', value: cpln://secret/' + self['postgres-highly-available'].config.credentialsSecretName + '.' + v[1] + '}').join(', ')
-        message: >-
-          Kafka extra environment variables need the four CDC_KAFKA_* entries of the chart's values.yaml, each
-          naming the credentials secret.
-      - rule: >-
-          'config.providers' in self.kafka.kafka.extra_configurations &&
-          string(self.kafka.kafka.extra_configurations['config.providers']).split(',').exists(p, p.trim() == 'env') &&
-          'config.providers.env.class' in self.kafka.kafka.extra_configurations &&
-          self.kafka.kafka.extra_configurations['config.providers.env.class'] == 'org.apache.kafka.common.config.provider.EnvVarConfigProvider'
-        mirrors: cdc.validateKafkaSecretRefs
-        paths: [kafka.kafka.extra_configurations]
-        message: >-
-          Keep config.providers: env and config.providers.env.class:
-          org.apache.kafka.common.config.provider.EnvVarConfigProvider in the extra broker properties: without them
-          the brokers take the ${env:…} references as the passwords and nothing can log in.
 
   - id: capture
     title: Change capture
@@ -343,24 +290,6 @@ steps:
             description: >-
               A user of the client listener. Its password is the `kafkaSaslPassword` key of the credentials
               secret.
-        rules:
-          - rule: >-
-              !('client' in self.kafka.kafka.listeners) || self.kafka.kafka.listeners['client'].sasl == null ||
-              self.kafka.kafka.listeners['client'].sasl.users == null ||
-              self.kafka.kafka.listeners['client'].sasl.users.split(',').exists(u, u.trim() == self['debezium-server'].sink.kafka.saslUsername)
-            mirrors: cdc.validateKafkaCredentials
-            paths: [debezium-server.sink.kafka.saslUsername]
-            message: Debezium's Kafka user must be one of the client listener's SASL users (Kafka listeners and security).
-          - rule: >-
-              self.kafka.kafka.acl.allowEveryoneIfNoAclFound ||
-              (self.kafka.kafka.acl.superUsers != null &&
-              self.kafka.kafka.acl.superUsers.split(';').exists(u, u.trim() == 'User:' + self['debezium-server'].sink.kafka.saslUsername))
-            mirrors: cdc.validateKafkaCredentials
-            paths: [debezium-server.sink.kafka.saslUsername]
-            messageExpression: >-
-              'Kafka enforces ACLs and the chart grants none: add User:' +
-              self['debezium-server'].sink.kafka.saslUsername + ' to the Kafka super users, or every write is refused.'
-            message: Kafka enforces ACLs and the chart grants none; add Debezium's user to the Kafka super users.
       - title: Replication slot and heartbeat
         fields:
           - path: debezium-server.source.postgres.slotName
@@ -443,6 +372,87 @@ steps:
 
 # Rules over the imported values: their issues show on the imported fields' steps.
 rules:
+  - rule: >-
+      'client' in self.kafka.kafka.listeners && self.kafka.kafka.listeners['client'].sasl != null &&
+      self.kafka.kafka.listeners['client'].sasl.admin != null &&
+      self.kafka.kafka.listeners['client'].sasl.admin.password == '${env:CDC_KAFKA_ADMIN_PASSWORD}'
+    mirrors: cdc.validateKafkaSecretRefs
+    paths: [kafka.kafka.listeners]
+    message: >-
+      The client listener's admin password must be ${env:CDC_KAFKA_ADMIN_PASSWORD}: put the password itself in
+      the credentials secret's kafkaAdminPassword key.
+  - rule: >-
+      !('client' in self.kafka.kafka.listeners) || self.kafka.kafka.listeners['client'].sasl == null ||
+      self.kafka.kafka.listeners['client'].sasl.users == null ||
+      [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].all(i,
+      i >= size(self.kafka.kafka.listeners['client'].sasl.users.split(',')) ||
+      self.kafka.kafka.listeners['client'].sasl.users.split(',')[i].trim() != self['debezium-server'].sink.kafka.saslUsername ||
+      (self.kafka.kafka.listeners['client'].sasl.passwords != null &&
+      i < size(self.kafka.kafka.listeners['client'].sasl.passwords.split(',')) &&
+      self.kafka.kafka.listeners['client'].sasl.passwords.split(',')[i].trim() == '${env:CDC_KAFKA_DEBEZIUM_PASSWORD}'))
+    mirrors: cdc.validateKafkaSecretRefs
+    paths: [kafka.kafka.listeners]
+    message: >-
+      Debezium's entry in the client listener's passwords must be ${env:CDC_KAFKA_DEBEZIUM_PASSWORD}: put the
+      password itself in the credentials secret's kafkaSaslPassword key, which Debezium reads too.
+  - rule: >-
+      self.kafka.kafka.listeners.all(k, self.kafka.kafka.listeners[k].sasl == null ||
+      ((self.kafka.kafka.listeners[k].sasl.admin == null ||
+      string(self.kafka.kafka.listeners[k].sasl.admin.password).matches('^\\$\\{env:[A-Za-z_][A-Za-z0-9_]*\\}$')) &&
+      (self.kafka.kafka.listeners[k].sasl.passwords == null || self.kafka.kafka.listeners[k].sasl.passwords == '' ||
+      self.kafka.kafka.listeners[k].sasl.passwords.split(',').all(p, p.trim().matches('^\\$\\{env:[A-Za-z_][A-Za-z0-9_]*\\}$')))))
+    mirrors: cdc.validateKafkaSecretRefs
+    paths: [kafka.kafka.listeners]
+    message: >-
+      Every Kafka SASL password is a ${env:VAR} reference, never the password: put the password in the
+      credentials secret, add a VAR entry to Kafka's extra environment variables that reads it
+      (cpln://secret/<credentials secret>.<key>), and write ${env:VAR} here.
+  - rule: >-
+      [['CDC_KAFKA_ADMIN_PASSWORD', 'kafkaAdminPassword'], ['CDC_KAFKA_DEBEZIUM_PASSWORD', 'kafkaSaslPassword'],
+      ['CDC_KAFKA_INTER_BROKER_PASSWORD', 'kafkaInterBrokerPassword'],
+      ['CDC_KAFKA_CONTROLLER_PASSWORD', 'kafkaControllerPassword']].all(v,
+      size(self.kafka.kafka.env.filter(e, e.name == v[0])) == 1 &&
+      self.kafka.kafka.env.filter(e, e.name == v[0])[0].value ==
+      'cpln://secret/' + self['postgres-highly-available'].config.credentialsSecretName + '.' + v[1])
+    mirrors: cdc.validateKafkaSecretRefs
+    paths: [kafka.kafka.env]
+    messageExpression: >-
+      'Kafka extra environment variables need exactly these four entries (the credentials secret name in each): ' +
+      [['CDC_KAFKA_ADMIN_PASSWORD', 'kafkaAdminPassword'], ['CDC_KAFKA_DEBEZIUM_PASSWORD', 'kafkaSaslPassword'],
+      ['CDC_KAFKA_INTER_BROKER_PASSWORD', 'kafkaInterBrokerPassword'],
+      ['CDC_KAFKA_CONTROLLER_PASSWORD', 'kafkaControllerPassword']].map(v, '{name: ' + v[0] +
+      ', value: cpln://secret/' + self['postgres-highly-available'].config.credentialsSecretName + '.' + v[1] + '}').join(', ')
+    message: >-
+      Kafka extra environment variables need the four CDC_KAFKA_* entries of the chart's values.yaml, each
+      naming the credentials secret.
+  - rule: >-
+      'config.providers' in self.kafka.kafka.extra_configurations &&
+      string(self.kafka.kafka.extra_configurations['config.providers']).split(',').exists(p, p.trim() == 'env') &&
+      'config.providers.env.class' in self.kafka.kafka.extra_configurations &&
+      self.kafka.kafka.extra_configurations['config.providers.env.class'] == 'org.apache.kafka.common.config.provider.EnvVarConfigProvider'
+    mirrors: cdc.validateKafkaSecretRefs
+    paths: [kafka.kafka.extra_configurations]
+    message: >-
+      Keep config.providers: env and config.providers.env.class:
+      org.apache.kafka.common.config.provider.EnvVarConfigProvider in the extra broker properties: without them
+      the brokers take the ${env:…} references as the passwords and nothing can log in.
+  - rule: >-
+      !('client' in self.kafka.kafka.listeners) || self.kafka.kafka.listeners['client'].sasl == null ||
+      self.kafka.kafka.listeners['client'].sasl.users == null ||
+      self.kafka.kafka.listeners['client'].sasl.users.split(',').exists(u, u.trim() == self['debezium-server'].sink.kafka.saslUsername)
+    mirrors: cdc.validateKafkaCredentials
+    paths: [debezium-server.sink.kafka.saslUsername, kafka.kafka.listeners]
+    message: Debezium's Kafka user must be one of the client listener's SASL users (Kafka listeners and security).
+  - rule: >-
+      self.kafka.kafka.acl.allowEveryoneIfNoAclFound ||
+      (self.kafka.kafka.acl.superUsers != null &&
+      self.kafka.kafka.acl.superUsers.split(';').exists(u, u.trim() == 'User:' + self['debezium-server'].sink.kafka.saslUsername))
+    mirrors: cdc.validateKafkaCredentials
+    paths: [debezium-server.sink.kafka.saslUsername, kafka.kafka.acl.superUsers]
+    messageExpression: >-
+      'Kafka enforces ACLs and the chart grants none: add User:' +
+      self['debezium-server'].sink.kafka.saslUsername + ' to the Kafka super users, or every write is refused.'
+    message: Kafka enforces ACLs and the chart grants none; add Debezium's user to the Kafka super users.
   - rule: self['postgres-highly-available'].internal_access.type != 'none'
     paths: [postgres-highly-available.internal_access.type]
     message: '"None" also blocks Debezium, which connects to the database like any other workload.'

@@ -29,6 +29,7 @@ spec:
         httpGet:
           path: /healthz
           port: 8081
+          scheme: HTTP
         initialDelaySeconds: 2
         periodSeconds: 5
         failureThreshold: 3
@@ -38,9 +39,11 @@ spec:
         httpGet:
           path: /healthz
           port: 8081
+          scheme: HTTP
         initialDelaySeconds: 5
         periodSeconds: 15
         failureThreshold: 5
+        successThreshold: 1
         timeoutSeconds: 3
   defaultOptions:
     autoscaling:

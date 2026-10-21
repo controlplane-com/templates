@@ -54,7 +54,7 @@ cpln secret create-dictionary --name my-sftpgo-user-passwords \
   --entry sftpuser="$(openssl rand -hex 16)"
 ```
 
-Set `userPasswords.secretName` to that name. Declared users are re-applied on every start, so the value in this secret **is** the password: to change one, update the secret and force a redeployment. If a password user has no key in the secret, SFTPGo does not start and its log names the missing `USERPW_<index>`.
+Set `userPasswords.secretName` to that name. Declared users are re-applied on every start, so the value in this secret **is** the password: to change one, update the secret and force a redeployment. If a password user has no key in the secret, the deployment wedges with nothing in the log: `cpln workload get-deployments RELEASE_NAME-sftpgo --gvc GVC_NAME -o yaml` shows `couldn't find key USERNAME in Secret` under `status.versions[].message`. Add the key, then force a redeployment. An empty value stops SFTPGo with `USERPW_<index> is empty` in its log.
 
 ### S3-compatible credentials — a **dictionary** secret (`storage.type: minio` only)
 

@@ -29,8 +29,8 @@ description: Proxy may suspend and wake exactly the SFTPGo workload
 tags: {{- include "sftpgo.tags" . | nindent 4 }}
 bindings:
   - permissions:
-      - view
       - edit
+      - view
     principalLinks:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "sftpgo.proxy.identity.name" . }}
 targetKind: workload

@@ -15,3 +15,6 @@ targetLinks:
 {{- if .Values.jmx_exporter }}
   - //secret/{{ include "kafka.name" . }}-jmx-exporter-conf
 {{- end }}
+{{- if include "kafka.credSecret" . }}
+  - //secret/{{ include "kafka.credSecret" . }}
+{{- end }}

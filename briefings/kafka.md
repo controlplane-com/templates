@@ -25,21 +25,46 @@ non-working `your-…` placeholders.
 
 ## Troubleshooting traps
 
-- **SASL credentials and the KRaft cluster id are plain values** in the Helm release (placeholders by default,
-  so an untouched install has no usable credential). Converting them means extending the runtime
-  `replace_placeholder` step across per-listener user lists and re-proving every SASL principal; deferred.
-- **`replace_placeholder` uses `sed` with an unescaped replacement**: a password with `|`, `&` or `\`
-  corrupts the config silently.
+- **Inline SASL and cluster passwords are still supported and still the values default** (4.4.0 kept them
+  byte-identical on purpose: production releases upgrade without a change). The KRaft cluster id stays a plain
+  value; it is an identifier, not a credential.
+- **`replace_placeholder` uses `sed` with an unescaped replacement**: an inline password with `|`, `&` or `\`
+  corrupts the config silently. The credentials-secret path routes only `${env:…}` strings through it.
 - **Floating images**: `cp-kafka-rest:latest`, `kafbat/kafka-ui`, `jmx-exporter` (untagged).
 - **Replication factor derives from `kafka.replicas`**; a single broker replicates nothing. Single-broker
   installs also need `offsets.topic.replication.factor=1` (and the transaction-log equivalents).
 - **`server.log` is off via `KAFKA_LOG4J_ROOT_LOGLEVEL=INFO`** (4.2.0, official `apache/kafka:3.x.y` only); on a
   4.x image that variable strips every appender. Connect's `connect.log` still rolls without deletion.
-- **`cdc-pipeline` pins kafka 4.0.1**; bumping this template does not affect it.
+- **`cdc-pipeline` 1.1.0 bundles kafka 4.3.0** and reaches the same EnvVarConfigProvider result by hand
+  (`${env:CDC_KAFKA_*}` values + `kafka.env` + `extra_configurations`), refusing the sidecars that need the
+  admin password in clear. Bumping it to 4.4.0 would let it drop that scaffolding and turn the health sidecar
+  and exporter back on; not done (separate change, its own test round).
 - **Uninstalling deletes the volumesets**, and with them every topic's log.
-- Known, not fixed: `appVersion: "3.9"` vs image `3.9.1` (display only); connector credentials are plaintext
-  values; a connector with neither `listener` nor `bootstrap.servers` fails to render (`kafka.bootstrapAddress`
+- Known, not fixed: `appVersion: "3.9"` vs image `3.9.1` (display only); a connector with neither `listener` nor `bootstrap.servers` fails to render (`kafka.bootstrapAddress`
   is missing).
+
+## Credentials from secrets (4.4.0)
+
+| Value (default `""` = inline) | Secret | How it reaches the workload |
+|---|---|---|
+| `kafka.credentialsSecretName` | dictionary: `inter-broker-password`, `controller-password`, `<listener>-<username>-password` per SASL admin/user (listener = `name` lower-cased) | brokers: `KCRED_*` env = `cpln://secret/…`; server.properties carries `${env:KCRED_*}` resolved by Kafka's `EnvVarConfigProvider` (`config.providers=env` rendered only in this mode); inter-broker/controller go through the `-secrets` dict as `${env:…}` strings into the init script's placeholders. Orchestrator, kafka-exporter: env points straight at the user's key. Deprecated kafka_ui: own identity+policy, JAAS via `$(KCRED_ADMIN_PASSWORD)` |
+| `kafka_rest_proxy.jaas_conf_secret` | opaque, whole JAAS file | mounted in place of the chart's `-rest-jaas-conf` (kafbat `configuration_secret` precedent) |
+| `kafka_rest_proxy.password_properties_secret` | opaque, whole `password.properties` | mounted in place of `-rest-password-properties` |
+| Kafka Connect | none new | existing: `env` entry with `cpln://secret/…` (policy auto-grants) + `config.providers: env` and `${env:VAR}` in `connector_properties`/plugin `config` (README example) |
+
+- **The secret wins** over every inline password; inline password count checks are skipped in that mode
+  (`kafka.validateAuthUsers` replaces `kafka.validateAuthConfig`). Usernames and listener names must be
+  `[A-Za-z0-9._-]+` (they form keys); `extra_configurations` may not drop `env` from `config.providers`.
+- **`KCRED_`, never `KAFKA_`**: the apache/kafka image writes every `KAFKA_*` env var into server.properties,
+  which would put the resolved password in the file (cdc-pipeline measured this).
+- **Wizard**: a new install starts on "From a secret" (virtual init reads `context.mode`); an upgraded release
+  that has `""` stays on "In values". `requiredKeysFrom` derives the key list from the listeners.
+- **Rotation needs `cpln workload force-redeployment`** of the brokers (or REST Proxy); a running replica keeps
+  the old value. Switching a running cluster inline → secret restarts the brokers once; put today's passwords
+  in the secret.
+- **Proof status (2026-10-21):** renders only. cdc-pipeline measured the broker mechanism locally on
+  `apache/kafka:3.9.1`; this chart's own live rows (all-secret install, inline→secret switch, rotation, REST
+  Proxy file secrets, Connect `${env:}`, kafka_ui `$(VAR)`) are pending.
 
 ## Kafka Connect plugins (4.3.0)
 

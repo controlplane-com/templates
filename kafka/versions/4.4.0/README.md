@@ -5,7 +5,7 @@
 - **Stateful Kafka workload** — KRaft-mode brokers; the first nodes take the combined controller and broker roles, the rest are brokers only.
 - **Volume sets** — per-broker log directories.
 - **Secrets** — the broker configuration (including SASL/JAAS), the startup script that substitutes runtime values into it, and the cluster credentials.
-- **Identity and policy** — `reveal` on those secrets, and cloud storage access when backups are enabled.
+- **Identity and policy** — `reveal` on those secrets, and on your credentials secret when `kafka.credentialsSecretName` is set.
 - **Kafbat UI workload** *(optional)* — a web console for the cluster.
 - **REST Proxy workload** *(optional)* — HTTP access to produce and consume.
 - **Connectors workload** *(optional)* — Kafka Connect.
@@ -15,9 +15,86 @@ This template does not create a GVC.
 
 ### Prerequisites
 
-None for a default install, which runs an internal-only cluster.
+- **Recommended: a credentials secret** for the broker passwords (`kafka.credentialsSecretName`, see [Credentials](#credentials)). Without it the passwords are plain values in the release.
+- **Recommended while the REST Proxy is on (the default): a JAAS file secret** (`kafka_rest_proxy.jaas_conf_secret`, see [REST Proxy credentials](#rest-proxy-credentials)).
+- The Kafbat UI (on by default) waits for its configuration secret; see [Kafbat configuration example](#kafbat-configuration-example).
 
 Public listener access needs a domain you control and a dedicated load balancer on the GVC. Backups need a bucket and a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account).
+
+### Credentials
+
+Every broker password can come from one **dictionary** secret instead of values. Create it before you install: while it is missing the brokers wait and `cpln logs` shows nothing; `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-cluster --gvc GVC_NAME -o yaml` names it.
+
+```yaml
+kafka:
+  credentialsSecretName: my-kafka-credentials # "" = the inline passwords are used
+  listeners:
+    client:
+      sasl:
+        admin:
+          username: admin # usernames stay in values; their passwords come from the secret
+        users: "user"
+```
+
+The secret holds `inter-broker-password`, `controller-password`, and one `<listener>-<username>-password` key for each SASL admin and user, where `<listener>` is the listener's `name` in lower case. For the default listeners:
+
+```bash
+cpln secret create-dictionary --name my-kafka-credentials \
+  --entry inter-broker-password="$(openssl rand -hex 24)" \
+  --entry controller-password="$(openssl rand -hex 24)" \
+  --entry client-admin-password="$(openssl rand -hex 24)" \
+  --entry client-user-password="$(openssl rand -hex 24)"
+```
+
+- When `credentialsSecretName` is set it wins over `sasl.admin.password`, `sasl.passwords`, `secrets.inter_broker_password` and `secrets.controller_password`, which are then ignored. The health sidecar, the Kafka exporter and the deprecated Kafka UI read the admin password from the secret too.
+- The brokers resolve the passwords through Kafka's `env` config provider. If you set `config.providers` in `kafka.extra_configurations`, keep `env` in the list.
+- **Moving a running cluster to the secret:** put the passwords the cluster uses today in the secret, then upgrade with `credentialsSecretName` set. The brokers restart once.
+- **Changing a password:** update the secret, then run `cpln workload force-redeployment RELEASE_NAME-cluster --gvc GVC_NAME`. Running brokers keep the old password until they restart, and clients that log in with it need the new one.
+- Inline passwords keep working: with `credentialsSecretName: ""` the brokers are configured exactly as in 4.3.0.
+
+#### REST Proxy credentials
+
+The REST Proxy's JAAS file holds a Kafka password. Put the whole file in an **opaque** secret and name it in `kafka_rest_proxy.jaas_conf_secret`; it then replaces `jaas_conf`. Basic auth users work the same way through `password_properties_secret`:
+
+```yaml
+kafka_rest_proxy:
+  jaas_conf_secret: my-kafka-rest-jaas # "" = jaas_conf is used
+  password_properties_secret: "" # e.g. my-kafka-rest-users: one "user: password,role" line per user
+```
+
+```bash
+cat > kafka-rest.jaas.conf <<'EOF'
+KafkaClient {
+  org.apache.kafka.common.security.plain.PlainLoginModule required
+  username="admin"
+  password="THE_CLIENT_ADMIN_PASSWORD";
+};
+KafkaRest {
+  org.eclipse.jetty.jaas.spi.PropertyFileLoginModule required
+  debug="true"
+  file="/etc/kafka-rest/password.properties";
+};
+EOF
+cpln secret create-opaque --name my-kafka-rest-jaas --encoding plain -f kafka-rest.jaas.conf
+```
+
+After changing either secret, run `cpln workload force-redeployment RELEASE_NAME-rest-proxy --gvc GVC_NAME`.
+
+#### Kafka Connect credentials
+
+A connector worker's Kafka login and its plugins' passwords can come from secrets through Kafka's `env` config provider: add an `env` entry that references the secret (the chart grants the worker `reveal` on it) and use `${env:VAR}` in `connector_properties` or a plugin's `config`:
+
+```yaml
+kafka_connectors:
+  - name: cluster
+    env:
+      - name: CONNECT_ADMIN_PASSWORD
+        value: cpln://secret/my-kafka-credentials.client-admin-password
+    connector_properties:
+      config.providers: env
+      config.providers.env.class: org.apache.kafka.common.config.provider.EnvVarConfigProvider
+      sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"admin\" password=\"${env:CONNECT_ADMIN_PASSWORD}\";"
+```
 
 ### How to connect to the cluster
 
@@ -38,7 +115,7 @@ You can connect to Kafka from the same GVC in which it's deployed using the foll
 
 1. To activate the Kafka client, make sure `kafka_client` is uncommented in your values file, then upgrade the release with it:
    ```bash
-   cpln helm upgrade RELEASE_NAME ./kafka/versions/4.3.0 --gvc GVC_NAME --dependency-update -f values.yaml
+   cpln helm upgrade RELEASE_NAME ./kafka/versions/4.4.0 --gvc GVC_NAME --dependency-update -f values.yaml
    ```
 
 2. To connect to the `kafka-client` workload, navigate through the UI to the appropriate GVC and select the `kafka-client` workload. In the workload details, find and use the **Connect** feature to establish a connection, which can be done either via the UI or by utilizing the CLI command provided there.
@@ -318,7 +395,8 @@ See [RELEASES.md](https://github.com/controlplane-com/templates/blob/main/kafka/
 ### Important Notes
 
 - **`kafka.replicas` sets the cluster size, and the first nodes take the controller role.** Shrinking a running cluster below the controller quorum will make it unavailable.
-- **SASL credentials are plain values today**, so they land in the Helm release. They are non-working placeholders by default, so an install that never sets them has no usable credential rather than a weak one.
+- **Set `kafka.credentialsSecretName` to keep the broker passwords out of the Helm release.** Inline passwords still work but are stored in the release values; their defaults are non-working placeholders.
+- **A changed password in a credentials secret takes effect only after `cpln workload force-redeployment`** of the workloads that read it.
 - **The Kafbat UI and REST Proxy images are unpinned** (`:latest`), so a redeploy may pick up newer builds of either.
 - **Replication factor is derived from `kafka.replicas`** unless you override it in `extra_configurations`. A single-broker cluster cannot replicate, so topics created there survive nothing.
 - **Uninstalling deletes the volume sets**, and with them every topic's log.

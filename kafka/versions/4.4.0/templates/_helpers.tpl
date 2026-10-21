@@ -1490,6 +1490,130 @@ wait $KAFKA_PID
 {{- end }}
 
 
+{{/*
+================================================================================
+Credentials from a secret (4.4.0)
+
+kafka.credentialsSecretName names a dictionary secret the user creates. When it is
+set, every broker password comes from it and the inline passwords are ignored:
+
+  inter-broker-password            the inter-broker listener password
+  controller-password              the KRaft controller listener password
+  <listener>-<username>-password   one per SASL user and per SASL admin, where
+                                   <listener> is the listener's `name`, lower-cased
+
+The passwords reach server.properties as `${env:KCRED_...}` references that Kafka's
+EnvVarConfigProvider resolves at start; each KCRED_ variable is a cpln://secret
+reference to the user's secret. The variables deliberately avoid the KAFKA_ prefix:
+the apache/kafka image writes every KAFKA_* variable into server.properties, which
+would put the resolved password in the broker's config file. Left empty, the chart
+renders exactly what 4.3.0 rendered.
+================================================================================
+*/}}
+
+{{/* The credentials secret's name, or "" when the inline passwords are used. */}}
+{{- define "kafka.credSecret" -}}
+{{- .Values.kafka.credentialsSecretName | default "" | toString | trim -}}
+{{- end -}}
+
+{{/*
+Environment variable that holds one SASL password on the broker.
+Call with (dict "listener" <listener name> "role" "ADMIN" | "USER_<index>").
+*/}}
+{{- define "kafka.credEnvName" -}}
+{{- printf "KCRED_%s_%s_PASSWORD" (regexReplaceAll "[^A-Z0-9]" (upper .listener) "_") .role -}}
+{{- end -}}
+
+{{/*
+Key of the credentials secret that holds a SASL user's password.
+Call with (dict "listener" <listener name> "user" <username>).
+*/}}
+{{- define "kafka.credKey" -}}
+{{- printf "%s-%s-password" (lower .listener) (trim .user) -}}
+{{- end -}}
+
+{{/* `cpln://secret/<credentials secret>.<key>` for a listener's admin password. */}}
+{{- define "kafka.credAdminRef" -}}
+{{- printf "cpln://secret/%s.%s" (include "kafka.credSecret" .root) (include "kafka.credKey" (dict "listener" .listener.name "user" .listener.sasl.admin.username)) -}}
+{{- end -}}
+
+{{/*
+With a credentials secret, a SASL listener still needs its usernames (the passwords
+come from the secret). Replaces kafka.validateAuthConfig in that mode.
+*/}}
+{{- define "kafka.validateAuthUsers" -}}
+{{- if eq .protocol "SASL_PLAINTEXT" -}}
+  {{- if not .sasl -}}
+    {{- fail (printf "Error: SASL_PLAINTEXT protocol requires sasl configuration to be enabled for listener '%s'" .name) -}}
+  {{- else if not .sasl.users -}}
+    {{- fail (printf "Error: SASL_PLAINTEXT protocol requires at least one user to be defined in sasl.users for listener '%s'" .name) -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Checks that apply only with kafka.credentialsSecretName set: usernames and listener
+names that form valid secret keys, and no extra configuration that would switch off
+the EnvVarConfigProvider the references need.
+*/}}
+{{- define "kafka.validateCredentialsSecret" -}}
+{{- if include "kafka.credSecret" . -}}
+{{- range $key, $l := .Values.kafka.listeners -}}
+  {{- if $l.sasl -}}
+    {{- if not (regexMatch "^[A-Za-z0-9._-]+$" (toString $l.name)) -}}
+      {{- fail (printf "Error: with kafka.credentialsSecretName set, listener '%s' needs a name of letters, digits, '.', '_' or '-' (it forms the secret keys <listener>-<username>-password)" $key) -}}
+    {{- end -}}
+    {{- $names := list -}}
+    {{- if $l.sasl.admin -}}{{- $names = append $names (toString $l.sasl.admin.username) -}}{{- end -}}
+    {{- range splitList "," (toString ($l.sasl.users | default "")) -}}{{- if trim . -}}{{- $names = append $names (trim .) -}}{{- end -}}{{- end -}}
+    {{- range $names -}}
+      {{- if not (regexMatch "^[A-Za-z0-9._-]+$" .) -}}
+        {{- fail (printf "Error: with kafka.credentialsSecretName set, SASL username '%s' on listener '%s' must be letters, digits, '.', '_' or '-' (it forms the secret key <listener>-<username>-password)" . $key) -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- $extra := .Values.kafka.extra_configurations | default dict -}}
+{{- if hasKey $extra "config.providers" -}}
+  {{- $providers := list -}}
+  {{- range splitList "," (toString (index $extra "config.providers")) -}}{{- $providers = append $providers (trim .) -}}{{- end -}}
+  {{- if not (has "env" $providers) -}}
+    {{- fail "Error: kafka.extra_configurations sets config.providers without 'env'. With kafka.credentialsSecretName set, the brokers resolve their passwords through the 'env' config provider; add env to the list (for example 'env,file') or remove the key." -}}
+  {{- end -}}
+{{- end -}}
+{{- if and (hasKey $extra "config.providers.env.class") (ne (toString (index $extra "config.providers.env.class")) "org.apache.kafka.common.config.provider.EnvVarConfigProvider") -}}
+  {{- fail "Error: kafka.extra_configurations sets config.providers.env.class to something other than org.apache.kafka.common.config.provider.EnvVarConfigProvider, which kafka.credentialsSecretName needs; remove the key." -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The broker container's KCRED_ variables, one per password, each a reference to the
+credentials secret. Rendered only with kafka.credentialsSecretName set.
+*/}}
+{{- define "kafka.credEnv" -}}
+{{- $secret := include "kafka.credSecret" . -}}
+- name: KCRED_INTER_BROKER_PASSWORD
+  value: 'cpln://secret/{{ $secret }}.inter-broker-password'
+- name: KCRED_CONTROLLER_PASSWORD
+  value: 'cpln://secret/{{ $secret }}.controller-password'
+{{- range .Values.kafka.listeners }}
+{{- if .sasl }}
+{{- $lname := .name }}
+{{- if .sasl.admin }}
+- name: {{ include "kafka.credEnvName" (dict "listener" $lname "role" "ADMIN") }}
+  value: 'cpln://secret/{{ $secret }}.{{ include "kafka.credKey" (dict "listener" $lname "user" .sasl.admin.username) }}'
+{{- end }}
+{{- range $index, $user := (.sasl.users | default "" | toString | split ",") }}
+{{- if trim $user }}
+- name: {{ include "kafka.credEnvName" (dict "listener" $lname "role" (printf "USER%s" $index)) }}
+  value: 'cpln://secret/{{ $secret }}.{{ include "kafka.credKey" (dict "listener" $lname "user" $user) }}'
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
 {{/* Labeling */}}
 
 {{/*

@@ -2,7 +2,7 @@ apiVersion: v2
 name: kafka
 description: Apache Kafka event-streaming cluster in KRaft mode with optional web UI and REST proxy
 type: application
-version: 4.3.0
+version: 4.4.0
 appVersion: "3.9"
 
 dependencies:
@@ -12,5 +12,5 @@ dependencies:
 
 annotations:
   created: "2026-10-08"
-  lastModified: "2026-10-09"
+  lastModified: "2026-10-21"
   createsGvc: false

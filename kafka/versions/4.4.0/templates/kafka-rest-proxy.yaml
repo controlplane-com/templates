@@ -1,5 +1,7 @@
 {{- if .Values.kafka_rest_proxy.enabled }}
-{{- if .Values.kafka_rest_proxy.password_properties }}
+{{- $jaasSecret := .Values.kafka_rest_proxy.jaas_conf_secret | default "" | toString | trim }}
+{{- $passwordSecret := .Values.kafka_rest_proxy.password_properties_secret | default "" | toString | trim }}
+{{- if and .Values.kafka_rest_proxy.password_properties (not $passwordSecret) }}
 kind: secret
 name: {{ include "kafka.name" . }}-rest-password-properties
 description: {{ include "kafka.name" . }}-rest-password-properties
@@ -24,6 +26,7 @@ data:
     {{- range $key, $value := .Values.kafka_rest_proxy.properties }}
     {{ $key }}={{ $value }}
     {{- end }}
+{{- if not $jaasSecret }}
 ---
 kind: secret
 name: {{ include "kafka.name" . }}-rest-jaas-conf
@@ -34,6 +37,7 @@ data:
   encoding: plain
   payload: >-
     {{- .Values.kafka_rest_proxy.jaas_conf | nindent 4 }}
+{{- end }}
 ---
 kind: identity
 name: {{ include "kafka.name" . }}-rest-proxy-identity
@@ -52,11 +56,17 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "kafka.name" . }}-rest-proxy-identity
 targetKind: secret
 targetLinks:
-{{- if .Values.kafka_rest_proxy.password_properties }}
+{{- if $passwordSecret }}
+  - //secret/{{ $passwordSecret }}
+{{- else if .Values.kafka_rest_proxy.password_properties }}
   - //secret/{{ include "kafka.name" . }}-rest-password-properties
 {{- end }}
   - //secret/{{ include "kafka.name" . }}-rest-properties
+{{- if $jaasSecret }}
+  - //secret/{{ $jaasSecret }}
+{{- else }}
   - //secret/{{ include "kafka.name" . }}-rest-jaas-conf
+{{- end }}
 ---
 kind: workload
 name: {{ include "kafka.name" . }}-{{ .Values.kafka_rest_proxy.name }}
@@ -95,14 +105,22 @@ spec:
         - number: 8082
           protocol: http
       volumes:
-        {{- if .Values.kafka_rest_proxy.password_properties }}
+        {{- if $passwordSecret }}
+        - path: /etc/kafka-rest/password.properties
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ $passwordSecret }}
+        {{- else if .Values.kafka_rest_proxy.password_properties }}
         - path: /etc/kafka-rest/password.properties
           recoveryPolicy: retain
           uri: cpln://secret/{{ include "kafka.name" . }}-rest-password-properties
         {{- end }}
         - path: /etc/kafka-rest/kafka-rest.jaas.conf
           recoveryPolicy: retain
+          {{- if $jaasSecret }}
+          uri: cpln://secret/{{ $jaasSecret }}
+          {{- else }}
           uri: cpln://secret/{{ include "kafka.name" . }}-rest-jaas-conf
+          {{- end }}
         - path: /etc/kafka-rest/kafka-rest.properties
           recoveryPolicy: retain
           uri: cpln://secret/{{ include "kafka.name" . }}-rest-properties

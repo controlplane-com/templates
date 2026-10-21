@@ -84,6 +84,9 @@ spec:
           value: 'cpln://secret/{{ include "kafka.name" . }}-secrets.kraft-cluster-id'
         - name: KAFKA_MIN_ID
           value: '0'
+        {{- if include "kafka.credSecret" . }}
+        {{- include "kafka.credEnv" . | nindent 8 }}
+        {{- end }}
       image: {{ .Values.kafka.image }}
       inheritEnv: false
       livenessProbe:
@@ -208,7 +211,11 @@ spec:
         - name: SASL_USERNAME
           value: '{{ $orchestratorListener.sasl.admin.username }}'
         - name: SASL_PASSWORD
+          {{- if include "kafka.credSecret" . }}
+          value: '{{ include "kafka.credAdminRef" (dict "root" . "listener" $orchestratorListener) }}'
+          {{- else }}
           value: 'cpln://secret/{{ include "kafka.name" . }}-secrets.{{ $orchestratorListener.name | lower }}-admin-password'
+          {{- end }}
         {{- end }}
 {{- end }}
 {{- if .Values.kafka_exporter }}
@@ -265,7 +272,11 @@ spec:
 {{- $listener := index .Values.kafka.listeners $listenerName }}
 {{- if eq $listener.protocol "SASL_PLAINTEXT" }}
         - name: KAFKA_CLIENT_PASSWORDS
+  {{- if include "kafka.credSecret" $ }}
+          value: '{{ include "kafka.credAdminRef" (dict "root" $ "listener" $listener) }}'
+  {{- else }}
           value: 'cpln://secret/{{ include "kafka.name" $ }}-secrets.{{ $listener.name | lower }}-admin-password'
+  {{- end }}
 {{- end }}
       image: {{ .Values.kafka_exporter.image }}
       inheritEnv: false

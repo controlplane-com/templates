@@ -111,6 +111,11 @@ kafka:
   acl:
     superUsers: "User:admin" # User:admin;User:connectors (for multiple users)
     allowEveryoneIfNoAclFound: false
+  # Recommended: a dictionary secret with every broker password, created before install. When set it
+  # wins over every inline password (sasl passwords, inter_broker_password, controller_password); "" = inline.
+  # Keys: inter-broker-password, controller-password, and <listener>-<username>-password per SASL user and admin
+  # (defaults: client-admin-password, client-user-password).
+  credentialsSecretName: ""
   secrets:
     kraft_cluster_id: your-kraft-cluster-id # Example:bkdDtS1Rsf536si7BGM0JY
     inter_broker_password: your-inter-broker-password # Example: HfcgCHp32e
@@ -504,6 +509,11 @@ kafka_rest_proxy:
       debug="true"
       file="/etc/kafka-rest/password.properties";
     };
+
+  # Recommended: an opaque secret (encoding plain) holding the whole JAAS file; when set it replaces jaas_conf.
+  jaas_conf_secret: ""
+  # An opaque secret (encoding plain) holding the whole password.properties; when set it replaces password_properties.
+  password_properties_secret: ""
 
   # # Password properties for Kafka Rest Proxy
   # # Required when authentication.method is set to BASIC

@@ -1,4 +1,25 @@
 {{- if and .Values.kafka_ui .Values.kafka_ui.enabled }}
+{{- if include "kafka.credSecret" . }}
+kind: identity
+name: {{ include "kafka.name" . }}-{{ .Values.kafka_ui.name }}
+description: {{ include "kafka.name" . }}-{{ .Values.kafka_ui.name }}
+tags: {{- include "kafka.tags" . | nindent 2 }}
+gvc: {{ .Values.global.cpln.gvc }}
+---
+kind: policy
+name: {{ include "kafka.name" . }}-{{ .Values.kafka_ui.name }}
+description: {{ include "kafka.name" . }}-{{ .Values.kafka_ui.name }}
+tags: {{- include "kafka.tags" . | nindent 2 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "kafka.name" . }}-{{ .Values.kafka_ui.name }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "kafka.credSecret" . }}
+---
+{{- end }}
 kind: workload
 name: {{ include "kafka.name" . }}-{{ .Values.kafka_ui.name }}
 description: kafka-ui
@@ -28,9 +49,17 @@ spec:
           value: {{ $listener.protocol }}
         - name: KAFKA_CLUSTERS_0_PROPERTIES_SASL_MECHANISM
           value: PLAIN
+  {{- if include "kafka.credSecret" . }}
+        - name: KCRED_ADMIN_PASSWORD
+          value: '{{ include "kafka.credAdminRef" (dict "root" . "listener" $listener) }}'
+        - name: KAFKA_CLUSTERS_0_PROPERTIES_SASL_JAAS_CONFIG
+          value: >-
+            org.apache.kafka.common.security.plain.PlainLoginModule required username="{{ $listener.sasl.admin.username }}" password="$(KCRED_ADMIN_PASSWORD)";
+  {{- else }}
         - name: KAFKA_CLUSTERS_0_PROPERTIES_SASL_JAAS_CONFIG
           value: >-
             org.apache.kafka.common.security.plain.PlainLoginModule required username="{{ $listener.sasl.admin.username }}" password="{{ $listener.sasl.admin.password }}";
+  {{- end }}
 {{- end }}
       image: 'provectuslabs/kafka-ui:latest'
       inheritEnv: false
@@ -62,6 +91,9 @@ spec:
       inboundAllowType: {{ default "[]" .Values.kafka_ui.firewall.internal_inboundAllowType }}
     {{- end }}
 {{- end }}
+  {{- if include "kafka.credSecret" . }}
+  identityLink: //identity/{{ include "kafka.name" . }}-{{ .Values.kafka_ui.name }}
+  {{- end }}
   localOptions: []
   supportDynamicTags: false
 {{- end }}

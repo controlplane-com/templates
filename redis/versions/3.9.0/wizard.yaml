@@ -189,18 +189,26 @@ steps:
             init: >-
               self.redis.auth.fromSecret.enabled ? 'secret' :
               self.redis.auth.password.enabled ? 'password' : 'none'
+            docs: "#prerequisites"
             options:
               - value: none
                 label: No password
                 set: { redis.auth.fromSecret.enabled: false, redis.auth.password.enabled: false }
-              - value: password
-                label: Password in values
-                description: Stored in the release values.
-                set: { redis.auth.fromSecret.enabled: false, redis.auth.password.enabled: true }
               - value: secret
                 label: Password from a secret
+                description: "Recommended: the password never enters the release values."
                 set: { redis.auth.fromSecret.enabled: true, redis.auth.password.enabled: false }
+              - value: password
+                label: Password in values
+                description: "Less secure: the password is stored in the Helm release."
+                set: { redis.auth.fromSecret.enabled: false, redis.auth.password.enabled: true }
             rules:
+              - when: ui.redisAuth == 'password'
+                rule: "!self.redis.auth.password.enabled"
+                severity: info
+                message: >-
+                  The Redis password will be stored in the Helm release values. Choose Password from a secret
+                  to keep it out of the release.
               - rule: "!(self.redis.auth.fromSecret.enabled && self.redis.auth.password.enabled)"
                 mirrors: validateAuth
                 message: Redis has both a password in values and a password secret enabled; enable only one.
@@ -273,18 +281,26 @@ steps:
             init: >-
               self.sentinel.auth.fromSecret.enabled ? 'secret' :
               self.sentinel.auth.password.enabled ? 'password' : 'none'
+            docs: "#prerequisites"
             options:
               - value: none
                 label: No password
                 set: { sentinel.auth.fromSecret.enabled: false, sentinel.auth.password.enabled: false }
-              - value: password
-                label: Password in values
-                description: Stored in the release values.
-                set: { sentinel.auth.fromSecret.enabled: false, sentinel.auth.password.enabled: true }
               - value: secret
                 label: Password from a secret
+                description: "Recommended: the password never enters the release values."
                 set: { sentinel.auth.fromSecret.enabled: true, sentinel.auth.password.enabled: false }
+              - value: password
+                label: Password in values
+                description: "Less secure: the password is stored in the Helm release."
+                set: { sentinel.auth.fromSecret.enabled: false, sentinel.auth.password.enabled: true }
             rules:
+              - when: ui.sentinelAuth == 'password'
+                rule: "!self.sentinel.auth.password.enabled"
+                severity: info
+                message: >-
+                  The Sentinel password will be stored in the Helm release values. Choose Password from a secret
+                  to keep it out of the release.
               - rule: "!(self.sentinel.auth.fromSecret.enabled && self.sentinel.auth.password.enabled)"
                 mirrors: validateAuth
                 message: Sentinel has both a password in values and a password secret enabled; enable only one.

@@ -144,8 +144,19 @@ spec:
             # Self-heal sentinel's view of the slave set. Without this, a
             # scale-up race or a sentinel restart (which can wipe known-replica
             # entries on volume loss) can leave this replica invisible to
-            # sentinel and orphaned at the next failover. SENTINEL RESET only
-            # refreshes sentinel's bookkeeping — no failover is triggered.
+            # sentinel and orphaned at the next failover. SENTINEL RESET never
+            # starts a failover, but it ABORTS one in progress on that sentinel,
+            # which can leave the sentinels split for good (seen on resume from
+            # suspend with sentinel persistence on). So a sentinel that already
+            # lists this replica is left alone, and one that is mid-failover is
+            # only reset once the failover ends.
+            sentinel_cli() {
+              if [ -n "$CUSTOM_SENTINEL_PASSWORD" ]; then
+                redis-cli -h "$RS_HOST" -p "$RS_PORT" --no-auth-warning -a "$CUSTOM_SENTINEL_PASSWORD" "$@" 2>/dev/null | tr -d '\r'
+              else
+                redis-cli -h "$RS_HOST" -p "$RS_PORT" "$@" 2>/dev/null | tr -d '\r'
+              fi
+            }
             (
               while true; do
                 if [ -n "$CUSTOM_REDIS_PASSWORD" ]; then
@@ -168,10 +179,19 @@ spec:
                 RS_HOST="{{ include "redis.sentinel.name" . }}-${IDX}.{{ include "redis.sentinel.name" . }}"
                 RS_PORT=26379
                 {{- end }}
-                if [ -n "$CUSTOM_SENTINEL_PASSWORD" ]; then
-                  redis-cli -h $RS_HOST -p $RS_PORT --no-auth-warning -a "$CUSTOM_SENTINEL_PASSWORD" SENTINEL RESET mymaster >/dev/null 2>&1 || true
+                if sentinel_cli SENTINEL REPLICAS mymaster | grep -qxF "$SELF_HOST:$SELF_PORT"; then
+                  echo "Sentinel $RS_HOST:$RS_PORT already lists this replica; no reset"
                 else
-                  redis-cli -h $RS_HOST -p $RS_PORT SENTINEL RESET mymaster >/dev/null 2>&1 || true
+                  WAITED=0
+                  while sentinel_cli SENTINEL MASTER mymaster | grep -q 'failover_in_progress' && [ $WAITED -lt 60 ]; do
+                    sleep 2; WAITED=$((WAITED + 2))
+                  done
+                  if [ $WAITED -ge 60 ]; then
+                    echo "Sentinel $RS_HOST:$RS_PORT still failing over after 60s; not resetting it"
+                  else
+                    echo "Resetting sentinel $RS_HOST:$RS_PORT so it picks up this replica"
+                    sentinel_cli SENTINEL RESET mymaster >/dev/null || true
+                  fi
                 fi
                 IDX=$((IDX + 1))
               done

@@ -131,7 +131,7 @@ Only needed when `backup.enabled: true`.
 ### AWS S3
 
 
-<b>Upgrading from 1.5.0:</b> this version removes <code>aws::ReadOnlyAccess</code> from the backup identity.
+<b>Upgrading from 1.5.0:</b> 1.5.1 removed <code>aws::ReadOnlyAccess</code> from the backup identity.
 That managed policy granted read access to every bucket in your AWS account and contained no write actions,
 so it was never carrying the backup itself — but it <i>was</i> silently supplying any read action your
 bucket-scoped policy happened to omit. <b>Update your IAM policy to the full action list in this section before

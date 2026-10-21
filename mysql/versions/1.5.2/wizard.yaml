@@ -18,16 +18,27 @@ steps:
         fields:
           - type: note
             severity: warning
+            when: >-
+              context.mode == 'install' ||
+              (context.fromVersion != null && semverCompare(context.fromVersion, '1.5.0') < 0)
             text: >-
-              Both secrets must exist **before** you install. If one is missing, the deployment waits and
-              `cpln logs` shows nothing at all.
+              Both secrets must exist **before** you install or upgrade. If one is missing, the deployment
+              waits and `cpln logs` shows nothing at all.
           - type: note
             severity: warning
             when: context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.5.0') < 0
             text: >-
-              Before 1.5.0 the credentials were values (`config.user`, `config.password`, `config.db`,
-              `config.rootPassword`). Create both secrets holding the values the database was initialized
-              with: MySQL keeps the users it created on the existing volume.
+              Version 1.5.0 moved the database credentials out of the values and into the two secrets below.
+              Before you upgrade, read the credentials the database already uses, because the upgrade deletes
+              the secret that holds them: `cpln secret reveal RELEASE_NAME-mysql-config -o yaml` (keys `user`,
+              `password`, `database` and `rootPassword`). Create both secrets with those same values (`user`
+              becomes `username`, `password` and `database` keep their names, and `rootPassword` is the whole
+              content of the root password secret): the database keeps the credentials stored on its volume.
+              Earlier versions shipped published default passwords (`password` and `root-password`, shared by
+              every install). If the reveal shows either one, treat it as compromised: after the upgrade,
+              change it with `ALTER USER` (for root, both `'root'@'localhost'` and `'root'@'%'`), then update
+              the secret to match. See
+              [Upgrading from 1.4.3 or earlier](/template-catalog/templates/mysql#upgrading-from-1-4-3-or-earlier).
           - path: credentialsSecretName
             type: ref
             label: Database credentials secret
@@ -76,34 +87,45 @@ steps:
             paths: [credentialsSecretName]
             message: >-
               MySQL reads the credentials only when its data directory is first initialized; pointing at
-              another secret does not change the existing user or password.
+              another secret does not change the existing user, password or database. The new secret must
+              keep the same `username` and `database`; run `ALTER USER` first so its password matches, or
+              your applications cannot sign in.
           - rule: >-
               oldSelf == null || !has(oldSelf.rootPasswordSecretName) ||
               self.rootPasswordSecretName == oldSelf.rootPasswordSecretName
             severity: info
             paths: [rootPasswordSecretName]
+            messageExpression: >-
+              "MySQL sets the root password only when its data directory is first initialized; pointing at
+              another secret does not change it. Run `ALTER USER` for both `'root'@'localhost'` and
+              `'root'@'%'` first so the new secret matches" + (self.backup.enabled ? ", or the backup job,
+              which signs in as root with this secret, cannot connect." : ".")
             message: >-
               MySQL sets the root password only when its data directory is first initialized; pointing at
-              another secret does not change it.
+              another secret does not change it. Run `ALTER USER` for both `'root'@'localhost'` and
+              `'root'@'%'` first so the new secret matches.
 
   - id: server
-    title: Server
-    description: The MySQL image and the compute of its single stateful replica.
+    title: Server and storage
+    description: The MySQL image, the compute of its single stateful replica and the volume that holds its data.
     sections:
       - fields:
           - type: note
             severity: warning
             when: context.mode == 'upgrade'
             text: >-
-              An upgrade that changes the server restarts its single replica: the database is unavailable
-              for a short time.
+              Every upgrade restarts the single MySQL replica, so the database is unavailable for a short
+              time. Plan a short outage.
           - path: image
             type: string
             format: image
             label: MySQL image
             required: true
             docs: "#image"
-            help: For example `mysql:9` or `mysql:8.4`. The backup image works with every MySQL major.
+            help: >-
+              For example `mysql:9` or `mysql:8.4`. The backup image works with every MySQL major. MySQL
+              upgrades the data directory to the image's major version on first start: you can move to a
+              newer major later, but never roll back to an older one.
           - path: resources
             type: resources
             label: Resources
@@ -129,12 +151,8 @@ steps:
             message: >-
               The data directory belongs to the installed MySQL major version. Take a backup first: MySQL
               upgrades the data directory on start and cannot go back to an older major.
-
-  - id: storage
-    title: Storage
-    description: The volume set that holds the data directory.
-    sections:
-      - fields:
+      - title: Storage
+        fields:
           - path: volumeset.capacity
             type: integer
             label: Initial capacity
@@ -146,9 +164,16 @@ steps:
               Uninstalling the release deletes the volume set, so the data does not survive a
               reinstall.
             docs: "/reference/volumeset#capacity-and-billing"
+        rules:
+          - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+            paths: [volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
       - id: autoscaling
         title: Grow storage automatically
         toggle: volumeset.autoscaling.enabled
+        description: >-
+          Grows the volume set by the scaling factor whenever its free space falls below the threshold,
+          up to the maximum capacity.
         docs: "/reference/volumeset#autoscaling"
         fields:
           - path: volumeset.autoscaling.maxCapacity
@@ -181,14 +206,12 @@ steps:
           - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
             paths: [volumeset.autoscaling.maxCapacity]
             message: The maximum capacity must be at least the initial capacity.
-    rules:
-      - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
-        paths: [volumeset.capacity]
-        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
 
   - id: network
-    title: Network
-    description: Which workloads can connect to MySQL on port 3306; it is never published to the internet.
+    title: Network and admin console
+    description: >-
+      Which workloads can connect to MySQL on port 3306, which is never published to the internet, and
+      an optional phpMyAdmin console.
     sections:
       - title: Database access
         docs: "#internal-access"
@@ -204,6 +227,15 @@ steps:
               - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
               - { value: same-org, label: Same org, description: Any workload in this org. }
               - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          - type: note
+            when: self.internalAccess.type == 'workload-list'
+            text: >-
+              The chart does not add its own workloads to this list. If you turn on scheduled backups (next
+              step), add the backup job `RELEASE_NAME-mysql-backup` here too, or it cannot connect.
+            textExpression: >-
+              context.releaseName == null || context.gvc == null ?
+              'The chart does not add its own workloads to this list. If you turn on scheduled backups (next step), add the backup job RELEASE_NAME-mysql-backup here too, or it cannot connect.' :
+              'The chart does not add its own workloads to this list. If you turn on scheduled backups (next step), add the backup job //gvc/' + context.gvc + '/workload/' + context.releaseName + '-mysql-backup here too, or it cannot connect.'
           # workload-mysql.yaml writes any non-empty list into inboundAllowWorkload, whatever the type.
           - path: internalAccess.workloads
             type: list
@@ -244,40 +276,6 @@ steps:
               self.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
               ' can be removed from the list.'
             message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
-    rules:
-      - rule: "!(self.internalAccess.type == 'none' && (self.phpMyAdmin.enabled || self.backup.enabled))"
-        severity: warning
-        paths: [internalAccess.type]
-        message: >-
-          "None" also blocks the phpMyAdmin console and the backup job, which connect to MySQL like any
-          other workload.
-      - when: self.internalAccess.type == 'workload-list' && context.gvc != null && context.releaseName != null
-        rule: >-
-          (!self.phpMyAdmin.enabled ||
-          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mysql-phpmyadmin') in self.internalAccess.workloads) &&
-          (!self.backup.enabled ||
-          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mysql-backup') in self.internalAccess.workloads)
-        severity: warning
-        paths: [internalAccess.workloads]
-        messageExpression: >-
-          'The chart does not add its own workloads to the list. Add ' +
-          (self.phpMyAdmin.enabled ? '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mysql-phpmyadmin' : '') +
-          (self.phpMyAdmin.enabled && self.backup.enabled ? ' and ' : '') +
-          (self.backup.enabled ? '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mysql-backup' : '') +
-          ', or they cannot connect.'
-        fix:
-          path: internalAccess.workloads
-          items: >-
-            (self.phpMyAdmin.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mysql-phpmyadmin'] : []) +
-            (self.backup.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mysql-backup'] : [])
-        message: >-
-          The chart does not add its own workloads to the list; add the phpMyAdmin and backup workloads,
-          or they cannot connect.
-
-  - id: admin-console
-    title: Admin console
-    description: An optional phpMyAdmin web console next to the database.
-    sections:
       - id: phpmyadmin
         title: phpMyAdmin
         toggle: phpMyAdmin.enabled
@@ -291,13 +289,16 @@ steps:
             label: Public HTTPS endpoint
             description: >-
               Publishes the console and its login form to the whole internet on the workload's `*.cpln.app`
-              endpoint. Anyone who reaches it needs only a valid database password.
+              endpoint. Anyone who reaches it needs only a valid database password. Turning it on or off
+              takes a few minutes to take effect.
           - path: phpMyAdmin.internalAccess.type
             type: enum
             label: Who can reach the console
             widget: cards
             required: true
-            description: This governs the console only; the database has its own setting under Network.
+            description: >-
+              This governs the console only; the database has its own setting above. Firewall changes take
+              a few minutes to take effect.
             options:
               - { value: none, label: None, description: No workload can reach the console. }
               - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
@@ -346,6 +347,25 @@ steps:
             severity: info
             paths: [phpMyAdmin.internalAccess.workloads]
             message: Same org already lets every workload of the org reach the console, so these entries add nothing.
+          # The console connects to MySQL like any other workload; both settings sit on this step.
+          - when: self.internalAccess.type == 'none'
+            rule: "false"
+            severity: warning
+            paths: [internalAccess.type]
+            message: >-
+              "None" also blocks the phpMyAdmin console, which connects to MySQL like any other workload.
+              Choose another option under Database access, or turn phpMyAdmin off.
+          - when: self.internalAccess.type == 'workload-list' && context.gvc != null && context.releaseName != null
+            rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mysql-phpmyadmin') in self.internalAccess.workloads
+            severity: warning
+            paths: [internalAccess.workloads]
+            messageExpression: >-
+              'The chart does not add its own workloads to the list. Add //gvc/' + context.gvc + '/workload/' +
+              context.releaseName + '-mysql-phpmyadmin, or the console cannot connect.'
+            message: The chart does not add its own workloads to the list; add the phpMyAdmin workload, or the console cannot connect.
+            fix:
+              path: internalAccess.workloads
+              items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mysql-phpmyadmin']"
 
   - id: backup
     title: Backups
@@ -354,7 +374,10 @@ steps:
       - id: backup
         title: Scheduled backups
         toggle: backup.enabled
-        description: Adds one cron workload that dumps the database and uploads it to your bucket.
+        description: >-
+          Adds one cron workload that dumps the database and uploads it to your S3 or GCS bucket through a
+          Control Plane cloud account. The bucket and the cloud account (for S3 also the IAM policy) must
+          exist before you turn it on.
         docs: "#backup"
         fields:
           - path: backup.provider
@@ -386,6 +409,27 @@ steps:
             mirrors: mysql.validateBackupConfig
             paths: [backup.provider]
             message: The backup destination must be AWS S3 or Google Cloud Storage.
+          # The database firewall is set on the previous step; these show here, where backups are turned on.
+          - when: self.internalAccess.type == 'none'
+            rule: "false"
+            severity: warning
+            paths: [backup.enabled]
+            message: >-
+              Database access is set to "None" (Network and admin console step), which also blocks the backup
+              job: it connects to MySQL like any other workload. Choose another option there, or turn backups off.
+          - when: self.internalAccess.type == 'workload-list' && context.gvc != null && context.releaseName != null
+            rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mysql-backup') in self.internalAccess.workloads
+            severity: warning
+            paths: [backup.enabled]
+            messageExpression: >-
+              'Database access is limited to specific workloads, and the chart does not add its own. Add //gvc/' +
+              context.gvc + '/workload/' + context.releaseName + '-mysql-backup to Allowed workloads (Network and admin console step), or the backup job cannot connect.'
+            message: >-
+              Database access is limited to specific workloads, and the chart does not add its own. Add the backup
+              workload to Allowed workloads (Network and admin console step), or the backup job cannot connect.
+            fix:
+              path: internalAccess.workloads
+              items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mysql-backup']"
       - title: AWS S3
         when: self.backup.enabled && self.backup.provider == 'aws'
         docs: "#aws-s3"
@@ -396,6 +440,12 @@ steps:
             text: >-
               1.5.1 removed `aws::ReadOnlyAccess` from the backup identity. Make sure your IAM policy holds the
               full action list from the docs before upgrading, or backups that relied on it stop working.
+          - type: note
+            severity: warning
+            text: >-
+              Create the bucket, the cloud account and the IAM policy first, as in
+              [AWS S3](/template-catalog/templates/mysql#aws-s3). The chart attaches the IAM policy by name
+              and nothing checks that it exists.
           - path: backup.aws.bucket
             type: string
             label: Bucket
@@ -426,6 +476,9 @@ steps:
             required: true
             example: true
             description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            help: >-
+              The policy needs all ten S3 actions listed under
+              [AWS S3](/template-catalog/templates/mysql#aws-s3), on the bucket and on its objects.
           - path: backup.aws.prefix
             type: string
             label: Folder prefix
@@ -435,6 +488,11 @@ steps:
         when: self.backup.enabled && self.backup.provider == 'gcp'
         docs: "#gcs"
         fields:
+          - type: note
+            severity: warning
+            text: >-
+              Create the bucket and the cloud account first, as in
+              [GCS](/template-catalog/templates/mysql#gcs).
           - path: backup.gcp.bucket
             type: string
             label: Bucket
@@ -481,4 +539,4 @@ migrations:
     note: The root password moved to an opaque secret; choose it under Credentials.
   - fromVersions: "<1.5.0"
     from: enablePhpMyAdmin
-    note: Renamed to phpMyAdmin.enabled, which is off by default; turn it on under Admin console.
+    note: Renamed to phpMyAdmin.enabled, which is off by default; turn it on under Network and admin console.

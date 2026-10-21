@@ -213,18 +213,21 @@ rx() { cpln workload exec RELEASE_NAME-redis --gvc GVC_NAME --location LOCATION 
   --container redis --replica "RELEASE_NAME-redis-$1" -- "${@:2}"; }
 sx() { cpln workload exec RELEASE_NAME-sentinel --gvc GVC_NAME --location LOCATION \
   --container sentinel --replica "RELEASE_NAME-sentinel-$1" -- "${@:2}"; }
-# 1. On EVERY Redis node: accept the new password alongside the old one, and replicate with it
-rx 0 redis-cli --no-auth-warning -a OLD_PASSWORD ACL SETUSER default ">NEW_PASSWORD"
-rx 0 redis-cli --no-auth-warning -a OLD_PASSWORD CONFIG SET masterauth NEW_PASSWORD
-# 2. On EVERY Sentinel (SENTINEL_PASSWORD is the value in your Sentinel password secret)
-sx 0 redis-cli -p 26379 --no-auth-warning -a SENTINEL_PASSWORD SENTINEL SET mymaster auth-pass NEW_PASSWORD
+# The loops cover the default 2 Redis nodes and 3 Sentinels; list one number per node if you changed the counts
+# 1. On every Redis node: accept the new password alongside the old one, and replicate with it
+for n in 0 1; do
+  rx $n redis-cli --no-auth-warning -a OLD_PASSWORD ACL SETUSER default ">NEW_PASSWORD"
+  rx $n redis-cli --no-auth-warning -a OLD_PASSWORD CONFIG SET masterauth NEW_PASSWORD
+done
+# 2. On every Sentinel (SENTINEL_PASSWORD is the value in your Sentinel password secret)
+for n in 0 1 2; do sx $n redis-cli -p 26379 --no-auth-warning -a SENTINEL_PASSWORD SENTINEL SET mymaster auth-pass NEW_PASSWORD; done
 # 3. Put the new password in the secret and read it back
 cpln secret edit SECRET_NAME
 cpln secret reveal SECRET_NAME -o yaml
 # 4. Restart the gateway, which keeps the old password until it restarts
 cpln workload force-redeployment RELEASE_NAME-tyk-api-gateway --gvc GVC_NAME
-# 5. Once get-deployments shows a higher version, alone and ready: retire the old password on EVERY Redis node
-rx 0 redis-cli --no-auth-warning -a NEW_PASSWORD ACL SETUSER default "<OLD_PASSWORD"
+# 5. Once get-deployments shows a higher version, alone and ready: retire the old password on every Redis node
+for n in 0 1; do rx $n redis-cli --no-auth-warning -a NEW_PASSWORD ACL SETUSER default "<OLD_PASSWORD"; done
 ```
 
 The Sentinel password itself is kept in Sentinel's configuration on its volume, and this template has no procedure for changing it: keep the value it was installed with.
@@ -233,7 +236,7 @@ The Sentinel password itself is kept in Sentinel's configuration on its volume, 
 
 `redis.redis.auth.password` and `redis.sentinel.auth.password` were removed: the two passwords are now prerequisite secrets. Carrying the old keys forward fails the render.
 
-1.3.0 created `RELEASE_NAME-redis-auth-password` and `RELEASE_NAME-sentinel-auth-password` itself, so **this upgrade deletes them**. Before upgrading, copy the passwords your release runs with **today** into two secrets under **new** names. Do not generate new ones: Sentinel keeps the passwords it first started with on its volume, so a new value locks the gateway out of its store.
+1.3.0 created `RELEASE_NAME-redis-auth-password` and `RELEASE_NAME-sentinel-auth-password` itself, so **this upgrade deletes them**. Before upgrading, copy the passwords your release runs with **today** into two secrets under **new** names. Do not generate new ones: Sentinel keeps the passwords it first started with on its volume, so a new value locks the gateway out of its store and stalls the Redis restart. To recover, upgrade again with the secrets holding the original passwords.
 
 ```bash
 cpln secret reveal RELEASE_NAME-redis-auth-password -o yaml

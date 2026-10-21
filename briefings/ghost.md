@@ -17,7 +17,7 @@
 | `{release}-ghost-vs` volumeset | durable uploaded images, themes, logs |
 | `{release}-ghost-start` secret | startup script: derives `url` from the canonical endpoint, then execs the image entrypoint |
 | `{release}-ghost-identity` / `-policy` | least-privilege `reveal` on the start script, the DB credentials secret (`mysql.credentialsSecretName`), and the SMTP secret (only if set) — never the root-password secret |
-| `{release}-mysql` (+ `-vs`) | MySQL 8 backing DB (`mysql` subchart 1.5.1, image pinned `mysql:8`); reads the two prerequisite secrets |
+| `{release}-mysql` (+ `-vs`) | MySQL 8 backing DB (`mysql` subchart 1.5.2, image pinned `mysql:8`); reads the two prerequisite secrets |
 | user-created secrets | `mysql.credentialsSecretName` (dictionary `username`/`password`/`database`, read by MySQL AND Ghost) + `mysql.rootPasswordSecretName` (opaque root password, MySQL only) — required, must exist before install |
 | `{release}-mysql-backup` cron (optional) | scheduled `mysqldump` → S3/GCS, created only when `mysql.backup.enabled` |
 

@@ -9,7 +9,7 @@ gvc:
   minLocations: 1
   maxLocations: 1
 
-# The bundled mysql 1.5.1 has no descriptor of its own, so its keys are bound here as plain fields
+# The bundled mysql 1.5.2 keys are bound here as plain fields (not imported)
 # (they are all in this chart's `mysql:` block) and its chart checks are restated as rules.
 steps:
   - id: ghost

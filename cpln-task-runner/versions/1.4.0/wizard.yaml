@@ -12,30 +12,30 @@ gvc:
 steps:
   - id: secrets
     title: Secrets
-    description: The two prerequisite secrets the task runner and its Redis read.
+    description: The prerequisite secrets the task runner and its Redis read.
     fields:
       - type: note
         severity: warning
         text: >-
-          Both secrets must exist **before** you install. If one is missing, the deployment waits and
+          These secrets must exist **before** you install. If one is missing, the deployment waits and
           `cpln logs` shows nothing at all.
       - type: note
         severity: warning
         when: context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.4.0') < 0
         text: >-
-          This upgrade deletes the `task-runner-secrets` secret the previous version created. Before upgrading,
-          read it with `cpln secret reveal task-runner-secrets -o yaml` and put the SAME two passwords in a new
-          secret under another name: Redis and Sentinel keep the passwords they started with.
+          If the previous version created `task-runner-secrets` (createSecret true), this upgrade deletes it.
+          Before upgrading, read it with `cpln secret reveal task-runner-secrets -o yaml` and put the SAME
+          passwords in two new secrets under the key `password`: `redis-password` in the Redis secret,
+          `redis-sentinel-password` in the Sentinel secret. Redis and Sentinel keep the passwords they started
+          with. A secret of your own (createSecret false) is kept, with its key names.
       - path: redis.redis.auth.fromSecret.name
         type: ref
         label: Redis credentials secret
         required: true
-        description: >-
-          A dictionary secret with the Redis password under the Redis password key and the Sentinel password
-          under the Sentinel password key (`password` and `sentinelPassword` by default).
+        description: A dictionary secret with the Redis password under the key `password`.
         help: >-
-          Redis and Sentinel read the passwords when their volumes are first initialized, and Sentinel keeps
-          them; changing them later means uninstalling and reinstalling.
+          Sentinel keeps the Redis password it started with, so editing the secret alone locks the API and
+          Worker out. To change it, follow "Rotating the Redis and Sentinel passwords" in the README.
         docs: "#prerequisites"
         ref:
           kind: secret
@@ -43,15 +43,19 @@ steps:
           filter: { secretType: [dictionary] }
           mustExist: error
           allowCreate: true
-          requiredKeysFrom: "[self.redis.redis.auth.fromSecret.passwordKey, self.redis.sentinel.auth.fromSecret.passwordKey]"
+          requiredKeysFrom: "[self.redis.redis.auth.fromSecret.passwordKey]"
           create:
             suggestName: "context.releaseName + '-task-runner-redis-credentials'"
-            hint: "Generate each password with: openssl rand -hex 24"
+            hint: "Generate the password with: openssl rand -hex 24"
       - path: redis.sentinel.auth.fromSecret.name
         type: ref
         label: Sentinel credentials secret
         required: true
-        description: Usually the same secret as the Redis credentials secret.
+        description: A dictionary secret with the Sentinel password under the key `password`.
+        help: >-
+          Sentinel keeps the password it started with, so editing the secret alone locks the API and Worker
+          out. To change it, follow "Rotating the Redis and Sentinel passwords" in the README.
+        docs: "#prerequisites"
         ref:
           kind: secret
           format: name
@@ -60,7 +64,8 @@ steps:
           allowCreate: true
           requiredKeysFrom: "[self.redis.sentinel.auth.fromSecret.passwordKey]"
           create:
-            suggestName: "context.releaseName + '-task-runner-redis-credentials'"
+            suggestName: "context.releaseName + '-task-runner-sentinel-credentials'"
+            hint: "Generate the password with: openssl rand -hex 24"
       - path: redis.redis.auth.fromSecret.passwordKey
         type: string
         label: Redis password key
@@ -100,7 +105,7 @@ steps:
         paths: [redis.redis.auth.fromSecret.name]
         message: >-
           createSecret, secretName, redis.redisPassword and redis.sentinelPassword were removed in 1.4.0: the
-          passwords now come from the Redis credentials secret. Remove those keys from the values.
+          passwords now come from the Redis and Sentinel credentials secrets. Remove those keys from the values.
       - rule: self.redis.redis.auth.fromSecret.name != '' && self.redis.sentinel.auth.fromSecret.name != ''
         mirrors: cpln-task-runner.validateRedisCredentials
         paths: [redis.redis.auth.fromSecret.name, redis.sentinel.auth.fromSecret.name]
@@ -112,7 +117,7 @@ steps:
         paths: [redis.redis.auth.fromSecret.name, redis.sentinel.auth.fromSecret.name]
         message: >-
           task-runner-secrets is the secret version 1.3.0 and earlier created itself, and upgrading deletes it.
-          Create the credentials secret under a new name holding the same passwords.
+          Create the credentials secrets under new names holding the same passwords.
       - rule: >-
           self.redis.redis.auth.fromSecret.passwordKey != '' && self.redis.sentinel.auth.fromSecret.passwordKey != ''
         mirrors: cpln-task-runner.validateRedisCredentials
@@ -362,19 +367,19 @@ migrations:
   - fromVersions: "<1.4.0"
     from: redis.sentinelPassword
     note: >-
-      The Sentinel password is now in the Redis credentials secret (key sentinelPassword). Put the password the
+      The Sentinel password is now in the Sentinel credentials secret (key password). Put the password the
       release runs with today there; a password never changed is `change-me-cpln-task-runner-sentinel`.
   - fromVersions: "<1.4.0"
     from: createSecret
     note: >-
       The chart no longer creates the Redis secret. If it did (createSecret true, the default), this upgrade
-      deletes task-runner-secrets: create the Redis credentials secret under a new name and choose it under
-      Secrets. A secret of your own (createSecret false) is kept.
+      deletes task-runner-secrets: create the Redis and Sentinel credentials secrets under new names and choose
+      them under Secrets. A secret of your own (createSecret false) is kept.
   - fromVersions: "<1.4.0"
     from: secretName
-    note: The Redis credentials secret is now chosen under Secrets; it cannot be task-runner-secrets.
+    note: The Redis and Sentinel credentials secrets are now chosen under Secrets; neither can be task-runner-secrets.
   # A release that brought its own secret (createSecret: false) keeps it, with its key names: the passwordKey
-  # defaults changed (redis-password → password, redis-sentinel-password → sentinelPassword), and a rename
+  # defaults changed (redis-password → password, redis-sentinel-password → password), and a rename
   # alone would hand such a release the new names its secret does not have.
   - fromVersions: "<1.4.0"
     to: redis.redis.auth.fromSecret.passwordKey
@@ -382,5 +387,5 @@ migrations:
     note: Your own Redis secret is kept with its key names.
   - fromVersions: "<1.4.0"
     to: redis.sentinel.auth.fromSecret.passwordKey
-    valueExpr: "self.createSecret ? 'sentinelPassword' : self.redis.sentinel.auth.fromSecret.passwordKey"
+    valueExpr: "self.createSecret ? 'password' : self.redis.sentinel.auth.fromSecret.passwordKey"
     note: Your own Sentinel secret is kept with its key names.

@@ -88,18 +88,18 @@ worker:
     otelEndpoint: ""
 
 # ─── Bundled Redis + Sentinel ───────────────────────────────────────────────
-# The Redis and Sentinel passwords come from a REQUIRED prerequisite `dictionary`
-# secret with the keys `password` (Redis) and `sentinelPassword` (Sentinel). The
-# Redis subchart, the API and the Worker all read it.
+# The Redis and Sentinel passwords come from TWO REQUIRED prerequisite `dictionary`
+# secrets, each with the key `password`: one for Redis, one for Sentinel. The Redis
+# subchart, the API and the Worker read both.
 #
-# THE SECRET MUST EXIST BEFORE YOU INSTALL — otherwise the deployment wedges
+# THE SECRETS MUST EXIST BEFORE YOU INSTALL — otherwise the deployment wedges
 # silently and `cpln logs` returns nothing at all. See Prerequisites in the README.
 redis:
   redis:
     auth:
       fromSecret:
         enabled: true          # must stay true
-        name: my-cpln-task-runner-redis-credentials   # prerequisite dictionary secret
+        name: my-cpln-task-runner-redis-credentials   # prerequisite dictionary secret for Redis
         passwordKey: password  # key holding the Redis password
     persistence:
       enabled: true
@@ -107,7 +107,7 @@ redis:
     auth:
       fromSecret:
         enabled: true          # must stay true
-        name: my-cpln-task-runner-redis-credentials   # usually the same secret as above
-        passwordKey: sentinelPassword   # key holding the Sentinel password
+        name: my-cpln-task-runner-sentinel-credentials   # prerequisite dictionary secret for Sentinel
+        passwordKey: password  # key holding the Sentinel password
     persistence:
       enabled: true

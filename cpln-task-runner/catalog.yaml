@@ -63,7 +63,13 @@ prerequisites:
     description: Admin API key for /admin/* (X-Admin-Key header); the payload is the key, created with printf, not echo. A missing secret leaves the API waiting with no logs.
   - kind: secret
     secretType: dictionary
-    keys: [password, sentinelPassword]
-    valuesPath: [redis.redis.auth.fromSecret.name, redis.sentinel.auth.fromSecret.name]
+    keys: [password]
+    valuesPath: redis.redis.auth.fromSecret.name
     required: true
-    description: Passwords for the bundled Redis (key password) and Sentinel (key sentinelPassword); both values name the same secret by default. A missing secret leaves the deployment waiting with no logs.
+    description: Password of the bundled Redis. Create before installing; when upgrading from 1.3.0 it holds the current password under a new name. If missing, the deployment waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [password]
+    valuesPath: redis.sentinel.auth.fromSecret.name
+    required: true
+    description: Password of the bundled Sentinel. Create before installing; when upgrading from 1.3.0 it holds the current password under a new name. If missing, the deployment waits with no logs.

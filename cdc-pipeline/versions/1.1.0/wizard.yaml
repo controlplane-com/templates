@@ -180,9 +180,9 @@ steps:
         paths: [postgres-highly-available.config.credentialsSecretName]
         message: >-
           database, debezium-server.source.database.password and debezium-server.sink.kafka.saslPassword were
-          removed in 1.1.0. Put the values the release runs with today in the credentials secret (username,
-          password, database, sourcePassword, kafkaSaslPassword, kafkaAdminPassword, kafkaInterBrokerPassword,
-          kafkaControllerPassword) and remove them from the values.
+          removed in 1.1.0. Put the values in the credentials secret (username, password, database,
+          sourcePassword, kafkaSaslPassword, kafkaAdminPassword, kafkaInterBrokerPassword, kafkaControllerPassword;
+          on an upgrade, the ones the release runs with today) and remove them from the values.
       - rule: "!('postgres' in self['postgres-highly-available'])"
         paths: [postgres-highly-available.config.credentialsSecretName]
         message: >-

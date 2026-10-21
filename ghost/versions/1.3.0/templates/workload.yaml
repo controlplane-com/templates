@@ -79,6 +79,7 @@ spec:
         httpGet:
           path: /
           port: 2368
+          scheme: HTTP
           # Ghost 301-redirects http->https unless it sees this header; without it
           # the probe gets a 301, never goes ready, and the edge returns 503.
           httpHeaders:
@@ -94,6 +95,9 @@ spec:
       metric: disabled
       minScale: 1
       maxScale: 1
+      maxConcurrency: 0
+      scaleToZeroDelay: 300
+      target: 95
     capacityAI: false
     debug: false
     suspend: false

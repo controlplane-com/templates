@@ -91,9 +91,9 @@ steps:
         mirrors: maria.validateRemovedKeys
         paths: [credentialsSecretName]
         message: >-
-          The `config` block was removed in 1.4.0. Put the credentials in a dictionary secret with the keys
-          `username`, `password` and `database`, put the root password in an opaque secret, and remove
-          `config` from the values.
+          The config block was removed in 1.4.0. Put the credentials in a dictionary secret with the keys
+          username, password and database, put the root password in an opaque secret, and remove
+          config from the values.
       - rule: >-
           oldSelf == null || context.fromVersion == null || semverCompare(context.fromVersion, '1.4.0') < 0 ||
           self.credentialsSecretName == oldSelf.credentialsSecretName
@@ -102,7 +102,7 @@ steps:
         message: >-
           MariaDB reads the credentials only when the volume is first initialized; pointing at another
           secret does not change the existing user, password or database. The new secret must keep the
-          same `username` and `database`; run `ALTER USER` first so its password matches, or your
+          same username and database; run ALTER USER first so its password matches, or your
           applications cannot sign in.
       - rule: >-
           oldSelf == null || context.fromVersion == null || semverCompare(context.fromVersion, '1.4.0') < 0 ||
@@ -111,13 +111,13 @@ steps:
         paths: [rootPasswordSecretName]
         messageExpression: >-
           "MariaDB reads the root password only when the volume is first initialized; pointing at another
-          secret does not change the existing root password. Run `ALTER USER` for both `'root'@'localhost'`
-          and `'root'@'%'` first so the new secret matches" + (self.backup.enabled ? ", or the backup job,
+          secret does not change the existing root password. Run ALTER USER for both 'root'@'localhost'
+          and 'root'@'%' first so the new secret matches" + (self.backup.enabled ? ", or the backup job,
           which signs in as root with this secret, cannot connect." : ".")
         message: >-
           MariaDB reads the root password only when the volume is first initialized; pointing at another
-          secret does not change the existing root password. Run `ALTER USER` for both `'root'@'localhost'`
-          and `'root'@'%'` first so the new secret matches.
+          secret does not change the existing root password. Run ALTER USER for both 'root'@'localhost'
+          and 'root'@'%' first so the new secret matches.
 
   - id: server
     title: Server
@@ -128,7 +128,9 @@ steps:
         format: image
         label: MariaDB image
         required: true
-        description: The backup image works with every MariaDB version.
+        description: >-
+          Moving a running database to a newer major version converts its data directory, so change it on
+          purpose, after a backup.
         docs: "#image"
       - path: resources
         type: resources
@@ -240,6 +242,7 @@ steps:
           # workload-mariadb.yaml:72-73 writes any non-empty list into inboundAllowWorkload, and the platform
           # validates every entry, though it applies the workload links only with same-gvc and workload-list.
           - path: internalAccess.workloads
+            when: self.internalAccess.type in ['same-gvc', 'workload-list'] || size(self.internalAccess.workloads) > 0
             type: list
             label: Allowed workloads
             widget: tags
@@ -259,7 +262,7 @@ steps:
         title: phpMyAdmin
         toggle: phpMyAdmin.enabled
         description: >-
-          A browser console for the database. It shows a login form and holds no identity and no secret;
+          A browser console for the database, internal-only unless you publish it. It shows a login form and holds no identity and no secret;
           you sign in with the application credentials, or with `root` and the root password.
         docs: "#phpmyadmin"
         fields:
@@ -288,7 +291,9 @@ steps:
             label: Who can reach the console
             widget: cards
             required: true
-            description: This governs the console only; the database has its own setting above.
+            description: >-
+              This governs the console only; the database has its own setting above. Access changes take up
+              to a couple of minutes to take effect.
             options:
               - value: none
                 label: None
@@ -304,6 +309,7 @@ steps:
                 description: Only the workloads listed below.
           # Shown for every type, as above: workload-phpmyadmin.yaml:48-49 writes any non-empty list.
           - path: phpMyAdmin.internalAccess.workloads
+            when: self.phpMyAdmin.internalAccess.type in ['same-gvc', 'workload-list'] || size(self.phpMyAdmin.internalAccess.workloads) > 0
             type: list
             label: Allowed console workloads
             widget: tags
@@ -434,8 +440,8 @@ steps:
         mirrors: maria.validateRemovedKeys
         paths: [phpMyAdmin.enabled]
         message: >-
-          `enablePhpMyAdmin` was renamed in 1.4.0. Use `phpMyAdmin.enabled` instead, and remove
-          `enablePhpMyAdmin` from the values.
+          enablePhpMyAdmin was renamed in 1.4.0. Use phpMyAdmin.enabled instead, and remove
+          enablePhpMyAdmin from the values.
 
   - id: backup
     title: Backups
@@ -480,6 +486,7 @@ steps:
             label: Backup image
             required: true
             advanced: true
+            description: Works with every MariaDB version.
           - path: backup.resources
             type: resources
             label: Backup job resources

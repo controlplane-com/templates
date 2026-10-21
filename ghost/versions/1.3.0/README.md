@@ -147,6 +147,8 @@ Then set `mysql.backup.provider: aws` and `mysql.backup.aws.{bucket,region,cloud
 
 `mysql.config` (database name, user, password and root password) was removed: the database credentials are now the two prerequisite secrets above, the same ones the `mysql` template requires on its own. An upgrade that still carries `mysql.config` or `mysql.enablePhpMyAdmin` is refused at render, before anything changes.
 
+**If you turned phpMyAdmin on in 1.2.0 or earlier, upgrade now or turn it off.** That phpMyAdmin is published to the internet and its PHP is affected by CVE-2026-109618 and CVE-2026-109619 (remote code execution, no login needed). In 1.3.0 phpMyAdmin is off by default, runs a patched PHP, and is internal-only when turned on.
+
 1.2.0 created the secret `RELEASE_NAME-mysql-config` itself, and **this upgrade deletes it**. Create the new secrets under **different** names, holding the values your database was initialized with (not new ones, or Ghost and MySQL lose their login). Read the current values first:
 
 ```bash

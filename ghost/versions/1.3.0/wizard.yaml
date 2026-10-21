@@ -508,7 +508,10 @@ migrations:
       with, so put in the current one.
   - fromVersions: "<1.3.0"
     from: mysql.enablePhpMyAdmin
-    note: phpMyAdmin is off by default in the bundled MySQL; set mysql.phpMyAdmin.enabled in YAML to deploy it.
+    note: >-
+      phpMyAdmin is off by default in the bundled MySQL; set mysql.phpMyAdmin.enabled in YAML to deploy it.
+      The phpMyAdmin of earlier versions was public and its PHP is affected by CVE-2026-109618 and
+      CVE-2026-109619; this version's runs a patched PHP and is internal-only.
   - fromVersions: "<1.1.0"
     from: resources.cpu
     to: resources.maxCpu

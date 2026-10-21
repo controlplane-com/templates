@@ -1,0 +1,812 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Redis Multi-Location
+# The chart runs only in the locations it lists (every other GVC location is scaled to 0) and fails
+# below 2 of them.
+gvc:
+  minLocations: 2
+
+steps:
+  - id: topology
+    title: Locations and engine
+    description: Where the cluster runs, how many Redis instances each location gets, and which server both tiers run.
+    sections:
+      - id: locations
+        title: Locations
+        docs: "#locations"
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '3.0.0') < 0
+            text: >-
+              Do not upgrade a release older than 3.0.0 in place: 1.x and 2.x created their own GVCs, and this
+              upgrade deletes them with every workload, volume set and identity in them. Install 3.0.0 as a new
+              release into a GVC with at least two locations, copy the keyspace across, move your clients to the
+              new hostnames, then uninstall the old release, which deletes the old GVCs and their volume sets.
+              See [Upgrading from version 2](#upgrading-from-version-2).
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Every upgrade restarts every Redis instance and Sentinel in every location at once. Nothing
+              limits the rollout of a stateful workload, so plan a write outage.
+          - type: note
+            when: context.mode == 'install' && size(self.global.locations) >= 2
+            text: Sentinel runs one instance per location, and a failover needs a majority of them to agree.
+            textExpression: >-
+              string(size(self.global.locations)) + ' locations: ' +
+              (self.redis.replicasPerLocation == null ? '' :
+              string(size(self.global.locations) * self.redis.replicasPerLocation) + ' Redis instances and ') +
+              string(size(self.global.locations)) + ' Sentinels, one per location. A failover needs ' +
+              string(size(self.global.locations) / 2 + 1) + ' Sentinels to agree, so ' +
+              (size(self.global.locations) - (size(self.global.locations) / 2 + 1) == 0 ?
+              'losing either location leaves no automatic failover.' :
+              'automatic failover survives the loss of ' +
+              string(size(self.global.locations) - (size(self.global.locations) / 2 + 1)) +
+              (size(self.global.locations) - (size(self.global.locations) / 2 + 1) == 1 ? ' location.' : ' locations.'))
+          - type: note
+            when: >-
+              context.gvcLocations != null && self.global.locations.exists(l, l.name != '') &&
+              context.gvcLocations.exists(g, !(g in self.global.locations.map(l, l.name)))
+            textExpression: >-
+              'GVC locations not listed here run nothing from this release: ' +
+              context.gvcLocations.filter(g, !(g in self.global.locations.map(l, l.name))).join(', ') + '.'
+            text: GVC locations not listed here run nothing from this release.
+          - path: global.locations
+            type: list
+            label: Locations
+            required: true
+            minItems: 2
+            uniqueBy: [name]
+            widget: table
+            newItem: { name: "" }
+            itemLabel: item.name
+            description: One entry per location this release runs in. The first one seeds the initial master.
+            help: >-
+              Every location listed must already be a location of the GVC: the platform accepts one the GVC
+              lacks and runs nothing there, which removes part of the Sentinel quorum. To remove a location,
+              remove it from this list; never suspend a location, which permanently withdraws its endpoints
+              from the other locations' service discovery. Replication is asynchronous, so a failover can lose
+              the writes the promoted replica had not received yet.
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: ref
+                  label: Location
+                  required: true
+                  ref: { kind: location, scope: gvc, format: name, mustExist: error }
+              rules:
+                - rule: context.gvcLocations == null || item.name == '' || item.name in context.gvcLocations
+                  paths: [name]
+                  message: >-
+                    This location is not in the target GVC: its Redis instances and its Sentinel would never
+                    start, and a fresh install refuses to bootstrap.
+                - rule: "!has(item.replicas)"
+                  mirrors: redis-ml.validate
+                  paths: [name]
+                  message: >-
+                    This entry sets replicas, which the chart refuses. Remove it and set Redis instances per
+                    location instead.
+            rules:
+              # workload-sentinel.yaml: the `sentinel monitor ... <quorum>` line is written only while bootstrapping a
+              # Sentinel that has never started; afterwards its sentinel.conf lives on the retained volume set.
+              - rule: >-
+                  oldSelf == null || size(oldSelf.global.locations) == 0 ||
+                  size(self.global.locations) == size(oldSelf.global.locations)
+                severity: info
+                messageExpression: >-
+                  'The number of locations changes from ' + string(size(oldSelf.global.locations)) + ' to ' +
+                  string(size(self.global.locations)) + '. Sentinels that already ran keep the quorum they
+                  bootstrapped with (' + string(size(oldSelf.global.locations) / 2 + 1) + ' for Sentinels first
+                  started with ' + string(size(oldSelf.global.locations)) + ' locations), which the chart writes
+                  only when a Sentinel bootstraps; only Sentinels in new locations start with ' +
+                  string(size(self.global.locations) / 2 + 1) + '.'
+                message: >-
+                  The number of locations changes. Sentinels that already ran keep the quorum they were first
+                  started with, which the chart writes only when a Sentinel bootstraps; only Sentinels in new
+                  locations start with the new majority.
+              # workload-sentinel.yaml: a Sentinel that never started writes `sentinel monitor mymaster replica-0 of
+              # the FIRST listed location`; workload-redis.yaml asks the Sentinels in list order and follows the
+              # first answer.
+              - when: >-
+                  oldSelf != null && size(oldSelf.global.locations) > 0 && size(self.global.locations) > 0 &&
+                  self.global.locations[0].name != ''
+                rule: self.global.locations[0].name in oldSelf.global.locations.map(l, l.name)
+                severity: info
+                messageExpression: >-
+                  self.global.locations[0].name + ' is new to this release and listed first. Its Sentinel has
+                  never started, so it names the first Redis instance in ' + self.global.locations[0].name +
+                  ', which is new and empty, as the master. Redis instances ask the Sentinels in list order and
+                  follow the first answer, so they can replicate from that empty instance, which replaces their
+                  data. Keep a location the release already runs in at the top of the list.'
+                message: >-
+                  The first listed location is new to this release. Its Sentinel has never started, so it names
+                  that location's new, empty Redis instance as the master, and Redis instances that ask it first
+                  can replicate from it, which replaces their data. Keep a location the release already runs in
+                  at the top of the list.
+              - rule: size(self.global.locations) != 2
+                severity: info
+                message: >-
+                  Two locations give no automatic failover: after losing one, the remaining Sentinel cannot
+                  reach a majority. Use 3 or 5 locations for automatic failover.
+              - rule: size(self.global.locations) < 4 || size(self.global.locations) % 2 == 1
+                severity: info
+                message: >-
+                  An even number of locations survives no more losses than one location fewer; 3 survives
+                  losing one location, 5 survives losing two.
+          - path: redis.replicasPerLocation
+            type: integer
+            label: Redis instances per location
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+            description: >-
+              Every listed location gets this many. One instance in the cluster is the master; the rest
+              replicate from it.
+        rules:
+          - rule: "!has(self.global.gvc)"
+            mirrors: redis-ml.validateNoLegacyGvc
+            paths: [global.locations]
+            message: >-
+              global.gvc was removed in 3.0.0 and the chart refuses it: this version deploys into the GVC you
+              install into. Move global.gvc.locations to global.locations and remove global.gvc. Never upgrade a
+              2.x release in place; install 3.0.0 as a new release.
+      - id: engine
+        title: Engine
+        docs: "#redis-or-valkey"
+        fields:
+          - path: engine
+            type: enum
+            label: Server
+            widget: cards
+            required: true
+            immutable: >-
+              The engine is fixed at install, because Redis and Valkey write different on-disk formats:
+              Valkey cannot read the files Redis 7.4 writes, so a switch to Valkey crash-loops every instance.
+            help: >-
+              If a Redis release was switched to Valkey outside the wizard and its instances crash-loop, set
+              `engine` back to `redis` with `helm upgrade`: the data is recovered untouched. Move between
+              engines with a dump and restore, or by replicating into a fresh install.
+            options:
+              - value: redis
+                label: Redis
+                description: The default. Runs the Redis image on both tiers.
+              - value: valkey
+                label: Valkey
+                description: The BSD-licensed fork of Redis 7.2, on both tiers.
+          - path: valkeyImage
+            type: string
+            format: image
+            label: Valkey image
+            required: true
+            when: self.engine == 'valkey'
+            description: Used for both the Redis and the Sentinel tier.
+          - path: redis.image
+            type: string
+            format: image
+            label: Redis image
+            required: true
+            when: self.engine == 'redis'
+          - path: sentinel.image
+            type: string
+            format: image
+            label: Sentinel image
+            required: true
+            when: self.engine == 'redis'
+        rules:
+          - rule: self.engine != 'valkey' || (self.valkeyImage != null && self.valkeyImage != '')
+            mirrors: redis-ml.validateEngine
+            paths: [valkeyImage]
+            message: A Valkey image is required when the server is Valkey.
+          - when: self.engine == 'valkey'
+            rule: self.valkeyImage == null || !self.valkeyImage.matches(':[^:/@]*alpine')
+            paths: [valkeyImage]
+            message: >-
+              An -alpine tag fails at start with "Bad directive": both tiers build their config in a way busybox
+              does not support. Use a Debian-based tag such as valkey/valkey:8.1.9.
+          - when: self.engine == 'redis'
+            rule: self.redis.image == null || !self.redis.image.matches(':[^:/@]*alpine')
+            paths: [redis.image]
+            message: >-
+              An -alpine tag fails at start with "Bad directive": the chart builds its config in a way busybox
+              does not support. Use a Debian-based tag such as redis:7.4.
+          - when: self.engine == 'redis'
+            rule: self.sentinel.image == null || !self.sentinel.image.matches(':[^:/@]*alpine')
+            paths: [sentinel.image]
+            message: >-
+              An -alpine tag fails at start with "Bad directive": the chart builds its config in a way busybox
+              does not support. Use a Debian-based tag such as redis:7.4.
+          - when: self.engine == 'valkey'
+            rule: self.valkeyImage == null || imageMajor(self.valkeyImage) < 9
+            severity: info
+            paths: [valkeyImage]
+            message: >-
+              Valkey 9 tags are not tested with this template, and Valkey 9 writes a data format (RDB 80) that
+              no Redis can read.
+
+  - id: auth
+    title: Authentication
+    description: Optional passwords for Redis and for Sentinel, each read from a secret you create.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: ui.redisAuth == 'secret' || ui.sentinelAuth == 'secret'
+            text: >-
+              A password secret must exist **before** you install: the chart does not create it, and a
+              missing one wedges the deployment waiting on it.
+      - title: Redis
+        fields:
+          - id: redisAuth
+            virtual: true
+            type: enum
+            label: Redis authentication
+            widget: segmented
+            required: true
+            init: "self.redis.passwordSecretName == null || self.redis.passwordSecretName == '' ? 'none' : 'secret'"
+            options:
+              - value: none
+                label: No password
+                set: { redis.passwordSecretName: "" }
+              - value: secret
+                label: Password from a secret
+            rules:
+              - rule: "!has(self.redis.password)"
+                severity: warning
+                message: >-
+                  redis.password is not read by this chart (passwords moved to secrets in 2.1.0), and it stays
+                  in the release values in plain text. Remove it from the values and choose a password secret
+                  here instead.
+              - rule: >-
+                  oldSelf == null || oldSelf.redis.passwordSecretName == null ||
+                  self.redis.passwordSecretName == oldSelf.redis.passwordSecretName
+                severity: info
+                message: >-
+                  Changing the Redis password restarts every Redis instance in every location at once, so
+                  Sentinel briefly loses the master and starts a failover. Plan it as a restart of the whole
+                  tier.
+          - path: redis.passwordSecretName
+            type: ref
+            label: Redis password secret
+            required: true
+            when: ui.redisAuth == 'secret'
+            description: >-
+              An opaque secret (encoding `plain`) whose payload is the password. Every Redis instance uses it
+              for `requirepass` and `masterauth`, and Sentinel to reach the master.
+            help: >-
+              Create it with `printf '%s' "$(openssl rand -hex 24)" | cpln secret create-opaque --name
+              <release>-redis-password --encoding plain -f -`. Both tiers read the password when a container starts,
+              so after you change the secret's payload, run `cpln workload force-redeployment
+              <release>-sentinel --gvc <gvc>` and then the same for `<release>-redis`; until then the old
+              password keeps working. Redeploying Redis restarts every instance at once, so Sentinel briefly
+              starts a failover: plan it as a restart of the whole tier.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-redis-password'"
+                hint: "Generate the content with: openssl rand -hex 24"
+      - title: Sentinel
+        fields:
+          - id: sentinelAuth
+            virtual: true
+            type: enum
+            label: Sentinel authentication
+            widget: segmented
+            required: true
+            init: "self.sentinel.passwordSecretName == null || self.sentinel.passwordSecretName == '' ? 'none' : 'secret'"
+            options:
+              - value: none
+                label: No password
+                set: { sentinel.passwordSecretName: "" }
+              - value: secret
+                label: Password from a secret
+            rules:
+              - rule: "!has(self.sentinel.password)"
+                severity: warning
+                message: >-
+                  sentinel.password is not read by this chart (passwords moved to secrets in 2.1.0), and it
+                  stays in the release values in plain text. Remove it from the values and choose a password
+                  secret here instead.
+          - path: sentinel.passwordSecretName
+            type: ref
+            label: Sentinel password secret
+            required: true
+            when: ui.sentinelAuth == 'secret'
+            description: >-
+              An opaque secret (encoding `plain`) whose payload is Sentinel's own password, independent of the
+              Redis one. Every Sentinel uses it for `requirepass`.
+            help: >-
+              Create it with `printf '%s' "$(openssl rand -hex 24)" | cpln secret create-opaque --name
+              <release>-sentinel-password --encoding plain -f -`. After you change the secret's payload, run
+              `cpln workload force-redeployment <release>-sentinel --gvc <gvc>` and then the same for
+              `<release>-redis`; until then the old password keeps working. Redeploying Redis restarts every
+              instance at once, so Sentinel briefly starts a failover: plan it as a restart of the whole tier.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-sentinel-password'"
+                hint: "Generate the content with: openssl rand -hex 24"
+
+  - id: resources
+    title: Resources and storage
+    description: Compute for every Redis instance and Sentinel, and the Redis data volumes.
+    sections:
+      - title: Redis
+        docs: "#redis"
+        fields:
+          - path: redis.resources
+            type: resources
+            label: Redis resources
+            required: true
+            description: Per instance.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: redis.volumeset.initialCapacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            description: Per Redis instance; each instance has its own volume.
+            help: >-
+              Data survives an upgrade but not an uninstall: uninstalling the release deletes the volume
+              sets.
+            docs: "/reference/volumeset#capacity-and-billing"
+          - type: note
+            severity: warning
+            text: >-
+              Extra server arguments (`redis.extraArgs` in YAML) are added to the `redis-server` command
+              line as written and are not checked. A wrong value can stop Redis from
+              starting or drop the data-directory and replication flags that follow it.
+        rules:
+          - rule: >-
+              oldSelf == null || oldSelf.redis.volumeset.initialCapacity == null ||
+              self.redis.volumeset.initialCapacity >= oldSelf.redis.volumeset.initialCapacity
+            paths: [redis.volumeset.initialCapacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - id: autoscaling
+        title: Grow the volumes automatically
+        toggle: redis.volumeset.autoscaling.enabled
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: redis.volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: redis.volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: redis.volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.redis.volumeset.autoscaling.maxCapacity >= self.redis.volumeset.initialCapacity
+            paths: [redis.volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+      - title: Sentinel
+        docs: "#sentinel"
+        fields:
+          - path: sentinel.resources
+            type: resources
+            label: Sentinel resources
+            required: true
+            description: Per Sentinel; each location runs exactly one, with a fixed 10 GiB volume.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - type: note
+            severity: warning
+            text: >-
+              Extra Sentinel arguments (`sentinel.extraArgs` in YAML) are added to the `redis-sentinel`
+              command line as written and are not checked. A wrong value stops Sentinel from starting.
+
+  - id: network
+    title: Network
+    description: Who can connect inside Control Plane, and optional public TCP access per tier.
+    sections:
+      - id: internal
+        title: Internal access
+        docs: "#firewall"
+        fields:
+          - path: firewall.internalAllowType
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: Applies to both Redis and Sentinel. Firewall changes take 30 to 150 seconds to take effect.
+            options:
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: This release's own workloads, plus the workloads listed below.
+          - path: firewall.workloads
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: >-
+              Client workloads allowed to connect, for example from another GVC. This release's own workloads
+              never need listing.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.firewall.internalAllowType == 'same-gvc'
+            rules:
+              - when: self.firewall.internalAllowType == 'same-gvc' && context.gvc != null
+                rule: "!self.firewall.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+                severity: info
+                messageExpression: >-
+                  'Same GVC already allows every workload in this GVC: ' +
+                  self.firewall.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+                  ' can be removed from the list.'
+                message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+              # _helpers.tpl redis-ml.internalFirewall writes a non-empty list into inboundAllowWorkload under every type.
+              - when: self.firewall.internalAllowType == 'same-org'
+                rule: size(self.firewall.workloads) == 0
+                severity: info
+                message: Same org already lets every workload of the org connect, so these entries add nothing.
+              - when: self.firewall.internalAllowType == 'workload-list'
+                rule: size(self.firewall.workloads) > 0
+                severity: info
+                message: >-
+                  With no workloads listed, only this release's own workloads can connect. Add your client
+                  workloads.
+      - id: external
+        title: Internet access
+        docs: "/reference/workload/firewall"
+        fields:
+          - path: firewall.externalInboundAllowCIDR
+            type: list
+            serialize: csv
+            label: Public inbound CIDRs
+            description: >-
+              Applies to both Redis and Sentinel. While the list is empty, a tier with public access on allows
+              `0.0.0.0/0`.
+            item:
+              type: string
+              format: cidr
+              pattern: '^(?!.*:\s*$)'
+              patternMessage: >-
+                Add the prefix length, such as `2001:db8::/48` or `::/0`: the chart writes the CIDRs unquoted,
+                so an address that ends in a colon is read as a map.
+          - path: firewall.externalOutboundAllowCIDR
+            type: list
+            serialize: csv
+            label: Outbound CIDRs
+            description: Addresses Redis and Sentinel may connect to outside the platform.
+            item:
+              type: string
+              format: cidr
+              pattern: '^(?!.*:\s*$)'
+              patternMessage: >-
+                Add the prefix length, such as `2001:db8::/48` or `::/0`: the chart writes the CIDRs unquoted,
+                so an address that ends in a colon is read as a map.
+      - id: redis-public
+        title: Public TCP access to Redis
+        toggle: redis.publicAccess.enabled
+        description: >-
+          Publishes one TCP port per Redis instance, from 6380, through a domain the chart creates. It needs
+          a dedicated load balancer on the GVC, a paid feature you enable on the GVC before installing, and the
+          domain's DNS records in place before the deploy completes.
+        docs: "#public-access"
+        fields:
+          - path: redis.publicAccess.address
+            type: string
+            format: hostname
+            label: Redis hostname
+            required: true
+            example: true
+            pattern: '^(?![0-9]+\.e-?[0-9]+$)([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]([a-z0-9-]*[a-z0-9])?$'
+            patternMessage: Enter a full lowercase domain name, such as redis.example.com.
+            description: A subdomain you own. The chart creates a domain with this name.
+            help: >-
+              Add the TXT and CNAME records the first deploy asks for before that deploy completes: Control
+              Plane rejects a domain whose ownership is unproven. Turn off DNS proxying at your registrar, so
+              TCP traffic passes through directly.
+        rules:
+          - rule: self.redis.publicAccess.address != null && self.redis.publicAccess.address != ''
+            mirrors: redis-ml.validatePublicAccess
+            paths: [redis.publicAccess.address]
+            message: A Redis hostname is required while public access to Redis is on.
+          - rule: self.redis.passwordSecretName != null && self.redis.passwordSecretName != ''
+            severity: info
+            paths: [redis.publicAccess.enabled]
+            message: >-
+              Redis has no password, so anyone who can reach the public ports can read and write the data.
+              Choose a Redis password secret under Authentication.
+          - rule: >-
+              context.gvcSpec == null || (has(context.gvcSpec.loadBalancer) &&
+              has(context.gvcSpec.loadBalancer.dedicated) && context.gvcSpec.loadBalancer.dedicated)
+            paths: [redis.publicAccess.enabled]
+            message: >-
+              Public access needs a dedicated load balancer on the GVC, which this chart cannot enable. Enable
+              it in the GVC's load balancer settings first.
+          - rule: >-
+              oldSelf == null || oldSelf.redis.publicAccess.enabled != true ||
+              self.redis.publicAccess.address == oldSelf.redis.publicAccess.address
+            severity: info
+            paths: [redis.publicAccess.address]
+            message: >-
+              Changing the hostname replaces the domain: the chart deletes the domain of the old hostname and
+              creates one for the new hostname, whose DNS records must exist first. Clients of the old
+              hostname lose access.
+      - id: sentinel-public
+        title: Public TCP access to Sentinel
+        toggle: sentinel.publicAccess.enabled
+        description: >-
+          Publishes one TCP port per Sentinel, from 26380, through a domain the chart creates. It needs a
+          dedicated load balancer on the GVC, a paid feature you enable on the GVC before installing, and the
+          domain's DNS records in place before the deploy completes.
+        fields:
+          - path: sentinel.publicAccess.address
+            type: string
+            format: hostname
+            label: Sentinel hostname
+            required: true
+            example: true
+            pattern: '^(?![0-9]+\.e-?[0-9]+$)([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]([a-z0-9-]*[a-z0-9])?$'
+            patternMessage: Enter a full lowercase domain name, such as redis-sentinel.example.com.
+            description: A subdomain you own. The chart creates a domain with this name.
+            help: >-
+              Add the TXT and CNAME records the first deploy asks for before that deploy completes: Control
+              Plane rejects a domain whose ownership is unproven. Turn off DNS proxying at your registrar, so
+              TCP traffic passes through directly.
+        rules:
+          - rule: >-
+              context.gvcSpec == null || (has(context.gvcSpec.loadBalancer) &&
+              has(context.gvcSpec.loadBalancer.dedicated) && context.gvcSpec.loadBalancer.dedicated)
+            paths: [sentinel.publicAccess.enabled]
+            message: >-
+              Public access needs a dedicated load balancer on the GVC, which this chart cannot enable. Enable
+              it in the GVC's load balancer settings first.
+          - rule: self.sentinel.passwordSecretName != null && self.sentinel.passwordSecretName != ''
+            severity: info
+            paths: [sentinel.publicAccess.enabled]
+            message: >-
+              Sentinel has no password, so anyone who can reach the public ports can send it commands without
+              credentials. Choose a Sentinel password secret under Authentication.
+          - rule: >-
+              oldSelf == null || oldSelf.sentinel.publicAccess.enabled != true ||
+              self.sentinel.publicAccess.address == oldSelf.sentinel.publicAccess.address
+            severity: info
+            paths: [sentinel.publicAccess.address]
+            message: >-
+              Changing the hostname replaces the domain: the chart deletes the domain of the old hostname and
+              creates one for the new hostname, whose DNS records must exist first. Clients of the old
+              hostname lose access.
+    rules:
+      - when: self.redis.publicAccess.enabled && self.sentinel.publicAccess.enabled
+        rule: self.redis.publicAccess.address != self.sentinel.publicAccess.address
+        paths: [sentinel.publicAccess.address]
+        message: Redis and Sentinel need different hostnames; each tier creates its own domain.
+
+  - id: backup
+    title: Backups
+    description: Optional scheduled snapshots to an S3 or GCS bucket.
+    sections:
+      - id: backup
+        title: Scheduled backups
+        toggle: backup.enabled
+        description: >-
+          A cron job uploads a gzipped RDB snapshot to your bucket on a schedule, from the first listed
+          location only. Create the bucket, its cloud account and, for S3, a bucket-scoped IAM policy before
+          you install with backups on. Restoring a snapshot is a manual procedure that has not been verified
+          against this template, so rehearse it on a scratch install before you rely on it.
+        docs: "#backup"
+        fields:
+          - type: note
+            text: >-
+              Copying a downloaded snapshot into an instance's data directory restores nothing: with
+              `appendonly yes`, Redis loads its append-only files and ignores `dump.rdb`, with no error. The
+              Redis image ships neither `aws` nor `gsutil`, so download snapshots outside the container. See
+              [Restoring a backup](#restoring-a-backup).
+          - type: note
+            when: size(self.global.locations) > 0 && self.global.locations[0].name != ''
+            textExpression: "'The backup job runs in ' + self.global.locations[0].name + ', the first listed location.'"
+            text: The backup job runs in the first listed location.
+          - path: backup.provider
+            type: enum
+            label: Destination
+            widget: segmented
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+          - path: backup.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+            pattern: '^[0-9].*[0-9*][ \t]*$'
+            patternMessage: >-
+              Start the schedule with a number, such as `0 */6 * * *`, and add nothing before or after it: the
+              chart writes the schedule unquoted, so a leading `*` breaks the install.
+          - path: backup.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+          - path: backup.resources
+            type: resources
+            label: Backup job resources
+            required: true
+            advanced: true
+        rules:
+          - rule: self.backup.provider in ['aws', 'gcp']
+            mirrors: redis-ml.validateBackupConfig
+            paths: [backup.provider]
+            message: Backups need a destination, aws or gcp.
+      - title: AWS S3
+        when: self.backup.enabled && self.backup.provider == 'aws'
+        docs: "#aws-s3"
+        fields:
+          - path: backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^(?!(y|n|yes|no|on|off|true|false|null)$)(?![0-9.-]+$)(?![0-9.]+e-?[0-9]+$)(?!0[xob][0-9a-f.]*(p-?[0-9]+)?$)[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+            patternMessage: >-
+              Use 3 to 63 lowercase letters, digits, dots and hyphens, starting and ending with a letter or
+              digit. The chart writes the name unquoted, so it cannot be a number, a date or a word such as
+              true or null.
+          - path: backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^(aws-)?[a-z]{2}(-[a-z]+)+-\d$'
+          - path: backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) for the AWS account that holds the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            help: >-
+              Allow `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket`, `s3:GetObjectVersion`
+              and `s3:DeleteObjectVersion` on `arn:aws:s3:::<bucket>` and `arn:aws:s3:::<bucket>/*`. The Redis
+              identity, which the backup job also uses, is granted this policy and `cpln-connector` only.
+          - path: backup.aws.prefix
+            type: string
+            label: Folder prefix
+            pattern: '^(?!/)'
+            patternMessage: Leave out the leading /.
+      - title: Google Cloud Storage
+        when: self.backup.enabled && self.backup.provider == 'gcp'
+        docs: "#gcs"
+        fields:
+          - path: backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^(?!(y|n|yes|no|on|off|true|false|null)$)(?![0-9._-]+$)(?![0-9._]+e-?[0-9_]+$)(?!0_*[xob][0-9a-f._]*(p-?[0-9_]+)?$)(?!.*[a-z0-9_-]{64})[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
+            patternMessage: >-
+              Use 3 to 222 lowercase letters, digits, dots, hyphens and underscores, starting and ending with
+              a letter or digit, with at most 63 between dots. The chart writes the name unquoted, so it cannot
+              be a number, a date or a word such as true or null.
+          - path: backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the Storage Admin
+              (`roles/storage.admin`) role on the project. The chart also binds the Redis identity, which the
+              backup job uses, to `roles/storage.objectAdmin` on the bucket.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            pattern: '^(?!/)'
+            patternMessage: Leave out the leading /.
+
+
+rules:
+  - rule: context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '3.0.0') >= 0
+    message: >-
+      Do not upgrade a release older than 3.0.0 in place: 1.x and 2.x created their own GVCs, and this upgrade
+      deletes them with every workload, volume set and identity in them. Install 3.0.0 as a new release into a
+      GVC with at least two locations, copy the keyspace across, move your clients, then uninstall the old
+      release, which deletes the old GVCs and their volume sets.
+
+yamlOnly:
+  - path: redis.extraArgs
+    reason: >-
+      Extra redis-server arguments, added to the server's shell command line as written; only experts tune
+      them, and the defaults leave them empty.
+  - path: sentinel.extraArgs
+    reason: >-
+      Extra redis-sentinel arguments, added to the Sentinel's shell command line as written; only experts
+      tune them, and the defaults leave them empty.
+  - path: redis.serverCommand
+    reason: >-
+      Correct for both engines (the Valkey image ships a redis-server symlink); it only matters for exotic
+      images, and a wrong value crash-loops every instance.
+
+migrations:
+  # 2.1.0 and 2.2.0 kept the roster under global.gvc; 3.0.0 no longer creates a GVC.
+  - fromVersions: ">=2.1.0 <3.0.0"
+    from: global.gvc.locations
+    to: global.locations
+  - fromVersions: ">=2.1.0 <3.0.0"
+    from: global.gvc.name
+    note: 3.0.0 deploys into the GVC you install into and no longer creates one; there is nothing to name.
+  # 1.0.2 to 2.0.2 listed gvc.locations with a replicas count per location.
+  - fromVersions: ">=1.0.2 <2.1.0"
+    to: global.locations
+    valueExpr: "self.gvc.locations.map(l, {'name': l.name})"
+    note: The location names are carried; the Redis count is one value for every location now (Redis instances per location).
+  - fromVersions: ">=1.0.2 <2.1.0"
+    from: gvc.locations
+    note: The locations moved to global.locations, without a per-location replicas count; set Redis instances per location instead.
+  - fromVersions: ">=1.0.2 <2.1.0"
+    from: gvc.name
+    note: 3.0.0 deploys into the GVC you install into and no longer creates one; there is nothing to name.
+  # 1.0.0 and 1.0.1 listed location names as plain strings.
+  - fromVersions: "<1.0.2"
+    to: global.locations
+    valueExpr: "self.locations.map(l, {'name': l})"
+    note: The location names are carried into global.locations.
+  - fromVersions: "<1.0.2"
+    from: locations
+    note: The locations moved to global.locations under Locations.
+  - fromVersions: "<1.0.2"
+    from: redis.replicas
+    note: The Redis count is now set per location (Redis instances per location), and every listed location gets that many.
+  - fromVersions: "<2.0.0"
+    from: sentinel.quorum
+    note: The quorum is computed from the number of locations (one Sentinel per location, a majority must agree); there is nothing to set.

@@ -1,0 +1,128 @@
+# ─── Location ─────────────────────────────────────────────────────────────────
+# This chart deploys into the GVC you install into — it does NOT create one.
+# Airflow runs in exactly ONE location, and this names it. It MUST already be a
+# location of that GVC; the webserver reads the GVC at boot and refuses a fresh
+# install if it is not (see Important Notes in the README).
+# Extra locations in the GVC are fine: nothing Airflow-related runs in them.
+#
+# One location is not a simplification. A `shared` volumeset provisions ONE
+# VOLUME PER LOCATION, so the Airflow home — DAGs and task logs — written in one
+# location is invisible in another, and the metadata database and Celery broker
+# are each a single volume bound to a single replica.
+location: aws-us-east-1
+
+# ─── Postgres (Airflow metadata database) ─────────────────────────────────────
+# Bundled plumbing: it serves Airflow only, is unreachable from outside the GVC,
+# and nobody ever types this password into a client — so it stays a value.
+postgres:
+  image: postgres:18
+  resources:
+    minCpu: 250m
+    maxCpu: 500m
+    minMemory: 512Mi
+    maxMemory: 1024Mi
+  config:
+    username: username
+    password: change-me-airflow-db # set at FIRST install; see Migrating in the README
+    database: airflow
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+# ─── Redis (Celery broker) ────────────────────────────────────────────────────
+redis:
+  image: redis:7.4
+  resources:
+    cpu: 250m
+    memory: 512Mi
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+# ─── Apache Airflow ───────────────────────────────────────────────────────────
+airflow:
+  webserver:
+    image: apache/airflow:3.0.3
+    resources:
+      cpu: 2000m
+      memory: 3Gi
+  celeryWorker:
+    image: controlplanecorporation/celery:v1
+    replicas: 1 # fixed worker count; ignored when keda.enabled is true
+    resources:
+      cpu: 256m
+      memory: 512Mi
+  webPort: 8080 # port serving the Airflow UI and REST API
+
+  auth:
+    # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. If it does not
+    # exist at install time the deployment WEDGES silently and `cpln logs` returns
+    # nothing at all. A `dictionary` secret holding exactly three keys:
+    #   jwtSecret     — signs API access tokens
+    #   fernetKey     — encrypts the Connections and Variables your DAGs use
+    #                   (database passwords, cloud keys, API tokens). It CANNOT be
+    #                   rotated without making every stored one unreadable.
+    #   adminPassword — the Airflow UI login for `admin.username` below
+    # See Prerequisites in the README for the exact command.
+    secretName: my-airflow-auth
+    jwtExpirationTime: 86400 # API token lifetime in seconds (Airflow's own default)
+
+  admin:
+    username: admin # its password is `adminPassword` in the secret above
+
+  scheduler:
+    dagDirListInterval: 10 # how often to rescan the DAG folder (seconds)
+    minFileProcessInterval: 10 # minimum interval between processing a DAG file (seconds)
+
+  celery:
+    workerConcurrency: 1 # tasks each worker runs concurrently
+
+volumeset:
+  airflow:
+    capacity: 10 # shared Airflow home (DAGs + logs), GiB (minimum is 10)
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+# The Airflow UI can trigger arbitrary code and decrypt every stored Connection,
+# so it ships CLOSED to the internet. Reach it with `cpln port-forward`, or add
+# your own CIDRs here (e.g. - 203.0.113.0/24) to expose it. A firewall change
+# takes up to a couple of minutes to propagate.
+firewallConfig:
+  inboundAllowCIDR: []
+
+# Who may reach Airflow's workloads from inside the org. Every workload this
+# release creates is ALWAYS allowed, whatever is set here — the webserver and the
+# workers have to reach the metadata database, the broker and each other.
+internalAccess:
+  type: same-gvc # options: same-gvc, same-org, workload-list
+  workloads: [] # only with workload-list, e.g. - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── DAG delivery (git-sync) ──────────────────────────────────────────────────
+gitSync:
+  enabled: false
+  repo: "" # git repository URL (e.g. https://github.com/YOUR_ORG/dags)
+  branch: main
+  period: 60s # how often to sync
+  subPath: "" # optional subfolder within the repo containing DAGs
+  auth:
+    # OPTIONAL PREREQUISITE SECRET, private repos only. An `opaque` secret
+    # (encoding `plain`) whose payload is a personal access token, e.g.
+    # `my-airflow-git-token`. Empty = public repo, no credentials sent.
+    secretName: ""
+
+# ─── KEDA autoscaling (Celery workers) ────────────────────────────────────────
+# OFF by default, because KEDA is a GVC-LEVEL setting this chart can no longer
+# turn on for you: enabling it means editing the GVC you install into (see
+# Prerequisites in the README). Leave it off and workers run at a fixed
+# `airflow.celeryWorker.replicas`.
+#
+# Turning it on WITHOUT enabling KEDA on the GVC fails SILENTLY: the workload is
+# accepted, never autoscales, and simply sits at `minScale` forever — at
+# minScale 0 that is zero workers and every task queues with no error anywhere
+# (measured 2026-08-28). The webserver checks the GVC at boot and says so.
+keda:
+  enabled: false
+  minScale: 1 # minimum number of Celery workers; 0 = scale to zero when idle
+  maxScale: 3 # maximum number of Celery workers
+  scaleToZeroDelay: 300 # idle time before scaling to zero (seconds)
+  listLength: 3 # Redis queue length that triggers a scale-up
+  cooldownPeriod: 1 # cooldown between scaling events (seconds)
+  initialCooldownPeriod: 1 # cooldown after startup before scaling begins (seconds)
+  pollingInterval: 4 # how often KEDA queries Redis (seconds)

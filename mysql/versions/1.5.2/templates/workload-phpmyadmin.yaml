@@ -34,6 +34,7 @@ spec:
       minScale: 1
       scaleToZeroDelay: 300
       target: 95
+    capacityAI: true # what the API stores when it is left out; unchanged from 1.5.1
     timeoutSeconds: 5
   firewallConfig:
     external:

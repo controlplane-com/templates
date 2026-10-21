@@ -22,21 +22,43 @@ Tyk Policy Name
 {{- end }}
 
 {{/*
-Redis Auth Password Secret Name
+Redis / Sentinel auth: whether each is on, and the prerequisite secret + key it
+reads. The subchart reads the same values, so Tyk and the store always agree.
 */}}
-{{- define "tyk.redisAuthSecret.name" -}}
-{{- printf "%s-redis-auth-password" .Release.Name }}
+{{- define "tyk.redisAuthEnabled" -}}
+{{- if dig "auth" "fromSecret" "enabled" false .Values.redis.redis }}true{{ end -}}
 {{- end }}
 
-{{/*
-Sentinel Auth Password Secret Name
-*/}}
-{{- define "tyk.sentinelAuthSecret.name" -}}
-{{- printf "%s-sentinel-auth-password" .Release.Name }}
+{{- define "tyk.sentinelAuthEnabled" -}}
+{{- if dig "auth" "fromSecret" "enabled" false .Values.redis.sentinel }}true{{ end -}}
+{{- end }}
+
+{{- define "tyk.redisAuthRef" -}}
+{{- printf "cpln://secret/%s.%s" .Values.redis.redis.auth.fromSecret.name .Values.redis.redis.auth.fromSecret.passwordKey }}
+{{- end }}
+
+{{- define "tyk.sentinelAuthRef" -}}
+{{- printf "cpln://secret/%s.%s" .Values.redis.sentinel.auth.fromSecret.name .Values.redis.sentinel.auth.fromSecret.passwordKey }}
 {{- end }}
 
 
 {{/* Validation */}}
+
+{{- /*
+1.3.0 took both passwords as plaintext values and the redis subchart created
+{release}-redis-auth-password / {release}-sentinel-auth-password from them.
+Refuse the old keys so an upgrade carrying 1.3.0 values stops at render. The
+subchart's own defaults (enabled: false, value: your-password) are merged into
+.Values.redis, so only a value that differs from them counts.
+*/ -}}
+{{- define "tyk.validateRedisPassword" -}}
+{{- range $tier := list "redis" "sentinel" -}}
+{{- $pw := dig "auth" "password" dict (index $.Values.redis $tier) -}}
+{{- if or (dig "enabled" false $pw) (ne (toString (dig "value" "your-password" $pw)) "your-password") -}}
+{{- fail (printf "redis.%s.auth.password was removed in tyk 1.4.0: the Redis and Sentinel passwords are no longer values. Create two dictionary secrets, each with the key `password` (one for Redis, one for Sentinel), name them in redis.redis.auth.fromSecret.name and redis.sentinel.auth.fromSecret.name, and remove redis.redis.auth.password and redis.sentinel.auth.password. Upgrading from 1.3.0: the upgrade deletes the chart-created RELEASE-redis-auth-password and RELEASE-sentinel-auth-password secrets, so create the new secrets under NEW names holding your CURRENT passwords — see \"Upgrading from 1.3.0\" in the README." $tier) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
 
 {{- define "tyk.validate" -}}
 {{- if not .Values.adminSecretName -}}
@@ -57,11 +79,16 @@ Sentinel Auth Password Secret Name
 {{- if has (int .Values.listenPort) $reserved -}}
 {{- fail (printf "tyk: listenPort %v is reserved by Control Plane and the workload will be rejected at apply. Pick another port (default 8080)." .Values.listenPort) -}}
 {{- end -}}
-{{- if and .Values.redis.redis.auth.password.enabled (not .Values.redis.redis.auth.password.value) -}}
-{{- fail "tyk: redis.redis.auth.password.value must be set when redis.redis.auth.password.enabled is true" -}}
+{{- include "tyk.validateRedisPassword" . -}}
+{{- if eq (include "tyk.redisAuthEnabled" .) "true" -}}
+{{- if not (and .Values.redis.redis.auth.fromSecret.name .Values.redis.redis.auth.fromSecret.passwordKey) -}}
+{{- fail "tyk: redis.redis.auth.fromSecret.name and passwordKey are required when redis.redis.auth.fromSecret.enabled is true — the prerequisite dictionary secret (must exist BEFORE install) and the key holding the Redis password (default: password)" -}}
 {{- end -}}
-{{- if and .Values.redis.sentinel.auth.password.enabled (not .Values.redis.sentinel.auth.password.value) -}}
-{{- fail "tyk: redis.sentinel.auth.password.value must be set when redis.sentinel.auth.password.enabled is true" -}}
+{{- end -}}
+{{- if eq (include "tyk.sentinelAuthEnabled" .) "true" -}}
+{{- if not (and .Values.redis.sentinel.auth.fromSecret.name .Values.redis.sentinel.auth.fromSecret.passwordKey) -}}
+{{- fail "tyk: redis.sentinel.auth.fromSecret.name and passwordKey are required when redis.sentinel.auth.fromSecret.enabled is true — the prerequisite dictionary secret (must exist BEFORE install) and the key holding the Sentinel password (default: password)" -}}
+{{- end -}}
 {{- end -}}
 {{- end }}
 

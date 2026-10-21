@@ -3,7 +3,8 @@ image: tykio/tyk-gateway:v5.10.0
 listenPort: 8080 # REQUIRED - the port the gateway listens on
 
 # ─── Prerequisite secrets ─────────────────────────────────────────────────────
-# All three must EXIST BEFORE INSTALL. See README Prerequisites for the exact
+# All three, plus the two Redis/Sentinel secrets under redis: below, must EXIST
+# BEFORE INSTALL. See README Prerequisites for the exact
 # commands that create them.
 
 # The admin secret is the Gateway Control API key (X-Tyk-Authorization on /tyk/*),
@@ -41,9 +42,9 @@ internalAccess: # OPTIONAL - Sets the internal firewall scope
   workloads: [] # used with workload-list, e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
 # ─── Bundled Redis + Sentinel ─────────────────────────────────────────────────
-# Tyk's token, rate-limit and analytics store. It serves this gateway only and is
-# never reachable from outside the GVC, so the passwords are template plumbing —
-# but they are used AS-IS, so change them before installing.
+# Tyk's token, rate-limit and analytics store, reachable only inside the GVC.
+# Each password comes from its own prerequisite dictionary secret (key
+# `password`) that must EXIST BEFORE INSTALL. See README Prerequisites.
 redis:
   redis:
     resources:
@@ -51,9 +52,10 @@ redis:
       memory: 256Mi
     replicas: 2
     auth:
-      password:
+      fromSecret:
         enabled: true
-        value: change-me-tyk-redis
+        name: my-tyk-redis-credentials # REQUIRED - dictionary secret holding the Redis password
+        passwordKey: password # key inside that secret
     firewall:
       internal_inboundAllowType: same-gvc
     persistence:
@@ -64,9 +66,10 @@ redis:
       memory: 256Mi
     replicas: 3
     auth:
-      password:
+      fromSecret:
         enabled: true
-        value: change-me-tyk-sentinel
+        name: my-tyk-sentinel-credentials # REQUIRED - dictionary secret holding the Sentinel password
+        passwordKey: password # key inside that secret
     firewall:
       internal_inboundAllowType: same-gvc
     persistence:

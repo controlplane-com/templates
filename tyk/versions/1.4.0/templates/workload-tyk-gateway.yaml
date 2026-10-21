@@ -17,13 +17,14 @@ spec:
           value: 'false'
         - name: TYK_GW_STORAGE_MASTERNAME
           value: mymaster
-{{- if .Values.redis.redis.auth.password.enabled }}
+{{- if eq (include "tyk.redisAuthEnabled" .) "true" }}
+        # Same prerequisite secret + key the bundled Redis reads.
         - name: TYK_GW_STORAGE_PASSWORD
-          value: cpln://secret/{{ include "tyk.redisAuthSecret.name" . }}.password
+          value: {{ include "tyk.redisAuthRef" . }}
 {{- end }}
-{{- if .Values.redis.sentinel.auth.password.enabled }}
+{{- if eq (include "tyk.sentinelAuthEnabled" .) "true" }}
         - name: TYK_GW_STORAGE_SENTINELPASSWORD
-          value: cpln://secret/{{ include "tyk.sentinelAuthSecret.name" . }}.password
+          value: {{ include "tyk.sentinelAuthRef" . }}
 {{- end }}
         - name: TYK_GW_STORAGE_TYPE
           value: redis

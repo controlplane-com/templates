@@ -1,0 +1,402 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Tyk API Gateway
+
+# The gateway is stateless, but the bundled Redis and Sentinel are stateful workloads with no location
+# handling: every extra GVC location would run its own, separate store, so keys and rate limits would
+# differ by location.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: secrets
+    title: Secrets
+    description: The prerequisite secrets the gateway and its Redis read.
+    docs: "#prerequisites"
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          Every secret named here must exist **before** you install. If one is missing, the deployment waits
+          and `cpln logs` shows nothing at all.
+      - path: adminSecretName
+        type: ref
+        label: Admin API key secret
+        required: true
+        description: >-
+          An opaque secret (encoding plain) holding the key for the Gateway admin API (`/tyk/*`, sent as
+          `X-Tyk-Authorization`). Whoever holds it can create and revoke every API key.
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [opaque] }
+          mustExist: error
+          allowCreate: true
+          create:
+            encoding: plain
+            suggestName: "context.releaseName + '-tyk-admin'"
+            hint: "Generate the content with: openssl rand -hex 32"
+      - path: redis.redis.auth.fromSecret.enabled
+        type: boolean
+        label: Require a Redis password
+        description: >-
+          Off, the GVC firewall is the only boundary in front of Redis. On, Redis and the gateway read the
+          password from the secret below.
+      - path: redis.redis.auth.fromSecret.name
+        type: ref
+        label: Redis password secret
+        required: true
+        when: self.redis.redis.auth.fromSecret.enabled
+        description: A dictionary secret with the key `password`.
+        help: >-
+          Upgrading from 1.3.0, it must hold the password Redis runs with today, under a new name: see
+          "Upgrading from 1.3.0" in the README.
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeysFrom: "[self.redis.redis.auth.fromSecret.passwordKey]"
+          create:
+            suggestName: "context.releaseName + '-tyk-redis'"
+      - path: redis.sentinel.auth.fromSecret.enabled
+        type: boolean
+        label: Require a Sentinel password
+        description: >-
+          Off, the GVC firewall is the only boundary in front of Sentinel. On, Sentinel and the gateway read
+          the password from the secret below.
+      - path: redis.sentinel.auth.fromSecret.name
+        type: ref
+        label: Sentinel password secret
+        required: true
+        when: self.redis.sentinel.auth.fromSecret.enabled
+        description: A dictionary secret with the key `password`.
+        help: >-
+          Sentinel keeps the password it first started with on its volume, so on an upgrade from 1.3.0 this
+          secret must hold the Sentinel password in use today, under a new name.
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeysFrom: "[self.redis.sentinel.auth.fromSecret.passwordKey]"
+          create:
+            suggestName: "context.releaseName + '-tyk-sentinel'"
+    rules:
+      - rule: self.adminSecretName != ''
+        mirrors: tyk.validate
+        paths: [adminSecretName]
+        message: Name the admin API key secret; the chart does not render without it.
+      - when: self.redis.redis.auth.fromSecret.enabled
+        rule: self.redis.redis.auth.fromSecret.name != '' && self.redis.redis.auth.fromSecret.passwordKey != ''
+        mirrors: tyk.validate
+        paths: [redis.redis.auth.fromSecret.name]
+        message: Name the Redis password secret, or turn the Redis password off.
+      - when: self.redis.sentinel.auth.fromSecret.enabled
+        rule: self.redis.sentinel.auth.fromSecret.name != '' && self.redis.sentinel.auth.fromSecret.passwordKey != ''
+        mirrors: tyk.validate
+        paths: [redis.sentinel.auth.fromSecret.name]
+        message: Name the Sentinel password secret, or turn the Sentinel password off.
+      # Upgrading from 1.3.0, the upgrade deletes the chart-created <release>-redis-auth-password and
+      # <release>-sentinel-auth-password secrets, so the prerequisites must have different names.
+      - when: >-
+          self.redis.redis.auth.fromSecret.enabled && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '1.4.0') < 0
+        rule: self.redis.redis.auth.fromSecret.name != context.releaseName + '-redis-auth-password'
+        paths: [redis.redis.auth.fromSecret.name]
+        message: >-
+          The previous version created this secret itself, and this upgrade deletes it. Create a secret under a
+          NEW name holding your current Redis password, and name it here.
+      - when: >-
+          self.redis.sentinel.auth.fromSecret.enabled && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '1.4.0') < 0
+        rule: self.redis.sentinel.auth.fromSecret.name != context.releaseName + '-sentinel-auth-password'
+        paths: [redis.sentinel.auth.fromSecret.name]
+        message: >-
+          The previous version created this secret itself, and this upgrade deletes it. Create a secret under a
+          NEW name holding your current Sentinel password, and name it here.
+      - when: oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.4.0') < 0
+        rule: "false"
+        severity: info
+        paths: [redis.redis.auth.fromSecret.name]
+        message: >-
+          Put the passwords Redis and Sentinel run with today into the new secrets, not new ones: Sentinel keeps
+          its first password on its volume, so a new one locks the gateway out. Read them with
+          `cpln secret reveal` before upgrading, because the upgrade deletes the old secrets.
+
+  - id: gateway
+    title: Gateway
+    description: The gateway image and port, your APIs and policies, and its compute.
+    docs: "#configuration"
+    sections:
+      - title: APIs and policies
+        docs: "#api-definitions-and-policies"
+        fields:
+          - path: apiSecretName
+            type: ref
+            label: API definitions secret
+            description: >-
+              A dictionary secret with one Tyk API definition per `*.json` key. Leave empty and the gateway
+              serves the demo API built into the image instead of yours.
+            help: Read at boot. After editing the secret, force a redeployment of the gateway.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              create:
+                suggestName: "context.releaseName + '-tyk-apis'"
+          - path: policySecretName
+            type: ref
+            label: Policies secret
+            description: >-
+              An opaque secret (encoding plain) holding your Tyk policies as one JSON object. Leave empty to run
+              without policies.
+            help: Read at boot. After editing the secret, force a redeployment of the gateway.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-tyk-policies'"
+          - path: allowMasterKeys
+            type: boolean
+            label: Allow master keys
+            description: >-
+              On, a key created without an `access_rights` section can call every API on this gateway. Off
+              matches upstream Tyk.
+      - title: Server
+        docs: "#image-and-port"
+        fields:
+          - path: image
+            type: string
+            format: image
+            label: Tyk Gateway image
+            required: true
+          - path: listenPort
+            type: integer
+            label: Listen port
+            required: true
+            min: 1
+            max: 65535
+            description: Serves both your APIs and the `/tyk` admin API.
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per replica.
+            cpu: { min: 25m }
+            memory: { min: 64Mi }
+          - path: multiZone
+            type: boolean
+            label: Spread replicas across zones
+            description: Check that your location supports multiple zones.
+        rules:
+          - rule: >-
+              !([8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090, 41000].exists(p, p == self.listenPort))
+            mirrors: tyk.validate
+            paths: [listenPort]
+            message: Control Plane reserves this port. Pick another one, such as 8080.
+      - title: Autoscaling
+        docs: "#resources-and-autoscaling"
+        fields:
+          - path: autoscaling.minScale
+            type: integer
+            label: Minimum replicas
+            required: true
+            min: 0
+          - path: autoscaling.maxScale
+            type: integer
+            label: Maximum replicas
+            required: true
+            min: 1
+          - path: autoscaling.metric
+            type: enum
+            label: Scale on
+            required: true
+            options:
+              - { value: cpu, label: CPU }
+              - { value: memory, label: Memory }
+              - { value: concurrency, label: Concurrent requests }
+              - { value: rps, label: Requests per second }
+              - { value: latency, label: Latency }
+          - path: autoscaling.target
+            type: integer
+            label: Target
+            required: true
+            min: 1
+            description: The metric value per replica that triggers scaling (a percentage for CPU and memory).
+          - path: autoscaling.scaleToZeroDelay
+            type: integer
+            label: Scale-to-zero delay (seconds)
+            required: true
+            min: 0
+            advanced: true
+            description: Used only when the minimum is 0.
+        rules:
+          - rule: self.autoscaling.maxScale >= self.autoscaling.minScale
+            paths: [autoscaling.maxScale]
+            message: The maximum must be at least the minimum.
+
+  - id: access
+    title: Access
+    description: Who can reach the gateway, and with it the `/tyk` admin API.
+    docs: "#access"
+    fields:
+      - path: externalAccess
+        type: boolean
+        label: Serve on the public endpoint
+        description: >-
+          Publishes the gateway on its `*.cpln.app` endpoint, including the `/tyk` admin API on the same port,
+          with only the admin key in front of it.
+      - path: internalAccess.type
+        type: enum
+        label: Who can connect internally
+        widget: cards
+        required: true
+        description: Firewall changes take from 30 seconds to a few minutes to take effect.
+        options:
+          - { value: none, label: None, description: No workload can connect. }
+          - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+          - { value: same-org, label: Same org, description: Any workload in this org. }
+          - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+      - path: internalAccess.workloads
+        type: list
+        label: Allowed workloads
+        when: self.internalAccess.type == 'workload-list' || self.internalAccess.type == 'same-gvc'
+        widget: tags
+        description: Workload links such as `//gvc/GVC_NAME/workload/WORKLOAD_NAME`.
+        item:
+          type: ref
+          ref:
+            kind: workload
+            gvc: any
+            format: relativeLink
+            mustExist: warning
+    rules:
+      - when: self.internalAccess.type == 'workload-list'
+        rule: size(self.internalAccess.workloads) > 0
+        mirrors: tyk.validate
+        paths: [internalAccess.workloads]
+        message: List at least one workload, or nothing inside Control Plane can reach the gateway.
+      - rule: self.externalAccess || self.internalAccess.type != 'none'
+        mirrors: tyk.validate
+        paths: [internalAccess.type]
+        message: With public access off and no internal access, nothing could reach the gateway.
+
+  - id: redis
+    title: Redis and Sentinel
+    description: >-
+      The bundled store for keys, rate limits and quotas: Redis with replicas, and Sentinel for failover. The
+      gateway connects through Sentinel.
+    docs: "#redis-and-sentinel"
+    sections:
+      - title: Redis
+        fields:
+          - path: redis.redis.replicas
+            type: integer
+            label: Redis replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+            description: One primary, the rest replicas.
+          - path: redis.redis.persistence.enabled
+            type: boolean
+            label: Persist Redis data
+            description: Keeps keys, rate-limit counters and quotas on a volume across restarts.
+          - path: redis.redis.resources.cpu
+            type: quantity
+            quantity: cpu
+            label: Redis CPU limit
+            required: true
+            advanced: true
+          - path: redis.redis.resources.memory
+            type: quantity
+            quantity: memory
+            label: Redis memory limit
+            required: true
+            advanced: true
+          - path: redis.redis.firewall.internal_inboundAllowType
+            type: enum
+            label: Who can connect to Redis
+            required: true
+            advanced: true
+            options:
+              - { value: same-gvc, label: Same GVC }
+              - { value: same-org, label: Same org }
+      - title: Sentinel
+        fields:
+          - path: redis.sentinel.replicas
+            type: integer
+            label: Sentinel replicas
+            required: true
+            min: 1
+            suggestions: [3, 5]
+            description: Use an odd number so the sentinels can agree on a failover.
+          - path: redis.sentinel.persistence.enabled
+            type: boolean
+            label: Persist Sentinel state
+            description: Keeps the current primary and the known replicas across Sentinel restarts.
+          - path: redis.sentinel.resources.cpu
+            type: quantity
+            quantity: cpu
+            label: Sentinel CPU limit
+            required: true
+            advanced: true
+          - path: redis.sentinel.resources.memory
+            type: quantity
+            quantity: memory
+            label: Sentinel memory limit
+            required: true
+            advanced: true
+          - path: redis.sentinel.firewall.internal_inboundAllowType
+            type: enum
+            label: Who can connect to Sentinel
+            required: true
+            advanced: true
+            options:
+              - { value: same-gvc, label: Same GVC }
+              - { value: same-org, label: Same org }
+
+# Rules over removed keys: the chart refuses them whatever else is set.
+rules:
+  - rule: "!has(self.redis.redis.auth.password) && !has(self.redis.sentinel.auth.password)"
+    mirrors: tyk.validateRedisPassword
+    paths: [redis.redis.auth.fromSecret.enabled]
+    message: >-
+      redis.redis.auth.password and redis.sentinel.auth.password were removed in 1.4.0: each password is now a
+      prerequisite dictionary secret (key password) chosen under Secrets. Remove both from the values.
+
+yamlOnly:
+  - path: redis.redis.auth.fromSecret.passwordKey
+    reason: The key name inside the Redis password secret; `password` matches the documented secret.
+  - path: redis.sentinel.auth.fromSecret.passwordKey
+    reason: The key name inside the Sentinel password secret; `password` matches the documented secret.
+
+migrations:
+  - fromVersions: "<1.4.0"
+    from: redis.redis.auth.password.enabled
+    to: redis.redis.auth.fromSecret.enabled
+  - fromVersions: "<1.4.0"
+    from: redis.sentinel.auth.password.enabled
+    to: redis.sentinel.auth.fromSecret.enabled
+  - fromVersions: "<1.4.0"
+    from: redis.redis.auth.password.value
+    note: >-
+      The Redis password is now a prerequisite dictionary secret (key password). Create it under a NEW name
+      holding your CURRENT Redis password (read it with `cpln secret reveal RELEASE-redis-auth-password` before
+      upgrading; the upgrade deletes that secret), and choose it under Secrets.
+  - fromVersions: "<1.4.0"
+    from: redis.sentinel.auth.password.value
+    note: >-
+      The Sentinel password is now a prerequisite dictionary secret (key password). Create it under a NEW name
+      holding your CURRENT Sentinel password (read it with `cpln secret reveal RELEASE-sentinel-auth-password`
+      before upgrading; the upgrade deletes that secret), and choose it under Secrets.

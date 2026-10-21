@@ -12,11 +12,16 @@ targetKind: secret
 targetLinks:
   # The user-created admin-API secret — the gateway reveals it and nothing more.
   - //secret/{{ .Values.adminSecretName }}
-{{- if .Values.redis.redis.auth.password.enabled }}
-  - //secret/{{ include "tyk.redisAuthSecret.name" . }}
+{{- /* The Redis credentials prerequisite secret(s); one link when both tiers name the same secret. */}}
+{{- $redisSecrets := list }}
+{{- if eq (include "tyk.redisAuthEnabled" .) "true" }}
+{{- $redisSecrets = append $redisSecrets .Values.redis.redis.auth.fromSecret.name }}
 {{- end }}
-{{- if .Values.redis.sentinel.auth.password.enabled }}
-  - //secret/{{ include "tyk.sentinelAuthSecret.name" . }}
+{{- if eq (include "tyk.sentinelAuthEnabled" .) "true" }}
+{{- $redisSecrets = append $redisSecrets .Values.redis.sentinel.auth.fromSecret.name }}
+{{- end }}
+{{- range uniq $redisSecrets }}
+  - //secret/{{ . }}
 {{- end }}
 {{- if .Values.apiSecretName }}
   - //secret/{{ .Values.apiSecretName }}

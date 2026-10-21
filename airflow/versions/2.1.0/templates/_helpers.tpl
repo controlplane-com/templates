@@ -43,10 +43,13 @@ Redis Volume Set Name
 {{- end }}
 
 {{/*
-Airflow Secret Name
+Metadata database credentials secret -- a PREREQUISITE the user creates, named
+by postgres.config.credentialsSecretName (a dictionary: username, password,
+database). Until 2.1.0 the chart created `{release}-airflow-config` itself from
+plaintext values; that name is now refused (see airflow.validateDbCredentials).
 */}}
-{{- define "airflow.secret.name" -}}
-{{- printf "%s-airflow-config" .Release.Name }}
+{{- define "airflow.dbSecret.name" -}}
+{{- .Values.postgres.config.credentialsSecretName }}
 {{- end }}
 
 {{/*
@@ -229,6 +232,7 @@ error instead of the destructive-upgrade refusal.
 {{- include "airflow.validateInternalAccess" . -}}
 {{- include "airflow.validateKeda" . -}}
 {{- include "airflow.validateAuth" . -}}
+{{- include "airflow.validateDbCredentials" . -}}
 {{- include "airflow.validateGitSync" . -}}
 {{- end }}
 
@@ -340,6 +344,30 @@ connections or serve a login without it.
 {{- end -}}
 {{- if not .Values.airflow.admin.username -}}
   {{- fail "airflow.admin.username is required — it is the login paired with the `adminPassword` key in the auth secret." -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+The metadata database credentials became a prerequisite secret in 2.1.0.
+
+The plaintext keys are refused by name, so an upgrade carrying a 2.0.0 values
+file fails at render instead of silently ignoring the password it was given.
+
+The secret may not be named `{release}-airflow-config`: that is the secret 2.0.0
+created itself, and the 2.1.0 upgrade DELETES it (the chart no longer declares
+it). Pointing the new prerequisite at that name would leave every workload
+waiting on a secret that no longer exists, with no log output at all.
+*/}}
+{{- define "airflow.validateDbCredentials" -}}
+{{- $cfg := .Values.postgres.config | default dict -}}
+{{- if or (hasKey $cfg "username") (hasKey $cfg "password") (hasKey $cfg "database") -}}
+  {{- fail "airflow 2.1.0: postgres.config.username, postgres.config.password and postgres.config.database were REMOVED. The metadata database credentials are now a prerequisite `dictionary` secret with the keys `username`, `password` and `database`, named by postgres.config.credentialsSecretName. Create it (on an upgrade: with the values the database was initialized with, under a NEW name) and remove the old keys from your values. See `Upgrading from 2.0.0` in the README." -}}
+{{- end -}}
+{{- if not $cfg.credentialsSecretName -}}
+  {{- fail "airflow: postgres.config.credentialsSecretName is required — it names the `dictionary` secret holding the metadata database `username`, `password` and `database`. Create that secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- if eq $cfg.credentialsSecretName (printf "%s-airflow-config" .Release.Name) -}}
+  {{- fail (printf "airflow 2.1.0: postgres.config.credentialsSecretName may not be %q — that is the secret airflow 2.0.0 created itself, and upgrading to 2.1.0 deletes it. Create a secret under a different name holding the same username, password and database. See `Upgrading from 2.0.0` in the README." $cfg.credentialsSecretName) -}}
 {{- end -}}
 {{- end }}
 

@@ -12,8 +12,6 @@
 location: aws-us-east-1
 
 # ─── Postgres (Airflow metadata database) ─────────────────────────────────────
-# Bundled plumbing: it serves Airflow only, is unreachable from outside the GVC,
-# and nobody ever types this password into a client — so it stays a value.
 postgres:
   image: postgres:18
   resources:
@@ -22,9 +20,13 @@ postgres:
     minMemory: 512Mi
     maxMemory: 1024Mi
   config:
-    username: username
-    password: change-me-airflow-db # set at FIRST install; see Migrating in the README
-    database: airflow
+    # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. If it does not
+    # exist the deployment WEDGES silently and `cpln logs` returns nothing at all.
+    # A `dictionary` secret holding exactly three keys: username, password and
+    # database. Postgres reads them only when its data directory is first
+    # initialized. Upgrading from 2.0.0: give it a NEW name (not
+    # RELEASE-airflow-config) — see `Upgrading from 2.0.0` in the README.
+    credentialsSecretName: my-airflow-db-credentials
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)
 

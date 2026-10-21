@@ -2,12 +2,12 @@ apiVersion: v2
 name: airflow
 description: Apache Airflow with CeleryExecutor, Redis broker and Postgres metadata database
 type: application
-version: 2.0.0
+version: 2.1.0
 appVersion: "3.0.3"
 
 annotations:
   created: "2025-08-14"
-  lastModified: "2026-10-01"
+  lastModified: "2026-10-21"
   createsGvc: false
 
 dependencies:

@@ -17,9 +17,11 @@ spec:
         - name: AIRFLOW__API_AUTH__JWT_EXPIRATION_TIME
           value: "{{ .Values.airflow.auth.jwtExpirationTime }}"
         - name: POSTGRES_USERNAME
-          value: cpln://secret/{{ include "airflow.secret.name" . }}.username
+          value: cpln://secret/{{ include "airflow.dbSecret.name" . }}.username
         - name: POSTGRES_PASSWORD
-          value: cpln://secret/{{ include "airflow.secret.name" . }}.password
+          value: cpln://secret/{{ include "airflow.dbSecret.name" . }}.password
+        - name: POSTGRES_DATABASE
+          value: cpln://secret/{{ include "airflow.dbSecret.name" . }}.database
         - name: AIRFLOW__API_AUTH__JWT_SECRET
           value: cpln://secret/{{ .Values.airflow.auth.secretName }}.jwtSecret
         - name: AIRFLOW__CORE__FERNET_KEY
@@ -29,7 +31,7 @@ spec:
         - name: AIRFLOW__CELERY__BROKER_URL
           value: redis://{{ include "airflow.redis.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local
         - name: AIRFLOW__CELERY__RESULT_BACKEND
-          value: db+postgresql://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ include "airflow.postgres.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:5432/{{ .Values.postgres.config.database }}
+          value: db+postgresql://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ include "airflow.postgres.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:5432/$(POSTGRES_DATABASE)
         {{- /*
           Unconditional since 2.0.0. It used to be gated on keda.enabled, which
           was harmless while KEDA defaulted ON -- but KEDA now defaults OFF, and
@@ -49,7 +51,7 @@ spec:
         - name: AIRFLOW__CORE__EXECUTOR
           value: CeleryExecutor
         - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
-          value: postgresql+psycopg2://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ include "airflow.postgres.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:5432/{{ .Values.postgres.config.database }}
+          value: postgresql+psycopg2://$(POSTGRES_USERNAME):$(POSTGRES_PASSWORD)@{{ include "airflow.postgres.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:5432/$(POSTGRES_DATABASE)
         - name: AIRFLOW__LOGGING__REMOTE_LOGGING
           value: 'False'
       image: {{ .Values.airflow.celeryWorker.image }}

@@ -54,23 +54,28 @@ spec:
         httpGet:
           path: /health/ready
           port: {{ .Values.api.port }}
+          scheme: HTTP
         initialDelaySeconds: 5
         periodSeconds: 10
         timeoutSeconds: 5
         failureThreshold: 3
+        successThreshold: 1
 
       livenessProbe:
         httpGet:
           path: /health/live
           port: {{ .Values.api.port }}
+          scheme: HTTP
         initialDelaySeconds: 10
         periodSeconds: 15
         timeoutSeconds: 5
         failureThreshold: 3
+        successThreshold: 1
 
   defaultOptions:
     autoscaling:
       metric: concurrency
+      maxConcurrency: 0
       target: 100
       minScale: {{ .Values.api.replicas.min }}
       maxScale: {{ .Values.api.replicas.max }}

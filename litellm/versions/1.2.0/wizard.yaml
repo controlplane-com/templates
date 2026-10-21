@@ -174,7 +174,7 @@ steps:
           - when: self.litellm.replicas >= 2
             rule: self.redis.enabled
             severity: info
-            paths: [litellm.replicas, redis.enabled]
+            paths: [litellm.replicas]
             message: >-
               Without Redis every replica rate-limits on its own, so the effective limit is the replica count
               times the configured one.
@@ -232,6 +232,15 @@ steps:
     title: Redis
     description: Shares rate-limit counters, budgets and the response cache between proxy replicas.
     docs: "#bundled-redis"
+    # Step-level, so it runs while the toggle below is off; the copy on the proxy step only shows there.
+    rules:
+      - when: self.litellm.replicas >= 2
+        rule: self.redis.enabled
+        severity: info
+        paths: [redis.enabled]
+        message: >-
+          Without Redis every replica rate-limits on its own, so the effective limit is the replica count
+          times the configured one.
     sections:
       - id: redis
         title: Bundled Redis with Sentinel

@@ -46,10 +46,16 @@ spec:
           recoveryPolicy: retain
           uri: 'cpln://volumeset/{{ include "mysql.volume.name" . }}'
   defaultOptions:
+    # Declared in full: the API fills any field a partial block leaves out
+    # (maxConcurrency 0, scaleToZeroDelay 300, target 95), and the Console's
+    # Drift tab then shows the workload drifting on a default install.
     autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
       metric: disabled
       minScale: 1
-      maxScale: 1
+      scaleToZeroDelay: 300
+      target: 95
     capacityAI: false
     timeoutSeconds: {{ .Values.timeoutSeconds | int }}
   firewallConfig:

@@ -25,10 +25,16 @@ spec:
         - number: 80
           protocol: http
   defaultOptions:
+    # Declared in full: the API fills any field a partial block leaves out,
+    # and the Console's Drift tab then shows the workload drifting.
     autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
       metric: disabled
       minScale: 1
-      maxScale: 1
+      scaleToZeroDelay: 300
+      target: 95
+    timeoutSeconds: 5
   firewallConfig:
     external:
       {{- if .Values.phpMyAdmin.publicAccess.enabled }}

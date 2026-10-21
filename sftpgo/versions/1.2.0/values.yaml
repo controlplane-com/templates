@@ -1,4 +1,4 @@
-image: drakkan/sftpgo:v2.7.4-distroless-slim
+image: drakkan/sftpgo:v2.7.4-alpine-slim # needs /bin/sh: the chart runs a start script
 
 # ─── Mode ─────────────────────────────────────────────────────────────────────
 # scale_to_zero: SFTPGo suspends when idle; an always-on proxy holds inbound
@@ -60,16 +60,23 @@ storage:
     bucket: my-sftp-bucket # bucket must already exist
     region: us-east-1
     keyPrefix: "" # optional bucket-wide folder prefix, e.g. sftp/
-    accessKey: my-minio-username
-    accessSecret: my-minio-password
+    # REQUIRED with type minio — CREATE IT BEFORE YOU INSTALL: a dictionary secret
+    # with keys accessKey and secretKey (see README Prerequisites).
+    credentialsSecretName: my-sftpgo-minio-credentials
 
 # ─── SFTP Users ───────────────────────────────────────────────────────────────
+# REQUIRED while any user logs in with a password — CREATE IT BEFORE YOU INSTALL.
+# A dictionary secret with one key per such username; the value is its password.
+# If it does not exist the deployment wedges silently. See README Prerequisites.
+userPasswords:
+  secretName: my-sftpgo-user-passwords
+
 # Declarative user list, re-applied on every start. Each user is isolated to the
 # bucket folder {keyPrefix}{username}/ unless keyPrefix is overridden.
 users:
   - username: sftpuser
-    password: change-me-sftp-user # omit when publicKeys is set
     publicKeys: [] # SSH public keys, e.g. ["ssh-ed25519 AAAA... user@laptop"]
+    # passwordLogin: true # password from userPasswords; default true only when publicKeys is empty
     # keyPrefix: custom/folder/ # optional per-user bucket folder override
 
 volumeset:

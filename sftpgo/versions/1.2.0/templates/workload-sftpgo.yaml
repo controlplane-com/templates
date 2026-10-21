@@ -15,6 +15,12 @@ spec:
       minMemory: {{ .Values.resources.minMemory | quote }}
       cpu: {{ .Values.resources.maxCpu | quote }}
       memory: {{ .Values.resources.maxMemory | quote }}
+      # Builds the users file from the chart-owned template plus the password env
+      # vars below, then execs SFTPGo (see sftpgo.script.start).
+      command: /bin/sh
+      args:
+        - -c
+        - {{- include "sftpgo.inlineScript" (include "sftpgo.script.start" .) | nindent 10 }}
       env:
         - name: SFTPGO_DATA_PROVIDER__DRIVER
           value: bolt
@@ -29,10 +35,28 @@ spec:
           value: 'cpln://secret/{{ .Values.admin.secretName }}.username'
         - name: SFTPGO_DEFAULT_ADMIN_PASSWORD
           value: 'cpln://secret/{{ .Values.admin.secretName }}.password'
+        # The start script writes the users file here; SFTPGo deletes it once loaded.
         - name: SFTPGO_LOADDATA_FROM
-          value: /etc/sftpgo/users.json
+          value: /tmp/sftpgo-users.json
         - name: SFTPGO_LOADDATA_MODE
           value: '0'
+        - name: SFTPGO_LOADDATA_CLEAN
+          value: 'true'
+        {{- range $i, $u := .Values.users }}
+        {{- if include "sftpgo.userWantsPassword" $u }}
+        # Password of users[{{ $i }}] ({{ $u.username }}), from the userPasswords secret.
+        - name: USERPW_{{ $i }}
+          value: 'cpln://secret/{{ $.Values.userPasswords.secretName }}.{{ $u.username }}'
+        {{- end }}
+        {{- end }}
+        {{- if eq .Values.storage.type "minio" }}
+        # S3-compatible static keys from the prerequisite secret. The users file
+        # omits access_key/access_secret, so SFTPGo's AWS SDK reads these.
+        - name: AWS_ACCESS_KEY_ID
+          value: 'cpln://secret/{{ .Values.storage.minio.credentialsSecretName }}.accessKey'
+        - name: AWS_SECRET_ACCESS_KEY
+          value: 'cpln://secret/{{ .Values.storage.minio.credentialsSecretName }}.secretKey'
+        {{- end }}
         - name: SFTPGO_SFTPD__BINDINGS__0__PORT
           value: '2022'
         - name: SFTPGO_HTTPD__BINDINGS__0__PORT
@@ -79,7 +103,7 @@ spec:
     debug: false
     suspend: false
     timeoutSeconds: 30
-  # The distroless image runs as UID/GID 1000 with no root entrypoint to chown
+  # The image runs as UID/GID 1000 with no root entrypoint to chown
   # the freshly-provisioned (root-owned) volumeset mount. filesystemGroupId makes
   # /var/lib/sftpgo group-owned and group-writable by GID 1000 so SFTPGo can
   # create its bolt database and SSH host keys on first boot.

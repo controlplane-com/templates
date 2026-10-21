@@ -2,8 +2,8 @@ apiVersion: v2
 name: sftpgo
 description: SFTPGo SFTP server backed by S3-compatible object storage, with an optional scale-to-zero mode
 type: application
-version: 1.1.0
-appVersion: "2.7.4-distroless-slim"
+version: 1.2.0
+appVersion: "2.7.4-alpine-slim"
 
 dependencies:
   - name: cpln-common
@@ -12,5 +12,5 @@ dependencies:
 
 annotations:
   created: "2026-07-13"
-  lastModified: "2026-10-01"
+  lastModified: "2026-10-21"
   createsGvc: false

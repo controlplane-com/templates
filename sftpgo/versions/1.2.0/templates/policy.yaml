@@ -9,9 +9,18 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "sftpgo.identity.name" . }}
 targetKind: secret
 targetLinks:
-  # Prerequisite secret the user creates — granted by name, nothing broader.
-  - //secret/{{ .Values.admin.secretName }}
-  - //secret/{{ include "sftpgo.secretUsers.name" . }}
+  # Prerequisite secrets the user creates, plus the chart's users template —
+  # granted by name, nothing broader.
+  {{- $targets := list .Values.admin.secretName (include "sftpgo.secretUsers.name" .) }}
+  {{- if include "sftpgo.anyPasswordUser" . }}
+  {{- $targets = append $targets .Values.userPasswords.secretName }}
+  {{- end }}
+  {{- if eq .Values.storage.type "minio" }}
+  {{- $targets = append $targets .Values.storage.minio.credentialsSecretName }}
+  {{- end }}
+  {{- range uniq $targets }}
+  - //secret/{{ . }}
+  {{- end }}
 {{- if eq .Values.mode "scale_to_zero" }}
 ---
 kind: policy

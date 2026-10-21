@@ -1,0 +1,386 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Control Plane Task Runner
+
+# The API and Worker are serverless, but the bundled Redis and Sentinel are stateful workloads with no
+# location handling: every extra GVC location would run its own, separate Redis cluster.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: secrets
+    title: Secrets
+    description: The two prerequisite secrets the task runner and its Redis read.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          Both secrets must exist **before** you install. If one is missing, the deployment waits and
+          `cpln logs` shows nothing at all.
+      - type: note
+        severity: warning
+        when: context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.4.0') < 0
+        text: >-
+          This upgrade deletes the `task-runner-secrets` secret the previous version created. Before upgrading,
+          read it with `cpln secret reveal task-runner-secrets -o yaml` and put the SAME two passwords in a new
+          secret under another name: Redis and Sentinel keep the passwords they started with.
+      - path: redis.redis.auth.fromSecret.name
+        type: ref
+        label: Redis credentials secret
+        required: true
+        description: >-
+          A dictionary secret with the Redis password under the Redis password key and the Sentinel password
+          under the Sentinel password key (`password` and `sentinelPassword` by default).
+        help: >-
+          Redis and Sentinel read the passwords when their volumes are first initialized, and Sentinel keeps
+          them; changing them later means uninstalling and reinstalling.
+        docs: "#prerequisites"
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeysFrom: "[self.redis.redis.auth.fromSecret.passwordKey, self.redis.sentinel.auth.fromSecret.passwordKey]"
+          create:
+            suggestName: "context.releaseName + '-task-runner-redis-credentials'"
+            hint: "Generate each password with: openssl rand -hex 24"
+      - path: redis.sentinel.auth.fromSecret.name
+        type: ref
+        label: Sentinel credentials secret
+        required: true
+        description: Usually the same secret as the Redis credentials secret.
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeysFrom: "[self.redis.sentinel.auth.fromSecret.passwordKey]"
+          create:
+            suggestName: "context.releaseName + '-task-runner-redis-credentials'"
+      - path: redis.redis.auth.fromSecret.passwordKey
+        type: string
+        label: Redis password key
+        required: true
+        advanced: true
+        description: The key in the Redis credentials secret that holds the Redis password.
+      - path: redis.sentinel.auth.fromSecret.passwordKey
+        type: string
+        label: Sentinel password key
+        required: true
+        advanced: true
+        description: The key in the Sentinel credentials secret that holds the Sentinel password.
+      - path: api.admin.apiKeySecretName
+        type: ref
+        label: Admin API key secret
+        description: >-
+          An opaque secret whose payload is the key for `/admin/*` (the `X-Admin-Key` header). Leave it empty
+          only for an internal-only API: the admin endpoints are then unauthenticated.
+        help: >-
+          Create the payload with `printf`, not `echo`, or the trailing newline becomes part of the key. After
+          changing the key, force a redeployment of the API workload.
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [opaque] }
+          mustExist: error
+          allowCreate: true
+          create:
+            encoding: plain
+            suggestName: "context.releaseName + '-task-runner-admin-key'"
+            hint: "Generate the content with: openssl rand -hex 32"
+    rules:
+      - rule: >-
+          !has(self.createSecret) && !has(self.secretName) && !has(self.redis.redisPassword) &&
+          !has(self.redis.sentinelPassword)
+        mirrors: cpln-task-runner.validateRedisCredentials
+        paths: [redis.redis.auth.fromSecret.name]
+        message: >-
+          createSecret, secretName, redis.redisPassword and redis.sentinelPassword were removed in 1.4.0: the
+          passwords now come from the Redis credentials secret. Remove those keys from the values.
+      - rule: self.redis.redis.auth.fromSecret.name != '' && self.redis.sentinel.auth.fromSecret.name != ''
+        mirrors: cpln-task-runner.validateRedisCredentials
+        paths: [redis.redis.auth.fromSecret.name, redis.sentinel.auth.fromSecret.name]
+        message: Name the Redis and Sentinel credentials secrets; the chart does not render without them.
+      - rule: >-
+          self.redis.redis.auth.fromSecret.name != 'task-runner-secrets' &&
+          self.redis.sentinel.auth.fromSecret.name != 'task-runner-secrets'
+        mirrors: cpln-task-runner.validateRedisCredentials
+        paths: [redis.redis.auth.fromSecret.name, redis.sentinel.auth.fromSecret.name]
+        message: >-
+          task-runner-secrets is the secret version 1.3.0 and earlier created itself, and upgrading deletes it.
+          Create the credentials secret under a new name holding the same passwords.
+      - rule: >-
+          self.redis.redis.auth.fromSecret.passwordKey != '' && self.redis.sentinel.auth.fromSecret.passwordKey != ''
+        mirrors: cpln-task-runner.validateRedisCredentials
+        paths: [redis.redis.auth.fromSecret.passwordKey, redis.sentinel.auth.fromSecret.passwordKey]
+        message: Name the keys that hold the Redis and Sentinel passwords.
+      - rule: self.redis.redis.auth.fromSecret.enabled && self.redis.sentinel.auth.fromSecret.enabled
+        mirrors: cpln-task-runner.validateRedisCredentials
+        paths: [redis.redis.auth.fromSecret.name]
+        message: >-
+          Keep redis.redis.auth.fromSecret.enabled and redis.sentinel.auth.fromSecret.enabled true: the API and
+          Worker always authenticate to Redis and Sentinel.
+      - rule: "!has(self.api.env.adminApiKey) && !has(self.redis.admin)"
+        mirrors: cpln-task-runner.validateAdmin
+        paths: [api.admin.apiKeySecretName]
+        message: >-
+          api.env.adminApiKey and redis.admin were removed in 1.3.0: the admin key is an opaque secret chosen
+          here. Remove them from the values.
+      - when: self.api.public.enabled
+        rule: self.api.admin.apiKeySecretName != ''
+        mirrors: cpln-task-runner.validate
+        paths: [api.admin.apiKeySecretName]
+        message: >-
+          With public access on, an admin API key secret is required; without one, anyone could manage clients
+          and rate-limit tiers.
+
+  - id: api
+    title: API
+    description: The HTTP endpoint that accepts tasks and serves the admin endpoints.
+    sections:
+      - id: api
+        title: API workload
+        toggle: api.enabled
+        docs: "#api-workload"
+        fields:
+          - path: api.public.enabled
+            type: boolean
+            label: Serve on the public HTTPS endpoint
+            description: >-
+              `/v1/enqueue` has no authentication and registers unknown clients, so anyone who reaches it can
+              make the workers send arbitrary HTTP requests. Keep it off unless an authenticating proxy fronts it.
+          - path: api.replicas.min
+            type: integer
+            label: Minimum replicas
+            required: true
+            min: 0
+            suggestions: [1, 2]
+          - path: api.replicas.max
+            type: integer
+            label: Maximum replicas
+            required: true
+            min: 1
+            suggestions: [3, 5]
+          - path: api.resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per replica.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: api.env.logLevel
+            type: enum
+            label: Log level
+            widget: segmented
+            required: true
+            options:
+              - { value: debug, label: Debug }
+              - { value: info, label: Info }
+              - { value: warn, label: Warn }
+              - { value: error, label: Error }
+          - path: api.env.otelEndpoint
+            type: string
+            label: OpenTelemetry endpoint
+            description: "Leave empty to disable tracing. The built-in collector is `tracing.controlplane:4318`."
+            docs: "#opentelemetry"
+          - path: api.port
+            type: integer
+            label: Port
+            required: true
+            min: 1
+            max: 65535
+            advanced: true
+          - path: api.env.connectRetries
+            type: integer
+            label: Redis connection attempts
+            required: true
+            min: 1
+            advanced: true
+            description: At startup.
+          - path: api.env.retryIntervalSec
+            type: integer
+            label: Seconds between Redis connection attempts
+            required: true
+            min: 1
+            advanced: true
+        rules:
+          - rule: self.api.replicas.max >= self.api.replicas.min
+            paths: [api.replicas.max]
+            message: Set the maximum replicas at or above the minimum.
+
+  - id: worker
+    title: Worker
+    description: The workers that deliver each task to its target URL.
+    sections:
+      - id: worker
+        title: Worker workload
+        toggle: worker.enabled
+        docs: "#worker-workload"
+        fields:
+          - path: worker.replicas.min
+            type: integer
+            label: Minimum replicas
+            required: true
+            min: 0
+            suggestions: [1, 2]
+          - path: worker.replicas.max
+            type: integer
+            label: Maximum replicas
+            required: true
+            min: 1
+            suggestions: [5, 10]
+          - path: worker.resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per replica.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: worker.env.concurrency
+            type: integer
+            label: Concurrent tasks per replica
+            required: true
+            min: 1
+          - path: worker.env.taskTimeoutSec
+            type: integer
+            label: Task timeout
+            unit: seconds
+            required: true
+            min: 1
+          - path: worker.env.maxRetry
+            type: integer
+            label: Delivery attempts before a task is archived
+            required: true
+            min: 0
+          - path: worker.env.allowPrivateUrls
+            type: boolean
+            label: Allow tasks to target private URLs
+            description: >-
+              On, any enqueued task can reach anything the worker can route to, including internal addresses.
+          - path: worker.env.cbFailureThreshold
+            type: integer
+            label: Circuit breaker failure threshold
+            required: true
+            min: 1
+            advanced: true
+            description: Failures before the circuit opens.
+          - path: worker.env.cbTimeoutSec
+            type: integer
+            label: Circuit breaker timeout
+            unit: seconds
+            required: true
+            min: 1
+            advanced: true
+            description: How long the circuit stays open before retrying.
+          - path: worker.env.logLevel
+            type: enum
+            label: Log level
+            widget: segmented
+            required: true
+            advanced: true
+            options:
+              - { value: debug, label: Debug }
+              - { value: info, label: Info }
+              - { value: warn, label: Warn }
+              - { value: error, label: Error }
+          - path: worker.env.otelEndpoint
+            type: string
+            label: OpenTelemetry endpoint
+            advanced: true
+            description: Leave empty to disable tracing.
+          - path: worker.port
+            type: integer
+            label: Health check port
+            required: true
+            min: 1
+            max: 65535
+            advanced: true
+          - path: worker.env.connectRetries
+            type: integer
+            label: Redis connection attempts
+            required: true
+            min: 1
+            advanced: true
+            description: At startup.
+          - path: worker.env.retryIntervalSec
+            type: integer
+            label: Seconds between Redis connection attempts
+            required: true
+            min: 1
+            advanced: true
+        rules:
+          - rule: self.worker.replicas.max >= self.worker.replicas.min
+            paths: [worker.replicas.max]
+            message: Set the maximum replicas at or above the minimum.
+
+  - id: redis
+    title: Redis
+    description: The bundled Redis with Sentinel failover that stores the queues.
+    sections:
+      - title: Persistence
+        fields:
+          - path: redis.redis.persistence.enabled
+            type: boolean
+            label: Keep Redis data on a volume
+            description: Off, queued tasks are lost whenever a Redis node restarts.
+          - path: redis.sentinel.persistence.enabled
+            type: boolean
+            label: Keep Sentinel state on a volume
+            description: Lets Sentinel remember the current primary across restarts.
+        rules:
+          - rule: >-
+              oldSelf == null ||
+              (self.redis.redis.persistence.enabled == oldSelf.redis.redis.persistence.enabled &&
+              self.redis.sentinel.persistence.enabled == oldSelf.redis.sentinel.persistence.enabled)
+            severity: warning
+            paths: [redis.redis.persistence.enabled, redis.sentinel.persistence.enabled]
+            message: >-
+              Changing persistence on a running release replaces the Redis and Sentinel workloads' storage;
+              queued tasks can be lost. Keep the installed setting.
+
+yamlOnly:
+  - path: image
+    reason: One image serves both workloads and is pinned to the version this chart was built for.
+  - path: api.public.pathPrefix
+    reason: Has no routing effect in this chart version.
+  - path: redis.redis.auth.fromSecret.enabled
+    reason: Must stay true (the chart refuses false); the API and Worker always authenticate to Redis.
+  - path: redis.sentinel.auth.fromSecret.enabled
+    reason: Must stay true (the chart refuses false); the API and Worker always authenticate to Sentinel.
+
+migrations:
+  - fromVersions: "<1.4.0"
+    from: redis.redisPassword
+    note: >-
+      The Redis password is now in the Redis credentials secret (key password). Put the password the release
+      runs with today there (read it with `cpln secret reveal task-runner-secrets -o yaml`); a password never
+      changed is `change-me-cpln-task-runner-redis`.
+  - fromVersions: "<1.4.0"
+    from: redis.sentinelPassword
+    note: >-
+      The Sentinel password is now in the Redis credentials secret (key sentinelPassword). Put the password the
+      release runs with today there; a password never changed is `change-me-cpln-task-runner-sentinel`.
+  - fromVersions: "<1.4.0"
+    from: createSecret
+    note: >-
+      The chart no longer creates the Redis secret. If it did (createSecret true, the default), this upgrade
+      deletes task-runner-secrets: create the Redis credentials secret under a new name and choose it under
+      Secrets. A secret of your own (createSecret false) is kept.
+  - fromVersions: "<1.4.0"
+    from: secretName
+    note: The Redis credentials secret is now chosen under Secrets; it cannot be task-runner-secrets.
+  # A release that brought its own secret (createSecret: false) keeps it, with its key names: the passwordKey
+  # defaults changed (redis-password → password, redis-sentinel-password → sentinelPassword), and a rename
+  # alone would hand such a release the new names its secret does not have.
+  - fromVersions: "<1.4.0"
+    to: redis.redis.auth.fromSecret.passwordKey
+    valueExpr: "self.createSecret ? 'password' : self.redis.redis.auth.fromSecret.passwordKey"
+    note: Your own Redis secret is kept with its key names.
+  - fromVersions: "<1.4.0"
+    to: redis.sentinel.auth.fromSecret.passwordKey
+    valueExpr: "self.createSecret ? 'sentinelPassword' : self.redis.sentinel.auth.fromSecret.passwordKey"
+    note: Your own Sentinel secret is kept with its key names.

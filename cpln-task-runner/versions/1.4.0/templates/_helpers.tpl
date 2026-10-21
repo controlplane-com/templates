@@ -36,13 +36,72 @@ Task Runner Policy Name
 {{- end }}
 
 
+{{/*
+Redis / Sentinel credentials: one user-created prerequisite dictionary secret
+(the redis subchart reads the same names through redis.*.auth.fromSecret).
+*/}}
+{{- define "task-runner.redis.secret.name" -}}
+{{- .Values.redis.redis.auth.fromSecret.name -}}
+{{- end }}
+
+{{- define "task-runner.redis.secret.key" -}}
+{{- .Values.redis.redis.auth.fromSecret.passwordKey -}}
+{{- end }}
+
+{{- define "task-runner.sentinel.secret.name" -}}
+{{- .Values.redis.sentinel.auth.fromSecret.name -}}
+{{- end }}
+
+{{- define "task-runner.sentinel.secret.key" -}}
+{{- .Values.redis.sentinel.auth.fromSecret.passwordKey -}}
+{{- end }}
+
+
 {{/* Validation */}}
 
 {{/*
-Top-level validation — included by identity.yaml, which always renders.
+Top-level validation — included by templates/validate/redis/auth.yaml, which
+always renders and renders before the redis subchart.
 */}}
 {{- define "cpln-task-runner.validate" -}}
 {{- include "cpln-task-runner.validateAdmin" . -}}
+{{- include "cpln-task-runner.validateRedisCredentials" . -}}
+{{- end }}
+
+{{/*
+Validate the Redis / Sentinel credentials. Until 1.3.0 the chart created a
+secret (createSecret / secretName, default `task-runner-secrets`) from the plain
+values redis.redisPassword and redis.sentinelPassword. As of 1.4.0 no credential
+is a Helm value: both passwords live in a user-created prerequisite dictionary
+secret named by redis.redis.auth.fromSecret.name / redis.sentinel.auth.fromSecret.name.
+
+The old chart-created name is refused: an upgrade from 1.3.0 deletes the secret
+the release created, so a new secret under that same name would be deleted by
+the very upgrade that starts reading it.
+*/}}
+{{- define "cpln-task-runner.validateRedisCredentials" -}}
+{{- $removed := list -}}
+{{- if hasKey .Values "createSecret" -}}{{- $removed = append $removed "createSecret" -}}{{- end -}}
+{{- if hasKey .Values "secretName" -}}{{- $removed = append $removed "secretName" -}}{{- end -}}
+{{- if hasKey .Values.redis "redisPassword" -}}{{- $removed = append $removed "redis.redisPassword" -}}{{- end -}}
+{{- if hasKey .Values.redis "sentinelPassword" -}}{{- $removed = append $removed "redis.sentinelPassword" -}}{{- end -}}
+{{- if $removed -}}
+  {{- fail (printf "Removed in cpln-task-runner 1.4.0: %s. The Redis and Sentinel passwords are no longer values, and the chart no longer creates a secret for them. Create a dictionary secret with the keys `password` and `sentinelPassword` holding the passwords your release runs with TODAY, set redis.redis.auth.fromSecret.name and redis.sentinel.auth.fromSecret.name to its name, and remove %s from the values. See \"Upgrading from 1.3.0\" in the README." (join ", " $removed) (join ", " $removed)) -}}
+{{- end -}}
+{{- if not (and .Values.redis.redis.auth.fromSecret.enabled .Values.redis.sentinel.auth.fromSecret.enabled) -}}
+  {{- fail "redis.redis.auth.fromSecret.enabled and redis.sentinel.auth.fromSecret.enabled must both stay true: the API and Worker always authenticate to Redis and Sentinel with the passwords from the prerequisite credentials secret." -}}
+{{- end -}}
+{{- range $name := list (include "task-runner.redis.secret.name" .) (include "task-runner.sentinel.secret.name" .) -}}
+  {{- if not $name -}}
+    {{- fail "redis.redis.auth.fromSecret.name and redis.sentinel.auth.fromSecret.name are required: the name of a prerequisite dictionary secret holding the Redis password (key `password`) and the Sentinel password (key `sentinelPassword`). Create it BEFORE you install; see Prerequisites in the README." -}}
+  {{- end -}}
+  {{- if eq $name "task-runner-secrets" -}}
+    {{- fail "The Redis credentials secret cannot be named `task-runner-secrets`: that is the secret cpln-task-runner 1.3.0 and earlier created itself, and upgrading deletes it. Create the prerequisite dictionary secret under a NEW name (e.g. my-cpln-task-runner-redis-credentials) holding the same passwords, and set redis.redis.auth.fromSecret.name and redis.sentinel.auth.fromSecret.name to it." -}}
+  {{- end -}}
+{{- end -}}
+{{- if not (and (include "task-runner.redis.secret.key" .) (include "task-runner.sentinel.secret.key" .)) -}}
+  {{- fail "redis.redis.auth.fromSecret.passwordKey and redis.sentinel.auth.fromSecret.passwordKey must not be empty." -}}
+{{- end -}}
 {{- end }}
 
 {{/*

@@ -87,34 +87,27 @@ worker:
     # OpenTelemetry endpoint (leave empty to disable tracing)
     otelEndpoint: ""
 
-# Creates a secret holding the bundled Redis + Sentinel passwords.
-# Set to false to bring your own secret; see redis.*.auth.fromSecret below.
-createSecret: true
-# Must match names below. Disregard if providing your own secret
-secretName: task-runner-secrets
-
-# Redis configuration
+# ─── Bundled Redis + Sentinel ───────────────────────────────────────────────
+# The Redis and Sentinel passwords come from a REQUIRED prerequisite `dictionary`
+# secret with the keys `password` (Redis) and `sentinelPassword` (Sentinel). The
+# Redis subchart, the API and the Worker all read it.
+#
+# THE SECRET MUST EXIST BEFORE YOU INSTALL — otherwise the deployment wedges
+# silently and `cpln logs` returns nothing at all. See Prerequisites in the README.
 redis:
-  # Passwords for the BUNDLED Redis and Sentinel, used only by the API and Worker
-  # containers — nobody types them. Used as written when createSecret is true, so
-  # change them: an untouched install runs on a password published in this repo.
-  redisPassword: change-me-cpln-task-runner-redis
-  sentinelPassword: change-me-cpln-task-runner-sentinel
-  # If createSecret is true, do not change.
-  # If providing a secret, adjust the values below to match its name and password keys.
   redis:
     auth:
       fromSecret:
-        enabled: true
-        name: task-runner-secrets
-        passwordKey: redis-password
+        enabled: true          # must stay true
+        name: my-cpln-task-runner-redis-credentials   # prerequisite dictionary secret
+        passwordKey: password  # key holding the Redis password
     persistence:
       enabled: true
   sentinel:
     auth:
       fromSecret:
-        enabled: true
-        name: task-runner-secrets
-        passwordKey: redis-sentinel-password
+        enabled: true          # must stay true
+        name: my-cpln-task-runner-redis-credentials   # usually the same secret as above
+        passwordKey: sentinelPassword   # key holding the Sentinel password
     persistence:
       enabled: true

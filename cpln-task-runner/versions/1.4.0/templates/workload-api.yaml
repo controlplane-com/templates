@@ -33,17 +33,10 @@ spec:
         - name: REDIS_RETRY_INTERVAL_SEC
           value: {{ .Values.api.env.retryIntervalSec | quote }}
         # Secrets
-        {{- if .Values.createSecret }}
         - name: REDIS_SENTINEL_PASSWORD
-          value: "cpln://secret/{{ .Values.secretName }}.redis-sentinel-password"
+          value: "cpln://secret/{{ include "task-runner.sentinel.secret.name" . }}.{{ include "task-runner.sentinel.secret.key" . }}"
         - name: REDIS_PASSWORD
-          value: "cpln://secret/{{ .Values.secretName }}.redis-password"
-        {{- else }}
-        - name: REDIS_SENTINEL_PASSWORD
-          value: "cpln://secret/{{ .Values.redis.sentinel.auth.fromSecret.name }}.{{ .Values.redis.sentinel.auth.fromSecret.passwordKey }}"
-        - name: REDIS_PASSWORD
-          value: "cpln://secret/{{ .Values.redis.redis.auth.fromSecret.name }}.{{ .Values.redis.redis.auth.fromSecret.passwordKey }}"
-        {{- end }}
+          value: "cpln://secret/{{ include "task-runner.redis.secret.name" . }}.{{ include "task-runner.redis.secret.key" . }}"
         {{- /* The admin key is a user-created opaque secret; its whole payload is
                the key. An empty name means admin auth is off, which the validation
                only permits while public access is disabled. */}}

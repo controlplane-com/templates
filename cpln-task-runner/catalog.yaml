@@ -63,8 +63,7 @@ prerequisites:
     description: Admin API key for /admin/* (X-Admin-Key header); the payload is the key, created with printf, not echo. A missing secret leaves the API waiting with no logs.
   - kind: secret
     secretType: dictionary
-    keys: [redis-password, redis-sentinel-password]
+    keys: [password, sentinelPassword]
     valuesPath: [redis.redis.auth.fromSecret.name, redis.sentinel.auth.fromSecret.name]
-    required: false
-    when: createSecret false
-    description: Your own Redis and Sentinel passwords instead of the chart-created secret; the key names follow the passwordKey values.
+    required: true
+    description: Passwords for the bundled Redis (key password) and Sentinel (key sentinelPassword); both values name the same secret by default. A missing secret leaves the deployment waiting with no logs.

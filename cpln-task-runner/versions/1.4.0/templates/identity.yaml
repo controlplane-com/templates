@@ -1,4 +1,3 @@
-{{- include "cpln-task-runner.validate" . }}
 kind: identity
 name: {{ include "task-runner.identity.name" . }}
 gvc: {{ .Values.global.cpln.gvc }}

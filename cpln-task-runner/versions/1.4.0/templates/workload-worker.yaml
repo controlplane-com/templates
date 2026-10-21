@@ -27,17 +27,10 @@ spec:
         - name: REDIS_SENTINEL_ADDR
           value: {{ include "task-runner-sentinel.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:26379
         # Secrets
-        {{- if .Values.createSecret }}
         - name: REDIS_PASSWORD
-          value: "cpln://secret/{{ .Values.secretName }}.redis-password"
+          value: "cpln://secret/{{ include "task-runner.redis.secret.name" . }}.{{ include "task-runner.redis.secret.key" . }}"
         - name: REDIS_SENTINEL_PASSWORD
-          value: "cpln://secret/{{ .Values.secretName }}.redis-sentinel-password"
-        {{- else }}
-        - name: REDIS_PASSWORD
-          value: "cpln://secret/{{ .Values.redis.redis.auth.fromSecret.name }}.{{ .Values.redis.redis.auth.fromSecret.passwordKey }}"
-        - name: REDIS_SENTINEL_PASSWORD
-          value: "cpln://secret/{{ .Values.redis.sentinel.auth.fromSecret.name }}.{{ .Values.redis.sentinel.auth.fromSecret.passwordKey }}"
-        {{- end }}
+          value: "cpln://secret/{{ include "task-runner.sentinel.secret.name" . }}.{{ include "task-runner.sentinel.secret.key" . }}"
         - name: LOG_LEVEL
           value: {{ .Values.worker.env.logLevel | quote }}
         - name: WORKER_CONCURRENCY

@@ -1,0 +1,22 @@
+{{- /*
+  `reveal` on exactly the secrets the WordPress container reads — and no others.
+  The bundled database's ROOT password is deliberately absent: the application
+  connects as the unprivileged user, and the MariaDB subchart's own identity
+  already covers root.
+*/}}
+kind: policy
+name: {{ include "wordpress.policy.name" . }}
+description: WordPress secret access
+tags: {{- include "wordpress.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "wordpress.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "wordpress.secret.start.name" . }}
+  - //secret/{{ include "wordpress.secret.install.name" . }}
+  - //secret/{{ include "wordpress.secret.phpini.name" . }}
+  - //secret/{{ include "wordpress.secret.db.name" . }}
+  - //secret/{{ .Values.admin.secretName }}

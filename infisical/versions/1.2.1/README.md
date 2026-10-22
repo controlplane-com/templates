@@ -128,7 +128,7 @@ redis:
         enabled: false         # true = require AUTH, with the password from the secret below (wired into Infisical as REDIS_PASSWORD)
         name: ""               # dictionary secret with the key `password`, e.g. my-infisical-redis — must exist BEFORE install
   sentinel:
-    replicas: 3
+    replicas: 3                # no `auth:` block — Sentinel auth (incl. a plaintext `auth.password`) is refused at render
 ```
 
 ## Connecting

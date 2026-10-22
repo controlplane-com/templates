@@ -102,9 +102,24 @@ true
 {{- if not (include "infisical.redis.secret.name" .) -}}
 {{- fail "infisical: redis.redis.auth.fromSecret.name is required when redis.redis.auth.fromSecret.enabled is true — the name of your pre-created `dictionary` secret holding the key `password` (wired into Infisical as REDIS_PASSWORD). Create the secret BEFORE installing; see Prerequisites in the README." -}}
 {{- end -}}
-{{- if or (dig "auth" "password" "enabled" false .Values.redis.sentinel) (dig "auth" "fromSecret" "enabled" false .Values.redis.sentinel) -}}
-{{- fail "infisical: redis.sentinel.auth must stay disabled — Infisical authenticates only the data nodes (REDIS_PASSWORD), not the sentinels; the same-gvc firewall is the boundary" -}}
 {{- end -}}
+{{- include "infisical.validateSentinelAuth" . -}}
+{{- end }}
+
+{{/*
+Sentinel auth is refused whether or not Redis auth is on. Infisical sends no
+Sentinel password, so a Sentinel password would only lock it out — and the
+plaintext form (redis.sentinel.auth.password.enabled + .value) would make the
+redis subchart write the value into {release}-sentinel-auth-password straight
+from the Helm release (through 1.2.0 this check ran only with Redis auth on).
+The subchart's own default for password.value is "your-password" (merged into
+these values), so only another value counts as "set". Also included from templates/validate/redis/auth.yaml, which Helm renders
+before the subchart.
+*/}}
+{{- define "infisical.validateSentinelAuth" -}}
+{{- $s := dig "auth" dict (.Values.redis.sentinel | default dict) -}}
+{{- if or (dig "password" "enabled" false $s) (not (has (toString (dig "password" "value" "your-password" $s)) (list "" "your-password"))) (dig "fromSecret" "enabled" false $s) -}}
+{{- fail "infisical: redis.sentinel.auth must stay disabled — Infisical authenticates only the Redis nodes (REDIS_PASSWORD), not the Sentinels, and a plaintext redis.sentinel.auth.password would land in the Helm release. Remove redis.sentinel.auth from your values; the same-gvc firewall is the Sentinels' boundary. To require a Redis password, use redis.redis.auth.fromSecret (see Prerequisites in the README)." -}}
 {{- end -}}
 {{- end }}
 

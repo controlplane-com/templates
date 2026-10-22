@@ -7,3 +7,4 @@ is combined with fromSecret.enabled. At this depth the parent's message, which
 names the replacement and the upgrade procedure, is the one users see.
 */ -}}
 {{- include "infisical.validateRedisSecret" . }}
+{{- include "infisical.validateSentinelAuth" . }}

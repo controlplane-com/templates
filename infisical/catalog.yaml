@@ -67,11 +67,24 @@ prerequisites:
     description: Root-of-trust keys, write-once (rotating ENCRYPTION_KEY corrupts stored secrets). Create before installing; when missing the workload waits with no logs.
   - kind: secret
     secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: postgres.config.credentialsSecretName
+    required: true
+    description: Credentials of the bundled PostgreSQL; it initializes from them and Infisical connects with them. Create before installing, with a URL-safe password; when missing the deployment waits with no logs.
+  - kind: secret
+    secretType: dictionary
     keys: [SMTP_USERNAME, SMTP_PASSWORD]
     valuesPath: smtp.auth.secretName
     required: false
     when: smtp.enabled with an authenticated SMTP server
     description: SMTP login for sending invites, verification and password reset email. Leave smtp.auth.secretName empty for an unauthenticated relay.
+  - kind: secret
+    secretType: dictionary
+    keys: [password]
+    valuesPath: redis.redis.auth.fromSecret.name
+    required: false
+    when: redis.redis.auth.fromSecret.enabled (Redis auth; off by default)
+    description: Password that the bundled Redis requires and that Sentinel and Infisical connect with. Create before turning auth on; when missing the Redis, Sentinel and Infisical workloads wait with no logs.
   - kind: bucket
     required: false
     when: postgres.backup.enabled

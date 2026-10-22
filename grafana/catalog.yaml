@@ -66,6 +66,12 @@ related:
 
 prerequisites:
   - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+    required: true
+    description: Credentials the bundled PostgreSQL initializes with and Grafana connects with; set the key of the database mode in use. When it is missing the deployment waits with no logs.
+  - kind: secret
     secretType: opaque
     valuesPath: admin.passwordSecretName
     required: true

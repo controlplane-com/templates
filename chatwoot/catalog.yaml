@@ -75,6 +75,18 @@ prerequisites:
     valuesPath: secrets.name
     required: true
     description: Chatwoot's write-once root keys. Create it before installing; when it is missing the deployment waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+    required: true
+    description: Credentials the bundled PostgreSQL initializes with and Chatwoot connects with; set the key of the database mode in use. When it is missing the deployment waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [password]
+    valuesPath: redis.credentialsSecretName
+    required: true
+    description: Password of the bundled Redis (URL-safe value), read by Redis and Chatwoot at start. When it is missing the deployment waits with no logs.
   - kind: bucket
     valuesPath: [storage.s3.bucket, storage.s3Compatible.bucket]
     required: false

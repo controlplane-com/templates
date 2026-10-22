@@ -10,6 +10,9 @@ bindings:
 targetKind: secret
 targetLinks:
   - //secret/{{ include "nats.secret.name" . }}
+  {{- if .Values.auth.credentialsSecretName }}
+  - //secret/{{ .Values.auth.credentialsSecretName }}
+  {{- end }}
   {{- if and .Values.nats_extra_config (ne (.Values.nats_extra_config | trim) "") }}
   - //secret/{{ include "nats.extraData.name" . }}
   {{- end }}

@@ -2,12 +2,12 @@ apiVersion: v2
 name: nats
 description: High-performance messaging with clustering, JetStream and cross-region super clusters
 type: application
-version: 3.0.0
+version: 3.1.0
 appVersion: "2.11.6-alpine"
 
 annotations:
   created: "2025-07-04"
-  lastModified: "2026-08-28"
+  lastModified: "2026-10-22"
   createsGvc: false
 
 dependencies:

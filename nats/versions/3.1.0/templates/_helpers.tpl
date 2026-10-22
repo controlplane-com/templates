@@ -241,6 +241,25 @@ that cannot work should be refused instead.
 {{- end -}}
 
 {{/*
+Authentication.
+
+`auth.credentialsSecretName` makes the chart generate the `authorization` block
+(and the cluster and gateway ones). `nats_extra_config` is appended after the
+generated config, so an `authorization` block there would silently replace the
+chart's credentials -- and an `accounts` block would move users into accounts
+the chart knows nothing about. Refuse both rather than let either win quietly.
+*/}}
+{{- define "nats.validateAuth" -}}
+{{- $name := .Values.auth.credentialsSecretName | default "" -}}
+{{- if not (kindIs "string" $name) -}}
+{{- fail "nats: auth.credentialsSecretName must be the NAME of a dictionary secret (keys `username` and `password`), or empty for no authentication." -}}
+{{- end -}}
+{{- if and $name (regexMatch "(^|[\\s{;,])(authorization|accounts)\\s*(\\{|:|=)" (.Values.nats_extra_config | default "" | toString)) -}}
+{{- fail "nats: `nats_extra_config` contains an `authorization` or `accounts` block while auth.credentialsSecretName is set. The chart generates the authorization itself from that secret, and a second block would silently replace it. Remove the block from `nats_extra_config` -- and never put credentials there, since its contents are stored in the Helm release as plain text." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Single aggregate validator. Invoked once, from identity.yaml, which is
 unconditionally rendered -- so "is validation still wired up?" is one grep.
 The legacy-GVC check runs FIRST: a 2.x values file has no top-level `locations`,
@@ -255,6 +274,7 @@ error instead of the destructive-upgrade refusal.
 {{- include "nats.validateJetStreamQuorum" . -}}
 {{- include "nats.validatePorts" . -}}
 {{- include "nats.validateInternalAccess" . -}}
+{{- include "nats.validateAuth" . -}}
 {{- end -}}
 
 

@@ -15,6 +15,16 @@ spec:
       args:
         - /etc/nats/start.sh
       cpu: {{ .Values.resources.cpu | quote }}
+      {{- if .Values.auth.credentialsSecretName }}
+      {{- /* Resolved by the platform at replica start; start.sh writes them into
+             nats.conf. Rotating the secret does not redeploy the workload --
+             force a redeployment to pick up new values. */}}
+      env:
+        - name: NATS_AUTH_PASSWORD
+          value: cpln://secret/{{ .Values.auth.credentialsSecretName }}.password
+        - name: NATS_AUTH_USER
+          value: cpln://secret/{{ .Values.auth.credentialsSecretName }}.username
+      {{- end }}
       image: {{ .Values.image }}
       inheritEnv: false
       memory: {{ .Values.resources.memory | quote }}

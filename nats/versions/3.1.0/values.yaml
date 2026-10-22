@@ -38,12 +38,19 @@ nats_defaults:
     compression: false
     noTls: true # Control Plane terminates TLS — leave true unless you supply certs
 
+# ─── Authentication ───────────────────────────────────────────────────────────
+# Name of a dictionary secret you create BEFORE installing, with keys `username`
+# and `password`. Empty = no authentication (anyone who can reach a port can
+# publish and subscribe). Set, every client, WebSocket, route and gateway
+# connection must present these credentials. Example: my-nats-credentials
+auth:
+  credentialsSecretName: ""
+
 # Inbound public CIDRs for the WebSocket endpoint, which Control Plane exposes on
-# port 443. EMPTY = no public access, which is the default: this chart configures
-# NO NATS authentication, so opening it to 0.0.0.0/0 publishes an unauthenticated
-# message bus to the internet — measured handing an anonymous outside client the
-# cluster name, every server name and their private IPs. Add your own ranges here
-# only alongside an `authorization { … }` block in `nats_extra_config`.
+# port 443. EMPTY = no public access, which is the default. Without
+# `auth.credentialsSecretName`, opening it publishes an unauthenticated message
+# bus to the internet — measured handing an anonymous outside client the cluster
+# name, every server name and their private IPs. Add ranges only with auth on.
 allowCIDR: []
 
 # ─── JetStream ────────────────────────────────────────────────────────────────
@@ -55,7 +62,8 @@ volumeset:
 
 # Any additional valid NATS configuration — appended verbatim to the generated
 # server config at startup. A syntax error here is a container that will not
-# start, not a render failure.
+# start, not a render failure. It lands in the Helm release as plain text, so
+# never put credentials here — use `auth.credentialsSecretName` instead.
 nats_extra_config: ""
 
 # ─── Access ───────────────────────────────────────────────────────────────────

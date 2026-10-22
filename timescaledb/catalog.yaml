@@ -9,7 +9,7 @@ topology: single
 summary: >-
   A single PostgreSQL server with the TimescaleDB extension preloaded and created, giving
   hypertables, columnar compression, continuous aggregates and retention policies, on a
-  persistent, snapshotted volume tuned to the container size at first boot. Options: a
+  persistent volume tuned to the container size at first boot. Options: a
   PgBouncer pooler, a public TCP endpoint, and scheduled backups to S3, GCS or an S3-compatible
   endpoint. Pick it for metrics, IoT or event data queried with SQL in one location.
 

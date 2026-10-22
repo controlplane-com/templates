@@ -5,17 +5,15 @@ This app deploys [TimescaleDB](https://www.timescale.com/) — the time-series d
 ## Architecture
 
 - **TimescaleDB**: stateful workload (single replica) on port 5432; the extension is preloaded, created automatically in your database, and auto-tuned to the container's resources at first boot.
-- **Volumeset**: dedicated persistent volume for the data directory, with optional autoscaling and 7-day snapshots.
+- **Volumeset**: dedicated persistent volume for the data directory, with optional autoscaling. No snapshots are scheduled; uninstalling keeps one final snapshot for 7 days.
 - **Secret, identity, and policy**: database credentials in a dictionary secret; least-privilege policy granting the workload identity `reveal` on exactly that secret.
 - **PgBouncer** (optional): serverless connection-pooler workload in front of the database.
 - **Backup** (optional): cron workload running a nightly `pg_dumpall` to AWS S3, GCS, or an S3-compatible endpoint.
 
 ## Prerequisites
 
-- None for a default install.
+- A database credentials secret (below), for every install.
 - For optional backups: a bucket and access setup for one of the supported providers (see [Backup storage setup](#backup-storage-setup)).
-
-### Prerequisites
 
 **One `dictionary` secret must exist BEFORE you install.** These are the credentials you put in every application's connection string, so they are not values — putting them in values would leave them in the Helm release.
 
@@ -118,7 +116,7 @@ backup:
 | Internal (same GVC) | `{release}-timescaledb.{gvc}.cpln.local:5432` |
 | Via PgBouncer (when enabled) | `{release}-pgbouncer.{gvc}.cpln.local:5432` — use this as the app endpoint |
 | Public (when enabled) | `status.canonicalEndpoint` of the `{release}-timescaledb` workload, port 5432 (unencrypted) |
-| Credentials | `config.username` / `config.password`, stored in the `{release}-tsdb-config` secret |
+| Credentials | `username` / `password` / `database` from the secret named in `config.credentialsSecretName` |
 
 ## Using TimescaleDB
 
@@ -185,7 +183,7 @@ upgrading</b>; if it already matches, no action is needed. Nothing else changes.
 ### S3-compatible (MinIO, R2, Wasabi, …)
 
 1. Create your bucket on the server. Set `backup.minio.bucket`.
-2. Set `backup.minio.endpoint` to the S3 API address including port. For the `minio` marketplace template in the same GVC, this is `http://WORKLOAD_NAME:9000`.
+2. Set `backup.minio.endpoint` to the S3 API address including port. For the `minio` marketplace template in the same GVC, this is `http://WORKLOAD_NAME.GVC_NAME.cpln.local:9000`.
 3. Create a [dictionary secret](https://docs.controlplane.com/reference/secret) holding exactly `accessKey` and `secretKey`, and set `backup.minio.credentialsSecretName` to its name. For the `minio` template these are its `admin.username` and `admin.password`:
 
 ```bash
@@ -218,7 +216,7 @@ For GCS replace the download with `gsutil cp "gs://BUCKET_NAME/PREFIX/BACKUP_FIL
 
 ## Important Notes
 
-- **Change `config.password` before installing** — credentials are written into the data directory at first boot; changing the value later does not change the database password.
+- **Credentials are set at first boot only** — the secret's values are written into the data directory when the volume is empty; changing the secret later does not change the database password (run `ALTER ROLE` first, then update the secret and force a redeployment).
 - **Do not scale this workload** — single-writer PostgreSQL, pinned to 1 replica. A highly-available TimescaleDB template is the planned follow-up.
 - **Tuning is captured at first boot only** — `timescaledb-tune` sizes memory settings from the container limit when the volume is empty; raising `resources.maxMemory` later does not retune.
 - **Public access is unencrypted** — the image ships no TLS certificates; keep `publicAccess.enabled: false` unless you accept plaintext connections.

@@ -41,7 +41,7 @@ cpln workload get-deployments RELEASE_NAME-timescaledb-ha --gvc GVC_NAME -o yaml
 the cluster <b>already has</b>. An upgrade that still carries any of the old keys is refused at render.
 
 
-- None for a default install.
+- The credentials secret above, for every install.
 - For optional backups: a bucket and access setup for one of the supported providers — AWS S3, GCS, or MinIO/S3-compatible (see [Backup storage setup](#backup-storage-setup)).
 
 ## Configuration
@@ -226,7 +226,7 @@ Always connect through the proxy (or PgBouncer) — never a raw replica address,
 | Via HAProxy (default) | `{release}-timescaledb-ha-proxy.{gvc}.cpln.local:5432` |
 | Via PgBouncer (when enabled) | `{release}-pgbouncer.{gvc}.cpln.local:5432` — use this as the app endpoint |
 | Credentials | The `username` and `password` entries of the secret named by `postgres.credentialsSecretName` |
-| Database | `postgres.database` (TimescaleDB extension created here) |
+| Database | The `database` entry of the same secret (TimescaleDB extension created here) |
 
 Turn a table into a hypertable and query with time buckets:
 

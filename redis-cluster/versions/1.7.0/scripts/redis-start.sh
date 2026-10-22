@@ -1,6 +1,9 @@
 #!/bin/bash
 
 set -e
+# No pathname expansion: $AUTH_PARAMS carries the password unquoted, so a * ? or [ in it
+# must never be matched against files.
+set -f
 
 cp /usr/local/etc/redis/redis-default.conf /usr/local/etc/redis/redis.conf
 
@@ -15,7 +18,8 @@ if [ -n "$REDIS_PASSWORD" ] && ! grep -q '^requirepass ' /usr/local/etc/redis/re
             exit 1
             ;;
     esac
-    printf 'requirepass %s\nmasterauth %s\n' "$REDIS_PASSWORD" "$REDIS_PASSWORD" >> /usr/local/etc/redis/redis.conf
+    # redis-default.conf ends without a newline, so start on a fresh line.
+    printf '\nrequirepass %s\nmasterauth %s\n' "$REDIS_PASSWORD" "$REDIS_PASSWORD" >> /usr/local/etc/redis/redis.conf
 fi
 
 # Find which member of the Stateful Set this pod is running

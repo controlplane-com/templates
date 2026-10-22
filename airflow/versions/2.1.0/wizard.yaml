@@ -1,0 +1,544 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Apache Airflow
+# Every workload is pinned to the single `location` value; the shared Airflow home, the metadata
+# database and the broker are one volume each in that location.
+gvc: { minLocations: 1, maxLocations: 1 }
+steps:
+  - id: credentials
+    title: Credentials
+    description: The two secrets Airflow reads, and the admin login name.
+    sections:
+      - title: Prerequisite secrets
+        docs: "#prerequisites"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Both secrets must exist **before** you install or upgrade. If one is missing, the deployment waits and
+              `cpln logs` shows nothing at all.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.1.0') < 0
+            text: >-
+              Put the CURRENT database username, password and database in the new secret, not new ones (read them
+              with `cpln secret reveal RELEASE_NAME-airflow-config -o yaml`; the database is `airflow` unless you
+              changed it). This upgrade restarts PostgreSQL, the webserver and the workers, so Airflow is
+              unavailable for a few minutes. A new workload version can wait about 10 minutes on `is not allowed
+              to reveal the secret` while the old one keeps serving; it clears by itself.
+            textExpression: >-
+              'Put the CURRENT database username, password and database in the new secret, not new ones (read them ' +
+              'with `cpln secret reveal ' + context.releaseName + '-airflow-config -o yaml`; the database is `airflow` ' +
+              'unless you changed it). This upgrade restarts PostgreSQL, the webserver and the workers, so Airflow is ' +
+              'unavailable for a few minutes. A new workload version can wait about 10 minutes on `is not allowed ' +
+              'to reveal the secret` while the old one keeps serving; it clears by itself.'
+          - path: airflow.auth.secretName
+            type: ref
+            label: Auth secret
+            required: true
+            description: A dictionary secret with the keys `jwtSecret`, `fernetKey` and `adminPassword`.
+            help: >-
+              `jwtSecret` signs API tokens, `fernetKey` encrypts the Connections and Variables your DAGs use
+              (32 random bytes, url-safe base64), and `adminPassword` is the UI login. Generate them with
+              `openssl rand -base64 48`, `openssl rand -base64 32 | tr '+/' '-_'` and `openssl rand -base64 18`.
+              The Fernet key can never be changed: every stored Connection and Variable becomes unreadable.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [jwtSecret, fernetKey, adminPassword]
+              create:
+                suggestName: "context.releaseName + '-airflow-auth'"
+          - path: postgres.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: A dictionary secret with the keys `username`, `password` and `database`.
+            help: >-
+              The bundled PostgreSQL initializes from it, and the webserver and workers connect with it.
+              PostgreSQL reads it only when its data directory is first initialized. The values are part of
+              Airflow's connection URLs, so use letters, digits, `-` and `_` only.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-airflow-db'"
+          - path: airflow.admin.username
+            type: string
+            label: Admin username
+            required: true
+            description: The UI login; its password is `adminPassword` in the auth secret.
+        rules:
+          - rule: self.airflow.auth.secretName != '' && self.airflow.admin.username != ''
+            mirrors: airflow.validateAuth
+            paths: [airflow.auth.secretName]
+            message: The auth secret and the admin username are required.
+          - rule: >-
+              !has(self.airflow.auth.jwtSecret) && !has(self.airflow.auth.fernetKey) &&
+              !has(self.airflow.admin.password)
+            mirrors: airflow.validateRemovedKeys
+            paths: [airflow.auth.secretName]
+            message: >-
+              airflow.auth.jwtSecret, airflow.auth.fernetKey and airflow.admin.password were removed in 1.5.0.
+              They are keys of the auth secret now; remove them from the values.
+          - rule: "!has(self.airflow.auth.jwtExpirationDelta) && !has(self.airflow.auth.jwtRefreshThreshold)"
+            mirrors: airflow.validate
+            paths: [airflow.auth.secretName]
+            message: >-
+              airflow.auth.jwtExpirationDelta and airflow.auth.jwtRefreshThreshold were removed in 1.5.0 and did
+              nothing in Airflow 3. Remove them; the token lifetime is the API token lifetime setting.
+          - rule: >-
+              !has(self.postgres.config.username) && !has(self.postgres.config.password) &&
+              !has(self.postgres.config.database)
+            mirrors: airflow.validateDbCredentials
+            paths: [postgres.config.credentialsSecretName]
+            message: >-
+              postgres.config.username, postgres.config.password and postgres.config.database were removed in
+              2.1.0. Put them in a dictionary secret, choose it as the database credentials secret, and remove
+              them from the values.
+          # 2.0.0 created <release>-airflow-config itself, and the 2.1.0 upgrade deletes it; the chart refuses
+          # the name on every render.
+          - rule: self.postgres.config.credentialsSecretName != context.releaseName + '-airflow-config'
+            mirrors: airflow.validateDbCredentials
+            paths: [postgres.config.credentialsSecretName]
+            message: >-
+              This name is reserved: airflow 2.0.0 created this secret itself, and upgrading to 2.1.0 deletes it.
+              Create a secret under another name holding the same username, password and database, and choose
+              that one.
+          - when: oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '2.1.0') >= 0
+            rule: self.postgres.config.credentialsSecretName == oldSelf.postgres.config.credentialsSecretName
+            severity: info
+            paths: [postgres.config.credentialsSecretName]
+            message: >-
+              PostgreSQL keeps the credentials it was initialized with. The new secret must hold the same
+              username, password and database, or Airflow loses its database connection.
+          - rule: oldSelf == null || self.airflow.auth.secretName == oldSelf.airflow.auth.secretName
+            severity: info
+            paths: [airflow.auth.secretName]
+            message: >-
+              The new auth secret must hold the same fernetKey as the old one, or every stored Connection and
+              Variable becomes unreadable.
+
+  - id: airflow
+    title: Airflow
+    description: Where Airflow runs, and the webserver that also runs the scheduler and triggerer.
+    sections:
+      - title: Location
+        docs: "#location"
+        fields:
+          - path: location
+            type: ref
+            label: Location
+            required: true
+            immutable: Moving Airflow to another location starts it on new, empty volumes there.
+            description: >-
+              The one location of the GVC that every Airflow workload runs in. It cannot be changed later:
+              another location starts Airflow on new, empty volumes.
+            ref: { kind: location, scope: gvc, format: name, mustExist: error }
+        rules:
+          - rule: self.location != '' && !has(self.locations)
+            mirrors: airflow.validateLocation
+            paths: [location]
+            message: >-
+              Airflow runs in exactly one location: set the single `location` and remove `locations` from the
+              values.
+          - rule: context.gvcLocations == null || self.location == '' || self.location in context.gvcLocations
+            paths: [location]
+            message: This location is not enabled on the target GVC; nothing would run.
+      - title: Webserver
+        docs: "#airflow"
+        fields:
+          - path: airflow.webserver.image
+            type: string
+            format: image
+            label: Airflow image
+            required: true
+          - path: airflow.webserver.resources
+            type: resources
+            label: Webserver resources
+            required: true
+            description: >-
+              One replica running the API server, scheduler, dag-processor and triggerer together.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: airflow.auth.jwtExpirationTime
+            type: integer
+            label: API token lifetime
+            unit: seconds
+            min: 1
+            required: true
+            suggestions: [3600, 86400, 604800]
+          - path: airflow.webPort
+            type: integer
+            label: Web port
+            min: 1
+            max: 65535
+            required: true
+            advanced: true
+            description: Serves the UI and the REST API.
+            rules:
+              - rule: >-
+                  !(self.airflow.webPort in [8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090,
+                  41000])
+                message: This port is reserved by the platform; choose another, such as 8080.
+          - path: airflow.scheduler.dagDirListInterval
+            type: integer
+            label: DAG folder rescan interval
+            unit: seconds
+            min: 1
+            required: true
+            advanced: true
+          - path: airflow.scheduler.minFileProcessInterval
+            type: integer
+            label: Minimum DAG file processing interval
+            unit: seconds
+            min: 1
+            required: true
+            advanced: true
+
+  - id: workers
+    title: Celery workers
+    description: The workers that run your tasks, at a fixed count or scaled on the queue length.
+    sections:
+      - fields:
+          - path: airflow.celeryWorker.image
+            type: string
+            format: image
+            label: Worker image
+            required: true
+          - path: airflow.celery.workerConcurrency
+            type: integer
+            label: Tasks per worker
+            min: 1
+            required: true
+            suggestions: [1, 2, 4, 8]
+          - path: airflow.celeryWorker.resources
+            type: resources
+            label: Worker resources
+            required: true
+            description: Per worker.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - type: note
+            text: >-
+              Avoid wide simultaneous task fan-outs, or stagger task submission: a race in the worker image's
+              Redis transport can drop tasks without any error in the UI.
+      - id: keda
+        title: KEDA autoscaling
+        toggle: keda.enabled
+        docs: "#keda-autoscaling"
+        description: >-
+          Scales the workers on the Redis queue length, down to zero when idle. KEDA must already be enabled
+          on the GVC (`spec.keda.enabled`); without it the workers never scale and stay at the minimum.
+        fields:
+          - path: keda.minScale
+            type: integer
+            label: Minimum workers
+            min: 0
+            required: true
+            description: 0 scales to zero when idle.
+          - path: keda.maxScale
+            type: integer
+            label: Maximum workers
+            min: 1
+            required: true
+            suggestions: [3, 5, 10]
+          - path: keda.listLength
+            type: integer
+            label: Queue length per worker
+            min: 1
+            required: true
+            description: Queued tasks that trigger another worker.
+          - path: keda.scaleToZeroDelay
+            type: integer
+            label: Scale-to-zero delay
+            unit: seconds
+            min: 0
+            required: true
+            advanced: true
+          - path: keda.cooldownPeriod
+            type: integer
+            label: Cooldown between scaling events
+            unit: seconds
+            min: 0
+            required: true
+            advanced: true
+          - path: keda.initialCooldownPeriod
+            type: integer
+            label: Cooldown after startup
+            unit: seconds
+            min: 0
+            required: true
+            advanced: true
+          - path: keda.pollingInterval
+            type: integer
+            label: Polling interval
+            unit: seconds
+            min: 1
+            required: true
+            advanced: true
+        rules:
+          - rule: self.keda.minScale <= self.keda.maxScale
+            mirrors: airflow.validateKeda
+            paths: [keda.minScale]
+            message: The minimum number of workers cannot exceed the maximum.
+          - when: context.mode == 'install'
+            rule: >-
+              context.gvcSpec == null || (has(context.gvcSpec.keda) && has(context.gvcSpec.keda.enabled) &&
+              context.gvcSpec.keda.enabled)
+            paths: [keda.enabled]
+            message: >-
+              KEDA is not enabled on the target GVC, so the webserver refuses to start a fresh install. Enable
+              KEDA in the GVC settings first, or turn autoscaling off.
+          - when: context.mode == 'upgrade'
+            rule: >-
+              context.gvcSpec == null || (has(context.gvcSpec.keda) && has(context.gvcSpec.keda.enabled) &&
+              context.gvcSpec.keda.enabled)
+            severity: warning
+            paths: [keda.enabled]
+            message: >-
+              KEDA is not enabled on the target GVC, so the workers would never scale and stay at the minimum.
+              Enable it in the GVC settings first.
+      - title: Fixed worker count
+        when: "!self.keda.enabled"
+        fields:
+          - path: airflow.celeryWorker.replicas
+            type: integer
+            label: Workers
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 5]
+
+  - id: storage
+    title: Storage
+    description: The shared Airflow home, the metadata database volume and the broker volume.
+    sections:
+      - title: Volumes
+        docs: "#storage"
+        fields:
+          - path: volumeset.airflow.capacity
+            type: integer
+            label: Airflow home capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100]
+            description: DAGs and task logs, shared by the webserver and every worker.
+            docs: "/reference/volumeset#capacity-and-billing"
+          - path: postgres.volumeset.capacity
+            type: integer
+            label: Metadata database capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100]
+          - path: redis.volumeset.capacity
+            type: integer
+            label: Broker capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50]
+          - type: note
+            text: Uninstalling the release deletes all three volume sets, so export what you need first.
+        rules:
+          - rule: oldSelf == null || self.volumeset.airflow.capacity >= oldSelf.volumeset.airflow.capacity
+            paths: [volumeset.airflow.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+          - rule: oldSelf == null || self.postgres.volumeset.capacity >= oldSelf.postgres.volumeset.capacity
+            paths: [postgres.volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+          - rule: oldSelf == null || self.redis.volumeset.capacity >= oldSelf.redis.volumeset.capacity
+            paths: [redis.volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: access
+    title: Access and DAGs
+    description: Who can reach Airflow, and an optional Git repository for your DAGs.
+    sections:
+      - title: Network access
+        docs: "#access"
+        fields:
+          - path: firewallConfig.inboundAllowCIDR
+            type: list
+            label: Public inbound CIDRs
+            widget: tags
+            description: >-
+              Empty keeps the UI closed to the internet; reach it with `cpln port-forward`. The UI can run
+              arbitrary code, so open it only to addresses you trust. Firewall changes take up to a few
+              minutes to take effect.
+            item: { type: string, format: cidr }
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect from the org
+            widget: cards
+            required: true
+            description: This release's own workloads can always reach each other.
+            options:
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type == 'workload-list' || size(self.internalAccess.workloads) > 0
+            description: Used only with Specific workloads; with another choice, remove every entry.
+            widget: tags
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+        rules:
+          - rule: >-
+              self.internalAccess.type != 'none' &&
+              (self.internalAccess.type == 'workload-list' || size(self.internalAccess.workloads) == 0)
+            mirrors: airflow.validateInternalAccess
+            paths: [internalAccess.type, internalAccess.workloads]
+            message: >-
+              Allowed workloads apply only to Specific workloads; remove them from the values or choose
+              Specific workloads.
+      - id: git-sync
+        title: DAGs from Git (git-sync)
+        toggle: gitSync.enabled
+        docs: "#dag-delivery-with-git-sync"
+        description: >-
+          A sidecar pulls DAGs from a Git repository onto the shared volume. Off, you put DAGs in
+          `/opt/airflow/dags` yourself.
+        fields:
+          - path: gitSync.repo
+            type: string
+            label: Repository URL
+            required: true
+            placeholder: https://github.com/my-org/dags
+          - path: gitSync.branch
+            type: string
+            label: Branch
+            required: true
+          - path: gitSync.subPath
+            type: string
+            label: DAG folder in the repository
+            placeholder: dags
+            description: Empty uses the repository root.
+          - path: gitSync.period
+            type: string
+            label: Sync interval
+            required: true
+            pattern: '^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$'
+            patternMessage: A duration such as 60s, 5m or 1h30m.
+            suggestions: [30s, 60s, 5m]
+          - path: gitSync.auth.secretName
+            type: ref
+            label: Access token secret
+            description: Private repositories only. An opaque secret (encoding plain) holding a personal access token.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-airflow-git-token'"
+        rules:
+          - rule: self.gitSync.repo != '' && self.gitSync.branch != ''
+            mirrors: airflow.validateGitSync
+            paths: [gitSync.repo]
+            message: The repository URL and the branch are required.
+
+  - id: advanced
+    title: Advanced
+    description: Images and compute of the metadata database and the Celery broker.
+    sections:
+      - title: PostgreSQL (metadata database)
+        docs: "#postgresql-metadata-database"
+        fields:
+          - path: postgres.image
+            type: string
+            format: image
+            label: PostgreSQL image
+            required: true
+            description: The major version cannot be changed after install; a new one cannot start on the existing data.
+          - path: postgres.resources
+            type: resources
+            label: PostgreSQL resources
+            required: true
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: >-
+              oldSelf == null || imageMajor(self.postgres.image) < 0 || imageMajor(oldSelf.postgres.image) < 0 ||
+              imageMajor(self.postgres.image) == imageMajor(oldSelf.postgres.image)
+            severity: warning
+            paths: [postgres.image]
+            message: >-
+              A new PostgreSQL major version cannot start on the existing data directory. Keep the installed
+              major version.
+      - title: Redis (Celery broker)
+        docs: "#redis-broker"
+        fields:
+          - path: redis.image
+            type: string
+            format: image
+            label: Redis image
+            required: true
+          - path: redis.resources
+            type: resources
+            label: Redis resources
+            required: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+
+rules:
+  - rule: context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '2.0.0') >= 0
+    message: >-
+      Do not upgrade a 1.x release to 2.x: the upgrade deletes the GVC that the 1.x chart created, with the
+      metadata database and DAGs in it. Install this version as a new release, move the database and DAGs,
+      then uninstall the old release.
+  - rule: "!has(self.gvc)"
+    mirrors: airflow.validateNoLegacyGvc
+    message: >-
+      The gvc key was removed in 2.0.0: this chart deploys into the GVC you install into. Remove gvc from the
+      values and set the single location instead.
+  - rule: "!has(self.gitSync.auth.token)"
+    mirrors: airflow.validateRemovedKeys
+    paths: [gitSync.enabled]
+    message: >-
+      gitSync.auth.token was removed in 1.5.0. Put the token in an opaque secret, choose it as the access
+      token secret, and remove the token from the values.
+  - rule: self.gitSync.enabled || self.gitSync.auth.secretName == ''
+    mirrors: airflow.validateGitSync
+    paths: [gitSync.enabled]
+    message: An access token secret is set while git-sync is off. Turn git-sync on, or clear the secret.
+
+migrations:
+  - fromVersions: "<2.1.0"
+    from: postgres.config.username
+    note: >-
+      The database credentials are now a prerequisite dictionary secret (username, password, database). Create
+      it under a NEW name with the values the database was initialized with (the username and password are in
+      the secret named after your release, ending in `-airflow-config`, which this upgrade deletes), and choose it under Credentials.
+  - fromVersions: "<2.1.0"
+    from: postgres.config.password
+    note: >-
+      Moved to the `password` key of the database credentials secret; use the password the database runs with
+      today.
+  - fromVersions: "<2.1.0"
+    from: postgres.config.database
+    note: >-
+      Moved to the `database` key of the database credentials secret; use the same name (airflow unless you
+      changed it).

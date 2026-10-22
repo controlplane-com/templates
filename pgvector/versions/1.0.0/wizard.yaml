@@ -20,15 +20,15 @@ steps:
         textExpression: >-
           'The credentials secret must exist **before** you install. If it is missing, the deployment waits on ' +
           'it and `cpln logs` shows nothing at all; the reason is in `status.versions[].message` of ' +
-          '`cpln workload get-deployments ' + context.releaseName + '-pgvector -o yaml`. Once the secret exists ' +
+          '`cpln workload get-deployments ' + context.releaseName + '-pgvector --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml`. Once the secret exists ' +
           'the deployment recovers on its own within about ten minutes, or at once with ' +
-          '`cpln workload force-redeployment ' + context.releaseName + '-pgvector`.'
+          '`cpln workload force-redeployment ' + context.releaseName + '-pgvector --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
         text: >-
           The credentials secret must exist **before** you install. If it is missing, the deployment waits on
           it and `cpln logs` shows nothing at all; the reason is in `status.versions[].message` of
-          `cpln workload get-deployments RELEASE_NAME-pgvector -o yaml`. Once the secret exists the deployment
+          `cpln workload get-deployments RELEASE_NAME-pgvector --gvc GVC_NAME -o yaml`. Once the secret exists the deployment
           recovers on its own within about ten minutes, or at once with
-          `cpln workload force-redeployment RELEASE_NAME-pgvector`.
+          `cpln workload force-redeployment RELEASE_NAME-pgvector --gvc GVC_NAME`.
       - path: config.credentialsSecretName
         type: ref
         label: Database credentials secret
@@ -40,7 +40,8 @@ steps:
           in with it too.
         help: >-
           PostgreSQL reads the credentials only when the volume is first initialized. To change the password
-          later, run `ALTER ROLE` inside PostgreSQL, then update the secret to match. Create the secret with:
+          later, run `ALTER ROLE` inside PostgreSQL, update the secret to match, then force a redeployment of
+          the PgBouncer and backup workloads, which keep the old password until they restart. Create the secret with:
           `cpln secret create-dictionary --name CREDENTIALS_SECRET_NAME --entry username=pgvector --entry password="$(openssl rand -hex 24)" --entry database=vectors`
         docs: "#prerequisites"
         ref:
@@ -71,7 +72,8 @@ steps:
           PostgreSQL reads the credentials only when the volume is first initialized; pointing at another
           secret does not change the existing user, password or database. The new secret must keep the same
           username and database; run ALTER ROLE first so its password matches, or your applications, PgBouncer
-          and the backup job cannot sign in.
+          and the backup job cannot sign in. PgBouncer and the backup job pick up the new secret only after a
+          forced redeployment.
 
   - id: server
     title: Server
@@ -165,7 +167,7 @@ steps:
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             help: >-
               The data lives on the volume set and survives redeploys. Uninstalling the release deletes
-              the volume set, and the database with it.
+              the volume set, and the database with it. The capacity can be raised later but never lowered.
             docs: "/reference/volumeset#capacity-and-billing"
       - id: autoscaling
         title: Grow storage automatically
@@ -595,7 +597,7 @@ steps:
           (self.pgbouncer.enabled ? '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgbouncer' : '') +
           (self.pgbouncer.enabled && self.backup.enabled ? ' and ' : '') +
           (self.backup.enabled ? '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgvector-backup' : '') +
-          ', or they cannot connect.'
+          ((self.pgbouncer.enabled && self.backup.enabled) ? ', or they cannot connect.' : ', or it cannot connect.')
         message: >-
           The chart does not add its own workloads to the list; add the PgBouncer and backup workloads, or they
           cannot connect.

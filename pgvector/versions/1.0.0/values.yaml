@@ -78,7 +78,7 @@ backup:
     prefix: pgvector/backups # folder name where your backups will be stored
 
   minio: # Backup to a self-hosted MinIO workload (or any S3-compatible endpoint)
-    endpoint: http://my-minio-workload:9000 # e.g. http://WORKLOAD_NAME:9000 for an internal MinIO template deployment
+    endpoint: http://my-minio-workload:9000 # e.g. http://WORKLOAD_NAME.GVC_NAME.cpln.local:9000 for an internal MinIO template deployment
     bucket: my-pgvector-bucket
     # REQUIRED PREREQUISITE SECRET when provider is `minio` — a `dictionary`
     # secret holding `accessKey` and `secretKey`. See Storage setup in the README.

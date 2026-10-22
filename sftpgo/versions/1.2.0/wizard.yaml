@@ -123,7 +123,7 @@ steps:
           - type: note
             severity: warning
             text: >-
-              The bucket, the AWS cloud account and the IAM policy must exist **before** you install; the README's Storage setup section has the steps.
+              The bucket, the AWS cloud account and the IAM policy must exist **before** the release uses them, on install or when you switch storage; the README's Storage setup section has the steps.
           - path: storage.aws.bucket
             type: string
             label: Bucket
@@ -165,7 +165,7 @@ steps:
           - type: note
             severity: warning
             text: >-
-              The bucket and the GCP cloud account must exist **before** you install; the README's Storage setup section has the steps.
+              The bucket and the GCP cloud account must exist **before** the release uses them, on install or when you switch storage; the README's Storage setup section has the steps.
           - path: storage.gcp.bucket
             type: string
             label: Bucket
@@ -194,7 +194,7 @@ steps:
           - type: note
             severity: warning
             text: >-
-              The bucket and the access keys secret must exist **before** you install; the README's Storage setup section has the steps.
+              The bucket and the access keys secret must exist **before** the release uses them, on install or when you switch storage; the README's Storage setup section has the steps.
           - type: note
             severity: warning
             when: context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.2.0') < 0
@@ -267,6 +267,12 @@ steps:
           a new value changes that user's login. A user with keys and a password keeps both through
           Password too. If the deployment then reports it is not allowed to reveal the secret, wait
           about 5 minutes and force a redeployment.
+        textExpression: >-
+          'Passwords moved out of the values in 1.2.0. Create the passwords secret with the ' +
+          '**current** password of each user (read them with `cpln secret reveal ' + context.releaseName + '-sftpgo-users -o yaml`); ' +
+          'a new value changes the login of that user. A user with keys and a password keeps both through ' +
+          'Password too. If the deployment then reports it is not allowed to reveal the secret, wait ' +
+          'about 5 minutes and force a redeployment.'
       - path: users
         type: list
         label: Users
@@ -293,7 +299,7 @@ steps:
             - path: passwordLogin
               type: boolean
               absent: true
-              label: Password too
+              label: Password too (users with keys)
               description: >-
                 Only for users with SSH keys: also accept a password. Users without keys always log in
                 with a password.

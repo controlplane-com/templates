@@ -125,6 +125,14 @@ the subchart's own helper.
 {{- if ($k.kafka_rest_proxy).enabled -}}
 {{- fail "cdc-pipeline: kafka.kafka_rest_proxy must stay off. In kafka 4.3.0 the REST Proxy takes its Kafka login (jaas_conf) with the password inline in values, so cdc-pipeline does not offer it: every Kafka password here lives only in the credentials secret. Remove kafka_rest_proxy from your values." -}}
 {{- end -}}
+{{- /* Kafka Connect (1.1.1): the pipeline's connector is Debezium Server, so it needs no Kafka Connect. In
+kafka 4.3.0 a Connect group's worker login (connector_properties, e.g. sasl.jaas.config) and its plugins'
+config (passwords, accessKey/secretKey, private keys) are free-form maps written from the values, so a
+plaintext credential there would land in the Helm release and in the -props/-init secrets. Refused whole:
+nothing narrower can tell a password from a setting in an arbitrary connector config. */ -}}
+{{- if $k.kafka_connectors -}}
+{{- fail "cdc-pipeline: kafka.kafka_connectors must stay empty. This pipeline's connector is Debezium Server, and in kafka 4.3.0 a Kafka Connect group takes its Kafka login (connector_properties, e.g. sasl.jaas.config) and its plugins' credentials (plugins[].config: passwords, access and secret keys, private keys) inline in the values, where they would sit in the Helm release as plain text. cdc-pipeline does not offer Kafka Connect; remove kafka_connectors from your values. To run Kafka Connect, install the kafka template on its own." -}}
+{{- end -}}
 {{- /* 2. Every password value is the broker-resolved reference, never a password. */ -}}
 {{- $client := ($k.kafka.listeners).client | default dict -}}
 {{- $sasl := $client.sasl | default dict -}}

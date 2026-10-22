@@ -39,7 +39,6 @@ imports:
       - { id: listeners, title: Kafka listeners and security }
       - { id: storage, title: Kafka storage }
       - { id: ui, title: Kafka UI, description: "An optional web console for topics, consumer groups and messages." }
-      - { id: connect, title: Kafka Connect }
       - { id: advanced, title: Kafka advanced, description: "The JMX exporter and other advanced settings. The health sidecar and the Kafka exporter stay off in this pipeline." }
     exclude:
       # Bound in the Credentials step: the passwords are references to the credentials secret.
@@ -53,6 +52,9 @@ imports:
       - kafka_ui
       # Its Kafka login (jaas_conf) carries the password inline in kafka 4.3.0; the chart refuses it.
       - kafka_rest_proxy
+      # Kafka Connect (the whole Kafka Connect step): its worker login and plugin configs carry credentials inline
+      # in kafka 4.3.0, and the pipeline's connector is Debezium Server; the chart refuses it (1.1.1).
+      - kafka_connectors
     override:
       kafka.listeners:
         description: >-
@@ -225,6 +227,13 @@ steps:
         message: >-
           kafka.kafka_rest_proxy must stay off: in kafka 4.3.0 its Kafka login (jaas_conf) carries the password
           inline in the values, and this pipeline keeps every Kafka password only in the credentials secret.
+      - rule: "!has(self.kafka.kafka_connectors) || size(self.kafka.kafka_connectors) == 0"
+        mirrors: cdc.validateKafkaSecretRefs
+        paths: [postgres-highly-available.config.credentialsSecretName]
+        message: >-
+          kafka.kafka_connectors must stay empty: this pipeline's connector is Debezium Server, and in kafka 4.3.0
+          a Kafka Connect group carries its Kafka login and its plugins' credentials inline in the values. Remove
+          kafka_connectors from the values; install the kafka template on its own to run Kafka Connect.
       - rule: >-
           self.kafka.kafka.secrets.inter_broker_password == '${env:CDC_KAFKA_INTER_BROKER_PASSWORD}' &&
           self.kafka.kafka.secrets.controller_password == '${env:CDC_KAFKA_CONTROLLER_PASSWORD}'

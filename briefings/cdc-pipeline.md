@@ -70,9 +70,8 @@ database.
   no password and still runs. Kafbat UI reads the user's own config file, which must carry the admin password
   from the secret.
 - **`kafka_rest_proxy` is refused too** (render `fail` + wizard rule, excluded from the import): in kafka 4.3.0
-  its `jaas_conf` carries the Kafka password inline in values. `kafka_connectors` stays available: its `env`
-  takes `cpln://secret/…` references (the kafka chart adds the reveal grant itself), and the README says to
-  use them rather than inline credentials.
+  its `jaas_conf` carries the Kafka password inline in values. 1.1.0 left `kafka_connectors` available (its `env`
+  takes `cpln://secret/…` references), but nothing stopped a credential going inline — see 1.1.1 below.
 - **Kafka 4.0.1 → 4.3.0** for the 4.2.0 fix (brokers on the 3.x image wrote an undeleted `server.log` and
   were evicted after ~10 days) and because 4.3.0 has a wizard the cdc wizard imports. Its values are a
   superset of 4.0.1's, so the umbrella block carried over unchanged.
@@ -81,6 +80,22 @@ database.
   string), topics are created. Not changed: on an upgraded release the id is already formatted into the logs,
   so a new default would break every existing broker. The wizard flags it as an example value on install.
 - **Kafbat UI is off by default; upgrades keep what they ran** (a computed wizard migration).
+
+## What 1.1.1 changed (5284 follow-up, 2026-10-22)
+
+- **Kafka Connect is refused at render** (`kafka.kafka_connectors` non-empty → `fail` in
+  `cdc.validateKafkaSecretRefs`, which the deep `validate/kafka/sidecars/guard.yaml` renders before the kafka
+  subchart; wizard rule in Credentials; the import excludes `kafka_connectors` and drops the Kafka Connect step).
+  In kafka 4.3.0 a Connect group's worker login (`connector_properties`, e.g. `sasl.jaas.config`) and its
+  plugins' `config` (passwords, accessKey/secretKey, private keys) are free-form maps written into the
+  `-props`/`-init` secrets, so 1.1.0 rendered any inline credential straight from the Helm release (canary:
+  three plaintext values in the output). Refused whole because nothing narrower can tell a password from a
+  setting in an arbitrary connector config, and the pipeline does not need Connect: Debezium Server is its
+  connector. A `${env:VAR}` + `config.providers=env` path on the Connect worker (the broker mechanism above)
+  would probably work but was never tested here — the route back if anyone needs Connect in this template.
+- **A 1.1.0 release with connectors cannot upgrade** until they are removed: carry keeps the list (reported
+  `unverified`) and the wizard rule blocks Install, rather than a silent drop deleting the Connect workloads.
+- Default render identical to 1.1.0 apart from chart-version tags; no deployed behaviour changes.
 
 ## Troubleshooting traps
 

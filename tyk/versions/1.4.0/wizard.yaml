@@ -359,6 +359,12 @@ steps:
           # Redis is a stateful workload, and the redis subchart reserves minCpu 80m and minMemory 128Mi, which
           # this chart does not expose. The API refuses a limit above 4 times the reservation, and memory (MiB) at
           # 8 times the CPU (millicores) or more.
+          - rule: cpuMillicores(self.redis.redis.resources.cpu) >= 80
+            paths: [redis.redis.resources.cpu]
+            message: The Redis CPU limit cannot be below the 80m the redis subchart reserves; set 80m or more.
+          - rule: memoryBytes(self.redis.redis.resources.memory) >= memoryBytes('128Mi')
+            paths: [redis.redis.resources.memory]
+            message: The Redis memory limit cannot be below the 128Mi the redis subchart reserves; set 128Mi or more.
           - rule: cpuMillicores(self.redis.redis.resources.cpu) <= 320
             paths: [redis.redis.resources.cpu]
             message: >-
@@ -415,6 +421,12 @@ steps:
           # Sentinel is a stateful workload, and the redis subchart reserves minCpu 80m and minMemory 128Mi, which
           # this chart does not expose. The API refuses a limit above 4 times the reservation, and memory (MiB) at
           # 8 times the CPU (millicores) or more.
+          - rule: cpuMillicores(self.redis.sentinel.resources.cpu) >= 80
+            paths: [redis.sentinel.resources.cpu]
+            message: The Sentinel CPU limit cannot be below the 80m the redis subchart reserves; set 80m or more.
+          - rule: memoryBytes(self.redis.sentinel.resources.memory) >= memoryBytes('128Mi')
+            paths: [redis.sentinel.resources.memory]
+            message: The Sentinel memory limit cannot be below the 128Mi the redis subchart reserves; set 128Mi or more.
           - rule: cpuMillicores(self.redis.sentinel.resources.cpu) <= 320
             paths: [redis.sentinel.resources.cpu]
             message: >-

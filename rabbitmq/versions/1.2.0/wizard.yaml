@@ -1,0 +1,351 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: RabbitMQ
+# One stateful replica on its own volume: every GVC location would run an independent broker.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: credentials
+    title: Credentials
+    description: The prerequisite secret with the RabbitMQ default user.
+    fields:
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'install' ||
+          (context.fromVersion != null && semverCompare(context.fromVersion, '1.2.0') < 0)
+        text: >-
+          The secret must exist **before** you install or upgrade. If it is missing, the deployment waits on
+          it and `cpln logs` shows nothing at all; only `status.versions[].message` in
+          `cpln workload get-deployments RELEASE_NAME-rabbitmq --gvc GVC_NAME -o yaml` names the missing secret.
+        textExpression: >-
+          'The secret must exist **before** you install or upgrade. If it is missing, the deployment waits on
+          it and `cpln logs` shows nothing at all; only `status.versions[].message` in
+          `cpln workload get-deployments ' + context.releaseName + '-rabbitmq --gvc ' +
+          (context.gvc == null ? 'GVC_NAME' : context.gvc) + ' -o yaml` names the missing secret.'
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '1.2.0') < 0
+        text: >-
+          Version 1.2.0 moved the RabbitMQ default user out of the values and into the secret below. Before you
+          upgrade, read the user the broker was started with: `cpln secret reveal RELEASE_NAME-rabbitmq-config -o yaml`
+          shows it as the `default_user` and `default_pass` lines of the payload, and the upgrade rewrites that
+          secret without them. Create the secret below with that same `username` and `password`: the broker keeps
+          the user stored on its volume and never re-reads the secret. Earlier versions shipped the published
+          default user `user` with the password `changeMe`, shared by every install. If the reveal shows it, treat
+          it as compromised: after the upgrade, change it with `rabbitmqctl change_password`, then update the
+          secret to match. See
+          [Upgrading from earlier versions](/template-catalog/templates/rabbitmq#upgrading-from-earlier-versions).
+        textExpression: >-
+          'Version 1.2.0 moved the RabbitMQ default user out of the values and into the secret below. Before you
+          upgrade, read the user the broker was started with: `cpln secret reveal ' + context.releaseName +
+          '-rabbitmq-config -o yaml` shows it as the `default_user` and `default_pass` lines of the payload, and the
+          upgrade rewrites that secret without them. Create the secret below with that same `username` and
+          `password`: the broker keeps the user stored on its volume and never re-reads the secret. Earlier versions
+          shipped the published default user `user` with the password `changeMe`, shared by every install. If the
+          reveal shows it, treat it as compromised: after the upgrade, change it with `rabbitmqctl change_password`,
+          then update the secret to match. See
+          [Upgrading from earlier versions](/template-catalog/templates/rabbitmq#upgrading-from-earlier-versions).'
+      - path: credentialsSecretName
+        type: ref
+        label: Default user secret
+        required: true
+        description: >-
+          A dictionary secret with the keys `username` and `password`. They are the management UI login and the
+          AMQP credentials your producers and consumers put in their connection strings.
+        help: >-
+          RabbitMQ creates this user only when its volume is first initialized; changing the secret later does not
+          change the broker. To change the password, run
+          `cpln workload exec RELEASE_NAME-rabbitmq --gvc GVC_NAME -- rabbitmqctl change_password USERNAME 'NEW-STRONG-PASSWORD'`,
+          then update the secret to match. Create the secret with:
+          `cpln secret create-dictionary --name SECRET_NAME --entry username=rabbitmq --entry password="$(openssl rand -hex 24)"`
+        docs: "#credentials"
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeys: [username, password]
+          create:
+            suggestName: "context.releaseName + '-rabbitmq-credentials'"
+    rules:
+      # rabbitmq.validateCredentials: the removed plaintext keys, then the empty name (required on the field;
+      # restated here for the mirror, suppressed while REQUIRED shows).
+      - rule: "!has(self.rabbitmq_conf.default_user) && !has(self.rabbitmq_conf.default_pass)"
+        mirrors: rabbitmq.validateCredentials
+        paths: [credentialsSecretName]
+        message: >-
+          rabbitmq_conf.default_user and rabbitmq_conf.default_pass were removed in 1.2.0. Put the default user
+          in a dictionary secret with the keys username and password, choose it here, and remove both keys from
+          the values.
+      - rule: self.credentialsSecretName != null && self.credentialsSecretName != ''
+        mirrors: rabbitmq.validateCredentials
+        paths: [credentialsSecretName]
+        message: The default user secret is required.
+      - rule: >-
+          oldSelf == null || context.fromVersion == null || semverCompare(context.fromVersion, '1.2.0') < 0 ||
+          self.credentialsSecretName == oldSelf.credentialsSecretName
+        severity: info
+        paths: [credentialsSecretName]
+        message: >-
+          RabbitMQ creates the default user only when its volume is first initialized; pointing at another
+          secret does not change the broker's user or password. The new secret must hold the same username; run
+          rabbitmqctl change_password first so its password matches, or your clients cannot sign in with it.
+
+  - id: broker
+    title: Broker
+    description: The RabbitMQ image, the compute of its single stateful replica, and its listener.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Every upgrade restarts the broker, which runs as a single replica: every connected client sees a
+              short outage, so give your producers and consumers a reconnect policy.
+          - path: image.repository
+            type: string
+            format: image
+            label: RabbitMQ image
+            required: true
+            description: >-
+              Keep a `-management` tag: the template serves the management UI on port 15672 and Prometheus
+              metrics on 15692.
+            docs: "#image"
+            rules:
+              - rule: oldSelf == null || self.image.repository == oldSelf.image.repository
+                severity: info
+                message: >-
+                  A new image restarts the broker, a short outage for every connected client. Export the
+                  definitions with rabbitmqctl export_definitions first, so you can recreate the topology.
+          - path: cpu
+            type: quantity
+            quantity: cpu
+            label: CPU
+            required: true
+            min: 25m
+            suggestions: ["200m", "500m", "1", "2"]
+            docs: "#resources"
+          - path: memory
+            type: quantity
+            quantity: memory
+            label: Memory
+            required: true
+            min: 32Mi
+            suggestions: [256Mi, 512Mi, 1Gi, 2Gi]
+          # The platform accepts 1 to 3600 for defaultOptions.timeoutSeconds; only serverless workloads are
+          # capped at 600. RabbitMQ is a stateful workload.
+          - path: timeoutSeconds
+            type: integer
+            label: Request timeout
+            unit: seconds
+            min: 1
+            max: 3600
+            required: true
+            advanced: true
+            docs: "/reference/workload/general#timeout-seconds"
+          - type: note
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.2.0') < 0
+            text: >-
+              Before 1.2.0 the workload ignored the request timeout (under Advanced) and always used 5 seconds.
+              From 1.2.0 it applies the value set there.
+      - title: RabbitMQ configuration
+        docs: "#rabbitmq-configuration"
+        fields:
+          # The listener is also the readiness probe's TCP port: the platform's probe and container port
+          # schema allows 80 to 65535, minus the reserved ports in the rule below.
+          - path: rabbitmq_conf.listeners_tcp_default
+            type: integer
+            label: AMQP port
+            required: true
+            min: 80
+            max: 65535
+            description: >-
+              Written into `rabbitmq.conf`; clients connect on it, and the readiness check probes it.
+            rules:
+              - rule: >-
+                  !(self.rabbitmq_conf.listeners_tcp_default in [8012, 8022, 9090, 9091, 15000, 15001, 15006,
+                  15020, 15021, 15090, 41000])
+                messageExpression: >-
+                  'Port ' + string(self.rabbitmq_conf.listeners_tcp_default) + ' is reserved by the platform,
+                  which refuses a workload that uses it. Choose another port; see
+                  [blocked ports](/reference/workload/containers#number).'
+                message: >-
+                  The AMQP port is reserved by the platform, which refuses a workload that uses it. Choose
+                  another port; see [blocked ports](/reference/workload/containers#number).
+              - rule: "!(self.rabbitmq_conf.listeners_tcp_default in [15672, 15692])"
+                message: >-
+                  The AMQP port must differ from 15672 (management UI) and 15692 (Prometheus metrics), which
+                  the workload already uses.
+              - rule: >-
+                  oldSelf == null || oldSelf.rabbitmq_conf.listeners_tcp_default == null ||
+                  self.rabbitmq_conf.listeners_tcp_default == oldSelf.rabbitmq_conf.listeners_tcp_default
+                severity: info
+                message: >-
+                  Every producer and consumer must switch to the new AMQP port; connections on the old port
+                  stop when the broker restarts.
+          - path: env
+            type: map
+            label: Environment variables
+            widget: kv
+            advanced: true
+            description: >-
+              Extra environment variables for the broker. `RABBITMQ_CONFIG_FILE` is also where `rabbitmq.conf`
+              is mounted.
+            keys:
+              label: Name
+            values: { type: string }
+            rules:
+              - rule: self.env.all(k, !k.startsWith('CPLN_'))
+                message: >-
+                  Environment variable names starting with CPLN_ are reserved by the platform, which refuses
+                  the workload. Rename the variable.
+              - rule: "!('RABBITMQ_DEFAULT_USER' in self.env) && !('RABBITMQ_DEFAULT_PASS' in self.env)"
+                severity: info
+                message: >-
+                  RABBITMQ_DEFAULT_USER and RABBITMQ_DEFAULT_PASS always come from the default user secret;
+                  the values set here are ignored. Remove them.
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds the queues, messages and users.
+    fields:
+      - path: volumeset.volume.initialCapacity
+        type: integer
+        label: Initial capacity
+        unit: GiB
+        min: 10
+        required: true
+        suggestions: [10, 20, 50, 100, 250, 500, 1000]
+        help: >-
+          The data lives on the volume set and survives redeploys. Uninstalling the release deletes the volume
+          set, and every queue, message and user with it. The volume set keeps 7 days of snapshots.
+        docs: "#storage"
+        rules:
+          - rule: >-
+              self.volumeset.volume.performanceClass != 'high-throughput-ssd' ||
+              self.volumeset.volume.initialCapacity >= 1000
+            message: A high throughput SSD volume set needs an initial capacity of at least 1000 GiB.
+          - rule: >-
+              oldSelf == null || oldSelf.volumeset.volume.initialCapacity == null ||
+              self.volumeset.volume.initialCapacity >= oldSelf.volumeset.volume.initialCapacity
+            message: >-
+              Keep the capacity at or above the installed value. Lowering it would not shrink the existing
+              volume.
+      - path: volumeset.volume.performanceClass
+        type: enum
+        label: Performance class
+        widget: cards
+        required: true
+        immutable: The performance class of a volume set cannot change after it is created.
+        docs: "/reference/volumeset#performance-classes"
+        options:
+          - value: high-throughput-ssd
+            label: High throughput SSD
+            description: For sustained heavy I/O; a much larger minimum size.
+          - value: general-purpose-ssd
+            label: General purpose SSD
+            description: Suits most brokers.
+      - path: volumeset.volume.fileSystemType
+        type: enum
+        label: File system
+        widget: segmented
+        required: true
+        immutable: The file system of a volume set cannot change after it is created.
+        options:
+          - { value: ext4, label: ext4 }
+          - { value: xfs, label: xfs }
+
+  - id: network
+    title: Network
+    description: Which workloads can reach the broker; it is never published to the internet.
+    sections:
+      - title: Internal access
+        docs: "#internal-access"
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.2.0') < 0
+            text: >-
+              Version 1.2.0 replaced the `firewall` block with this setting. External inbound is now always
+              closed and outbound traffic is always allowed: any `external_inboundAllowCIDR` or
+              `external_outboundAllowCIDR` the release set no longer applies.
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: >-
+              Applies to AMQP, the management UI and the metrics endpoint alike. Access changes take up to a
+              couple of minutes to take effect.
+            help: >-
+              To open the management UI from your machine without publishing it, tunnel to it with
+              `cpln port-forward RELEASE_NAME-rabbitmq 15672:15672 --gvc GVC_NAME`, then browse
+              `http://localhost:15672` and sign in with the default user.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+            rules:
+              - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org']
+                mirrors: rabbitmq.validateRemovedKeys
+                message: Choose None, Same GVC or Same org for who can connect.
+    rules:
+      - rule: "!has(self.firewall)"
+        mirrors: rabbitmq.validateRemovedKeys
+        paths: [internalAccess.type]
+        message: >-
+          The firewall block was replaced by internalAccess in 1.2.0, and external inbound is always closed.
+          Choose who can connect here and remove firewall from the values.
+
+rules:
+  - rule: context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '1.1.0') >= 0
+    message: >-
+      Do not upgrade a 1.0.0 release in place: 1.1.0 renamed the workload, the volume set and the config secret,
+      so the upgrade deletes the volume set that holds the queues, messages and users and starts RabbitMQ on an
+      empty one. Install this version as a new release, export the definitions from the old broker with
+      rabbitmqctl export_definitions and import them into the new one, move your clients over once the old
+      queues are drained, then uninstall the old release.
+  - rule: "!has(self.diskCapacity)"
+    mirrors: rabbitmq.validateRemovedKeys
+    message: >-
+      diskCapacity was removed in 1.2.0; it was never read and had no effect on the disk size. Set the
+      initial capacity under Storage and remove diskCapacity from the values.
+
+migrations:
+  # 1.2.0 moved the default user out of the values (rabbitmq.conf) into a prerequisite secret.
+  - fromVersions: "<1.2.0"
+    from: rabbitmq_conf.default_user
+    note: >-
+      The default user moved to a dictionary secret with the keys username and password; choose it under
+      Credentials. The broker keeps the user stored on its volume, so give the secret this same username.
+  - fromVersions: "<1.2.0"
+    from: rabbitmq_conf.default_pass
+    note: >-
+      The default user moved to a dictionary secret with the keys username and password; choose it under
+      Credentials. The broker keeps the password stored on its volume. Earlier versions shipped the published
+      default password "changeMe": if this value is that default, change it with rabbitmqctl change_password
+      after the upgrade, then put the new password in the secret.
+  # 1.2.0 replaced the firewall block with internalAccess (same default, same-gvc).
+  - fromVersions: "<1.2.0"
+    from: firewall.internal_inboundAllowType
+    to: internalAccess.type
+  - fromVersions: "<1.2.0"
+    from: diskCapacity
+    note: diskCapacity was never read and had no effect; the volume size is the initial capacity under Storage.

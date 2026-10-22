@@ -10,9 +10,10 @@ topology: distributed
 summary: >-
   A sharded Redis Cluster of six nodes, three primaries that split the hash slots and one replica
   for each, running Redis or Valkey with a persistent volume per node. A replica takes over when
-  its primary fails, an optional password protects every node, and an optional cron job backs up
-  each shard to Amazon S3 or Google Cloud Storage. Pick it when data or write load outgrows one
-  Redis primary and your clients speak the Redis Cluster protocol.
+  its primary fails, an optional password (read from your own secret, or set inline) protects every
+  node, and an optional cron job backs up each shard to Amazon S3 or Google Cloud Storage. Pick it
+  when data or write load outgrows one Redis primary and your clients speak the Redis Cluster
+  protocol.
 
 keywords:
   - valkey
@@ -52,6 +53,13 @@ pickInsteadIf:
     template: redis-multi-location
 
 prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [password]
+    valuesPath: redis.auth.fromSecret.name
+    required: false
+    when: redis.auth.fromSecret.enabled
+    description: Existing secret holding the cluster password under the key set in redis.auth.fromSecret.passwordKey (default password). Missing, the nodes wait.
   - kind: bucket
     valuesPath: [backup.aws.bucket, backup.gcp.bucket]
     required: false

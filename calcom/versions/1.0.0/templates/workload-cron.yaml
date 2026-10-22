@@ -1,0 +1,126 @@
+{{- if .Values.cron.enabled }}
+{{- include "calcom.validate" . }}
+kind: workload
+name: {{ include "calcom.cron.name" . }}
+description: Cal.com scheduled-job caller
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "calcom.tags" . | nindent 4 }}
+spec:
+  {{- /* Cal.com runs NO scheduler inside the container: upstream's own cloud
+         drives seven HTTP paths from apps/web/vercel.json. A self-hosted
+         instance with no caller never processes its task queue (which carries
+         queued outbound email), never refreshes calendar credentials and never
+         syncs calendar subscriptions — while every health surface reads green.
+         That is why this ships enabled rather than as an opt-in extra.
+
+         Deliberately ONE replica: two callers would double every scheduled run
+         and these endpoints are not all idempotent under concurrency. */}}
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "calcom.identity.name" . }}
+  containers:
+    - name: cron
+      {{- /* The SAME image as the app, with the entrypoint overridden so none of
+             start.sh runs — no second Prisma migration racer, no app-store seed.
+             The runner stage installs wget explicitly, so the one binary this
+             loop depends on is verified at the pinned tag (GNU Wget 1.21.3,
+             probed 2026-08-31); a second image would add a registry, a tag and a
+             review surface for a sleep+wget loop. Depending on the binary rather
+             than the image's own entrypoint follows the pocketbase precedent. */}}
+      image: {{ .Values.calcom.image }}
+      inheritEnv: false
+      cpu: {{ .Values.cron.resources.cpu | quote }}
+      memory: {{ .Values.cron.resources.memory | quote }}
+      command: /bin/sh
+      args:
+        - -c
+        - |
+          # `set -u` only. NOT `set -e`: `expr N % 5` exits 1 whenever the result
+          # is 0, which is exactly the tick we act on.
+          set -u
+
+          # Every call is bounded. GNU wget's retry machinery is invisible against
+          # an NXDOMAIN control and costs ~200 s per call against a hanging server
+          # (measured on clickhouse), so an unbounded loop here would stall the
+          # whole schedule silently.
+          call() {
+            out=`wget -O /dev/null -S -T 30 -t 1 --header="Authorization: Bearer $CRON_SECRET" "$CALCOM_URL$1" 2>&1`
+            code=`echo "$out" | awk '/HTTP\/1/ {c=$2} END {print c}'`
+            echo "calcom-cron $1 -> ${code:-unreachable}"
+          }
+
+          # One 60 s tick drives every cadence in apps/web/vercel.json@v6.2.0:
+          #   every tick  -> /api/tasks/cron                       (* * * * *)
+          #   every 5     -> calendar-subscriptions, credentials,
+          #                  selected-calendars                    (*/5 * * * *)
+          #   every 720   -> queuedFormResponseCleanup             (0 */12 * * *)
+          #   every 1440  -> tasks/cleanup, calendar-subscriptions-cleanup (daily)
+          tick=0
+          while true; do
+            tick=`expr $tick + 1`
+            call /api/tasks/cron
+            if [ `expr $tick % 5` -eq 0 ]; then
+              call /api/cron/calendar-subscriptions
+              call /api/cron/credentials
+              call /api/cron/selected-calendars
+            fi
+            if [ `expr $tick % 720` -eq 0 ]; then
+              call /api/cron/queuedFormResponseCleanup
+            fi
+            if [ $tick -ge 1440 ]; then
+              call /api/tasks/cleanup
+              call /api/cron/calendar-subscriptions-cleanup
+              tick=0
+            fi
+            sleep 60
+          done
+      env:
+        {{- /* Internal service DNS on the container port. NOT
+               CPLN_GLOBAL_ENDPOINT: that variable is per-workload, so this tier
+               would advertise its own inbound-less endpoint (the shipped
+               dead-link defect in chatwoot and twenty). */}}
+        - name: CALCOM_URL
+          value: {{ include "calcom.internalUrl" . | quote }}
+        {{- /* One `Authorization: Bearer $CRON_SECRET` header satisfies both
+               families: /api/tasks/* accepts only that form, /api/cron/* accepts
+               it or the raw key. CRON_API_KEY is provisioned so an operator can
+               drive the legacy routes by hand. */}}
+        - name: CRON_SECRET
+          value: 'cpln://secret/{{ .Values.calcom.auth.secretName }}.cronSecret'
+        - name: CRON_API_KEY
+          value: 'cpln://secret/{{ .Values.calcom.auth.secretName }}.cronApiKey'
+      {{- /* No probes: there is no port and no endpoint to probe. A dead loop
+             shows up as a gap in the app's own access log for /api/tasks/cron. */}}
+  {{- /* Pinned to the one configured location, for the same reason the app is:
+         a workload runs in EVERY location its GVC has, and a caller in another
+         location would drive that location's Cal.com — which, before the app
+         was pinned, was a different Cal.com over a different database. 0/0 on
+         defaultOptions means an unasked-for location starts NOTHING; the single
+         localOptions entry supplies the one replica. */}}
+  defaultOptions:
+    autoscaling:
+      {{- include "calcom.autoscaling" (dict "scale" 0) | nindent 6 }}
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  localOptions:
+    {{- include "calcom.localOptions" (dict "root" . "scale" 1) | nindent 4 }}
+  firewallConfig:
+    external:
+      {{- /* Outbound to the internet is not needed — every call this workload
+             makes stays on the internal mesh — and nothing may reach it. */}}
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: none
+      inboundAllowWorkload: []
+  {{- /* rolloutOptions and loadBalancer are omitted deliberately: measured
+         2026-08-31, the API backfills NEITHER when the block is absent, so
+         omitting them is drift-free. supportDynamicTags IS backfilled, so it is
+         declared. */}}
+  supportDynamicTags: false
+{{- end }}

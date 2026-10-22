@@ -1,0 +1,32 @@
+name: E2E Test Coverage
+
+# A template with a tests/ directory must update its tests whenever a PR changes what one of its
+# versions deploys (a byte-identical render, e.g. README or wizard-only, is exempt). No secrets:
+# this only reads the diff. A maintainer can waive it with the `e2e-gate-exempt` label.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: azure/setup-helm@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - run: pip install --quiet pyyaml
+      - name: Check that chart changes come with test changes
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'e2e-gate-exempt') }}
+        run: python3 .github/e2e/run.py gate --base "${{ github.event.pull_request.base.sha }}"
+      - name: Waived
+        if: ${{ contains(github.event.pull_request.labels.*.name, 'e2e-gate-exempt') }}
+        run: echo "::notice::e2e coverage gate waived by the e2e-gate-exempt label"

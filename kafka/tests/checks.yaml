@@ -1,0 +1,110 @@
+# Feature checks for the kafka template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org}, and the vars each baseline defines (admin_password, rest_password).
+checks:
+  - id: produce-consume
+    description: A message produced over SASL reaches a consumer, on a topic replicated to all three brokers.
+    exec:
+      workload: "{release}-client"
+      container: kafka
+      shell: bash
+      script: |
+        set -e
+        cd /opt/kafka/bin
+        cat > /tmp/e2e.properties <<'EOF'
+        security.protocol=SASL_PLAINTEXT
+        sasl.mechanism=PLAIN
+        sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="{admin_password}";
+        EOF
+        B={release}-cluster.{gvc}.cpln.local:9092
+        ./kafka-topics.sh --bootstrap-server $B --command-config /tmp/e2e.properties --create --if-not-exists \
+          --topic e2e --partitions 3 --replication-factor 3 >/dev/null
+        MSG="e2e-$(date +%s%N)"
+        echo "$MSG" | ./kafka-console-producer.sh --bootstrap-server $B --producer.config /tmp/e2e.properties --topic e2e
+        ./kafka-console-consumer.sh --bootstrap-server $B --consumer.config /tmp/e2e.properties --topic e2e \
+          --from-beginning --timeout-ms 60000 2>/dev/null | grep -qx "$MSG" && echo "CONSUMED $MSG"
+    expect:
+      stdout: "^CONSUMED e2e-"
+    retries: 4
+    retryDelaySeconds: 30
+    timeoutSeconds: 180
+
+  - id: replicas-in-sync
+    description: Every partition of the test topic has three in-sync replicas.
+    exec:
+      workload: "{release}-client"
+      container: kafka
+      shell: bash
+      script: |
+        cd /opt/kafka/bin
+        printf '%s\n' 'security.protocol=SASL_PLAINTEXT' 'sasl.mechanism=PLAIN' \
+          'sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="{admin_password}";' > /tmp/e2e.properties
+        ./kafka-topics.sh --bootstrap-server {release}-cluster.{gvc}.cpln.local:9092 \
+          --command-config /tmp/e2e.properties --describe --topic e2e | grep 'Partition:' \
+          | awk '{ for (i=1;i<=NF;i++) if ($i=="Isr:") print split($(i+1), a, ",") }' | sort -u
+    expect:
+      stdout: "\\A3\\s*\\Z"
+    retries: 3
+
+  - id: rest-proxy
+    description: The REST Proxy authenticates a basic-auth user and lists the cluster's topics.
+    # Run in the proxy's own container: its default firewall admits no other workload in the GVC.
+    exec:
+      workload: "{release}-rest-proxy"
+      container: rest-proxy
+      script: |
+        python3 - <<'EOF'
+        import base64, urllib.request, urllib.error
+        auth = base64.b64encode(b"e2e:{rest_password}").decode()
+        req = urllib.request.Request("http://127.0.0.1:8082/topics", headers={"Authorization": "Basic " + auth})
+        print(urllib.request.urlopen(req, timeout=20).read().decode())
+        EOF
+    expect:
+      stdout: '"e2e"'
+    retries: 4
+    retryDelaySeconds: 20
+
+  - id: rest-proxy-rejects-bad-password
+    description: The REST Proxy refuses a wrong basic-auth password (the control for the check above).
+    exec:
+      workload: "{release}-rest-proxy"
+      container: rest-proxy
+      script: |
+        python3 - <<'EOF'
+        import base64, urllib.request, urllib.error
+        auth = base64.b64encode(b"e2e:wrong-password").decode()
+        req = urllib.request.Request("http://127.0.0.1:8082/topics", headers={"Authorization": "Basic " + auth})
+        try:
+            print("STATUS", urllib.request.urlopen(req, timeout=20).status)
+        except urllib.error.HTTPError as e:
+            print("STATUS", e.code)
+        EOF
+    expect:
+      stdout: "^STATUS 401$"
+
+  - id: kafbat-ui
+    description: The Kafbat UI is up and reports its cluster online with all three brokers.
+    exec:
+      workload: "{release}-kafbat-ui"
+      container: kafbat-ui
+      script: wget -qO- http://127.0.0.1:8080/api/clusters
+    expect:
+      stdout: '"status":"ONLINE".*"brokerCount":3'
+    retries: 4
+    retryDelaySeconds: 20
+
+  - id: log4j-root-loglevel
+    issue: "#5137"
+    since: 4.2.0
+    description: >-
+      The brokers run with KAFKA_LOG4J_ROOT_LOGLEVEL=INFO, so the official 3.x image does not also write
+      root logs to server.log, which filled the container's ephemeral storage.
+    exec:
+      workload: "{release}-cluster"
+      container: kafka
+      script: |
+        echo "LEVEL=$KAFKA_LOG4J_ROOT_LOGLEVEL"
+        ls -l /opt/kafka/logs/server.log* 2>/dev/null || echo "NO-SERVER-LOG"
+    expect:
+      stdout: "^LEVEL=INFO$"
+      notStdout: "server\\.log"

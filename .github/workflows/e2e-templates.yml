@@ -1,0 +1,144 @@
+name: Template e2e tests
+
+# Installs each changed template version for real in the CI org, runs its checks
+# ({service}/tests/checks.yaml), upgrades into it from the versions customers run, and tears it all
+# down. See E2E_TESTING.md.
+#
+# Runs on a PR while it carries the `e2e` label (adding the label starts a run; every later push
+# re-runs), or by hand from the Actions tab. The test job uses the `e2e-nifah` environment, so each
+# run waits for a maintainer's approval before it gets the org token: review the PR's changes under
+# .github/ and */tests/ before approving, because they run with that token.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [labeled, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: 'Space-separated service/version list, e.g. "kafka/4.4.0" (empty = the changes on this branch vs main)'
+        type: string
+        default: ''
+      upgrades:
+        description: 'Comma-separated upgrade sources to run (empty = every upgradeFrom; "none" = fresh install only)'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: e2e-${{ github.event.pull_request.number || github.run_id }}
+  # Never cancel: a cancelled run still tears down, but a queued one would start against its leftovers.
+  cancel-in-progress: false
+
+env:
+  CPLN_ORG: nifah
+  CPLN_SKIP_UPDATE_CHECK: "1"
+  CPLN_CLI_VERSION: 3.11.0
+
+jobs:
+  plan:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (contains(github.event.pull_request.labels.*.name, 'e2e') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'e2e'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      targets: ${{ steps.plan.outputs.targets }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: azure/setup-helm@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - run: pip install --quiet pyyaml
+      - id: plan
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          [ -n "$base" ] || base="$(git merge-base origin/main HEAD)"
+          targets=$(python3 .github/e2e/run.py plan --base "$base" --targets "${{ inputs.targets }}")
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+          echo "Targets: $targets"
+
+  test:
+    needs: plan
+    if: needs.plan.outputs.targets != '[]'
+    runs-on: ubuntu-latest
+    environment: e2e-nifah
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        target: ${{ fromJSON(needs.plan.outputs.targets) }}
+    env:
+      CPLN_TOKEN: ${{ secrets.CPLN_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install -g @controlplane/cli@${CPLN_CLI_VERSION} && pip install --quiet pyyaml
+      - name: Sweep GVCs a dead run left behind
+        run: python3 .github/e2e/run.py sweep --older-than-hours 3
+      - name: Test ${{ matrix.target }}
+        id: run
+        run: |
+          name=$(echo "${{ matrix.target }}" | tr '/' '-')
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          mkdir -p e2e-results
+          python3 .github/e2e/run.py run --target "${{ matrix.target }}" --index "${{ strategy.job-index }}" \
+            --upgrades "${{ inputs.upgrades }}" --out "e2e-results/$name.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-${{ steps.run.outputs.name }}
+          path: e2e-results/
+          if-no-files-found: ignore
+
+  report:
+    needs: [plan, test]
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.targets != '[]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install --quiet pyyaml
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: e2e-*
+          path: e2e-results
+          merge-multiple: true
+      - name: Build the report
+        id: report
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set +e
+          python3 .github/e2e/run.py report --dir e2e-results --out report.md
+          echo "failed=$?" >> "$GITHUB_OUTPUT"
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Post the report on the PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          id=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" --paginate \
+            --jq '.[] | select(.body | startswith("<!-- templates-e2e-report -->")) | .id' | head -1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$id" -F body=@report.md >/dev/null
+          else
+            gh pr comment "$PR" --body-file report.md
+          fi
+      - name: Fail when a check failed or a test job did not finish
+        if: steps.report.outputs.failed != '0' || needs.test.result != 'success'
+        run: |
+          echo "::error::e2e failed (report exit ${{ steps.report.outputs.failed }}, test jobs: ${{ needs.test.result }})"
+          exit 1

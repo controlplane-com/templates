@@ -1,0 +1,369 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: SeaweedFS
+# One stateful replica on its own volume and no location handling: every GVC location would run an
+# independent object store with its own data behind one name.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: credentials
+    title: Credentials
+    description: The prerequisite secrets with the S3 keys every client uses and the optional admin UI login.
+    sections:
+      - title: S3 credentials
+        docs: "#s3-api"
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'install' ||
+              (context.fromVersion != null && semverCompare(context.fromVersion, '1.1.0') < 0)
+            text: >-
+              The secrets must exist **before** you install or upgrade. If one is missing, the deployment waits on it and
+              `cpln logs` shows nothing at all. The reason is in `status.versions[].message` of
+              `cpln workload get-deployments RELEASE_NAME-seaweedfs --gvc GVC_NAME -o yaml`; once the secret
+              exists the deployment recovers on its own within about 10 minutes, or at once with
+              `cpln workload force-redeployment RELEASE_NAME-seaweedfs --gvc GVC_NAME`.
+            textExpression: >-
+              'The secrets must exist **before** you install or upgrade. If one is missing, the deployment waits on it and
+              `cpln logs` shows nothing at all. The reason is in `status.versions[].message` of
+              `cpln workload get-deployments ' + context.releaseName + '-seaweedfs --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml`; once the secret exists the
+              deployment recovers on its own within about 10 minutes, or at once with
+              `cpln workload force-redeployment ' + context.releaseName + '-seaweedfs --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
+          - path: s3.credentialsSecretName
+            type: ref
+            label: S3 credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`: the access key
+              and secret key every S3 client signs its requests with. Without them SeaweedFS would serve S3 with
+              no authentication at all.
+            help: >-
+              Create the secret with:
+              `cpln secret create-dictionary --name SECRET_NAME --entry AWS_ACCESS_KEY_ID="$(openssl rand -hex 10)" --entry AWS_SECRET_ACCESS_KEY="$(openssl rand -hex 24)"`.
+              SeaweedFS reads the pair on every start, so changing the secret's values rotates the keys once
+              you force a redeployment of the workload; update every client in the same window. See
+              [Rotating Credentials](/template-catalog/templates/seaweedfs#rotating-credentials).
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]
+              create:
+                suggestName: "context.releaseName + '-seaweedfs-s3-credentials'"
+        rules:
+          - rule: self.s3.credentialsSecretName != null && self.s3.credentialsSecretName != ''
+            mirrors: seaweedfs.validate
+            paths: [s3.credentialsSecretName]
+            message: The S3 credentials secret is required.
+          - rule: oldSelf == null || self.s3.credentialsSecretName == oldSelf.s3.credentialsSecretName
+            severity: info
+            paths: [s3.credentialsSecretName]
+            message: >-
+              Another secret replaces the S3 keys when the replica restarts: clients still holding the old pair
+              get InvalidAccessKeyId, so update every client in the same window. A newly chosen secret also
+              needs a new reveal grant, which can hold the restart back for several minutes.
+      - id: admin-ui
+        title: Admin UI
+        toggle: adminUI.enabled
+        description: >-
+          A web console on port 23646 for cluster status, a bucket browser, and user and maintenance
+          management, behind a login form. It is never published to the internet; reach it from inside the GVC
+          or with `cpln port-forward`. Turned off, the port and its login are removed.
+        docs: "#admin-ui"
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.1.0') < 0
+            text: >-
+              Version 1.1.0 moved the admin UI login out of the values and into a secret you create. The
+              upgrade deletes the secret RELEASE_NAME-seaweedfs-admin that held it. The UI reads its login on
+              every start, so you may choose a new pair; to keep the current one, read it before you upgrade
+              with `cpln secret reveal RELEASE_NAME-seaweedfs-admin -o yaml` (keys `WEED_ADMIN_USER` and
+              `WEED_ADMIN_PASSWORD`) and create a dictionary secret with those values as `username` and
+              `password`, under a name of your own. 1.0.0 shipped the published default password
+              `change-me-seaweedfs-admin`: if the reveal shows it, choose a new one. The new secret needs a new
+              reveal grant, which can hold the restart back for several minutes. See
+              [Upgrading from 1.0.0](/template-catalog/templates/seaweedfs#upgrading-from-1-0-0).
+            textExpression: >-
+              'Version 1.1.0 moved the admin UI login out of the values and into a secret you create. The
+              upgrade deletes the secret ' + context.releaseName + '-seaweedfs-admin that held it. The UI reads
+              its login on every start, so you may choose a new pair; to keep the current one, read it before
+              you upgrade with `cpln secret reveal ' + context.releaseName + '-seaweedfs-admin -o yaml` (keys
+              `WEED_ADMIN_USER` and `WEED_ADMIN_PASSWORD`) and create a dictionary secret with those values as
+              `username` and `password`, under a name of your own. 1.0.0 shipped the published default password
+              `change-me-seaweedfs-admin`: if the reveal shows it, choose a new one. The new secret needs a new
+              reveal grant, which can hold the restart back for several minutes. See
+              [Upgrading from 1.0.0](/template-catalog/templates/seaweedfs#upgrading-from-1-0-0).'
+          - path: adminUI.credentialsSecretName
+            type: ref
+            label: Admin UI credentials secret
+            required: true
+            description: A dictionary secret with the keys `username` and `password`, the admin UI login.
+            help: >-
+              Create the secret with:
+              `cpln secret create-dictionary --name SECRET_NAME --entry username=admin --entry password="$(openssl rand -hex 24)"`.
+              The UI reads the login on every start: after you change the secret's values, force a
+              redeployment of the workload.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password]
+              create:
+                suggestName: "context.releaseName + '-seaweedfs-admin-credentials'"
+        rules:
+          - rule: self.adminUI.credentialsSecretName != null && self.adminUI.credentialsSecretName != ''
+            mirrors: seaweedfs.validate
+            paths: [adminUI.credentialsSecretName]
+            message: The admin UI credentials secret is required while the admin UI is on.
+          - rule: >-
+              oldSelf == null || context.fromVersion == null || semverCompare(context.fromVersion, '1.1.0') >= 0 ||
+              self.adminUI.credentialsSecretName != context.releaseName + '-seaweedfs-admin'
+            paths: [adminUI.credentialsSecretName]
+            messageExpression: >-
+              'The upgrade deletes ' + context.releaseName + '-seaweedfs-admin, the secret 1.0.0 created for the
+              admin login. Choose a secret with another name.'
+            message: >-
+              The upgrade deletes the admin secret 1.0.0 created for this release. Choose a secret with another
+              name.
+          - rule: >-
+              oldSelf == null || context.fromVersion == null || semverCompare(context.fromVersion, '1.1.0') < 0 ||
+              !oldSelf.adminUI.enabled || self.adminUI.credentialsSecretName == oldSelf.adminUI.credentialsSecretName
+            severity: info
+            paths: [adminUI.credentialsSecretName]
+            message: >-
+              The admin UI uses the login in this secret once the replica restarts. A newly chosen secret needs a
+              new reveal grant, which can hold the restart back for several minutes.
+    rules:
+      - rule: "!has(self.adminUI.username) && !has(self.adminUI.password)"
+        mirrors: seaweedfs.validate
+        paths: [adminUI.enabled]
+        message: >-
+          adminUI.username and adminUI.password were removed in 1.1.0. Put the admin login in a dictionary
+          secret with the keys username and password, choose it under Admin UI, and remove both keys from the
+          values.
+
+  - id: server
+    title: Server
+    description: The SeaweedFS image and the compute of its single stateful replica.
+    fields:
+      - type: note
+        when: context.mode == 'upgrade'
+        text: >-
+          The template runs one replica, so every upgrade that changes the workload is a full S3 outage until
+          the replica is back. Plan it like a maintenance window.
+      - path: image
+        type: string
+        format: image
+        label: SeaweedFS image
+        required: true
+        description: >-
+          The replica runs `weed mini`: master, volume server, filer, S3 gateway and admin UI in one process.
+          Pin a released tag.
+      - path: resources
+        type: resources
+        label: Resources
+        required: true
+        description: >-
+          A single stateful replica. The volume index is held in memory, so raise the maximum memory for
+          stores with tens of millions of objects.
+        maxRatio: 4
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds every object and all metadata, and the buckets created at startup.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            help: >-
+              The data lives on the volume set and survives redeploys and upgrades. Uninstalling the release
+              deletes the volume set and every stored object, keeping a final snapshot for 7 days.
+            docs: "/reference/volumeset#capacity-and-billing"
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: volumeset.autoscaling.enabled
+        description: The volume set grows by the scaling factor whenever its free space falls below the threshold.
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [50, 100, 200, 500, 1000, 2000]
+          - path: volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
+            mirrors: seaweedfs.validate
+            paths: [volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+      - title: Buckets
+        fields:
+          - path: s3.buckets
+            type: list
+            label: Buckets to create
+            widget: tags
+            unique: true
+            description: >-
+              Created at startup when they do not exist yet. Most backup tools need their bucket to exist before
+              they run. Removing a name from the list never deletes the bucket.
+            item:
+              type: string
+              label: Bucket
+              placeholder: backups
+        rules:
+          - rule: "self.s3.buckets.all(b, b.matches('^[a-z0-9][a-z0-9.-]{2,62}$'))"
+            mirrors: seaweedfs.validate
+            paths: [s3.buckets]
+            messageExpression: >-
+              'Not a valid bucket name: ' +
+              self.s3.buckets.filter(b, !b.matches('^[a-z0-9][a-z0-9.-]{2,62}$')).join(', ') +
+              '. Use 3 to 63 lowercase letters, digits, dots and hyphens, starting with a letter or digit.'
+            message: >-
+              Every bucket name must be 3 to 63 lowercase letters, digits, dots and hyphens, starting with a
+              letter or digit.
+    rules:
+      - rule: self.volumeset.capacity >= 10
+        mirrors: seaweedfs.validate
+        paths: [volumeset.capacity]
+        message: The initial capacity must be at least 10 GiB.
+      - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: network
+    title: Network
+    description: Who can reach the S3 API and the admin UI.
+    sections:
+      - title: Public access
+        fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Public S3 endpoint
+            description: >-
+              The S3 API on the workload's `*.cpln.app` HTTPS endpoint, port 443. Anyone holding the S3 keys can
+              then read and write every bucket from the internet. Clients must use path-style addressing. The
+              admin UI is never published.
+            help: >-
+              Read the address from `status.canonicalEndpoint` in
+              `cpln workload get RELEASE_NAME-seaweedfs --gvc GVC_NAME -o yaml`. Turning it on or off takes a few
+              minutes to take effect.
+      - title: Internal access
+        docs: /reference/workload/firewall
+        fields:
+          - type: note
+            text: >-
+              Inside the GVC the S3 API is http://RELEASE_NAME-seaweedfs.GVC_NAME.cpln.local:8333, with
+              path-style addressing.
+            textExpression: >-
+              'Inside the GVC the S3 API is `http://' + context.releaseName + '-seaweedfs.' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '.cpln.local:8333`, with path-style addressing.' +
+              (self.adminUI.enabled ? ' To open the admin UI from your computer, run `cpln port-forward ' +
+              context.releaseName + '-seaweedfs 23646:23646 --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '`, open http://localhost:23646 and sign in with the admin UI credentials.' : '')
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: >-
+              Governs the S3 API and, while it is on, the admin UI. Access changes take a few minutes to take
+              effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          - path: internalAccess.workloads
+            when: self.internalAccess.type == 'workload-list'
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: The only workloads allowed to connect, from any GVC.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+    rules:
+      - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+        mirrors: seaweedfs.validate
+        paths: [internalAccess.type]
+        message: Choose None, Same GVC, Same org or Specific workloads.
+      - when: self.internalAccess.type == 'workload-list'
+        rule: size(self.internalAccess.workloads) > 0
+        severity: warning
+        paths: [internalAccess.workloads]
+        message: List at least one workload, or no workload can connect.
+      - when: self.internalAccess.type == 'none'
+        rule: self.publicAccess.enabled
+        severity: info
+        paths: [internalAccess.type]
+        message: >-
+          With None and the public endpoint off, no workload can reach SeaweedFS and it is not on the internet
+          either; only cpln port-forward reaches it.
+
+migrations:
+  # 1.1.0 moved the admin UI login into a prerequisite secret; the chart refuses both old keys.
+  - fromVersions: "<1.1.0"
+    from: adminUI.username
+    note: >-
+      The admin UI login moved to a dictionary secret with the keys username and password; choose it under
+      Credentials › Admin UI. To keep the current login, read it from the RELEASE_NAME-seaweedfs-admin secret
+      before you upgrade.
+  - fromVersions: "<1.1.0"
+    from: adminUI.password
+    note: >-
+      The admin UI login moved to a dictionary secret with the keys username and password; choose it under
+      Credentials › Admin UI. 1.0.0 shipped the published default password change-me-seaweedfs-admin: if the
+      release still uses it, choose a new one.

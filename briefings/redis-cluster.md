@@ -89,3 +89,10 @@ client can speak the Redis Cluster protocol and follow `MOVED`/`ASK` redirects.
 - **Bootstrap DNS race, fixed in 1.6.0.** `--cluster create` re-resolves every peer hostname after the ping loop has already passed; a name that briefly stops resolving produced `Invalid IP address or hostname specified`, which `set -e` turned into a container exit. Measured swinging from 1-2 restarts to 7 with a ~20 min recovery and a transient `cluster_state:fail`, on DEFAULT installs — the failure most likely to be mistaken for a broken template. Now a bounded in-process retry (12 × 5 s) that still exits non-zero when genuinely exhausted, so a real misconfiguration stays loud.
 - **The start script still discards server output** (`redis-server … > /dev/null 2>&1`), which is why failures here are hard to diagnose. Left alone deliberately: changing it alters logging for every existing install, which is a bigger behavioural change than the retry. Open for a future version.
 - **`ready: true` does not mean the cluster exists**, and the create-retry widens that window to about a minute. The probe only asks the local server for a PONG. It CANNOT be tightened to require `cluster_state:ok`: the cluster is not created until all six nodes are up, and the workload uses `scalingPolicy: OrderedReady`, so a probe waiting on cluster state would deadlock the rollout. Diagnose with `CLUSTER INFO`, never the ready flag.
+- **A rolling restart makes each node's slots unreachable for ~1.5–2 min** (measured 10-22, 6 nodes): the
+  restarting node's per-replica name stops resolving but it is not failed over, so redirected reads to it fail
+  while `cluster_state` stays `ok`. A full rollout takes ~14 min. Same in 1.6.0.
+- **Known drift, pre-existing since 1.6.0 (deferred):** `rolloutOptions.maxUnavailableReplicas` is dropped by the
+  API on this stateful workload and `terminationGracePeriodSeconds: 90` is backfilled.
+- **The start script runs `set -f`**: `$AUTH_PARAMS` is unquoted, so without it a password such as `/e*/..` globs
+  to a path and the node never passes its health wait (proven locally 10-22).

@@ -1,0 +1,10 @@
+{{- /*
+Renders nothing. It lives two directories deep on purpose: Helm renders the
+deepest template paths first, so at the top level the redis subchart's own
+"Only one authentication method can be enabled at a time" would fire before
+litellm.validate whenever a 1.1.0 values file (redis.redis.auth.password.*)
+is combined with fromSecret.enabled. At this depth the parent's message, which
+names the replacement and the upgrade procedure, is the one users see.
+*/ -}}
+{{- include "litellm.validateRedisPassword" . }}
+{{- include "litellm.validateSentinelAuth" . }}

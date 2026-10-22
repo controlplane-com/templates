@@ -363,14 +363,6 @@ steps:
             message: >-
               The previous version created this secret itself, and this upgrade deletes it. Create a secret under
               a NEW name holding your current Redis password, and name it here.
-          # The chart fails only when sentinel auth is switched on; any redis.sentinel.auth block is YAML-only here.
-          - when: self.redis.redis.auth.fromSecret.enabled
-            rule: "!has(self.redis.sentinel.auth)"
-            mirrors: litellm.validate
-            paths: [redis.redis.auth.fromSecret.enabled]
-            message: >-
-              Keep Sentinel authentication off: LiteLLM sends only the Redis password, not a Sentinel password.
-              Remove redis.sentinel.auth from the values.
 
 # Rules over the imported values: their issues show on the imported fields' steps.
 rules:
@@ -381,6 +373,15 @@ rules:
     message: >-
       redis.redis.auth.password was removed in 1.2.0: the Redis password is now a prerequisite dictionary secret
       (key password) chosen under Bundled Redis. Remove redis.redis.auth.password from the values.
+  # Top level too: since 1.2.1 the chart refuses Sentinel auth (including the plaintext
+  # redis.sentinel.auth.password) whatever Redis and Redis auth are set to. Any redis.sentinel.auth block is
+  # YAML-only here.
+  - rule: "!has(self.redis.sentinel.auth)"
+    mirrors: litellm.validateSentinelAuth
+    paths: [redis.enabled]
+    message: >-
+      Keep Sentinel authentication off (remove redis.sentinel.auth from the values): LiteLLM sends only the Redis
+      password, not a Sentinel password, and a Sentinel password would sit in the release as plain text.
   - rule: self.postgres.internalAccess.type != 'none'
     paths: [postgres.internalAccess.type]
     message: '"None" also blocks the proxy, which connects to its database like any other workload.'

@@ -123,8 +123,24 @@ than that default means the key was carried over.
 {{- if not (include "litellm.redis.secret.name" .) -}}
 {{- fail "litellm: redis.redis.auth.fromSecret.name is required when redis.redis.auth.fromSecret.enabled is true — the name of a prerequisite dictionary secret holding the Redis password under the key `password` (must exist BEFORE install)" -}}
 {{- end -}}
-{{- if or (dig "auth" "password" "enabled" false .Values.redis.sentinel) (dig "auth" "fromSecret" "enabled" false .Values.redis.sentinel) -}}
-{{- fail "litellm: redis.sentinel.auth must stay disabled — LiteLLM sends only the master password, not a sentinel password (upstream #20734); the same-gvc firewall is the boundary" -}}
 {{- end -}}
+{{- include "litellm.validateSentinelAuth" . -}}
+{{- end }}
+
+{{/*
+Sentinel auth is refused whether or not Redis (or Redis auth) is on. LiteLLM
+sends only the master password, not a Sentinel password (upstream #20734), so a
+Sentinel password would only lock it out — and the plaintext form
+(redis.sentinel.auth.password.enabled + .value) would make the redis subchart
+write the value into {release}-sentinel-auth-password straight from the Helm
+release (through 1.2.0 this check ran only with Redis auth on). The subchart's
+own default for password.value is "your-password" (merged into these values),
+so only another value counts as "set". Also included from
+templates/validate/redis/auth.yaml, which Helm renders before the subchart.
+*/}}
+{{- define "litellm.validateSentinelAuth" -}}
+{{- $s := dig "auth" dict (.Values.redis.sentinel | default dict) -}}
+{{- if or (dig "password" "enabled" false $s) (not (has (toString (dig "password" "value" "your-password" $s)) (list "" "your-password"))) (dig "fromSecret" "enabled" false $s) -}}
+{{- fail "litellm: redis.sentinel.auth must stay disabled — LiteLLM sends only the Redis master password, not a Sentinel password (upstream #20734), and a plaintext redis.sentinel.auth.password would land in the Helm release. Remove redis.sentinel.auth from your values; the same-gvc firewall is the Sentinels' boundary. To require a Redis password, use redis.redis.auth.fromSecret (see Prerequisites in the README)." -}}
 {{- end -}}
 {{- end }}

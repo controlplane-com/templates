@@ -29,6 +29,12 @@ steps:
               changed it). This upgrade restarts PostgreSQL, the webserver and the workers, so Airflow is
               unavailable for a few minutes. A new workload version can wait about 10 minutes on `is not allowed
               to reveal the secret` while the old one keeps serving; it clears by itself.
+            textExpression: >-
+              'Put the CURRENT database username, password and database in the new secret, not new ones (read them ' +
+              'with `cpln secret reveal ' + context.releaseName + '-airflow-config -o yaml`; the database is `airflow` ' +
+              'unless you changed it). This upgrade restarts PostgreSQL, the webserver and the workers, so Airflow is ' +
+              'unavailable for a few minutes. A new workload version can wait about 10 minutes on `is not allowed ' +
+              'to reveal the secret` while the old one keeps serving; it clears by itself.'
           - path: airflow.auth.secretName
             type: ref
             label: Auth secret
@@ -525,7 +531,7 @@ migrations:
     note: >-
       The database credentials are now a prerequisite dictionary secret (username, password, database). Create
       it under a NEW name with the values the database was initialized with (the username and password are in
-      the RELEASE_NAME-airflow-config secret, which this upgrade deletes), and choose it under Credentials.
+      the secret named after your release, ending in `-airflow-config`, which this upgrade deletes), and choose it under Credentials.
   - fromVersions: "<2.1.0"
     from: postgres.config.password
     note: >-

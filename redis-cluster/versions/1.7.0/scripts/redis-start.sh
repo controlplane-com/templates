@@ -1,0 +1,126 @@
+#!/bin/bash
+
+set -e
+
+cp /usr/local/etc/redis/redis-default.conf /usr/local/etc/redis/redis.conf
+
+# Find which member of the Stateful Set this pod is running
+# e.g. "redis-cluster-0" -> "0"
+PET_ORDINAL=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev)
+WORKLOAD_NAME=$(echo $CPLN_WORKLOAD | sed 's|.*/workload/\([^/]*\)$|\1|')
+NODE_LIST=""
+
+echo "" >> /usr/local/etc/redis/redis.conf
+# Redis 7.2.14+ requires cluster-announce-ip to be a real IP; announce the pod IP
+# for the cluster bus and the stable replica DNS name for client redirects
+MY_IP=$(hostname -i | awk '{print $1}')
+echo "cluster-announce-ip $MY_IP" >> /usr/local/etc/redis/redis.conf
+echo "cluster-announce-hostname $WORKLOAD_NAME-$PET_ORDINAL.$WORKLOAD_NAME" >> /usr/local/etc/redis/redis.conf
+echo "cluster-preferred-endpoint-type hostname" >> /usr/local/etc/redis/redis.conf
+redis-server /usr/local/etc/redis/redis.conf > /dev/null 2>&1 &
+REDIS_PID=$!
+trap 'kill -TERM $REDIS_PID; wait $REDIS_PID' TERM INT
+sleep 10
+
+# Auth parameters if password is set
+AUTH_PARAMS=""
+if [ ! -z "$REDIS_PASSWORD" ]; then
+    AUTH_PARAMS="--no-auth-warning -a $REDIS_PASSWORD"
+fi
+
+# Waiting for redis to become Healthy
+while true; do
+    response=$(redis-cli $AUTH_PARAMS -p "$CUSTOM_REDIS_PORT" ping 2>&1)
+    # Check if the response is "PONG"
+    if [[ "$response" == *"PONG"* ]]; then
+        echo "Redis node is HEALTHY"
+        break
+    else
+        echo "Waiting for Redis node to become healthy"
+    fi
+    sleep 5
+done
+
+# Construct NODE_LIST
+for (( i=0; i<CUSTOM_NUM_NODES; i++ )); do
+    NODE_LIST+="$WORKLOAD_NAME-$i.$WORKLOAD_NAME:$CUSTOM_REDIS_PORT "
+done
+
+# Trim the trailing space
+NODE_LIST=$(echo $NODE_LIST | sed 's/ $//')
+
+# Cluster init
+cluster_status=$(redis-cli $AUTH_PARAMS -p "$CUSTOM_REDIS_PORT" cluster info | grep "cluster_state" | cut -d':' -f2 | tr -d '\r')
+
+if [[ "$cluster_status" == "ok" ]]; then
+    echo "Redis cluster is HEALTHY"
+    cluster_status=$(redis-cli $AUTH_PARAMS -p "$CUSTOM_REDIS_PORT" cluster info)
+    echo "$cluster_status"
+else
+    while true; do
+        all_nodes_healthy=true
+        for (( i=0; i<CUSTOM_NUM_NODES; i++ )); do
+            # Attempt to ping the current Redis node
+            response=$(redis-cli $AUTH_PARAMS -h "$WORKLOAD_NAME-$i.$WORKLOAD_NAME" -p $CUSTOM_REDIS_PORT ping 2>&1) || true
+            # Check if the response is "PONG"
+            if [[ "$response" == *"PONG"* ]]; then
+                echo "Node $i is HEALTHY. Received PONG."
+            else
+                echo "Node $i did not respond with PONG. Restarting check from the first node..."
+                all_nodes_healthy=false
+                break
+            fi
+        done
+
+        # If this is replica *-0, all nodes are healthy, and the cluster is not initiated, create the cluster
+        if [[ $PET_ORDINAL == 0 && "$all_nodes_healthy" == true ]]; then
+            cluster_status=$(redis-cli $AUTH_PARAMS -p "$CUSTOM_REDIS_PORT" cluster info | grep "cluster_state" | cut -d':' -f2 | tr -d '\r')
+            if [ "$cluster_status" = "ok" ]; then
+                echo "All nodes are healthy and cluster status is OK."
+                break
+            else
+                echo "Creating Cluster"
+                # `--cluster create` RE-RESOLVES every peer hostname, and a name
+                # that answered the ping loop moments earlier can briefly stop
+                # resolving ("Invalid IP address or hostname specified"). Under
+                # `set -e` that killed the container, so one transient DNS blip
+                # cost a full restart -- measured at 7 restarts and ~20 minutes to
+                # converge on a default install, with cluster_state:fail visible
+                # throughout. Retry in-process instead.
+                #
+                # Bounded, and still exits non-zero when exhausted: a real
+                # misconfiguration must stay loud. Only the transient case is
+                # absorbed. `if` is deliberate -- `cmd && break` would make the
+                # && list's non-zero status trip `set -e` on a failed attempt.
+                create_attempts=0
+                cluster_created=false
+                while [ "$create_attempts" -lt 12 ]; do
+                    if [ ! -z "$REDIS_PASSWORD" ]; then
+                        if redis-cli $AUTH_PARAMS -p "$CUSTOM_REDIS_PORT" --cluster create $NODE_LIST --cluster-replicas 1 --cluster-yes; then
+                            cluster_created=true
+                            break
+                        fi
+                    else
+                        if redis-cli -p "$CUSTOM_REDIS_PORT" --cluster create $NODE_LIST --cluster-replicas 1 --cluster-yes; then
+                            cluster_created=true
+                            break
+                        fi
+                    fi
+                    create_attempts=$((create_attempts + 1))
+                    echo "cluster create failed (attempt $create_attempts/12) - retrying in 5s"
+                    sleep 5
+                done
+                if [ "$cluster_created" != true ]; then
+                    echo "FATAL: cluster create did not succeed after 12 attempts" >&2
+                    exit 1
+                fi
+                break
+            fi   
+        fi
+
+        # Short delay before restarting loop
+        sleep 5
+    done
+fi
+
+wait $REDIS_PID

@@ -17,9 +17,14 @@ steps:
         when: >-
           context.mode == 'install' ||
           (context.fromVersion != null && semverCompare(context.fromVersion, '1.4.0') < 0)
+        textExpression: >-
+          'The credentials secret must exist **before** you install or upgrade. If it is missing, the ' +
+          'deployment waits on it and `cpln logs` shows nothing at all; the reason is in ' +
+          '`cpln workload get-deployments ' + context.releaseName + '-mongo` under `status.versions[].message`.'
         text: >-
           The credentials secret must exist **before** you install or upgrade. If it is missing, the
-          deployment waits on it and `cpln logs` shows nothing at all.
+          deployment waits on it and `cpln logs` shows nothing at all; the reason is in
+          `cpln workload get-deployments RELEASE-mongo` under `status.versions[].message`.
       - type: note
         severity: warning
         when: >-
@@ -195,110 +200,6 @@ steps:
         paths: [volumeset.capacity]
         message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
 
-  - id: network
-    title: Network
-    description: Who can connect to the database, inside Control Plane and from the internet.
-    sections:
-      - title: Database access
-        docs: "#internal-access"
-        fields:
-          - path: internalAccess.type
-            type: enum
-            label: Who can connect
-            widget: cards
-            required: true
-            description: Access changes take up to a couple of minutes to take effect.
-            options:
-              - value: none
-                label: None
-                description: No workload can connect.
-              - value: same-gvc
-                label: Same GVC
-                description: Any workload in this GVC.
-              - value: same-org
-                label: Same org
-                description: Any workload in this org.
-              - value: workload-list
-                label: Specific workloads
-                description: Only the workloads listed below.
-          # Shown for every type: the values comment says "only used if type is same-gvc or workload-list", but
-          # workload-mongodb.yaml:43-44 writes any non-empty list into inboundAllowWorkload, and the platform
-          # validates every entry, though it applies the workload links only with same-gvc and workload-list.
-          - path: internalAccess.workloads
-            when: self.internalAccess.type in ['same-gvc', 'workload-list'] || size(self.internalAccess.workloads) > 0
-            type: list
-            label: Allowed workloads
-            widget: tags
-            unique: true
-            description: >-
-              Extra workloads allowed to connect, for example from another GVC. The platform applies the list
-              with Same GVC and Specific workloads.
-            item:
-              type: ref
-              ref:
-                kind: workload
-                gvc: any
-                format: relativeLink
-                mustExist: warning
-                excludeTargetGvcWhen: self.internalAccess.type == 'same-gvc'
-      - title: Internet access
-        docs: "#direct-load-balancer"
-        fields:
-          - path: directLoadBalancer.enabled
-            type: boolean
-            label: Publish through a direct load balancer
-            description: >-
-              Exposes MongoDB on TCP port 27017 through a direct load balancer with a public address in each
-              location. Anyone who reaches it needs only the password; leave it off for applications inside
-              Control Plane.
-    rules:
-      - when: self.internalAccess.type == 'workload-list'
-        rule: size(self.internalAccess.workloads) > 0
-        severity: warning
-        paths: [internalAccess.workloads]
-        message: List at least one workload when the database is open to specific workloads, or none can connect.
-      - when: self.internalAccess.type == 'same-gvc' && context.gvc != null
-        rule: "!self.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
-        severity: info
-        paths: [internalAccess.workloads]
-        messageExpression: >-
-          'Same GVC already allows every workload in this GVC: ' +
-          self.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
-          ' can be removed from the list.'
-        message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
-      - when: self.internalAccess.type == 'same-org'
-        rule: size(self.internalAccess.workloads) == 0
-        severity: info
-        paths: [internalAccess.workloads]
-        message: >-
-          Same org already lets every workload of the org connect to MongoDB, so the workloads listed add
-          nothing.
-      - when: self.internalAccess.type == 'none'
-        rule: size(self.internalAccess.workloads) == 0
-        severity: warning
-        paths: [internalAccess.workloads]
-        message: >-
-          The chart still writes the listed workloads into the firewall, where the platform checks every
-          entry, but "None" lets none of them connect. Remove them.
-      - when: self.internalAccess.type == 'none'
-        rule: "!self.backup.enabled"
-        severity: warning
-        paths: [internalAccess.type]
-        message: >-
-          "None" also blocks the backup job, which connects to MongoDB like any other workload.
-      - when: self.internalAccess.type == 'workload-list' && context.gvc != null && self.backup.enabled
-        rule: >-
-          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mongo-backup') in self.internalAccess.workloads
-        severity: warning
-        paths: [internalAccess.workloads]
-        messageExpression: >-
-          'The chart does not add its own backup job to the list. Add //gvc/' + context.gvc + '/workload/' +
-          context.releaseName + '-mongo-backup, or it cannot connect.'
-        message: The chart does not add its own backup job to the list; add the backup workload, or it cannot connect.
-        fix:
-          path: internalAccess.workloads
-          items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mongo-backup']"
-
   - id: backup
     title: Backups
     description: Scheduled database dumps to object storage.
@@ -427,6 +328,118 @@ steps:
             label: Folder prefix
             pattern: '^(?!/)'
             patternMessage: Leave out the leading /.
+
+  - id: network
+    title: Network
+    description: Who can connect to the database, inside Control Plane and from the internet.
+    sections:
+      - title: Database access
+        docs: "#internal-access"
+        fields:
+          - type: note
+            severity: info
+            textExpression: >-
+              'Applications connect to `' + context.releaseName + '-mongo.' + (context.gvc == null ? 'GVC' : context.gvc) +
+              '.cpln.local:27017` with the secret username and password and `authSource=admin`.'
+            text: >-
+              Applications connect to `RELEASE-mongo.GVC.cpln.local:27017` with the secret username and
+              password and `authSource=admin`.
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: Access changes take up to a couple of minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          # Shown for every type: the values comment says "only used if type is same-gvc or workload-list", but
+          # workload-mongodb.yaml:43-44 writes any non-empty list into inboundAllowWorkload, and the platform
+          # validates every entry, though it applies the workload links only with same-gvc and workload-list.
+          - path: internalAccess.workloads
+            when: self.internalAccess.type in ['same-gvc', 'workload-list'] || size(self.internalAccess.workloads) > 0
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: >-
+              With Specific workloads, the only workloads allowed to connect; with Same GVC, extra workloads
+              from other GVCs. The platform ignores the list with the other choices.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internalAccess.type == 'same-gvc'
+      - title: Internet access
+        docs: "#direct-load-balancer"
+        fields:
+          - path: directLoadBalancer.enabled
+            type: boolean
+            label: Publish through a direct load balancer
+            description: >-
+              Exposes MongoDB on TCP port 27017 through a direct load balancer with a public address in each
+              location. Anyone who reaches it needs only the password; leave it off for applications inside
+              Control Plane.
+    rules:
+      - when: self.internalAccess.type == 'workload-list'
+        rule: size(self.internalAccess.workloads) > 0
+        severity: warning
+        paths: [internalAccess.workloads]
+        message: List at least one workload when the database is open to specific workloads, or none can connect.
+      - when: self.internalAccess.type == 'same-gvc' && context.gvc != null
+        rule: "!self.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+        severity: info
+        paths: [internalAccess.workloads]
+        messageExpression: >-
+          'Same GVC already allows every workload in this GVC: ' +
+          self.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+          ' can be removed from the list.'
+        message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+      - when: self.internalAccess.type == 'same-org'
+        rule: size(self.internalAccess.workloads) == 0
+        severity: info
+        paths: [internalAccess.workloads]
+        message: >-
+          Same org already lets every workload of the org connect to MongoDB, so the workloads listed add
+          nothing.
+      - when: self.internalAccess.type == 'none'
+        rule: size(self.internalAccess.workloads) == 0
+        severity: warning
+        paths: [internalAccess.workloads]
+        message: >-
+          The chart still writes the listed workloads into the firewall, where the platform checks every
+          entry, but "None" lets none of them connect. Remove them.
+      - when: self.internalAccess.type == 'none'
+        rule: "!self.backup.enabled"
+        severity: warning
+        paths: [internalAccess.type]
+        message: >-
+          "None" also blocks the backup job, which connects to MongoDB like any other workload.
+      - when: self.internalAccess.type == 'workload-list' && context.gvc != null && self.backup.enabled
+        rule: >-
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mongo-backup') in self.internalAccess.workloads
+        severity: warning
+        paths: [internalAccess.workloads]
+        messageExpression: >-
+          'The chart does not add its own backup job to the list. Add //gvc/' + context.gvc + '/workload/' +
+          context.releaseName + '-mongo-backup, or it cannot connect.'
+        message: The chart does not add its own backup job to the list; add the backup workload, or it cannot connect.
+        fix:
+          path: internalAccess.workloads
+          items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mongo-backup']"
 
 rules:
   - rule: context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '1.2.0') >= 0

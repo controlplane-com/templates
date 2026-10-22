@@ -139,7 +139,8 @@ steps:
             label: Extra broker properties
             description: >-
               Written to `server.properties`. `default.replication.factor` and `min.insync.replicas`
-              are derived from the broker count unless you set them here.
+              are derived from the broker count unless you set them here. With broker passwords from a
+              secret, keep `env` in `config.providers`.
           - path: kafka.env
             type: yaml
             yamlType: list
@@ -190,7 +191,7 @@ steps:
             virtual: true
             type: enum
             label: Broker passwords
-            widget: segmented
+            widget: cards
             required: true
             # A new install starts on the secret; a release that keeps its passwords in values stays there.
             init: >-
@@ -204,7 +205,7 @@ steps:
                   and controller password comes from one dictionary secret.
               - value: inline
                 label: In values
-                description: "Less secure: the passwords are stored in the Helm release."
+                description: "Less secure: the passwords are stored in the Helm release. Clears the secret chosen here."
                 set: { kafka.credentialsSecretName: "" }
             rules:
               - when: context.mode == 'install' && ui.kafkaPasswords == 'inline'
@@ -217,7 +218,7 @@ steps:
             severity: warning
             when: ui.kafkaPasswords == 'secret'
             text: >-
-              The secret must exist **before** you install. If it is missing, the brokers wait and
+              The secret must exist **before** you install or upgrade. If it is missing, the brokers wait and
               `cpln logs` shows nothing. After you change a password in it, force a redeployment of
               the brokers; the running ones keep the old one.
           - type: note
@@ -260,6 +261,7 @@ steps:
                   (self.kafka.listeners[k].sasl.users == null ||
                   self.kafka.listeners[k].sasl.users.split(',').all(u, u.trim() == '' || u.trim().matches('^[A-Za-z0-9._-]+$')))))
                 mirrors: kafka.validateCredentialsSecret
+                paths: [kafka.listeners]
                 message: >-
                   With a credentials secret, listener names and SASL usernames may use only letters, digits,
                   `.`, `_` and `-`: they form the secret's keys.
@@ -398,7 +400,8 @@ steps:
                   self.kafka.listeners[k].sasl != null && self.kafka.listeners[k].sasl.admin != null)
                 mirrors: kafka.validateAdminExists
                 message: At least one SASL_PLAINTEXT listener needs an admin user.
-              - rule: >-
+              - when: self.kafka.credentialsSecretName == null || self.kafka.credentialsSecretName == ''
+                rule: >-
                   self.kafka.listeners.all(k, self.kafka.listeners[k].protocol != 'SASL_PLAINTEXT' ||
                   (self.kafka.listeners[k].sasl != null && self.kafka.listeners[k].sasl.users != null &&
                   self.kafka.listeners[k].sasl.users != '' &&
@@ -736,7 +739,7 @@ steps:
             virtual: true
             type: enum
             label: REST Proxy JAAS file
-            widget: segmented
+            widget: cards
             required: true
             # Inline unless a secret is named, so a default install needs only the broker-passwords secret.
             init: >-
@@ -749,7 +752,7 @@ steps:
                   Kafka password, in an opaque secret.
               - value: inline
                 label: In values
-                description: "Less secure: the JAAS file and its password are stored in the Helm release."
+                description: "Less secure: the JAAS file and its password are stored in the Helm release. Clears the secret chosen here."
                 set: { kafka_rest_proxy.jaas_conf_secret: "" }
             rules:
               - when: ui.restProxyJaas == 'inline'
@@ -785,11 +788,18 @@ steps:
             example: true
             when: ui.restProxyJaas == 'inline'
             description: Its `KafkaClient` password must match a SASL user on the brokers.
+          - type: note
+            severity: warning
+            when: ui.restProxyJaas == 'inline' && ui.kafkaPasswords == 'secret'
+            text: >-
+              Replace `your-admin-password` in the JAAS file with the `client-admin-password` from the broker
+              credentials secret (or the password of whichever SASL user it logs in as). Choose From a secret
+              above to keep that password out of the release values.
           - id: restProxyUsers
             virtual: true
             type: enum
             label: Basic auth users
-            widget: segmented
+            widget: cards
             required: true
             init: >-
               self.kafka_rest_proxy.password_properties_secret != null && self.kafka_rest_proxy.password_properties_secret != '' ? 'secret' :
@@ -797,13 +807,14 @@ steps:
             options:
               - value: none
                 label: None
+                description: Clears the users and the secret chosen here.
                 set: { kafka_rest_proxy.password_properties_secret: "", kafka_rest_proxy.password_properties: {} }
               - value: secret
                 label: From a secret
                 description: "Recommended: the passwords never enter the release values. The whole `password.properties` file in an opaque secret."
               - value: inline
                 label: In values
-                description: "Less secure: the passwords are stored in the Helm release."
+                description: "Less secure: the passwords are stored in the Helm release. Clears the secret chosen here."
                 set: { kafka_rest_proxy.password_properties_secret: "" }
           - path: kafka_rest_proxy.password_properties_secret
             type: ref
@@ -812,7 +823,8 @@ steps:
             when: ui.restProxyUsers == 'secret'
             description: >-
               An opaque secret (encoding plain) holding the whole `password.properties` file, one
-              `user: password,role` line per user; used when `authentication.method` is `BASIC`.
+              `user: password,role` line per user; used when `authentication.method` is `BASIC`. After you
+              change it, force a redeployment of the REST Proxy.
             ref:
               kind: secret
               format: name
@@ -1043,6 +1055,9 @@ steps:
                   type: map
                   label: Worker properties
                   description: Written to `connect-distributed.properties`.
+                  help: >-
+                    To keep passwords out of the values, read them with `${env:VAR}` from an env var set to a
+                    `cpln://secret/...` reference; see [Kafka Connect credentials](#kafka-connect-credentials).
                   values: { type: string }
                 - path: plugins
                   type: yaml

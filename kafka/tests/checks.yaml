@@ -90,8 +90,10 @@ checks:
       script: wget -qO- http://127.0.0.1:8080/api/clusters
     expect:
       stdout: '"status":"ONLINE".*"brokerCount":3'
-    retries: 4
-    retryDelaySeconds: 20
+    # Kafbat refreshes its cluster view on a timer, so right after an upgrade it can still count a
+    # broker that is rejoining as missing.
+    retries: 8
+    retryDelaySeconds: 30
 
   - id: log4j-root-loglevel
     issue: "#5137"

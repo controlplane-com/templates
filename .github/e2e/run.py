@@ -308,9 +308,15 @@ def values_file(base, ctx):
     return f.name
 
 
+def chart_values(chart):
+    """The version's own values.yaml, passed explicitly: some versions' .helmignore leaves it out of the
+    chart (kafka 2.0.0-3.5.1), so Helm alone would render them with no defaults at all."""
+    return ["-f", os.path.join(chart, "values.yaml")]
+
+
 def helm(t, verb, version, vfile, timeout_s):
     chart = os.path.join(ROOT, t.service, "versions", version)
-    args = ["helm", verb, t.release, chart, "--gvc", t.gvc, "--dependency-update", "-f", vfile,
+    args = ["helm", verb, t.release, chart, "--gvc", t.gvc, "--dependency-update", *chart_values(chart), "-f", vfile,
             "--wait", "--timeout", str(timeout_s), "--tag", "=".join(MANAGED_TAG), "--state-tag", "=".join(MANAGED_TAG)]
     code, out, err = cpln(*args, timeout=timeout_s + 300)
     return code, out + err
@@ -330,7 +336,8 @@ def deployments_summary(t):
 
 def rendered_docs(t, version, vfile):
     chart = os.path.join(ROOT, t.service, "versions", version)
-    code, out, err = sh(["helm", "template", t.release, chart, "--set", f"global.cpln.gvc={t.gvc}", "-f", vfile])
+    code, out, err = sh(["helm", "template", t.release, chart, "--set", f"global.cpln.gvc={t.gvc}",
+                         *chart_values(chart), "-f", vfile])
     if code:
         raise RuntimeError(err.strip()[-400:])
     return [d for d in yaml.safe_load_all(out) if isinstance(d, dict) and d.get("kind")]

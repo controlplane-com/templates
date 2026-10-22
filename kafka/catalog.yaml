@@ -75,6 +75,25 @@ related:
 
 prerequisites:
   - kind: secret
+    secretType: dictionary
+    keys: [inter-broker-password, controller-password, client-admin-password, client-user-password]
+    valuesPath: kafka.credentialsSecretName
+    required: false
+    when: kafka.credentialsSecretName is set (recommended; empty keeps the passwords in values)
+    description: Every broker password; each SASL admin and user needs a <listener>-<username>-password key (shown for the default listener). Create it before installing.
+  - kind: secret
+    secretType: opaque
+    valuesPath: kafka_rest_proxy.jaas_conf_secret
+    required: false
+    when: kafka_rest_proxy.jaas_conf_secret is set (recommended while the REST Proxy is on)
+    description: The REST Proxy's whole JAAS file, whose KafkaClient login holds a Kafka password; example in the README.
+  - kind: secret
+    secretType: opaque
+    valuesPath: kafka_rest_proxy.password_properties_secret
+    required: false
+    when: kafka_rest_proxy.password_properties_secret is set
+    description: "The REST Proxy's basic auth users file, one `user: password,role` line per user."
+  - kind: secret
     secretType: opaque
     valuesPath: kafbat_ui.configuration_secret
     required: true

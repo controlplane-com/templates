@@ -64,6 +64,12 @@ prerequisites:
     valuesPath: airflow.auth.secretName
     required: true
     description: API token signing key, Fernet key (32 url-safe base64 bytes, never rotate) and admin UI password. A missing secret leaves the deployment waiting with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: postgres.config.credentialsSecretName
+    required: true
+    description: Metadata database username, password and database name; the bundled PostgreSQL initializes from it and Airflow connects with it. A missing secret leaves the deployment waiting with no logs.
   - kind: other
     valuesPath: location
     required: true

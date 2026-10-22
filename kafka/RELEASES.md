@@ -1,3 +1,14 @@
+# Release Notes - Version 4.4.0
+
+## What's New
+
+- **Every credential can come from a secret you create** (recommended). Inline passwords keep working exactly as before; nothing changes for a release until you set one of these:
+  - `kafka.credentialsSecretName`: a dictionary secret with `inter-broker-password`, `controller-password` and one `<listener>-<username>-password` key per SASL admin and user. It replaces every broker password in values, and the health sidecar, Kafka exporter and Kafka UI read the admin password from it.
+  - `kafka_rest_proxy.jaas_conf_secret` and `kafka_rest_proxy.password_properties_secret`: opaque secrets holding the REST Proxy's whole JAAS file and basic auth users file.
+  - Kafka Connect workers can read their passwords from secrets through Kafka's `env` config provider; the README has an example.
+- Changing a password in a secret takes effect after `cpln workload force-redeployment`.
+- Upgrading from 4.3.0 with unchanged values renders the same configuration; as with any chart version change, the brokers restart.
+
 # Release Notes - Version 4.3.0
 
 ## What's New

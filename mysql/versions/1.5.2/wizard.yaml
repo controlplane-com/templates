@@ -39,6 +39,18 @@ steps:
               change it with `ALTER USER` (for root, both `'root'@'localhost'` and `'root'@'%'`), then update
               the secret to match. See
               [Upgrading from 1.4.3 or earlier](/template-catalog/templates/mysql#upgrading-from-1-4-3-or-earlier).
+            textExpression: >-
+              'Version 1.5.0 moved the database credentials out of the values and into the two secrets below. ' +
+              'Before you upgrade, read the credentials the database already uses, because the upgrade deletes ' +
+              'the secret that holds them: `cpln secret reveal ' + context.releaseName + '-mysql-config -o yaml` (keys `user`, ' +
+              '`password`, `database` and `rootPassword`). Create both secrets with those same values (`user` ' +
+              'becomes `username`, `password` and `database` keep their names, and `rootPassword` is the whole ' +
+              'content of the root password secret): the database keeps the credentials stored on its volume. ' +
+              'Earlier versions shipped published default passwords (`password` and `root-password`, shared by ' +
+              'every install). If the reveal shows either one, treat it as compromised: after the upgrade, ' +
+              "change it with `ALTER USER` (for root, both `'root'@'localhost'` and `'root'@'%'`), then update " +
+              'the secret to match. See ' +
+              '[Upgrading from 1.4.3 or earlier](/template-catalog/templates/mysql#upgrading-from-1-4-3-or-earlier).'
           - path: credentialsSecretName
             type: ref
             label: Database credentials secret
@@ -88,7 +100,7 @@ steps:
             message: >-
               MySQL reads the credentials only when its data directory is first initialized; pointing at
               another secret does not change the existing user, password or database. The new secret must
-              keep the same `username` and `database`; run `ALTER USER` first so its password matches, or
+              keep the same username and database; run ALTER USER first so its password matches, or
               your applications cannot sign in.
           - rule: >-
               oldSelf == null || !has(oldSelf.rootPasswordSecretName) ||
@@ -97,13 +109,13 @@ steps:
             paths: [rootPasswordSecretName]
             messageExpression: >-
               "MySQL sets the root password only when its data directory is first initialized; pointing at
-              another secret does not change it. Run `ALTER USER` for both `'root'@'localhost'` and
-              `'root'@'%'` first so the new secret matches" + (self.backup.enabled ? ", or the backup job,
+              another secret does not change it. Run ALTER USER for both 'root'@'localhost' and
+              'root'@'%' first so the new secret matches" + (self.backup.enabled ? ", or the backup job,
               which signs in as root with this secret, cannot connect." : ".")
             message: >-
               MySQL sets the root password only when its data directory is first initialized; pointing at
-              another secret does not change it. Run `ALTER USER` for both `'root'@'localhost'` and
-              `'root'@'%'` first so the new secret matches.
+              another secret does not change it. Run ALTER USER for both 'root'@'localhost' and
+              'root'@'%' first so the new secret matches.
 
   - id: server
     title: Server and storage

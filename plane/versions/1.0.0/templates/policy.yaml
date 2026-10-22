@@ -1,0 +1,22 @@
+{{- include "plane.validate" . -}}
+kind: policy
+name: {{ include "plane.policy.name" . }}
+description: Plane secret access
+tags: {{- include "plane.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "plane.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "plane.secret.creds.name" . }}
+  - //secret/{{ .Values.secrets.name }}
+  - //secret/{{ include "plane.secret.caddyfile.name" . }}
+  - //secret/{{ include "plane.secret.adminNginx.name" . }}
+  - //secret/{{ include "plane.secret.mqConf.name" . }}
+  - //secret/{{ include "plane.secret.beatStart.name" . }}
+  - //secret/{{ include "plane.secret.workerStart.name" . }}
+  {{- if and (eq .Values.storage.type "s3") .Values.storage.s3.auth.secretName }}
+  - //secret/{{ .Values.storage.s3.auth.secretName }}
+  {{- end }}

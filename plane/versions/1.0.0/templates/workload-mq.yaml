@@ -1,0 +1,93 @@
+{{- include "plane.validate" . -}}
+{{- /*
+  RabbitMQ — the Celery broker, and REQUIRED.
+
+  Plane 1.x runs Celery over AMQP: settings/common.py builds CELERY_BROKER_URL
+  from AMQP_URL (or from RABBITMQ_*), and there is no Redis-broker code path.
+  Redis is the Django cache and the live editor's channel — a different job.
+
+  Bundled rather than vendoring the `rabbitmq` template: that template predates
+  the 3.4.0 values conventions (no credentialsSecretName, no internalAccess
+  shape) and offers no dependency contract. We copy its APPROACH — a stateful
+  workload with a mounted rabbitmq.conf from an opaque secret, and credentials
+  supplied as env vars rather than written into the config file.
+
+  `stateful` is load-bearing beyond the volumeset: RabbitMQ's mnesia directory
+  is named `rabbit@$(hostname)`, and a `standard` workload's random
+  `{workload}-{replicaset}-{random}` hostname would strand the previous node's
+  data on every restart. `stateful` gives a stable `{workload}-0`.
+
+  The image's entrypoint runs as root, chowns /var/lib/rabbitmq and drops to the
+  `rabbitmq` user — so the root-owned volumeset mount needs no
+  securityOptions.filesystemGroupId (this is also what the shipped `rabbitmq`
+  template does).
+*/}}
+kind: workload
+name: {{ include "plane.mq.name" . }}
+description: Plane RabbitMQ — the Celery broker
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "plane.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "plane.identity.name" . }}
+  containers:
+    - name: rabbitmq
+      image: {{ .Values.rabbitmq.image }}
+      inheritEnv: false
+      cpu: {{ .Values.rabbitmq.resources.cpu | quote }}
+      memory: {{ .Values.rabbitmq.resources.memory | quote }}
+      env:
+        # RabbitMQ 3.9+ reads these natively. They are env vars, not config-file
+        # entries, precisely so the password can stay a cpln:// reference — a
+        # cpln:// written into a mounted file stays literal text.
+        # NOTE: RABBITMQ_DEFAULT_* apply on FIRST BOOT ONLY (they seed an empty
+        # mnesia). Changing rabbitmq.password on an existing release does not
+        # change the broker's password — see Important Notes in the README.
+        - name: RABBITMQ_DEFAULT_USER
+          value: cpln://secret/{{ include "plane.secret.creds.name" . }}.mqUsername
+        - name: RABBITMQ_DEFAULT_PASS
+          value: cpln://secret/{{ include "plane.secret.creds.name" . }}.mqPassword
+        - name: RABBITMQ_DEFAULT_VHOST
+          value: {{ .Values.rabbitmq.vhost | quote }}
+        - name: RABBITMQ_CONFIG_FILE
+          value: /etc/rabbitmq/rabbitmq.conf
+      ports:
+        - number: 5672
+          protocol: tcp
+        # Management UI. External inbound is always closed on this workload;
+        # reach it with `cpln port-forward` when you need to inspect the queue.
+        - number: 15672
+          protocol: http
+      readinessProbe:
+        exec:
+          command:
+            - rabbitmq-diagnostics
+            - -q
+            - ping
+        initialDelaySeconds: 20
+        periodSeconds: 10
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 10
+      volumes:
+        - path: /etc/rabbitmq/rabbitmq.conf
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "plane.secret.mqConf.name" . }}.payload
+        - path: /var/lib/rabbitmq
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "plane.mq.volumeset.name" . }}
+  defaultOptions:
+    {{- include "plane.defaultOptions" (dict "timeout" 5) | nindent 4 }}
+  localOptions:
+    {{- include "plane.localOptions" (dict "root" . "replicas" 1 "timeout" 5) | nindent 4 }}
+  firewallConfig:
+    external:
+      {{- include "plane.externalFirewall" (dict "root" . "public" false) | nindent 6 }}
+    internal:
+      {{- include "plane.internalFirewall" . | nindent 6 }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

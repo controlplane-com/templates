@@ -159,9 +159,21 @@ steps:
           oldSelf == null ||
           oldSelf.redis.sentinel.auth.fromSecret.name != 'my-cpln-task-runner-sentinel-credentials' ||
           oldSelf.redis.redis.auth.fromSecret.name == 'task-runner-secrets' ||
-          (self.redis.redis.auth.fromSecret.name != oldSelf.redis.redis.auth.fromSecret.name &&
-          self.redis.sentinel.auth.fromSecret.name != oldSelf.redis.redis.auth.fromSecret.name)
-        paths: [redis.redis.auth.fromSecret.name, redis.sentinel.auth.fromSecret.name]
+          self.redis.redis.auth.fromSecret.name != oldSelf.redis.redis.auth.fromSecret.name
+        paths: [redis.redis.auth.fromSecret.name]
+        message: >-
+          The previous version created this secret itself (its secretName), and this upgrade deletes it. Create
+          the credentials secrets under new names holding the same passwords.
+        messageExpression: >-
+          'The previous version created ' + oldSelf.redis.redis.auth.fromSecret.name + ' itself (its secretName), and this upgrade deletes it. Create the credentials secrets under new names holding the same passwords.'
+      - when: >-
+          context.fromVersion != null && semverCompare(context.fromVersion, '1.4.0') < 0
+        rule: >-
+          oldSelf == null ||
+          oldSelf.redis.sentinel.auth.fromSecret.name != 'my-cpln-task-runner-sentinel-credentials' ||
+          oldSelf.redis.redis.auth.fromSecret.name == 'task-runner-secrets' ||
+          self.redis.sentinel.auth.fromSecret.name != oldSelf.redis.redis.auth.fromSecret.name
+        paths: [redis.sentinel.auth.fromSecret.name]
         message: >-
           The previous version created this secret itself (its secretName), and this upgrade deletes it. Create
           the credentials secrets under new names holding the same passwords.

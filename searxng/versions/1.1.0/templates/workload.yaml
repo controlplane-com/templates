@@ -1,0 +1,130 @@
+---
+kind: workload
+name: {{ include "searxng.name" . }}
+description: SearXNG metasearch engine — UI + JSON API, HTTP :8080
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "searxng.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "searxng.identity.name" . }}
+  containers:
+    - name: searxng
+      image: {{ .Values.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      {{- if .Values.redis.enabled }}
+      # Wrapper that waits for the datastore, then execs the image's own
+      # entrypoint. Without it SearXNG wins the boot race against redis and
+      # comes up with the limiter permanently disabled -- see the script.
+      command: "/bin/sh"
+      args:
+        - "/usr/local/bin/searxng-startup.sh"
+      {{- end }}
+      env:
+        # ── Signing key (user prerequisite opaque secret, read as .payload) ──
+        # SEARXNG_SECRET overrides server.secret_key from settings.yml
+        # (searx/settings_defaults.py), so the key never touches the rendered file.
+        - name: SEARXNG_SECRET
+          value: cpln://secret/{{ .Values.secretKey.secretName }}.payload
+        # ── Runtime (granian WSGI server) ──
+        # The image ships GRANIAN_HOST="::"; 0.0.0.0 makes the listener
+        # deterministic on the pod IP AND on loopback, which is what
+        # `cpln port-forward` needs.
+        - name: GRANIAN_HOST
+          value: "0.0.0.0"
+        # settings.yml arrives as a read-only secret mount — skip the
+        # entrypoint's chown of /etc/searxng.
+        - name: FORCE_OWNERSHIP
+          value: "false"
+        {{- if .Values.redis.enabled }}
+        {{- if eq (include "searxng.redisAuthEnabled" .) "true" }}
+        # ── Datastore password (redis subchart auth secret) — declared BEFORE
+        # the URL that interpolates it via the platform's $(VAR) substitution.
+        - name: REDIS_PASSWORD
+          value: cpln://secret/{{ include "searxng.redis.secretPassword.name" . }}.password
+        - name: SEARXNG_VALKEY_URL
+          value: valkey://:$(REDIS_PASSWORD)@{{ include "searxng.redis.host" . }}:6379/0
+        {{- else }}
+        - name: SEARXNG_VALKEY_URL
+          value: valkey://{{ include "searxng.redis.host" . }}:6379/0
+        {{- end }}
+        {{- end }}
+        {{- if .Values.baseUrl }}
+        - name: SEARXNG_BASE_URL
+          value: {{ .Values.baseUrl | quote }}
+        {{- end }}
+      ports:
+        - number: 8080
+          protocol: http
+      volumes:
+        - path: /etc/searxng/settings.yml
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "searxng.secret.settings.name" . }}.payload
+        {{- if .Values.redis.enabled }}
+        - path: /usr/local/bin/searxng-startup.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "searxng.secret.startup.name" . }}.payload
+        {{- end }}
+      readinessProbe:
+        httpGet:
+          path: /healthz
+          port: 8080
+        # Budget must exceed the startup gate's wait (45 s) plus app start.
+        # 5 + 20x5 = 105 s. failureThreshold is capped at 20 by the platform.
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 3
+      livenessProbe:
+        httpGet:
+          path: /healthz
+          port: 8080
+        # First check must land AFTER the startup gate could still be waiting
+        # (45 s) plus app start, or a slow datastore gets the container killed
+        # mid-wait -- measured as a ~195 s crash-loop when these were equal.
+        initialDelaySeconds: 90
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: {{ .Values.replicas }}
+      maxScale: {{ .Values.replicas }}
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      # SearXNG's entire function is querying upstream engines over the public
+      # internet — narrowing this makes every engine fail.
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  supportDynamicTags: false

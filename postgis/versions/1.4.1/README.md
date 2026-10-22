@@ -8,7 +8,7 @@ Creates a single replica PostGIS database with a dedicated persistent volume. Po
 - **Volume set** (`RELEASE_NAME-postgis-vs`) — `PGDATA`, with optional autoscaling.
 - **Identity and policy** — grants `reveal` on exactly the credentials secret you create, plus the backup config secret and Cloud Account binding when backups are on.
 - **Backup config secret** *(optional)* — the bucket and region only; created when `backup.enabled`.
-- **Backup cron workload** *(optional)* — a scheduled `pg_dump` writing compressed SQL dumps to S3 or GCS.
+- **Backup cron workload** *(optional)* — a scheduled `pg_dumpall` writing compressed SQL dumps to S3 or GCS.
 
 This template creates no credential secret of its own, and does not create a GVC.
 

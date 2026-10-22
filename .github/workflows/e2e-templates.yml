@@ -5,11 +5,9 @@ name: Template e2e tests
 # down. See E2E_TESTING.md.
 #
 # Runs on every PR, and by hand from the Actions tab. A PR that changes no tested template version
-# passes at once. Otherwise the test job uses the `e2e-nifah` environment, so it waits for a
-# maintainer's approval before it gets the org token: review the PR's changes under .github/ and
-# */tests/ before approving, because they run with that token. The `E2E result` job is the one to
-# require in branch protection: it fails when a check fails and stays pending until the run is
-# approved, so an untested change cannot merge.
+# passes at once. The org token lives in the `e2e-nifah` environment; GitHub withholds it from fork
+# PRs, so those fail the test job until a maintainer re-runs the change from a branch here. The
+# `E2E result` job is the one to require in branch protection: it fails when any check fails.
 
 on:
   pull_request:

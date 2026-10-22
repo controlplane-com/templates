@@ -17,12 +17,12 @@ run, and deletes everything. The report lands on the PR as one comment.
   a baseline. "Changes what it deploys" means the default `helm template` output differs, so README, comment
   and `wizard.yaml` fixes are exempt. A maintainer can waive it with the `e2e-gate-exempt` label.
 - **`Template e2e tests`** (every PR and every push, or by hand from the Actions tab with a `targets` list
-  such as `kafka/4.4.0`): a PR that changes no tested version passes at once. Otherwise the run waits for a
-  maintainer to approve the `e2e-nifah` environment. Approve only after reading the PR's changes under
-  `.github/` and `*/tests/`: they run with the org token.
+  such as `kafka/4.4.0`): a PR that changes no tested version passes at once; otherwise it runs
+  automatically with the org token from the `e2e-nifah` environment. GitHub does not give that token to
+  PRs from forks, so a fork's change is tested by pushing it to a branch in this repo.
 
 Both `E2E Test Coverage` and `E2E result` are required checks on `main`. `E2E result` fails when any check
-fails and stays pending until the run is approved, so an untested or failing change cannot merge.
+fails, so an untested or failing change cannot merge.
 
 A version is tested when its render changed or it is new; a change to `tests/` alone re-tests the template's
 newest version with a baseline.

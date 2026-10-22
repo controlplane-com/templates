@@ -68,10 +68,13 @@ durable streams via JetStream where a full Kafka deployment is more than the wor
   credentials** — with bare URLs every route was refused `Authentication Failure` (measured). Without route
   auth, a rogue server dialling 6222 received published messages (measured with auth off; refused with it on).
 - WebSocket inherits the top-level authorization (no separate block needed; measured).
-- Boot refuses (FATAL) a missing/empty key, a newline, or a bcrypt-looking (`$2…$`) password — servers must
+- A key MISSING from the secret never reaches the script: the platform refuses the container
+  (`CreateContainerConfigError: couldn't find key password`, only in `status.versions[].message`, no logs).
+- Boot refuses (FATAL) an empty key, a newline, or a bcrypt-looking (`$2…$`) password — servers must
   present the plain password to each other.
 - Render-time `fail` (`nats.validateAuth`) refuses an `authorization`/`accounts` block in `nats_extra_config`
-  while auth is on. With auth off such a block still works (pre-3.1.0 behaviour) — the wizard only advises.
+  while auth is on, case-insensitively (nats-server
+  reads `AUTHORIZATION {}` as `authorization {}` — measured overriding the chart's credentials). With auth off such a block still works (pre-3.1.0 behaviour) — the wizard only advises.
 - Single user by design for v1: one shared credential, full permissions. Per-user permissions/accounts (or
   nkeys/JWT) would be the next step and need an accounts design, not a list knob.
 
@@ -97,8 +100,11 @@ durable streams via JetStream where a full Kafka deployment is more than the wor
   name and their private IPs. The wizard blocks that on install (warning) and advises on upgrade.
 - **Missing credentials secret = silent wedge** (no logs); `get-deployments` → `status.versions[].message`.
   Turning auth on during an upgrade adds a new reveal grant, so the CLAUDE.md edge-cache stall may apply
-  (wait ~5 min, then `force-redeployment`) — not yet measured on nats.
+  (wait ~5 min, then `force-redeployment`). Measured once on nats: no stall, rollout done in 4m59s.
 - **Rotating the password needs `cpln workload force-redeployment`**; until then the old one keeps working.
+  **During that rollout the cluster is split**: new-password and old-password servers refuse each other's
+  routes (~40k `Authentication Failure` lines over 2 min, measured) and messages do not cross the split
+  until every server has restarted. A two-user overlap (NATS `users` list) would remove it; not built.
 - **`nats_extra_config` is injected verbatim.** A syntax error there is a container that will not start,
   not a render failure, so it is easy to mistake for an infrastructure problem.
 - **Cross-region gateway traffic is billed.** A single-location install is the default for that reason.

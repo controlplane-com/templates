@@ -368,13 +368,13 @@ steps:
             placeholder: "max_payload: 2MB"
             rules:
               - when: self.auth.credentialsSecretName != null && self.auth.credentialsSecretName != ''
-                rule: "!self.nats_extra_config.matches('(^|[\\\\s{;,])(authorization|accounts)\\\\s*[{:=]')"
+                rule: "!self.nats_extra_config.lowerAscii().matches('(^|[\\\\s{;,])(authorization|accounts)\\\\s*[{:=]')"
                 mirrors: nats.validateAuth
                 message: >-
                   With authentication on, the chart generates the authorization itself, and an `authorization`
                   or `accounts` block here would replace it. Remove the block.
               - when: self.auth.credentialsSecretName == null || self.auth.credentialsSecretName == ''
-                rule: "!self.nats_extra_config.matches('(^|[\\\\s{;,])(authorization|accounts)\\\\s*[{:=]')"
+                rule: "!self.nats_extra_config.lowerAscii().matches('(^|[\\\\s{;,])(authorization|accounts)\\\\s*[{:=]')"
                 severity: info
                 message: >-
                   Credentials here are stored in the release values as plain text. Use a credentials secret

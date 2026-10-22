@@ -248,13 +248,15 @@ Authentication.
 generated config, so an `authorization` block there would silently replace the
 chart's credentials -- and an `accounts` block would move users into accounts
 the chart knows nothing about. Refuse both rather than let either win quietly.
+Case-insensitive, because nats-server reads config keys case-insensitively: an
+`AUTHORIZATION { … }` block replaced the chart's credentials just the same.
 */}}
 {{- define "nats.validateAuth" -}}
 {{- $name := .Values.auth.credentialsSecretName | default "" -}}
 {{- if not (kindIs "string" $name) -}}
 {{- fail "nats: auth.credentialsSecretName must be the NAME of a dictionary secret (keys `username` and `password`), or empty for no authentication." -}}
 {{- end -}}
-{{- if and $name (regexMatch "(^|[\\s{;,])(authorization|accounts)\\s*(\\{|:|=)" (.Values.nats_extra_config | default "" | toString)) -}}
+{{- if and $name (regexMatch "(?i)(^|[\\s{;,])(authorization|accounts)\\s*(\\{|:|=)" (.Values.nats_extra_config | default "" | toString)) -}}
 {{- fail "nats: `nats_extra_config` contains an `authorization` or `accounts` block while auth.credentialsSecretName is set. The chart generates the authorization itself from that secret, and a second block would silently replace it. Remove the block from `nats_extra_config` -- and never put credentials there, since its contents are stored in the Helm release as plain text." -}}
 {{- end -}}
 {{- end -}}

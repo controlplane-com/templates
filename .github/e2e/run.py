@@ -31,6 +31,8 @@ import drift  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 GVC_PREFIX = "templates-ci-"
+# The CI service account manages only resources carrying this tag (its policies match on it).
+MANAGED_TAG = ("templates-ci/managed", "true")
 IGNORED_FOR_RENDER = re.compile(r"/(README\.md|wizard\.yaml)$")
 
 
@@ -117,6 +119,12 @@ def cpln_json(*args):
         return json.loads(out)
     except json.JSONDecodeError:
         return None
+
+
+def missing(*args):
+    """True only when the API says 404. Any other failure (403, 500, a timeout) is not proof of absence."""
+    code, out, err = cpln(*args, "-o", "json")
+    return code != 0 and '"status": 404' in (out + err)
 
 
 ORG_ARGS = []
@@ -235,13 +243,13 @@ def make_release(run_id, index):
 
 def create_gvc(t, locations):
     manifest = {"kind": "gvc", "name": t.gvc, "description": f"templates e2e CI: {t.service} {t.version}",
-                "tags": {"cpln/marketplace-gvc": t.gvc, "templates-ci/target": f"{t.service}-{t.version}",
+                "tags": {MANAGED_TAG[0]: MANAGED_TAG[1], "cpln/marketplace-gvc": t.gvc, "templates-ci/target": f"{t.service}-{t.version}",
                          "templates-ci/run": os.environ.get("GITHUB_RUN_ID", "local")},
                 "spec": {"staticPlacement": {"locationLinks": [f"//location/{l}" for l in sorted(locations)]}}}
-    apply(manifest)
+    code, out, err = apply(manifest)
     g = cpln_json("gvc", "get", t.gvc)
     if not g:  # `cpln apply` exits 0 on a 400, so the read-back is the real check
-        raise RuntimeError(f"GVC {t.gvc} was not created")
+        raise RuntimeError(f"GVC {t.gvc} was not created or cannot be read: {(err or out).strip()[-300:]}")
 
 
 def apply(manifest):
@@ -273,7 +281,7 @@ def prepare(t, base, ctx, version):
         if f"secrets.{key}.name" in ctx:  # an upgrade keeps the secrets the install created
             continue
         name = f"{t.release}-{key}"
-        tags = {"cpln/marketplace-gvc": t.gvc, "app.cpln.io/instance": t.release}
+        tags = {MANAGED_TAG[0]: MANAGED_TAG[1], "cpln/marketplace-gvc": t.gvc, "app.cpln.io/instance": t.release}
         if spec.get("type", "dictionary") == "dictionary":
             values = {k: generate("hex") for k in spec.get("keys", [])}
             for v in values.values():
@@ -303,7 +311,7 @@ def values_file(base, ctx):
 def helm(t, verb, version, vfile, timeout_s):
     chart = os.path.join(ROOT, t.service, "versions", version)
     args = ["helm", verb, t.release, chart, "--gvc", t.gvc, "--dependency-update", "-f", vfile,
-            "--wait", "--timeout", str(timeout_s)]
+            "--wait", "--timeout", str(timeout_s), "--tag", "=".join(MANAGED_TAG), "--state-tag", "=".join(MANAGED_TAG)]
     code, out, err = cpln(*args, timeout=timeout_s + 300)
     return code, out + err
 
@@ -434,7 +442,10 @@ def leftovers(t):
     left = []
     for kind, scoped in (("workload", True), ("volumeset", True), ("identity", True), ("policy", False), ("secret", False)):
         r = cpln_json(kind, "query", *(["--gvc", t.gvc] if scoped else []),
-                      "--tag", f"app.cpln.io/instance={t.release}") or {}
+                      "--tag", f"app.cpln.io/instance={t.release}")
+        if r is None:  # an unreadable kind is not an empty one
+            left.append(f"{kind}/? (query failed)")
+            continue
         left += [f"{kind}/{i['name']}" for i in r.get("items", [])
                  if not (kind == "secret" and i["name"] in t.created_secrets)]
     return left
@@ -512,7 +523,7 @@ def delete_gvc(gvc):
             cpln(kind, "delete", i["name"])
     for _ in range(6):
         cpln("gvc", "delete", gvc)
-        if cpln_json("gvc", "get", gvc) is None:
+        if missing("gvc", "get", gvc):
             log(f"deleted GVC {gvc}")
             return True
         time.sleep(20)

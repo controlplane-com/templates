@@ -125,7 +125,8 @@ python3 .github/e2e/run.py report --dir /tmp --out /tmp/report.md
 ## The CI org
 
 Org `nifah`, service account `templates-ci` in group `template-pipeline`. Its policies let it create
-GVCs, workloads, volumesets, identities, secrets and policies anywhere, but manage only GVCs named
-`templates-ci-*` and resources tagged `cpln/marketplace-gvc: templates-ci-*` (every chart resource and
-Helm release secret carries that tag). So CI GVCs must be named `templates-ci-…`, and any secret CI
-creates carries the tag too. Every run first deletes CI GVCs older than three hours.
+GVCs, workloads, volumesets, identities, secrets and policies anywhere, but manage only resources tagged
+`templates-ci/managed: "true"`. The runner puts that tag on the GVC, on every secret it creates, and on
+every chart resource and Helm release secret (`cpln helm --tag/--state-tag`). The policies match the tag
+by equality: a regex (`=~`) query in a policy made every permission check on that kind fail with a 500,
+org-wide. Every run first deletes CI GVCs older than three hours.

@@ -1,0 +1,7 @@
+{{- include "litellm.validate" . }}
+---
+kind: identity
+name: {{ include "litellm.identity.name" . }}
+description: LiteLLM identity
+tags: {{- include "litellm.tags" . | nindent 4 }}
+gvc: {{ .Values.global.cpln.gvc }}

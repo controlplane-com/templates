@@ -62,6 +62,18 @@ prerequisites:
     valuesPath: secrets.name
     required: true
     description: Opaque secret whose payload is APP_SECRET, a random string of 32+ characters (write-once). When it is missing the deployment waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: postgres.config.credentialsSecretName
+    required: true
+    description: Bundled PostgreSQL credentials (URL-safe values), read at first init and by Docmost. When missing, the deployment waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [password]
+    valuesPath: redis.credentialsSecretName
+    required: true
+    description: Password of the bundled Redis (URL-safe value), read by Redis and Docmost at start. When missing, the deployment waits with no logs.
   - kind: bucket
     valuesPath: storage.s3.bucket
     required: false

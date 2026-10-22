@@ -197,7 +197,8 @@ steps:
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             help: >-
               The data lives on the volume set and survives redeploys and upgrades. Uninstalling the release
-              deletes the volume set and every stored object, keeping a final snapshot for 7 days.
+              deletes the volume set and every stored object, keeping a final snapshot for 7 days; no other
+              snapshots are scheduled. The capacity can be raised later but never lowered.
             docs: "/reference/volumeset#capacity-and-billing"
       - id: autoscaling
         title: Grow storage automatically
@@ -295,8 +296,9 @@ steps:
               Inside the GVC the S3 API is http://RELEASE_NAME-seaweedfs.GVC_NAME.cpln.local:8333, with
               path-style addressing.
             textExpression: >-
+              (self.internalAccess.type == 'none' ? 'With None, no workload can reach the S3 API.' :
               'Inside the GVC the S3 API is `http://' + context.releaseName + '-seaweedfs.' +
-              (context.gvc != null ? context.gvc : 'GVC_NAME') + '.cpln.local:8333`, with path-style addressing.' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '.cpln.local:8333`, with path-style addressing.') +
               (self.adminUI.enabled ? ' To open the admin UI from your computer, run `cpln port-forward ' +
               context.releaseName + '-seaweedfs 23646:23646 --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
               '`, open http://localhost:23646 and sign in with the admin UI credentials.' : '')

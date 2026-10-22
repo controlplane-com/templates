@@ -35,7 +35,7 @@ Both secrets below are credentials, so they are **prerequisite secrets rather th
    Then set `adminUI.credentialsSecretName` to that name. Read either secret back later with
    `cpln secret reveal my-seaweedfs-admin-credentials -o yaml`.
 
-**If a secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments <release>-seaweedfs --gvc <gvc> -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own in about 6 minutes, or clear it immediately with a `cpln workload force-redeployment` on the workload (~90 s).
+**If a secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments <release>-seaweedfs --gvc <gvc> -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own within about ten minutes, or clear it immediately with a `cpln workload force-redeployment` on the workload (~90 s).
 
 ## Configuration
 

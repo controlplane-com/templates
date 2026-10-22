@@ -14,63 +14,34 @@ gvc:
 steps:
   - id: ghost
     title: Ghost
-    description: The Ghost image, its compute and content volume, and the two database secrets.
-    docs: "#configuration"
+    description: The two database secrets, then the Ghost image, its compute and content volume.
     sections:
-      - title: Server
-        docs: "#ghost-application"
-        fields:
-          - type: note
-            severity: warning
-            when: context.mode == 'upgrade'
-            text: >-
-              Every upgrade restarts Ghost, its single replica: the site is unavailable for a short time.
-          - path: image
-            type: string
-            format: image
-            label: Ghost image
-            required: true
-          - path: resources
-            type: resources
-            label: Resources
-            required: true
-            maxRatio: 4
-            cpu: { min: 100m }
-            memory: { min: 256Mi }
-          - path: volumeset.capacity
-            type: integer
-            label: Content volume capacity
-            unit: GiB
-            min: 10
-            required: true
-            suggestions: [10, 20, 50, 100, 250]
-            description: Uploaded images, themes, logs and adapters.
-            help: Uninstalling the release deletes the volume set with everything on it.
-        rules:
-          - rule: "!has(self.resources.cpu) && !has(self.resources.memory)"
-            mirrors: ghost.validateResourceKnobs
-            paths: [resources]
-            message: >-
-              resources.cpu and resources.memory were renamed to resources.maxCpu and resources.maxMemory in
-              1.1.0. Remove the old keys from the values.
-          - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
-            paths: [volumeset.capacity]
-            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
       - title: Database credentials
         docs: "#prerequisites"
         fields:
           - type: note
             severity: warning
             text: >-
-              Both database secrets must exist **before** you install. If one is missing, the deployment waits
-              and `cpln logs` shows nothing at all.
+              Both database secrets must exist **before** you install or upgrade. If one is missing, the
+              deployment waits and `cpln logs` shows nothing at all.
           - type: note
             severity: warning
             when: context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') < 0
             text: >-
               1.2.0 created the database secret itself (`<release>-mysql-config`), and this upgrade deletes it.
-              Create both secrets under NEW names holding the values the database was initialized with: read
-              them with `cpln secret reveal <release>-mysql-config -o yaml` before upgrading.
+              Before upgrading, read it with `cpln secret reveal <release>-mysql-config -o yaml` and create two
+              secrets under NEW names with the values the database was initialized with: a dictionary with
+              `username` (from `user`), `password` and `database`, and an opaque secret holding `rootPassword`.
+              After the upgrade the new version can wait about 10 minutes with "is not allowed to reveal the
+              secret" while access to the new secrets propagates; the old version keeps serving meanwhile.
+            textExpression: >-
+              '1.2.0 created the database secret itself (`' + context.releaseName + '-mysql-config`), and this
+              upgrade deletes it. Before upgrading, read it with `cpln secret reveal ' + context.releaseName +
+              '-mysql-config -o yaml` and create two secrets under NEW names with the values the database was
+              initialized with: a dictionary with `username` (from `user`), `password` and `database`, and an
+              opaque secret holding `rootPassword`. After the upgrade the new version can wait about 10 minutes
+              with "is not allowed to reveal the secret" while access to the new secrets propagates; the old
+              version keeps serving meanwhile.'
           - path: mysql.credentialsSecretName
             type: ref
             label: Database credentials secret
@@ -137,6 +108,45 @@ steps:
             message: >-
               MySQL reads the credentials only when its data directory is first initialized; pointing at another
               secret does not change the existing user or password.
+      - title: Server
+        docs: "#ghost-application"
+        fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Every upgrade restarts Ghost, its single replica: the site is unavailable for a short time.
+          - path: image
+            type: string
+            format: image
+            label: Ghost image
+            required: true
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            maxRatio: 4
+            cpu: { min: 100m }
+            memory: { min: 256Mi }
+          - path: volumeset.capacity
+            type: integer
+            label: Content volume capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250]
+            description: Uploaded images, themes, logs and adapters.
+            help: Uninstalling the release deletes the volume set with everything on it.
+        rules:
+          - rule: "!has(self.resources.cpu) && !has(self.resources.memory)"
+            mirrors: ghost.validateResourceKnobs
+            paths: [resources]
+            message: >-
+              resources.cpu and resources.memory were renamed to resources.maxCpu and resources.maxMemory in
+              1.1.0. Remove the old keys from the values.
+          - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+            paths: [volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
 
   - id: site
     title: Site and access
@@ -211,13 +221,15 @@ steps:
             virtual: true
             type: enum
             label: Email
-            widget: segmented
+            widget: cards
             required: true
             init: "self.mail.secretName != '' ? 'smtp' : 'off'"
             options:
               - value: 'off'
                 label: Off
-                description: No email is sent; members cannot sign in by link.
+                description: >-
+                  No email is sent; members cannot sign in by link. Choosing Off clears the SMTP login secret and
+                  turns staff device verification off.
                 set: { mail.secretName: '', staffDeviceVerification: false }
               - value: smtp
                 label: SMTP
@@ -278,20 +290,13 @@ steps:
             severity: info
             paths: [mail.secure]
             message: Implicit TLS is normally on for port 465 and off for every other port.
-    rules:
-      - rule: "!self.staffDeviceVerification || self.mail.secretName != ''"
-        mirrors: ghost.validate
-        paths: [staffDeviceVerification]
-        message: >-
-          Staff device verification needs SMTP: Ghost emails the code, so without mail staff cannot sign in to
-          the admin.
 
   - id: database
     title: Database
-    description: The bundled MySQL 8 that Ghost stores posts, members and settings in.
-    docs: "#backing-database"
+    description: The bundled MySQL 8 that Ghost stores posts, members and settings in, and its backups.
     sections:
       - title: MySQL server
+        docs: "#backing-database"
         fields:
           - type: note
             severity: warning
@@ -378,11 +383,6 @@ steps:
               path: mysql.internalAccess.workloads
               items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-ghost']"
             message: Add the Ghost workload to the list, or Ghost cannot reach its database.
-
-  - id: backup
-    title: Database backups
-    description: Scheduled MySQL dumps to object storage.
-    sections:
       - id: backup
         title: Scheduled backups
         toggle: mysql.backup.enabled
@@ -478,6 +478,13 @@ steps:
             patternMessage: Leave out the leading /.
 
 rules:
+  # No paths: staffDeviceVerification sits in the SMTP section, hidden when email is Off, and a rule whose
+  # paths are all hidden is not shown.
+  - rule: "!self.staffDeviceVerification || self.mail.secretName != ''"
+    mirrors: ghost.validate
+    message: >-
+      staffDeviceVerification is on but email is off: Ghost emails the code, so without SMTP staff cannot sign in
+      to the admin. Choose SMTP under Email, or set staffDeviceVerification to false in YAML.
   - rule: "!has(self.mysql.config) && !has(self.mysql.enablePhpMyAdmin)"
     mirrors: ghost.validateRemovedKeys
     paths: [mysql.credentialsSecretName]
@@ -509,9 +516,9 @@ migrations:
   - fromVersions: "<1.3.0"
     from: mysql.enablePhpMyAdmin
     note: >-
-      phpMyAdmin is off by default in the bundled MySQL; set mysql.phpMyAdmin.enabled in YAML to deploy it.
-      The phpMyAdmin of earlier versions was public and its PHP is affected by CVE-2026-109618 and
-      CVE-2026-109619; this version's runs a patched PHP and is internal-only.
+      This upgrade removes the public phpMyAdmin of earlier versions, whose PHP is affected by CVE-2026-109618
+      and CVE-2026-109619. To have one again, set mysql.phpMyAdmin.enabled in YAML: it runs a patched PHP and
+      is internal-only.
   - fromVersions: "<1.1.0"
     from: resources.cpu
     to: resources.maxCpu

@@ -17,17 +17,42 @@ steps:
       - type: note
         severity: warning
         text: >-
-          These secrets must exist **before** you install. If one is missing, the deployment waits and
-          `cpln logs` shows nothing at all.
+          These secrets must exist **before** you install or upgrade. If one is missing, the deployment waits
+          and `cpln logs` shows nothing at all.
+      # Upgrades from <1.4.0. In oldSelf, the Sentinel secret name is the new placeholder exactly when the
+      # previous release had createSecret true (the computed migration below), and the Redis secret name is the
+      # previous secretName (the rename migration below). The note is shown when the installed values are
+      # unknown too (oldSelf null), with the text covering both cases.
       - type: note
         severity: warning
-        when: context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.4.0') < 0
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '1.4.0') < 0 &&
+          (oldSelf == null || oldSelf.redis.sentinel.auth.fromSecret.name == 'my-cpln-task-runner-sentinel-credentials')
         text: >-
-          If the previous version created `task-runner-secrets` (createSecret true), this upgrade deletes it.
-          Before upgrading, read it with `cpln secret reveal task-runner-secrets -o yaml` and put the SAME
-          passwords in two new secrets under the key `password`: `redis-password` in the Redis secret,
-          `redis-sentinel-password` in the Sentinel secret. Redis and Sentinel keep the passwords they started
-          with. A secret of your own (createSecret false) is kept, with its key names.
+          If the previous version created the Redis secret itself (createSecret true, the default), this upgrade
+          deletes it: `task-runner-secrets`, or the name in your previous `secretName`. Before upgrading, read it
+          with `cpln secret reveal NAME -o yaml` and put the SAME passwords in two new secrets under the key
+          `password`: `redis-password` in the Redis secret, `redis-sentinel-password` in the Sentinel secret.
+          Redis and Sentinel keep the passwords they started with. A secret of your own (createSecret false) is
+          kept, with its key names. The upgrade restarts Redis and Sentinel one node at a time over a few
+          minutes, and enqueue can fail briefly while the primary moves.
+        textExpression: >-
+          'The previous version created the secret `' + oldSelf.redis.redis.auth.fromSecret.name + '` itself, ' +
+          'and this upgrade deletes it. Before upgrading, read it with `cpln secret reveal ' +
+          oldSelf.redis.redis.auth.fromSecret.name + ' -o yaml` and put the SAME passwords in two new secrets ' +
+          'under the key `password`: `redis-password` in the Redis secret, `redis-sentinel-password` in the ' +
+          'Sentinel secret. Redis and Sentinel keep the passwords they started with. The upgrade restarts Redis ' +
+          'and Sentinel one node at a time over a few minutes, and enqueue can fail briefly while the primary moves.'
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '1.4.0') < 0 && oldSelf != null &&
+          oldSelf.redis.sentinel.auth.fromSecret.name != 'my-cpln-task-runner-sentinel-credentials'
+        text: >-
+          Your own Redis secret (createSecret false) is kept, with its key names. The upgrade restarts Redis and
+          Sentinel one node at a time over a few minutes, and enqueue can fail briefly while the primary moves.
       - path: redis.redis.auth.fromSecret.name
         type: ref
         label: Redis credentials secret
@@ -82,11 +107,12 @@ steps:
         type: ref
         label: Admin API key secret
         description: >-
-          An opaque secret whose payload is the key for `/admin/*` (the `X-Admin-Key` header). Leave it empty
-          only for an internal-only API: the admin endpoints are then unauthenticated.
+          An opaque secret whose payload is the key for `/admin/*` (the `X-Admin-Key` header). Empty is
+          allowed only while the API is not public, and leaves the admin endpoints unauthenticated.
         help: >-
           Create the payload with `printf`, not `echo`, or the trailing newline becomes part of the key. After
           changing the key, force a redeployment of the API workload.
+        docs: "#rotating-the-admin-key"
         ref:
           kind: secret
           format: name
@@ -97,6 +123,12 @@ steps:
             encoding: plain
             suggestName: "context.releaseName + '-task-runner-admin-key'"
             hint: "Generate the content with: openssl rand -hex 32"
+      - type: note
+        severity: warning
+        when: self.api.enabled && self.api.admin.apiKeySecretName == ''
+        text: >-
+          No admin API key secret: anything in this GVC can create, edit and delete clients and rate-limit tiers
+          through `/admin/*`. Choose one unless that is acceptable.
     rules:
       - rule: >-
           !has(self.createSecret) && !has(self.secretName) && !has(self.redis.redisPassword) &&
@@ -118,6 +150,23 @@ steps:
         message: >-
           task-runner-secrets is the secret version 1.3.0 and earlier created itself, and upgrading deletes it.
           Create the credentials secrets under new names holding the same passwords.
+      # A previous release with createSecret true and a custom secretName: the upgrade deletes that secret too.
+      # oldSelf holds the previous secretName at redis.redis.auth.fromSecret.name (the rename migration below);
+      # the literal task-runner-secrets is left to the rule above.
+      - when: >-
+          context.fromVersion != null && semverCompare(context.fromVersion, '1.4.0') < 0
+        rule: >-
+          oldSelf == null ||
+          oldSelf.redis.sentinel.auth.fromSecret.name != 'my-cpln-task-runner-sentinel-credentials' ||
+          oldSelf.redis.redis.auth.fromSecret.name == 'task-runner-secrets' ||
+          (self.redis.redis.auth.fromSecret.name != oldSelf.redis.redis.auth.fromSecret.name &&
+          self.redis.sentinel.auth.fromSecret.name != oldSelf.redis.redis.auth.fromSecret.name)
+        paths: [redis.redis.auth.fromSecret.name, redis.sentinel.auth.fromSecret.name]
+        message: >-
+          The previous version created this secret itself (its secretName), and this upgrade deletes it. Create
+          the credentials secrets under new names holding the same passwords.
+        messageExpression: >-
+          'The previous version created ' + oldSelf.redis.redis.auth.fromSecret.name + ' itself (its secretName), and this upgrade deletes it. Create the credentials secrets under new names holding the same passwords.'
       - rule: >-
           self.redis.redis.auth.fromSecret.passwordKey != '' && self.redis.sentinel.auth.fromSecret.passwordKey != ''
         mirrors: cpln-task-runner.validateRedisCredentials
@@ -138,7 +187,7 @@ steps:
       - when: self.api.public.enabled
         rule: self.api.admin.apiKeySecretName != ''
         mirrors: cpln-task-runner.validate
-        paths: [api.admin.apiKeySecretName]
+        paths: [api.admin.apiKeySecretName, api.public.enabled]
         message: >-
           With public access on, an admin API key secret is required; without one, anyone could manage clients
           and rate-limit tiers.
@@ -158,6 +207,14 @@ steps:
             description: >-
               `/v1/enqueue` has no authentication and registers unknown clients, so anyone who reaches it can
               make the workers send arbitrary HTTP requests. Keep it off unless an authenticating proxy fronts it.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.3.0') < 0
+            text: >-
+              Public access now defaults to off (1.2.x defaulted to on), so this upgrade removes the public
+              endpoint unless you turn it on here. `/v1/enqueue` is unauthenticated either way.
           - path: api.replicas.min
             type: integer
             label: Minimum replicas
@@ -216,6 +273,11 @@ steps:
           - rule: self.api.replicas.max >= self.api.replicas.min
             paths: [api.replicas.max]
             message: Set the maximum replicas at or above the minimum.
+          - rule: "!(self.api.port in [8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090, 41000])"
+            paths: [api.port]
+            message: >-
+              Control Plane reserves this port (8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090 and
+              41000 are refused at install); choose another.
 
   - id: worker
     title: Worker
@@ -230,7 +292,8 @@ steps:
             type: integer
             label: Minimum replicas
             required: true
-            min: 0
+            min: 1
+            description: The workers pull tasks from Redis and receive no requests, so at least one must run.
             suggestions: [1, 2]
           - path: worker.replicas.max
             type: integer
@@ -321,6 +384,11 @@ steps:
           - rule: self.worker.replicas.max >= self.worker.replicas.min
             paths: [worker.replicas.max]
             message: Set the maximum replicas at or above the minimum.
+          - rule: "!(self.worker.port in [8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090, 41000])"
+            paths: [worker.port]
+            message: >-
+              Control Plane reserves this port (8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090 and
+              41000 are refused at install); choose another.
 
   - id: redis
     title: Redis
@@ -331,11 +399,15 @@ steps:
           - path: redis.redis.persistence.enabled
             type: boolean
             label: Keep Redis data on a volume
-            description: Off, queued tasks are lost whenever a Redis node restarts.
+            description: >-
+              Off, queued tasks are lost whenever a Redis node restarts. Choose now: changing it after install
+              replaces the storage and can lose queued tasks.
           - path: redis.sentinel.persistence.enabled
             type: boolean
             label: Keep Sentinel state on a volume
-            description: Lets Sentinel remember the current primary across restarts.
+            description: >-
+              Lets Sentinel remember the current primary across restarts. Choose now: changing it after install
+              replaces the storage.
         rules:
           - rule: >-
               oldSelf == null ||
@@ -358,13 +430,25 @@ yamlOnly:
     reason: Must stay true (the chart refuses false); the API and Worker always authenticate to Sentinel.
 
 migrations:
-  - fromVersions: "<1.4.0"
+  # The never-changed passwords differ: 1.0.0-1.2.x shipped mypassword for both, 1.3.0 the change-me- values.
+  - fromVersions: "<1.3.0"
     from: redis.redisPassword
     note: >-
       The Redis password is now in the Redis credentials secret (key password). Put the password the release
-      runs with today there (read it with `cpln secret reveal task-runner-secrets -o yaml`); a password never
-      changed is `change-me-cpln-task-runner-redis`.
-  - fromVersions: "<1.4.0"
+      runs with today there (read it with `cpln secret reveal NAME -o yaml`, NAME being `task-runner-secrets`
+      or your previous `secretName`); a password never changed is `mypassword`.
+  - fromVersions: ">=1.3.0 <1.4.0"
+    from: redis.redisPassword
+    note: >-
+      The Redis password is now in the Redis credentials secret (key password). Put the password the release
+      runs with today there (read it with `cpln secret reveal NAME -o yaml`, NAME being `task-runner-secrets`
+      or your previous `secretName`); a password never changed is `change-me-cpln-task-runner-redis`.
+  - fromVersions: "<1.3.0"
+    from: redis.sentinelPassword
+    note: >-
+      The Sentinel password is now in the Sentinel credentials secret (key password). Put the password the
+      release runs with today there; a password never changed is `mypassword`.
+  - fromVersions: ">=1.3.0 <1.4.0"
     from: redis.sentinelPassword
     note: >-
       The Sentinel password is now in the Sentinel credentials secret (key password). Put the password the
@@ -373,11 +457,9 @@ migrations:
     from: createSecret
     note: >-
       The chart no longer creates the Redis secret. If it did (createSecret true, the default), this upgrade
-      deletes task-runner-secrets: create the Redis and Sentinel credentials secrets under new names and choose
-      them under Secrets. A secret of your own (createSecret false) is kept.
-  - fromVersions: "<1.4.0"
-    from: secretName
-    note: The Redis and Sentinel credentials secrets are now chosen under Secrets; neither can be task-runner-secrets.
+      deletes it (`task-runner-secrets`, or your previous `secretName`): create the Redis and Sentinel
+      credentials secrets under new names and choose them under Secrets. A secret of your own (createSecret
+      false) is kept.
   # A release that brought its own secret (createSecret: false) keeps it, with its key names: the passwordKey
   # defaults changed (redis-password → password, redis-sentinel-password → password), and a rename
   # alone would hand such a release the new names its secret does not have.
@@ -398,3 +480,14 @@ migrations:
     to: redis.sentinel.auth.fromSecret.name
     valueExpr: "self.createSecret ? 'my-cpln-task-runner-sentinel-credentials' : self.redis.sentinel.auth.fromSecret.name"
     note: The secret 1.3.0 created is deleted by this upgrade; choose a new Sentinel credentials secret.
+  # secretName is renamed, not dropped, so that oldSelf keeps it: the secret it names is deleted by the upgrade,
+  # and the Secrets rule refuses it. Migrations build oldSelf in this order, so this rename (after the computed
+  # migration above) leaves oldSelf.redis.redis.auth.fromSecret.name = the previous secretName. In the carried
+  # values the computed migration wins over a rename at the same path (WIZARD_AUTHORING §9.2), so the picker
+  # still gets the new placeholder.
+  - fromVersions: "<1.4.0"
+    from: secretName
+    to: redis.redis.auth.fromSecret.name
+    note: >-
+      The Redis and Sentinel credentials secrets are now chosen under Secrets. If the previous version created
+      the secret named here (createSecret true), this upgrade deletes it, so neither can use it.

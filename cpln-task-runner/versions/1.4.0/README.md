@@ -238,12 +238,12 @@ If both `fromSecret.name` values point at one secret, edit that one secret in st
 
 1.4.0 no longer takes the Redis and Sentinel passwords as values, and no longer creates the `task-runner-secrets` secret. Use the CURRENT passwords: Redis and Sentinel keep the ones they started with, so new ones would lock the API and Worker out. To change them, upgrade first, then follow [Rotating the Redis and Sentinel passwords](#rotating-the-redis-and-sentinel-passwords).
 
-**With `createSecret: true` (the default)**, the upgrade **deletes** `task-runner-secrets`, so copy the passwords into two new secrets **before** upgrading:
+**With `createSecret: true` (the default)**, the upgrade **deletes** `task-runner-secrets` (or the secret named by your `secretName`, if you changed it), so copy the passwords into two new secrets **before** upgrading:
 
 1. Read the current passwords. `redis-password` is the Redis password, `redis-sentinel-password` the Sentinel password:
 
    ```sh
-   cpln secret reveal task-runner-secrets -o yaml
+   cpln secret reveal task-runner-secrets -o yaml   # or the name you set in secretName
    ```
 
 2. Create the two new secrets with those values:
@@ -253,7 +253,7 @@ If both `fromSecret.name` values point at one secret, edit that one secret in st
    cpln secret create-dictionary --name my-cpln-task-runner-sentinel-credentials --entry password='YOUR_CURRENT_SENTINEL_PASSWORD'
    ```
 
-3. Remove `createSecret`, `secretName`, `redis.redisPassword` and `redis.sentinelPassword` from your values, and point `redis.redis.auth.fromSecret.name` and `redis.sentinel.auth.fromSecret.name` at the new secrets (the defaults above). The chart refuses to render while any of the removed keys is still set, and refuses the name `task-runner-secrets`.
+3. Remove `createSecret`, `secretName`, `redis.redisPassword` and `redis.sentinelPassword` from your values, and point `redis.redis.auth.fromSecret.name` and `redis.sentinel.auth.fromSecret.name` at the new secrets (the defaults above). The chart refuses to render while any of the removed keys is still set, and refuses the name `task-runner-secrets`; do not reuse a custom `secretName` either, because the upgrade deletes that secret too.
 
 **With `createSecret: false`** and a secret of your own, keep it: remove the same four keys, keep both `fromSecret.name` values pointing at your secret, and set both `passwordKey` values to its key names explicitly (`redis-password` and `redis-sentinel-password` if you kept the 1.3.0 defaults; 1.4.0 defaults both to `password`). Nothing is deleted.
 

@@ -60,7 +60,7 @@ prerequisites:
     secretType: opaque
     valuesPath: api.admin.apiKeySecretName
     required: true
-    description: Admin API key for /admin/* (X-Admin-Key header); the payload is the key, created with printf, not echo. A missing secret leaves the API waiting with no logs.
+    description: Key for /admin/* (X-Admin-Key header) as the payload, created with printf, not echo. If missing, the API waits with no logs. Empty leaves /admin/* open; refused while public.
   - kind: secret
     secretType: dictionary
     keys: [password]

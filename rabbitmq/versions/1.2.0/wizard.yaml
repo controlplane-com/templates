@@ -21,11 +21,14 @@ steps:
           The secret must exist **before** you install or upgrade. If it is missing, the deployment waits on
           it and `cpln logs` shows nothing at all; only `status.versions[].message` in
           `cpln workload get-deployments RELEASE_NAME-rabbitmq --gvc GVC_NAME -o yaml` names the missing secret.
+          It recovers on its own within about ten minutes of the secret being created, or at once with
+          `cpln workload force-redeployment`.
         textExpression: >-
           'The secret must exist **before** you install or upgrade. If it is missing, the deployment waits on
           it and `cpln logs` shows nothing at all; only `status.versions[].message` in
           `cpln workload get-deployments ' + context.releaseName + '-rabbitmq --gvc ' +
-          (context.gvc == null ? 'GVC_NAME' : context.gvc) + ' -o yaml` names the missing secret.'
+          (context.gvc == null ? 'GVC_NAME' : context.gvc) + ' -o yaml` names the missing secret. It recovers on its own within about ten minutes of the secret ' +
+          'being created, or at once with `cpln workload force-redeployment`.'
       - type: note
         severity: warning
         when: >-
@@ -170,17 +173,18 @@ steps:
             max: 65535
             description: >-
               Written into `rabbitmq.conf`; clients connect on it, and the readiness check probes it.
+            help: >-
+              The platform reserves some ports; see [blocked ports](/reference/workload/containers#number).
             rules:
               - rule: >-
                   !(self.rabbitmq_conf.listeners_tcp_default in [8012, 8022, 9090, 9091, 15000, 15001, 15006,
                   15020, 15021, 15090, 41000])
                 messageExpression: >-
                   'Port ' + string(self.rabbitmq_conf.listeners_tcp_default) + ' is reserved by the platform,
-                  which refuses a workload that uses it. Choose another port; see
-                  [blocked ports](/reference/workload/containers#number).'
+                  which refuses a workload that uses it. Choose another port.'
                 message: >-
                   The AMQP port is reserved by the platform, which refuses a workload that uses it. Choose
-                  another port; see [blocked ports](/reference/workload/containers#number).
+                  another port.
               - rule: "!(self.rabbitmq_conf.listeners_tcp_default in [15672, 15692])"
                 message: >-
                   The AMQP port must differ from 15672 (management UI) and 15692 (Prometheus metrics), which
@@ -218,33 +222,12 @@ steps:
     title: Storage
     description: The volume set that holds the queues, messages and users.
     fields:
-      - path: volumeset.volume.initialCapacity
-        type: integer
-        label: Initial capacity
-        unit: GiB
-        min: 10
-        required: true
-        suggestions: [10, 20, 50, 100, 250, 500, 1000]
-        help: >-
-          The data lives on the volume set and survives redeploys. Uninstalling the release deletes the volume
-          set, and every queue, message and user with it. The volume set keeps 7 days of snapshots.
-        docs: "#storage"
-        rules:
-          - rule: >-
-              self.volumeset.volume.performanceClass != 'high-throughput-ssd' ||
-              self.volumeset.volume.initialCapacity >= 1000
-            message: A high throughput SSD volume set needs an initial capacity of at least 1000 GiB.
-          - rule: >-
-              oldSelf == null || oldSelf.volumeset.volume.initialCapacity == null ||
-              self.volumeset.volume.initialCapacity >= oldSelf.volumeset.volume.initialCapacity
-            message: >-
-              Keep the capacity at or above the installed value. Lowering it would not shrink the existing
-              volume.
       - path: volumeset.volume.performanceClass
         type: enum
         label: Performance class
         widget: cards
         required: true
+        description: Fixed once the volume set is created.
         immutable: The performance class of a volume set cannot change after it is created.
         docs: "/reference/volumeset#performance-classes"
         options:
@@ -259,10 +242,34 @@ steps:
         label: File system
         widget: segmented
         required: true
+        description: Fixed once the volume set is created.
         immutable: The file system of a volume set cannot change after it is created.
         options:
           - { value: ext4, label: ext4 }
           - { value: xfs, label: xfs }
+      - path: volumeset.volume.initialCapacity
+        type: integer
+        label: Initial capacity
+        unit: GiB
+        min: 10
+        required: true
+        suggestions: [10, 20, 50, 100, 250, 500, 1000]
+        help: >-
+          The data lives on the volume set and survives redeploys. Uninstalling the release deletes the volume
+          set, and every queue, message and user with it. The template schedules no snapshots,
+          so take your own backups.
+        docs: "#storage"
+        rules:
+          - rule: >-
+              self.volumeset.volume.performanceClass != 'high-throughput-ssd' ||
+              self.volumeset.volume.initialCapacity >= 1000
+            message: A high throughput SSD volume set needs an initial capacity of at least 1000 GiB.
+          - rule: >-
+              oldSelf == null || oldSelf.volumeset.volume.initialCapacity == null ||
+              self.volumeset.volume.initialCapacity >= oldSelf.volumeset.volume.initialCapacity
+            message: >-
+              Keep the capacity at or above the installed value. Lowering it would not shrink the existing
+              volume.
 
   - id: network
     title: Network

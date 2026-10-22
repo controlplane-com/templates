@@ -1,0 +1,14 @@
+{{- include "documenso.validate" . }}
+---
+kind: identity
+name: {{ include "documenso.identity.name" . }}
+description: Documenso identity
+tags: {{- include "documenso.tags" . | nindent 4 }}
+gvc: {{ .Values.global.cpln.gvc }}
+{{- if eq (include "documenso.s3.keyless" .) "true" }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.storage.s3.cloudAccountName }}
+  policyRefs:
+    - cpln-connector
+    - "{{ .Values.storage.s3.policyName }}"
+{{- end }}

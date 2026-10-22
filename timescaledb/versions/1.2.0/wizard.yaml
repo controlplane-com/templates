@@ -99,7 +99,8 @@ steps:
         message: >-
           TimescaleDB reads the credentials only when the volume is first initialized; pointing at another secret
           does not change the existing user, password or database. The new secret must keep the same username and
-          database; run ALTER ROLE first so its password matches, or PgBouncer and the backup job cannot sign in.
+          database; run ALTER ROLE first so its password matches, or PgBouncer, the backup job and every
+          application that reads this secret cannot sign in.
 
   - id: server
     title: Server
@@ -213,196 +214,6 @@ steps:
       - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
         paths: [volumeset.capacity]
         message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
-
-  - id: network
-    title: Network
-    description: Who can connect to the database, and an optional connection pooler.
-    sections:
-      - title: Internal access
-        docs: "#internal-access"
-        fields:
-          - path: internalAccess.type
-            type: enum
-            label: Who can connect
-            widget: cards
-            required: true
-            description: Firewall changes can take several minutes to take effect.
-            options:
-              - value: none
-                label: None
-                description: No workload can connect.
-              - value: same-gvc
-                label: Same GVC
-                description: Any workload in this GVC.
-              - value: same-org
-                label: Same org
-                description: Any workload in this org.
-              - value: workload-list
-                label: Specific workloads
-                description: Only the workloads listed below.
-          # Shown for every type once it holds entries: workload-timescaledb.yaml:63-65 and workload-pgbouncer.yaml:49-51
-          # write any non-empty list into inboundAllowWorkload, and the platform validates every entry, though it
-          # applies the workload links only with same-gvc and workload-list.
-          - path: internalAccess.workloads
-            when: self.internalAccess.type in ['same-gvc', 'workload-list'] || size(self.internalAccess.workloads) > 0
-            type: list
-            label: Allowed workloads
-            widget: tags
-            unique: true
-            description: >-
-              Extra workloads allowed to connect, for example from another GVC. The platform applies the list with
-              Same GVC and Specific workloads.
-            item:
-              type: ref
-              ref:
-                kind: workload
-                gvc: any
-                format: relativeLink
-                mustExist: warning
-                excludeTargetGvcWhen: self.internalAccess.type == 'same-gvc'
-      - title: Public access
-        docs: "#public-access"
-        fields:
-          - path: publicAccess.enabled
-            type: boolean
-            label: Publish port 5432 to the internet
-            description: >-
-              A direct TCP load balancer on port 5432, open to every address. Connections are unencrypted: the image
-              ships no TLS certificates. Leave it off and connect from inside the GVC, or through `cpln port-forward`.
-            help: >-
-              Read the public address from `status.canonicalEndpoint` in
-              `cpln workload get RELEASE_NAME-timescaledb --gvc GVC_NAME -o yaml`. PgBouncer is not published.
-      - id: pgbouncer
-        title: Connection pooler (PgBouncer)
-        toggle: pgbouncer.enabled
-        description: >-
-          PgBouncer multiplexes many application connections into a small pool of database connections. When on, it
-          becomes the endpoint your applications connect to.
-        docs: "#pgbouncer"
-        fields:
-          - type: note
-            textExpression: >-
-              'Applications connect to ' + context.releaseName + '-pgbouncer.' +
-              (context.gvc != null ? context.gvc : 'GVC_NAME') + '.cpln.local:5432. PgBouncer uses the same
-              credentials secret and identity as TimescaleDB, and the same "Who can connect" setting for its own
-              firewall.'
-            text: >-
-              Applications connect to RELEASE_NAME-pgbouncer.GVC_NAME.cpln.local:5432. PgBouncer uses the same
-              credentials secret and identity as TimescaleDB, and the same "Who can connect" setting for its own
-              firewall.
-          - path: pgbouncer.poolMode
-            type: enum
-            label: Pool mode
-            widget: segmented
-            required: true
-            help: >-
-              **Transaction** holds a connection for one transaction: best for most web and API workloads, but not
-              compatible with `SET` variables, temporary tables or advisory locks. **Session** holds it for the whole
-              client session: compatible with everything, less reuse. **Statement** returns it after every
-              statement: transactions are not supported.
-            options:
-              - { value: session, label: Session }
-              - { value: transaction, label: Transaction }
-              - { value: statement, label: Statement }
-          - path: pgbouncer.defaultPoolSize
-            type: integer
-            label: Server connections per pool
-            min: 1
-            required: true
-            suggestions: [10, 25, 50, 100]
-          - path: pgbouncer.maxClientConn
-            type: integer
-            label: Max client connections
-            min: 1
-            required: true
-            suggestions: [100, 500, 1000, 5000]
-          - path: pgbouncer.replicas
-            type: integer
-            label: Replicas
-            min: 1
-            required: true
-            suggestions: [1, 2, 3]
-          - path: pgbouncer.image
-            type: string
-            format: image
-            label: PgBouncer image
-            required: true
-            advanced: true
-          - path: pgbouncer.resources
-            type: resources
-            label: PgBouncer resources
-            required: true
-            advanced: true
-            cpu: { min: 25m }
-            memory: { min: 32Mi }
-        rules:
-          - rule: self.pgbouncer.defaultPoolSize <= self.pgbouncer.maxClientConn
-            severity: info
-            paths: [pgbouncer.defaultPoolSize]
-            message: The pool is larger than the number of client connections PgBouncer accepts.
-    rules:
-      - when: self.internalAccess.type == 'same-gvc' && context.gvc != null
-        rule: "!self.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
-        severity: info
-        paths: [internalAccess.workloads]
-        messageExpression: >-
-          'Same GVC already allows every workload in this GVC: ' +
-          self.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
-          ' can be removed from the list.'
-        message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
-      - when: self.internalAccess.type == 'same-org'
-        rule: size(self.internalAccess.workloads) == 0
-        severity: info
-        paths: [internalAccess.workloads]
-        message: >-
-          Same org already lets every workload of the org connect, so the listed workloads add nothing.
-      - when: self.internalAccess.type == 'none'
-        rule: size(self.internalAccess.workloads) == 0
-        severity: warning
-        paths: [internalAccess.workloads]
-        message: >-
-          The chart still writes the listed workloads into its firewall, where the platform checks every entry,
-          but "None" lets none of them connect. Remove them.
-      - when: self.internalAccess.type == 'none'
-        rule: "!self.pgbouncer.enabled && !self.backup.enabled"
-        severity: warning
-        paths: [internalAccess.type]
-        messageExpression: >-
-          '"None" also blocks ' +
-          (self.pgbouncer.enabled && self.backup.enabled ? 'PgBouncer and the backup job' :
-          self.pgbouncer.enabled ? 'PgBouncer' : 'the backup job') +
-          (self.pgbouncer.enabled ? ', and PgBouncer applies it to its own clients too.' :
-          ', which connects to TimescaleDB like any other workload.')
-        message: >-
-          "None" also blocks the optional PgBouncer and backup job, which connect to TimescaleDB like any other
-          workload.
-      - when: self.internalAccess.type == 'workload-list'
-        rule: size(self.internalAccess.workloads) > 0 || self.publicAccess.enabled
-        severity: warning
-        paths: [internalAccess.workloads]
-        message: With "Specific workloads" and an empty list, no workload can connect.
-      - when: self.internalAccess.type == 'workload-list' && context.gvc != null
-        rule: >-
-          (!self.pgbouncer.enabled ||
-          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgbouncer') in self.internalAccess.workloads) &&
-          (!self.backup.enabled ||
-          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-timescaledb-backup') in self.internalAccess.workloads)
-        severity: warning
-        paths: [internalAccess.workloads]
-        messageExpression: >-
-          'The chart does not add its own workloads to the list. Add ' +
-          (self.pgbouncer.enabled ? '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgbouncer' : '') +
-          (self.pgbouncer.enabled && self.backup.enabled ? ' and ' : '') +
-          (self.backup.enabled ? '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-timescaledb-backup' : '') +
-          ', or they cannot connect.'
-        message: >-
-          The chart does not add its own workloads to the list; add the PgBouncer and backup workloads, or they
-          cannot connect.
-        fix:
-          path: internalAccess.workloads
-          items: >-
-            (self.pgbouncer.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgbouncer'] : []) +
-            (self.backup.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-timescaledb-backup'] : [])
 
   - id: backup
     title: Backups
@@ -637,6 +448,196 @@ steps:
             severity: warning
             paths: [backup.minio.prefix]
             message: Leave out the leading / of the folder prefix.
+
+  - id: network
+    title: Network
+    description: Who can connect to the database, and an optional connection pooler.
+    sections:
+      - title: Internal access
+        docs: "#internal-access"
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: Firewall changes can take several minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          # Shown for every type once it holds entries: workload-timescaledb.yaml:63-65 and workload-pgbouncer.yaml:49-51
+          # write any non-empty list into inboundAllowWorkload, and the platform validates every entry, though it
+          # applies the workload links only with same-gvc and workload-list.
+          - path: internalAccess.workloads
+            when: self.internalAccess.type in ['same-gvc', 'workload-list'] || size(self.internalAccess.workloads) > 0
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: >-
+              Extra workloads allowed to connect, for example from another GVC. The platform applies the list with
+              Same GVC and Specific workloads.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internalAccess.type == 'same-gvc'
+      - title: Public access
+        docs: "#public-access"
+        fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Publish port 5432 to the internet
+            description: >-
+              A direct TCP load balancer on port 5432, open to every address. Connections are unencrypted: the image
+              ships no TLS certificates. Leave it off and connect from inside the GVC, or through `cpln port-forward`.
+            help: >-
+              Read the public address from `status.canonicalEndpoint` in
+              `cpln workload get RELEASE_NAME-timescaledb --gvc GVC_NAME -o yaml`. PgBouncer is not published.
+      - id: pgbouncer
+        title: Connection pooler (PgBouncer)
+        toggle: pgbouncer.enabled
+        description: >-
+          PgBouncer multiplexes many application connections into a small pool of database connections. When on, it
+          becomes the endpoint your applications connect to.
+        docs: "#pgbouncer"
+        fields:
+          - type: note
+            textExpression: >-
+              'Applications connect to ' + context.releaseName + '-pgbouncer.' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '.cpln.local:5432. PgBouncer uses the same
+              credentials secret and identity as TimescaleDB, and the same "Who can connect" setting for its own
+              firewall.'
+            text: >-
+              Applications connect to RELEASE_NAME-pgbouncer.GVC_NAME.cpln.local:5432. PgBouncer uses the same
+              credentials secret and identity as TimescaleDB, and the same "Who can connect" setting for its own
+              firewall.
+          - path: pgbouncer.poolMode
+            type: enum
+            label: Pool mode
+            widget: segmented
+            required: true
+            help: >-
+              **Transaction** holds a connection for one transaction: best for most web and API workloads, but not
+              compatible with `SET` variables, temporary tables or advisory locks. **Session** holds it for the whole
+              client session: compatible with everything, less reuse. **Statement** returns it after every
+              statement: transactions are not supported.
+            options:
+              - { value: session, label: Session }
+              - { value: transaction, label: Transaction }
+              - { value: statement, label: Statement }
+          - path: pgbouncer.defaultPoolSize
+            type: integer
+            label: Server connections per pool
+            min: 1
+            required: true
+            suggestions: [10, 25, 50, 100]
+          - path: pgbouncer.maxClientConn
+            type: integer
+            label: Max client connections
+            min: 1
+            required: true
+            suggestions: [100, 500, 1000, 5000]
+          - path: pgbouncer.replicas
+            type: integer
+            label: Replicas
+            min: 1
+            required: true
+            suggestions: [1, 2, 3]
+          - path: pgbouncer.image
+            type: string
+            format: image
+            label: PgBouncer image
+            required: true
+            advanced: true
+          - path: pgbouncer.resources
+            type: resources
+            label: PgBouncer resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: self.pgbouncer.defaultPoolSize <= self.pgbouncer.maxClientConn
+            severity: info
+            paths: [pgbouncer.defaultPoolSize]
+            message: The pool is larger than the number of client connections PgBouncer accepts.
+    rules:
+      - when: self.internalAccess.type == 'same-gvc' && context.gvc != null
+        rule: "!self.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+        severity: info
+        paths: [internalAccess.workloads]
+        messageExpression: >-
+          'Same GVC already allows every workload in this GVC: ' +
+          self.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+          ' can be removed from the list.'
+        message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+      - when: self.internalAccess.type == 'same-org'
+        rule: size(self.internalAccess.workloads) == 0
+        severity: info
+        paths: [internalAccess.workloads]
+        message: >-
+          Same org already lets every workload of the org connect, so the listed workloads add nothing.
+      - when: self.internalAccess.type == 'none'
+        rule: size(self.internalAccess.workloads) == 0
+        severity: warning
+        paths: [internalAccess.workloads]
+        message: >-
+          The chart still writes the listed workloads into its firewall, where the platform checks every entry,
+          but "None" lets none of them connect. Remove them.
+      - when: self.internalAccess.type == 'none'
+        rule: "!self.pgbouncer.enabled && !self.backup.enabled"
+        severity: warning
+        paths: [internalAccess.type]
+        messageExpression: >-
+          '"None" also blocks ' +
+          (self.pgbouncer.enabled && self.backup.enabled ? 'PgBouncer and the backup job' :
+          self.pgbouncer.enabled ? 'PgBouncer' : 'the backup job') +
+          (self.pgbouncer.enabled ? ', and PgBouncer applies it to its own clients too.' :
+          ', which connects to TimescaleDB like any other workload.')
+        message: >-
+          "None" also blocks the optional PgBouncer and backup job, which connect to TimescaleDB like any other
+          workload.
+      - when: self.internalAccess.type == 'workload-list'
+        rule: size(self.internalAccess.workloads) > 0 || self.publicAccess.enabled
+        severity: warning
+        paths: [internalAccess.workloads]
+        message: With "Specific workloads" and an empty list, no workload can connect.
+      - when: self.internalAccess.type == 'workload-list' && context.gvc != null
+        rule: >-
+          (!self.pgbouncer.enabled ||
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgbouncer') in self.internalAccess.workloads) &&
+          (!self.backup.enabled ||
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-timescaledb-backup') in self.internalAccess.workloads)
+        severity: warning
+        paths: [internalAccess.workloads]
+        messageExpression: >-
+          'The chart does not add its own workloads to the list. Add ' +
+          (self.pgbouncer.enabled ? '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgbouncer' : '') +
+          (self.pgbouncer.enabled && self.backup.enabled ? ' and ' : '') +
+          (self.backup.enabled ? '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-timescaledb-backup' : '') +
+          ', or they cannot connect.'
+        message: >-
+          The chart does not add its own workloads to the list; add the PgBouncer and backup workloads, or they
+          cannot connect.
+        fix:
+          path: internalAccess.workloads
+          items: >-
+            (self.pgbouncer.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgbouncer'] : []) +
+            (self.backup.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-timescaledb-backup'] : [])
 
 migrations:
   # 1.1.0 moved the database credentials into a prerequisite secret.

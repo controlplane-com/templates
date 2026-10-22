@@ -70,3 +70,15 @@ prerequisites:
     valuesPath: policySecretName
     required: true
     description: Tyk security policies as one JSON object. Set policySecretName to "" to run without policies.
+  - kind: secret
+    secretType: dictionary
+    keys: [password]
+    valuesPath: redis.redis.auth.fromSecret.name
+    required: true
+    description: Password of the bundled Redis, read by Redis and the gateway. Create before installing; when upgrading from 1.3.0 it holds the current password under a new name.
+  - kind: secret
+    secretType: dictionary
+    keys: [password]
+    valuesPath: redis.sentinel.auth.fromSecret.name
+    required: true
+    description: Password of the bundled Sentinel, read by Sentinel and the gateway. Create before installing; when upgrading from 1.3.0 it holds the current password under a new name.

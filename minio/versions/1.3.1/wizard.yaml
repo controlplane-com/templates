@@ -93,7 +93,8 @@ steps:
         message: >-
           Another secret rotates the root credentials. The nodes restart one at a time, and until every
           node has restarted clients see intermittent sign-in failures with both the old and the new pair.
-          Plan it as a maintenance window and update every client in the same window.
+          Plan it as a maintenance window and update every client in the same window. A newly chosen secret
+          also needs a new reveal grant, which can hold the first node back for several minutes.
 
   - id: cluster
     title: Cluster
@@ -118,11 +119,22 @@ steps:
           the usable share of the raw capacity and how many nodes may be down. 6 or more is recommended for
           production. Choose it now: it cannot change after install.
         docs: "#image-and-replicas"
+      - type: note
+        severity: warning
+        when: context.mode == 'install' && self.replicas > 5
+        textExpression: >-
+          'The default replicas-per-workload quota is 5, and ' + string(self.replicas) + ' nodes need more. ' +
+          'Request a quota increase before you install, or the install is refused; check your org limit with ' +
+          '`cpln quota get` (it may already be raised).'
+        text: >-
+          The default replicas-per-workload quota is 5. Request a quota increase before you install, or the
+          install is refused; check your org limit with `cpln quota get` (it may already be raised).
       - path: image
         type: string
         format: image
         label: MinIO image
         required: true
+        description: Any MinIO server image; every node runs the same one.
       - path: resources
         type: resources
         label: Resources
@@ -168,11 +180,16 @@ steps:
               volume set, and every stored object with it.
             docs: "#storage"
           - type: note
-            text: With the parity MinIO applies, usable space is roughly nodes × capacity ÷ 2.
+            text: >-
+              With the parity MinIO applies, usable space is roughly nodes × capacity ÷ 2 up to 8 nodes, and
+              a larger share (about 60 to 75%) on bigger pools.
             textExpression: >-
+              self.replicas <= 8 ?
               'With the parity MinIO applies, usable space is roughly ' +
               string(self.replicas * self.volumeset.capacity / 2) + ' GiB (' + string(self.replicas) +
-              ' nodes × ' + string(self.volumeset.capacity) + ' GiB ÷ 2).'
+              ' nodes × ' + string(self.volumeset.capacity) + ' GiB ÷ 2).' :
+              'With the parity MinIO applies to ' + string(self.replicas) + ' nodes, usable space is about 60 to ' +
+              '75% of the ' + string(self.replicas * self.volumeset.capacity) + ' GiB raw capacity.'
       - id: autoscaling
         title: Grow storage automatically
         toggle: volumeset.autoscaling.enabled
@@ -259,8 +276,8 @@ steps:
             unique: true
             when: self.internalAccess.type in ['same-gvc', 'workload-list']
             description: >-
-              Extra workloads allowed to connect, for example from another GVC. The chart writes the list
-              only with Same GVC and Specific workloads.
+              With Specific workloads, the only workloads allowed to connect, and it must include MinIO's own
+              workload; with Same GVC, extra workloads from other GVCs.
             item:
               type: ref
               ref:

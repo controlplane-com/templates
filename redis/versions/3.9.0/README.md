@@ -6,7 +6,7 @@ Creates a Redis Sentinel cluster on Control Plane with automatic leader election
 
 - **Stateful Redis workload** — one primary plus replicas, each on its own volume set; a single node in dev mode.
 - **Stateful Sentinel workload** *(production mode only)* — monitors the primary and promotes a replica on failure; clients discover the current primary through it.
-- **Secrets** — Redis and Sentinel configuration, plus password secrets created only when auth is enabled.
+- **Secrets** — Redis and Sentinel configuration, plus password secrets created only for a password set in values.
 - **Identities and policies** — one identity for Redis, shared by the backup job (it also carries the backup cloud binding), and one for Sentinel in production mode; each policy grants `reveal` on only the secrets its tier needs.
 - **Domains** *(optional)* — created when public access is enabled, for external TCP reach.
 - **Volume sets** *(optional)* — persistence for Redis, and for Sentinel in production mode.
@@ -15,10 +15,24 @@ Creates a Redis Sentinel cluster on Control Plane with automatic leader election
 
 This template does not create a GVC.
 
+### Prerequisites
+
+None for a default install, which runs without a password.
+
+To turn authentication on, the recommended way is a password secret you create **before** install, so the password never enters the release values. Create a dictionary secret with the password under the key `password`; one secret can serve both Redis and Sentinel:
+
+```bash
+cpln secret create-dictionary --name my-redis-password --entry password="$(openssl rand -hex 32)"
+```
+
+If the secret is missing, the workloads wait without container logs; `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-redis --gvc GVC_NAME -o yaml` names it.
+
+Backups and public access have their own prerequisites; see [Backing Up](#backing-up) and [Public Access](#public-access-external-tcp).
+
 ### Important Notes
 
 - **`mode: dev` has no failover and is not for production;** with persistence off its data is lost on every restart and upgrade.
-- **Do not change the Redis password on a running release.** A restarted replica can no longer authenticate to the master, so the rollout stops advancing; setting the previous password back recovers it. To change the password, uninstall and reinstall.
+- **Do not change the Redis password on a running release,** in values or in the password secret. A restarted replica can no longer authenticate to the master, so the rollout stops advancing; setting the previous password back recovers it. To change the password, uninstall and reinstall.
 - **Turn persistence on at install when you can.** Adding it to a running release takes effect only once every node stops, so set `suspend: true` in the same upgrade, then `suspend: false` in the next one. Data held only in memory is lost.
 - **The engine is fixed at install.** Valkey cannot read the data files Redis 8 writes, so switching `engine` on a running release crash-loops the nodes (persistence on) or starts them empty (persistence off). Move data between engines with dump/restore or replication.
 - **Switching `backup.provider` between `aws` and `gcp` keeps the previous provider's cloud access on the Redis identity.** Remove it by editing the identity or reinstalling the release.
@@ -81,18 +95,31 @@ sentinel:
   quorumAutoCalculation: true  # calculates as (replicas/2)+1
 ```
 
-**Authentication** — enable one method. In production mode apply the same config under both `redis.auth` and `sentinel.auth`; dev mode uses `redis.auth` only and refuses `sentinel.auth`:
+**Authentication** — off by default; enable one method per tier. In production mode apply the same config under both `redis.auth` and `sentinel.auth`; dev mode uses `redis.auth` only and refuses `sentinel.auth`. Recommended — read the password from the secret created in [Prerequisites](#prerequisites):
+```yaml
+redis:
+  auth:
+    fromSecret:
+      enabled: true
+      name: my-redis-password   # dictionary secret; must exist before install
+      passwordKey: password     # key holding the password
+
+sentinel:
+  auth:
+    fromSecret:
+      enabled: true
+      name: my-redis-password   # the same secret can serve both tiers
+      passwordKey: password
+```
+Still supported, but less secure — a password in values is stored in the Helm release:
 ```yaml
 redis:
   auth:
     password:
       enabled: true
       value: change-me-redis-password
-    # fromSecret:
-    #   enabled: true
-    #   name: my-redis-secret
-    #   passwordKey: password
 ```
+Set the password at install. Nodes read the secret only when they start, so a new value reaches them only after `cpln workload force-redeployment`, and that is a password change on a running release (see Important Notes). With Sentinel persistence on, Sentinel also keeps the password it wrote at its first start.
 
 **Persistence** — disabled by default. Enable to attach a persistent volume to Redis:
 ```yaml

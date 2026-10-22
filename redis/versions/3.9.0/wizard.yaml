@@ -184,23 +184,31 @@ steps:
             virtual: true
             type: enum
             label: Redis authentication
-            widget: segmented
+            widget: cards
             required: true
             init: >-
               self.redis.auth.fromSecret.enabled ? 'secret' :
               self.redis.auth.password.enabled ? 'password' : 'none'
+            docs: "#prerequisites"
             options:
               - value: none
                 label: No password
                 set: { redis.auth.fromSecret.enabled: false, redis.auth.password.enabled: false }
-              - value: password
-                label: Password in values
-                description: Stored in the release values.
-                set: { redis.auth.fromSecret.enabled: false, redis.auth.password.enabled: true }
               - value: secret
                 label: Password from a secret
+                description: "Recommended: the password never enters the release values."
                 set: { redis.auth.fromSecret.enabled: true, redis.auth.password.enabled: false }
+              - value: password
+                label: Password in values
+                description: "Less secure: the password is stored in the Helm release."
+                set: { redis.auth.fromSecret.enabled: false, redis.auth.password.enabled: true }
             rules:
+              - when: ui.redisAuth == 'password'
+                rule: "!self.redis.auth.password.enabled"
+                severity: info
+                message: >-
+                  The Redis password will be stored in the Helm release values. Choose Password from a secret
+                  to keep it out of the release.
               - rule: "!(self.redis.auth.fromSecret.enabled && self.redis.auth.password.enabled)"
                 mirrors: validateAuth
                 message: Redis has both a password in values and a password secret enabled; enable only one.
@@ -237,8 +245,9 @@ steps:
             severity: warning
             when: ui.redisAuth == 'secret'
             text: >-
-              The Redis password secret must exist **before** you install. Pick it below, or create it with
-              **Create**.
+              The Redis password secret must exist **before** you install or upgrade. Pick it below, or create it
+              with **Create**. If it is missing, the deployment waits and `cpln logs` shows nothing; the reason is
+              in `status.versions[].message` of `cpln workload get-deployments`.
           - path: redis.auth.fromSecret.name
             type: ref
             label: Redis password secret
@@ -268,23 +277,31 @@ steps:
             virtual: true
             type: enum
             label: Sentinel authentication
-            widget: segmented
+            widget: cards
             required: true
             init: >-
               self.sentinel.auth.fromSecret.enabled ? 'secret' :
               self.sentinel.auth.password.enabled ? 'password' : 'none'
+            docs: "#prerequisites"
             options:
               - value: none
                 label: No password
                 set: { sentinel.auth.fromSecret.enabled: false, sentinel.auth.password.enabled: false }
-              - value: password
-                label: Password in values
-                description: Stored in the release values.
-                set: { sentinel.auth.fromSecret.enabled: false, sentinel.auth.password.enabled: true }
               - value: secret
                 label: Password from a secret
+                description: "Recommended: the password never enters the release values."
                 set: { sentinel.auth.fromSecret.enabled: true, sentinel.auth.password.enabled: false }
+              - value: password
+                label: Password in values
+                description: "Less secure: the password is stored in the Helm release."
+                set: { sentinel.auth.fromSecret.enabled: false, sentinel.auth.password.enabled: true }
             rules:
+              - when: ui.sentinelAuth == 'password'
+                rule: "!self.sentinel.auth.password.enabled"
+                severity: info
+                message: >-
+                  The Sentinel password will be stored in the Helm release values. Choose Password from a secret
+                  to keep it out of the release.
               - rule: "!(self.sentinel.auth.fromSecret.enabled && self.sentinel.auth.password.enabled)"
                 mirrors: validateAuth
                 message: Sentinel has both a password in values and a password secret enabled; enable only one.
@@ -325,8 +342,9 @@ steps:
             severity: warning
             when: ui.sentinelAuth == 'secret'
             text: >-
-              The Sentinel password secret must exist **before** you install. Pick it below, or create it with
-              **Create**.
+              The Sentinel password secret must exist **before** you install or upgrade. Pick it below, or create it
+              with **Create**. If it is missing, the deployment waits and `cpln logs` shows nothing; the reason is
+              in `status.versions[].message` of `cpln workload get-deployments`.
           - path: sentinel.auth.fromSecret.name
             type: ref
             label: Sentinel password secret
@@ -350,6 +368,26 @@ steps:
             patternMessage: Use letters, digits, -, . and _.
             when: ui.sentinelAuth == 'secret'
     rules:
+      - when: oldSelf != null && oldSelf.redis.auth.fromSecret.enabled && self.redis.auth.fromSecret.enabled
+        rule: >-
+          self.redis.auth.fromSecret.name == oldSelf.redis.auth.fromSecret.name &&
+          self.redis.auth.fromSecret.passwordKey == oldSelf.redis.auth.fromSecret.passwordKey
+        severity: warning
+        paths: [redis.auth.fromSecret.name, redis.auth.fromSecret.passwordKey]
+        message: >-
+          A different Redis password secret or key is a password change on a running release: restarted nodes
+          cannot authenticate to the rest, so the rollout stops. Keep the installed secret and key unless the
+          new one holds the password Redis runs with today.
+      - when: oldSelf != null && oldSelf.sentinel.auth.fromSecret.enabled && self.sentinel.auth.fromSecret.enabled
+        rule: >-
+          self.sentinel.auth.fromSecret.name == oldSelf.sentinel.auth.fromSecret.name &&
+          self.sentinel.auth.fromSecret.passwordKey == oldSelf.sentinel.auth.fromSecret.passwordKey
+        severity: warning
+        paths: [sentinel.auth.fromSecret.name, sentinel.auth.fromSecret.passwordKey]
+        message: >-
+          A different Sentinel password secret or key is a password change on a running release: restarted nodes
+          cannot authenticate to the rest, so the rollout stops. Keep the installed secret and key unless the
+          new one holds the password Sentinel runs with today.
       - rule: >-
           oldSelf == null || self.mode == 'dev' || !self.redis.auth.password.enabled ||
           !oldSelf.redis.auth.password.enabled || self.redis.auth.password.value == oldSelf.redis.auth.password.value
@@ -756,8 +794,8 @@ steps:
       - fields:
           - type: note
             text: >-
-              Setting either external CIDR list of a tier also sets the other one: left empty, that direction
-              is closed to the internet.
+              Setting a tier's Outbound CIDRs also sets its Public inbound CIDRs (shown once public access is on):
+              an empty inbound list keeps that tier closed to the internet.
       - title: Redis
         fields:
           - path: redis.firewall.internal_inboundAllowType
@@ -798,27 +836,6 @@ steps:
                 rule: size(self.redis.firewall.inboundAllowWorkload) == 0
                 severity: info
                 message: Same org already lets every workload of the org connect, so these Redis entries add nothing.
-          - path: redis.firewall.external_inboundAllowCIDR
-            type: list
-            when: self.redis.publicAccess.enabled || size(self.redis.firewall.external_inboundAllowCIDR) > 0
-            absent: true
-            serialize: csv
-            label: Public inbound CIDRs
-            description: Addresses allowed to connect from the internet, e.g. `0.0.0.0/0`.
-            item: { type: string, format: cidr }
-          - path: redis.firewall.external_outboundAllowCIDR
-            type: list
-            absent: true
-            serialize: csv
-            label: Outbound CIDRs
-            description: Addresses Redis may connect to outside the platform.
-            item: { type: string, format: cidr }
-          - path: redis.replicaDirect
-            type: boolean
-            label: Per-replica internal endpoints
-            when: "!self.redis.publicAccess.enabled"
-            docs: "/reference/workload/general#internal-endpoint-formatting"
-            description: Public access turns this on.
       - id: redis-public
         title: Public TCP access to Redis
         toggle: redis.publicAccess.enabled
@@ -845,6 +862,29 @@ steps:
             severity: warning
             paths: [redis.publicAccess.address]
             message: Still has the example hostname `redis-test.example-cpln.com`. Enter a host name you own.
+      - title: Redis firewall and endpoints
+        fields:
+          - path: redis.firewall.external_inboundAllowCIDR
+            type: list
+            when: self.redis.publicAccess.enabled || size(self.redis.firewall.external_inboundAllowCIDR) > 0
+            absent: true
+            serialize: csv
+            label: Public inbound CIDRs
+            description: Addresses allowed to connect from the internet, e.g. `0.0.0.0/0`.
+            item: { type: string, format: cidr }
+          - path: redis.firewall.external_outboundAllowCIDR
+            type: list
+            absent: true
+            serialize: csv
+            label: Outbound CIDRs
+            description: Addresses Redis may connect to outside the platform.
+            item: { type: string, format: cidr }
+          - path: redis.replicaDirect
+            type: boolean
+            label: Per-replica internal endpoints
+            when: "!self.redis.publicAccess.enabled"
+            docs: "/reference/workload/general#internal-endpoint-formatting"
+            description: Public access turns this on.
       - title: Sentinel
         when: self.mode != 'dev'
         fields:
@@ -885,26 +925,6 @@ steps:
                 rule: size(self.sentinel.firewall.inboundAllowWorkload) == 0
                 severity: info
                 message: Same org already lets every workload of the org connect, so these Sentinel entries add nothing.
-          - path: sentinel.firewall.external_inboundAllowCIDR
-            type: list
-            when: self.sentinel.publicAccess.enabled || size(self.sentinel.firewall.external_inboundAllowCIDR) > 0
-            absent: true
-            serialize: csv
-            label: Public inbound CIDRs
-            description: Addresses allowed to connect from the internet, e.g. `0.0.0.0/0`.
-            item: { type: string, format: cidr }
-          - path: sentinel.firewall.external_outboundAllowCIDR
-            type: list
-            absent: true
-            serialize: csv
-            label: Outbound CIDRs
-            description: Addresses Sentinel may connect to outside the platform.
-            item: { type: string, format: cidr }
-          - path: sentinel.replicaDirect
-            type: boolean
-            label: Per-replica internal endpoints
-            when: "!self.sentinel.publicAccess.enabled"
-            description: Public access turns this on.
       - id: sentinel-public
         title: Public TCP access to Sentinel
         toggle: sentinel.publicAccess.enabled
@@ -931,6 +951,29 @@ steps:
             severity: warning
             paths: [sentinel.publicAccess.address]
             message: Still has the example hostname `redis-sentinel-test.example-cpln.com`. Enter a host name you own.
+      - title: Sentinel firewall and endpoints
+        when: self.mode != 'dev'
+        fields:
+          - path: sentinel.firewall.external_inboundAllowCIDR
+            type: list
+            when: self.sentinel.publicAccess.enabled || size(self.sentinel.firewall.external_inboundAllowCIDR) > 0
+            absent: true
+            serialize: csv
+            label: Public inbound CIDRs
+            description: Addresses allowed to connect from the internet, e.g. `0.0.0.0/0`.
+            item: { type: string, format: cidr }
+          - path: sentinel.firewall.external_outboundAllowCIDR
+            type: list
+            absent: true
+            serialize: csv
+            label: Outbound CIDRs
+            description: Addresses Sentinel may connect to outside the platform.
+            item: { type: string, format: cidr }
+          - path: sentinel.replicaDirect
+            type: boolean
+            label: Per-replica internal endpoints
+            when: "!self.sentinel.publicAccess.enabled"
+            description: Public access turns this on.
     rules:
       - when: self.redis.firewall.internal_inboundAllowType == 'workload-list' && context.gvc != null
         rule: >-

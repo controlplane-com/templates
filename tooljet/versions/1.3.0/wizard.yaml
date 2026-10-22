@@ -1,0 +1,392 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: ToolJet
+
+# The ToolJet tier is stateless, but the bundled PostgreSQL (brings this limit with its import) and the
+# optional Redis + Sentinel tier (redis 3.4.3 has no descriptor, so its keys are parent fields below) are
+# single-location stateful workloads with no location handling.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.4.1
+    title: Bundled PostgreSQL
+    after: tooljet
+    steps:
+      - { id: credentials, title: Database credentials }
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
+      - { id: backup, title: Database backups }
+    exclude:
+      # ToolJet connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      image:
+        description: >-
+          Keep PostgreSQL 16: the PostgREST bundled in the ToolJet image (the ToolJet Database API) is proven
+          against it.
+      config.credentialsSecretName:
+        help: >-
+          PostgreSQL reads these values only when its data directory is first initialized, and ToolJet
+          connects with them (it creates its `tooljet_db` database alongside). To change the password later,
+          run `ALTER ROLE ... PASSWORD` first, then update the secret and right away force a
+          redeployment of ToolJet (not the database). Keep the password URL-safe (letters, digits, `-`, `_`): it is placed in
+          a connection URL as-is.
+      internalAccess.type:
+        description: >-
+          ToolJet connects to its database like any other workload: keep Same GVC, or add the ToolJet
+          workload under Allowed workloads.
+      backup.enabled:
+        help: >-
+          Adds one cron workload that runs `pg_dumpall` and uploads a gzipped dump to the bucket. Backups need a
+          PostgreSQL 17 or later image, and ToolJet's bundled PostgREST is proven only against 16, so switching
+          the image to enable them is untested.
+
+steps:
+  - id: tooljet
+    title: ToolJet
+    description: The ToolJet server, its root keys and outbound email.
+    docs: "#configuration"
+    sections:
+      - title: Server
+        docs: "#tooljet-server"
+        fields:
+          - path: tooljet.image
+            type: string
+            format: image
+            label: ToolJet image
+            required: true
+            description: The LTS image; it runs the free tier without a license key and migrates the database on boot.
+          - path: tooljet.replicas
+            type: integer
+            label: Replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+            description: 2 or more need the bundled Redis (Redis step), which the replicas share.
+          - path: tooljet.host
+            type: string
+            format: url
+            label: Public URL
+            placeholder: https://tools.example.com
+            description: >-
+              Optional. The URL ToolJet uses in links and redirects, with `https://`. Leave empty to use the
+              canonical endpoint.
+          - path: tooljet.resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per replica. Keep 4Gi of memory; first-boot migrations run out of memory below it.
+            maxRatio: 4
+            cpu: { min: 100m }
+            memory: { min: 256Mi }
+      - title: Root keys
+        docs: "#key-secret"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The secret must exist **before** you install. If it is missing, the deployment waits and
+              `cpln logs` shows nothing at all.
+          - path: secrets.name
+            type: ref
+            label: Keys secret
+            required: true
+            description: A dictionary secret with the keys `SECRET_KEY_BASE`, `LOCKBOX_MASTER_KEY` and `PGRST_JWT_SECRET`.
+            help: >-
+              `SECRET_KEY_BASE` and `LOCKBOX_MASTER_KEY` are write-once. A new `LOCKBOX_MASTER_KEY` makes every
+              stored datasource credential unreadable.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [SECRET_KEY_BASE, LOCKBOX_MASTER_KEY, PGRST_JWT_SECRET]
+              create:
+                secretType: dictionary
+                suggestName: "context.releaseName + '-tooljet-secrets'"
+                hint: "SECRET_KEY_BASE: openssl rand -hex 64. LOCKBOX_MASTER_KEY and PGRST_JWT_SECRET: openssl rand -hex 32"
+        rules:
+          - rule: oldSelf == null || self.secrets.name == oldSelf.secrets.name
+            severity: info
+            paths: [secrets.name]
+            message: >-
+              The new secret must hold the same SECRET_KEY_BASE and LOCKBOX_MASTER_KEY as the installed one, or
+              stored datasource credentials become unreadable.
+      - id: smtp
+        title: Outbound email
+        toggle: smtp.enabled
+        docs: "#email"
+        description: >-
+          Invites and password reset. Decide at the first install: ToolJet stores these settings on its first
+          boot, so turning email on in a later upgrade has no effect.
+        fields:
+          - path: smtp.host
+            type: string
+            format: hostname
+            label: SMTP host
+            required: true
+            example: true
+          - path: smtp.port
+            type: integer
+            label: SMTP port
+            required: true
+            min: 1
+            max: 65535
+            suggestions: [25, 465, 587, 1025, 2525]
+          - path: smtp.fromEmail
+            type: string
+            format: email
+            label: From address
+            required: true
+            example: true
+          - path: smtp.auth.secretName
+            type: ref
+            label: SMTP login secret
+            description: >-
+              Optional. A dictionary secret with the keys `SMTP_USERNAME` and `SMTP_PASSWORD`. Leave empty for a
+              relay without authentication.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [SMTP_USERNAME, SMTP_PASSWORD]
+              create:
+                secretType: dictionary
+                suggestName: "context.releaseName + '-tooljet-smtp'"
+        rules:
+          - when: oldSelf != null && !oldSelf.smtp.enabled
+            rule: "false"
+            severity: warning
+            paths: [smtp.enabled]
+            message: >-
+              ToolJet stored its email settings on its first boot, so turning email on now has no effect on
+              this release.
+    rules:
+      - rule: >-
+          self.secrets.name != '' && self.tooljet.replicas >= 1 &&
+          (self.tooljet.replicas < 2 || self.redis.enabled) &&
+          self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list'] &&
+          (!self.smtp.enabled || (self.smtp.host != '' && self.smtp.fromEmail != ''))
+        mirrors: tooljet.validate
+        paths: [tooljet.replicas]
+        message: >-
+          Name the keys secret, keep at least one replica, turn on the bundled Redis for 2 or more replicas, and
+          with email on set the SMTP host and from address; the chart does not render otherwise.
+
+  - id: access
+    title: Access
+    description: Who reaches the UI and API, from the internet and from inside the GVC.
+    docs: "#access"
+    sections:
+      - fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Public HTTPS endpoint
+            description: >-
+              The UI and API on the workload's `*.cpln.app` endpoint. The first visitor to finish onboarding
+              becomes the Super Admin, so finish it right after install.
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect internally
+            widget: cards
+            required: true
+            description: Firewall changes take 30 seconds to a few minutes to take effect.
+            options:
+              - { value: none, label: None, description: No workload can reach ToolJet internally. }
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          # workload.yaml writes this list only when the type is workload-list.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type == 'workload-list'
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+    rules:
+      - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+        severity: info
+        paths: [internalAccess.workloads]
+        message: With "Specific workloads" and an empty list, no workload inside Control Plane can connect.
+
+  - id: redis
+    title: Redis
+    description: A shared job queue and multiplayer coordination for 2 or more ToolJet replicas.
+    docs: "#bundled-redis"
+    sections:
+      - id: redis-bundle
+        title: Bundled Redis
+        toggle: redis.enabled
+        description: >-
+          Needed for 2 or more ToolJet replicas. Off, a single replica uses the Redis inside the ToolJet image.
+          It runs one Redis node and one Sentinel: ToolJet is not Sentinel-aware, so it must always reach the
+          one writable node.
+        fields:
+          - path: redis.redis.replicas
+            type: integer
+            label: Redis nodes
+            required: true
+            readOnly: true
+            min: 1
+            max: 1
+            advanced: true
+          - path: redis.sentinel.replicas
+            type: integer
+            label: Sentinels
+            required: true
+            readOnly: true
+            min: 1
+            max: 1
+            advanced: true
+          - path: redis.redis.image
+            type: string
+            format: image
+            label: Redis image
+            required: true
+            advanced: true
+          - path: redis.sentinel.image
+            type: string
+            format: image
+            label: Sentinel image
+            required: true
+            advanced: true
+        rules:
+          - rule: self.redis.redis.replicas == 1 && self.redis.sentinel.replicas == 1
+            mirrors: tooljet.validate
+            paths: [redis.redis.replicas]
+            message: >-
+              Keep one Redis node and one Sentinel: ToolJet is not Sentinel-aware, and more nodes would send its
+              writes to read-only replicas.
+      - id: redis-auth
+        title: Redis password
+        toggle: redis.redis.auth.fromSecret.enabled
+        when: self.redis.enabled
+        description: >-
+          Off, Redis accepts connections from the GVC without a password. On, Redis and ToolJet read the
+          password from the secret below; the Sentinel itself stays without one.
+        fields:
+          - path: redis.redis.auth.fromSecret.name
+            type: ref
+            label: Redis password secret
+            required: true
+            description: A dictionary secret with the key `password`. It must exist before you install.
+            help: >-
+              Changing the password later takes more than a secret edit, because a running Sentinel keeps the
+              old one: follow "Rotating the Redis password" in the README.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [password]
+              create:
+                suggestName: "context.releaseName + '-tooljet-redis'"
+        rules:
+          - rule: self.redis.redis.auth.fromSecret.name != ''
+            mirrors: tooljet.validate
+            paths: [redis.redis.auth.fromSecret.name]
+            message: Name the Redis password secret, or turn the password off.
+          # Upgrading from 1.2.0 with auth on, the upgrade deletes the chart-created <release>-redis-auth-password
+          # secret, so the prerequisite secret must have a different name (holding the same password).
+          - when: context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') < 0
+            rule: self.redis.redis.auth.fromSecret.name != context.releaseName + '-redis-auth-password'
+            paths: [redis.redis.auth.fromSecret.name]
+            message: >-
+              The previous version created this secret itself, and this upgrade deletes it. Create a secret under
+              a NEW name holding your current Redis password, and name it here.
+    rules:
+      - rule: "!has(self.redis.redis.auth.password)"
+        mirrors: tooljet.validateRedisPassword
+        paths: [redis.enabled]
+        message: >-
+          redis.redis.auth.password was removed in 1.3.0: the Redis password is now a prerequisite dictionary
+          secret (key password) chosen under Redis password. Remove redis.redis.auth.password from the values.
+      - rule: >-
+          !has(self.redis.sentinel.auth) ||
+          ((!has(self.redis.sentinel.auth.password) || !has(self.redis.sentinel.auth.password.enabled)) &&
+          (!has(self.redis.sentinel.auth.fromSecret) || !has(self.redis.sentinel.auth.fromSecret.enabled)))
+        mirrors: tooljet.validate
+        paths: [redis.enabled]
+        message: >-
+          Keep Sentinel authentication off (remove redis.sentinel.auth from the values): ToolJet authenticates
+          only to the Redis node.
+
+# Rules over the imported values: their issues show on the imported fields' step.
+rules:
+  - rule: "!has(self.postgres.credentials)"
+    mirrors: tooljet.validateRemovedKeys
+    paths: [postgres.config.credentialsSecretName]
+    message: >-
+      postgres.credentials was removed in 1.3.0: the database credentials are now a prerequisite dictionary
+      secret named by the credentials secret field. Remove postgres.credentials from the values.
+  # Upgrading from 1.2.0 or earlier, the chart-created secret is deleted by the upgrade itself, so the new
+  # prerequisite secret must have a different name (holding the same username, password and database).
+  - when: oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') < 0
+    rule: self.postgres.config.credentialsSecretName != oldSelf.postgres.config.credentialsSecretName
+    paths: [postgres.config.credentialsSecretName]
+    message: >-
+      The previous version created the database secret itself, and this upgrade deletes it. Create a secret
+      under a NEW name holding the same username, password and database, and name it here.
+  - rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks ToolJet, which connects to its database like any other workload.'
+  - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-tooljet') in self.postgres.internalAccess.workloads
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-tooljet, or ToolJet cannot reach its database.'"
+    fix:
+      path: postgres.internalAccess.workloads
+      items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-tooljet']"
+    message: Add the ToolJet workload to the list, or ToolJet cannot reach its database.
+
+yamlOnly:
+  - path: postgres.pgbouncer
+    reason: ToolJet connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+  - path: redis.redis.resources
+    reason: >-
+      redis 3.4.3 names its limits cpu/memory beside minCpu/minMemory, a shape the resources field cannot bind;
+      the defaults suit the job queue.
+  - path: redis.sentinel.resources
+    reason: >-
+      redis 3.4.3 names its limits cpu/memory beside minCpu/minMemory, a shape the resources field cannot bind;
+      a Sentinel needs little.
+
+migrations:
+  - fromVersions: "<1.3.0"
+    from: redis.redis.auth.password.enabled
+    to: redis.redis.auth.fromSecret.enabled
+  - fromVersions: "<1.3.0"
+    from: redis.redis.auth.password.value
+    note: >-
+      The Redis password is now a prerequisite dictionary secret (key password). If Redis auth was on, create it
+      under a NEW name holding your CURRENT Redis password, and choose it under Redis password.
+  - fromVersions: "<1.3.0"
+    from: postgres.credentials
+    note: >-
+      The database credentials are now a prerequisite dictionary secret (username, password, database). Create it
+      under a NEW name with the values the database was initialized with, and choose it under Bundled PostgreSQL.
+  - fromVersions: "<1.1.0"
+    from: postgres.config.username
+    note: Put it in the database credentials secret (key username).
+  - fromVersions: "<1.1.0"
+    from: postgres.config.password
+    note: Put it in the database credentials secret (key password). PostgreSQL keeps the password it was initialized with.
+  - fromVersions: "<1.1.0"
+    from: postgres.config.database
+    note: Put it in the database credentials secret (key database).

@@ -56,10 +56,19 @@ env values on the backup job — they are not credentials; bucket access comes f
 - **`enablePhpMyAdmin` and the whole `config` block were removed in 1.5.0.** Setting either fails at
   render with a message naming the replacement, rather than silently ignoring a password the user set.
 - **One replica only.** `defaultOptions.autoscaling` pins min=max=1 and the volumeset is single-mount.
+- **`defaultOptions` is declared in full on every workload (1.5.2).** A partial `autoscaling` block is
+  completed by the API (`maxConcurrency: 0`, `scaleToZeroDelay: 300`, `target: 95`, measured on the MySQL
+  workload through ghost's bundled copy), and the Console's Drift tab then shows the release drifting on a
+  default install. Do not trim these back to the three keys that matter; they are there so rendered == stored.
+- **Wizard (1.5.2 onward):** Credentials → Server → Storage → Network → Admin console → Backups. Both secrets
+  are prerequisite pickers with Create; every `fail` define is mirrored; upgrades from 1.4.x drop the
+  `config.*`/`enablePhpMyAdmin` values with notes.
 
 ## History
 
 - **1.5.0** (2026-08-17) — credentials became two prerequisite secrets; phpMyAdmin defaults off, gains
   its own `publicAccess`/`internalAccess` knobs and a pinned image; template-created secret removed.
 - **1.4.3** — backup job passes `MYSQL_DATABASE`; schedule quoted.
+- **1.5.2** (2026-10-21) — drift fix: declares the `defaultOptions` fields the API backfills on the MySQL
+  and phpMyAdmin workloads; first version with a `wizard.yaml`. Nothing else changes; ghost 1.3.0 bundles it.
 - **`aws::ReadOnlyAccess` was removed from the backup identity in 1.5.1.** It granted read access to every bucket in the AWS account and contains no write actions, so it was never carrying the backup — what it did carry was account-wide read. The identity is now `cpln-connector` plus the user's bucket-scoped policy only. The documented IAM policy was widened to ten actions at the same time, because `ReadOnlyAccess` had been silently supplying any read action a user's policy omitted; **an upgrading user must update their IAM policy first**.

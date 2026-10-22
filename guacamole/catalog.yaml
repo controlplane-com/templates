@@ -53,6 +53,12 @@ prerequisites:
     valuesPath: admin.secretName
     required: true
     description: Initial admin login, applied on first boot only and replacing guacadmin. Create before installing; when missing the workload waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: postgres.config.credentialsSecretName
+    required: true
+    description: Credentials the bundled PostgreSQL initializes with and Guacamole connects with. Create before installing; when missing the deployment waits with no logs.
   - kind: bucket
     required: false
     when: postgres.backup.enabled

@@ -55,6 +55,17 @@ related:
 prerequisites:
   - kind: secret
     secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: mysql.credentialsSecretName
+    required: true
+    description: MySQL user, password and database name; MySQL is initialized with it on first boot and Ghost connects with it. Create it before installing; when it is missing the workloads wait with no logs.
+  - kind: secret
+    secretType: opaque
+    valuesPath: mysql.rootPasswordSecretName
+    required: true
+    description: MySQL root password as a plain opaque secret, kept apart from the credentials Ghost reads. Create it before installing; when it is missing the database waits.
+  - kind: secret
+    secretType: dictionary
     keys: [user, password]
     valuesPath: mail.secretName
     required: false

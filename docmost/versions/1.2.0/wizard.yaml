@@ -1,0 +1,458 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Docmost
+
+# The bundled PostgreSQL and Redis are single-location stateful workloads with no location handling, and
+# local attachments live on a per-replica volume: one location only.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.4.1
+    title: Bundled PostgreSQL
+    after: access
+    steps:
+      - { id: credentials, title: Database credentials }
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
+      - { id: backup, title: Database backups }
+    exclude:
+      # Docmost connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      config.credentialsSecretName:
+        help: >-
+          The bundled PostgreSQL initializes from these values, and Docmost connects with the same keys.
+          Postgres reads them only when its data directory is first initialized. The username, password and
+          database are part of Docmost's connection URL, so use letters, digits, `-` and `_` only.
+      internalAccess.type:
+        description: >-
+          Docmost connects to its database like any other workload: keep Same GVC, or add the Docmost
+          workload under Allowed workloads.
+      backup.enabled:
+        help: Adds one cron workload that runs `pg_dumpall` and uploads a gzipped dump to the bucket.
+
+steps:
+  - id: docmost
+    title: Docmost
+    description: The Docmost server and the prerequisite secret that signs sessions and links.
+    sections:
+      - title: Server
+        docs: "#docmost-server"
+        fields:
+          - path: docmost.image
+            type: string
+            format: image
+            label: Docmost image
+            required: true
+            help: Pin a released tag; never `latest`. Database migrations run automatically on boot.
+          - path: docmost.replicas
+            type: integer
+            label: Replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+            description: More than one requires S3 attachment storage; replicas coordinate through Redis.
+          - path: docmost.appUrl
+            type: string
+            label: Public base URL
+            placeholder: https://wiki.example.com
+            pattern: '^(https?://.+)?$'
+            patternMessage: Include the scheme, for example https://wiki.example.com.
+            description: >-
+              Used in email and share links. Leave empty to use the canonical endpoint; set it only when a
+              custom domain fronts the workload.
+          - path: docmost.resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per replica. Boot migrations and large imports need headroom.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: self.docmost.replicas >= 1
+            mirrors: docmost.validate
+            paths: [docmost.replicas]
+            message: At least one replica is required.
+          - rule: self.docmost.replicas <= 1 || self.storage.type == 's3'
+            mirrors: docmost.validate
+            paths: [docmost.replicas, storage.type]
+            message: More than one replica needs S3 attachment storage; local attachments live on a per-replica volume.
+      - title: App secret
+        docs: "#prerequisite-secret"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The app secret must exist **before** you install. If it is missing, the deployment waits and
+              `cpln logs` shows nothing at all.
+          - path: secrets.name
+            type: ref
+            label: App secret
+            required: true
+            description: An opaque secret whose payload is `APP_SECRET`, a random string of at least 32 characters.
+            help: >-
+              Write-once: changing it signs every user out and invalidates outstanding invite and share links.
+              Stored documents are not affected.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                secretType: opaque
+                suggestName: "context.releaseName + '-docmost-app-secret'"
+        rules:
+          - rule: self.secrets.name != ''
+            mirrors: docmost.validate
+            paths: [secrets.name]
+            message: The app secret is required.
+
+  - id: attachments
+    title: Attachments
+    description: Where uploaded files and attachments are stored.
+    sections:
+      - fields:
+          - path: storage.type
+            type: enum
+            label: Attachment storage
+            widget: cards
+            required: true
+            docs: "#attachment-storage"
+            options:
+              - value: local
+                label: Local volume
+                description: A volume on the Docmost workload. One replica only.
+              - value: s3
+                label: S3
+                description: AWS S3 (keyless, through a cloud account) or an S3-compatible server with static keys.
+          - path: storage.fileUploadSizeLimit
+            type: string
+            label: Upload size limit
+            required: true
+            suggestions: [50mb, 100mb, 500mb]
+            pattern: '^[0-9]+(kb|mb|gb)$'
+            patternMessage: A number followed by kb, mb or gb, for example 50mb.
+            description: Largest single attachment. A larger upload is cut off at this size rather than refused.
+        rules:
+          - rule: self.storage.type in ['local', 's3']
+            mirrors: docmost.validate
+            paths: [storage.type]
+            message: Choose where attachments are stored.
+      - title: Local volume
+        when: self.storage.type == 'local'
+        fields:
+          - path: storage.local.volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100]
+            help: Uninstalling the release deletes the volume set, so the files do not survive a reinstall.
+            docs: "/reference/volumeset#capacity-and-billing"
+        rules:
+          - rule: >-
+              oldSelf == null || oldSelf.storage.type != 'local' ||
+              self.storage.local.volumeset.capacity >= oldSelf.storage.local.volumeset.capacity
+            paths: [storage.local.volumeset.capacity]
+            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+      - title: S3 bucket
+        when: self.storage.type == 's3'
+        docs: "#attachment-storage"
+        fields:
+          - path: storage.s3.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: storage.s3.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+          - path: storage.s3.endpoint
+            type: string
+            label: S3-compatible endpoint
+            placeholder: http://my-minio-workload:9000
+            pattern: '^(https?://.+)?$'
+            patternMessage: Include the scheme and port, for example http://my-minio-workload:9000.
+            description: Empty for AWS S3. For MinIO or another S3-compatible server, its S3 API address.
+          - path: storage.s3.forcePathStyle
+            type: boolean
+            label: Path-style addressing
+            description: On for most S3-compatible servers, such as MinIO.
+          - path: storage.s3.cloudAccountName
+            type: ref
+            label: Cloud account
+            when: self.storage.s3.auth.secretName == ''
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket. Used only without static keys."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: storage.s3.policyName
+            type: string
+            label: IAM policy name
+            when: self.storage.s3.auth.secretName == ''
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+          - path: storage.s3.auth.secretName
+            type: ref
+            label: Access keys secret
+            description: >-
+              S3-compatible servers only (the endpoint above must be set). A dictionary secret with the keys
+              `AWS_S3_ACCESS_KEY_ID` and `AWS_S3_SECRET_ACCESS_KEY`. Leave empty for AWS S3, which is keyless.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [AWS_S3_ACCESS_KEY_ID, AWS_S3_SECRET_ACCESS_KEY]
+        rules:
+          - rule: self.storage.type != 's3' || self.storage.s3.bucket != ''
+            mirrors: docmost.validate
+            paths: [storage.s3.bucket]
+            message: The bucket is required for S3 storage.
+          - rule: self.storage.type != 's3' || self.storage.s3.auth.secretName == '' || self.storage.s3.endpoint != ''
+            mirrors: docmost.validate
+            paths: [storage.s3.auth.secretName, storage.s3.endpoint]
+            message: >-
+              Static keys are only for S3-compatible servers: set the endpoint, or leave the access keys secret
+              empty and use the keyless cloud account for AWS S3.
+          - rule: >-
+              self.storage.type != 's3' || self.storage.s3.auth.secretName != '' ||
+              (self.storage.s3.cloudAccountName != '' && self.storage.s3.policyName != '')
+            mirrors: docmost.validate
+            paths: [storage.s3.cloudAccountName, storage.s3.policyName]
+            message: AWS S3 needs the cloud account and the IAM policy name; an S3-compatible server needs the access keys secret.
+
+  - id: email
+    title: Email
+    description: Outbound mail for member invites.
+    sections:
+      - title: SMTP
+        toggle: smtp.enabled
+        docs: "#email"
+        description: Member invites are sent by email; without SMTP they cannot be delivered and no invite link is logged. Configure it before inviting members.
+        fields:
+          - path: smtp.host
+            type: string
+            label: SMTP server
+            required: true
+            example: true
+            placeholder: smtp.example.com
+          - path: smtp.port
+            type: integer
+            label: Port
+            required: true
+            min: 1
+            max: 65535
+            suggestions: [587, 465, 25, 1025]
+          - path: smtp.secure
+            type: boolean
+            label: Implicit TLS
+            description: On for port 465. Off for STARTTLS or a plaintext relay (587, 25, 1025).
+          - path: smtp.fromAddress
+            type: string
+            label: Sender address
+            required: true
+            example: true
+            placeholder: no-reply@example.com
+          - path: smtp.fromName
+            type: string
+            label: Sender name
+          - path: smtp.auth.secretName
+            type: ref
+            label: SMTP login secret
+            description: >-
+              Optional. A dictionary secret with the keys `SMTP_USERNAME` and `SMTP_PASSWORD`. Leave empty for a
+              relay without a login.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [SMTP_USERNAME, SMTP_PASSWORD]
+        rules:
+          - rule: "!self.smtp.enabled || (self.smtp.host != '' && self.smtp.fromAddress != '')"
+            mirrors: docmost.validate
+            paths: [smtp.host, smtp.fromAddress]
+            message: The SMTP server and the sender address are required when SMTP is on.
+
+  - id: access
+    title: Access
+    description: The public endpoint, and which workloads can reach Docmost inside Control Plane.
+    docs: "#access"
+    fields:
+      - path: publicAccess.enabled
+        type: boolean
+        label: Serve on the public HTTPS endpoint
+        description: The UI and live collaboration on the canonical endpoint. The first visitor creates the admin account.
+      - path: internalAccess.type
+        type: enum
+        label: Who can connect internally
+        widget: cards
+        required: true
+        description: Firewall changes take 30 seconds to a few minutes to take effect.
+        options:
+          - value: none
+            label: None
+            description: No workload can connect.
+          - value: same-gvc
+            label: Same GVC
+            description: Any workload in this GVC.
+          - value: same-org
+            label: Same org
+            description: Any workload in this org.
+          - value: workload-list
+            label: Specific workloads
+            description: Only the workloads listed below.
+      - path: internalAccess.workloads
+        type: list
+        label: Allowed workloads
+        when: self.internalAccess.type == 'workload-list'
+        widget: tags
+        item:
+          type: ref
+          ref:
+            kind: workload
+            gvc: any
+            format: relativeLink
+            mustExist: warning
+    rules:
+      - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+        mirrors: docmost.validate
+        paths: [internalAccess.type]
+        message: Choose who can connect internally.
+
+  - id: redis
+    title: Redis
+    description: The bundled single-node Redis for job queues and live collaboration. Docmost does not start without it.
+    docs: "#bundled-redis"
+    fields:
+      - path: redis.image
+        type: string
+        format: image
+        label: Redis image
+        required: true
+      - type: note
+        severity: warning
+        text: >-
+          The Redis password secret must exist **before** you install. If it is missing, the deployment waits and
+          `cpln logs` shows nothing at all.
+      - path: redis.credentialsSecretName
+        type: ref
+        label: Redis password secret
+        required: true
+        description: >-
+          A dictionary secret with the key `password`. It is part of the Redis connection URL, so use letters,
+          digits, `-` and `_` only.
+        help: >-
+          Redis and Docmost read it when they start: after changing it, redeploy Redis and then Docmost (see
+          Rotating the Redis password in the docs).
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeys: [password]
+          create:
+            secretType: dictionary
+            suggestName: "context.releaseName + '-docmost-redis'"
+      - path: redis.resources
+        type: resources
+        label: Redis resources
+        required: true
+        maxRatio: 4
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+      - path: redis.volumeset.capacity
+        type: integer
+        label: Initial capacity
+        unit: GiB
+        min: 10
+        required: true
+        suggestions: [10, 20, 50]
+        help: Uninstalling the release deletes the volume set, so the data does not survive a reinstall.
+        docs: "/reference/volumeset#capacity-and-billing"
+    rules:
+      - rule: self.redis.credentialsSecretName != ''
+        mirrors: docmost.validateRedisSecret
+        paths: [redis.credentialsSecretName]
+        message: The Redis password secret is required.
+      - rule: "!has(self.redis.auth) || !has(self.redis.auth.password)"
+        mirrors: docmost.validateRedisSecret
+        paths: [redis.credentialsSecretName]
+        message: >-
+          redis.auth.password was removed in 1.2.0: the Redis password is now a prerequisite dictionary secret
+          (key: password) named by the Redis password secret field. Remove redis.auth from the values.
+      # Upgrading from 1.1.0, the chart-created secret that held the Redis password is deleted by the upgrade
+      # itself, so the new prerequisite secret must have a different name (holding the same password).
+      - when: oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.2.0') < 0
+        rule: self.redis.credentialsSecretName != context.releaseName + '-docmost-creds'
+        paths: [redis.credentialsSecretName]
+        message: >-
+          1.1.0 kept the Redis password in this secret, and this upgrade deletes it. Create a secret under a NEW
+          name holding the same password, and name it here.
+      - rule: oldSelf == null || self.redis.volumeset.capacity >= oldSelf.redis.volumeset.capacity
+        paths: [redis.volumeset.capacity]
+        message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+
+# Rules over the imported values: their issues show on the imported fields' steps.
+rules:
+  - rule: "!has(self.postgres.credentials)"
+    mirrors: docmost.validateDatabaseSecret
+    paths: [postgres.config.credentialsSecretName]
+    message: >-
+      postgres.credentials was removed in 1.2.0: the database credentials are now a prerequisite dictionary
+      secret named by the credentials secret field. Remove postgres.credentials from the values.
+  # Upgrading from 1.1.0, the chart-created secret is deleted by the upgrade itself, so the new
+  # prerequisite secret must have a different name (holding the same username, password and database).
+  - when: oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.2.0') < 0
+    rule: self.postgres.config.credentialsSecretName != oldSelf.postgres.config.credentialsSecretName
+    paths: [postgres.config.credentialsSecretName]
+    message: >-
+      1.1.0 created the database secret itself, and this upgrade deletes it. Create a secret under a NEW
+      name holding the same username, password and database, and name it here.
+  - rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks Docmost, which connects to its database like any other workload.'
+  - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-docmost') in self.postgres.internalAccess.workloads
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-docmost, or Docmost cannot reach its database.'"
+    fix:
+      path: postgres.internalAccess.workloads
+      items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-docmost']"
+    message: Add the Docmost workload to the list, or Docmost cannot reach its database.
+
+yamlOnly:
+  - path: postgres.pgbouncer
+    reason: Docmost connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+
+migrations:
+  - fromVersions: "<1.2.0"
+    from: postgres.credentials
+    note: >-
+      The database credentials are now a prerequisite dictionary secret (username, password, database). Create it
+      under a NEW name with the values the database was initialized with, and choose it under Database credentials.
+  - fromVersions: "<1.2.0"
+    from: redis.auth.password
+    note: >-
+      The Redis password is now a prerequisite dictionary secret (key: password). Create it under a NEW name
+      holding the current password (key redisPassword of the <release>-docmost-creds secret), and choose it
+      under Redis.

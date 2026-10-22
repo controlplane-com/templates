@@ -1,0 +1,262 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: etcd
+# Every member builds its peer list from its own location (secret.yaml:15,40-51), so each GVC location
+# would run its own independent cluster.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: cluster
+    title: Cluster
+    description: The number of members in the quorum and how they are spread.
+    fields:
+      # Measured: from 1.3.0 and older the rendered workload changes (the startup secret's volume uri lost its
+      # `.payload` suffix in 1.4.0), so the upgrade itself restarts the members; secret.yaml:55-59 makes each
+      # member with a data directory start with --initial-cluster-state existing.
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '1.4.0') < 0
+        text: >-
+          Upgrading from etcd template versions before 1.4.0 changes the workload itself, so every member
+          restarts during the upgrade and rejoins the cluster from its own volume. Plan the upgrade for a time
+          when every member may restart.
+      - path: replicas
+        type: integer
+        label: Members
+        widget: stepper
+        required: true
+        immutable: >-
+          Each member builds its peer list from the member count when it first starts, and the chart never
+          adds or removes members.
+        description: The number of etcd members in the quorum, each on its own volume.
+        help: >-
+          Choose the count now: each member builds its peer list from it when the cluster first starts, and the
+          chart never adds or removes members.
+        docs: "#scaling-and-availability"
+        min: 3
+      - path: multiZone
+        type: boolean
+        label: Spread members across zones
+        required: true
+        description: Confirm that your location supports multiple zones.
+        docs: "#multi-zone"
+      # _helpers.tpl:46-56 and secret.yaml:25-38: a non-empty global.locations switches the chart to one member
+      # per listed location. Declared only so the root rule below can read it; shown only while it is set.
+      - path: global.locations
+        type: list
+        label: Locations (multi-location)
+        readOnly: true
+        absent: true
+        when: size(self.global.locations) > 0
+        description: Set in YAML mode.
+        item: { type: string }
+    rules:
+      - rule: self.replicas % 2 == 1
+        mirrors: etcd.validateReplicas
+        paths: [replicas]
+        message: The number of members must be odd.
+
+  - id: compute
+    title: Compute
+    description: The resources and the image of each member.
+    fields:
+      - path: resources
+        type: resources
+        label: Resources
+        docs: "#resources"
+        required: true
+        description: Per member. The defaults can be lowered for lighter usage.
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+      # workload.yaml:14 renders the image unquoted; `format: image` refuses every value YAML would read as
+      # another type (`true`, `null`, `1e3`, the YAML 1.1 sexagesimal `1:20`), so no pattern of its own
+      # (guide 17.3.1).
+      - path: image
+        type: string
+        format: image
+        label: etcd image
+        required: true
+        advanced: true
+        docs: "#image"
+        rules:
+          - rule: oldSelf == null || self.image == oldSelf.image
+            severity: info
+            # secret.yaml:55-59: a member with a data directory restarts with --initial-cluster-state existing.
+            message: A new image restarts every member. Each rejoins the cluster from its own volume.
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds each member's data directory.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            required: true
+            description: Per member.
+            help: >-
+              Uninstalling the release deletes the volume set, and with it the keyspace; a final snapshot is
+              taken first and kept for 7 days.
+            docs: "/reference/volumeset#capacity-and-billing"
+            unit: GiB
+            min: 10
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+          # secret.yaml:65-75 passes no --auto-compaction-* and no --quota-backend-bytes. CHANGELOG 2026-08,
+          # entry etcd 1.4.2: storage filled the default 2 GiB after a couple of months, the cluster went
+          # read-only, databases using it for coordination could restart-loop, and users of
+          # postgres-highly-available or timescaledb-highly-available upgrade those templates; entries
+          # postgres-highly-available 2.4.2 and timescaledb-highly-available 1.0.1 pick up the fix.
+          # The etcdctl commands and the NOSPACE symptom come from the etcd 1.4.2 README (Storage growth and
+          # compaction; If the backend quota is already full); etcd 1.4.2 runs this version's image and appVersion
+          # (values.yaml:3 and Chart.yaml:7 in both). The workload `<release>-etcd` (_helpers.tpl:6-7) and its
+          # container `etcd` (workload.yaml:9) are this chart's.
+          - type: note
+            severity: warning
+            text: >-
+              This version passes no compaction flags to etcd, so the cluster keeps every revision it writes and
+              fills etcd's default 2 GiB backend quota, typically after a couple of months. The cluster then goes
+              read-only, and a database that uses it for coordination can start restart-looping. etcd template
+              version 1.4.2 and later turn compaction on, so install 1.4.2 or later instead; where etcd is bundled
+              in another template, upgrade that template (postgres-highly-available 2.4.2 or
+              timescaledb-highly-available 1.0.1 and later).
+              See [Upgrading from a version before 1.4.2](#upgrading-from-a-version-before-1-4-2), and check a
+              running cluster as [If the backend quota is already full](#if-the-backend-quota-is-already-full)
+              describes.
+            textExpression: >-
+              'This version passes no compaction flags to etcd, so the cluster keeps every revision it writes and
+              fills etcd\'s default 2 GiB backend quota, typically after a couple of months. The cluster then goes
+              read-only, and a database that uses it for coordination can start restart-looping. etcd template
+              version 1.4.2 and later turn compaction on, so ' +
+              (context.mode == 'upgrade' ? 'upgrade to' : 'install') + ' 1.4.2 or later instead; where etcd is
+              bundled in another template, upgrade that template (postgres-highly-available 2.4.2 or
+              timescaledb-highly-available 1.0.1 and later). To check a running cluster, run `cpln workload exec ' +
+              (context.mode == 'upgrade' ? context.releaseName : 'RELEASE_NAME') + '-etcd --gvc ' +
+              (context.mode == 'upgrade' && context.gvc != null ? context.gvc : 'GVC_NAME') +
+              ' --container etcd -- etcdctl endpoint status --cluster -w table` and the same command with
+              `etcdctl alarm list`: a `DB SIZE` near 2.1 GB on every member with `NOSPACE` in the alarm list needs
+              the recovery in [If the backend quota is already full](#if-the-backend-quota-is-already-full). See
+              [Upgrading from a version before 1.4.2](#upgrading-from-a-version-before-1-4-2).'
+    rules:
+      - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: access
+    title: Access
+    description: Who can reach the cluster.
+    sections:
+      - id: network-access
+        title: Network access
+        docs: /reference/workload/firewall
+        fields:
+          # secret.yaml:68-69: plain HTTP on 2379 and no authentication flags.
+          - type: note
+            text: >-
+              Clients connect on port `2379` over plain HTTP with no authentication, so anything this firewall
+              admits can read and write the whole keyspace.
+          - path: internal_access.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            options:
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          # Shown with every type: workload.yaml:54-56 writes a non-empty list into the firewall whatever the type,
+          # and the platform checks each entry (LocalLink) also with Same org (guide 6.8).
+          - path: internal_access.workloads
+            type: list
+            label: Allowed workloads
+            widget: tags
+            description: Extra workloads allowed to connect, for example from another GVC.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internal_access.type == 'same-gvc'
+            rules:
+              - when: self.internal_access.type == 'same-gvc' && context.gvc != null
+                rule: "!self.internal_access.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+                severity: info
+                messageExpression: >-
+                  'Same GVC already allows every workload in this GVC: ' +
+                  self.internal_access.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))
+                  .map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+                  ' can be removed from the list.'
+                message: >-
+                  Same GVC already allows every workload in this GVC, so those entries can be removed from the
+                  list.
+              - when: self.internal_access.type == 'same-org'
+                rule: size(self.internal_access.workloads) == 0
+                severity: info
+                message: Same org already lets every workload of the org connect, so these entries add nothing.
+    rules:
+      # The internal firewall also governs the members' peer traffic on 2380: etcd-multi-location 2.0.0
+      # templates/workload.yaml:90-98 (measured quorum loss when the list omits the workload itself), its README
+      # (Internal access: "The members reach each other over the same internal firewall") and its CHANGELOG
+      # entry (2026-08). This chart does not add its own workload (workload.yaml:53-56).
+      - when: self.internal_access.type == 'workload-list' && context.gvc != null
+        rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-etcd') in self.internal_access.workloads
+        severity: warning
+        paths: [internal_access.workloads]
+        messageExpression: >-
+          'The members also reach each other through Allowed workloads. Add //gvc/' + context.gvc + '/workload/' +
+          context.releaseName + '-etcd, or they cannot form a quorum.'
+        message: >-
+          The members also reach each other through Allowed workloads. Add the etcd workload itself, or they
+          cannot form a quorum.
+        fix:
+          path: internal_access.workloads
+          items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-etcd']"
+
+rules:
+  # _helpers.tpl:46-56: with global.locations set the chart wants replicas 1 and 3 or more locations in an odd
+  # count, one member per location (secret.yaml:25-38). This template allows one location (gvc above) and
+  # needs at least 3 members, so no setting passes both: refuse the mode. Helm treats an empty list as unset.
+  - rule: size(self.global.locations) == 0
+    mirrors: etcd.validateReplicas
+    paths: [global.locations]
+    message: >-
+      `global.locations` puts one member in each listed location, but this template runs all its members in
+      the one location of its GVC. Remove `global.locations` in YAML mode. For a cluster that spans
+      locations, use the etcd Multi-Location template.
+  # etcd.validateReplicas arrived in 1.3.0; older releases may run 1, 2 or an even number of members. The count
+  # is immutable (docs: Scaling and Availability), so say how to get out instead of only "must be odd".
+  - when: context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') < 0
+    rule: oldSelf == null || (oldSelf.replicas >= 3 && oldSelf.replicas % 2 == 1)
+    messageExpression: >-
+      'This release runs ' + string(oldSelf.replicas) + (oldSelf.replicas == 1 ? ' member' : ' members') +
+      '. etcd template versions before 1.3.0 accepted any count; this version needs an odd count of at least
+      3, and the count cannot change on a running cluster. Install a new release with 3, 5 or 7 members and
+      move the clients over.'
+    message: >-
+      etcd template versions before 1.3.0 accepted any member count; this version needs an odd count of at
+      least 3, and the count cannot change on a running cluster. Install a new release with 3, 5 or 7 members
+      and move the clients over.
+
+migrations:
+  - fromVersions: "<1.1.0"
+    assume: { volumeset.capacity: 10 }
+  # Before 1.3.0 the image was fixed in workload.yaml, not a value: the image-change advice compares with it.
+  - fromVersions: "<1.3.0"
+    assume: { image: controlplanecorporation/etcd:0.1 }
+  # multiZone defaulted to true before 1.2.0: keep what a release on the old default runs with.
+  - fromVersions: "<1.2.0"
+    to: multiZone
+    valueExpr: self.multiZone
+    note: Zone spreading was on by default before 1.2.0, so the installed setting is kept.

@@ -61,6 +61,12 @@ prerequisites:
     valuesPath: gitea.auth.secretName
     required: true
     description: First site-admin login plus write-once signing keys (jwtSecret is base64url of 32 bytes). When it is missing the deployment waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: postgres.config.credentialsSecretName
+    required: true
+    description: Credentials the bundled PostgreSQL initializes with and Gitea connects with. When it is missing the deployment waits with no logs.
   - kind: domain
     required: false
     when: ssh.enabled while the web UI must stay public

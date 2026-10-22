@@ -35,7 +35,7 @@ non-working `your-…` placeholders.
   installs also need `offsets.topic.replication.factor=1` (and the transaction-log equivalents).
 - **`server.log` is off via `KAFKA_LOG4J_ROOT_LOGLEVEL=INFO`** (4.2.0, official `apache/kafka:3.x.y` only); on a
   4.x image that variable strips every appender. Connect's `connect.log` still rolls without deletion.
-- **`cdc-pipeline` 1.1.0 bundles kafka 4.3.0** and reaches the same EnvVarConfigProvider result by hand
+- **`cdc-pipeline` 1.1.0 pins kafka 4.3.0** (and imports its wizard) and reaches the same EnvVarConfigProvider result by hand
   (`${env:CDC_KAFKA_*}` values + `kafka.env` + `extra_configurations`), refusing the sidecars that need the
   admin password in clear. Bumping it to 4.4.0 would let it drop that scaffolding and turn the health sidecar
   and exporter back on; not done (separate change, its own test round).

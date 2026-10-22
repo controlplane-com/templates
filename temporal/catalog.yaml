@@ -58,6 +58,20 @@ pickInsteadIf:
     template: cpln-task-runner
 
 prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: postgresHA.config.credentialsSecretName
+    required: true
+    when: postgresHA.enabled
+    description: Credentials the bundled HA PostgreSQL initializes with and Temporal connects with; the database key must be temporal. When it is missing the deployment waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: postgres.config.credentialsSecretName
+    required: true
+    when: postgres.enabled
+    description: Credentials the single-instance PostgreSQL initializes with and Temporal connects with; the database key must be temporal. When it is missing the deployment waits with no logs.
   - kind: bucket
     valuesPath:
       - postgresHA.backup.aws.bucket

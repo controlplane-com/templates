@@ -35,7 +35,7 @@ non-working `your-…` placeholders.
   installs also need `offsets.topic.replication.factor=1` (and the transaction-log equivalents).
 - **`server.log` is off via `KAFKA_LOG4J_ROOT_LOGLEVEL=INFO`** (4.2.0, official `apache/kafka:3.x.y` only); on a
   4.x image that variable strips every appender. Connect's `connect.log` still rolls without deletion.
-- **`cdc-pipeline` pins kafka 4.0.1**; bumping this template does not affect it.
+- **`cdc-pipeline` 1.1.0 pins kafka 4.3.0** (and imports its wizard); bumping this template does not affect it.
 - **Uninstalling deletes the volumesets**, and with them every topic's log.
 - Known, not fixed: `appVersion: "3.9"` vs image `3.9.1` (display only); connector credentials are plaintext
   values; a connector with neither `listener` nor `bootstrap.servers` fails to render (`kafka.bootstrapAddress`

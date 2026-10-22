@@ -6,15 +6,24 @@ This app creates a Redis Cluster with at least 6 nodes on Control Plane Platform
 
 - **Stateful Redis workload** — `replicas` nodes forming a Redis Cluster, sharded across masters with one replica each.
 - **Volume set** — per-node persistence.
-- **Secrets** — the cluster configuration and the startup/bootstrap script, plus an auth secret created only when `redis.password` is set.
-- **Identity and policy** — `reveal` on this template's secrets, and cloud storage access when backups are on.
+- **Secrets** — the cluster configuration and the startup/bootstrap script, plus an auth secret created only when an inline `redis.password` is set (a password from your own secret is read from that secret instead).
+- **Identity and policy** — `reveal` on this template's secrets (and on your password secret when you use one), and cloud storage access when backups are on.
 - **Backup cron workload** *(optional)* — a scheduled backup to S3 or GCS.
 
 This template does not create a GVC.
 
 ### Prerequisites
 
-None for a default install.
+None for a default install, which runs without a password.
+
+To protect the cluster with a password (recommended), create a dictionary secret holding it **before** you install, then point `redis.auth.fromSecret` at it:
+
+```bash
+cpln secret create-dictionary --name my-redis-cluster-auth --entry password=$(openssl rand -hex 24)
+```
+
+The key defaults to `password` (`redis.auth.fromSecret.passwordKey`). Use a password without spaces or quotes.
+If the secret is missing, the nodes never start and `cpln logs` shows nothing; the reason is in `status.versions[].message` of `cpln workload get-deployments RELEASE_NAME-redis-cluster --gvc GVC_NAME -o yaml`.
 
 Backups need a bucket and a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) before they can be enabled — see [Backing Up](#backing-up).
 
@@ -46,11 +55,19 @@ cpu: 200m
 memory: 250Mi
 ```
 
-**Authentication** — uncomment and set a password to enable auth on all nodes:
+**Authentication** — off by default. Turn it on with ONE of the two options; the secret is the recommended one:
 ```yaml
 redis:
-  password: "your-secure-password-here"
+  auth:
+    fromSecret:
+      enabled: false
+      name: ""                    # e.g. my-redis-cluster-auth; create it before install (see Prerequisites)
+      passwordKey: password       # the secret key that holds the password
+  # Less secure: an inline password, stored in plain text in the Helm release.
+  # password: "change-me-redis-cluster-password"
 ```
+
+With the secret, the password reaches the nodes only through an environment variable resolved at start; it is never written into a rendered file or the release. Setting both options at once is refused at install.
 
 When connecting to a password-protected cluster, pass the `-a` flag:
 ```
@@ -93,8 +110,8 @@ edition, so nothing in it is feature-gated.
 **Nothing else in this template changes.** The Valkey image ships `redis-server`, `redis-cli`,
 `redis-sentinel`, `redis-benchmark`, `redis-check-rdb` and `redis-check-aof` compatibility
 symlinks, so the cluster bootstrap script, the config directives, the readiness probe and the
-backup job all run unmodified. Sharding, `MOVED` redirects, `cluster-announce-hostname`, auth via
-`redis.password`, replica counts, backups and firewall behaviour are identical on both engines.
+backup job all run unmodified. Sharding, `MOVED` redirects, `cluster-announce-hostname`, password
+authentication, replica counts, backups and firewall behaviour are identical on both engines.
 
 ```yaml
 engine: valkey
@@ -223,7 +240,8 @@ RDB files are portable. The upstream-documented way to read one is to start a st
 - **A transient DNS blip during first-boot no longer restarts the node.** Cluster creation re-resolves every peer hostname, and a name that answered moments earlier can briefly stop resolving. That used to kill the container and was measured costing 7 restarts and ~20 minutes on a default install. It now retries in place, and still fails loudly if creation genuinely cannot succeed.
 - **Changing `port` also moves the cluster bus.** Redis derives the bus as `port + 10000` and this template declares both, so a custom `port` needs no extra configuration — but any firewall or client expecting `16379` must move with it.
 - **`replicas` is effectively pinned at 6.** Redis Cluster needs three masters for quorum and this template pairs each with a replica, so fewer will not form a cluster. Raising it does not work either: the platform caps replica-direct workloads at 6 by a built-in org quota, and `replicas: 8` is rejected at apply with `exceed the autoscaling.maxScale of 6 (quota: replicas-per-replica-direct-workload)`. Treat 6 as the only supported value.
-- **Authentication is off by default.** `redis: {}` means no `requirepass`, so anything `internalAccess` admits has full access. Set `redis.password` to enable it.
+- **Authentication is off by default**, so anything `internalAccess` admits has full access. Turn it on with `redis.auth.fromSecret` (recommended) or an inline `redis.password`.
+- **A changed password secret takes effect only after a forced redeployment**: update the secret, then run `cpln workload force-redeployment RELEASE_NAME-redis-cluster --gvc GVC_NAME`. Nodes restart one at a time, and a node on the new password cannot replicate from a node still on the old one until the rollout completes, so plan a maintenance window. The backup job reads the secret on its next run.
 - **Your client must speak the Redis Cluster protocol.** A plain client pointed at one node receives `MOVED` redirects it will not follow — the most common cause of "it does not work" here.
 - **This is not interchangeable with the `redis` template.** That one is primary/replica with Sentinel and a single write endpoint; this one shards the keyspace. Moving between them is a data migration.
 - **The engine is chosen at install, not switched later.** On the pinned `redis:7.2` default a switch to `valkey` does in fact carry the data across — tested, and all 48 keys survived with the cluster re-forming from its persisted `nodes.conf`. It is still **unsupported**, because that only holds while `image` is untouched.

@@ -4,6 +4,20 @@ set -e
 
 cp /usr/local/etc/redis/redis-default.conf /usr/local/etc/redis/redis.conf
 
+# Password from a secret (redis.auth.fromSecret): the chart renders no requirepass into
+# redis-default.conf, so it is written here, at start, from the secret-backed env var into
+# the container-local copy. An inline redis.password is already in the copied config and is
+# left alone. A config value is one unquoted token, so reject what would split or quote it.
+if [ -n "$REDIS_PASSWORD" ] && ! grep -q '^requirepass ' /usr/local/etc/redis/redis.conf; then
+    case "$REDIS_PASSWORD" in
+        *[[:space:]]*|*\"*|*\'*)
+            echo "FATAL: the Redis password must not contain spaces, line breaks or quotes" >&2
+            exit 1
+            ;;
+    esac
+    printf 'requirepass %s\nmasterauth %s\n' "$REDIS_PASSWORD" "$REDIS_PASSWORD" >> /usr/local/etc/redis/redis.conf
+fi
+
 # Find which member of the Stateful Set this pod is running
 # e.g. "redis-cluster-0" -> "0"
 PET_ORDINAL=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev)

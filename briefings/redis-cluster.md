@@ -2,7 +2,9 @@
 
 **What it is.** A Redis Cluster (sharded, with replicas) on persistent volumes, with optional backups.
 Distinct from the `redis` template, which is a primary/replica set with Sentinel.
-Since 1.6.0 it runs **Redis (default) or Valkey** — one `engine` knob, chosen at install. Valkey is the
+Since 1.6.0 it runs **Redis (default) or Valkey** — one `engine` knob, chosen at install.
+Since 1.7.0 the password can come from a **user-created dictionary secret** (`redis.auth.fromSecret`,
+recommended) as well as the inline `redis.password` (unchanged, stored in the release). Parity with `redis`. Valkey is the
 BSD-3-Clause fork of Redis 7.2 stewarded by the Linux Foundation; no paid edition exists, so nothing in it
 is feature-gated.
 
@@ -16,9 +18,10 @@ client can speak the Redis Cluster protocol and follow `MOVED`/`ASK` redirects.
 | workload (stateful) | `replicas` nodes forming the cluster |
 | volumeset | per-node persistence |
 | secret `-config`, `-start-script` | cluster config and the startup/bootstrap script |
-| secret auth *(optional)* | `REDIS_PASSWORD`, created **only** when `redis.password` is set |
+| secret auth *(optional)* | `REDIS_PASSWORD`, created **only** when an inline `redis.password` is set |
+| user secret *(optional, prerequisite)* | dictionary, key `password` by default; read via `cpln://secret/` env, never rendered (1.7.0+) |
 | workload backup (cron, optional) | backup to S3 or GCS |
-| identity + policy | `reveal` on this release's secrets; bucket-scoped cloud binding when backups are on |
+| identity + policy | `reveal` on this release's secrets, plus exactly the user's password secret when `fromSecret` is on; bucket-scoped cloud binding when backups are on |
 
 ## Key knobs (shipped defaults)
 
@@ -30,16 +33,30 @@ client can speak the Redis Cluster protocol and follow `MOVED`/`ASK` redirects.
 | `replicas` | `6` | **minimum 6** — three shards each with one replica |
 | `port` | `6379` | |
 | `cpu` / `memory` | `200m` / `250Mi` | per node; the default is small for a cache |
-| `redis` | `{}` | set `redis.password` to enable auth — **off by default** |
+| `redis.auth.fromSecret.enabled` / `.name` / `.passwordKey` | `false` / `""` / `password` | recommended auth; the chart `fail`s on both options at once, or on an empty name/key. **1.7.0+** |
+| `redis.password` | unset (commented) | inline auth, less secure — **auth is off by default** |
 | `internalAccess` | — | the only access control when no password is set |
 | `backup.enabled` | `false` | |
 
 ## Troubleshooting traps
 
-- **Authentication is OFF by default.** `redis: {}` means no `requirepass`, so anything `internal_access`
-  admits has full access. This is why the credential audit did not flag it — there is no weak default
-  password because there is no password at all. Setting `redis.password` creates the auth secret and turns it
-  on; that value is a plain Helm value, so it lands in the release.
+- **Authentication is OFF by default.** No `requirepass`, so anything `internalAccess` admits has full access.
+  This is why the credential audit did not flag it — there is no weak default password because there is no
+  password at all. An inline `redis.password` creates the auth secret and is written into the config secret
+  (`requirepass`/`masterauth`) at RENDER time, so it lands in the release. The 1.7.0 secret option does not:
+  `REDIS_PASSWORD` is a `cpln://secret/{name}.{key}` env var and `scripts/redis-start.sh` appends
+  `requirepass`/`masterauth` to the container-local `redis.conf` at START, only when the copied config has no
+  `requirepass` line (so inline mode is untouched). The script stays a mounted secret rather than going inline:
+  that secret already exists and is already granted in 1.6.0, so the upgrade needs no new reveal grant for it.
+  The start script rejects a password with whitespace or quotes (`FATAL` in the logs) — a config value is one
+  unquoted token; the inline path has the same limit, enforced only by the wizard.
+- **Rotating the password secret needs `cpln workload force-redeployment`** (a `cpln://` reference never
+  re-resolves on its own). Nodes then restart one at a time and replication between old- and new-password nodes
+  can fail until the rollout completes — expected from `masterauth`, not yet measured on a live cluster.
+- **A missing password secret wedges silently**: zero log lines; the reason is only in
+  `status.versions[].message` from `get-deployments`.
+- **1.6.0 → 1.7.0 inline render is identical except the start-script secret** (the new no-op block) and the
+  chart-version tags.
 - **`replicas` is effectively pinned at 6.** Three masters for quorum, each paired with a replica. Raising it fails too: a built-in org quota caps replica-direct workloads at 6, and `replicas: 8` is rejected at apply (`quota: replicas-per-replica-direct-workload`). Measured 2026-08-26.
 - **Clients must speak the cluster protocol.** A plain Redis client pointed at one node gets `MOVED`
   redirects it does not follow. This is the most common "it does not work" report, and it is a client

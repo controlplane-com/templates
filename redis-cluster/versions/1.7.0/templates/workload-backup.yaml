@@ -36,7 +36,10 @@ spec:
           value: "{{ .Values.port }}"
         - name: REDIS_WORKLOAD_NAME
           value: {{ include "redis-cluster.name" . }}
-      {{- if .Values.redis.password }}
+      {{- if include "redis-cluster.authFromSecret" . }}
+        - name: REDIS_PASSWORD
+          value: cpln://secret/{{ .Values.redis.auth.fromSecret.name }}.{{ .Values.redis.auth.fromSecret.passwordKey }}
+      {{- else if .Values.redis.password }}
         - name: REDIS_PASSWORD
           value: cpln://secret/{{ include "redis-cluster.secretAuthPassword.name" . }}.REDIS_PASSWORD
       {{- end }}

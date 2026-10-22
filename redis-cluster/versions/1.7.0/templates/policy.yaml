@@ -12,6 +12,8 @@ targetKind: secret
 targetLinks:
   - //secret/{{ include "redis-cluster.secretConfig.name" . }}
   - //secret/{{ include "redis-cluster.secretStartup.name" . }}
-  {{- if .Values.redis.password }}
+  {{- if include "redis-cluster.authFromSecret" . }}
+  - //secret/{{ .Values.redis.auth.fromSecret.name }}
+  {{- else if .Values.redis.password }}
   - //secret/{{ include "redis-cluster.secretAuthPassword.name" . }}
   {{- end }}

@@ -35,9 +35,18 @@ volumeset:
     minFreePercentage: 10 # Minimum free percentage to trigger scaling when autoscaling is enabled
     scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
 
-# Configure Redis authentication by uncommenting and setting the password field
-redis: {}
-  # password: "your-secure-password-here"
+# ─── Authentication ───────────────────────────────────────────────────────────
+# Off by default: no password on any node. Pick ONE of the two ways to turn it on.
+redis:
+  # Recommended: read the password from a dictionary secret you create BEFORE install
+  # (`cpln secret create-dictionary`, see the README). The chart grants reveal on it.
+  auth:
+    fromSecret:
+      enabled: false
+      name: ""                    # e.g. my-redis-cluster-auth
+      passwordKey: password       # the secret key that holds the password
+  # Less secure: an inline password, stored in plain text in the Helm release.
+  # password: "change-me-redis-cluster-password"
 
 backup:
   enabled: false

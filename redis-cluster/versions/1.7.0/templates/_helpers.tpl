@@ -130,3 +130,30 @@ Redis Cluster Engine Validation
 {{- fail "redis-cluster: valkeyImage must be set when engine is \"valkey\"" -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+Redis Cluster Auth — true when the password comes from the user's prerequisite secret
+(redis.auth.fromSecret.enabled). Reads with dig so a values file without the auth block
+(any release installed before 1.7.0) behaves as before.
+*/}}
+{{- define "redis-cluster.authFromSecret" -}}
+{{- if dig "auth" "fromSecret" "enabled" false (.Values.redis | default dict) -}}true{{- end -}}
+{{- end }}
+
+{{/*
+Redis Cluster Auth Validation — at most one password source, and a complete secret reference.
+*/}}
+{{- define "redis-cluster.validateAuth" -}}
+{{- $redis := .Values.redis | default dict -}}
+{{- if include "redis-cluster.authFromSecret" . -}}
+{{- if $redis.password -}}
+{{- fail "redis-cluster: set either redis.password or redis.auth.fromSecret.enabled, not both. The secret is the recommended option; remove redis.password." -}}
+{{- end -}}
+{{- if not $redis.auth.fromSecret.name -}}
+{{- fail "redis-cluster: redis.auth.fromSecret.name is required when redis.auth.fromSecret.enabled is true. Name the dictionary secret that holds the password." -}}
+{{- end -}}
+{{- if not $redis.auth.fromSecret.passwordKey -}}
+{{- fail "redis-cluster: redis.auth.fromSecret.passwordKey is required when redis.auth.fromSecret.enabled is true. Name the key of the secret that holds the password (default: password)." -}}
+{{- end -}}
+{{- end -}}
+{{- end }}

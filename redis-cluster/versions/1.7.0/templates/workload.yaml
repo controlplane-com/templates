@@ -1,4 +1,5 @@
 {{- include "redis-cluster.validateEngine" . -}}
+{{- include "redis-cluster.validateAuth" . -}}
 kind: workload
 name: {{ include "redis-cluster.name" . }}
 description: Redis Cluster
@@ -20,7 +21,12 @@ spec:
           value: "{{ .Values.replicas }}"
         - name: CUSTOM_REDIS_PORT
           value: "{{ .Values.port }}"
-        {{- if .Values.redis.password }}
+        {{- if include "redis-cluster.authFromSecret" . }}
+        # From the user's prerequisite secret; redis-start.sh writes requirepass and
+        # masterauth from it at container start, so it never reaches a rendered file.
+        - name: REDIS_PASSWORD
+          value: 'cpln://secret/{{ .Values.redis.auth.fromSecret.name }}.{{ .Values.redis.auth.fromSecret.passwordKey }}'
+        {{- else if .Values.redis.password }}
         - name: REDIS_PASSWORD
           value: 'cpln://secret/{{ include "redis-cluster.secretAuthPassword.name" . }}.REDIS_PASSWORD'
         {{- end }}

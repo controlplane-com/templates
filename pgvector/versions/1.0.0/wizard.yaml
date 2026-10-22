@@ -1,0 +1,606 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: pgvector
+# One stateful replica on its own volume: every GVC location would run an independent copy.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: credentials
+    title: Credentials
+    description: The prerequisite secret with the database user, password and name.
+    fields:
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'install' ||
+          (oldSelf != null && self.config.credentialsSecretName != oldSelf.config.credentialsSecretName)
+        textExpression: >-
+          'The credentials secret must exist **before** you install. If it is missing, the deployment waits on ' +
+          'it and `cpln logs` shows nothing at all; the reason is in `status.versions[].message` of ' +
+          '`cpln workload get-deployments ' + context.releaseName + '-pgvector -o yaml`. Once the secret exists ' +
+          'the deployment recovers on its own within about ten minutes, or at once with ' +
+          '`cpln workload force-redeployment ' + context.releaseName + '-pgvector`.'
+        text: >-
+          The credentials secret must exist **before** you install. If it is missing, the deployment waits on
+          it and `cpln logs` shows nothing at all; the reason is in `status.versions[].message` of
+          `cpln workload get-deployments RELEASE_NAME-pgvector -o yaml`. Once the secret exists the deployment
+          recovers on its own within about ten minutes, or at once with
+          `cpln workload force-redeployment RELEASE_NAME-pgvector`.
+      - path: config.credentialsSecretName
+        type: ref
+        label: Database credentials secret
+        required: true
+        description: >-
+          A dictionary secret with the keys `username`, `password` and `database`. PostgreSQL creates this
+          user and database on first boot, with the `vector` extension already created in it; put this
+          credential in your applications' connection strings. PgBouncer and the backup job, when on, sign
+          in with it too.
+        help: >-
+          PostgreSQL reads the credentials only when the volume is first initialized. To change the password
+          later, run `ALTER ROLE` inside PostgreSQL, then update the secret to match. Create the secret with:
+          `cpln secret create-dictionary --name CREDENTIALS_SECRET_NAME --entry username=pgvector --entry password="$(openssl rand -hex 24)" --entry database=vectors`
+        docs: "#prerequisites"
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeys: [username, password, database]
+          create:
+            suggestName: "context.releaseName + '-pgvector-credentials'"
+    rules:
+      # pgvector.validateCredentials refuses an empty secret name and plaintext credential keys.
+      - rule: self.config.credentialsSecretName != null && self.config.credentialsSecretName != ''
+        mirrors: pgvector.validateCredentials
+        paths: [config.credentialsSecretName]
+        message: The database credentials secret is required.
+      - rule: "!has(self.config.username) && !has(self.config.password) && !has(self.config.database)"
+        mirrors: pgvector.validateCredentials
+        paths: [config.credentialsSecretName]
+        message: >-
+          config.username, config.password and config.database are not values in this chart. Put them in a
+          dictionary secret with the keys username, password and database, and remove them from the values.
+      - rule: oldSelf == null || self.config.credentialsSecretName == oldSelf.config.credentialsSecretName
+        severity: info
+        paths: [config.credentialsSecretName]
+        message: >-
+          PostgreSQL reads the credentials only when the volume is first initialized; pointing at another
+          secret does not change the existing user, password or database. The new secret must keep the same
+          username and database; run ALTER ROLE first so its password matches, or your applications, PgBouncer
+          and the backup job cannot sign in.
+
+  - id: server
+    title: Server
+    description: The pgvector image, the extensions created on first boot and the compute of the single replica.
+    fields:
+      - type: note
+        severity: warning
+        when: context.mode == 'upgrade'
+        text: >-
+          Every upgrade restarts the server. Nothing limits the rollout of a stateful workload, so plan a
+          write outage of a minute or two.
+      - path: image
+        type: string
+        format: image
+        label: pgvector image
+        required: true
+        description: >-
+          The `-pgNN` suffix of the tag is the PostgreSQL major version, which is fixed once the volume holds
+          data.
+        help: >-
+          For example `pgvector/pgvector:0.8.6-pg18` (PostgreSQL 18, pgvector 0.8.6). The data directory is
+          specific to a PostgreSQL major version: a different major on an existing volume does not start.
+        docs: "#server-and-resources"
+      - path: config.extraExtensions
+        type: list
+        label: Extra extensions
+        widget: tags
+        unique: true
+        description: >-
+          Extensions created in your database alongside `vector`, on first boot only. Each must already ship
+          in the image.
+        help: >-
+          A name the image does not carry stops the first-boot script: the restart then skips initialization,
+          and the server comes up with `vector` but without that extension and any listed after it. To add one
+          later, or on an existing volume, run `CREATE EXTENSION IF NOT EXISTS pg_trgm;` in the database.
+        docs: "#credentials-and-extensions"
+        item:
+          type: string
+          label: Extension
+          pattern: '^[a-z][a-z0-9_]*$'
+          patternMessage: Enter an extension name in lower case, using letters, digits and _ (for example pg_trgm).
+          suggestions: [btree_gin, btree_gist, citext, fuzzystrmatch, hstore, pg_trgm, pgcrypto, unaccent]
+      - path: resources
+        type: resources
+        label: Resources
+        required: true
+        description: >-
+          A single stateful replica. Vector search is CPU-bound, and HNSW index builds are much faster when the
+          graph fits in memory.
+        maxRatio: 4
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+    rules:
+      - rule: self.config.extraExtensions.all(e, e.matches('^[a-z][a-z0-9_]*$'))
+        mirrors: pgvector.validateExtensions
+        paths: [config.extraExtensions]
+        message: >-
+          Each extra extension must be a lower-case name of letters, digits and underscores, such as pg_trgm,
+          pgcrypto or btree_gin.
+      - rule: "!('vector' in self.config.extraExtensions)"
+        severity: info
+        paths: [config.extraExtensions]
+        message: The vector extension is always created; it does not need to be listed.
+      - rule: oldSelf == null || self.config.extraExtensions == oldSelf.config.extraExtensions
+        severity: info
+        paths: [config.extraExtensions]
+        message: >-
+          Extra extensions are created only on first boot, so changing the list does nothing on this release.
+          Run CREATE EXTENSION IF NOT EXISTS in the database instead.
+      - rule: >-
+          oldSelf == null || !self.image.matches('-pg[0-9]+$') || !oldSelf.image.matches('-pg[0-9]+$') ||
+          self.image.split('-pg')[size(self.image.split('-pg')) - 1] ==
+          oldSelf.image.split('-pg')[size(oldSelf.image.split('-pg')) - 1]
+        severity: warning
+        paths: [image]
+        message: >-
+          The data directory belongs to the installed PostgreSQL major version; an image for a different major
+          version does not start on it. Move to a new major with a dump and restore instead.
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds the data directory.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            help: >-
+              The data lives on the volume set and survives redeploys. Uninstalling the release deletes
+              the volume set, and the database with it.
+            docs: "/reference/volumeset#capacity-and-billing"
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: volumeset.autoscaling.enabled
+        description: The volume set grows by the scaling factor whenever its free space falls below the threshold.
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
+            paths: [volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+    rules:
+      - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  # Before Network: the Network rules check that PgBouncer and the backup job can connect.
+  - id: pooler
+    title: Pooler
+    description: An optional connection pooler in front of the database.
+    sections:
+      - id: pgbouncer
+        title: Connection pooler (PgBouncer)
+        toggle: pgbouncer.enabled
+        description: >-
+          PgBouncer multiplexes many short-lived application connections into a small pool of real database
+          connections. When on, it becomes the endpoint your applications connect to; it reads the same
+          credentials secret, and the same "Who can connect" setting under Network governs its firewall.
+        docs: "#pgbouncer"
+        fields:
+          - type: note
+            textExpression: >-
+              'Applications connect to `' + context.releaseName + '-pgbouncer.' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '.cpln.local:5432` with the credentials ' +
+              'from the secret.'
+            text: >-
+              Applications connect to `RELEASE_NAME-pgbouncer.GVC_NAME.cpln.local:5432` with the credentials
+              from the secret.
+          - path: pgbouncer.poolMode
+            type: enum
+            label: Pool mode
+            widget: cards
+            required: true
+            options:
+              - value: session
+                label: Session
+                description: Held for the whole client session. Compatible with everything, less reuse.
+              - value: transaction
+                label: Transaction
+                description: >-
+                  Held for one transaction. Best for most web and API workloads; plain SET variables,
+                  temporary tables and advisory locks do not work.
+              - value: statement
+                label: Statement
+                description: Returned after every statement. Transactions are not supported.
+          - type: note
+            severity: warning
+            when: self.pgbouncer.poolMode == 'transaction'
+            text: >-
+              In transaction mode a plain `SET hnsw.ef_search` is not bound to your client: another client can
+              read or overwrite it, or get `unrecognized configuration parameter`. Set it per query inside a
+              transaction with `BEGIN; SET LOCAL hnsw.ef_search = 100; SELECT ...; COMMIT;`, or choose Session.
+          - path: pgbouncer.defaultPoolSize
+            type: integer
+            label: Server connections per pool
+            min: 1
+            required: true
+            suggestions: [10, 25, 50, 100]
+            description: The real PostgreSQL connections PgBouncer keeps for each user and database.
+          - path: pgbouncer.maxClientConn
+            type: integer
+            label: Max client connections
+            min: 1
+            required: true
+            suggestions: [100, 500, 1000, 5000]
+          - path: pgbouncer.replicas
+            type: integer
+            label: Replicas
+            min: 1
+            required: true
+            suggestions: [1, 2, 3]
+          - path: pgbouncer.image
+            type: string
+            format: image
+            label: PgBouncer image
+            required: true
+            advanced: true
+          - path: pgbouncer.resources
+            type: resources
+            label: PgBouncer resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: self.pgbouncer.defaultPoolSize <= self.pgbouncer.maxClientConn
+            severity: info
+            paths: [pgbouncer.defaultPoolSize]
+            message: The pool is larger than the number of client connections PgBouncer accepts.
+
+  - id: backup
+    title: Backups
+    description: Scheduled logical backups to object storage.
+    sections:
+      - id: backup
+        title: Scheduled backups
+        toggle: backup.enabled
+        description: >-
+          A cron workload runs pg_dumpall on a schedule and uploads a gzip-compressed dump of every database
+          and role to S3, GCS or an S3-compatible endpoint, signing in with the credentials secret. The bucket,
+          and for S3 or GCS the cloud account (for S3 also the IAM policy), must exist before you turn it on.
+        docs: "#backup"
+        fields:
+          - path: backup.provider
+            type: enum
+            label: Destination
+            widget: cards
+            required: true
+            options:
+              - value: aws
+                label: AWS S3
+                description: Through a Control Plane cloud account and a bucket-scoped IAM policy.
+              - value: gcp
+                label: Google Cloud Storage
+                description: Through a Control Plane cloud account.
+              - value: minio
+                label: MinIO or S3-compatible
+                description: An S3 endpoint with access keys from a secret; no cloud account.
+          - path: backup.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+          - path: backup.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+            description: Tag 18.x.x carries the PostgreSQL 18 client, which matches the default server.
+          - path: backup.resources
+            type: resources
+            label: Backup job resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: self.backup.provider in ['aws', 'gcp', 'minio']
+            mirrors: pgvector.validateBackupConfig
+            paths: [backup.provider]
+            message: Choose AWS S3, Google Cloud Storage or MinIO as the backup destination.
+          - rule: >-
+              imageMajor(self.backup.image) < 0 || !self.image.matches('-pg[0-9]+$') ||
+              imageMajor(self.backup.image) >= int(self.image.split('-pg')[size(self.image.split('-pg')) - 1])
+            severity: warning
+            paths: [backup.image]
+            message: >-
+              The backup image's major version must be at least the PostgreSQL major version of the server
+              image (the -pgNN suffix of its tag); an older pg_dumpall cannot dump a newer server.
+          - rule: >-
+              oldSelf == null || !oldSelf.backup.enabled || self.backup.provider == oldSelf.backup.provider
+            severity: info
+            paths: [backup.provider]
+            message: >-
+              Control Plane never removes a cloud binding from an existing identity, so switching the
+              destination leaves the old provider's binding attached to this release. Uninstall and reinstall
+              to change providers cleanly.
+      - title: AWS S3
+        when: self.backup.enabled && self.backup.provider == 'aws'
+        docs: "#aws-s3"
+        fields:
+          - path: backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+            patternMessage: Enter an S3 bucket name in lower case, using letters, digits, dots and dashes.
+          - path: backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+            patternMessage: Enter an AWS region such as us-east-1.
+          - path: backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) for the AWS account that holds the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            help: >-
+              The policy needs all ten S3 actions listed under
+              [AWS S3](/template-catalog/templates/pgvector#aws-s3), on the bucket and on its objects. The
+              backup identity carries only `cpln-connector` and this policy, so an action missing from it is
+              missing for the backup job.
+            pattern: '^[A-Za-z0-9+=,.@_-]+$'
+            patternMessage: "Enter the name of your IAM policy, using letters, digits and + = , . @ _ -."
+          - path: backup.aws.prefix
+            type: string
+            label: Folder prefix
+            pattern: '^(?!/)'
+            patternMessage: Leave out the leading /.
+      - title: Google Cloud Storage
+        when: self.backup.enabled && self.backup.provider == 'gcp'
+        docs: "#gcs"
+        fields:
+          - path: backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            description: The backup identity gets Storage Object Admin on exactly this bucket.
+            pattern: '^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
+            patternMessage: Enter a GCS bucket name in lower case, using letters, digits, dots, dashes and _.
+          - path: backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) for the project that holds the bucket, whose
+              service account has the Storage Admin role.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            pattern: '^(?!/)'
+            patternMessage: Leave out the leading /.
+      - title: MinIO or S3-compatible
+        when: self.backup.enabled && self.backup.provider == 'minio'
+        docs: "#minio"
+        fields:
+          - path: backup.minio.endpoint
+            type: string
+            format: url
+            label: S3 endpoint
+            required: true
+            example: true
+            description: The S3 API address including the port.
+            help: >-
+              For a MinIO workload in this GVC, use its internal address, for example
+              `http://WORKLOAD_NAME.GVC_NAME.cpln.local:9000`.
+          - path: backup.minio.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: backup.minio.credentialsSecretName
+            type: ref
+            label: MinIO credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `accessKey` and `secretKey`. For the minio template these are
+              its admin username and password.
+            help: >-
+              Create the secret with:
+              `cpln secret create-dictionary --name MINIO_SECRET_NAME --entry accessKey=MINIO_ACCESS_KEY --entry secretKey=MINIO_SECRET_KEY`
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [accessKey, secretKey]
+              create:
+                suggestName: "context.releaseName + '-pgvector-minio-credentials'"
+          - path: backup.minio.prefix
+            type: string
+            label: Folder prefix
+            pattern: '^(?!/)'
+            patternMessage: Leave out the leading /.
+        rules:
+          - rule: "!has(self.backup.minio.accessKey) && !has(self.backup.minio.secretKey)"
+            mirrors: pgvector.validateBackupConfig
+            paths: [backup.minio.credentialsSecretName]
+            message: >-
+              backup.minio.accessKey and backup.minio.secretKey are not values in this chart. Put them in a
+              dictionary secret with the keys accessKey and secretKey, and remove them from the values.
+
+  - id: network
+    title: Network
+    description: Who can connect to the database, and whether it is published to the internet.
+    sections:
+      - title: Database access
+        docs: "#internal-access"
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: >-
+              Access changes can take several minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          - type: note
+            when: self.pgbouncer.enabled
+            text: This setting also governs who can connect to PgBouncer.
+          # workload-pgvector.yaml and workload-pgbouncer.yaml write the list only with same-gvc and workload-list.
+          - path: internalAccess.workloads
+            when: self.internalAccess.type in ['same-gvc', 'workload-list']
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: >-
+              With Specific workloads, the only workloads allowed to connect, including this release's own
+              PgBouncer and backup job when they are on; with Same GVC, extra workloads from other GVCs.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internalAccess.type == 'same-gvc'
+      - title: Public access
+        docs: "#public-access"
+        fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Publish to the internet
+            description: >-
+              Exposes the database server's port 5432 through a TCP load balancer (PgBouncer is never
+              published). Prefer internal access where you can.
+          - type: note
+            severity: warning
+            when: self.publicAccess.enabled
+            textExpression: >-
+              'Public connections are unencrypted: the image ships no TLS certificate, so `sslmode=require` ' +
+              'fails, and anyone who reaches the endpoint needs only the database password. Read the address ' +
+              'from `status.canonicalEndpoint` in `cpln workload get ' + context.releaseName + '-pgvector -o yaml`. ' +
+              'Turning it on or off can take several minutes to take effect.'
+            text: >-
+              Public connections are unencrypted: the image ships no TLS certificate, so `sslmode=require`
+              fails, and anyone who reaches the endpoint needs only the database password. Read the address
+              from `status.canonicalEndpoint` in `cpln workload get RELEASE_NAME-pgvector -o yaml`. Turning it
+              on or off can take several minutes to take effect.
+    rules:
+      - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+        severity: warning
+        paths: [internalAccess.workloads]
+        message: With "Specific workloads" and an empty list, no workload can connect.
+      - when: self.internalAccess.type == 'same-gvc' && context.gvc != null
+        rule: "!self.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+        severity: info
+        paths: [internalAccess.workloads]
+        messageExpression: >-
+          'Same GVC already allows every workload in this GVC: ' +
+          self.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+          ' can be removed from the list.'
+        message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+      - when: self.internalAccess.type == 'none'
+        rule: "!self.pgbouncer.enabled && !self.backup.enabled"
+        severity: warning
+        paths: [internalAccess.type]
+        messageExpression: >-
+          '"None" also blocks ' +
+          (self.pgbouncer.enabled && self.backup.enabled ? 'PgBouncer and the backup job, which connect' :
+          self.pgbouncer.enabled ? 'PgBouncer, which connects' : 'the backup job, which connects') +
+          ' to the database like any other workload.'
+        message: >-
+          "None" also blocks the optional PgBouncer pooler and backup job, which connect to the database like
+          any other workload.
+      - when: self.internalAccess.type == 'workload-list' && context.gvc != null
+        rule: >-
+          (!self.pgbouncer.enabled ||
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgbouncer') in self.internalAccess.workloads) &&
+          (!self.backup.enabled ||
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgvector-backup') in self.internalAccess.workloads)
+        severity: warning
+        paths: [internalAccess.workloads]
+        messageExpression: >-
+          'The chart does not add its own workloads to the list. Add ' +
+          (self.pgbouncer.enabled ? '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgbouncer' : '') +
+          (self.pgbouncer.enabled && self.backup.enabled ? ' and ' : '') +
+          (self.backup.enabled ? '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgvector-backup' : '') +
+          ', or they cannot connect.'
+        message: >-
+          The chart does not add its own workloads to the list; add the PgBouncer and backup workloads, or they
+          cannot connect.
+        fix:
+          path: internalAccess.workloads
+          items: >-
+            (self.pgbouncer.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgbouncer'] : []) +
+            (self.backup.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgvector-backup'] : [])

@@ -1,0 +1,556 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: PgDog
+# No gvc block: the PgDog workload is standard and stateless (no volume set), so a copy per location
+# holds no data of its own.
+
+steps:
+  - id: backends
+    title: Backends
+    description: The existing PostgreSQL servers PgDog sends queries to.
+    sections:
+      - title: Backend databases
+        docs: "#backend-databases"
+        fields:
+          - type: note
+            text: >-
+              PgDog deploys no PostgreSQL. Each backend, its roles and its databases must already exist and be
+              reachable from this GVC.
+          - path: databases
+            type: list
+            label: Backend databases
+            required: true
+            widget: table
+            newItem: { name: "", host: "", port: 5432, role: replica }
+            itemLabel: >-
+              (item.name == null || item.name == '' ? '(no name)' : item.name) + ' on ' +
+              (item.host == null || item.host == '' ? '(no host)' : item.host) +
+              (item.role == null ? '' : ' (' + string(item.role) + ')')
+            description: >-
+              Entries that share a name form one cluster: writes go to its `primary` entry and reads are
+              spread over its `replica` entries.
+            help: >-
+              For a backend in this GVC use the fully qualified `WORKLOAD_NAME.GVC_NAME.cpln.local`; a bare
+              workload name does not resolve for every workload type. With the postgres template the host is
+              `PG_RELEASE_NAME-postgres.GVC_NAME.cpln.local`. With postgres-highly-available, point the
+              `primary` entry at `PG_RELEASE_NAME-postgres-ha-proxy.GVC_NAME.cpln.local` and add `replica`
+              entries for `replica-N.PG_RELEASE_NAME-postgres-ha.LOCATION.GVC_NAME.cpln.local`.
+            item:
+              type: object
+              label: Backend
+              fields:
+                - path: name
+                  type: string
+                  label: Database
+                  required: true
+                  example: true
+                  description: The name clients connect to; it must be a real database on the backend.
+                - path: host
+                  type: string
+                  label: Host
+                  required: true
+                  example: true
+                  placeholder: my-postgres.my-gvc.cpln.local
+                - path: port
+                  type: integer
+                  label: Port
+                  required: true
+                  min: 1
+                  max: 65535
+                  suggestions: [5432]
+                - path: role
+                  type: enum
+                  label: Role
+                  required: true
+                  options:
+                    - { value: primary, label: Primary }
+                    - { value: replica, label: Replica }
+                    - { value: auto, label: Auto }
+              rules:
+                - rule: item.host == null || item.host == '' || item.host.contains('.')
+                  severity: info
+                  paths: [host]
+                  message: >-
+                    A bare workload name does not resolve for every workload type. For a backend in this GVC
+                    use the fully qualified WORKLOAD_NAME.GVC_NAME.cpln.local.
+        rules:
+          - rule: size(self.databases) > 0
+            mirrors: pgdog.validateDatabases
+            paths: [databases]
+            message: Add at least one backend database.
+          - rule: >-
+              self.databases.all(d, d.name == null || d.name == '' || d.role != 'replica' ||
+              self.databases.exists(p, p.name == d.name && p.role != 'replica'))
+            severity: info
+            paths: [databases]
+            message: >-
+              A database with only replica entries has nowhere to send writes. Add a primary (or auto) entry
+              with the same name, unless the clients only read.
+
+  - id: credentials
+    title: Credentials
+    description: The pooled users your applications connect as, and the admin database login.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            text: >-
+              Every secret on this step must exist **before** you install. If one is missing, the deployment
+              waits on it and `cpln logs` shows nothing at all: the reason is under `status.versions[].message`
+              in `cpln workload get-deployments RELEASE_NAME-pgdog`. It recovers on its own within about ten
+              minutes of the secret appearing, or at once with `cpln workload force-redeployment`.
+            textExpression: >-
+              'Every secret on this step must exist **before** you install. If one is missing, the deployment
+              waits on it and `cpln logs` shows nothing at all: the reason is under `status.versions[].message`
+              in `cpln workload get-deployments ' + context.releaseName + '-pgdog' +
+              (context.gvc == null ? '' : ' --gvc ' + context.gvc) + ' -o yaml`. It recovers on its own within
+              about ten minutes of the secret appearing, or at once with `cpln workload force-redeployment ' +
+              context.releaseName + '-pgdog' + (context.gvc == null ? '' : ' --gvc ' + context.gvc) + '`.'
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.1.0') < 0
+            text: >-
+              Version 1.1.0 moved every credential out of the values. Before you upgrade, read the pooled users
+              the proxy uses today, because the upgrade deletes the secret that holds them:
+              `cpln secret reveal RELEASE_NAME-pgdog-users -o yaml` (the `name` and `password` of each
+              `[[users]]` entry). Create one dictionary secret per pooled user with the keys `username` and
+              `password` holding those same values, so existing connection strings keep working, and pick each
+              one below. Create a new admin password secret: 1.0.0 shipped the published defaults `changeme`
+              (admin) and `mypassword` (pooled user), shared by every install. If a pooled user still has
+              `mypassword`, change that role's password in PostgreSQL with `ALTER ROLE` and put the new one in
+              its secret. See
+              [Upgrading From 1.0.0](/template-catalog/templates/pgdog#upgrading-from-1-0-0).
+            textExpression: >-
+              'Version 1.1.0 moved every credential out of the values. Before you upgrade, read the pooled users
+              the proxy uses today, because the upgrade deletes the secret that holds them: `cpln secret reveal ' +
+              context.releaseName + '-pgdog-users -o yaml` (the `name` and `password` of each `[[users]]` entry).
+              Create one dictionary secret per pooled user with the keys `username` and `password` holding those
+              same values, so existing connection strings keep working, and pick each one below. Create a new
+              admin password secret: 1.0.0 shipped the published defaults `changeme` (admin) and `mypassword`
+              (pooled user), shared by every install. If a pooled user still has `mypassword`, change that role
+              password in PostgreSQL with `ALTER ROLE` and put the new one in its secret. See
+              [Upgrading From 1.0.0](/template-catalog/templates/pgdog#upgrading-from-1-0-0).'
+      - title: Pooled users
+        docs: "#pooled-users"
+        fields:
+          - path: users
+            type: list
+            label: Pooled users
+            required: true
+            widget: table
+            newItem: { credentialsSecretName: "", database: "" }
+            itemLabel: >-
+              (item.credentialsSecretName == null || item.credentialsSecretName == '' ? '(no secret)' :
+              item.credentialsSecretName) + ' to ' +
+              (item.database == null || item.database == '' ? '(no database)' : item.database)
+            description: >-
+              One entry and one dictionary secret per user. PgDog checks client logins against the secret's
+              `username` and `password` **and** opens its backend connections with them, so they must be a
+              real PostgreSQL role with access to the database.
+            help: >-
+              With the postgres template as the backend, pick the dictionary secret that template already
+              uses; PgDog ignores its extra `database` key. Otherwise create one with:
+              `cpln secret create-dictionary --name USER_CREDENTIALS_SECRET_NAME --entry username=appuser --entry password='YOUR-STRONG-PASSWORD'`.
+              PgDog reads the secrets only when the container starts: after changing a secret's contents, run
+              `cpln workload force-redeployment RELEASE_NAME-pgdog --gvc GVC_NAME`.
+            item:
+              type: object
+              label: Pooled user
+              fields:
+                - path: credentialsSecretName
+                  type: ref
+                  label: Credentials secret
+                  required: true
+                  ref:
+                    kind: secret
+                    format: name
+                    filter: { secretType: [dictionary] }
+                    mustExist: error
+                    allowCreate: true
+                    requiredKeys: [username, password]
+                    create:
+                      suggestName: "context.releaseName + '-pgdog-user-credentials'"
+                - path: database
+                  type: enum
+                  label: Database
+                  required: true
+                  optionsFrom: >-
+                    self.databases.filter(d, d.name != null && d.name != '' &&
+                    d == self.databases.filter(e, e.name == d.name)[0]).map(d, d.name)
+        rules:
+          - rule: size(self.users) > 0
+            mirrors: pgdog.validateUsers
+            paths: [users]
+            message: Add at least one pooled user.
+          - rule: self.users.all(u, !has(u.password) && !has(u.name))
+            mirrors: pgdog.validateUsers
+            paths: [users]
+            message: >-
+              users[].name and users[].password were removed in 1.1.0. Put each user's name and password in a
+              dictionary secret with the keys username and password, choose it as the user's credentials
+              secret, and remove name and password from the values.
+          - rule: >-
+              self.users.all(u, u.database == null || u.database == '' ||
+              self.databases.exists(d, d.name == u.database))
+            mirrors: pgdog.validateDatabases
+            paths: [users]
+            message: Every pooled user's database must be the name of one of the backend databases.
+      - title: Admin database
+        docs: "#admin-database"
+        description: >-
+          PgDog's own database for stats and introspection (`SHOW POOLS`, `SHOW CLIENTS`), on the same host and
+          port as the pooled databases.
+        fields:
+          - path: admin.passwordSecretName
+            type: ref
+            label: Admin password secret
+            required: true
+            description: >-
+              An opaque secret (encoding plain) holding only the admin password, with no trailing newline. It is
+              separate from the pooled-user secrets, so an application that can read its own credentials cannot
+              also reach the admin database.
+            help: >-
+              Create it with `printf`, not `echo` (the startup script refuses a password that ends in a
+              newline):
+              `printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name ADMIN_PASSWORD_SECRET_NAME --encoding plain -f -`
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-pgdog-admin-password'"
+                hint: "Generate the content with: openssl rand -hex 32 (no trailing newline)"
+          - path: admin.database
+            type: string
+            label: Admin database name
+            required: true
+          - path: admin.user
+            type: string
+            label: Admin user
+            required: true
+        rules:
+          - rule: self.admin.passwordSecretName != null && self.admin.passwordSecretName != ''
+            mirrors: pgdog.validateAdmin
+            paths: [admin.passwordSecretName]
+            message: The admin password secret is required.
+          - rule: "!has(self.admin.password)"
+            mirrors: pgdog.validateAdmin
+            paths: [admin.passwordSecretName]
+            message: >-
+              admin.password was removed in 1.1.0. Put the admin password in an opaque secret (encoding plain),
+              choose it as the admin password secret, and remove admin.password from the values.
+
+  - id: pooling
+    title: Pooling
+    description: How PgDog shares backend connections and routes reads and writes.
+    sections:
+      - title: Connection pooling
+        docs: "#connection-pooling"
+        fields:
+          - path: pooling.mode
+            type: enum
+            label: Pool mode
+            widget: cards
+            required: true
+            options:
+              - value: transaction
+                label: Transaction
+                description: >-
+                  A backend connection is held for one transaction. Best reuse for web and API workloads, but
+                  SET variables, temporary tables and advisory locks do not survive between transactions.
+              - value: session
+                label: Session
+                description: >-
+                  A backend connection is held for the whole client session. Works with everything; reuses less,
+                  so size the pool for the expected concurrency.
+              - value: statement
+                label: Statement
+                description: A backend connection is held for one statement; multi-statement transactions break.
+          - path: pooling.defaultPoolSize
+            type: integer
+            label: Server connections per pool
+            required: true
+            min: 1
+            description: Real PostgreSQL connections per user and database, in each PgDog replica.
+            suggestions: [5, 10, 25, 50, 100]
+          - path: pooling.minPoolSize
+            type: integer
+            label: Idle connections kept open
+            required: true
+            min: 0
+          - path: pooling.workers
+            type: integer
+            label: Worker threads
+            required: true
+            min: 1
+            description: About two per vCPU of the proxy's CPU limit.
+            suggestions: [1, 2, 4, 8]
+        rules:
+          - rule: self.pooling.mode in ['transaction', 'session', 'statement']
+            mirrors: pgdog.validatePooling
+            paths: [pooling.mode]
+            message: Choose transaction, session or statement as the pool mode.
+          - rule: self.pooling.minPoolSize <= self.pooling.defaultPoolSize
+            severity: info
+            paths: [pooling.minPoolSize]
+            message: The idle connections kept open exceed the server connections per pool.
+      - title: Timeouts
+        docs: "#timeouts"
+        fields:
+          - path: timeouts.connect
+            type: integer
+            label: Backend connect timeout
+            required: true
+            unit: ms
+            min: 0
+          - path: timeouts.checkout
+            type: integer
+            label: Wait for a free connection
+            required: true
+            unit: ms
+            min: 0
+            description: How long a client waits for a pooled connection before it gets an error.
+          - path: timeouts.idle
+            type: integer
+            label: Close idle connections after
+            required: true
+            unit: ms
+            min: 0
+          - path: timeouts.query
+            type: integer
+            label: Query timeout
+            required: true
+            unit: ms
+            min: 0
+            description: 0 turns it off.
+      - title: Load balancing
+        docs: "#load-balancing"
+        fields:
+          - path: loadBalancing.strategy
+            type: enum
+            label: Read balancing strategy
+            required: true
+            options:
+              - { value: random, label: Random }
+              - { value: round_robin, label: Round robin }
+              - { value: least_active_connections, label: Least active connections }
+          - path: loadBalancing.readWriteSplit
+            type: enum
+            label: Reads on the primary
+            widget: cards
+            required: true
+            description: PgDog parses each query; writes always go to the primary.
+            options:
+              - value: include_primary
+                label: Include the primary
+                description: The primary serves reads alongside the replicas.
+              - value: exclude_primary
+                label: Replicas only
+                description: Reads go to the replicas; the primary serves only writes.
+
+  - id: proxy
+    title: Proxy
+    description: The PgDog image, its compute and its logs.
+    sections:
+      - title: Image and resources
+        docs: "#image-and-resources"
+        fields:
+          - path: image
+            type: string
+            format: image
+            label: PgDog image
+            required: true
+            description: >-
+              The startup script needs bash in the image, as the upstream image has; check it before moving to
+              another tag or base.
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per replica.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: replicas
+            type: integer
+            label: Replicas
+            required: true
+            min: 1
+            description: >-
+              PgDog is stateless; every upgrade replaces the replicas and drops open client connections, so give
+              applications a reconnect policy.
+            docs: "#scaling-and-availability"
+            suggestions: [1, 2, 3]
+        rules:
+          - rule: "!has(self.resources.cpu) && !has(self.resources.memory)"
+            mirrors: pgdog.validateResources
+            paths: [resources]
+            message: >-
+              resources.cpu and resources.memory were renamed in 1.1.0. Use resources.maxCpu and
+              resources.maxMemory, and remove the old keys from the values.
+          - rule: self.replicas <= 1
+            severity: info
+            paths: [replicas]
+            messageExpression: >-
+              'Each replica keeps its own pool, so the backend sees up to ' + string(self.replicas) + ' × ' +
+              string(self.pooling.defaultPoolSize) + ' = ' + string(self.replicas * self.pooling.defaultPoolSize) +
+              ' connections per pool. Keep that under the backend max_connections, or lower the server
+              connections per pool.'
+            message: >-
+              Each replica keeps its own pool, so the backend sees up to replicas × server connections per pool.
+              Keep that under the backend max_connections, or lower the server connections per pool.
+      - title: Logging
+        docs: "#authentication-and-logging"
+        fields:
+          - path: logging.format
+            type: enum
+            label: Log format
+            required: true
+            options:
+              - { value: text, label: Text }
+              - { value: json, label: JSON }
+              - { value: json_flattened, label: Flattened JSON }
+          - path: logging.level
+            type: string
+            label: Log level
+            required: true
+            description: RUST_LOG syntax, for example `info`, `debug` or `pgdog=debug`.
+            suggestions: [error, warn, info, debug, pgdog=debug]
+
+  - id: network
+    title: Network
+    description: Who can connect to PgDog on port 6432.
+    sections:
+      - title: Network access
+        docs: "#access"
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: >-
+              Clients connect to `RELEASE_NAME-pgdog.GVC_NAME.cpln.local:6432`; the short name does not resolve.
+              Access changes can take several minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          # Shown for every type when non-empty: workload-pgdog.yaml writes any non-empty list into
+          # inboundAllowWorkload, and the platform validates every entry.
+          - path: internalAccess.workloads
+            when: self.internalAccess.type in ['same-gvc', 'workload-list'] || size(self.internalAccess.workloads) > 0
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: >-
+              With Specific workloads this is the whole allow-list: every application that connects through
+              PgDog must be in it. With Same GVC it adds workloads from other GVCs.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internalAccess.type == 'same-gvc'
+          - path: publicAccess.enabled
+            type: boolean
+            label: Publish to the internet
+            description: >-
+              Opens a TCP load balancer on port 6432 with a generated `cpln.app` hostname, read from
+              `status.canonicalEndpoint` of the workload. Anyone who reaches it needs only a pooled user's
+              password. Turning it on or off can take several minutes to take effect.
+        rules:
+          - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+            severity: warning
+            paths: [internalAccess.workloads]
+            message: List at least one workload when PgDog is open to specific workloads, or nothing can connect.
+          - when: self.internalAccess.type == 'same-gvc' && context.gvc != null
+            rule: "!self.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+            severity: info
+            paths: [internalAccess.workloads]
+            messageExpression: >-
+              'Same GVC already allows every workload in this GVC: ' +
+              self.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+              ' can be removed from the list.'
+            message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+          - when: self.internalAccess.type == 'same-org'
+            rule: size(self.internalAccess.workloads) == 0
+            severity: info
+            paths: [internalAccess.workloads]
+            message: >-
+              Same org already lets every workload of the org connect to PgDog, so the workloads listed add
+              nothing.
+          - when: self.internalAccess.type == 'none'
+            rule: size(self.internalAccess.workloads) == 0
+            severity: warning
+            paths: [internalAccess.workloads]
+            message: >-
+              The chart still writes the listed workloads into its firewall, where the platform checks every
+              entry, but "None" lets none of them connect. Remove them.
+          - when: self.internalAccess.type == 'none'
+            rule: self.publicAccess.enabled
+            severity: info
+            paths: [internalAccess.type]
+            message: >-
+              With "None" and "Publish to the internet" off, no workload can connect to PgDog and it is not on
+              the internet either.
+
+rules:
+  # publicAccess.address is only a commented-out key in values.yaml. The chart renders it as
+  # spec.loadBalancer.domains, which the workload schema does not have (additionalProperties: false),
+  # so a set address makes the API refuse the workload.
+  - rule: "!has(self.publicAccess.address)"
+    paths: [publicAccess.enabled]
+    message: >-
+      publicAccess.address cannot be used: the chart writes it into the workload load balancer, which the
+      platform refuses. Remove it from the values and use the generated cpln.app hostname.
+
+yamlOnly:
+  - path: auth.type
+    reason: >-
+      SCRAM-SHA-256, the only client authentication this template was tested with; every standard PostgreSQL
+      client supports it, and the other methods are weaker or turn authentication off.
+
+migrations:
+  # 1.1.0 split the CPU and memory limits from their reservations; the defaults did not change.
+  - { fromVersions: "<1.1.0", from: resources.cpu, to: resources.maxCpu }
+  - { fromVersions: "<1.1.0", from: resources.memory, to: resources.maxMemory }
+  - fromVersions: "<1.1.0"
+    from: admin.password
+    note: >-
+      The admin password moved to an opaque secret (encoding plain); choose it under Credentials. 1.0.0
+      shipped the published default "changeme": pick a new password rather than copying it.
+  # users is a list, carried whole; 1.1.0 removed users[].name and users[].password (the chart fails on
+  # either) and added users[].credentialsSecretName. Keep each entry's routing target and leave the secret
+  # for the user to pick.
+  - fromVersions: "<1.1.0"
+    to: users
+    valueExpr: "self.users.map(u, {'credentialsSecretName': '', 'database': u.database})"
+    note: >-
+      Each pooled user's name and password moved to a dictionary secret with the keys username and password;
+      choose one per user under Credentials. Use the same name and password so connection strings keep
+      working. 1.0.0 shipped the published default password "mypassword": if a user still has it, change it.
+  # 1.1.0 changed the databases example (mydb on postgres.example.com became my-pgdog-database on
+  # my-postgres-workload), and a list on its old default would take the new one: keep the backends the
+  # release routes to, so they still match the carried users.
+  - fromVersions: "<1.1.0"
+    to: databases
+    valueExpr: self.databases
+    note: The release keeps the backend databases it routes to.

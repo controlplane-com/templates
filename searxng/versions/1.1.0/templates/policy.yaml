@@ -12,9 +12,9 @@ targetKind: secret
 targetLinks:
   - //secret/{{ include "searxng.secret.settings.name" . }}
   - //secret/{{ .Values.secretKey.secretName }}
-  {{- if .Values.redis.enabled }}
-  - //secret/{{ include "searxng.secret.startup.name" . }}
+  {{- if .Values.metrics.secretName }}
+  - //secret/{{ .Values.metrics.secretName }}
   {{- end }}
   {{- if eq (include "searxng.redisAuthEnabled" .) "true" }}
-  - //secret/{{ include "searxng.redis.secretPassword.name" . }}
+  - //secret/{{ include "searxng.redis.secret.name" . }}
   {{- end }}

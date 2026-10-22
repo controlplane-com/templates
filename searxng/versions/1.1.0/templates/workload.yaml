@@ -15,13 +15,15 @@ spec:
       cpu: {{ .Values.resources.maxCpu | quote }}
       minMemory: {{ .Values.resources.minMemory | quote }}
       memory: {{ .Values.resources.maxMemory | quote }}
-      {{- if .Values.redis.enabled }}
-      # Wrapper that waits for the datastore, then execs the image's own
-      # entrypoint. Without it SearXNG wins the boot race against redis and
-      # comes up with the limiter permanently disabled -- see the script.
+      {{- if eq (include "searxng.startScript.enabled" .) "true" }}
+      # Inline start script (templates/_script-startup.tpl): applies the
+      # /metrics password and/or waits for the datastore, then execs the
+      # image's own entrypoint. Without the wait SearXNG wins the boot race
+      # against redis and comes up with the limiter permanently disabled.
       command: "/bin/sh"
       args:
-        - "/usr/local/bin/searxng-startup.sh"
+        - "-c"
+        - {{- include "searxng.inlineScript" (include "searxng.script.startup" .) | nindent 10 }}
       {{- end }}
       env:
         # ── Signing key (user prerequisite opaque secret, read as .payload) ──
@@ -41,16 +43,24 @@ spec:
           value: "false"
         {{- if .Values.redis.enabled }}
         {{- if eq (include "searxng.redisAuthEnabled" .) "true" }}
-        # ── Datastore password (redis subchart auth secret) — declared BEFORE
-        # the URL that interpolates it via the platform's $(VAR) substitution.
+        # ── Datastore password (user's prerequisite dictionary secret, key
+        # `password`) — declared BEFORE the URL that interpolates it via the
+        # platform's $(VAR) substitution, so it never appears in the release.
         - name: REDIS_PASSWORD
-          value: cpln://secret/{{ include "searxng.redis.secretPassword.name" . }}.password
+          value: cpln://secret/{{ include "searxng.redis.secret.name" . }}.{{ include "searxng.redis.secret.key" . }}
         - name: SEARXNG_VALKEY_URL
           value: valkey://:$(REDIS_PASSWORD)@{{ include "searxng.redis.host" . }}:6379/0
         {{- else }}
         - name: SEARXNG_VALKEY_URL
           value: valkey://{{ include "searxng.redis.host" . }}:6379/0
         {{- end }}
+        {{- end }}
+        {{- if .Values.metrics.secretName }}
+        # ── /metrics basic-auth password (user's optional prerequisite opaque
+        # secret). The start script writes it into a runtime copy of
+        # settings.yml and unsets it before SearXNG starts.
+        - name: SEARXNG_METRICS_PASSWORD
+          value: cpln://secret/{{ .Values.metrics.secretName }}.payload
         {{- end }}
         {{- if .Values.baseUrl }}
         - name: SEARXNG_BASE_URL
@@ -63,11 +73,6 @@ spec:
         - path: /etc/searxng/settings.yml
           recoveryPolicy: retain
           uri: cpln://secret/{{ include "searxng.secret.settings.name" . }}.payload
-        {{- if .Values.redis.enabled }}
-        - path: /usr/local/bin/searxng-startup.sh
-          recoveryPolicy: retain
-          uri: cpln://secret/{{ include "searxng.secret.startup.name" . }}.payload
-        {{- end }}
       readinessProbe:
         httpGet:
           path: /healthz

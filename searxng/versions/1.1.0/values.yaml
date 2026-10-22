@@ -16,7 +16,14 @@ imageProxy: true               # proxy result images through this instance inste
 baseUrl: ""                    # set only behind a custom domain, e.g. https://search.example.com (empty = derive from request)
 limiter:
   enabled: false               # bot-detection rate limiter; requires redis.enabled. NOTE: it 429s non-browser clients, including the JSON API
-extraSettings: {}              # merged into settings.yml verbatim, e.g. {general: {enable_metrics: false}}
+extraSettings: {}              # merged into settings.yml verbatim, e.g. {general: {enable_metrics: false}}; general.open_metrics is refused — use metrics.secretName
+
+# ─── /metrics password (OPTIONAL PREREQUISITE SECRET) ─────────────
+# Opaque secret, encoding: plain, whose payload is the HTTP basic-auth password
+# for /metrics. Empty = /metrics stays closed (404). The password is written
+# into settings.yml inside the container at start — never into the release.
+metrics:
+  secretName: ""               # e.g. my-searxng-metrics-password; must exist BEFORE install
 
 # ─── Signing key (USER-CREATED PREREQUISITE — MUST EXIST BEFORE INSTALL) ─
 # Opaque secret, encoding: plain, whose payload is the session/CSRF signing key.
@@ -49,10 +56,13 @@ redis:
   redis:
     image: redis:8
     replicas: 1                # MUST be 1 (validated) — SearXNG must reach the master directly
+    # Auth is OFF by default (the same-GVC firewall is the boundary). To require
+    # AUTH, create a dictionary secret with the key `password` BEFORE install, then
+    # set enabled: true and name it (e.g. my-searxng-redis). See README Prerequisites.
     auth:
-      password:
-        enabled: false         # true = require AUTH; password is wired into the connection URL
-        value: change-me-searxng-redis
+      fromSecret:
+        enabled: false         # true = require AUTH, password read from the secret below
+        name: ""               # prerequisite dictionary secret (key: password); URL-safe characters only
     resources:
       minCpu: 80m
       maxCpu: 200m

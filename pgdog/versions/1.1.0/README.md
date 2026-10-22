@@ -192,6 +192,16 @@ Applications connect exactly as they would to PostgreSQL — PgDog speaks the fu
 | Password | the `password` key of that user's credentials secret |
 | Admin database | `admin.database` on the same host/port, as `admin.user`, with the payload of `admin.passwordSecretName` |
 
+## Upgrading
+
+**From 1.0.0:** 1.1.0 moves every credential into secrets you create, and renames `resources.cpu`/`memory` to `maxCpu`/`maxMemory`. The upgrade **deletes** the `RELEASE_NAME-pgdog-users` secret that holds today's pooled usernames and passwords, so read it first:
+
+```bash
+cpln secret reveal RELEASE_NAME-pgdog-users -o yaml
+```
+
+Create one dictionary secret per pooled user with those same `username` and `password` values (so connection strings keep working), and a new admin password secret (the 1.0.0 default was published) — see [Prerequisites](#prerequisites). Then remove `users[].name`, `users[].password` and `admin.password` from your values, set `users[].credentialsSecretName` and `admin.passwordSecretName`, and upgrade. An upgrade that still carries a removed key is refused before anything changes.
+
 ## Important Notes
 
 - **A missing prerequisite secret wedges the deployment silently** — `cpln logs` returns zero lines because the container never starts. The only diagnostic is `cpln workload get-deployments RELEASE_NAME-pgdog --gvc GVC_NAME -o yaml` and reading `status.versions[].message` (plain `cpln workload get` has no `versions` key). It recovers on its own several minutes after the secret appears, or immediately with `cpln workload force-redeployment RELEASE_NAME-pgdog --gvc GVC_NAME`.

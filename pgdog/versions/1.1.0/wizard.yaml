@@ -201,8 +201,8 @@ steps:
       - title: Admin database
         docs: "#admin-database"
         description: >-
-          PgDog's own database for stats and introspection (`SHOW POOLS`, `SHOW CLIENTS`), on the same host and
-          port as the pooled databases.
+          PgDog's own database for stats and introspection (`SHOW POOLS`, `SHOW CLIENTS`), served by PgDog itself
+          on port 6432, beside the pooled databases.
         fields:
           - path: admin.passwordSecretName
             type: ref
@@ -331,6 +331,8 @@ steps:
             description: 0 turns it off.
       - title: Load balancing
         docs: "#load-balancing"
+        description: Applies only when a backend database has a replica or auto entry.
+        when: self.databases.exists(d, d.role != 'primary')
         fields:
           - path: loadBalancing.strategy
             type: enum
@@ -353,6 +355,11 @@ steps:
               - value: exclude_primary
                 label: Replicas only
                 description: Reads go to the replicas; the primary serves only writes.
+            rules:
+              - when: self.loadBalancing.readWriteSplit == 'exclude_primary'
+                rule: self.databases.exists(d, d.role == 'replica')
+                severity: warning
+                message: Replicas only needs at least one backend entry with the replica role, or reads have nowhere to go.
 
   - id: proxy
     title: Proxy

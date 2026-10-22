@@ -1,0 +1,39 @@
+kind: policy
+name: {{ include "sftpgo.policy.name" . }}
+description: SFTPGo secret access
+tags: {{- include "sftpgo.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "sftpgo.identity.name" . }}
+targetKind: secret
+targetLinks:
+  # Prerequisite secrets the user creates, plus the chart's users template —
+  # granted by name, nothing broader.
+  {{- $targets := list .Values.admin.secretName (include "sftpgo.secretUsers.name" .) }}
+  {{- if include "sftpgo.anyPasswordUser" . }}
+  {{- $targets = append $targets .Values.userPasswords.secretName }}
+  {{- end }}
+  {{- if eq .Values.storage.type "minio" }}
+  {{- $targets = append $targets .Values.storage.minio.credentialsSecretName }}
+  {{- end }}
+  {{- range uniq $targets }}
+  - //secret/{{ . }}
+  {{- end }}
+{{- if eq .Values.mode "scale_to_zero" }}
+---
+kind: policy
+name: {{ include "sftpgo.proxy.policy.name" . }}
+description: Proxy may suspend and wake exactly the SFTPGo workload
+tags: {{- include "sftpgo.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - edit
+      - view
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "sftpgo.proxy.identity.name" . }}
+targetKind: workload
+targetLinks:
+  - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "sftpgo.name" . }}
+{{- end }}

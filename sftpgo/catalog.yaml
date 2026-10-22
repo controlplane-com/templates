@@ -8,8 +8,8 @@ topology: single
 
 summary: >-
   SFTPGo SFTP server that stores files in an Amazon S3, Google Cloud Storage or S3-compatible
-  bucket, with users declared in values (password or SSH public keys), each isolated to a folder,
-  and an admin login for the REST API and optional web admin. The default scale-to-zero mode
+  bucket, with users declared in values (SSH public keys, or passwords read from a secret), each
+  isolated to a folder, and an admin login for the REST API and optional web admin. The default scale-to-zero mode
   suspends the server when idle behind a small always-on proxy; always-warm mode keeps it running.
   A dedicated load balancer exposes SFTP publicly. Pick it to exchange files over SFTP while
   keeping them in object storage.
@@ -63,10 +63,23 @@ prerequisites:
     valuesPath: admin.secretName
     required: true
     description: Administrator login for the REST API and web admin, applied on first boot. When missing, the workload waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [sftpuser]
+    valuesPath: userPasswords.secretName
+    required: true
+    description: SFTP passwords keyed by username (default sftpuser); not needed for key-only users. When missing, the workload waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath: storage.minio.credentialsSecretName
+    required: false
+    when: storage.type minio
+    description: Access keys for the S3-compatible (MinIO, R2, Wasabi) bucket.
   - kind: bucket
     valuesPath: [storage.aws.bucket, storage.gcp.bucket, storage.minio.bucket]
     required: true
-    description: Existing bucket that holds the SFTP files. With storage.type minio, its access keys go in storage.minio values.
+    description: Existing bucket that holds the SFTP files.
   - kind: cloud-account
     valuesPath: [storage.aws.cloudAccountName, storage.gcp.cloudAccountName]
     required: true

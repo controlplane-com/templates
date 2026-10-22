@@ -16,8 +16,9 @@
 | `{release}-ghost` (stateful, 1 replica, :2368) | Ghost Node app; content volumeset at `/var/lib/ghost/content` |
 | `{release}-ghost-vs` volumeset | durable uploaded images, themes, logs |
 | `{release}-ghost-start` secret | startup script: derives `url` from the canonical endpoint, then execs the image entrypoint |
-| `{release}-ghost-identity` / `-policy` | least-privilege `reveal` on the start script, `{release}-mysql-config`, and the SMTP secret (only if set) |
-| `{release}-mysql` (+ `-config`, `-vs`) | MySQL 8 backing DB (created by the `mysql` subchart, image pinned `mysql:8`) |
+| `{release}-ghost-identity` / `-policy` | least-privilege `reveal` on the start script, the DB credentials secret (`mysql.credentialsSecretName`), and the SMTP secret (only if set) — never the root-password secret |
+| `{release}-mysql` (+ `-vs`) | MySQL 8 backing DB (`mysql` subchart 1.5.2, image pinned `mysql:8`); reads the two prerequisite secrets |
+| user-created secrets | `mysql.credentialsSecretName` (dictionary `username`/`password`/`database`, read by MySQL AND Ghost) + `mysql.rootPasswordSecretName` (opaque root password, MySQL only) — required, must exist before install |
 | `{release}-mysql-backup` cron (optional) | scheduled `mysqldump` → S3/GCS, created only when `mysql.backup.enabled` |
 
 - Public access = auto-assigned `*.cpln.app` HTTPS endpoint (no `loadBalancer.direct` — Ghost is HTTP).
@@ -31,7 +32,9 @@
 | `mail.secretName` + `mail.host/port/secure/from` | `""` (off) | SMTP for member/newsletter email |
 | `staffDeviceVerification` | `false` | Ghost 6 admin-login 2FA; off by default (needs SMTP), guarded against being enabled without mail |
 | `publicAccess.enabled` / `internalAccess.type` | `true` / `same-gvc` | exposure |
-| `mysql.config.*` | `ghost` / change-me | DB name, user, passwords |
+| `mysql.credentialsSecretName` | `my-ghost-db-credentials` | prerequisite dictionary secret: `username`, `password`, `database` (since 1.3.0; replaced `mysql.config.*`) |
+| `mysql.rootPasswordSecretName` | `my-ghost-mysql-root-password` | prerequisite opaque secret: MySQL root password |
+| `mysql.internalAccess.type` / `.workloads` | `same-gvc` / `[]` | DB firewall; `none` breaks Ghost; `workload-list` must include `{release}-ghost` |
 | `mysql.backup.*` | `enabled: false` | scheduled DB dumps to S3/GCS (mysql template's native backup; tested dump AND restore) |
 
 ## Availability posture (state plainly)
@@ -39,6 +42,12 @@
 - Durability = durable MySQL + durable content volumeset + fast restart + optional scheduled DB dumps. A rolling restart of the one replica is a brief (seconds) outage — put a CDN in front for a public site.
 
 ## Troubleshooting / considerations
+- **1.3.0: no credential is a value any more.** `mysql.config.*` and `mysql.enablePhpMyAdmin` are gone (the chart, and the mysql 1.5.2 subchart before it, `fail` at render if they are still set — so a 1.2.0 values file is refused before anything is touched). Note the subchart's `fail` fires first (Helm renders subchart templates first), so users see mysql's wording, not ghost's.
+- **PHP2Shell (CVE-2026-109618/109619, work item 5369).** ghost ≤1.2.0 bundles mysql 1.4.3, whose phpMyAdmin (`phpmyadmin/phpmyadmin:latest`, PHP 8.3.26, stale upstream since 2025-10) is public when `mysql.enablePhpMyAdmin` is on → unauthenticated RCE. 1.3.0 bundles mysql 1.5.2: `phpmyadmin:5.2.3-apache` (PHP 8.3.36, rebuilt 2026-10-21) and internal-only. Old versions are not patched; the path is upgrade or turn it off.
+- **Upgrade 1.2.0 → 1.3.0 deletes `{release}-mysql-config`** (mysql 1.4.3 created it; 1.5.2 does not). Users must copy its CURRENT values (`cpln secret reveal`) into NEW secrets with different names; ghost `fail`s if either secret name equals `{release}-mysql-config`, and the wizard mirrors it. New values do NOT change the passwords MySQL was initialized with — that just breaks the login.
+- **Upgrade adds new reveal grants** (mysql identity and ghost identity both get new secret targets), so the new workload version can sit ~10 min on `is not allowed to reveal the secret` (authorization edge cache) while the old version keeps serving. Unavoidable: the subchart's design.
+- **Missing prerequisite secret = silent wedge**: zero log lines; read `status.versions[].message` via `cpln workload get-deployments`.
+- **Rotation needs a forced redeployment** of `{release}-mysql` and `{release}-ghost` (change the password inside MySQL first); the SMTP secret likewise for `{release}-ghost`.
 - **MySQL 8 only.** Ghost does NOT support MySQL 9 or MariaDB — the subchart image is pinned `mysql:8`. Do not "upgrade" it to 9; Ghost will refuse an unsupported DB.
 - **DB backups require mysql subchart ≥ 1.4.3 + backup image 1.0.0 (current).** Earlier chart/image pairs dumped a placeholder database instead of the app DB — Ghost ships pinned to the fixed pair, and the e2e test proved dump + restore of real Ghost content. Backups need the README's cloud setup (bucket, cloud account, scoped policy).
 - **First-run owner account:** there is no non-interactive admin bootstrap. After deploy the user visits `/ghost` to create the owner. If they never do, the site shows the default theme but has no admin.

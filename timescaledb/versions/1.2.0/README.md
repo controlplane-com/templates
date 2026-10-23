@@ -221,6 +221,7 @@ For GCS replace the download with `gsutil cp "gs://BUCKET_NAME/PREFIX/BACKUP_FIL
 - **Tuning is captured at first boot only** — `timescaledb-tune` sizes memory settings from the container limit when the volume is empty; raising `resources.maxMemory` later does not retune.
 - **Public access is unencrypted** — the image ships no TLS certificates; keep `publicAccess.enabled: false` unless you accept plaintext connections.
 - **Keep the image tag in the default (Community) series** — `-oss` tags remove compression, continuous aggregates, and retention policies; also match `backup.image` to the server major (18.1.0 for pg18, 17.1.0 for pg17).
+- **The image's pgvector (0.8.1) is open to CVE-2026-103484** — a role that can build an IVFFlat index can run code on the server. The secret's user is a superuser, which can do that anyway; until the image ships pgvector 0.8.7, don't give roles you don't fully trust the right to create indexes on `vector` tables.
 - **Uninstall deletes the volumeset** — a final snapshot is kept for 7 days; enable backups if the data matters long-term.
 
 ## Links

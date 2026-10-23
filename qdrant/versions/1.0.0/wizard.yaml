@@ -1,0 +1,306 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Qdrant
+# One stateful replica on its own volume, no location handling: every GVC location would run an
+# independent copy with its own data.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: auth
+    title: Authentication
+    description: The optional API-key secret that clients must send to Qdrant.
+    fields:
+      - type: note
+        severity: warning
+        when: self.auth.secretName != null && self.auth.secretName != ''
+        textExpression: >-
+          'The secret must exist **before** you install or upgrade. If it is missing, the deployment waits on it and ' +
+          '`cpln logs` shows nothing at all; the reason is in `cpln workload get-deployments ' + context.releaseName +
+          '-qdrant --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml` under ' +
+          '`status.versions[].message`. Once the secret exists the deployment recovers on its own within about ' +
+          '10 minutes, or at once with `cpln workload force-redeployment ' + context.releaseName + '-qdrant --gvc ' +
+          (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
+        text: >-
+          The secret must exist **before** you install or upgrade. If it is missing, the deployment waits on it
+          and `cpln logs` shows nothing at all; the reason is in
+          `cpln workload get-deployments RELEASE_NAME-qdrant --gvc GVC_NAME -o yaml` under
+          `status.versions[].message`. Once the secret exists the deployment recovers on its own within about
+          10 minutes, or at once with `cpln workload force-redeployment RELEASE_NAME-qdrant --gvc GVC_NAME`.
+      - path: auth.secretName
+        type: ref
+        label: API-key secret
+        description: >-
+          A dictionary secret with the key `api-key` (and `read-only-api-key` for the read-only key below).
+          Leave it empty to run Qdrant without authentication, which is possible only while it is not
+          published to the internet. Clients inside the GVC that send a key must still use plain http
+          (`https=False` in qdrant-client); the client otherwise switches to TLS and hangs.
+        help: >-
+          Create it with
+          `cpln secret create-dictionary --name SECRET_NAME --entry api-key=$(openssl rand -hex 32) --entry read-only-api-key=$(openssl rand -hex 32)`.
+          Qdrant reads the keys when its replica starts: after you change a key in the secret, run
+          `cpln workload force-redeployment RELEASE_NAME-qdrant --gvc GVC_NAME`, or the old key keeps working.
+          Uninstalling the release leaves the secret in place.
+        docs: "#authentication"
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeysFrom: "self.auth.readOnlyKey ? ['api-key', 'read-only-api-key'] : ['api-key']"
+          create:
+            suggestName: "context.releaseName + '-qdrant-keys'"
+            hint: "Generate each key with: openssl rand -hex 32"
+      - path: auth.readOnlyKey
+        type: boolean
+        label: Read-only key
+        when: (self.auth.secretName != null && self.auth.secretName != '') || self.auth.readOnlyKey
+        description: >-
+          Also accept the secret's `read-only-api-key`, which can search and read collections but is refused
+          on writes.
+    rules:
+      - rule: "!self.auth.readOnlyKey || (self.auth.secretName != null && self.auth.secretName != '')"
+        mirrors: qdrant.validate
+        paths: [auth.readOnlyKey]
+        message: The read-only key is read from the API-key secret. Choose the secret, or turn the read-only key off.
+      - rule: >-
+          oldSelf == null || (oldSelf.auth.secretName != null && oldSelf.auth.secretName != '') ||
+          self.auth.secretName == null || self.auth.secretName == ''
+        severity: info
+        paths: [auth.secretName]
+        message: >-
+          This release runs without authentication today. Once the upgrade is applied, every client must send
+          the api-key header (qdrant-client: api_key), or its requests are refused.
+      - rule: >-
+          oldSelf == null || oldSelf.auth.secretName == null || oldSelf.auth.secretName == '' ||
+          (self.auth.secretName != null && self.auth.secretName != '')
+        severity: info
+        paths: [auth.secretName]
+        message: >-
+          Without the secret, Qdrant accepts requests without any key from every workload allowed under
+          Network.
+
+  - id: server
+    title: Server
+    description: The Qdrant image, the compute of its single replica, and the API settings.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Qdrant runs a single replica, so every upgrade or configuration change restarts it and the API
+              is offline until the new replica is ready (about one to two minutes). Plan writes around
+              it; the data on the volume survives.
+          - path: image
+            type: string
+            format: image
+            label: Qdrant image
+            required: true
+            advanced: true
+            docs: "#image"
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            description: >-
+              Vectors and HNSW indexes are held in memory unless a collection is created on disk: plan memory
+              at about vectors × dimensions × 4 bytes × 1.5 (200k vectors of 1536 dimensions ≈ 1.8 GiB). A
+              collection that outgrows the memory limit gets the container OOM-killed.
+            docs: "#resources"
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 128Mi }
+      - title: API
+        docs: "#service"
+        fields:
+          - path: service.maxRequestSizeMb
+            type: integer
+            label: Maximum request size
+            unit: MB
+            min: 1
+            required: true
+            suggestions: [32, 64, 128, 256]
+            description: >-
+              A larger upsert is refused with HTTP 400 and writes nothing; send smaller batches or raise this.
+          - path: service.telemetryDisabled
+            type: boolean
+            label: Turn off usage reports
+            description: When on, Qdrant sends no anonymous usage reports upstream.
+            advanced: true
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds the data, and how it is snapshotted.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500]
+            description: >-
+              Holds collections, segments, the write-ahead log and the collection snapshots you create through
+              the API.
+            help: >-
+              The data survives restarts and upgrades. Uninstalling the release deletes the volume set, and
+              a reinstall starts empty.
+            docs: "#storage"
+        rules:
+          - rule: self.volumeset.capacity >= 10
+            mirrors: qdrant.validate
+            paths: [volumeset.capacity]
+            message: The initial capacity must be at least 10 GiB.
+          - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+            paths: [volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - id: backup
+        title: Scheduled volume snapshots
+        toggle: backup.enabled
+        description: >-
+          Platform snapshots of the whole data volume on a schedule, the backup for this template; no cloud
+          account or bucket is needed. Collection snapshots taken through Qdrant's API are separate, and live
+          on the same volume.
+        docs: "#backing-up"
+        fields:
+          - path: backup.schedule
+            type: string
+            format: cron
+            label: Snapshot schedule (UTC)
+            required: true
+        rules:
+          - rule: >-
+              (oldSelf != null && oldSelf.backup.schedule == self.backup.schedule) ||
+              self.backup.schedule.trim().matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$')
+            severity: warning
+            paths: [backup.schedule]
+            message: >-
+              The platform refuses snapshots more often than hourly. Use a single fixed minute, such as
+              0 3 * * * for every day at 03:00 UTC.
+      - title: Snapshot retention
+        fields:
+          - path: backup.retention
+            type: string
+            label: Keep snapshots for
+            required: true
+            placeholder: 7d
+            description: >-
+              Applies to the scheduled snapshots and to the final snapshot the platform takes when the volume
+              set is deleted.
+        rules:
+          - rule: >-
+              (oldSelf != null && oldSelf.backup.retention == self.backup.retention) ||
+              self.backup.retention.matches('^[0-9]+(\\.[0-9]+)?[dhm]$')
+            severity: warning
+            paths: [backup.retention]
+            message: Use a number followed by d, h or m, such as 7d, 720h or 30d.
+
+  - id: network
+    title: Network
+    description: Whether the REST API is published to the internet, and which workloads can connect inside Control Plane.
+    sections:
+      - title: Public access
+        docs: "#access"
+        fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Public HTTPS endpoint
+            description: >-
+              Serve the REST API (and the dashboard, when on) on the workload's public `*.cpln.app` endpoint.
+              The gRPC API always stays inside Control Plane.
+            help: >-
+              Read the address from `status.canonicalEndpoint` in
+              `cpln workload get RELEASE_NAME-qdrant --gvc GVC_NAME -o yaml`. Turning it on or off can take a few
+              minutes to take effect.
+          - path: service.dashboard
+            type: boolean
+            label: Web dashboard
+            description: >-
+              Serve Qdrant's web UI at `/dashboard`. The page itself loads without an API key; its data calls
+              need one.
+          - type: note
+            severity: warning
+            when: self.publicAccess.enabled
+            text: >-
+              The API key is the only thing that protects the public endpoint: every request needs the `api-key`
+              header, except the health paths (`/healthz`, `/livez`, `/readyz`). Anyone on the internet can
+              try keys against it, so use a long random key.
+          - type: note
+            severity: warning
+            when: self.publicAccess.enabled && self.service.dashboard
+            text: >-
+              The dashboard's page loads without an API key on the public endpoint (its data calls do not).
+              Turn off Web dashboard above for a published install.
+        rules:
+          - rule: >-
+              !self.publicAccess.enabled || (self.auth.secretName != null && self.auth.secretName != '')
+            mirrors: qdrant.validate
+            paths: [publicAccess.enabled]
+            message: >-
+              Qdrant is never published without an API key. Choose the API-key secret under Authentication, or
+              leave the public endpoint off.
+      - title: Internal access
+        fields:
+          - type: note
+            textExpression: >-
+              'Inside the GVC, clients connect to http://' + context.releaseName + '-qdrant.' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '.cpln.local:6333 (REST) or port 6334 (gRPC). ' +
+              'To reach it from your computer, run `cpln port-forward ' + context.releaseName +
+              '-qdrant 6333:6333 --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
+            text: >-
+              Inside the GVC, clients connect to http://RELEASE_NAME-qdrant.GVC_NAME.cpln.local:6333 (REST) or
+              port 6334 (gRPC). To reach it from your computer, run
+              `cpln port-forward RELEASE_NAME-qdrant 6333:6333 --gvc GVC_NAME`.
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: Firewall changes can take a few minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          # workload.yaml writes inboundAllowWorkload only for workload-list.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type == 'workload-list'
+            description: The whole allow-list; no other workload can connect.
+            widget: tags
+            unique: true
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+        rules:
+          - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+            mirrors: qdrant.validate
+            paths: [internalAccess.type]
+            message: Choose one of None, Same GVC, Same org or Specific workloads.
+          - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+            severity: info
+            paths: [internalAccess.workloads]
+            message: With Specific workloads and an empty list, no workload can connect.
+          - when: self.internalAccess.type == 'none'
+            rule: self.publicAccess.enabled
+            severity: info
+            paths: [internalAccess.type]
+            message: With None and the public endpoint off, nothing can reach Qdrant except a port-forward.

@@ -49,7 +49,7 @@
 | Knob | Default | Meaning |
 |---|---|---|
 | `global.locations[]` | `aws-us-east-1`, `aws-eu-central-1`, `aws-us-west-2`, all `replicas: 1` | The cluster roster. **≥2 required**, no duplicates; `replicas` = Patroni members per location (etcd always runs 1 and ignores it). Renamed from `global.gvc.locations` in 2.0.0; `global.gvc` now hard-fails at render |
-| `image` | `controlplanecorporation/patroni-postgres:0.7` | PostgreSQL 17 / Patroni 4.0.4 |
+| `image` | `controlplanecorporation/patroni-postgres:0.8` | PostgreSQL 17 / Patroni 4.0.4 / pgvector 0.8.7 (spilo-17 4.0-p3). Tags 0.1-0.7 are refused at render (`pg-ml.validateImage`, mirrored in the wizard) |
 | `postgres.credentialsSecretName` | `my-postgres-credentials` | **Required prerequisite** `dictionary` secret with `username`, `password`, `database`. Nothing else carries the credentials |
 | `primaryLocation` | `""` | Preferred location for the primary. Since 1.0.2 it places the primary on a **fresh install** (bootstrap head start) as well as biasing failover (`failover_priority`); empty = neither renders |
 | `resources.minCpu/minMemory/maxCpu/maxMemory` | `500m` / `1Gi` / `1` / `2Gi` | Per Patroni member; ratio 2:1 |
@@ -60,6 +60,18 @@
 | `backup.enabled` / `.mode` / `.location` | `false` / `logical` / `aws-us-east-1` | `logical` = nightly cron, `wal-g` = sidecar. `location` is **logical-only** |
 | `backup.provider` + `.aws` / `.gcp` / `.minio` | `aws` | `minio.credentialsSecretName` is a second required prerequisite secret (`accessKey`, `secretKey`) |
 | `etcd.*` | see the chart's own README | Subchart (**2.0.0**); it decides its own replica guard from `.Chart.IsRoot`, so the parent passes nothing. Setting `etcd.internalAccess.type: workload-list` needs `//gvc/{gvc}/workload/{release}-postgres` added BY HAND — etcd only appends itself |
+
+## 2.0.1 — pgvector CVE-2026-103484 (2026-10-23)
+
+- Default image `patroni-postgres:0.7` -> **`0.8`**: the same spilo-17 4.0-p3 base with the PGDG
+  `postgresql-{13..17}-pgvector` packages upgraded 0.8.0 -> **0.8.7** (and ca-certificates/curl refreshed).
+  Dockerfile: `images/patroni/dockerfile`. Nothing else changes; the render diff is the image and labels.
+- **`pg-ml.validateImage`** refuses `controlplanecorporation/patroni-postgres` plain-version tags 0.1-0.7
+  (with or without `docker.io/`), because the Console stores `image` in release values and an upgrade
+  with them would keep the vulnerable image silently. Digests, other registries and non-version tags pass.
+  The wizard image field mirrors it.
+- Upgrade in place; it is an ordinary restart (all members together, ~2 min of writes). `\dx` keeps
+  showing the old `vector` version until `ALTER EXTENSION vector UPDATE;` per database — record only.
 
 ## 2.0.0 — GVC removal (2026-08-28)
 
@@ -183,18 +195,14 @@ curl 7.81, `/usr/bin/timeout`), 2026-08-28, by running the rendered script again
   10 GiB volume is too loose to protect much; left as-is rather than retuned blind. Worth revisiting —
   and 2.0.0 makes it cheaper to test, since the template no longer creates its own GVC.
 - **`maxDbConnections` is per PgBouncer pod, not cluster-wide** — PgBouncer instances do not coordinate,
-  so the real ceiling is `maxReplicas x maxDbConnections`. Shipped values give 4 x 100 = 400 against
+  and maxReplicas applies per location, so the real ceiling is `locations x maxReplicas x maxDbConnections`. Shipped values give 3 x 4 x 100 = 1200 against
   `max_connections: 100` (97 usable after `superuser_reserved_connections`). The README said the opposite
   until 2026-08-24. The defaults were left alone deliberately: it is a tuning call, not a bug fix.
-- **DCS timeouts went from 45 / 10 / 15 to 60 / 10 / 20 in 1.1.0, and this was NOT a bug fix.**
-  45 / 10 / 15 satisfies Patroni's `loop_wait + 2*retry_timeout <= ttl` and was honoured as written, so
-  clusters on 1.0.x are correctly configured — unlike `postgres-highly-available` and
-  `timescaledb-highly-available`, which shipped a combination Patroni silently clamped to `1 / 14`. The
-  change here is margin: 15s was the tightest DCS budget in the catalog, sitting in the template most
-  exposed to long blips because its etcd quorum spans regions. A ~14.8s blackout was observed in production
-  on a sibling template, which is uncomfortably close. Cost is worst-case failover moving 45s → 60s.
-- **Existing clusters keep 45 / 10 / 15 after an upgrade** — `bootstrap.dcs` applies once, at first init.
-  That is fine and needs no action; use `patronictl edit-config` only to opt into the wider tolerance.
+- **DCS timeouts are 45 / 10 / 15 (ttl / loop_wait / retry_timeout) in every version**, read from
+  `secret-startup.yaml`. They satisfy Patroni's `loop_wait + 2*retry_timeout <= ttl`, so they are honoured as
+  written, unlike `postgres-highly-available` and `timescaledb-highly-available`, which shipped a combination
+  Patroni silently clamped. (An earlier version of this briefing said 1.1.0 moved them to 60 / 10 / 20; the
+  chart never shipped that.) `bootstrap.dcs` applies once, at first init; use `patronictl edit-config` to change them.
 - **`retry_timeout` is divided across the etcd endpoints.** The per-request read timeout is
   `retry_timeout / len(endpoints)`, so a 3-node etcd at `retry_timeout: 14` gives 4.67s per request. Handy
   when reading someone's logs: a `read timeout=4.666…` is the fingerprint of a clamped 14, not of anything

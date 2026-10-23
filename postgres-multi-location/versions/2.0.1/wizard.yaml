@@ -257,13 +257,32 @@ steps:
           Every upgrade restarts all members in every location together, also one that changes nothing:
           about two minutes without writes everywhere. Nothing limits the rollout of a stateful workload, so
           plan the upgrade as a short write outage.
+      - type: note
+        when: >-
+          context.mode == 'upgrade' && oldSelf != null &&
+          oldSelf.image.split(':')[0] in ['controlplanecorporation/patroni-postgres', 'docker.io/controlplanecorporation/patroni-postgres'] &&
+          size(oldSelf.image.split(':')) == 2 &&
+          oldSelf.image.split(':')[1].matches('^0[.][0-7]([.][0-9]+)*$')
+        text: >-
+          The CVE-2026-103484 fix (pgvector 0.8.7) is active after this upgrade's restart; existing data and
+          indexes need nothing. `\dx` keeps reporting the old vector version until you run
+          `ALTER EXTENSION vector UPDATE;` in each database that has it, which only updates that record.
       - path: image
         type: string
         format: image
         label: Patroni PostgreSQL image
         required: true
-        description: PostgreSQL 17 with Patroni and WAL-G.
+        description: PostgreSQL 17 with Patroni, WAL-G and pgvector 0.8.7.
         docs: "#image-and-resources"
+        rules:
+          - rule: >-
+              !(self.image.split(':')[0] in ['controlplanecorporation/patroni-postgres', 'docker.io/controlplanecorporation/patroni-postgres']) ||
+              size(self.image.split(':')) != 2 ||
+              !self.image.split(':')[1].matches('^0[.][0-7]([.][0-9]+)*$')
+            mirrors: pg-ml.validateImage
+            message: >-
+              Image tags before 0.8 carry a pgvector older than 0.8.7, open to CVE-2026-103484: a database user
+              who can create an IVFFlat index can run arbitrary code. Use controlplanecorporation/patroni-postgres:0.8.
       - path: resources
         type: resources
         label: Resources

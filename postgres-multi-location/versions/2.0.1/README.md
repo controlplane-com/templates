@@ -66,6 +66,20 @@ With N locations you survive `floor((N-1)/2)` losses, so an even count buys noth
 count below it. Two locations cannot form a symmetric quorum, which is why that topology is a warm
 standby rather than an automatic-failover cluster.
 
+## Upgrading from 2.0.0
+
+2.0.1 moves the default image to `controlplanecorporation/patroni-postgres:0.8`, which carries
+pgvector 0.8.7 and fixes CVE-2026-103484 (a database user who can create an IVFFlat index can run
+arbitrary code). Nothing else changes.
+
+- `helm upgrade` in place. The fix is in the server library and applies on the upgrade's restart,
+  which, like every upgrade of this chart, interrupts writes in every location for about two minutes.
+- Existing data and indexes need nothing.
+- `\dx` keeps reporting the old `vector` version until you run `ALTER EXTENSION vector UPDATE;` in
+  each database that has the extension; that only updates the recorded version.
+- If your values pin `image` to `controlplanecorporation/patroni-postgres` 0.7 or earlier, the chart
+  refuses to render: set it to `0.8`, or remove `image` from your values.
+
 ## Migrating from 1.x
 
 **1.x created its own GVC. 2.0.0 does not — it deploys into the GVC you install it into.**
@@ -116,7 +130,7 @@ global:
 ### PostgreSQL / Patroni
 
 ```yaml
-image: controlplanecorporation/patroni-postgres:0.7
+image: controlplanecorporation/patroni-postgres:0.8
 
 resources:
   minCpu: 500m

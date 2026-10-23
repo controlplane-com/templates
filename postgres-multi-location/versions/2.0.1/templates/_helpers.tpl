@@ -145,11 +145,29 @@ a sibling template: 6 seconds, while printing `upgraded successfully`.
 {{- end -}}
 
 {{/*
+Refuse controlplanecorporation/patroni-postgres 0.1-0.7: they carry a pgvector
+older than 0.8.7 (0.7 ships 0.8.0), open to CVE-2026-103484; image 0.8 ships 0.8.7.
+The Console wizard stores `image` in the release values, so without this an
+upgrade with those values would silently keep the vulnerable image. Only a
+plain version tag is refused; other registries, digests and non-version tags
+pass.
+*/}}
+{{- define "pg-ml.validateImage" -}}
+{{- $raw := .Values.image | default "" | toString -}}
+{{- $image := trimPrefix "docker.io/" $raw -}}
+{{- $prefix := "controlplanecorporation/patroni-postgres:" -}}
+{{- if and (hasPrefix $prefix $image) (regexMatch "^0\\.[0-7](\\.[0-9]+)*$" (trimPrefix $prefix $image)) -}}
+{{- fail (printf "postgres-multi-location: image %s carries a pgvector older than 0.8.7, which is open to CVE-2026-103484 (a database user who can create an IVFFlat index can run arbitrary code). Set image to controlplanecorporation/patroni-postgres:0.8, or remove `image` from your values to use the chart default." $raw) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Validate the location list, per-location replicas, primaryLocation and the
 access/credential knobs.
 */}}
 {{- define "pg-ml.validate" -}}
 {{- include "pg-ml.validateNoLegacyGvc" . -}}
+{{- include "pg-ml.validateImage" . -}}
 {{- if not .Values.global.locations -}}
 {{- fail "postgres-multi-location: global.locations is required — it is the cluster roster, and every entry must already exist in the GVC you install into." -}}
 {{- end -}}

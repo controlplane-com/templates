@@ -24,7 +24,7 @@ global:
       replicas: 1
 
 # ─── PostgreSQL / Patroni ─────────────────────────────────────────────────────
-image: controlplanecorporation/patroni-postgres:0.7
+image: controlplanecorporation/patroni-postgres:0.8
 
 resources:
   minCpu: 500m

@@ -55,3 +55,14 @@ checks:
         [ "${n:-0}" -ge 1 ] && echo PERSISTED || echo "MISSING (rows for {installed_version}: ${n:-none})"
     expect:
       stdout: "^PERSISTED$"
+
+  # FAILURE DRILL: never merge. Proves a failing check blocks the PR and mentions its author.
+  - id: failure-drill
+    description: Deliberately fails (expects output nothing prints).
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      script: echo drill
+    expect:
+      stdout: "^THIS-NEVER-PRINTS$"
+    retries: 1

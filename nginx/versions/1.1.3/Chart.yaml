@@ -8,7 +8,6 @@ appVersion: "1.31.7"
 annotations:
   created: "2024-07-17"
   lastModified: "2026-10-23"
-  file-nginxConf: "Nginx Configuration File"
   createsGvc: false
 
 dependencies:

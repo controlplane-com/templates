@@ -5,7 +5,7 @@ Creates an nginx reverse proxy workload that routes incoming traffic to internal
 ### Architecture
 
 - **Proxy workload** (`RELEASE_NAME-nginx`) — the nginx reverse proxy, routing to the targets listed in `locations`. Always open to the internet.
-- **Secret** — the generated `nginx.conf`.
+- **Secret** — the `nginx.conf`: generated from the values below, or your own from `nginxConf`.
 - **Identity and policy** — `reveal` on the configuration secret.
 - **Example backend workload** (`RELEASE_NAME-example`) *(optional)* — a demo target reachable only from the proxy, created when `enableExample: true`.
 
@@ -62,6 +62,11 @@ locations:
 ```
 
 The `regexModifier` field maps to nginx location modifiers (e.g., `~` for case-sensitive regex, `~*` for case-insensitive). Leave it empty for prefix matching.
+
+**Custom nginx.conf** — to run your own configuration instead of the generated one, put the whole file in `nginxConf`. Helm template syntax in it is rendered, so it can still use `.Values.locations` and `.Values.global.cpln.gvc`. Keep `listen 80` and a `location /health` that returns 200, because the health probes check them:
+```yaml
+nginxConf: "" # a full nginx.conf replacing the generated one (Helm template syntax is rendered); empty = generated from the settings above
+```
 
 ### Built-in Routes
 

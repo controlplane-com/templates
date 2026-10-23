@@ -134,7 +134,7 @@ steps:
         format: image
         label: MinIO image
         required: true
-        description: Any MinIO server image; every node runs the same one.
+        description: A Silo or MinIO server image; every node runs the same one.
       - path: resources
         type: resources
         label: Resources
@@ -156,12 +156,12 @@ steps:
           install is refused; check your org's current limit with cpln quota get (it may already be raised).
       - rule: >-
           !self.image.startsWith('minio/minio') && !self.image.startsWith('docker.io/minio/minio') &&
-          !self.image.startsWith('index.docker.io/minio/minio')
+          !self.image.startsWith('index.docker.io/minio/minio') && !self.image.startsWith('quay.io/minio/minio')
         severity: info
         paths: [image]
         message: >-
-          MinIO withdrew minio/minio from Docker Hub in 2025, so nodes that restart cannot pull this image.
-          Use an image from a registry that still serves it.
+          MinIO no longer publishes this image publicly (Docker Hub removed it and quay.io refuses anonymous
+          pulls), so nodes that restart cannot pull it. Use the default Silo image or a registry you can pull from.
 
   - id: storage
     title: Storage

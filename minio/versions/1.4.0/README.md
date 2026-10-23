@@ -1,7 +1,8 @@
 # MinIO
 
 MinIO is a high-performance, S3-compatible object storage server. This template deploys it in
-distributed mode with erasure coding, spreading every object across all replicas so the cluster
+distributed mode, running [Silo](https://github.com/pgsty/silo), the maintained open-source fork of
+MinIO (MinIO no longer publishes a public image), with erasure coding, spreading every object across all replicas so the cluster
 keeps serving reads and writes while nodes are down.
 
 ## Architecture
@@ -54,7 +55,7 @@ password are a secret you create yourself.
 ### Server and sizing
 
 ```yaml
-image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z # quay.io: MinIO withdrew minio/minio from Docker Hub (2025); quay is its public registry. Same release tag.
+image: pgsty/silo:RELEASE.2026-10-18T00-00-00Z # Silo, the maintained AGPL fork of MinIO; MinIO no longer publishes a public image
 
 replicas: 6 # Must be at least 4 and an even number
 
@@ -129,6 +130,17 @@ mc alias set minio http://{release}-minio:9000 USERNAME PASSWORD
 
 Other templates in this catalog that back up to MinIO take the same two values as their access key
 and secret key.
+
+## Upgrading from 1.3.x
+
+MinIO's own images are no longer publicly pullable (Docker Hub removed them, and quay.io now refuses
+anonymous pulls), so a 1.3.x node that restarts on a new host cannot start again. 1.4.0 runs Silo
+instead: same S3 API, same `MINIO_*` settings and the same on-disk data format, so your objects,
+buckets and credentials carry over. Upgrade with the values you already use. Every node restarts on
+the new image; after that, do not return to 1.3.x or mix the two images in one cluster.
+
+If you set your own `image`, the chart still works with it: it starts whichever of `silo` or `minio`
+the image contains.
 
 ## Important Notes
 

@@ -1,4 +1,4 @@
-image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z # quay.io: MinIO withdrew minio/minio from Docker Hub (2025); quay is its public registry. Same release tag.
+image: pgsty/silo:RELEASE.2026-10-18T00-00-00Z # Silo, the maintained AGPL fork of MinIO; MinIO no longer publishes a public image
 
 replicas: 6 # Must be at least 4 and an even number
 

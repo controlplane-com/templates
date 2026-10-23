@@ -71,6 +71,14 @@ No probes, and no cloud bindings on the identity — there is no `aws::ReadOnlyA
   bash. Ruled out: Chainguard (free tier is `latest`-only, non-root 65532), frozen community rebuilds
   (pgsty/minio, coollabsio, bitnamilegacy — CVE-heavy), quay with a pull secret (paid AIStor account).
   Fork changes are whole-cluster: no downgrade to 1.3.x and no mixed binaries in one pool.
+- **The 1.3.x → 1.4.0 upgrade is a partial S3 outage — measured.** A Silo node refuses a pool running a
+  different binary (`Expected Silo binary checksum: …, seen: …`, `Waiting for at least 2 remote servers
+  with valid configuration`) and stays out until enough peers run Silo. The chart has no probes, so those
+  waiting nodes still take traffic: at 6 replicas ~35% of writes / ~23% of reads failed for ~3m40s,
+  0 failures before, 3/239 after; ~100 s per node, ~10.5 min total; all data byte-identical after.
+  **Do NOT fix it with a `/minio/health/ready` readiness probe:** a not-ready replicaDirect replica is
+  unreachable (CLAUDE.md), so waiting nodes could never find peers and the rollout would deadlock. Silo
+  documents no setting to relax the check ("do not guarantee arbitrary upstream mixed-version operation").
 - **~8 templates' READMEs still say "for the MinIO template these are its `admin.username` and
   `admin.password`"** (postgres 3.4.x, postgres-multi-location, postgres-highly-available, docmost,
   twenty, sftpgo). Those value names no longer exist. Sweeping them is a follow-up, not this change.

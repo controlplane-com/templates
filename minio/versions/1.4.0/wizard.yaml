@@ -316,6 +316,14 @@ steps:
           ' can be removed from the list.'
         message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
 
+rules:
+  - rule: context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '1.4.0') >= 0
+    severity: info
+    message: >-
+      1.4.0 replaces the MinIO image with Silo, the maintained MinIO fork; your data carries over. Plan the
+      upgrade as a maintenance window: nodes switch one at a time, and until about half of them run Silo a
+      share of S3 requests fail. Pause writers or make sure clients retry. Do not return to 1.3.x afterwards.
+
 migrations:
   # 1.0.0 and 1.1.0 set one CPU and memory value; 1.2.0 split them into minimums and maximums. The old
   # defaults (2 and 4Gi) equal the new maximums, so the rename alone keeps what a release runs.

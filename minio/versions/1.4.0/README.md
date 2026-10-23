@@ -136,8 +136,12 @@ and secret key.
 MinIO's own images are no longer publicly pullable (Docker Hub removed them, and quay.io now refuses
 anonymous pulls), so a 1.3.x node that restarts on a new host cannot start again. 1.4.0 runs Silo
 instead: same S3 API, same `MINIO_*` settings and the same on-disk data format, so your objects,
-buckets and credentials carry over. Upgrade with the values you already use. Every node restarts on
-the new image; after that, do not return to 1.3.x or mix the two images in one cluster.
+buckets and credentials carry over. Upgrade with the values you already use.
+
+**Plan the upgrade as a maintenance window.** Nodes switch to Silo one at a time, and a Silo node does
+not join a pool that still runs mostly MinIO nodes: until about half the nodes run Silo, a share of S3
+reads and writes fail. Pause writers, or make sure clients retry, until every node is ready. Once the
+rollout finishes, do not return to 1.3.x.
 
 If you set your own `image`, the chart still works with it: it starts whichever of `silo` or `minio`
 the image contains.
@@ -170,8 +174,8 @@ the image contains.
 
 ## Links
 
-- [MinIO documentation](https://min.io/docs/minio/linux/index.html)
-- [Erasure coding](https://min.io/docs/minio/linux/operations/concepts/erasure-coding.html)
-- [Availability and resiliency](https://min.io/docs/minio/linux/operations/concepts/availability-and-resiliency.html)
-- [MinIO Client (`mc`)](https://min.io/docs/minio/linux/reference/minio-mc.html)
-- [Identity and access management](https://min.io/docs/minio/linux/administration/identity-access-management.html)
+- [Silo documentation](https://silo.pigsty.io/)
+- [Silo compatibility with MinIO](https://silo.pigsty.io/compatibility/)
+- [Erasure coding](https://silo.pigsty.io/operations/concepts/erasure-coding/)
+- [Erasure-coding thresholds](https://silo.pigsty.io/operations/concepts/thresholds/)
+- [MinIO Client (`mc`)](https://silo.pigsty.io/reference/minio-mc/)

@@ -297,25 +297,12 @@ steps:
             min: 0
             max: 30000
             suggestions: [0, 100, 500, 1000, 5000]
-          - path: proxyWorkload.capacityAI
-            type: boolean
-            label: Capacity AI
-            readOnly: true
-            advanced: true
-            description: >-
-              Not available here: the platform does not allow Capacity AI with CPU-based autoscaling, which
-              this chart always uses.
         rules:
           - rule: >-
               self.autoscaling.minScale == null || self.autoscaling.maxScale == null ||
               self.autoscaling.minScale <= self.autoscaling.maxScale
             paths: [autoscaling.maxScale]
             message: The maximum replicas must be at least the minimum replicas.
-          - rule: "!self.proxyWorkload.capacityAI"
-            paths: [proxyWorkload.capacityAI]
-            message: >-
-              Turn Capacity AI off. The chart always scales on CPU, and the platform refuses a workload with
-              both, so the install fails.
           - rule: self.autoscaling.minScale == null || self.autoscaling.minScale > 0
             severity: info
             paths: [autoscaling.minScale]
@@ -426,3 +413,10 @@ migrations:
     note: >-
       An nginx.conf edited on the classic install screen is carried into Custom nginx.conf; an unedited one
       is cleared so the generated configuration applies.
+  # proxyWorkload.capacityAI could never apply: the chart scales on CPU and the platform refuses Capacity AI
+  # with that metric. 1.1.3 removes the value; the workload keeps capacityAI: false.
+  - fromVersions: "<1.1.3"
+    from: proxyWorkload.capacityAI
+    note: >-
+      Capacity AI is removed: the proxy scales on CPU, and the platform does not allow Capacity AI with
+      CPU-based scaling, so it never applied.

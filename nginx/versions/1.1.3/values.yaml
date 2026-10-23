@@ -1,7 +1,6 @@
 proxyWorkload:
   image: nginx:1.31.7 # pinned: `latest` makes installs non-reproducible
   port: 80
-  capacityAI: false
   timeoutSeconds: 5
 
 resources:

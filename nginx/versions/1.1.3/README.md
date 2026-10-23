@@ -24,7 +24,6 @@ To proxy to your own services, set `enableExample: false` and add each target to
 proxyWorkload:
   image: nginx:1.31.7 # pinned: `latest` makes installs non-reproducible
   port: 80 # leave at 80: nginx.conf and the health probes are fixed to port 80
-  capacityAI: false
   timeoutSeconds: 5
 ```
 

@@ -15,7 +15,7 @@ spec:
       minScale: {{ .Values.autoscaling.minScale }}
       scaleToZeroDelay: 300
       target: 50
-    capacityAI: {{ .Values.proxyWorkload.capacityAI }}
+    capacityAI: false
     debug: false
     suspend: false
     timeoutSeconds: {{ .Values.proxyWorkload.timeoutSeconds }}

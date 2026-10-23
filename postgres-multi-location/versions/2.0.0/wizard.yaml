@@ -42,9 +42,16 @@ steps:
               with this release's workloads inside. See [Migrating from version 1](#migrating-from-version-1).
           - type: note
             severity: warning
+            textExpression: >-
+              'Every location you list must already be a location of the GVC you install into (check with ' +
+              '`cpln gvc get ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml`, under ' +
+              '`spec.staticPlacement.locationLinks`). On a fresh install the members read the GVC and refuse to ' +
+              'start while one is missing, with a `[patroni] FATAL:` line in `cpln logs`. After a fresh install ' +
+              'allow about two minutes before believing a member is unreachable: service discovery across ' +
+              'regions can lag a ready member.'
             text: >-
               Every location you list must already be a location of the GVC you install into (check with
-              `cpln gvc get <gvc> -o yaml`, under `spec.staticPlacement.locationLinks`). On a fresh install the
+              `cpln gvc get GVC_NAME -o yaml`, under `spec.staticPlacement.locationLinks`). On a fresh install the
               members read the GVC and refuse to start while one is missing, with a `[patroni] FATAL:` line in
               `cpln logs`. After a fresh install allow about two minutes before believing a member is
               unreachable: service discovery across regions can lag a ready member.
@@ -86,7 +93,9 @@ steps:
               with manual promotion (see
               [Recovering from a lost location](#recovering-from-a-lost-location)). To remove a location,
               remove it from this list and from the GVC; there is no per-location suspend. For a cluster in a
-              single location, use the postgres-highly-available template instead.
+              single location, use the postgres-highly-available template instead. Replication across locations
+              is asynchronous, so a failover can lose the most recent transactions, and every member outside the
+              primary's location receives the full WAL stream as billed cross-region traffic.
             item:
               type: object
               fields:
@@ -192,11 +201,12 @@ steps:
         severity: warning
         text: >-
           The credentials secret must exist **before** you install. If it is missing, the deployment waits on
-          it and `cpln logs` shows nothing at all.
+          it and `cpln logs` shows nothing at all; the reason is under `status.versions[].message` in
+          `cpln workload get-deployments RELEASE_NAME-postgres --gvc GVC_NAME`.
         textExpression: >-
           'The credentials secret must exist **before** you install. If it is missing, the deployment waits on it and `cpln logs` shows nothing at all; the reason is under `status.versions[].message` in `cpln workload get-deployments ' +
-          context.releaseName + '-postgres`. Once the secret exists the deployment recovers on its own within about 10 minutes, or at once with `cpln workload force-redeployment ' +
-          context.releaseName + '-postgres`.'
+          context.releaseName + '-postgres --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '`. Once the secret exists the deployment recovers on its own within about 10 minutes, or at once with `cpln workload force-redeployment ' +
+          context.releaseName + '-postgres --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
       - path: postgres.credentialsSecretName
         type: ref
         label: Database credentials secret
@@ -411,6 +421,9 @@ steps:
           - type: note
             when: self.pgbouncer.enabled && !self.proxy.enabled
             text: The connection pooler is on and connects through this proxy, so the proxy runs anyway.
+          - type: note
+            when: "!self.pgbouncer.enabled && !self.proxy.enabled"
+            text: Logical backups (on the Backups step) connect through this proxy, so leave it on if you plan to use them.
           - path: proxy.enabled
             type: boolean
             label: Run the proxy
@@ -594,7 +607,8 @@ steps:
               (oldSelf.backup.mode == 'wal-g') != (self.backup.mode == 'wal-g')
             text: >-
               Switching to or from WAL-G changes `archive_mode`, so this upgrade restarts PostgreSQL in every
-              location.
+              location. Turning WAL-G on can take about 10 minutes to settle in a location; check that
+              `archive_mode` is on in every location before relying on the archive.
           - path: backup.mode
             type: enum
             label: Backup mode

@@ -29,7 +29,17 @@ values:
     persistence:
       enabled: true
 
-# 3.0.2 is the version customers run most, by far. Its values (with no resources overrides) are valid on
-# 3.9.0, so the upgrade carries them as `helm upgrade -f my-values.yaml` would.
+# Both carry their values to 3.9.0, as `helm upgrade -f my-values.yaml` would.
+#  - 3.4.1: the most-used version since the 3.1.1 rename; this path must work, so it blocks.
+#  - 3.0.2: the version customers run most, by far. It crosses the rename, which is a known template
+#    bug, so the whole scenario warns until a redis version fixes it.
 upgradeFrom:
+  - version: 3.4.1
   - version: 3.0.2
+    timeoutSeconds: 300
+    knownIssue:
+      note: >-
+        Upgrading from 3.1.0 or older with persistence on deletes the old volumesets and identities
+        (3.1.1 renamed them, {release}-redis → {release}-redis-vs). The rollout then never proceeds,
+        even after a forced redeployment: the old replicas keep serving, and a replica that stops
+        does not come back.

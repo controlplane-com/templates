@@ -77,7 +77,15 @@ upgradeFrom:                        # each version needs its own baseline
   - version: 4.1.0                  # upgraded with 4.1.0's own values, as `helm upgrade -f` would
   - version: 3.2.0
     values: new                     # or switch to this baseline's values on the upgrade
+  - version: 2.0.0
+    timeoutSeconds: 300             # optional: the upgrade's own wait
+    knownIssue:                     # optional: everything after the starting install warns
+      note: "2.x volumesets were renamed in 3.0.0; the upgrade deletes them"
 ```
+
+An `upgradeFrom` entry marked `knownIssue` records an upgrade path that is known to be broken in a shipped
+version. Its failures warn with the note, except a leak on uninstall, which still fails. Keep a working
+upgrade source next to it, so an upgrade regression still blocks, and remove the entry with the fix.
 
 Always-available placeholders: `{release}`, `{gvc}`, `{org}`. Checks also get `{version}` (the version
 running now) and `{installed_version}` (the one the scenario installed first), so a check can write a

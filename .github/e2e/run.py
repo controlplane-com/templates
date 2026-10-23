@@ -219,6 +219,7 @@ class Target:
         self.org = os.environ.get("CPLN_ORG", "")
         self.results = []          # {scenario, check, status, detail, new}
         self.created_secrets = []
+        self.known = {}            # scenario → note: an upgradeFrom marked knownIssue warns instead of failing
         self.checks = load_yaml(os.path.join(ROOT, service, "tests", "checks.yaml")).get("checks", [])
 
     def baseline(self, version):
@@ -226,6 +227,9 @@ class Target:
 
     def record(self, scenario, check, ok, detail="", new=False, skipped=False, warn=False):
         """warn=True: a failure is reported as a warning and does not fail the run."""
+        note = self.known.get(scenario)
+        if not ok and note and check != "uninstall removes everything":  # a leak is never a known issue
+            warn, detail = True, f"known issue: {note} | {detail}"
         status = "skip" if skipped else ("pass" if ok else ("warn" if warn else "fail"))
         self.results.append({"scenario": scenario, "check": check, "status": status, "detail": detail, "new": new})
         log(f"  [{status.upper():4}] {scenario} · {check}{(' — ' + detail) if detail else ''}")
@@ -488,16 +492,20 @@ def scenario_fresh(t, timeout_s):
 
 
 def scenario_upgrade(t, src, timeout_s):
-    """src: {"version": "4.1.0", "values": "carry"|"new"}. "carry" upgrades with the starting version's own
-    values, the way a user's `helm upgrade -f my-values.yaml` does; "new" switches to the target's baseline."""
+    """src: {"version": "4.1.0", "values": "carry"|"new", "timeoutSeconds": N, "knownIssue": {"note": ...}}.
+    "carry" upgrades with the starting version's own values, the way a user's `helm upgrade -f
+    my-values.yaml` does; "new" switches to the target's baseline. knownIssue makes every failure after
+    the starting install warn (except a leak on uninstall); timeoutSeconds overrides the upgrade's wait."""
     old, mode = str(src["version"]), src.get("values", "carry")
     sc = f"upgrade {old} → {t.version}" + (" (new values)" if mode == "new" else "")
     group(sc)
+    install_timeout = timeout_s
+    timeout_s = int(src.get("timeoutSeconds", timeout_s))
     old_base, new_base = t.baseline(old), t.baseline(t.version)
     ctx = {"release": t.release, "gvc": t.gvc, "org": t.org, "installed_version": old}
     prepare(t, old_base, ctx, old)
     old_vfile = values_file(old_base, ctx)
-    code, out = helm(t, "install", old, old_vfile, timeout_s)
+    code, out = helm(t, "install", old, old_vfile, install_timeout)
     if t.record(sc, f"install {old} (starting point)", code == 0, "" if code == 0 else out.strip()[-500:]):
         run_checks(t, sc + f" [before, on {old}]", old, ctx, t.version, warn=True)
         if mode == "new":
@@ -506,6 +514,8 @@ def scenario_upgrade(t, src, timeout_s):
             new_vfile = values_file(new_base, ctx)
         else:
             new_vfile = old_vfile
+        if src.get("knownIssue"):
+            t.known[sc] = " ".join(str(src["knownIssue"].get("note", "")).split())
         code, out = helm(t, "upgrade", t.version, new_vfile, timeout_s)
         if t.record(sc, f"upgrade to {t.version} + every workload ready", code == 0,
                     "" if code == 0 else (out.strip()[-500:] + " | " + " | ".join(deployments_summary(t)))[:1500]):

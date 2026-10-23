@@ -7,7 +7,7 @@ pooler and optional scheduled backups to object storage.
 
 ## Architecture
 
-- **pgvector workload** (`{release}-pgvector`, stateful) — one replica, PostgreSQL 18 with pgvector 0.8.6, port 5432.
+- **pgvector workload** (`{release}-pgvector`, stateful) — one replica, PostgreSQL 18 with pgvector 0.8.7, port 5432.
 - **Volume set** (`{release}-pgvector-vs`) — `PGDATA` on `ext4`, general-purpose SSD, final snapshot with 7-day retention.
 - **First-boot SQL secret** (`{release}-pgvector-init`) — mounted at `/docker-entrypoint-initdb.d/00-pgvector.sql`; runs `CREATE EXTENSION vector`. Holds no credentials.
 - **PgBouncer workload** (`{release}-pgbouncer`, serverless) — connection pooler in front of the database. Optional (`pgbouncer.enabled`).
@@ -51,7 +51,7 @@ The database credentials are a secret you create yourself — this chart never w
 ### Server, resources and database
 
 ```yaml
-image: pgvector/pgvector:0.8.6-pg18 # PostgreSQL 18 + pgvector 0.8.6 (Debian bookworm base)
+image: pgvector/pgvector:0.8.7-pg18 # PostgreSQL 18 + pgvector 0.8.7 (Debian bookworm base)
 
 resources:
   minCpu: 300m
@@ -271,12 +271,23 @@ Use `gsutil cp "gs://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" -` for GCS. For MinI
 `aws configure set default.s3.addressing_style path`, export `AWS_ACCESS_KEY_ID` and
 `AWS_SECRET_ACCESS_KEY`, and add `--endpoint-url "http://MINIO_ENDPOINT:9000"` to the `aws s3 cp`.
 
+## Upgrading from 1.0.0
+
+1.0.1 moves to pgvector 0.8.7, which fixes CVE-2026-103484: in 0.8.6 and earlier, a database user
+who can create an IVFFlat index can run arbitrary code on the server.
+
+- **If your values pin `image`** (an install through the Console wizard stores it), set it to
+  `pgvector/pgvector:0.8.7-pg18` or remove it. The chart refuses an official pgvector tag older than 0.8.7.
+- **The fix is in the server library and is active after the upgrade's restart**; existing data
+  and indexes need nothing. `\dx` keeps reporting `vector` 0.8.6 until you run
+  `ALTER EXTENSION vector UPDATE;` in each database that has it, which only updates that record.
+
 ## High availability
 
 This template is a single server: a node failure reschedules it and reattaches the same volume, so
 the exposure is minutes of downtime, not data loss. For automatic failover use
 `postgres-highly-available`, whose image also carries pgvector — but it is **PostgreSQL 17, not 18**,
-with **pgvector 0.8.0 rather than 0.8.6**. Both `hnsw` and `ivfflat` exist in 0.8.0, so the gap is
+with **pgvector 0.8.0 rather than 0.8.7**. Both `hnsw` and `ivfflat` exist in 0.8.0, so the gap is
 fixes and refinements, not a missing index type.
 
 ## Connecting

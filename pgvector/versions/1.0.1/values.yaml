@@ -1,5 +1,5 @@
 # ─── Image ────────────────────────────────────────────────────────
-image: pgvector/pgvector:0.8.6-pg18 # PostgreSQL 18 + pgvector 0.8.6 (Debian bookworm base)
+image: pgvector/pgvector:0.8.7-pg18 # PostgreSQL 18 + pgvector 0.8.7 (Debian bookworm base)
 
 # ─── Resources ────────────────────────────────────────────────────
 resources:

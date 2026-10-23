@@ -94,9 +94,19 @@ steps:
           The `-pgNN` suffix of the tag is the PostgreSQL major version, which is fixed once the volume holds
           data.
         help: >-
-          For example `pgvector/pgvector:0.8.6-pg18` (PostgreSQL 18, pgvector 0.8.6). The data directory is
+          For example `pgvector/pgvector:0.8.7-pg18` (PostgreSQL 18, pgvector 0.8.7). The data directory is
           specific to a PostgreSQL major version: a different major on an existing volume does not start.
         docs: "#server-and-resources"
+        rules:
+          - rule: >-
+              !(self.image.split(':')[0] in ['pgvector/pgvector', 'docker.io/pgvector/pgvector']) ||
+              size(self.image.split(':')) < 2 ||
+              !self.image.split(':')[1].matches('^[0-9]+[.][0-9]+[.][0-9]+') ||
+              semverCompare(self.image.split(':')[1].split('@')[0].split('-')[0], '0.8.7') >= 0
+            mirrors: pgvector.validateImage
+            message: >-
+              pgvector before 0.8.7 is open to CVE-2026-103484: a database user who can create an IVFFlat index
+              can run arbitrary code. Use pgvector/pgvector:0.8.7-pg18.
       - path: config.extraExtensions
         type: list
         label: Extra extensions

@@ -135,7 +135,7 @@ redpanda:
 ```yaml
 redpanda:
   firewall:
-    internal_inboundAllowType: "same-gvc"  # same-org / same-gvc
+    internal_inboundAllowType: "same-gvc"  # same-org / same-gvc / workload-list / none
     # external_inboundAllowCIDR: 0.0.0.0/0
     # inboundAllowWorkload:
     #   - //gvc/my-gvc/workload/my-app
@@ -257,7 +257,7 @@ Two behaviours change, both deliberately:
 - A missing prerequisite secret wedges the deployment **silently**: `cpln logs` returns zero lines because the container never starts. The only diagnostic is `cpln workload get-deployments {release}-cluster --gvc {gvc} -o yaml` → `status.versions[].message`, which names the missing secret. After creating it, recovery takes 5.5–8.5 minutes, or run `cpln workload force-redeployment {release}-cluster --gvc {gvc}` to cut that to about 90 seconds.
 - Anyone who can reach the console acts as the cluster superuser — there is no login. Keep external inbound closed unless the console sits behind your own authenticating proxy.
 - **Console crash-loops for roughly 34 seconds on a cold install**, logging a red `Invalid credentials`. Broker-0's `postStart` hook has not created the SASL users yet; it self-heals with no action needed.
-- **The broker Admin API (port 9644) is unauthenticated for reads *and writes*, and is reachable from the whole GVC under the default `same-gvc` firewall.** Verified: a neighbouring workload with no credentials created and then deleted a SASL user through it. Any workload in the GVC can therefore administer the cluster. Narrow it with `redpanda.firewall.inboundAllowWorkload`, and treat GVC membership as equivalent to cluster admin until you do.
+- **The broker Admin API (port 9644) is unauthenticated for reads *and writes*, and is reachable from the whole GVC under the default `same-gvc` firewall.** Verified: a neighbouring workload with no credentials created and then deleted a SASL user through it. Any workload in the GVC can therefore administer the cluster. To narrow it, set `redpanda.firewall.internal_inboundAllowType: workload-list` and list every workload that needs the brokers in `inboundAllowWorkload`, including `RELEASE_NAME-console` when the console is on (under `same-gvc` that list only adds workloads, it narrows nothing). Until you do, treat GVC membership as equivalent to cluster admin.
 - SASL users are created on first boot of broker 0 and then live in the cluster's metadata. Editing a credentials secret afterwards does not rotate the user — update the user with `rpk security user update` and change the secret to match.
 - `replicas` must be 1, 3, or 5; an even count cannot form a Raft quorum and is rejected at install. Changing it changes broker membership, so treat it as a deliberate cluster operation.
 - The topic-data volume set is snapshotted daily by default (`volume.snapshots.schedule: 0 0 * * *`), kept 7 days, with a final snapshot on delete. Set `schedule: ""` to keep only the final-on-delete snapshot.

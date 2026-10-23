@@ -1,0 +1,432 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: DuckDB
+# A cron workload is deployed to every location of its GVC (reference/workload/types: "Cron workloads are
+# always deployed to all locations within their GVC"), and the chart has no location handling: in a
+# 3-location GVC the script runs three times per schedule, each run writing the same s3:// paths.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: storage
+    title: Object storage
+    description: Where the script reads and writes its files; a run keeps nothing between runs.
+    sections:
+      - title: Object storage
+        docs: "#object-storage"
+        fields:
+          - path: objectStore.type
+            type: enum
+            label: Storage
+            widget: cards
+            required: true
+            description: >-
+              Each run starts from an empty in-memory database and no volume is attached, so a real job
+              writes its results to object storage or to an attached database.
+            options:
+              - value: none
+                label: None
+                description: >-
+                  No `s3://` access. Enough for the self-test, or for a script that only reads and writes
+                  attached databases.
+              - value: aws
+                label: AWS S3
+                description: Keyless access through a cloud account and a bucket-scoped IAM policy; no keys anywhere.
+              - value: s3-compatible
+                label: S3-compatible
+                description: SeaweedFS, MinIO, Cloudflare R2, Tigris or Google Cloud Storage, with an access key secret.
+        rules:
+          - rule: self.objectStore.type in ['none', 'aws', 's3-compatible']
+            mirrors: duckdb.validate
+            paths: [objectStore.type]
+            message: Choose None, AWS S3 or S3-compatible as the object storage.
+      - title: AWS S3
+        when: self.objectStore.type == 'aws'
+        description: >-
+          The bucket, the cloud account and the IAM policy must exist before you install. The bucket itself
+          is named in your script's s3:// paths, not here.
+        docs: "#prerequisites"
+        fields:
+          - path: objectStore.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+            patternMessage: Enter an AWS region such as us-east-1.
+          - path: objectStore.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) for the AWS account that holds the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: objectStore.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            help: >-
+              The job's identity carries only `cpln-connector` and this policy. Grant `s3:ListBucket` and
+              `s3:GetBucketLocation` on the bucket, and `s3:GetObject`, `s3:PutObject` and `s3:DeleteObject`
+              on its objects; drop the last two if the job only reads. The template docs have the full
+              policy JSON.
+            pattern: '^[A-Za-z0-9+=,.@_-]+$'
+            patternMessage: "Enter the name of your IAM policy, using letters, digits and + = , . @ _ -."
+        rules:
+          - rule: self.objectStore.aws.cloudAccountName != null && self.objectStore.aws.cloudAccountName != ''
+            mirrors: duckdb.validate
+            paths: [objectStore.aws.cloudAccountName]
+            message: The AWS cloud account is required for AWS S3.
+          - rule: self.objectStore.aws.policyName != null && self.objectStore.aws.policyName != ''
+            mirrors: duckdb.validate
+            paths: [objectStore.aws.policyName]
+            message: The bucket-scoped IAM policy name is required for AWS S3.
+          - rule: self.objectStore.aws.region != null && self.objectStore.aws.region != ''
+            mirrors: duckdb.validate
+            paths: [objectStore.aws.region]
+            message: The bucket region is required for AWS S3.
+      - title: S3-compatible
+        when: self.objectStore.type == 's3-compatible'
+        description: >-
+          The bucket and the access key secret must exist before you install. The bucket itself is named in
+          your script's s3:// paths, not here.
+        fields:
+          - path: objectStore.s3Compatible.credentialsSecretName
+            type: ref
+            label: Access key secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `access-key-id` and `secret-access-key`, for a key with read
+              and write access to the bucket. For Google Cloud Storage these are HMAC keys.
+            help: >-
+              Create the secret with:
+              `cpln secret create-dictionary --name SECRET_NAME --entry access-key-id=YOUR_ACCESS_KEY --entry secret-access-key=YOUR_SECRET_KEY`.
+              A changed secret reaches the job only after `cpln workload force-redeployment`.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [access-key-id, secret-access-key]
+              create:
+                suggestName: "context.releaseName + '-duckdb-s3-credentials'"
+          - type: note
+            severity: warning
+            text: >-
+              If the access key secret is missing, the job waits and `cpln logs` shows nothing. The reason is
+              in `status.versions[].message` of `cpln workload get-deployments RELEASE_NAME-duckdb --gvc GVC_NAME -o yaml`.
+              It recovers on its own within about 10 minutes once the secret exists, or at once with
+              `cpln workload force-redeployment`.
+            textExpression: >-
+              'If the access key secret is missing, the job waits and `cpln logs` shows nothing. The reason is in `status.versions[].message` of `cpln workload get-deployments ' +
+              context.releaseName + '-duckdb --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              ' -o yaml`. It recovers on its own within about 10 minutes once the secret exists, or at once with `cpln workload force-redeployment ' +
+              context.releaseName + '-duckdb --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
+          - path: objectStore.s3Compatible.endpoint
+            type: string
+            label: Endpoint
+            required: true
+            example: true
+            description: >-
+              The server's host and port. For SeaweedFS or MinIO in this GVC, use its internal name, such as
+              `SEAWEEDFS_RELEASE-seaweedfs.GVC_NAME.cpln.local:8333` or `MINIO_RELEASE-minio.GVC_NAME.cpln.local:9000`.
+            help: >-
+              Typical values: SeaweedFS or MinIO in the same GVC with path style and TLS off;
+              `storage.googleapis.com` (path style, TLS on); `ACCOUNT_ID.r2.cloudflarestorage.com` (path style,
+              TLS on); `s3.us-east-1.amazonaws.com` for AWS S3 with static keys (virtual-hosted style, TLS on).
+          - path: objectStore.s3Compatible.region
+            type: string
+            label: Region
+            required: true
+            placeholder: us-east-1
+          - path: objectStore.s3Compatible.urlStyle
+            type: enum
+            label: URL style
+            widget: segmented
+            required: true
+            options:
+              - { value: path, label: Path }
+              - { value: vhost, label: Virtual-hosted }
+          - path: objectStore.s3Compatible.useSsl
+            type: boolean
+            label: Connect over TLS
+        rules:
+          - rule: self.objectStore.s3Compatible.endpoint != null && self.objectStore.s3Compatible.endpoint != ''
+            mirrors: duckdb.validate
+            paths: [objectStore.s3Compatible.endpoint]
+            message: The endpoint is required for S3-compatible storage.
+          - rule: >-
+              self.objectStore.s3Compatible.endpoint == null ||
+              (!self.objectStore.s3Compatible.endpoint.startsWith('http://') &&
+              !self.objectStore.s3Compatible.endpoint.startsWith('https://'))
+            mirrors: duckdb.validate
+            paths: [objectStore.s3Compatible.endpoint]
+            message: Enter the endpoint as host:port, without http:// or https://, and use Connect over TLS instead.
+          - rule: >-
+              self.objectStore.s3Compatible.credentialsSecretName != null &&
+              self.objectStore.s3Compatible.credentialsSecretName != ''
+            mirrors: duckdb.validate
+            paths: [objectStore.s3Compatible.credentialsSecretName]
+            message: The access key secret is required for S3-compatible storage.
+          - rule: self.objectStore.s3Compatible.urlStyle in ['path', 'vhost']
+            mirrors: duckdb.validate
+            paths: [objectStore.s3Compatible.urlStyle]
+            message: Choose path or virtual-hosted as the URL style.
+
+  - id: sql
+    title: SQL script
+    description: The script each run executes, and the secrets it reads.
+    sections:
+      - title: Script
+        docs: "#sql-script"
+        fields:
+          - id: sqlSource
+            virtual: true
+            type: enum
+            label: Script source
+            widget: cards
+            required: true
+            init: "self.sql.secretName != null && self.sql.secretName != '' ? 'secret' : 'inline'"
+            options:
+              - value: inline
+                label: In the values
+                description: Typed here; a change takes effect with an upgrade of the release.
+                set: { sql.secretName: "" }
+              - value: secret
+                label: From a secret
+                description: An opaque secret whose content is the script, for long scripts or ones you edit outside the release.
+          - path: sql.inline
+            type: string
+            multiline: true
+            label: SQL script
+            required: true
+            when: ui.sqlSource == 'inline'
+            description: >-
+              Runs after the template's preamble, which sets the memory limit and threads and, with object
+              storage, registers the s3:// credentials. A `SET` in your script overrides the preamble.
+          - type: note
+            when: ui.sqlSource == 'inline' && self.sql.inline != null && self.sql.inline.contains('duckdb-template-ok')
+            text: >-
+              The default script is a self-test that writes nothing anywhere. Replace it with your job, which
+              must write its results to object storage or an attached database.
+          - path: sql.secretName
+            type: ref
+            label: Script secret
+            required: true
+            when: ui.sqlSource == 'secret'
+            description: An opaque secret (encoding plain) whose content is the SQL script. The template then creates no script secret of its own.
+            help: >-
+              Create it from a file with `cat job.sql | cpln secret create-opaque --name SECRET_NAME --encoding plain -f -`.
+              After you change the script, run `cpln workload force-redeployment` on the job so the next run
+              is sure to read the new content.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-duckdb-script'"
+        rules:
+          - rule: >-
+              (self.sql.secretName != null && self.sql.secretName != '') ||
+              (self.sql.inline != null && self.sql.inline.trim() != '')
+            mirrors: duckdb.validate
+            paths: [sql.inline]
+            message: There is no SQL to run. Enter a script, or choose a secret that holds one.
+      - title: Secrets read by the script
+        docs: "#credentials-in-sql"
+        fields:
+          - type: note
+            severity: warning
+            when: ui.sqlSource == 'secret' || size(self.secretEnv) > 0
+            text: >-
+              Every secret named on this step must exist **before** you install. If one is missing, the job
+              waits and `cpln logs` shows nothing; the reason is in `status.versions[].message` of
+              `cpln workload get-deployments RELEASE_NAME-duckdb --gvc GVC_NAME -o yaml`. It recovers on its
+              own within about 10 minutes once the secret exists, or at once with `cpln workload force-redeployment`.
+            textExpression: >-
+              'Every secret named on this step must exist **before** you install. If one is missing, the job waits and `cpln logs` shows nothing; the reason is in `status.versions[].message` of `cpln workload get-deployments ' +
+              context.releaseName + '-duckdb --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              ' -o yaml`. It recovers on its own within about 10 minutes once the secret exists, or at once with `cpln workload force-redeployment ' +
+              context.releaseName + '-duckdb --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
+          - path: secretEnv
+            type: list
+            label: Secret environment variables
+            widget: table
+            uniqueBy: [name]
+            newItem: { name: "", secretName: "", secretKey: "" }
+            itemLabel: "item.name"
+            description: >-
+              Each entry is an environment variable from a secret, readable in SQL as `getenv('NAME')`.
+              For a database password, name the variable after the driver's own (`PGPASSWORD`, `MYSQL_PWD`)
+              and leave the password out of the ATTACH string.
+            help: >-
+              ATTACH takes a string literal, so `getenv()` cannot be concatenated into its connection string;
+              the driver reads `PGPASSWORD` or `MYSQL_PWD` from the environment instead. A changed secret
+              reaches the job only after `cpln workload force-redeployment`.
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: string
+                  label: Variable
+                  required: true
+                  pattern: '^[A-Z][A-Z0-9_]*$'
+                  patternMessage: Use upper-case letters, digits and underscores, starting with a letter.
+                  suggestions: [PGPASSWORD, MYSQL_PWD]
+                - path: secretName
+                  type: ref
+                  label: Secret
+                  required: true
+                  ref:
+                    kind: secret
+                    format: name
+                    mustExist: error
+                    allowCreate: true
+                    requiredKeysFrom: "item.secretKey != null && item.secretKey != '' ? [item.secretKey] : []"
+                - path: secretKey
+                  type: string
+                  label: Key
+                  description: The key in a dictionary secret, such as `password`. Leave it empty for an opaque secret.
+              rules:
+                - rule: "item.name == '' || !(item.name in ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_DEFAULT_REGION'])"
+                  mirrors: duckdb.validate
+                  paths: [name]
+                  message: This name is reserved for the object storage credentials, which Object storage sets.
+                - rule: item.name == '' || item.name.matches('^[A-Z][A-Z0-9_]*$')
+                  mirrors: duckdb.validate
+                  paths: [name]
+                  message: Use an UPPER_SNAKE_CASE environment variable name.
+                - rule: item.secretName != null && item.secretName != ''
+                  mirrors: duckdb.validate
+                  paths: [secretName]
+                  message: Choose the secret this variable is read from.
+        rules:
+          - rule: isUnique(self.secretEnv.map(e, e.name))
+            mirrors: duckdb.validate
+            paths: [secretEnv]
+            message: Each variable name may be used once; a second entry would overwrite the first.
+
+  - id: job
+    title: Schedule
+    description: When the job runs and how long a run may take.
+    sections:
+      - title: Schedule
+        docs: "#image-and-schedule"
+        fields:
+          - path: schedule
+            type: string
+            format: cron
+            widget: cron
+            label: Schedule (UTC)
+            required: true
+            description: Runs never overlap, and a failed run is not retried; the next scheduled run starts normally.
+          - path: suspend
+            type: boolean
+            label: Run only when started by hand
+            description: The schedule is kept but never fires; start a run with `cpln workload cron start`.
+          - path: activeDeadlineSeconds
+            type: integer
+            label: Run time limit
+            unit: seconds
+            min: 1
+            required: true
+            suggestions: [600, 1800, 3600, 7200, 21600]
+            description: A run still going is stopped, and recorded as failed, within about two minutes after this.
+          - path: image
+            type: string
+            format: image
+            label: DuckDB image
+            required: true
+            advanced: true
+            description: The command is the image's `/duckdb` binary with no shell, so keep to the official `duckdb/duckdb` image.
+          - type: note
+            text: >-
+              To run the job now: `cpln workload cron start RELEASE_NAME-duckdb --gvc GVC_NAME`. A run
+              succeeded only if its log contains `duckdb-job-complete` and `cpln workload cron get` shows it
+              as successful; check both.
+            textExpression: >-
+              'To run the job now: `cpln workload cron start ' + context.releaseName + '-duckdb --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '`. A run succeeded only if its log contains `duckdb-job-complete` and `cpln workload cron get ' +
+              context.releaseName + '-duckdb --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '` shows it as successful; check both.'
+        rules:
+          - rule: size(self.schedule.trim().split(' ').filter(s, s != '')) == 5
+            mirrors: duckdb.validate
+            paths: [schedule]
+            message: Enter a cron schedule with 5 fields (minute, hour, day of month, month, day of week).
+          - rule: self.activeDeadlineSeconds == null || self.activeDeadlineSeconds > 0
+            mirrors: duckdb.validate
+            paths: [activeDeadlineSeconds]
+            message: The run time limit must be more than 0 seconds.
+
+  - id: resources
+    title: Resources
+    description: The compute of each run, which also sizes DuckDB's memory limit and threads.
+    sections:
+      - title: Resources
+        docs: "#resources-and-tuning"
+        fields:
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            description: >-
+              No volume is attached, so every job must fit in memory: raise the maximum memory rather than
+              relying on spill. The maximum CPU sets DuckDB's threads, one per whole core.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: tuning.memoryLimitPercent
+            type: integer
+            label: DuckDB memory limit
+            unit: "% of maximum memory"
+            min: 20
+            max: 80
+            required: true
+            suggestions: [40, 50, 60, 70, 80]
+            description: >-
+              DuckDB reads the host's memory, not the container's, so the template sets its memory limit from
+              this share of the maximum memory. Lower it if runs are OOM-killed.
+          - type: note
+            when: >-
+              string(self.resources.maxMemory).matches('^[1-9][0-9]*(Mi|Gi)$') &&
+              self.tuning.memoryLimitPercent != null
+            text: The preamble sets DuckDB's memory limit and threads from these values.
+            textExpression: >-
+              'Each run gets `memory_limit = ' +
+              string(memoryBytes(self.resources.maxMemory) / 1048576 * self.tuning.memoryLimitPercent / 100) +
+              'MiB` and `threads = ' +
+              string(cpuMillicores(self.resources.maxCpu) / 1000 > 0 ? cpuMillicores(self.resources.maxCpu) / 1000 : 1) +
+              '`. A SET in your own script overrides them.'
+        rules:
+          - rule: >-
+              string(self.resources.minMemory).matches('^[1-9][0-9]*(Mi|Gi)$') &&
+              string(self.resources.maxMemory).matches('^[1-9][0-9]*(Mi|Gi)$')
+            mirrors: duckdb.validate.resources
+            paths: [resources]
+            message: Give the minimum and maximum memory as whole Mi or Gi quantities, such as 512Mi or 4Gi.
+          - rule: >-
+              string(self.resources.minCpu).matches('^([1-9][0-9]*m|[0-9]+(\\.[0-9]+)?)$') &&
+              string(self.resources.maxCpu).matches('^([1-9][0-9]*m|[0-9]+(\\.[0-9]+)?)$')
+            mirrors: duckdb.validate.resources
+            paths: [resources]
+            message: Give the minimum and maximum CPU as whole millicores or cores, such as 500m or 2.
+          - rule: cpuMillicores(self.resources.maxCpu) <= 4 * cpuMillicores(self.resources.minCpu)
+            mirrors: duckdb.validate.resources
+            paths: [resources]
+            message: The chart refuses a maximum CPU more than 4 times the minimum CPU. Raise the minimum or lower the maximum.
+          - rule: self.tuning.memoryLimitPercent == null || (self.tuning.memoryLimitPercent >= 20 && self.tuning.memoryLimitPercent <= 80)
+            mirrors: duckdb.validate
+            paths: [tuning.memoryLimitPercent]
+            message: The DuckDB memory limit must be between 20 and 80 % of the maximum memory.

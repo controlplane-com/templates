@@ -70,7 +70,7 @@ Two routes are always active regardless of configuration:
 - `GET /health` → returns `200 {"success":true,"message":"OK"}`
 - `GET /fail` → returns `500 {"success":false,"message":"Error"}`
 
-Any 5XX errors from upstream workloads are intercepted and returned as the `/fail` response.
+A 500, 502, 503 or 504 from an upstream workload is answered with the `/fail` body; the status code is kept.
 
 ### Connecting
 
@@ -88,12 +88,12 @@ cpln workload get RELEASE_NAME-nginx --gvc GVC_NAME -o yaml
 
 ### Important Notes
 
-- **`enableExample: true` is the default** and deploys a demo backend that all traffic routes to. Set it to `false` before pointing the proxy at your own services.
+- **`enableExample: true` is the default** and deploys a demo backend that answers every request none of your `locations` match. Set it to `false` to route `/` to your own service; a `/` location while it is on stops the proxy from starting.
 - **Put only the bare workload name in `locations[].workload`.** The chart appends `.GVC_NAME.cpln.local` itself, so typing a fully qualified name produces a doubled hostname.
 - **Each target's internal firewall must allow `RELEASE_NAME-nginx`**, or its route returns the `/fail` response.
 - **The proxy is always public.** The chart opens it to `0.0.0.0/0` and has no value to make it private.
 - **`proxyWorkload.port` does not move the listener.** nginx listens on 80 and the probes check 80 regardless, so leave it at `80`.
-- **Force a redeployment after a routing change** (`cpln workload force-redeployment RELEASE_NAME-nginx --gvc GVC_NAME`) so every replica loads the new `nginx.conf`.
+- **A routing change rolls the proxy onto the new config by itself** after `helm upgrade`; with one replica, expect a few seconds of failed requests during the swap.
 - **The example backend image is unpinned.** `gcr.io/knative-samples/helloworld-go` publishes only `:latest`, so the demo target can change under you. It does not affect the proxy itself, which is pinned.
 
 ### Links

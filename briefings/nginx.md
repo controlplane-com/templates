@@ -29,8 +29,11 @@ Does not create a GVC.
 
 ## Troubleshooting traps
 
-- **`enableExample: true` is the default and swallows all traffic.** A user who adds `locations` but leaves
-  the example on will not reach their own services. Turning it off is step one of any real use.
+- **`enableExample: true` is the default and owns `/`.** It is a plain `location /`, so it only gets requests no
+  user location matches (longest prefix wins — measured in 1.1.3: `/api` reached the user target with the example
+  on). A user `/` location while it is on makes nginx refuse to start (`duplicate location "/"`); on an upgrade the
+  old replica keeps serving and the error is only in `get-deployments`. (Before 1.1.3 this trap read "swallows all
+  traffic", which was wrong.)
 - **`locations[].workload` takes the BARE workload name.** `files/_nginxConf.txt` appends
   `.{gvc}.cpln.local` itself (for both `proxy_pass` and the `Host` header), so a user who types an FQDN gets a
   doubled hostname and a 502 (served as the `/fail` body).
@@ -40,8 +43,12 @@ Does not create a GVC.
   only changes the declared container port. Chart follow-up candidate.
 - **The proxy is always public.** `inboundAllowCIDR: 0.0.0.0/0` is hardcoded with no access knob, and no
   internal firewall is set. Chart follow-up candidate.
-- **Routing changes need a forced redeployment** so replicas pick up the remounted `nginx.conf` (whether the
-  upgrade alone restarts the proxy is unverified).
+- **A routing change rolls the proxy by itself.** The `cpln/checksum` tag on the proxy workload changes with the
+  config, so `helm upgrade` makes a new deployment version; measured in 1.1.3 (~40 s to switch, a ~10 s 503/504
+  blip at the swap on one replica). No forced redeployment needed.
+- **A target that does not exist does NOT stop the proxy.** Mesh DNS answers any name under `{gvc}.cpln.local`, so
+  nginx starts and the route returns the `/fail` body with a 502 (measured in 1.1.3). The status code of an upstream
+  5XX is kept; only the body is replaced (`error_page` has no `=code`).
 - **The example backend image cannot be pinned.** `gcr.io/knative-samples/helloworld-go` publishes only
   `:latest`, so the demo target can change under you. It does not affect the proxy, which is pinned.
 - **Config errors surface at container start, not at render.** `locations` is templated into `nginx.conf`, so

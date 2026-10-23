@@ -13,7 +13,7 @@ autoscaling:
   maxScale: 1
   maxConcurrency: 1000
 
-enableExample: true # set to true to deploy an example backend workload and route all traffic to it
+enableExample: true # deploy an example backend that answers every path none of your locations match
 
 locations: [] # add your own proxy targets here
   # - path: /

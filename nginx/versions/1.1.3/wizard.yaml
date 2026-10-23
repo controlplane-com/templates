@@ -51,30 +51,21 @@ steps:
             severity: warning
             when: size(self.locations) > 0
             text: >-
-              Every target must already exist in this GVC, and its internal firewall must allow
-              `RELEASE_NAME-nginx` (for example Same GVC, or a workload list that names it). Nginx resolves
-              every target when it starts: a target that does not exist stops the proxy from starting, and a
-              target whose firewall refuses the proxy answers with the `/fail` response.
+              Every target's internal firewall must allow `RELEASE_NAME-nginx` (for example Same GVC, or a
+              workload list that names it). A target whose firewall refuses the proxy, or that does not exist,
+              answers its route with the `/fail` body and a 5XX status.
             textExpression: >-
-              'Every target must already exist in this GVC, and its internal firewall must allow `' +
-              context.releaseName + '-nginx` (for example Same GVC, or a workload list that names it). Nginx
-              resolves every target when it starts: a target that does not exist stops the proxy from
-              starting, and a target whose firewall refuses the proxy answers with the `/fail` response.'
+              'Every target' + "'" + 's internal firewall must allow `' + context.releaseName + '-nginx` (for
+              example Same GVC, or a workload list that names it). A target whose firewall refuses the proxy, or
+              that does not exist, answers its route with the `/fail` body and a 5XX status.'
           - type: note
-            severity: warning
+            severity: info
             when: >-
               context.mode == 'upgrade' && oldSelf != null &&
               (self.locations != oldSelf.locations || self.enableExample != oldSelf.enableExample)
             text: >-
-              Running replicas keep the `nginx.conf` they started with. After this upgrade, force a
-              redeployment so every replica loads the new routing:
-              `cpln workload force-redeployment RELEASE_NAME-nginx --gvc GVC_NAME`. See
-              [Changing the routing](/template-catalog/templates/nginx#changing-the-routing).
-            textExpression: >-
-              'Running replicas keep the `nginx.conf` they started with. After this upgrade, force a
-              redeployment so every replica loads the new routing: `cpln workload force-redeployment ' +
-              context.releaseName + '-nginx --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.
-              See [Changing the routing](/template-catalog/templates/nginx#changing-the-routing).'
+              The upgrade rolls the proxy onto the new routing by itself. With one replica, expect a few
+              seconds of failed requests while the new replica takes over.
           - path: locations
             type: list
             label: Locations
@@ -87,7 +78,7 @@ steps:
               Nginx picks the longest matching prefix, unless an exact (`=`) location matches first or a
               regular expression (`~`, `~*`) matches; **Prefix, no regex** (`^~`) stops the regex check for
               its prefix. See the [Nginx location directive](https://nginx.org/en/docs/http/ngx_http_core_module.html#location).
-              Any 500, 502, 503 or 504 from a target is replaced with the `/fail` response.
+              A 500, 502, 503 or 504 from a target is answered with the `/fail` body; the status code is kept.
             item:
               type: object
               fields:

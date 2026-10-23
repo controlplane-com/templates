@@ -87,6 +87,15 @@ steps:
               A newer tag cannot open a database written by an older one until it is migrated: turn on
               Upgrade the database for the deploy that raises the tag, after a backup.
             docs: "#upgrading-meilisearch"
+          - path: server.upgradeDb
+            type: boolean
+            label: Upgrade the database
+            when: context.mode == 'upgrade' || self.server.upgradeDb
+            description: >-
+              Migrates the database on start, for the one deploy that raises the image tag. The migration is
+              not atomic: confirm a recent backup first, and turn this off again once the workload is ready on
+              the new tag.
+            docs: "#upgrading-meilisearch"
           - path: resources
             type: resources
             label: Resources
@@ -107,7 +116,8 @@ steps:
             max: 80
             description: >-
               The share of the maximum memory Meilisearch may use while indexing; the rest is left for search.
-              Raise the maximum memory to index faster.
+              Above 80 the container gets OOM-killed while indexing, and below 20 indexing starves. Raise the
+              maximum memory to index faster.
             suggestions: [30, 50, 70]
           - type: note
             when: >-
@@ -121,6 +131,27 @@ steps:
             text: >-
               Meilisearch may use this share of the maximum memory while indexing (`MEILI_MAX_INDEXING_MEMORY`).
         rules:
+          - when: oldSelf != null && self.image.split(':')[size(self.image.split(':')) - 1] != oldSelf.image.split(':')[size(oldSelf.image.split(':')) - 1]
+            rule: self.server.upgradeDb
+            severity: warning
+            paths: [server.upgradeDb]
+            message: >-
+              The image tag changes, and the new Meilisearch refuses to open the database written by the
+              running one: the new replica restarts in a loop and search goes down. Turn on Upgrade the
+              database for this deploy, after confirming a recent backup.
+          - when: >-
+              oldSelf != null && oldSelf.server.upgradeDb && self.image == oldSelf.image
+            rule: "!self.server.upgradeDb"
+            severity: info
+            paths: [server.upgradeDb]
+            message: >-
+              The database was migrated by the previous deploy. Once the workload is ready on this image,
+              turn Upgrade the database off so the migration flag is not left on.
+          - when: oldSelf == null
+            rule: "!self.server.upgradeDb"
+            severity: info
+            paths: [server.upgradeDb]
+            message: A new release starts with an empty database, so there is nothing to upgrade; leave it off.
           - rule: self.tuning.indexingMemoryPercent >= 20 && self.tuning.indexingMemoryPercent <= 80
             mirrors: meilisearch.validate
             paths: [tuning.indexingMemoryPercent]
@@ -174,15 +205,6 @@ steps:
           - path: server.telemetry
             type: boolean
             label: Send anonymous usage data upstream
-          - path: server.upgradeDb
-            type: boolean
-            label: Upgrade the database
-            when: context.mode == 'upgrade' || self.server.upgradeDb
-            description: >-
-              Migrates the database on start, for the one deploy that raises the image tag. The migration is
-              not atomic: confirm a recent backup first, and turn this off again once the workload is ready on
-              the new tag.
-            docs: "#upgrading-meilisearch"
         rules:
           - rule: self.server.env in ['production', 'development']
             mirrors: meilisearch.validate
@@ -192,27 +214,6 @@ steps:
             mirrors: meilisearch.validate
             paths: [server.logLevel]
             message: Choose ERROR, WARN, INFO, DEBUG or TRACE.
-          - when: oldSelf != null && self.image.split(':')[size(self.image.split(':')) - 1] != oldSelf.image.split(':')[size(oldSelf.image.split(':')) - 1]
-            rule: self.server.upgradeDb
-            severity: warning
-            paths: [server.upgradeDb]
-            message: >-
-              The image tag changes, and the new Meilisearch refuses to open the database written by the
-              running one: the new replica restarts in a loop and search goes down. Turn on Upgrade the
-              database for this deploy, after confirming a recent backup.
-          - when: >-
-              oldSelf != null && oldSelf.server.upgradeDb && self.image == oldSelf.image
-            rule: "!self.server.upgradeDb"
-            severity: info
-            paths: [server.upgradeDb]
-            message: >-
-              The database was migrated by the previous deploy. Once the workload is ready on this image,
-              turn Upgrade the database off so the migration flag is not left on.
-          - when: oldSelf == null
-            rule: "!self.server.upgradeDb"
-            severity: info
-            paths: [server.upgradeDb]
-            message: A new release starts with an empty database, so there is nothing to upgrade; leave it off.
       - id: metrics
         title: Prometheus metrics
         toggle: metrics.enabled
@@ -247,6 +248,19 @@ steps:
           - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
             paths: [volumeset.capacity]
             message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - title: Snapshot retention
+        fields:
+          - path: backup.retention
+            type: string
+            label: Keep volume snapshots for
+            required: true
+            placeholder: 7d
+            description: >-
+              Applies to the scheduled snapshots and to the final snapshot taken when the release is
+              uninstalled.
+            pattern: '^\d+(\.\d+)?[dhm]$'
+            patternMessage: Use a number followed by d, h or m, such as 7d or 720h.
+            suggestions: [7d, 14d, 30d]
       - id: backup
         title: Scheduled volume snapshots
         toggle: backup.enabled
@@ -271,26 +285,13 @@ steps:
             message: >-
               Snapshots run at most hourly: start the schedule with a single fixed minute, such as 0 3 * * *.
               The platform refuses a more frequent schedule at install.
-      - title: Snapshot retention
-        fields:
-          - path: backup.retention
-            type: string
-            label: Keep snapshots for
-            required: true
-            placeholder: 7d
-            description: >-
-              Applies to the scheduled snapshots and to the final snapshot taken when the release is
-              uninstalled.
-            pattern: '^\d+(\.\d+)?[dhm]$'
-            patternMessage: Use a number followed by d, h or m, such as 7d or 720h.
-            suggestions: [7d, 14d, 30d]
       - id: snapshots
         title: Meilisearch snapshots
         toggle: snapshots.enabled
         description: >-
           Meilisearch's own application-consistent .snapshot file, written to /meili_data/snapshots on the same
-          volume; only the newest is kept. It opens only with the same Meilisearch version: keep a dump before
-          a version upgrade.
+          volume; only the newest is kept. It opens only with the version that wrote it, which makes it the
+          rollback point before a version upgrade (restore it with the old image).
         docs: "#snapshots"
         fields:
           - path: snapshots.intervalSeconds

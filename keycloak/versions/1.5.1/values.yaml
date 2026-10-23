@@ -1,4 +1,4 @@
-image: quay.io/keycloak/keycloak:26.6.3
+image: quay.io/keycloak/keycloak:26.8.1
 
 # Replica count. 2+ (default) forms an Infinispan cluster over JGroups JDBC_PING
 # for zero-downtime restarts. 1 = dev mode: clustering fully disabled (local cache).

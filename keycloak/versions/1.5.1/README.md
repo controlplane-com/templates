@@ -59,7 +59,7 @@ Optional: a cloud account + bucket if you enable the Postgres backup pass-throug
 ### Keycloak Settings
 
 ```yaml
-image: quay.io/keycloak/keycloak:26.6.3
+image: quay.io/keycloak/keycloak:26.8.1
 
 replicas: 2          # 2+ = clustered, zero-downtime restarts; 1 = dev mode
 
@@ -125,6 +125,12 @@ Public access is **on** by default: browsers must reach Keycloak's login and OID
 | In-GVC (internal) | `http://RELEASE_NAME-keycloak.GVC_NAME.cpln.local:8080` |
 | Admin credentials | `username` / `password` from your `admin.secretName` secret — `cpln secret reveal my-keycloak-admin -o yaml` |
 | Database credentials | the `username` / `password` / `database` keys of your secret named by `postgresHA.config.credentialsSecretName` (HA path) or `postgres.config.credentialsSecretName` (single-instance path) — `cpln secret reveal SECRET_NAME -o yaml` |
+
+## Upgrading from 1.5.0
+
+1.5.1 moves Keycloak from 26.6.3 to 26.8.1, which fixes an unauthenticated account-takeover vulnerability in the reset-credentials flow (CVE-2026-18963). No values change: upgrade with the values you already use.
+
+The first 26.8.1 server to start migrates the database schema, and Keycloak cannot run an older version against a migrated database, so this upgrade cannot be rolled back to 1.5.0. Take a database backup before upgrading (`postgresHA.backup` or `postgres.backup`, see [Configuration](#configuration)).
 
 ## Upgrading from 1.4.0
 

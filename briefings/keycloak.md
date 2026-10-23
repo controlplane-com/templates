@@ -26,7 +26,7 @@
 ## Key knobs
 | Knob | Default | Note |
 |---|---|---|
-| `image` | `quay.io/keycloak/keycloak:26.6.3` | |
+| `image` | `quay.io/keycloak/keycloak:26.8.1` | |
 | `replicas` | `2` | 2+ = Infinispan cluster, zero-downtime restarts; 1 = clustering disabled (local cache) |
 | `resources` | 1000m/500m cpu · 2Gi/1Gi mem | JVM heap = 70% of the limit; **do not go below 1.5Gi** |
 | `admin.secretName` | `my-keycloak-admin` | **Prerequisite dictionary secret** (`username`, `password`) — 1.1.0 |

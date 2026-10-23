@@ -100,6 +100,14 @@ steps:
         docs: "#buckets"
         fields:
           - type: note
+            severity: warning
+            when: context.mode == 'install'
+            text: >-
+              Create these before you install: the S3 bucket with your CSV files, an IAM policy granting read
+              access to it, and an AWS cloud account in this org. The cloud account picker below lists only
+              existing AWS cloud accounts. See
+              [Prerequisites](/template-catalog/templates/manticore#prerequisites).
+          - type: note
             when: >-
               context.mode == 'upgrade' && context.fromVersion != null &&
               semverCompare(context.fromVersion, '2.1.0') < 0
@@ -153,6 +161,11 @@ steps:
       - title: Table definitions
         docs: "#tables"
         fields:
+          - type: note
+            when: self.tables.exists(t, ('name' in t) && string(t.name) == 'addresses')
+            text: >-
+              The default `addresses` table is an example: replace its name, CSV paths and columns with your
+              own data before you install.
           - path: tables
             type: yaml
             yamlType: list
@@ -329,8 +342,9 @@ steps:
           - type: note
             when: context.mode == 'install'
             text: >-
-              An install indexes nothing: run `init` once, then `import`, from the UI or by starting the job. See
-              [First run](/template-catalog/templates/manticore#first-run).
+              An install indexes nothing. Run Init once, from the UI or by starting the job with Action set to
+              Init; then run Import the same way. Starting the job with the default Action (Import) before Init
+              does not bootstrap the cluster. See [First run](/template-catalog/templates/manticore#first-run).
           - path: orchestrator.action
             type: enum
             label: Action
@@ -362,6 +376,9 @@ steps:
             label: Schedule (UTC)
             required: true
             when: "!self.orchestrator.suspend"
+            description: >-
+              Each scheduled run performs the Action above on the chosen table; with Import, that rebuilds the
+              table from its CSV files and swaps it in.
           - path: orchestrator.importMemLimit
             type: string
             label: Indexer memory limit
@@ -490,12 +507,9 @@ steps:
               - value: same-org
                 label: Same org
                 description: Any workload in this org.
-              - value: workload-list
-                label: Specific workloads
-                description: Only the workloads listed below.
-              - value: none
-                label: None
-                description: No workload can connect.
+          # workload-list and none are not offered: Galera replication, the orchestrator API reaching the
+          # agents and the backup job reaching Manticore all need same-gvc (wizard round 2026-10-23), and the
+          # release's own workloads cannot be listed on install (they do not exist yet).
           # Shown for every type: workload.yaml writes any non-empty list into inboundAllowWorkload, and the
           # platform validates every entry, though it applies the links only with same-gvc and workload-list.
           - path: manticore.firewall.internalAccess.workloads
@@ -507,8 +521,7 @@ steps:
             widget: tags
             unique: true
             description: >-
-              With Same GVC, extra workloads from other GVCs that may connect. With Specific workloads, the whole
-              list of workloads that may connect.
+              Extra workloads from other GVCs that may connect.
             item:
               type: ref
               ref:

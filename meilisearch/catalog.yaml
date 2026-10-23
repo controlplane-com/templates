@@ -55,4 +55,4 @@ prerequisites:
     secretType: opaque
     valuesPath: auth.secretName
     required: true
-    description: Opaque secret whose payload is the master key, at least 16 bytes. Create it before installing; when it is missing the workload waits indefinitely.
+    description: Opaque secret whose payload is the master key, at least 16 bytes. Create it before installing; when it is missing the workload waits with no logs until it exists.

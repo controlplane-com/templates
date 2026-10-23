@@ -20,9 +20,10 @@ steps:
           context.mode == 'upgrade' && context.fromVersion != null &&
           semverCompare(context.fromVersion, '1.0.2') < 0
         text: >-
-          1.0.0 and 1.0.1 pointed the workloads at an identity in a GVC named `test-gvc`, so a release in any
-          other GVC could not start. This upgrade points them at the identity in this release's GVC and keeps
-          the data on the volume sets. See [Upgrading from 1.0.x](#upgrading-from-1-0-x).
+          1.0.0 and 1.0.1 pointed the workloads at an identity in a GVC named `test-gvc`, so an install into
+          any other GVC failed (`spec.identityLink` failed custom validation) and left no OpenSearch workload.
+          This upgrade creates the workloads with the identity in this release's GVC; a release installed in a
+          GVC named `test-gvc` keeps its data. See [Upgrading from 1.0.x](#upgrading-from-1-0-x).
       # 1.0.0 and 1.0.1 policy.yaml: the demo-logs policy carried targetQuery {match: all, terms: []}, which
       # resolves to every secret of the org (briefings/opensearch.md).
       - type: note
@@ -192,96 +193,11 @@ steps:
             options:
               - { value: aws, label: AWS S3 }
               - { value: gcp, label: Google Cloud Storage }
-          - path: backup.schedule
-            type: string
-            format: cron
-            label: Snapshot schedule (UTC)
-            required: true
-          - path: backup.retention.maxAge
-            type: string
-            label: Delete snapshots older than
-            required: true
-            placeholder: 30d
-            description: A number and a unit, such as `30d` or `12h`. Old snapshots are pruned daily at 03:00 UTC.
-          - path: backup.retention.maxCount
-            type: integer
-            label: Snapshots kept at most
-            min: 1
-            required: true
-            suggestions: [7, 14, 30, 60]
-          # Shown once the setup job has had a chance to run (an upgrade of a release with backups already on),
-          # or while it is set.
-          - path: backup.remove_setup_workload
-            type: boolean
-            label: Remove the setup job
-            when: >-
-              (oldSelf != null && oldSelf.backup.enabled == true) || self.backup.remove_setup_workload == true
-            description: >-
-              The repository and the policy live inside OpenSearch, so scheduled snapshots continue without the
-              job. Remove it once its log ends with Backup Configuration Complete!
-            help: >-
-              Read the log with `cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-backup-setup"}' --limit 50 --since 10m`.
         rules:
           - rule: self.backup.provider in ['aws', 'gcp']
             mirrors: opensearch.validate
             paths: [backup.provider]
             message: Choose AWS S3 or Google Cloud Storage as the backup destination.
-          # OpenSearch time units (TimeValue): nanos, micros, ms, s, m, h, d. A rule rather than a pattern, so a
-          # value an installed release already holds is not refused.
-          - rule: >-
-              (oldSelf != null && oldSelf.backup.retention.maxAge == self.backup.retention.maxAge) ||
-              self.backup.retention.maxAge.matches('^[0-9]+(nanos|micros|ms|s|m|h|d)$')
-            paths: [backup.retention.maxAge]
-            message: Enter the snapshot age as a number and a unit, such as 30d, 12h or 90m.
-          # workload-backup-setup.yaml: with remove_setup_workload the job is never rendered, so on a fresh
-          # enable nothing registers the repository or the policy.
-          - rule: >-
-              !self.backup.remove_setup_workload ||
-              (oldSelf != null && oldSelf.backup.enabled == true)
-            severity: warning
-            paths: [backup.remove_setup_workload]
-            message: >-
-              The setup job has not run yet, and it is what registers the snapshot repository and the policy.
-              Leave Remove the setup job off until its log ends with Backup Configuration Complete!
-          # workload-backup-setup.yaml step 4: the policy is created only when GET automated-snapshots fails, so
-          # a changed schedule or retention never reaches a running cluster.
-          - when: >-
-              oldSelf != null && oldSelf.backup.enabled == true && !self.backup.remove_setup_workload
-            rule: >-
-              self.backup.schedule == oldSelf.backup.schedule &&
-              self.backup.retention.maxAge == oldSelf.backup.retention.maxAge &&
-              self.backup.retention.maxCount == oldSelf.backup.retention.maxCount
-            severity: info
-            paths: [backup.schedule]
-            messageExpression: >-
-              'The setup job creates the snapshot policy only when none exists, so the new schedule or retention
-              does not reach this cluster. After the upgrade, delete the policy from a workload in the GVC with
-              curl -X DELETE http://' + context.releaseName + '-opensearch.' +
-              (context.gvc != null ? context.gvc : 'GVC_NAME') +
-              '.cpln.local:9200/_plugins/_sm/policies/automated-snapshots, then run cpln workload force-redeployment ' +
-              context.releaseName + '-backup-setup --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
-              ' so the job creates it again with the new settings.'
-            message: >-
-              The setup job creates the snapshot policy only when none exists, so the new schedule or retention
-              does not reach this cluster. After the upgrade, delete the automated-snapshots policy, then force a
-              redeployment of the backup setup workload so the job creates it again with the new settings.
-          - when: >-
-              oldSelf != null && oldSelf.backup.enabled == true && self.backup.remove_setup_workload
-            rule: >-
-              self.backup.provider == oldSelf.backup.provider &&
-              self.backup.schedule == oldSelf.backup.schedule &&
-              self.backup.retention.maxAge == oldSelf.backup.retention.maxAge &&
-              self.backup.retention.maxCount == oldSelf.backup.retention.maxCount &&
-              self.backup.aws.bucket == oldSelf.backup.aws.bucket &&
-              self.backup.aws.region == oldSelf.backup.aws.region &&
-              self.backup.aws.prefix == oldSelf.backup.aws.prefix &&
-              self.backup.gcp.bucket == oldSelf.backup.gcp.bucket &&
-              self.backup.gcp.prefix == oldSelf.backup.gcp.prefix
-            severity: warning
-            paths: [backup.remove_setup_workload]
-            message: >-
-              Only the setup job writes the snapshot settings into OpenSearch, so with the job removed the
-              changed settings never reach the cluster. Turn off Remove the setup job for this upgrade.
           # README Important Notes: the API merges identity updates and never removes a provider block.
           - rule: >-
               oldSelf == null || oldSelf.backup.enabled != true || self.backup.provider == oldSelf.backup.provider
@@ -372,6 +288,95 @@ steps:
             patternMessage: Leave out the leading /.
 
   # Before Network: the "Specific workloads" rule there names the Dashboards and demo workloads.
+      - title: Schedule and retention
+        when: self.backup.enabled
+        fields:
+          - path: backup.schedule
+            type: string
+            format: cron
+            label: Snapshot schedule (UTC)
+            required: true
+          - path: backup.retention.maxAge
+            type: string
+            label: Delete snapshots older than
+            required: true
+            placeholder: 30d
+            description: A number and a unit, such as `30d` or `12h`. Old snapshots are pruned daily at 03:00 UTC.
+          - path: backup.retention.maxCount
+            type: integer
+            label: Snapshots kept at most
+            min: 1
+            required: true
+            suggestions: [7, 14, 30, 60]
+          # Shown once the setup job has had a chance to run (an upgrade of a release with backups already on),
+          # or while it is set.
+          - path: backup.remove_setup_workload
+            type: boolean
+            label: Remove the setup job
+            when: >-
+              (oldSelf != null && oldSelf.backup.enabled == true) || self.backup.remove_setup_workload == true
+            description: >-
+              The repository and the policy live inside OpenSearch, so scheduled snapshots continue without the
+              job. Remove it once its log ends with Backup Configuration Complete!
+            help: >-
+              Read the log with `cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-backup-setup"}' --limit 50 --since 10m`.
+        rules:
+          # OpenSearch time units (TimeValue): nanos, micros, ms, s, m, h, d. A rule rather than a pattern, so a
+          # value an installed release already holds is not refused.
+          - rule: >-
+              (oldSelf != null && oldSelf.backup.retention.maxAge == self.backup.retention.maxAge) ||
+              self.backup.retention.maxAge.matches('^[0-9]+(nanos|micros|ms|s|m|h|d)$')
+            paths: [backup.retention.maxAge]
+            message: Enter the snapshot age as a number and a unit, such as 30d, 12h or 90m.
+          # workload-backup-setup.yaml: with remove_setup_workload the job is never rendered, so on a fresh
+          # enable nothing registers the repository or the policy.
+          - rule: >-
+              !self.backup.remove_setup_workload ||
+              (oldSelf != null && oldSelf.backup.enabled == true)
+            severity: warning
+            paths: [backup.remove_setup_workload]
+            message: >-
+              The setup job has not run yet, and it is what registers the snapshot repository and the policy.
+              Leave Remove the setup job off until its log ends with Backup Configuration Complete!
+          # workload-backup-setup.yaml step 4: the policy is created only when GET automated-snapshots fails, so
+          # a changed schedule or retention never reaches a running cluster.
+          - when: >-
+              oldSelf != null && oldSelf.backup.enabled == true && !self.backup.remove_setup_workload
+            rule: >-
+              self.backup.schedule == oldSelf.backup.schedule &&
+              self.backup.retention.maxAge == oldSelf.backup.retention.maxAge &&
+              self.backup.retention.maxCount == oldSelf.backup.retention.maxCount
+            severity: info
+            paths: [backup.schedule]
+            messageExpression: >-
+              'The setup job creates the snapshot policy only when none exists, so the new schedule or retention
+              does not reach this cluster. After the upgrade, delete the policy from a workload in the GVC with
+              curl -X DELETE http://' + context.releaseName + '-opensearch.' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '.cpln.local:9200/_plugins/_sm/policies/automated-snapshots, then run cpln workload force-redeployment ' +
+              context.releaseName + '-backup-setup --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              ' so the job creates it again with the new settings.'
+            message: >-
+              The setup job creates the snapshot policy only when none exists, so the new schedule or retention
+              does not reach this cluster. After the upgrade, delete the automated-snapshots policy, then force a
+              redeployment of the backup setup workload so the job creates it again with the new settings.
+          - when: >-
+              oldSelf != null && oldSelf.backup.enabled == true && self.backup.remove_setup_workload
+            rule: >-
+              self.backup.provider == oldSelf.backup.provider &&
+              self.backup.schedule == oldSelf.backup.schedule &&
+              self.backup.retention.maxAge == oldSelf.backup.retention.maxAge &&
+              self.backup.retention.maxCount == oldSelf.backup.retention.maxCount &&
+              self.backup.aws.bucket == oldSelf.backup.aws.bucket &&
+              self.backup.aws.region == oldSelf.backup.aws.region &&
+              self.backup.aws.prefix == oldSelf.backup.aws.prefix &&
+              self.backup.gcp.bucket == oldSelf.backup.gcp.bucket &&
+              self.backup.gcp.prefix == oldSelf.backup.gcp.prefix
+            severity: warning
+            paths: [backup.remove_setup_workload]
+            message: >-
+              Only the setup job writes the snapshot settings into OpenSearch, so with the job removed the
+              changed settings never reach the cluster. Turn off Remove the setup job for this upgrade.
   - id: dashboards
     title: Dashboards
     description: The OpenSearch Dashboards UI and an optional demo log pipeline.

@@ -1,0 +1,35 @@
+# redis 3.9.0 — production mode (three Redis nodes, three Sentinels) with auth from a prerequisite
+# secret and persistence on both tiers, as recommended for production. Default resources.
+locations: [aws-us-east-1]
+timeoutSeconds: 600
+
+secrets:
+  auth:
+    type: dictionary
+    keys: [password]
+
+vars:
+  redis_password: "{secrets.auth.password}"
+
+values:
+  redis:
+    auth:
+      fromSecret:
+        enabled: true
+        name: "{secrets.auth.name}"
+        passwordKey: password
+    persistence:
+      enabled: true
+  sentinel:
+    auth:
+      fromSecret:
+        enabled: true
+        name: "{secrets.auth.name}"
+        passwordKey: password
+    persistence:
+      enabled: true
+
+# 3.0.2 is the version customers run most, by far. Its values (with no resources overrides) are valid on
+# 3.9.0, so the upgrade carries them as `helm upgrade -f my-values.yaml` would.
+upgradeFrom:
+  - version: 3.0.2

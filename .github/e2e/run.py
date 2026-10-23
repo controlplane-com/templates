@@ -397,6 +397,7 @@ def check_noop_upgrade(t, scenario, version, vfile, timeout_s):
 
 def run_checks(t, scenario, version, ctx, new_version, warn=False):
     """warn=True for the starting version of an upgrade: it has already shipped, so a PR cannot fix it."""
+    ctx["version"] = version  # the version running now; {installed_version} is the scenario's first one
     for c in t.checks:
         cid = c["id"]
         if not in_range(version, c):
@@ -473,7 +474,7 @@ def scenario_fresh(t, timeout_s):
     sc = f"install {t.version}"
     group(sc)
     base = t.baseline(t.version)
-    ctx = {"release": t.release, "gvc": t.gvc, "org": t.org}
+    ctx = {"release": t.release, "gvc": t.gvc, "org": t.org, "installed_version": t.version}
     prepare(t, base, ctx, t.version)
     vfile = values_file(base, ctx)
     code, out = helm(t, "install", t.version, vfile, timeout_s)
@@ -493,7 +494,7 @@ def scenario_upgrade(t, src, timeout_s):
     sc = f"upgrade {old} → {t.version}" + (" (new values)" if mode == "new" else "")
     group(sc)
     old_base, new_base = t.baseline(old), t.baseline(t.version)
-    ctx = {"release": t.release, "gvc": t.gvc, "org": t.org}
+    ctx = {"release": t.release, "gvc": t.gvc, "org": t.org, "installed_version": old}
     prepare(t, old_base, ctx, old)
     old_vfile = values_file(old_base, ctx)
     code, out = helm(t, "install", old, old_vfile, timeout_s)
@@ -630,6 +631,7 @@ def cmd_report(a):
         lines.append("")
     if run_url:
         lines.append(f"[Run logs]({run_url})")
+
     with open(a.out, "w") as f:
         f.write("\n".join(lines) + "\n")
     print("\n".join(lines))

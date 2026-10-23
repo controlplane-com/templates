@@ -79,7 +79,9 @@ upgradeFrom:                        # each version needs its own baseline
     values: new                     # or switch to this baseline's values on the upgrade
 ```
 
-Always-available placeholders: `{release}`, `{gvc}`, `{org}`. Pick `upgradeFrom` versions from current
+Always-available placeholders: `{release}`, `{gvc}`, `{org}`. Checks also get `{version}` (the version
+running now) and `{installed_version}` (the one the scenario installed first), so a check can write a
+row tagged with `{version}` and prove the row tagged `{installed_version}` survived the upgrade. Pick `upgradeFrom` versions from current
 customer usage, most-used first; do not commit usage data itself (it names customer orgs).
 
 ## Checks

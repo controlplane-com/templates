@@ -133,6 +133,17 @@ jobs:
           else
             gh pr comment "$PR" --body-file report.md
           fi
+      # The report comment is edited in place, and GitHub sends no notification for an edit, so a
+      # failure gets its own comment mentioning the author. Warnings alone stay in the report.
+      - name: Tell the PR author about a failure
+        if: github.event_name == 'pull_request' && (steps.report.outputs.failed != '0' || needs.test.result != 'success')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh pr comment "$PR" --body "@$AUTHOR template e2e tests failed, so this PR cannot merge yet. See the report above and the [run logs]($RUN_URL)."
       - name: Fail when a check failed or a test job did not finish
         if: steps.report.outputs.failed != '0' || needs.test.result != 'success'
         run: |

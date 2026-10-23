@@ -149,3 +149,24 @@ instead of silently restarting against a different password.
 {{- fail "timescaledb-highly-available: backup.minio.accessKey and backup.minio.secretKey were REMOVED — they are now a `dictionary` secret you create, named by backup.minio.credentialsSecretName, holding the keys `accessKey` and `secretKey`. Delete them from your values. See Storage setup in the README." -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Validate the image - refuse the timescale/timescaledb-ha pg18 tags that carry
+pgvector older than 0.8.7 (CVE-2026-103484). The wizard stores image in the
+release values, so a helm upgrade -f with those values would otherwise keep the
+vulnerable extension. Refused: every pinned tag up to ts2.30.1 (all pushed
+before pgvector 0.8.7 existed, 2026-10-01) and the frozen minor tags
+pg18-ts2.0 .. pg18-ts2.29. pg18.6-ts2.30.2 and later, pg18-ts2.30+, pg18,
+digests without a tag and other registries pass.
+*/}}
+{{- define "tsdb-ha.validateImage" -}}
+{{- $raw := .Values.image | default "" | toString -}}
+{{- $parts := splitList ":" $raw -}}
+{{- if and (ge (len $parts) 2) (has (index $parts 0) (list "timescale/timescaledb-ha" "docker.io/timescale/timescaledb-ha")) -}}
+{{- $tag := index $parts 1 -}}
+{{- if regexMatch "^pg18(\\.[0-9]+)?-ts2\\.([0-9]|[12][0-9]|30\\.[01])([^0-9]|$)" $tag -}}
+{{- $suffix := regexFind "-(all-oss|all|oss)$" (regexReplaceAll "@.*$" $tag "") -}}
+{{- fail (printf "timescaledb-highly-available: image %s carries pgvector older than 0.8.7, which is open to CVE-2026-103484 (a database user who can create an IVFFlat index can run arbitrary code). Set image to timescale/timescaledb-ha:pg18.6-ts2.31.0%s, or remove `image` from your values to use the chart default." $raw $suffix) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

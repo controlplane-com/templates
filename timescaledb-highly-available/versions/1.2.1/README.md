@@ -50,7 +50,7 @@ the cluster <b>already has</b>. An upgrade that still carries any of the old key
 
 ```yaml
 replicas: 3 # 1 leader + 2 hot standbys; Patroni forms the cluster and handles failover
-image: timescale/timescaledb-ha:pg18.4-ts2.28.3 # PostgreSQL 18 + TimescaleDB 2.28.3 Community, Patroni bundled
+image: timescale/timescaledb-ha:pg18.6-ts2.31.0 # PostgreSQL 18.6 + TimescaleDB 2.31.0 Community (pgvector 0.8.7), Patroni bundled
 resources:
   minCpu: 500m
   minMemory: 1Gi # time-series ingest is memory-sensitive
@@ -216,6 +216,36 @@ refused writes.
 was created, and the chart is never consulted again. Run the `edit-config` command above to move an
 existing cluster to 45 / 10 / 15.
 
+## Upgrading from a version before 1.2.1
+
+1.2.1 moves the default image from `pg18.4-ts2.28.3` to `pg18.6-ts2.31.0`: PostgreSQL 18.6, TimescaleDB 2.31.0
+and pgvector 0.8.7, which fixes CVE-2026-103484 (a database user who can build an IVFFlat index could run code
+as the server). An upgrade whose values still pin a `timescale/timescaledb-ha` tag with an older pgvector is
+refused at render; if you set `image` yourself, move it to the new tag.
+
+- The members restart onto the new image during the upgrade. PostgreSQL 18.4 → 18.6 needs no dump or restore.
+- The pgvector fix is in the server library, so it applies on that restart; existing data and indexes need
+  nothing. `\dx` keeps reporting the old `vector` version until `ALTER EXTENSION vector UPDATE;` in each
+  database that has it, which only updates that record.
+- **TimescaleDB stays at 2.28.3 in each existing database until you update it** — the image still ships that
+  version, so nothing breaks meanwhile. Update it on the leader, in each database where `\dx timescaledb` lists
+  it, soon after the upgrade (the nightly backup records the extension version, and a restore needs the same one):
+
+```bash
+# Find the leader
+cpln workload exec RELEASE_NAME-timescaledb-ha --gvc GVC_NAME --container patroni-timescaledb \
+  -- patronictl -c /tmp/patroni_config.yml list
+
+# Update the extension in the app database; -X and -c make it the first command of a fresh session
+cpln workload exec RELEASE_NAME-timescaledb-ha --gvc GVC_NAME --replica LEADER_MEMBER --container patroni-timescaledb \
+  -- sh -c 'psql -X -h 127.0.0.1 -d "$APP_DATABASE" -c "ALTER EXTENSION timescaledb UPDATE;"'
+```
+
+- If you set `timescaledb.enable_columnarscan` (now `timescaledb.debug_enable_columnarscan`) or a granular
+  refresh setting (now `timescaledb.cagg_granular_refresh_*`), move it to the new name.
+- PostgreSQL 18.6 allows only the `pgoutput` and `test_decoding` logical decoding plugins by default; a consumer
+  using another plugin needs it added to `output_plugin_libraries` (see the
+  [18.6 release notes](https://www.postgresql.org/docs/release/18.6/)).
 
 ## Connecting
 

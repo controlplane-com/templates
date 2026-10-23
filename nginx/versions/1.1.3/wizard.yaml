@@ -37,7 +37,9 @@ steps:
         description: >-
           Deploys a demo page as the workload `RELEASE_NAME-example` and routes `/` to it, so the proxy
           answers before you add your own services. Every request that none of your locations match goes to
-          it. Turn it off to route `/` to a service of your own.
+          it. Turn it off to route `/` to a service of your own. Its image,
+          `gcr.io/knative-samples/helloworld-go`, is published only as `latest`, so the demo page can change;
+          the proxy itself is pinned.
         docs: "#example-backend"
         fields: []
       - id: locations
@@ -64,8 +66,7 @@ steps:
               context.mode == 'upgrade' && oldSelf != null &&
               (self.locations != oldSelf.locations || self.enableExample != oldSelf.enableExample)
             text: >-
-              The upgrade rolls the proxy onto the new routing by itself. With one replica, expect a few
-              seconds of failed requests while the new replica takes over.
+              The upgrade rolls the proxy onto the new routing by itself. With one replica, requests may fail for a few seconds while the new replica takes over.
           - path: locations
             type: list
             label: Locations
@@ -103,7 +104,7 @@ steps:
                   label: Workload
                   required: true
                   description: The bare workload name; the chart adds `.GVC_NAME.cpln.local` itself.
-                  ref: { kind: workload, format: name, mustExist: error }
+                  ref: { kind: workload, format: name, mustExist: warning }
                 - path: port
                   type: integer
                   label: Port
@@ -112,11 +113,6 @@ steps:
                   min: 1
                   max: 65535
               rules:
-                - rule: item.workload == null || !item.workload.contains('.')
-                  paths: [workload]
-                  message: >-
-                    Enter only the workload name. The chart appends .GVC_NAME.cpln.local itself, so a fully
-                    qualified name becomes a doubled hostname.
                 - rule: >-
                     item.path == null || item.path == '' || (item.regexModifier != null &&
                     item.regexModifier.startsWith('~')) || item.path.startsWith('/')
@@ -227,15 +223,15 @@ steps:
         type: integer
         label: Container port
         required: true
+        readOnly: true
         advanced: true
         description: >-
-          Leave it at 80. The generated `nginx.conf` listens on 80 and the health probes check 80; neither
+          Fixed at 80: the generated `nginx.conf` listens on 80 and the health probes check 80; neither
           follows this value.
         min: 1
         max: 65535
         rules:
           - rule: self.proxyWorkload.port == 80
-            severity: warning
             message: >-
               Set the container port to 80. Nginx listens only on 80, so any other port sends the proxy's
               traffic to a port nothing listens on.

@@ -93,7 +93,7 @@ cpln workload get RELEASE_NAME-nginx --gvc GVC_NAME -o yaml
 - **Each target's internal firewall must allow `RELEASE_NAME-nginx`**, or its route returns the `/fail` response.
 - **The proxy is always public.** The chart opens it to `0.0.0.0/0` and has no value to make it private.
 - **`proxyWorkload.port` does not move the listener.** nginx listens on 80 and the probes check 80 regardless, so leave it at `80`.
-- **A routing change rolls the proxy onto the new config by itself** after `helm upgrade`; with one replica, expect a few seconds of failed requests during the swap.
+- **A routing change rolls the proxy onto the new config by itself** after `helm upgrade`; with one replica, requests may fail for a few seconds during the swap.
 - **The example backend image is unpinned.** `gcr.io/knative-samples/helloworld-go` publishes only `:latest`, so the demo target can change under you. It does not affect the proxy itself, which is pinned.
 
 ### Links

@@ -96,7 +96,7 @@ steps:
               Per node, and not derived from the resources: raising the memory limit does not raise the heap.
               Memory beyond the heap goes to off-heap structures and the file system cache.
             pattern: '^[0-9]+[kKmMgGtT]?$'
-            patternMessage: Enter a number with the unit k, m or g, such as 3g or 512m.
+            patternMessage: Enter a number with the unit k, m, g or t, such as 3g or 512m.
         rules:
           # The heap in bytes, from the JVM size syntax (a number with an optional k, m, g or t suffix).
           - when: self.jvmHeap.matches('^[0-9]+[kKmMgGtT]?$')
@@ -227,76 +227,11 @@ steps:
             options:
               - { value: aws, label: AWS S3 }
               - { value: gcp, label: Google Cloud Storage }
-          - path: backup.schedule
-            type: string
-            label: Schedule (UTC)
-            required: true
-            placeholder: 0 0 2 * * ?
-            description: >-
-              A Quartz schedule with a leading seconds field, not a five-field cron schedule. `0 0 2 * * ?`
-              runs daily at 02:00 UTC.
-            pattern: '^\S+( \S+){5,6}$'
-            patternMessage: >-
-              Enter a Quartz schedule with 6 fields (seconds, minutes, hours, day of month, month, day of week),
-              such as 0 0 2 * * ?.
-          - path: backup.retention.maxAge
-            type: string
-            label: Delete snapshots older than
-            required: true
-            suggestions: [7d, 14d, 30d, 90d]
-            pattern: '^[0-9]+(d|h|m|s|ms|micros|nanos)$'
-            patternMessage: Enter a number and a unit, such as 30d or 12h.
-          - path: backup.retention.maxCount
-            type: integer
-            label: Keep at most
-            unit: snapshots
-            required: true
-            min: 1
-            suggestions: [7, 14, 30, 90]
-            description: The newest snapshot is always kept, whatever its age.
-          - path: backup.remove_setup_workload
-            type: boolean
-            label: Remove the setup job
-            description: >-
-              The setup job registers the bucket and creates the snapshot policy, then has nothing left to do.
-              Turn this on in a later upgrade, once its logs show `Backup Configuration Complete!`.
-            help: >-
-              Read the job's logs with
-              `cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-backup-setup"}' --limit 50 --since 10m`.
-            docs: "#backing-up"
         rules:
           - rule: self.backup.provider in ['aws', 'gcp']
             mirrors: elasticsearch.validate
             paths: [backup.provider]
             message: Choose AWS S3 or Google Cloud Storage as the snapshot destination.
-          # workload-backup-setup.yaml:1-2 renders the job only while remove_setup_workload is off, and
-          # nothing else registers the repository or creates the SLM policy.
-          - rule: >-
-              !self.backup.remove_setup_workload ||
-              (oldSelf != null && oldSelf.backup.enabled == true &&
-              oldSelf.backup.provider == self.backup.provider &&
-              (self.backup.provider == 'aws' ?
-              oldSelf.backup.aws.bucket == self.backup.aws.bucket && oldSelf.backup.aws.prefix == self.backup.aws.prefix &&
-              oldSelf.backup.aws.region == self.backup.aws.region :
-              oldSelf.backup.gcp.bucket == self.backup.gcp.bucket && oldSelf.backup.gcp.prefix == self.backup.gcp.prefix))
-            severity: warning
-            paths: [backup.remove_setup_workload]
-            message: >-
-              Without the setup job the snapshot repository is never registered for this bucket, so no
-              snapshots are taken. Keep the job until its logs show Backup Configuration Complete!, then
-              remove it in a later upgrade.
-          - rule: >-
-              oldSelf == null || oldSelf.backup.enabled != true || self.backup.remove_setup_workload ||
-              (oldSelf.backup.schedule == self.backup.schedule &&
-              oldSelf.backup.retention.maxAge == self.backup.retention.maxAge &&
-              oldSelf.backup.retention.maxCount == self.backup.retention.maxCount)
-            severity: info
-            paths: [backup.schedule]
-            message: >-
-              The setup job creates the snapshot policy only when none exists, so a changed schedule or
-              retention does not reach a running cluster. Before you upgrade, delete the policy from an
-              Elasticsearch container with curl -X DELETE 'http://localhost:9200/_slm/policy/automated-snapshots';
-              the setup job then creates it again with the new settings.
           - rule: >-
               oldSelf == null || oldSelf.backup.enabled != true ||
               (oldSelf.backup.provider == self.backup.provider &&
@@ -413,6 +348,77 @@ steps:
             paths: [backup.gcp.cloudAccountName]
             message: The GCP cloud account is required.
 
+      - title: Schedule and retention
+        when: self.backup.enabled
+        docs: "#backing-up"
+        fields:
+          - path: backup.schedule
+            type: string
+            label: Schedule (UTC)
+            required: true
+            placeholder: 0 0 2 * * ?
+            description: >-
+              A Quartz schedule with a leading seconds field, not a five-field cron schedule. `0 0 2 * * ?`
+              runs daily at 02:00 UTC.
+            pattern: '^\S+( \S+){5,6}$'
+            patternMessage: >-
+              Enter a Quartz schedule with 6 fields (seconds, minutes, hours, day of month, month, day of week),
+              such as 0 0 2 * * ?.
+          - path: backup.retention.maxAge
+            type: string
+            label: Delete snapshots older than
+            required: true
+            suggestions: [7d, 14d, 30d, 90d]
+            pattern: '^[0-9]+(d|h|m|s|ms|micros|nanos)$'
+            patternMessage: Enter a number and a unit, such as 30d or 12h.
+          - path: backup.retention.maxCount
+            type: integer
+            label: Keep at most
+            unit: snapshots
+            required: true
+            min: 1
+            suggestions: [7, 14, 30, 90]
+            description: The newest snapshot is always kept, whatever its age.
+          - path: backup.remove_setup_workload
+            type: boolean
+            label: Remove the setup job
+            when: context.mode == 'upgrade' || self.backup.remove_setup_workload
+            description: >-
+              The setup job registers the bucket and creates the snapshot policy, then has nothing left to do.
+              Turn this on in a later upgrade, once its logs show `Backup Configuration Complete!`.
+            help: >-
+              Read the job's logs with
+              `cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-backup-setup"}' --limit 50 --since 10m`.
+            docs: "#backing-up"
+        rules:
+          # workload-backup-setup.yaml:1-2 renders the job only while remove_setup_workload is off, and
+          # nothing else registers the repository or creates the SLM policy.
+          - rule: >-
+              !self.backup.remove_setup_workload ||
+              (oldSelf != null && oldSelf.backup.enabled == true &&
+              oldSelf.backup.provider == self.backup.provider &&
+              (self.backup.provider == 'aws' ?
+              oldSelf.backup.aws.bucket == self.backup.aws.bucket && oldSelf.backup.aws.prefix == self.backup.aws.prefix &&
+              oldSelf.backup.aws.region == self.backup.aws.region :
+              oldSelf.backup.gcp.bucket == self.backup.gcp.bucket && oldSelf.backup.gcp.prefix == self.backup.gcp.prefix))
+            severity: warning
+            paths: [backup.remove_setup_workload]
+            message: >-
+              Without the setup job the snapshot repository is never registered for this bucket, so no
+              snapshots are taken. Keep the job until its logs show Backup Configuration Complete!, then
+              remove it in a later upgrade.
+          - rule: >-
+              oldSelf == null || oldSelf.backup.enabled != true || self.backup.remove_setup_workload ||
+              (oldSelf.backup.schedule == self.backup.schedule &&
+              oldSelf.backup.retention.maxAge == self.backup.retention.maxAge &&
+              oldSelf.backup.retention.maxCount == self.backup.retention.maxCount)
+            severity: info
+            paths: [backup.schedule]
+            message: >-
+              The setup job creates the snapshot policy only when none exists, so a changed schedule or
+              retention does not reach a running cluster. Before you upgrade, delete the policy from an
+              Elasticsearch container with curl -X DELETE 'http://localhost:9200/_slm/policy/automated-snapshots';
+              the setup job then creates it again with the new settings.
   - id: network
     title: Kibana and access
     description: The optional Kibana UI, and which workloads can reach Elasticsearch.

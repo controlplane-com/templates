@@ -364,6 +364,7 @@ steps:
             min: 10
             required: true
             suggestions: [10, 20, 50, 100, 250, 500]
+            description: Fixed once created; it can only grow, through the setting below.
             help: >-
               Each node has its own volume. The data survives redeploys; uninstalling the release deletes
               the volume set, and the data with it.
@@ -581,8 +582,9 @@ steps:
             widget: tags
             unique: true
             description: >-
-              With Specific workloads, the only workloads allowed to connect; with Same GVC, extra workloads
-              from other GVCs. The platform ignores the list with the other choices.
+              With Specific workloads, the only workloads allowed to connect, including this release's own
+              Weaviate workload when it runs more than one node (the nodes reach each other through it); with
+              Same GVC, extra workloads from other GVCs. The platform ignores the list with the other choices.
             item:
               type: ref
               ref:
@@ -633,6 +635,29 @@ steps:
         message: >-
           "None" also blocks the backup job, which calls Weaviate like any other workload, so no backup is
           taken.
+      # Measured 2026-10-23 (wizard round): workload-list without the release's own workload splits a
+      # 3-node cluster (each node lists only itself, schema writes time out) while every replica reports ready.
+      - when: self.internalAccess.type == 'workload-list' && context.gvc != null && self.replicas > 1
+        rule: >-
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-weaviate') in self.internalAccess.workloads
+        severity: warning
+        paths: [internalAccess.workloads]
+        messageExpression: >-
+          'The Weaviate nodes reach each other through their own workload, and the chart does not add it to the list. Add //gvc/' +
+          context.gvc + '/workload/' + context.releaseName + '-weaviate, or the cluster splits while every node still reports ready.'
+        message: >-
+          The Weaviate nodes reach each other through their own workload, and the chart does not add it to the
+          list. Add this release's Weaviate workload, or the cluster splits while every node still reports ready.
+        fix:
+          path: internalAccess.workloads
+          items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-weaviate']"
+      - when: oldSelf != null && self.replicas > 1 && oldSelf.internalAccess.type != self.internalAccess.type
+        rule: "false"
+        severity: info
+        paths: [internalAccess.type]
+        message: >-
+          Changing who can connect restarts every node in turn, which exposes the rejoin issue described on the
+          Cluster step: plan it like a version upgrade.
       - when: self.internalAccess.type == 'workload-list' && context.gvc != null && self.backup.enabled
         rule: >-
           ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-weaviate-backup') in self.internalAccess.workloads

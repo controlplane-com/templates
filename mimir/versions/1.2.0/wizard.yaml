@@ -25,17 +25,12 @@ steps:
               self.storage.minio.endpoint != oldSelf.storage.minio.endpoint)))
             text: >-
               This points Mimir at another bucket. The metrics already stored in the old bucket are not
-              copied, so queries no longer see them. Unless the change switches to or from S3-compatible
-              storage, the running replicas keep their old configuration until you run
-              `cpln workload force-redeployment RELEASE_NAME-mimir --gvc GVC_NAME` after the upgrade. A switch
+              copied, so queries no longer see them. A switch
               between AWS S3 and Google Cloud Storage leaves the previous cloud access on the identity; only a
               reinstall removes it.
             textExpression: >-
               'This points Mimir at another bucket. The metrics already stored in the old bucket are not ' +
-              'copied, so queries no longer see them. Unless the change switches to or from S3-compatible ' +
-              'storage, the running replicas keep their old configuration until you run ' +
-              '`cpln workload force-redeployment ' + context.releaseName + '-mimir --gvc ' +
-              (context.gvc != null ? context.gvc : 'GVC_NAME') + '` after the upgrade. A switch ' +
+              'copied, so queries no longer see them. A switch ' +
               'between AWS S3 and Google Cloud Storage leaves the previous cloud access on the identity; only a ' +
               'reinstall removes it.'
           - path: storage.type
@@ -78,6 +73,7 @@ steps:
             required: true
             placeholder: us-east-1
             pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+            description: The AWS region the bucket was created in; the S3 endpoint is built from it.
           - path: storage.aws.cloudAccountName
             type: ref
             label: Cloud account
@@ -180,7 +176,9 @@ steps:
           - path: storage.minio.insecure
             type: boolean
             label: Plain HTTP endpoint
-            description: On for an endpoint without TLS.
+            description: >-
+              On for an endpoint without TLS, such as a MinIO in this GVC. Turn it off for R2, Wasabi and
+              other HTTPS services.
           - path: storage.minio.bucket
             type: string
             label: Bucket
@@ -273,7 +271,7 @@ steps:
             suggestions: [10, 20, 50, 100, 250]
             description: >-
               Per replica, for the ingester write-ahead log and the compactor's workspace. The metric blocks
-              themselves live in the bucket.
+              themselves live in the bucket. Can be raised later, never lowered.
     rules:
       - rule: self.replicas == 1 || self.replicas >= 3
         mirrors: mimir.validate
@@ -303,18 +301,14 @@ steps:
     sections:
       - fields:
           - type: note
-            severity: warning
+            severity: info
             when: >-
               context.mode == 'upgrade' && oldSelf != null &&
               (self.multitenancy.enabled != oldSelf.multitenancy.enabled ||
               self.retention.period != oldSelf.retention.period)
             text: >-
-              Tenancy and retention live in the Mimir configuration, which a running replica does not re-read.
-              After the upgrade, run `cpln workload force-redeployment RELEASE_NAME-mimir --gvc GVC_NAME`.
-            textExpression: >-
-              'Tenancy and retention live in the Mimir configuration, which a running replica does not re-read. ' +
-              'After the upgrade, run `cpln workload force-redeployment ' + context.releaseName + '-mimir --gvc ' +
-              (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
+              The replicas restart to apply this change; with one replica, ingest and queries pause briefly
+              while it comes back.
       - title: Tenancy
         docs: "#tenancy"
         fields:

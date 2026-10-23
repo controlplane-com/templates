@@ -224,7 +224,7 @@ Senders dual-write to both endpoints; a Thanos Query tier dedups via `--query.re
 
 - **Prometheus has no built-in authentication, so this template never exposes a public endpoint.** To serve clients outside Control Plane, front it with your own authenticating proxy behind a custom domain.
 - **Remote-write password secrets must exist before install** — a missing `passwordSecretName` secret wedges the deployment waiting on it.
-- **A `helm upgrade` that changes only the config (scrape settings, labels, remote write, object storage) does not restart Prometheus** — the config is mounted from a secret, so run `cpln workload force-redeployment RELEASE_NAME-prometheus --gvc GVC_NAME` afterwards.
+- **Config changes ship via `helm upgrade`** (workload redeploy) — there is no hot reload.
 - **With object storage enabled, keep `retention.time` at least 3× `blockDuration`** (the default `15d`/`2h` satisfies this) — the sidecar needs blocks on the local volume long enough to upload them; history beyond local retention lives in your bucket.
 - **Uninstalling deletes the volume set** — only its final snapshot (kept 7 days) and anything already uploaded to your bucket remain.
 - **In a GVC with several locations, each location runs its own independent Prometheus and volume**, so stored data is split across locations — use a single-location GVC for one store.

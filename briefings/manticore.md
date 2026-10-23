@@ -26,17 +26,18 @@
 | `identity` ×3–6 + `policy` ×3–5 | S3 via cloud account; `reveal` on exactly four secrets; `exec.runCronWorkload` so the API can trigger the job |
 | `domain` | Optional; `/api/*` → orchestrator API, `/*` → UI |
 
-## Key knobs (defaults as shipped in 2.1.0)
+## Key knobs (defaults as shipped in 2.2.0)
 
 | Knob | Default | Meaning |
 |---|---|---|
 | `orchestrator.agent.tokenSecretName` | `my-manticore-agent-token` | **REQUIRED prerequisite opaque secret** — must exist before install |
 | `orchestrator.ui.publicAccess.enabled` | `false` | Was `allowExternalAccess: true` in 2.0.x. See the trap below |
 | `orchestrator.ui.internalAccess.type` | `same-gvc` | New in 2.1.0; was hardcoded |
+| `orchestrator.agent.resources.maxCpu` / `.maxMemory` | `250m` / `512Mi` | Renamed from `cpu` / `memory` in 2.2.0 (the block also has `minCpu`/`minMemory`); the old names `fail` |
 | `manticore.autoscaling.minScale` / `maxScale` | `3` / `4` | `minScale` is also the replica count the orchestrator coordinates across |
 | `manticore.resources.cpu` / `.memory` | `4` / `8Gi` | Limits only — bare names are correct per the 2026-08-06 ruling |
 | `manticore.volumeset.capacity` / `sharedVolumeset.capacity` | `200` / `100` (GB) | Sized for real datasets; shrink for a trial install |
-| `buckets.sourceBucket` / `cloudAccountName` / `awsPolicyRefs` | `my-manticore-*` | AWS only. **Read-only is sufficient** (see below) |
+| `buckets.sourceBucket` / `cloudAccountName` / `awsPolicyRefs` | `my-manticore-*` | AWS only. **Read-only is sufficient** (see below). `buckets.awsRegion` is not read by any template |
 | `orchestrator.action` / `schedule` / `suspend` | `import` / hourly / `true` | The cron ships suspended; the schedule only matters once un-suspended |
 | `tables[]` | one `addresses` example | `segmentCount` must equal `len(csvPath)` — enforced by a render-time `fail` |
 | `orchestrator.backup.*` | disabled | Separate bucket, cloud account and policy — the only one needing S3 write |

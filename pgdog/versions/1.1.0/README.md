@@ -169,14 +169,13 @@ logging:
 ```yaml
 publicAccess:
   enabled: false
-  # address: my-pgdog-domain.example.com  # name of an existing cpln domain resource
 
 internalAccess:
   type: same-gvc     # options: none, same-gvc, same-org, workload-list
   workloads: []      # used when type is workload-list
 ```
 
-With `publicAccess.enabled: true` Control Plane opens a TCP load balancer on port `6432` and assigns a canonical `*.cpln.app` hostname automatically — read it from `status.canonicalEndpoint` in `cpln workload get RELEASE_NAME-pgdog --gvc GVC_NAME -o yaml`. `address` attaches an existing domain resource to that load balancer; that path has not been verified. A change to either access knob can take several minutes to propagate.
+With `publicAccess.enabled: true` Control Plane opens a TCP load balancer on port `6432` and assigns a canonical `*.cpln.app` hostname automatically — read it from `status.canonicalEndpoint` in `cpln workload get RELEASE_NAME-pgdog --gvc GVC_NAME -o yaml`. A change to either access knob can take several minutes to propagate.
 
 ## Connecting
 

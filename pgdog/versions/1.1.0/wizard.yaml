@@ -520,9 +520,10 @@ steps:
               the internet either.
 
 rules:
-  # publicAccess.address is only a commented-out key in values.yaml. The chart renders it as
-  # spec.loadBalancer.domains, which the workload schema does not have (additionalProperties: false),
-  # so a set address makes the API refuse the workload.
+  # publicAccess.address is no longer documented (removed from values.yaml, README and catalog), but the
+  # chart still renders it as spec.loadBalancer.domains, which the workload schema does not have
+  # (additionalProperties: false), so a set address makes the API refuse the workload. The template block
+  # goes in the drift-audit patch version; until then this rule catches a release that still sets it.
   - rule: "!has(self.publicAccess.address)"
     paths: [publicAccess.enabled]
     message: >-

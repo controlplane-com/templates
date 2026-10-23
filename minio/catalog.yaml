@@ -7,7 +7,8 @@ category: storage
 topology: distributed
 
 summary: >-
-  MinIO S3-compatible object storage in distributed mode: an even number of replicas (at least
+  MinIO S3-compatible object storage (run as Silo, the maintained open-source MinIO fork) in
+  distributed mode: an even number of replicas (at least
   four, six by default) form one erasure-coded pool, each on its own persistent volume, so objects
   stay readable and writable while some nodes are down. It serves the S3 API and the MinIO web
   console inside the GVC, with root credentials from a secret you create. Pick it for durable
@@ -25,6 +26,8 @@ keywords:
   - backup target
   - minio console
   - mc client
+  - silo
+  - minio fork
   - data lake storage
 
 useCases:

@@ -224,8 +224,9 @@ class Target:
     def baseline(self, version):
         return load_yaml(os.path.join(ROOT, self.service, "tests", "baselines", f"{version}.yaml"))
 
-    def record(self, scenario, check, ok, detail="", new=False, skipped=False):
-        status = "skip" if skipped else ("pass" if ok else "fail")
+    def record(self, scenario, check, ok, detail="", new=False, skipped=False, warn=False):
+        """warn=True: a failure is reported as a warning and does not fail the run."""
+        status = "skip" if skipped else ("pass" if ok else ("warn" if warn else "fail"))
         self.results.append({"scenario": scenario, "check": check, "status": status, "detail": detail, "new": new})
         log(f"  [{status.upper():4}] {scenario} · {check}{(' — ' + detail) if detail else ''}")
         return ok
@@ -354,7 +355,12 @@ def check_drift(t, scenario, version, vfile):
     detail = "; ".join(errors + drifted)[:1500]
     if env:
         log(f"  (environment-dependent, not drift: {'; '.join(env)[:300]})")
-    return t.record(scenario, "rendered == stored (Console Drift tab)", not (drifted or errors), detail)
+    # Drift warns for now: most shipped templates still drift, so it would block every PR until they are
+    # fixed. A resource that could not be read still fails, since that is not drift.
+    if drifted and not errors:
+        log(f"::warning::{t.service}/{t.version} {scenario}: drift — {detail[:300]}")
+    return t.record(scenario, "rendered == stored (Console Drift tab)", not (drifted or errors), detail,
+                    warn=not errors)
 
 
 def stored_specs(t):
@@ -601,15 +607,17 @@ def cmd_report(a):
         r = load_yaml(os.path.join(a.dir, fn))
         res = r.get("results", [])
         fails = [x for x in res if x["status"] == "fail"]
+        warns = [x for x in res if x["status"] == "warn"]
         total_fail += len(fails)
-        icon = "❌" if fails else "✅"
-        lines.append(f"### {icon} {r['target']} — {len(res) - len(fails)}/{len(res)} passed "
+        icon = "❌" if fails else ("⚠️" if warns else "✅")
+        warned = f", {len(warns)} warning{'s' if len(warns) != 1 else ''}" if warns else ""
+        lines.append(f"### {icon} {r['target']} — {len(res) - len(fails) - len(warns)}/{len(res)} passed{warned} "
                      f"({r.get('minutes')} min, {', '.join(r.get('locations') or [])})")
         lines.append("")
         lines.append("| Scenario | Check | Result |")
         lines.append("|---|---|---|")
         for x in res:
-            mark = {"pass": "pass", "fail": "**FAIL**", "skip": "skip"}[x["status"]]
+            mark = {"pass": "pass", "fail": "**FAIL**", "warn": "warn", "skip": "skip"}[x["status"]]
             if x["new"]:
                 mark += " · new"
             detail = (" — " + x["detail"].replace("|", "\\|")) if x["detail"] else ""

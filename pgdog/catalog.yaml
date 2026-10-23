@@ -74,7 +74,3 @@ prerequisites:
     valuesPath: admin.passwordSecretName
     required: true
     description: Password for PgDog's admin database, plain encoding with no trailing newline. Create it before installing; when it is missing the workload waits with no logs.
-  - kind: domain
-    required: false
-    when: publicAccess.enabled with publicAccess.address set to a custom domain
-    description: Existing Control Plane domain for the public endpoint; without it the workload gets a generated cpln.app hostname.

@@ -8,7 +8,7 @@ resources:
 
 # Patroni's Prometheus metrics are scraped by the platform automatically on the
 # REST API port — no knob, no exporter. See "Cluster metrics" in the README.
-image: controlplanecorporation/patroni-postgres:0.7
+image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7; tags 0.1-0.7 are refused (CVE-2026-103484)
 
 # replica, or logical for logical replication / CDC (Debezium). Applied when the cluster is created; see the README to change it later.
 walLevel: replica

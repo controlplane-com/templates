@@ -32,6 +32,15 @@ steps:
         format: image
         label: Patroni PostgreSQL image
         required: true
+        rules:
+          - rule: >-
+              !(self.image.split(':')[0] in ['controlplanecorporation/patroni-postgres', 'docker.io/controlplanecorporation/patroni-postgres']) ||
+              size(self.image.split(':')) < 2 ||
+              !self.image.split(':')[1].matches('^0[.][0-7]([.][0-9]+)?$')
+            mirrors: pg-ha.validateImage
+            message: >-
+              This image carries a pgvector older than 0.8.7, which is open to CVE-2026-103484: a database user who can
+              create an IVFFlat index can run arbitrary code. Use controlplanecorporation/patroni-postgres:0.8.
       - path: resources
         type: resources
         label: Resources

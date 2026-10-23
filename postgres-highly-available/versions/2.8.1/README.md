@@ -58,6 +58,13 @@ config:
   credentialsSecretName: my-postgres-ha-credentials
 ```
 
+<b>Upgrading from 2.8.0 or earlier:</b> 2.8.1 moves to `controlplanecorporation/patroni-postgres:0.8`,
+which carries pgvector 0.8.7 (CVE-2026-103484). The fix is in the server library and takes effect when the
+upgrade restarts the members; existing data and indexes need nothing. If you pinned `image` in your values,
+set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render. In each database where you created the
+`vector` extension, `\dx` keeps reporting the old version until you run `ALTER EXTENSION vector UPDATE;`,
+which only updates that record.
+
 <b>Upgrading from 2.4.x:</b> the `postgres:` block was removed. Delete it from your
 values and create the credentials secret instead. An upgrade that still carries
 `postgres.username`, `postgres.password` or `postgres.database` is refused at

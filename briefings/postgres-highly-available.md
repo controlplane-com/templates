@@ -2,7 +2,7 @@
 
 ## What it is
 - A highly available PostgreSQL 17 cluster: multi-replica Patroni for automatic leader election and failover, etcd for consensus, an optional HAProxy that routes writes to the current leader, and an optional PgBouncer in front of that.
-- Ships `controlplanecorporation/patroni-postgres:0.7` (appVersion `17`).
+- Ships `controlplanecorporation/patroni-postgres:0.8` (appVersion `17`, the PostgreSQL major; it does not track the image tag). `0.8` = spilo-17 4.0-p3 + pgvector 0.8.7; Dockerfile in the `images` repo, `patroni/dockerfile`.
 - **15 other templates depend on this chart**, which makes every change here a cascade. Treat it like `postgres`: a version bump obliges a parent-adoption cycle.
 
 ## Common use cases
@@ -22,7 +22,7 @@
 | secret `{release}-postgres-ha-config` | Non-sensitive backup config only; gated on `backup.enabled` |
 | identity + policy | `reveal` on the startup secrets and the user's prerequisite secrets |
 
-## Key knobs (shipped 2.8.0 defaults)
+## Key knobs (shipped 2.8.1 defaults)
 `replicas` (3) | `config.credentialsSecretName` (`my-postgres-ha-credentials`, **must exist before install**) | `walLevel` (`replica` \| `logical`; render `fail` on anything else) | `image` | `resources.*` (500m-1 / 1-2Gi) | `volumeset.capacity` (10) | `multiZone` (false) | `proxy.enabled` | `pgbouncer.enabled` (false) | `backup.enabled` (false) / `backup.mode` (`logical` | `wal-g`) / `backup.provider` (`aws` | `gcp` | `minio`) | `backup.minio.credentialsSecretName`
 
 ## Troubleshooting / considerations
@@ -128,4 +128,4 @@
 - **2.8.0 stopped writing the password into `bootstrap.dcs.postgresql.authentication`.** Everything under `bootstrap.dcs` lands in etcd and is served by `GET :8008/config` with no authentication (no `restapi.authentication` is configured), so through 2.7.0 the superuser password was readable by anything that could reach port 8008. Patroni drops `authentication` from the dynamic config anyway (`_safe_copy_dynamic_configuration`), so removing it changes nothing functionally; the LOCAL `postgresql.authentication` (still rendered) is what Patroni uses. Existing clusters keep the stored copy until `PATCH /config {"postgresql":{"authentication":null}}` (README). Note the REST API is also unauthenticated for writes (`PATCH /config`, `/switchover`, `/restart`) — a pre-existing exposure limited only by `internal_access`, not addressed.
 - **Pre-existing, not fixed in 2.8.0:** `pgbouncer.enabled: true` with `proxy.enabled: false` creates the HAProxy workload (its `if` is `proxy OR pgbouncer`) but the policy grants `reveal` on its startup secret only `if proxy.enabled`, so HAProxy never starts. The 2.8.0 wizard blocks that combination with a warning rule.
 - **2.8.0 is the first version with a `wizard.yaml`.** It binds `etcd.*` as ordinary fields (no etcd import), so a parent such as `cdc-pipeline` can import it (nested imports are not supported).
-
+- **2.8.1 is an image bump for pgvector CVE-2026-103484** (`patroni-postgres` 0.7 → 0.8: PGDG `postgresql-{13..17}-pgvector` 0.8.0 → 0.8.7, plus refreshed ca-certificates/curl; nothing else differs). `pg-ha.validateImage` (mirrored in the wizard) refuses `controlplanecorporation/patroni-postgres` tags `0.1`-`0.7` (optional `docker.io/`, optional patch), because the wizard stores `image` in release values and an `upgrade -f` would keep the old one. Other registries, digests and non-version tags pass. `\dx` reports the old `vector` version until `ALTER EXTENSION vector UPDATE;` per database.

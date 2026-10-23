@@ -153,6 +153,7 @@ Validation. Runs from every resource template, so a bad value fails at render
 before anything is applied.
 */}}
 {{- define "pg-ha.validate" -}}
+{{- include "pg-ha.validateImage" . -}}
 {{- if .Values.postgres -}}
 {{- fail "postgres-highly-available: the `postgres` block was REMOVED in 2.5.0. `postgres.username`, `postgres.password` and `postgres.database` are now a `dictionary` secret you create, named by `config.credentialsSecretName`, holding the keys `username`, `password` and `database`. Delete the `postgres:` block from your values. See Prerequisites in the README." -}}
 {{- end -}}
@@ -171,3 +172,20 @@ before anything is applied.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Validate the image - refuse controlplanecorporation/patroni-postgres 0.1-0.7,
+which carry pgvector older than 0.8.7 (CVE-2026-103484). The wizard stores image in the
+release values, so a helm upgrade -f would otherwise keep the vulnerable image.
+Other registries, digests and non-version tags pass.
+*/}}
+{{- define "pg-ha.validateImage" -}}
+{{- $raw := .Values.image | default "" | toString -}}
+{{- $image := trimPrefix "docker.io/" $raw -}}
+{{- $prefix := "controlplanecorporation/patroni-postgres:" -}}
+{{- if hasPrefix $prefix $image -}}
+{{- if regexMatch "^0\\.[0-7](\\.[0-9]+)?$" (trimPrefix $prefix $image) -}}
+{{- fail (printf "postgres-highly-available: image %s carries a pgvector older than 0.8.7, which is open to CVE-2026-103484 (a database user who can create an IVFFlat index can run arbitrary code). Set image to controlplanecorporation/patroni-postgres:0.8, or remove `image` from your values to use the chart default." $raw) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}

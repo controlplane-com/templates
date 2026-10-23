@@ -69,6 +69,7 @@ that both sides read.
 {{- include "keycloak.validateResourceKnobs" . -}}
 {{- include "keycloak.validateAdmin" . -}}
 {{- include "keycloak.validateDatabaseSecret" . -}}
+{{- include "keycloak.validateImage" . -}}
 {{- $replicas := int .Values.replicas -}}
 {{- if lt $replicas 1 -}}
 {{- fail "keycloak: replicas must be at least 1" -}}
@@ -130,6 +131,25 @@ path.
 {{/*
 Common tags
 */}}
+{{/*
+Keycloak before 26.7.2 is open to an unauthenticated account takeover through the
+reset-credentials flow (CVE-2026-18963). Releases installed with 1.5.0 or earlier often
+carry `image: quay.io/keycloak/keycloak:26.6.3` in their stored values (the Console wizard
+writes it), so an upgrade that reuses those values would move the chart to 1.5.1 while
+still running the vulnerable image. Refuse an official image older than the fix. Tags this
+cannot read as a version (latest, digests, other registries) are left to the user.
+*/}}
+{{- define "keycloak.validateImage" -}}
+{{- $image := .Values.image | default "" | toString -}}
+{{- $prefix := "quay.io/keycloak/keycloak:" -}}
+{{- if hasPrefix $prefix $image -}}
+{{- $ver := regexFind "^[0-9]+\\.[0-9]+\\.[0-9]+" (trimPrefix $prefix $image) -}}
+{{- if and $ver (semverCompare "<26.7.2" $ver) -}}
+{{- fail (printf "keycloak: image %s is open to CVE-2026-18963 (unauthenticated account takeover, fixed in Keycloak 26.7.2). Set image to quay.io/keycloak/keycloak:26.8.1, or remove `image` from your values to use the chart default." $image) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "keycloak.tags" -}}
 {{- include "cpln-common.tags" . }}
 {{- end }}

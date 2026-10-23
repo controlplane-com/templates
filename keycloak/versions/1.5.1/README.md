@@ -128,9 +128,11 @@ Public access is **on** by default: browsers must reach Keycloak's login and OID
 
 ## Upgrading from 1.5.0
 
-1.5.1 moves Keycloak from 26.6.3 to 26.8.1, which fixes an unauthenticated account-takeover vulnerability in the reset-credentials flow (CVE-2026-18963). No values change: upgrade with the values you already use.
+1.5.1 moves Keycloak from 26.6.3 to 26.8.1, which fixes an unauthenticated account-takeover vulnerability in the reset-credentials flow (CVE-2026-18963). No values change: upgrade with the values you already use. If your values set `image` (installs made through the Console wizard store it), change it to `quay.io/keycloak/keycloak:26.8.1` or remove it; the chart refuses an official Keycloak image older than 26.7.2.
 
-The first 26.8.1 server to start migrates the database schema, and Keycloak cannot run an older version against a migrated database, so this upgrade cannot be rolled back to 1.5.0. Take a database backup before upgrading (`postgresHA.backup` or `postgres.backup`, see [Configuration](#configuration)).
+The first 26.8.1 server to start migrates the database schema, and Keycloak cannot run an older version against a migrated database, so this upgrade cannot be rolled back to 1.5.0: a rolled-back release reports healthy, but every login page fails with HTTP 500. Take a database backup before upgrading (`postgresHA.backup` or `postgres.backup`, see [Configuration](#configuration)); to recover from a rollback, upgrade to 1.5.1 again or restore the backup.
+
+With 2 or more replicas the upgrade serves requests throughout. With `replicas: 1`, Keycloak is unavailable while its single server restarts.
 
 ## Upgrading from 1.4.0
 

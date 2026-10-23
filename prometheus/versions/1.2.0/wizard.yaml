@@ -41,16 +41,6 @@ steps:
       - title: Retention
         docs: "#tsdb-and-retention"
         fields:
-          - type: note
-            when: context.mode == 'upgrade'
-            text: >-
-              Retention lives in the configuration file, which Prometheus reads only at start. After an
-              upgrade that changes it, force a redeployment:
-              `cpln workload force-redeployment RELEASE_NAME-prometheus --gvc GVC_NAME`.
-            textExpression: >-
-              'Retention lives in the configuration file, which Prometheus reads only at start. After an
-              upgrade that changes it, force a redeployment: `cpln workload force-redeployment ' +
-              context.releaseName + '-prometheus --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
           - path: retention.time
             type: string
             label: Keep samples for
@@ -73,9 +63,9 @@ steps:
           - rule: >-
               (oldSelf != null && self.retention.size == oldSelf.retention.size) ||
               self.retention.size == null || self.retention.size == '' ||
-              self.retention.size.matches('^[0-9]+(B|KB|MB|GB|TB|PB|EB)$')
+              self.retention.size.matches('^([0-9]*[.]?[0-9]+(B|KB|MB|GB|TB|PB|EB|KiB|MiB|GiB|TiB|PiB|EiB))+$')
             paths: [retention.size]
-            message: Enter the size cap as a whole number with a unit, such as 15GB or 512MB, or leave it empty.
+            message: Enter the size cap as a number with a unit, such as 15GB, 1.5GB or 512MiB (Prometheus counts GB as 1024³ bytes), or leave it empty.
       - fields:
           - path: volumeset.capacity
             type: integer
@@ -105,13 +95,8 @@ steps:
             when: context.mode == 'upgrade'
             text: >-
               These settings and remote write live in the configuration file, which Prometheus reads only at
-              start, and there is no hot reload. After an upgrade that changes them, force a redeployment:
-              `cpln workload force-redeployment RELEASE_NAME-prometheus --gvc GVC_NAME`.
-            textExpression: >-
-              'These settings and remote write live in the configuration file, which Prometheus reads only at
-              start, and there is no hot reload. After an upgrade that changes them, force a redeployment:
-              `cpln workload force-redeployment ' + context.releaseName + '-prometheus --gvc ' +
-              (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
+              start. An upgrade that changes them restarts Prometheus with the new file; on a large TSDB it can
+              take minutes to report ready again.
           - path: scrapeInterval
             type: string
             label: Scrape interval
@@ -161,7 +146,7 @@ steps:
         docs: "#remote-write"
         description: >-
           Forward every sample to Mimir or another store that accepts Prometheus remote write. This is the
-          usual way to keep history elsewhere when the Thanos sidecar is off.
+          usual way to keep history elsewhere if you turn the Thanos sidecar off (next step).
         fields:
           - type: note
             severity: warning
@@ -183,6 +168,7 @@ steps:
             label: Remote write endpoints
             widget: table
             newItem: { url: "" }
+            uniqueBy: [url]
             itemLabel: "item.url"
             item:
               type: object

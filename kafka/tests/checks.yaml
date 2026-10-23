@@ -44,7 +44,9 @@ checks:
           | awk '{ for (i=1;i<=NF;i++) if ($i=="Isr:") print split($(i+1), a, ",") }' | sort -u
     expect:
       stdout: "\\A3\\s*\\Z"
-    retries: 3
+    # After a rolling upgrade the last broker restarted needs a few minutes to rejoin the ISR.
+    retries: 8
+    retryDelaySeconds: 30
 
   - id: rest-proxy
     description: The REST Proxy authenticates a basic-auth user and lists the cluster's topics.

@@ -165,6 +165,7 @@ Point a Grafana Prometheus datasource at the PromQL URL. Collectors inside the G
 - **Data lives in your bucket** — the volumeset only holds the WAL and scratch space. Reinstalling the template against the same bucket resumes with your data; deleting data means emptying the bucket.
 - **After scaling `replicas` 1 → 3 on a live install**, metrics written shortly before the scale-up can be intermittently missing from query results for up to about 12 hours while their blocks age into the store. No data is lost, new writes are unaffected, and it resolves on its own — scale up at a quiet hour if that window matters.
 - **Retention is enforced by the compactor** — changing `retention.period` applies to existing blocks too.
+- **A change to `multitenancy`, `retention` or the bucket settings takes effect only after `cpln workload force-redeployment RELEASE_NAME-mimir --gvc GVC_NAME`** — the config is mounted from a secret, and an upgrade that only changes it does not restart the replicas.
 - **After uninstall, re-check your bucket**: the terminating replica can re-write a small cluster-seed file (`blocks/__mimir_cluster/`) minutes after teardown — delete it if you are emptying the bucket.
 
 ## Links

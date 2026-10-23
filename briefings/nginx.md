@@ -22,7 +22,7 @@ Does not create a GVC.
 
 | Knob | Default | Notes |
 |---|---|---|
-| `proxyWorkload.image` | `nginx:1.31.4` | pinned in 1.1.2; was `nginx:latest` |
+| `proxyWorkload.image` | `nginx:1.31.7` | pinned in 1.1.2 (1.31.4; was `nginx:latest`); 1.31.7 since 1.1.3 |
 | `enableExample` | `true` | deploys the demo backend and routes **all** traffic to it |
 | `locations` | `[]` | your own proxy targets |
 | `autoscaling` | — | the proxy is stateless and scales horizontally |
@@ -46,3 +46,6 @@ Does not create a GVC.
   `:latest`, so the demo target can change under you. It does not affect the proxy, which is pinned.
 - **Config errors surface at container start, not at render.** `locations` is templated into `nginx.conf`, so
   a malformed entry produces a container that will not start rather than a failed `helm install`.
+
+## Version history
+- **1.1.3** (2026-10): nginx 1.31.7, fixing the six advisories open in 1.31.4 (CVE-2026-15176, -93479, -95101, -97629, -97205, -90439; all medium, all fixed in 1.31.7 / 1.30.6). The shipped `nginx.conf` uses none of the affected features (alias+rewrite, HTTP/3, TLS session tickets, AIO), so default installs were not exposed; custom configs might be. No image guard: medium severity, and 1.1.2 had no wizard storing `image` in release values. First version with a `wizard.yaml`.

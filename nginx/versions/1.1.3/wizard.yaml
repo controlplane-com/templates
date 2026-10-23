@@ -46,7 +46,7 @@ steps:
         title: Locations
         description: >-
           Each entry forwards the requests whose path matches to a workload in this GVC. Longer prefixes win
-          over shorter ones; `/health` and `/fail` are built in.
+          over shorter ones; `/health` and `/fail` are built in. A Custom nginx.conf (below) replaces all of this.
         docs: "#locations"
         fields:
           - type: note
@@ -64,7 +64,8 @@ steps:
             severity: info
             when: >-
               context.mode == 'upgrade' && oldSelf != null &&
-              (self.locations != oldSelf.locations || self.enableExample != oldSelf.enableExample)
+              (self.locations != oldSelf.locations || self.enableExample != oldSelf.enableExample ||
+               (has(oldSelf.nginxConf) ? self.nginxConf != oldSelf.nginxConf : self.nginxConf != ''))
             text: >-
               The upgrade rolls the proxy onto the new routing by itself. With one replica, requests may fail for a few seconds while the new replica takes over.
           - path: locations
@@ -104,7 +105,7 @@ steps:
                   label: Workload
                   required: true
                   description: The bare workload name; the chart adds `.GVC_NAME.cpln.local` itself.
-                  ref: { kind: workload, format: name, mustExist: warning }
+                  ref: { kind: workload, format: name, mustExist: error }
                 - path: port
                   type: integer
                   label: Port
@@ -167,11 +168,20 @@ steps:
         docs: "#configuration"
         fields:
           - type: note
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.1.3') < 0
+            text: >-
+              Before 1.1.3 the install screen kept nginx.conf as a separate file. If you never edited it, this
+              box is empty and the configuration is generated from the settings above, as before. If you edited
+              it, your file is here and keeps replacing the generated one; clear the box to switch to the
+              settings above.
+          - type: note
             severity: warning
             when: self.nginxConf != ''
             text: >-
               This file replaces the generated `nginx.conf`, so the example backend and locations above take
-              effect only where it uses them (`.Values.locations`, `.Values.enableExample`). Helm template
+              effect only where it uses them (`.Values.locations`, `.Values.enableExample`); the example backend workload is still deployed while its switch is on. Helm template
               syntax in it is rendered. Keep `listen 80` and a `location /health` that answers 200: the
               health probes check it.
           - path: nginxConf

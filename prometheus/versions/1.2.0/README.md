@@ -227,7 +227,7 @@ Senders dual-write to both endpoints; a Thanos Query tier dedups via `--query.re
 - **Config changes ship via `helm upgrade`** (workload redeploy) — there is no hot reload.
 - **With object storage enabled, keep `retention.time` at least 3× `blockDuration`** (the default `15d`/`2h` satisfies this) — the sidecar needs blocks on the local volume long enough to upload them; history beyond local retention lives in your bucket.
 - **Uninstalling deletes the volume set** — only its final snapshot (kept 7 days) and anything already uploaded to your bucket remain.
-- **In a GVC with several locations, each location runs its own independent Prometheus and volume**, so stored data is split across locations — use a single-location GVC for one store.
+- **Install into a single-location GVC** (the console requires one). With the CLI in a multi-location GVC, every location runs its own independent Prometheus and volume, so stored data is split across locations.
 - **Upgrading from 1.0.0: `resources.cpu`/`memory` (and `thanos.sidecar.resources.*`) were renamed to `maxCpu`/`maxMemory` in 1.1.0** — the old keys are silently ignored, so rename them.
 - **After a restart, readiness can take minutes on a large TSDB** — WAL replay holds `/-/ready` at 503; this is normal recovery, not a failure.
 

@@ -72,6 +72,7 @@ steps:
             description: >-
               A local index cache over the bucket; losing it costs a rebuild on the next start, never data. On
               first start the Store Gateway builds it over every block, which takes a while on a large bucket.
+              You can raise it later, never lower it.
             docs: "/reference/volumeset#capacity-and-billing"
           - path: storeGateway.resources
             type: resources
@@ -127,7 +128,7 @@ steps:
             min: 10
             required: true
             suggestions: [20, 50, 100, 250]
-            description: Scratch space for compaction; size it at about twice two weeks of raw blocks.
+            description: Scratch space for compaction; size it at about twice two weeks of raw blocks. You can raise it later, never lower it.
             docs: "/reference/volumeset#capacity-and-billing"
           - path: compactor.resources
             type: resources
@@ -301,6 +302,26 @@ steps:
               `cpln workload get-deployments RELEASE_NAME-thanos-store --gvc GVC_NAME -o yaml` under
               `status.versions[].message`. Once the secret exists it recovers on its own within about 10 minutes,
               or at once with `cpln workload force-redeployment`.
+          - path: storage.minio.credentialsSecretName
+            type: ref
+            label: Access keys secret
+            required: true
+            description: A dictionary secret with the keys `accessKey` and `secretKey`, for a key pair that can read and write the bucket.
+            help: >-
+              Create it with:
+              `cpln secret create-dictionary --name SECRET_NAME --entry accessKey='YOUR-ACCESS-KEY' --entry secretKey='YOUR-SECRET-KEY'`.
+              After changing the keys inside this secret, force a redeployment of `RELEASE_NAME-thanos-store` and
+              `RELEASE_NAME-thanos-compact` (`cpln workload force-redeployment`): running workloads keep the keys
+              they started with.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [accessKey, secretKey]
+              create:
+                suggestName: "context.releaseName + '-thanos-minio-credentials'"
           - path: storage.minio.endpoint
             type: string
             label: Endpoint
@@ -325,26 +346,6 @@ steps:
             type: string
             label: Bucket region
             placeholder: us-east-1
-          - path: storage.minio.credentialsSecretName
-            type: ref
-            label: Access keys secret
-            required: true
-            description: A dictionary secret with the keys `accessKey` and `secretKey`, for a key pair that can read and write the bucket.
-            help: >-
-              Create it with:
-              `cpln secret create-dictionary --name SECRET_NAME --entry accessKey='YOUR-ACCESS-KEY' --entry secretKey='YOUR-SECRET-KEY'`.
-              After changing the keys, force a redeployment of `RELEASE_NAME-thanos-store` and
-              `RELEASE_NAME-thanos-compact` (`cpln workload force-redeployment`): running workloads keep the keys
-              they started with.
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [dictionary] }
-              mustExist: error
-              allowCreate: true
-              requiredKeys: [accessKey, secretKey]
-              create:
-                suggestName: "context.releaseName + '-thanos-minio-credentials'"
         rules:
           - rule: "!self.storage.minio.endpoint.contains('://')"
             mirrors: thanos.validate
@@ -355,6 +356,16 @@ steps:
             paths: [storage.minio.credentialsSecretName]
             message: The access keys secret is required.
     rules:
+      - when: "!self.compactor.enabled"
+        rule: >-
+          string(self.compactor.retention.raw).matches('^[0-9]+(ms|s|m|h|d|w|y)$') &&
+          string(self.compactor.retention.fiveMinutes).matches('^[0-9]+(ms|s|m|h|d|w|y)$') &&
+          string(self.compactor.retention.oneHour).matches('^[0-9]+(ms|s|m|h|d|w|y)$')
+        mirrors: thanos.validate
+        paths: [compactor.enabled]
+        message: >-
+          A Compactor retention is not a duration such as 0d, 30d, 2w or 1y, and the chart refuses it even with
+          the Compactor off. Turn the Compactor on and correct it.
       - when: "!self.storeGateway.enabled && !self.compactor.enabled && self.storage.type == 'minio'"
         rule: self.storage.minio.credentialsSecretName != null && self.storage.minio.credentialsSecretName != ''
         mirrors: thanos.validateObjstoreCreds
@@ -456,14 +467,14 @@ steps:
             help: >-
               Read the public address from `status.canonicalEndpoint` in
               `cpln workload get RELEASE_NAME-thanos --gvc GVC_NAME -o yaml`; see
-              [Connecting](/template-catalog/templates/thanos#connecting). Turning it on or off takes a few minutes to
-              take effect.
+              [Connecting](/template-catalog/templates/thanos#connecting). Turning it on or off can take up to about ten
+              minutes to take effect.
           - path: internalAccess.type
             type: enum
             label: Who can connect
             widget: cards
             required: true
-            description: Applies to Query inside Control Plane. Access changes take a few minutes to take effect.
+            description: Applies to Query inside Control Plane. Access changes can take up to about ten minutes to take effect.
             options:
               - value: none
                 label: None
@@ -514,12 +525,10 @@ migrations:
   - fromVersions: "<1.2.0"
     from: storage.minio.accessKey
     note: >-
-      The MinIO keys moved to a dictionary secret with the keys accessKey and secretKey, chosen under Long-term
-      storage, MinIO or S3-compatible. Only the MinIO or S3-compatible backend needs it: there, put this value in
-      accessKey.
+      Only if your backend is MinIO or S3-compatible: the keys moved to a dictionary secret with the keys
+      accessKey and secretKey, chosen under Long-term storage. Put this value in accessKey.
   - fromVersions: "<1.2.0"
     from: storage.minio.accessSecret
     note: >-
-      The MinIO keys moved to a dictionary secret with the keys accessKey and secretKey, chosen under Long-term
-      storage, MinIO or S3-compatible. Only the MinIO or S3-compatible backend needs it: there, put this value in
-      secretKey.
+      Only if your backend is MinIO or S3-compatible: the keys moved to a dictionary secret with the keys
+      accessKey and secretKey, chosen under Long-term storage. Put this value in secretKey.

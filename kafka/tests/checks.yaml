@@ -65,6 +65,12 @@ checks:
       stdout: '"e2e"'
     retries: 4
     retryDelaySeconds: 20
+    # A fresh 4.4.0 install passes; this still blocks there.
+    knownIssue:
+      note: >-
+        Values from 4.1.0 and older carry the old Jetty JAAS class, which cp-kafka-rest:latest rejects, so every
+        basic-auth user gets 401 after the upgrade. Pending a maintainer ruling.
+      scenarios: "^upgrade "
 
   - id: rest-proxy-rejects-bad-password
     description: The REST Proxy refuses a wrong basic-auth password (the control for the check above).

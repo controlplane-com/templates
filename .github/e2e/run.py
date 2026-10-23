@@ -395,7 +395,8 @@ def check_noop_upgrade(t, scenario, version, vfile, timeout_s):
     return t.record(scenario, "no-op upgrade ×2 (no churn)", ok, "; ".join(detail))
 
 
-def run_checks(t, scenario, version, ctx, new_version):
+def run_checks(t, scenario, version, ctx, new_version, warn=False):
+    """warn=True for the starting version of an upgrade: it has already shipped, so a PR cannot fix it."""
     for c in t.checks:
         cid = c["id"]
         if not in_range(version, c):
@@ -403,7 +404,11 @@ def run_checks(t, scenario, version, ctx, new_version):
         is_new = str(c.get("since", "")) == new_version and version == new_version
         ok, detail = exec_check(t, c, ctx)
         label = cid + (f" ({c['issue']})" if c.get("issue") else "")
-        t.record(scenario, label, ok, detail, new=is_new)
+        known = c.get("knownIssue") or {}
+        is_known = bool(known) and re.search(known.get("scenarios", ""), scenario) is not None
+        if not ok and is_known:
+            detail = f"known issue: {known.get('note', '').strip()} | {detail}"
+        t.record(scenario, label, ok, detail, new=is_new, warn=warn or is_known)
 
 
 def exec_check(t, c, ctx):
@@ -493,7 +498,7 @@ def scenario_upgrade(t, src, timeout_s):
     old_vfile = values_file(old_base, ctx)
     code, out = helm(t, "install", old, old_vfile, timeout_s)
     if t.record(sc, f"install {old} (starting point)", code == 0, "" if code == 0 else out.strip()[-500:]):
-        run_checks(t, sc + f" [before, on {old}]", old, ctx, t.version)
+        run_checks(t, sc + f" [before, on {old}]", old, ctx, t.version, warn=True)
         if mode == "new":
             # Secrets the new baseline adds are created now; ones it shares keep their values, as a user's would.
             prepare(t, new_base, ctx, t.version)

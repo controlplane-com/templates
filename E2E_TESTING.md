@@ -41,7 +41,8 @@ For the version under test, on a fresh install:
 5. Uninstall removes every resource of the release (uninstall can exit 0 having deleted nothing).
 
 Then, for each `upgradeFrom` entry: install that version with its own baseline, run its checks, upgrade
-into the version under test, and repeat 1-3 and 5.
+into the version under test, and repeat 1-3 and 5. The checks on the starting version only **warn**: that
+version has already shipped and the PR cannot fix it. Everything run against the version under test blocks.
 
 ## Baselines
 
@@ -103,7 +104,14 @@ checks:
     retries: 3                      # default 3
     retryDelaySeconds: 15
     timeoutSeconds: 120
+    knownIssue:                     # optional: a failure warns instead of blocking
+      note: "REST Proxy rejects valid users with jaas values carried from 4.1.0 and older"
+      scenarios: "^upgrade "        # regex on the scenario name; default every scenario
 ```
+
+Use `knownIssue` to record something that does not work yet without blocking every PR on that template.
+Scope it as narrowly as you can, so the same check still blocks where it passes today, and remove it
+with the fix.
 
 A check marked `since:` the version under test is reported as **new**. Every check needs a way to fail:
 assert on output only the working feature produces (a consumed message, a row read back), never on a

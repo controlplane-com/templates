@@ -35,7 +35,8 @@ steps:
         description: >-
           A dictionary secret with the key `api-key` (and `read-only-api-key` for the read-only key below).
           Leave it empty to run Qdrant without authentication, which is possible only while it is not
-          published to the internet.
+          published to the internet. Clients inside the GVC that send a key must still use plain http
+          (`https=False` in qdrant-client); the client otherwise switches to TLS and hangs.
         help: >-
           Create it with
           `cpln secret create-dictionary --name SECRET_NAME --entry api-key=$(openssl rand -hex 32) --entry read-only-api-key=$(openssl rand -hex 32)`.
@@ -56,6 +57,7 @@ steps:
       - path: auth.readOnlyKey
         type: boolean
         label: Read-only key
+        when: (self.auth.secretName != null && self.auth.secretName != '') || self.auth.readOnlyKey
         description: >-
           Also accept the secret's `read-only-api-key`, which can search and read collections but is refused
           on writes.
@@ -115,12 +117,6 @@ steps:
       - title: API
         docs: "#service"
         fields:
-          - path: service.dashboard
-            type: boolean
-            label: Web dashboard
-            description: >-
-              Serve Qdrant's web UI at `/dashboard`. The page itself loads without an API key; its data calls
-              need one.
           - path: service.maxRequestSizeMb
             type: integer
             label: Maximum request size
@@ -221,6 +217,12 @@ steps:
               Read the address from `status.canonicalEndpoint` in
               `cpln workload get RELEASE_NAME-qdrant --gvc GVC_NAME -o yaml`. Turning it on or off can take a few
               minutes to take effect.
+          - path: service.dashboard
+            type: boolean
+            label: Web dashboard
+            description: >-
+              Serve Qdrant's web UI at `/dashboard`. The page itself loads without an API key; its data calls
+              need one.
           - type: note
             severity: warning
             when: self.publicAccess.enabled
@@ -233,7 +235,7 @@ steps:
             when: self.publicAccess.enabled && self.service.dashboard
             text: >-
               The dashboard's page loads without an API key on the public endpoint (its data calls do not).
-              Turn off Web dashboard under Server for a published install.
+              Turn off Web dashboard above for a published install.
         rules:
           - rule: >-
               !self.publicAccess.enabled || (self.auth.secretName != null && self.auth.secretName != '')

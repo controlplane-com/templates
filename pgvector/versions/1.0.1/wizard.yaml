@@ -85,6 +85,16 @@ steps:
         text: >-
           Every upgrade restarts the server. Nothing limits the rollout of a stateful workload, so plan a
           write outage of a minute or two.
+      - type: note
+        when: >-
+          context.mode == 'upgrade' && oldSelf != null &&
+          oldSelf.image.split(':')[0] in ['pgvector/pgvector', 'docker.io/pgvector/pgvector'] &&
+          size(oldSelf.image.split(':')) > 1 &&
+          oldSelf.image.split(':')[1].matches('^0[.]([0-7][.][0-9]|8[.][0-6]([^0-9]|$))')
+        text: >-
+          The CVE-2026-103484 fix is active after this upgrade's restart; existing data and indexes need nothing.
+          `\dx` keeps reporting the old vector version until you run `ALTER EXTENSION vector UPDATE;` in each
+          database that has it, which only updates that record.
       - path: image
         type: string
         format: image
@@ -101,12 +111,16 @@ steps:
           - rule: >-
               !(self.image.split(':')[0] in ['pgvector/pgvector', 'docker.io/pgvector/pgvector']) ||
               size(self.image.split(':')) < 2 ||
-              !self.image.split(':')[1].matches('^[0-9]+[.][0-9]+[.][0-9]+') ||
-              semverCompare(self.image.split(':')[1].split('@')[0].split('-')[0], '0.8.7') >= 0
+              !self.image.split(':')[1].matches('^0[.]([0-7][.][0-9]|8[.][0-6]([^0-9]|$))')
             mirrors: pgvector.validateImage
+            messageExpression: >-
+              'pgvector before 0.8.7 is open to CVE-2026-103484: a database user who can create an IVFFlat index ' +
+              'can run arbitrary code. Use pgvector/pgvector:0.8.7' +
+              (self.image.matches('-pg[0-9]+') ? '-pg' + self.image.split('-pg')[1] : '-pg18') +
+              ', keeping your PostgreSQL major version.'
             message: >-
               pgvector before 0.8.7 is open to CVE-2026-103484: a database user who can create an IVFFlat index
-              can run arbitrary code. Use pgvector/pgvector:0.8.7-pg18.
+              can run arbitrary code. Use a 0.8.7 tag with your current -pgNN suffix, such as pgvector/pgvector:0.8.7-pg18.
       - path: config.extraExtensions
         type: list
         label: Extra extensions

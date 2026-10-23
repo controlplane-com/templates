@@ -187,7 +187,7 @@ cpln workload exec RELEASE_NAME-timescaledb-ha --gvc GVC_NAME --container patron
 # Change them — all three together
 cpln workload exec RELEASE_NAME-timescaledb-ha --gvc GVC_NAME --container patroni-timescaledb \
   -- patronictl -c /tmp/patroni_config.yml edit-config --force \
-     -s ttl=45 -s loop_wait=10 -s retry_timeout=15
+     -s ttl=45 -s loop_wait=10 -s retry_timeout=15 -s failsafe_mode=true
 ```
 
 ### Losing etcd does not fail the cluster over

@@ -21,15 +21,15 @@ steps:
         textExpression: >-
           'The credentials secret must exist **before** you install or upgrade. If it is missing, the deployment
           waits on it and `cpln logs` shows nothing at all; the reason is in `cpln workload get-deployments ' +
-          context.releaseName + '-timescaledb-ha` under `status.versions[].message`. Once the secret exists the
+          context.releaseName + '-timescaledb-ha --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '` under `status.versions[].message`. Once the secret exists the
           deployment recovers on its own within about 10 minutes, or at once with
-          `cpln workload force-redeployment ' + context.releaseName + '-timescaledb-ha`.'
+          `cpln workload force-redeployment ' + context.releaseName + '-timescaledb-ha --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
         text: >-
           The credentials secret must exist **before** you install or upgrade. If it is missing, the deployment
           waits on it and `cpln logs` shows nothing at all; the reason is in
-          `cpln workload get-deployments RELEASE_NAME-timescaledb-ha` under `status.versions[].message`. Once
+          `cpln workload get-deployments RELEASE_NAME-timescaledb-ha --gvc GVC_NAME` under `status.versions[].message`. Once
           the secret exists the deployment recovers on its own within about 10 minutes, or at once with
-          `cpln workload force-redeployment RELEASE_NAME-timescaledb-ha`.
+          `cpln workload force-redeployment RELEASE_NAME-timescaledb-ha --gvc GVC_NAME`.
       # 1.0.x kept username, password and database in RELEASE-tsdb-ha-config (secret-config.yaml); from 1.1.0
       # that secret holds only backup settings and exists only while backups are on.
       - type: note
@@ -205,7 +205,7 @@ steps:
         paths: [replicas]
         messageExpression: >-
           'HAProxy reads the member list when it starts. After the upgrade, run `cpln workload
-          force-redeployment ' + context.releaseName + '-timescaledb-ha-proxy` so it routes to the new members.' +
+          force-redeployment ' + context.releaseName + '-timescaledb-ha-proxy --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '` so it routes to the new members.' +
           (self.replicas < oldSelf.replicas ? ' Removing the member that holds the leader role triggers a failover.' : '')
         message: >-
           HAProxy reads the member list when it starts. After the upgrade, force a redeployment of the HAProxy
@@ -438,7 +438,7 @@ steps:
             paths: [etcd.tuning.autoCompactionMode]
             messageExpression: >-
               'etcd reads the compaction settings and the backend size limit only when a member starts. Once the
-              upgrade is applied, run `cpln workload force-redeployment ' + context.releaseName + '-etcd`; each
+              upgrade is applied, run `cpln workload force-redeployment ' + context.releaseName + '-etcd --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '`; each
               member rejoins the cluster from its own volume.'
             message: >-
               etcd reads the compaction settings and the backend size limit only when a member starts. Once the
@@ -497,6 +497,11 @@ steps:
               items: >-
                 ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-timescaledb-ha',
                 '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-etcd']
+          - when: self.etcd.internal_access.type == 'same-gvc' && context.gvc != null
+            rule: "!self.etcd.internal_access.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+            severity: info
+            paths: [etcd.internal_access.workloads]
+            message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
           - when: self.etcd.internal_access.type == 'same-org'
             rule: size(self.etcd.internal_access.workloads) == 0
             severity: info
@@ -949,7 +954,7 @@ steps:
         message: With "Specific workloads" and an empty list, no workload can connect.
       # The members replicate from each other and HAProxy checks them; PgBouncer and the backup job connect to
       # HAProxy. All of them share internal_access (workload-*.yaml), and the chart adds none of its own names.
-      - when: self.internal_access.type == 'workload-list' && context.gvc != null && size(self.internal_access.workloads) > 0
+      - when: self.internal_access.type == 'workload-list' && context.gvc != null
         rule: >-
           ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-timescaledb-ha') in self.internal_access.workloads &&
           (!(self.proxy.enabled || self.pgbouncer.enabled) ||

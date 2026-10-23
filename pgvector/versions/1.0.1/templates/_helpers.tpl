@@ -69,12 +69,13 @@ vulnerable extension through a helm upgrade -f. Other registries, digests and
 non-version tags pass.
 */}}
 {{- define "pgvector.validateImage" -}}
-{{- $image := .Values.image | default "" | toString | trimPrefix "docker.io/" -}}
+{{- $raw := .Values.image | default "" | toString -}}
+{{- $image := trimPrefix "docker.io/" $raw -}}
 {{- $prefix := "pgvector/pgvector:" -}}
 {{- if hasPrefix $prefix $image -}}
 {{- $ver := regexFind "^[0-9]+\\.[0-9]+\\.[0-9]+" (trimPrefix $prefix $image) -}}
 {{- if and $ver (semverCompare "<0.8.7" $ver) -}}
-{{- fail (printf "pgvector: image %s carries pgvector %s, which is open to CVE-2026-103484 (a database user who can create an IVFFlat index can run arbitrary code). Set image to pgvector/pgvector:0.8.7-pg18, or remove `image` from your values to use the chart default." $image $ver) -}}
+{{- fail (printf "pgvector: image %s carries pgvector %s, which is open to CVE-2026-103484 (a database user who can create an IVFFlat index can run arbitrary code). Set image to pgvector/pgvector:0.8.7-pg18, or remove `image` from your values to use the chart default." $raw $ver) -}}
 {{- end -}}
 {{- end -}}
 {{- end }}

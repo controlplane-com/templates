@@ -1,0 +1,45 @@
+# redis 3.9.0 — production mode (three Redis nodes, three Sentinels) with auth from a prerequisite
+# secret and persistence on both tiers, as recommended for production. Default resources.
+locations: [aws-us-east-1]
+timeoutSeconds: 600
+
+secrets:
+  auth:
+    type: dictionary
+    keys: [password]
+
+vars:
+  redis_password: "{secrets.auth.password}"
+
+values:
+  redis:
+    auth:
+      fromSecret:
+        enabled: true
+        name: "{secrets.auth.name}"
+        passwordKey: password
+    persistence:
+      enabled: true
+  sentinel:
+    auth:
+      fromSecret:
+        enabled: true
+        name: "{secrets.auth.name}"
+        passwordKey: password
+    persistence:
+      enabled: true
+
+# Both carry their values to 3.9.0, as `helm upgrade -f my-values.yaml` would.
+#  - 3.4.1: the most-used version since the 3.1.1 rename; this path must work, so it blocks.
+#  - 3.0.2: the version customers run most, by far. It crosses the rename, which is a known template
+#    bug, so the whole scenario warns until a redis version fixes it.
+upgradeFrom:
+  - version: 3.4.1
+  - version: 3.0.2
+    timeoutSeconds: 300
+    knownIssue:
+      note: >-
+        Upgrading from 3.1.0 or older with persistence on deletes the old volumesets and identities
+        (3.1.1 renamed them, {release}-redis → {release}-redis-vs). The rollout then never proceeds,
+        even after a forced redeployment: the old replicas keep serving, and a replica that stops
+        does not come back.

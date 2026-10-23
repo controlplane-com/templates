@@ -1,0 +1,31 @@
+# redis 3.4.1: the most-used version since 3.1.1 renamed the volumesets and identities (tied with 3.1.1),
+# in the same production shape as 3.9.0. Used as the starting point of an upgrade to a newer version.
+locations: [aws-us-east-1]
+timeoutSeconds: 600
+
+secrets:
+  auth:
+    type: dictionary
+    keys: [password]
+
+vars:
+  redis_password: "{secrets.auth.password}"
+
+values:
+  redis:
+    auth:
+      fromSecret:
+        enabled: true
+        name: "{secrets.auth.name}"
+        passwordKey: password
+    persistence:
+      enabled: true
+  sentinel:
+    auth:
+      fromSecret:
+        enabled: true
+        name: "{secrets.auth.name}"
+        passwordKey: password
+    persistence:
+      enabled: true
+

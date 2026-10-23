@@ -198,6 +198,15 @@ steps:
             format: image
             label: Redpanda image
             required: true
+          - path: redpanda.name
+            type: string
+            label: Broker workload name
+            required: true
+            advanced: true
+            immutable: The brokers find each other by this name, so it cannot change on a running cluster.
+            pattern: '^[a-z][a-z0-9-]*$'
+            patternMessage: Use lowercase letters, digits and hyphens, starting with a letter.
+            description: The broker workload is named `<release>-<name>`. Fixed once the cluster is created.
           - path: redpanda.multiZone
             type: boolean
             label: Spread brokers across zones
@@ -224,7 +233,10 @@ steps:
             label: Broker memory limit
             required: true
             min: 512Mi
-            suggestions: [2Gi, 4Gi, 8Gi, 16Gi]
+            suggestions: [3Gi, 4Gi, 8Gi, 16Gi]
+            description: >-
+              Redpanda uses this limit minus the memory reserved for the OS, and needs a little over 1 GiB of that
+              per reactor thread: with the default 1G reserve and one thread, 3Gi is the smallest limit that boots.
           - path: redpanda.minMemory
             type: quantity
             quantity: memory
@@ -276,6 +288,21 @@ steps:
             severity: info
             paths: [redpanda.reserveMemory]
             message: The memory reserved for the OS leaves Redpanda nothing of the broker memory limit.
+          # Measured 2026-10-23 (wizard round): 2Gi with reserveMemory 1G and smp 1 refused to boot
+          # ("Memory: '1004535808' below recommended: '1073741824'") and after 6 failed starts Redpanda's
+          # crash-loop guard kept the broker down even after an upgrade to 3Gi; 3Gi booted.
+          - when: self.redpanda.reserveMemory.matches('^[0-9]+[KMG]?$') && self.redpanda.smp != null
+            rule: >-
+              memoryBytes(self.redpanda.maxMemory) - memoryBytes(self.redpanda.reserveMemory) >=
+              self.redpanda.smp * 1181116006
+            paths: [redpanda.maxMemory]
+            messageExpression: >-
+              'Redpanda needs about 1.1 GiB per reactor thread after the OS reserve, so with ' +
+              string(self.redpanda.smp) + ' thread(s) and a ' + self.redpanda.reserveMemory +
+              ' reserve this limit will not boot, and repeated failed starts lock the broker until it is reinstalled. Raise the memory limit or lower the reserve.'
+            message: >-
+              Redpanda needs about 1.1 GiB per reactor thread after the OS reserve, so this limit will not boot.
+              Raise the memory limit or lower the reserve.
         # redpanda.validateResourceKnobs fails on the 1.1.0 key names even with the console off, so both
         # halves sit here, outside the console's toggle section.
     rules:
@@ -621,6 +648,23 @@ steps:
             fix:
               path: redpanda.firewall.inboundAllowWorkload
               items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-' + self.redpanda_console.name]"
+          - when: >-
+              self.redpanda.firewall.internal_inboundAllowType == 'workload-list' && self.redpanda.replicas > 1 &&
+              context.gvc != null
+            rule: >-
+              ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-' + self.redpanda.name) in
+              self.redpanda.firewall.inboundAllowWorkload
+            severity: warning
+            paths: [redpanda.firewall.inboundAllowWorkload]
+            messageExpression: >-
+              'The brokers reach each other through their own workload, and the chart does not add it to the list. Add //gvc/' +
+              context.gvc + '/workload/' + context.releaseName + '-' + self.redpanda.name + ', or the cluster can split.'
+            message: >-
+              The brokers reach each other through their own workload, and the chart does not add it to the list.
+              Add the broker workload, or the cluster can split.
+            fix:
+              path: redpanda.firewall.inboundAllowWorkload
+              items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-' + self.redpanda.name]"
           - when: self.redpanda.firewall.internal_inboundAllowType == 'none'
             rule: "!self.redpanda_console.enabled"
             severity: warning
@@ -739,6 +783,7 @@ steps:
               '`').join(', ') + '. The GVC alias is in the GVC' + "'" + 's settings. Clients connect with SASL_SSL to each
               of these names under your domain, on the external Kafka port.'
           - path: redpanda.firewall.external_inboundAllowCIDR
+            when: self.redpanda.listeners.kafka.external != null || size(self.redpanda.firewall.external_inboundAllowCIDR) > 0
             type: list
             absent: true
             serialize: csv
@@ -799,17 +844,9 @@ steps:
 
   - id: advanced
     title: Advanced
-    description: The broker workload name, extra environment and extra broker configuration.
+    description: Extra environment and extra broker configuration.
     sections:
       - fields:
-          - path: redpanda.name
-            type: string
-            label: Broker workload name
-            required: true
-            immutable: The brokers find each other by this name, so it cannot change on a running cluster.
-            pattern: '^[a-z][a-z0-9-]*$'
-            patternMessage: Use lowercase letters, digits and hyphens, starting with a letter.
-            description: The broker workload is named `<release>-<name>`. Fixed once the cluster is created.
           - path: redpanda.env
             type: yaml
             yamlType: list

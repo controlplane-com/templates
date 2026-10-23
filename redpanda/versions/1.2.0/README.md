@@ -135,7 +135,7 @@ redpanda:
 ```yaml
 redpanda:
   firewall:
-    internal_inboundAllowType: "same-gvc"  # same-org / same-gvc
+    internal_inboundAllowType: "same-gvc"  # same-org / same-gvc / workload-list / none
     # external_inboundAllowCIDR: 0.0.0.0/0
     # inboundAllowWorkload:
     #   - //gvc/my-gvc/workload/my-app

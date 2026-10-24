@@ -87,6 +87,25 @@ cpln port-forward RELEASE_NAME-rabbitmq 15672:15672 --gvc GVC_NAME
 # then browse http://localhost:15672
 ```
 
+## Upgrading
+
+**From 1.1.x:** 1.2.0 takes the default user from the credentials secret instead of `rabbitmq_conf.default_user`/`default_pass`, replaces the `firewall` block with `internalAccess.type`, and removes `diskCapacity` (it was never read). Drop those keys from your values, or the upgrade is refused before anything changes.
+
+1. Read the user the broker already has, because the upgrade rewrites the secret that holds it (`default_user` and `default_pass` lines):
+
+   ```bash
+   cpln secret reveal RELEASE_NAME-rabbitmq-config -o yaml
+   ```
+
+2. Create the credentials secret ([Prerequisites](#prerequisites)) with that same username, then upgrade with `credentialsSecretName` set.
+3. The broker keeps its existing user and password, since the default user is written on first boot only. If the old password was the published default `changeMe`, or you put a new one in the secret, set it on the broker:
+
+   ```bash
+   cpln workload exec RELEASE_NAME-rabbitmq --gvc GVC_NAME --container rabbitmq -- rabbitmqctl change_password USERNAME 'NEW-PASSWORD'
+   ```
+
+**From 1.0.0:** do not upgrade in place. 1.1.0 renamed every resource, including the volume set, so an upgrade deletes the volume set and every message on it. Install a new release and move your clients to it.
+
 ## Important Notes
 
 - The credentials secret must exist **before** you install. If it does not, the deployment wedges **silently** — `cpln logs` returns zero lines. The only diagnostic is `cpln workload get-deployments RELEASE_NAME-rabbitmq --gvc GVC_NAME -o yaml`, under `status.versions[].message`. Once you create the secret the deployment recovers on its own in roughly 5.5–8.5 minutes (measured 8 min 16 s here), or in about 90 seconds if you force a redeployment of the workload.

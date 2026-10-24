@@ -26,7 +26,7 @@
 ## Key knobs
 | Knob | Default | Note |
 |---|---|---|
-| `image` | `quay.io/keycloak/keycloak:26.6.3` | |
+| `image` | `quay.io/keycloak/keycloak:26.8.1` | |
 | `replicas` | `2` | 2+ = Infinispan cluster, zero-downtime restarts; 1 = clustering disabled (local cache) |
 | `resources` | 1000m/500m cpu · 2Gi/1Gi mem | JVM heap = 70% of the limit; **do not go below 1.5Gi** |
 | `admin.secretName` | `my-keycloak-admin` | **Prerequisite dictionary secret** (`username`, `password`) — 1.1.0 |
@@ -57,3 +57,13 @@
 - **Public access is intentional.** Unlike the templates flipped private this cycle, the credential here is user-created, and a private Keycloak cannot serve browser SSO to anything.
 - **HA password rotation must also update the `repl` role (measured on listmonk 1.6.0, 2026-10-14).** postgres-highly-available 2.5.0 uses the same secret password for its replication user `repl`; after `ALTER ROLE <user>` + secret edit + redeploy, the standbys failed with `password authentication failed for user "repl"` while the app kept working on the leader. `ALTER ROLE repl PASSWORD '<new>'` on the leader restored streaming in ~12 s. README and wizard help say so.
 - **HA rotation ORDER matters (spike 2026-10-15, postgres-highly-available 2.5.0, 3/3 pass).** `ALTER` + secret edit + force-redeploy of `-postgres-ha` is NOT safe on its own: the platform restarts members highest ordinal first (2→1→0, observed 5/5, undocumented) and the chart's preStop calls `/switchover` with no candidate, so the leader can hand off to a member still on the OLD password. Measured: a diverged timeline that HAProxy routed clients to (spike), and on chatwoot a replica stuck `forked off` for 19 min while the leader streamed ~16 GB/min to it (~$30 egress, single location). Safe order (README section): switch the leader to `-0` first, ALTER user + `repl` on `-0`, edit the secret, redeploy — `-0` restarts last. Recovery: `POST /reinitialize {"force":true}` on the stuck member. Also: Patroni's DCS config keeps the INSTALL-time password readable unauthenticated at `:8008/config` (survives rotation) — README step 7 PATCHes it out; chart fix + preStop candidate hardening tracked on 5284.
+
+**1.5.1 (2026-10-23):** Keycloak 26.6.3 → 26.8.1 for CVE-2026-18963 (unauthenticated account takeover via
+reset-credentials; work item 5376) — the chart's first Keycloak version change. Measured: a 2-replica HA
+upgrade served throughout (0 failed of 155 samples over the rollout); the new node migrates the schema in
+~11 s while the old one serves, forms its own cluster, and the old node drops out as the new one becomes
+ready. `replicas: 1` is down for the restart (~2 min). A `helm rollback` to 1.5.0 starts and reports
+ready but every login 500s (`column … organization_id does not exist`); re-upgrading recovers. Stored
+values from the 1.5.0 wizard pin `image: …26.6.3`, so `keycloak.validateImage` refuses official tags
+below 26.7.2. Known drift (same as 1.5.0, deferred): `livenessProbe.successThreshold`,
+`readinessProbe.httpGet.scheme` on keycloak, six probe fields in postgres-highly-available 2.5.0.

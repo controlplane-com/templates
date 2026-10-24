@@ -21,7 +21,9 @@ steps:
             text: >-
               Version 1.1.0 made the generated config the default (1.0.x defaulted to your own config). A
               release that still ran the shipped config moves to the generated one, which does the same work;
-              a release with its own config keeps it. See
+              a release with its own config keeps it. If that config started from the 1.0.x example, change its
+              histogram bucket numbers to duration strings (bare numbers are read as nanoseconds) and give
+              `health_check` the endpoint `0.0.0.0:13133`, or the probes fail. See
               [Upgrading from 1.0.x](/template-catalog/templates/otel-collector#upgrading-from-1-0-x).
           - path: otelCollector.mode
             type: enum
@@ -83,12 +85,8 @@ steps:
           - type: note
             when: context.mode == 'upgrade'
             text: >-
-              The collector reads its config only when a replica starts. After an upgrade that changes the
-              pipeline, run `cpln workload force-redeployment RELEASE_NAME --gvc GVC_NAME`.
-            textExpression: >-
-              'The collector reads its config only when a replica starts. After an upgrade that changes the
-              pipeline, run `cpln workload force-redeployment ' + context.releaseName + ' --gvc ' +
-              (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
+              An upgrade that changes the pipeline restarts the collector replicas, so the new config is in
+              effect when the upgrade finishes.
       - title: Span processing
         when: self.otelCollector.mode == 'simple'
         description: >-
@@ -230,6 +228,13 @@ steps:
           receiver on 4317 stays open to the GVC, because the GVC tracing provider sends to it without a
           token, and it is never published. Public ingestion requires auth.
         fields:
+          - type: note
+            severity: warning
+            when: self.otelCollector.mode == 'advanced' && self.auth.method != 'none'
+            text: >-
+              With your own config, the chart only mounts the token or certificates. Your config must apply
+              them to its receivers on 0.0.0.0:4318 and 0.0.0.0:4319; otherwise those ports accept OTLP without
+              auth.
           - path: auth.method
             type: enum
             label: Method
@@ -349,7 +354,6 @@ steps:
             type: list
             label: Allowed sender CIDRs
             widget: tags
-            required: true
             unique: true
             description: The address ranges your senders connect from. Use `0.0.0.0/0` to allow every address.
             item: { type: string, format: cidr, placeholder: 203.0.113.0/24 }

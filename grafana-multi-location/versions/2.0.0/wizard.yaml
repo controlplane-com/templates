@@ -103,7 +103,8 @@ steps:
               Three locations give automatic database failover, five survive losing two, and two keep
               dashboards up after losing a location but need a manual promotion before logins and saves work
               again. To remove a location, remove it from this list and from the GVC; never suspend a location.
-              For a Grafana in a single location, use the grafana template instead.
+              For a Grafana in a single location, use the grafana template instead. Alerting HA (on the
+              Alerting step) needs at least 3.
             item:
               type: object
               fields:
@@ -150,11 +151,6 @@ steps:
                 message: >-
                   Grafana multi-location needs at least 2 locations: its database is stretched across them. For a
                   Grafana in a single location, use the grafana template.
-              - rule: size(self.global.locations) != 2
-                severity: info
-                message: >-
-                  Two locations keep dashboards up after losing one, but logins, saves and alert-state writes fail
-                  until the surviving database member is promoted by hand. Three locations fail over on their own.
               - rule: size(self.global.locations) < 4 || size(self.global.locations) % 2 == 1
                 severity: info
                 message: >-
@@ -214,11 +210,11 @@ steps:
           - type: note
             severity: warning
             text: >-
-              These secrets must exist **before** you install. If one is missing, the deployment waits on it and
+              These secrets must exist **before** you install or upgrade. If one is missing, the deployment waits on it and
               `cpln logs` shows nothing at all; the reason is under `status.versions[].message` in
               `cpln workload get-deployments RELEASE_NAME-grafana --gvc GVC_NAME`.
             textExpression: >-
-              'These secrets must exist **before** you install. If one is missing, the deployment waits on it and `cpln logs` shows nothing at all; the reason is under `status.versions[].message` in `cpln workload get-deployments ' +
+              'These secrets must exist **before** you install or upgrade. If one is missing, the deployment waits on it and `cpln logs` shows nothing at all; the reason is under `status.versions[].message` in `cpln workload get-deployments ' +
               context.releaseName + '-grafana --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
               '` (and `' + context.releaseName + '-postgres` for the database credentials). Once the secret exists the deployment recovers on its own within about 10 minutes, or at once with `cpln workload force-redeployment ' +
               context.releaseName + '-grafana --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
@@ -432,7 +428,8 @@ steps:
             label: Public HTTPS endpoint
             description: >-
               The UI and API of the UI tier on the workload's georouted `*.cpln.app` endpoint. The dedicated
-              alert evaluator is never public.
+              alert evaluator is never public. Use that endpoint: on a per-location hostname dashboards load
+              with empty panels.
           - type: note
             when: "!self.publicAccess.enabled"
             textExpression: >-
@@ -486,6 +483,18 @@ steps:
         title: Alert evaluation
         docs: "#alert-evaluation"
         fields:
+          - type: note
+            severity: warning
+            when: size(self.global.locations) < 3
+            text: Alerting HA needs at least 3 locations. Add one on the Locations step to choose it.
+            textExpression: >-
+              'Alerting HA needs at least 3 locations; this release lists ' + string(size(self.global.locations)) +
+              '. Add one on the Locations step to choose it.'
+          - type: note
+            when: context.mode == 'upgrade' && self.alerting.highAvailability.enabled == true
+            text: >-
+              Every upgrade, also one that changes nothing, restarts the Redis tier: for about a minute and a half
+              several instances send the same notification. It never goes silent.
           - id: alertingMode
             virtual: true
             type: enum
@@ -507,6 +516,7 @@ steps:
                 description: >-
                   Every UI instance evaluates every rule and a Redis tier in every location picks one sender, so
                   alerting survives losing a location. Multiplies datasource query load by the instance count.
+                  Needs 3 or more locations.
                 set: { alerting.enabled: true, alerting.highAvailability.enabled: true }
               - value: "off"
                 label: "Off"
@@ -557,7 +567,8 @@ steps:
             required: true
             optionsFrom: self.global.locations.filter(l, l.name != null && l.name != '').map(l, l.name)
             description: >-
-              The one location the evaluator runs in. Moving it later restarts only the evaluator.
+              The one location the evaluator runs in. Moving it later restarts only the evaluator, which sends
+              every alert that is firing at that moment again.
           - path: alerting.resources
             type: resources
             label: Evaluator resources
@@ -834,7 +845,8 @@ steps:
             unique: true
             description: >-
               With Specific workloads, every workload that reaches Redis or Sentinel, this release's Grafana
-              workload included: the Redis tier adds only its own workloads.
+              workload included: the Redis tier adds only its own workloads. The platform also applies the list
+              with Same GVC, for clients in other GVCs.
             item:
               type: ref
               ref:
@@ -944,6 +956,7 @@ steps:
               (`http://WORKLOAD_NAME.GVC_NAME.cpln.local:9095`): a name that does not resolve shows only
               "upstream connect error ... connection timeout" in the panels.
       - title: Datasource credentials
+        docs: "#datasources-as-code"
         fields:
           - path: datasources.credentialSecrets
             type: list
@@ -956,9 +969,10 @@ steps:
               What Grafana authenticates to each datasource with. Each key becomes an environment variable that a
               definition references as `$KEY`.
             help: >-
-              Each secret must exist before you install. After you change one, run
-              `cpln workload force-redeployment WORKLOAD --gvc GVC_NAME` for RELEASE_NAME-grafana (and
-              RELEASE_NAME-grafana-alerting with a dedicated evaluator); until then the old values are used.
+              Each secret must exist before you install. After you change the values inside one of these
+              secrets, run `cpln workload force-redeployment WORKLOAD --gvc GVC_NAME` for RELEASE_NAME-grafana
+              (and RELEASE_NAME-grafana-alerting with a dedicated evaluator); until then the old values are used.
+              Adding or removing an entry here takes effect with the upgrade.
             item:
               type: object
               fields:

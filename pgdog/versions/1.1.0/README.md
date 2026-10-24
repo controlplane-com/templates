@@ -169,14 +169,13 @@ logging:
 ```yaml
 publicAccess:
   enabled: false
-  # address: my-pgdog-domain.example.com  # name of an existing cpln domain resource
 
 internalAccess:
   type: same-gvc     # options: none, same-gvc, same-org, workload-list
   workloads: []      # used when type is workload-list
 ```
 
-With `publicAccess.enabled: true` Control Plane opens a TCP load balancer on port `6432` and assigns a canonical `*.cpln.app` hostname automatically — read it from `status.canonicalEndpoint` in `cpln workload get RELEASE_NAME-pgdog --gvc GVC_NAME -o yaml`. `address` attaches an existing domain resource to that load balancer; that path has not been verified. A change to either access knob can take several minutes to propagate.
+With `publicAccess.enabled: true` Control Plane opens a TCP load balancer on port `6432` and assigns a canonical `*.cpln.app` hostname automatically — read it from `status.canonicalEndpoint` in `cpln workload get RELEASE_NAME-pgdog --gvc GVC_NAME -o yaml`. A change to either access knob can take several minutes to propagate.
 
 ## Connecting
 
@@ -191,6 +190,16 @@ Applications connect exactly as they would to PostgreSQL — PgDog speaks the fu
 | Username | the `username` key of that user's credentials secret |
 | Password | the `password` key of that user's credentials secret |
 | Admin database | `admin.database` on the same host/port, as `admin.user`, with the payload of `admin.passwordSecretName` |
+
+## Upgrading
+
+**From 1.0.0:** 1.1.0 moves every credential into secrets you create, and renames `resources.cpu`/`memory` to `maxCpu`/`maxMemory`. The upgrade **deletes** the `RELEASE_NAME-pgdog-users` secret that holds today's pooled usernames and passwords, so read it first:
+
+```bash
+cpln secret reveal RELEASE_NAME-pgdog-users -o yaml
+```
+
+Create one dictionary secret per pooled user with those same `username` and `password` values (so connection strings keep working), and a new admin password secret (the 1.0.0 default was published) — see [Prerequisites](#prerequisites). Then remove `users[].name`, `users[].password` and `admin.password` from your values, set `users[].credentialsSecretName` and `admin.passwordSecretName`, and upgrade. An upgrade that still carries a removed key is refused before anything changes.
 
 ## Important Notes
 

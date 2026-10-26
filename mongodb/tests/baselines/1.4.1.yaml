@@ -15,6 +15,7 @@ secrets:
       database: test
 
 vars:
+  mongo_workload: "{release}-mongo"
   mongo_user: e2e
   mongo_password: "{gen.mongopw}"
   mongo_db: test

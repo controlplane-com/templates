@@ -17,7 +17,7 @@ steps:
           - type: note
             severity: warning
             textExpression: >-
-              'The secret must exist **before** you install. If it is missing, the deployment waits on it and ' +
+              'The secret must exist **before** you install or upgrade. If it is missing, the deployment waits on it and ' +
               '`cpln logs` shows nothing at all; the reason is in `status.versions[].message` of ' +
               '`cpln workload get-deployments ' + context.releaseName + '-hermes-agent --gvc ' +
               (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml`. Once the secret exists the ' +
@@ -25,8 +25,8 @@ steps:
               '`cpln workload force-redeployment ' + context.releaseName + '-hermes-agent --gvc ' +
               (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
             text: >-
-              The secret must exist **before** you install. If it is missing, the deployment waits on it and
-              `cpln logs` shows nothing at all; the reason is in `status.versions[].message` of
+              The secret must exist **before** you install or upgrade. If it is missing, the deployment waits on
+              it and `cpln logs` shows nothing at all; the reason is in `status.versions[].message` of
               `cpln workload get-deployments RELEASE_NAME-hermes-agent --gvc GVC_NAME -o yaml`. Once the secret
               exists the deployment recovers on its own within about ten minutes, or at once with
               `cpln workload force-redeployment RELEASE_NAME-hermes-agent --gvc GVC_NAME`.
@@ -35,8 +35,8 @@ steps:
             label: Secret
             required: true
             description: >-
-              A dictionary secret with your LLM provider's API key and the token clients present to the
-              gateway API, plus the dashboard password while the dashboard is on and the webhook signing
+              A dictionary secret with the API key for the provider you choose on the next step and the token
+              clients present to the gateway API, plus the dashboard password while the dashboard is on and the webhook signing
               secret while webhooks are on. The token must be at least 16 characters, or the API never
               serves and the workload never becomes ready.
             help: >-
@@ -123,7 +123,8 @@ steps:
         label: Model ID
         placeholder: claude-opus-4-6
         description: >-
-          The model ID exactly as your provider lists it; empty uses Hermes's own default. With Anthropic,
+          The model ID exactly as your provider lists it; empty uses Hermes's built-in default, an Anthropic
+          model. With Anthropic,
           give the bare ID: the chart adds the `anthropic/` prefix.
       - path: model.reasoningEffort
         type: enum
@@ -254,6 +255,16 @@ steps:
     sections:
       - fields:
           - type: note
+            textExpression: >-
+              'Telegram, Slack, Discord and other chat platforms are not set here: set them up after install ' +
+              'with `cpln workload exec ' + context.releaseName + '-hermes-agent --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + ' --container hermes -- hermes gateway setup`. ' +
+              'Their tokens are stored on the volume.'
+            text: >-
+              Telegram, Slack, Discord and other chat platforms are not set here: set them up after install
+              with `cpln workload exec RELEASE_NAME-hermes-agent --gvc GVC_NAME --container hermes -- hermes gateway setup`.
+              Their tokens are stored on the volume.
+          - type: note
             when: >-
               context.mode == 'upgrade' && context.fromVersion != null &&
               semverCompare(context.fromVersion, '1.4.1') < 0
@@ -367,14 +378,16 @@ steps:
               'devices), or print it in a terminal with `cpln workload exec ' + context.releaseName +
               '-hermes-agent --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
               ' --container hermes -- hermes whatsapp`. The first pairing installs the bridge from ' +
-              'registry.npmjs.org onto the volume. People who message the number get a pairing code that ' +
-              'you approve on the dashboard Pairing page.'
+              'registry.npmjs.org onto the volume. ' + (self.dashboard.enabled ?
+              'People who message the number get a pairing code that you approve on the dashboard Pairing page.' :
+              'With the dashboard off, set the allowlist of who may message the agent during that terminal setup.')
             text: >-
               After install, scan the QR code from the dashboard WhatsApp setup with your phone (Linked
               devices), or print it in a terminal with
               `cpln workload exec RELEASE_NAME-hermes-agent --gvc GVC_NAME --container hermes -- hermes whatsapp`.
               The first pairing installs the bridge from registry.npmjs.org onto the volume. People who
-              message the number get a pairing code that you approve on the dashboard Pairing page.
+              message the number get a pairing code that you approve on the dashboard Pairing page, or that an
+              allowlist set during setup admits.
 
   - id: server
     title: Server and storage

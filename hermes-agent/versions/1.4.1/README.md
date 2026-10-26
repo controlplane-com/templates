@@ -58,7 +58,7 @@ image: nousresearch/hermes-agent:v2026.9.21   # pin the Hermes Agent image tag
 ```yaml
 model:
   provider: anthropic     # anthropic | openai | custom
-  name: ""                # model override — use the provider's exact model ID (e.g. claude-opus-4-6, gpt-5; Anthropic IDs are hyphenated, never dotted). Bare name only — the chart adds the anthropic/ prefix itself. Empty = provider default. Recommended for non-anthropic providers.
+  name: ""                # model override — use the provider's exact model ID (e.g. claude-opus-4-6, gpt-5; Anthropic IDs are hyphenated, never dotted). Bare name only — the chart adds the anthropic/ prefix itself. Empty = Hermes's built-in default, an Anthropic model, so set it for any other provider.
   baseUrl: ""             # OpenAI-compatible endpoint; required when provider is "custom"
   reasoningEffort: medium # none | low | medium | high — use "none" for non-reasoning models
 ```

@@ -25,9 +25,14 @@ values:
 # the same username and password the old version was installed with, since RabbitMQ creates the default
 # user only on a fresh data directory.
 #  - 1.1.1: the previous version.
-#  - 1.0.0: the version customers run (6 installs).
+#  - 1.0.0: the version customers run (6 installs). It crosses the 1.1.0 rename, a known issue.
 upgradeFrom:
   - version: 1.1.1
     values: new
   - version: 1.0.0
     values: new
+    knownIssue:
+      note: >-
+        1.1.0 renamed the workload and volume set ({release} → {release}-rabbitmq-vs), so upgrading
+        from 1.0.0 starts on a new, empty volume and the queued messages are gone. Old versions are
+        documented, not fixed (maintainer ruling 2026-10-26); the README says not to upgrade in place.

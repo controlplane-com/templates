@@ -210,6 +210,7 @@ unset MYSQL_PWD
 - **Access changes take up to a couple of minutes** to propagate after an `internalAccess` or `publicAccess` change.
 - **Data lives on the volume set** and survives redeploys; `cpln helm uninstall` deletes it, taking the database with it.
 - **Upgrading from 1.3.x is a breaking change.** `config.*` and `enablePhpMyAdmin` no longer exist — an install that still sets them fails at render with instructions. Create the two secrets first, and expect the credentials on an existing volume to stay whatever they already were.
+- **Do not `helm upgrade` from 1.1.x or older.** 1.2.0 renamed the workload and volume set (`RELEASE_NAME` → `RELEASE_NAME-maria` and `RELEASE_NAME-maria-vs`), so an in-place `helm upgrade` starts the database on a new, empty volume and removes the old one. Install a new release of this version instead, move the data across, then remove the old release.
 
 ## Links
 

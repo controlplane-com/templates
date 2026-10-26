@@ -76,9 +76,15 @@ steps:
               or deleting the secret makes every stored secret permanently unrecoverable. Keep a copy outside
               Control Plane (`cpln secret reveal SECRET_NAME -o yaml` prints it). Uninstalling the release
               leaves the secret in place.
+            textExpression: >-
+              'The key is **write-once**. It wraps the encryption barrier of OpenBao: changing the value of the secret
+              or deleting the secret makes every stored secret permanently unrecoverable. Keep a copy outside
+              Control Plane (`cpln secret reveal ' +
+              (self.seal.static.secretName != null && self.seal.static.secretName != '' ? self.seal.static.secretName : 'SECRET_NAME') +
+              ' -o yaml` prints it). Uninstalling the release leaves the secret in place.'
           - path: seal.static.secretName
             type: ref
-            label: Unseal key secret
+            label: Secret
             required: true
             description: >-
               An opaque secret (encoding plain) whose content is a 32-byte key, hex-encoded, with no line
@@ -119,6 +125,14 @@ steps:
           cpln-connector policy and the IAM policy below, so no grant is needed after install.
         docs: "#kms-auto-unseal-setup"
         fields:
+          - type: note
+            severity: warning
+            text: >-
+              Create the symmetric KMS key and an IAM policy that allows `kms:Encrypt`, `kms:Decrypt` and
+              `kms:DescribeKey` on it **before** you install. A wrong or missing key or policy does not stop
+              the server from booting: it shows only when `bao operator init` fails. See
+              [KMS auto-unseal setup](/template-catalog/templates/openbao#kms-auto-unseal-setup) for the
+              policy JSON.
           - path: seal.aws.kmsKeyId
             type: string
             label: KMS key
@@ -150,9 +164,7 @@ steps:
             description: An AWS IAM policy scoped to the key (an AWS object, not a Control Plane policy).
             help: >-
               The policy allows `kms:Encrypt`, `kms:Decrypt` and `kms:DescribeKey` on the key's ARN and
-              nothing else; the JSON is under
-              [KMS auto-unseal setup](/template-catalog/templates/openbao#kms-auto-unseal-setup). A wrong key
-              or policy does not stop the server from booting; it shows when `bao operator init` fails.
+              nothing else. The identity carries only `cpln-connector` and this policy.
             pattern: '^[A-Za-z0-9+=,.@_-]+$'
             patternMessage: "Enter the name of your IAM policy, using letters, digits and + = , . @ _ -."
         rules:
@@ -263,64 +275,75 @@ steps:
               needs the two role grants.
 
   - id: server
-    title: Server
-    description: The OpenBao image and the compute of its single stateful replica.
-    fields:
-      - type: note
-        when: context.mode == 'upgrade'
-        text: >-
-          Changing the image or the resources restarts the single OpenBao server. It unseals itself on the
-          way back up, so plan for a short outage, not a manual unseal.
-      - path: openbao.image
-        type: string
-        format: image
-        label: OpenBao image
-        required: true
-        description: >-
-          Pinned to the 2.6 line on purpose: OpenBao 2.7 moved the AWS and GCP KMS seals into external
-          plugins, which this template does not install.
-        docs: "#openbao-server"
-      - path: openbao.resources
-        type: resources
-        label: Resources
-        required: true
-        description: A single stateful replica.
-        maxRatio: 4
-        cpu: { min: 25m }
-        memory: { min: 32Mi }
-    rules:
-      - when: self.seal.type != 'static'
-        rule: "!self.openbao.image.matches(':(2[.]([7-9]|[1-9][0-9])|[3-9]|[1-9][0-9])([.-]|$)')"
-        severity: warning
-        paths: [openbao.image]
-        message: >-
-          OpenBao 2.7 and later moved the AWS and GCP KMS seals into external plugins that this template does
-          not install, so the server cannot unseal. Keep the image on the 2.6 line.
-
-  - id: storage
-    title: Storage
-    description: The volume set that holds the raft data.
-    fields:
-      - path: volumeset.capacity
-        type: integer
-        label: Initial capacity
-        unit: GiB
-        min: 10
-        required: true
-        suggestions: [10, 20, 50, 100]
-        description: >-
-          Every secret, auth method, policy and the cluster state live here, and survive restarts and
-          upgrades.
-        help: >-
-          Uninstalling the release deletes the volume set; a final snapshot is kept for 7 days. The chart
-          schedules no backups: take volume set or raft snapshots yourself, as described under
-          [Backing up](/template-catalog/templates/openbao#backing-up). A snapshot is readable only under the
-          same seal key.
+    title: Server and storage
+    description: The OpenBao image, the compute of its single stateful replica and the volume set that holds its data.
+    sections:
+      - fields:
+          - type: note
+            when: context.mode == 'upgrade'
+            text: >-
+              Any upgrade that changes the workload restarts the single OpenBao server: a new image or new
+              resources, and also an access change. It unseals itself on the way back up, so plan for a short
+              outage, not a manual unseal.
+          - path: openbao.image
+            type: string
+            format: image
+            label: OpenBao image
+            required: true
+            description: >-
+              Pinned to the 2.6 line on purpose: OpenBao 2.7 moved the AWS and GCP KMS seals into external
+              plugins, which this template does not install.
+            docs: "#openbao-server"
+          - path: openbao.resources
+            type: resources
+            label: Resources
+            required: true
+            description: A single stateful replica.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - when: self.seal.type != 'static'
+            rule: "!self.openbao.image.matches(':(2[.]([7-9]|[1-9][0-9])|[3-9]|[1-9][0-9])([.-]|$)')"
+            severity: warning
+            paths: [openbao.image]
+            message: >-
+              OpenBao 2.7 and later moved the AWS and GCP KMS seals into external plugins that this template does
+              not install, so the server cannot unseal. Keep the image on the 2.6 line.
+      - title: Storage
         docs: "#storage"
-    rules:
-      - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
-        paths: [volumeset.capacity]
-        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+        fields:
+          - type: note
+            when: context.mode == 'upgrade'
+            text: >-
+              The initial capacity sizes only a new volume, and this chart does not grow volumes automatically:
+              raising it leaves the existing volume at its size. Grow that volume with
+              `cpln volumeset expand RELEASE_NAME-openbao-data --gvc GVC_NAME --new-size SIZE_IN_GIB`.
+            textExpression: >-
+              'The initial capacity sizes only a new volume, and this chart does not grow volumes automatically:
+              raising it leaves the existing volume at its size. Grow that volume with
+              `cpln volumeset expand ' + context.releaseName + '-openbao-data --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + ' --new-size ' +
+              (self.volumeset.capacity != null ? string(self.volumeset.capacity) : 'SIZE_IN_GIB') + '`.'
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100]
+            description: >-
+              Every secret, auth method, policy and the cluster state live here, and survive restarts and
+              upgrades.
+            help: >-
+              Uninstalling the release deletes the volume set; a final snapshot is kept for 7 days. The chart
+              schedules no backups: take volume set or raft snapshots yourself, as described under
+              [Backing up](/template-catalog/templates/openbao#backing-up). A snapshot is readable only under the
+              same seal key.
+        rules:
+          - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+            paths: [volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
 
   - id: access
     title: Access
@@ -364,14 +387,18 @@ steps:
       - title: Other workloads
         docs: /reference/workload/firewall
         fields:
+          - type: note
+            text: >-
+              Clients inside Control Plane connect to `http://RELEASE_NAME-openbao.GVC_NAME.cpln.local:8200`.
+            textExpression: >-
+              'Clients inside Control Plane connect to `http://' + context.releaseName + '-openbao.' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '.cpln.local:8200`.'
           - path: internalAccess.type
             type: enum
             label: Who can connect
             widget: cards
             required: true
-            description: >-
-              Clients inside Control Plane connect to `http://RELEASE_NAME-openbao.GVC_NAME.cpln.local:8200`.
-              Access changes take from about 30 seconds to 10 minutes to take effect.
+            description: Access changes take from about 30 seconds to 10 minutes to take effect.
             options:
               - value: none
                 label: Nobody

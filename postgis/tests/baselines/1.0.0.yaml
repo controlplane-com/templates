@@ -1,0 +1,20 @@
+# postgis 1.0.0 — the version customers run: PostgreSQL 17, credentials inline in values, and the
+# workload and volumeset named after the release alone. Used as the starting point of an upgrade.
+locations: [aws-us-east-1]
+timeoutSeconds: 600
+
+generated:
+  pgpw: hex
+
+vars:
+  pg_workload: "{release}"
+  pg_user: e2e
+  pg_password: "{gen.pgpw}"
+  pg_db: e2e
+
+values:
+  config:
+    username: e2e
+    password: "{gen.pgpw}"
+  postgres:
+    database: e2e

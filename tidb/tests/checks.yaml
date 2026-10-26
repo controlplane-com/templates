@@ -4,7 +4,9 @@
 # (app_user, app_password, app_db, root_password).
 #
 # The TiDB images carry no MySQL client, so SQL runs from the ProxySQL container (the baseline enables
-# ProxySQL): to the tidb-server service directly, and to ProxySQL itself on 127.0.0.1:4000.
+# ProxySQL): to the tidb-server service directly, and to ProxySQL itself on 127.0.0.1:4000. Every client
+# asks for utf8mb4, as the README says to: the CLI's locale default is latin1, which TiDB rejects through
+# ProxySQL (ERROR 1273).
 checks:
   - id: stores-up
     description: PD sees all three TiKV stores Up, one per location.
@@ -32,10 +34,10 @@ checks:
         export MYSQL_PWD='{app_password}'
         H={release}-server.{gvc}.cpln.local
         M="e2e-$(date +%s%N)"
-        mysql -h "$H" -P 4000 -u {app_user} {app_db} -e "
+        mysql --default-character-set=utf8mb4 -h "$H" -P 4000 -u {app_user} {app_db} -e "
           create table if not exists e2e (id bigint auto_random primary key, version varchar(32) not null, marker varchar(64) not null);
           insert into e2e (version, marker) values ('{version}', '$M');"
-        mysql -h "$H" -P 4000 -u {app_user} {app_db} -N -B -e "select marker from e2e where marker = '$M'" | grep -qx "$M" && echo "READ $M"
+        mysql --default-character-set=utf8mb4 -h "$H" -P 4000 -u {app_user} {app_db} -N -B -e "select marker from e2e where marker = '$M'" | grep -qx "$M" && echo "READ $M"
     expect:
       stdout: "^READ e2e-"
     retries: 6
@@ -52,8 +54,8 @@ checks:
         set -e
         export MYSQL_PWD='{app_password}'
         M="e2e-pool-$(date +%s%N)"
-        mysql -h 127.0.0.1 -P 4000 -u {app_user} {app_db} -e "insert into e2e (version, marker) values ('{version}', '$M')"
-        mysql -h 127.0.0.1 -P 4000 -u {app_user} {app_db} -N -B -e "select marker from e2e where marker = '$M'" | grep -qx "$M" && echo "READ $M"
+        mysql --default-character-set=utf8mb4 -h 127.0.0.1 -P 4000 -u {app_user} {app_db} -e "insert into e2e (version, marker) values ('{version}', '$M')"
+        mysql --default-character-set=utf8mb4 -h 127.0.0.1 -P 4000 -u {app_user} {app_db} -N -B -e "select marker from e2e where marker = '$M'" | grep -qx "$M" && echo "READ $M"
     expect:
       stdout: "^READ e2e-pool-"
     retries: 6
@@ -68,8 +70,8 @@ checks:
       shell: bash
       script: |
         H={release}-server.{gvc}.cpln.local
-        MYSQL_PWD='{root_password}' mysql -h "$H" -P 4000 -u root -N -B -e "select concat('ROOT ', current_user())"
-        mysql -h "$H" -P 4000 -u root --skip-password -e "select 1" 2>&1 | head -1
+        MYSQL_PWD='{root_password}' mysql --default-character-set=utf8mb4 -h "$H" -P 4000 -u root -N -B -e "select concat('ROOT ', current_user())"
+        mysql --default-character-set=utf8mb4 -h "$H" -P 4000 -u root --skip-password -e "select 1" 2>&1 | grep -m1 '^ERROR'
     expect:
       stdout: "(?s)^ROOT root@.*Access denied for user 'root'"
 
@@ -80,7 +82,7 @@ checks:
       container: proxysql
       shell: bash
       script: |
-        MYSQL_PWD=wrong-password mysql -h {release}-server.{gvc}.cpln.local -P 4000 -u {app_user} {app_db} -e "select 1" 2>&1
+        MYSQL_PWD=wrong-password mysql --default-character-set=utf8mb4 -h {release}-server.{gvc}.cpln.local -P 4000 -u {app_user} {app_db} -e "select 1" 2>&1
         echo "EXIT=$?"
     expect:
       stdout: "Access denied for user"
@@ -95,9 +97,9 @@ checks:
       container: proxysql
       shell: bash
       script: |
-        n=$(MYSQL_PWD='{app_password}' mysql -h {release}-server.{gvc}.cpln.local -P 4000 -u {app_user} {app_db} -N -B \
-          -e "select count(*) from e2e where version = '{installed_version}'" 2>&1)
-        [ "${n:-0}" -ge 1 ] 2>/dev/null && echo PERSISTED || echo "MISSING (rows for {installed_version}: ${n:-none})"
+        n=$(MYSQL_PWD='{app_password}' mysql --default-character-set=utf8mb4 -h {release}-server.{gvc}.cpln.local -P 4000 -u {app_user} {app_db} -N -B \
+          -e "select count(*) from e2e where version = '{installed_version}'" 2>/tmp/e2e.err)
+        [ "${n:-0}" -ge 1 ] 2>/dev/null && echo PERSISTED || echo "MISSING (rows for {installed_version}: ${n:-none}) $(grep -v WARNING /tmp/e2e.err)"
     expect:
       stdout: "^PERSISTED$"
     retries: 4

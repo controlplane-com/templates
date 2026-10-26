@@ -1,0 +1,75 @@
+# Feature checks for the redis-cluster template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
+# (rc_workload, rc_password). rc_workload exists because 1.0.0-1.2.0 name the workload after
+# the release alone.
+#
+# The keys are spread over many hash slots, so `redis-cli -c` has to follow MOVED redirects to other
+# nodes: a write/read only passes when the cluster routes across nodes.
+checks:
+  - id: cluster-healthy
+    description: Every hash slot is assigned and the cluster sees all of its nodes.
+    exec:
+      workload: "{rc_workload}"
+      container: redis-cluster
+      shell: bash
+      script: |
+        export REDISCLI_AUTH='{rc_password}'
+        redis-cli -p 6379 cluster info | tr -d '\r' | grep -E '^cluster_(state|slots_assigned|known_nodes):'
+    expect:
+      stdout: "(?s)cluster_state:ok.*cluster_slots_assigned:16384.*cluster_known_nodes:6$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: write-read
+    description: Twenty keys across the hash slots, written and read back through cluster redirects.
+    exec:
+      workload: "{rc_workload}"
+      container: redis-cluster
+      shell: bash
+      script: |
+        export REDISCLI_AUTH='{rc_password}'
+        ok=0
+        for i in $(seq 1 20); do
+          k="e2e:{version}:$i"
+          redis-cli -c -p 6379 set "$k" "v$i" >/dev/null
+          [ "$(redis-cli -c -p 6379 get "$k" | tr -d '\r')" = "v$i" ] && ok=$((ok+1))
+        done
+        echo "READ $ok/20"
+    expect:
+      stdout: "^READ 20/20$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: rejects-bad-password
+    description: A wrong password is refused (the control for the checks above).
+    exec:
+      workload: "{rc_workload}"
+      container: redis-cluster
+      shell: bash
+      script: |
+        redis-cli -p 6379 --no-auth-warning -a wrong-password ping 2>&1
+        redis-cli -p 6379 get e2e:probe 2>&1
+    expect:
+      stdout: "WRONGPASS"
+      notStdout: "^PONG"
+
+  - id: data-survives-upgrade
+    description: >-
+      The keys written on the version this scenario installed first are still there. On a fresh install
+      that is the same version; after an upgrade it proves the append-only files carried over.
+    exec:
+      workload: "{rc_workload}"
+      container: redis-cluster
+      shell: bash
+      script: |
+        export REDISCLI_AUTH='{rc_password}'
+        ok=0
+        for i in $(seq 1 20); do
+          [ "$(redis-cli -c -p 6379 get "e2e:{installed_version}:$i" | tr -d '\r')" = "v$i" ] && ok=$((ok+1))
+        done
+        [ "$ok" = 20 ] && echo PERSISTED || echo "MISSING ($ok/20 keys for {installed_version})"
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 4
+    retryDelaySeconds: 15

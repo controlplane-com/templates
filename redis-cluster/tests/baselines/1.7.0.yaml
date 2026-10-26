@@ -1,0 +1,33 @@
+# redis-cluster 1.7.0 — the recommended install: the password from a prerequisite secret.
+# Prod shape for this template (six nodes, three shards with a replica each, one location) at its
+# default size.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  redispw: hex
+
+secrets:
+  auth:
+    type: dictionary
+    entries:
+      password: "{gen.redispw}"
+
+vars:
+  rc_workload: "{release}-redis-cluster"
+  rc_password: "{gen.redispw}"
+
+values:
+  redis:
+    auth:
+      fromSecret:
+        enabled: true
+        name: "{secrets.auth.name}"
+
+# 1.1.0 and 1.2.0 are the versions customers run (inline password). The upgrade moves the password to a
+# secret with the same value, as the README recommends.
+upgradeFrom:
+  - version: 1.2.0
+    values: new
+  - version: 1.1.0
+    values: new

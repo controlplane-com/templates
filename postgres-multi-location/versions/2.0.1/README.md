@@ -70,10 +70,12 @@ standby rather than an automatic-failover cluster.
 
 2.0.1 moves the default image to `controlplanecorporation/patroni-postgres:0.8`, which carries
 pgvector 0.8.7 and fixes CVE-2026-103484 (a database user who can create an IVFFlat index can run
-arbitrary code). Nothing else changes.
+arbitrary code). It also changes how the HAProxy tier starts: a new proxy no longer waits for every
+member, and the old proxies keep serving until a new one is up. Nothing for you to do.
 
 - `helm upgrade` in place. The fix is in the server library and applies on the upgrade's restart,
-  which, like every upgrade of this chart, interrupts writes in every location for about two minutes.
+  which, like every upgrade of this chart, interrupts writes in every location for about two minutes
+  and can lose the last writes acknowledged before it (see Important Notes). Stop writes first.
 - Existing data and indexes need nothing.
 - `\dx` keeps reporting the old `vector` version until you run `ALTER EXTENSION vector UPDATE;` in
   each database that has the extension; that only updates the recorded version.
@@ -459,8 +461,8 @@ The cluster ships a fixed Patroni consensus configuration:
 | `retry_timeout` | 15s | how long the primary tolerates losing etcd before it demotes itself |
 | `loop_wait` | 10s | how often the HA loop runs |
 
-**What that means in practice, measured on a 3-member cluster:** a *planned* failover — a rolling restart,
-or anything that shuts Patroni down cleanly — releases the leader lock immediately and costs a few seconds
+**What that means in practice, measured on a 3-member cluster:** a *planned* failover — a `patronictl switchover`,
+or anything that shuts Patroni down cleanly while another member stays up (a `helm upgrade` is not one: see Important Notes) — releases the leader lock immediately and costs a few seconds
 of refused writes. Patroni's own handover took 185 milliseconds; what clients actually wait on is the
 HAProxy health check noticing the change. An *abrupt* loss, where the lock has to expire on its own, took
 about a minute to recover in testing. Lowering `ttl` did not measurably shorten that, so treat it as the
@@ -548,6 +550,7 @@ this is never needed — losing one location is an automatic failover.
 - **`max_slot_wal_keep_size` is capped at 10 GB**, trading a little durability for availability: without the cap, a location down for hours fills the primary's volume and takes the whole cluster down. A long-absent member re-clones from the primary automatically.
 - **Switching `backup.mode` to or from `wal-g` restarts Postgres**, because it changes `archive_mode`. Plan it like any other restart.
 - **A `helm upgrade` interrupts writes in EVERY location for about two minutes.** Members do not restart one at a time: the chart asks for that (`rolloutOptions.maxUnavailableReplicas`) but the platform does not retain the field, so nothing limits the rollout and all members go down together. Measured at **~117 s** of failed writes across a 3-location cluster on an upgrade that changed nothing at all. Treat any upgrade as a planned write outage.
+- **A `helm upgrade` can lose recently acknowledged writes. Stop writes for the upgrade.** All members restart together, so the leader has no caught-up replica to hand over to, and the member that comes back first can be promoted before it has the last of the old primary's WAL (replication is asynchronous). Writes acknowledged in the seconds before the restart are then gone; the old primary rewinds and rejoins as a replica.
 - **A restart of the etcd tier costs about 20 seconds of writes.** `failsafe_mode` is enabled, which lets the primary keep serving while the DCS is unreachable — measured holding for ~60 s with zero failed writes — but it requires the primary to reach *every* member's REST API, and once replica readiness flips that precondition is lost and the primary demotes. The cluster recovers automatically.
 - **Enabling `wal-g` on a running cluster can take ~10 minutes to settle in one location**, during which that location may still run the previous spec (observed: the leader briefly held `archive_mode: off` while wal-g was considered enabled, so nothing was archived). Verify `archive_mode` is on in every location before relying on the archive.
 - **Never suspend a location.** Suspending and resuming one permanently withdraws its endpoints from the other locations' service discovery while every status surface still reads healthy. To remove a location, remove it from `global.locations` **and** from the GVC.

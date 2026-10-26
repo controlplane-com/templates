@@ -255,8 +255,9 @@ steps:
         when: context.mode == 'upgrade'
         text: >-
           Every upgrade restarts all members in every location together, also one that changes nothing:
-          about two minutes without writes everywhere. Nothing limits the rollout of a stateful workload, so
-          plan the upgrade as a short write outage.
+          about two minutes without writes everywhere, and writes acknowledged just before the restart can be
+          lost, because the member that is promoted may not have them yet (replication is asynchronous).
+          Nothing limits the rollout of a stateful workload, so stop writes for the upgrade.
       - type: note
         when: >-
           context.mode == 'upgrade' && oldSelf != null &&

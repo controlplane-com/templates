@@ -246,6 +246,7 @@ cpln workload exec RELEASE_NAME-timescaledb-ha --gvc GVC_NAME --replica LEADER_M
 - PostgreSQL 18.6 allows only the `pgoutput` and `test_decoding` logical decoding plugins by default; a consumer
   using another plugin needs it added to `output_plugin_libraries` (see the
   [18.6 release notes](https://www.postgresql.org/docs/release/18.6/)).
+- `pgbouncer.enabled: true` works again; on 1.2.0 the PgBouncer workload was rejected at install.
 
 ## Connecting
 

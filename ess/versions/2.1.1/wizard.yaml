@@ -99,13 +99,12 @@ steps:
       - id: provider
         virtual: true
         type: enum
-        label: Secret store
+        label: Show setup for
         widget: select
-        required: true
         init: "'vault'"
         description: >-
-          Shows what the provider block in your sync.yaml needs. A sync.yaml can list several providers; this
-          choice is not stored in the release.
+          Only picks which provider's setup to show below: what its block in your sync.yaml needs. A sync.yaml
+          can list several providers, and this choice is not stored in the release.
         docs: "#providers"
         options:
           - { value: vault, label: HashiCorp Vault }
@@ -171,7 +170,8 @@ steps:
           credentials, and a `secrets` list naming the Control Plane secrets to create or update. It is mounted
           at `/usr/src/app/sync.yaml`.
         help: >-
-          Secret names are org-wide, so give each release its own. Write sync.yaml, then create the secret
+          Secret names are org-wide, so give each release its own. Two ESS releases cannot manage the same
+          Control Plane secret: a sync into a secret another release manages fails. Write sync.yaml, then create the secret
           with `cat sync.yaml | cpln secret create-opaque --name SECRET_NAME --encoding plain -f -`. A running
           syncer does not see later edits to this secret: after each change run
           `cpln workload force-redeployment RELEASE_NAME-ess --gvc GVC_NAME`.
@@ -246,8 +246,8 @@ steps:
             description: >-
               Addresses allowed to reach the admin API on its public endpoint. Other workloads in the GVC cannot
               reach it. With the list empty the API is closed to the internet; reach it with
-              `cpln port-forward RELEASE_NAME-ess 3004:3004 --gvc GVC_NAME`. Firewall changes take up to a few
-              minutes to take effect.
+              `cpln port-forward` (the command is shown below). Firewall changes take up to a few minutes to take
+              effect.
             help: >-
               Read the public address from `status.canonicalEndpoint` in
               `cpln workload get RELEASE_NAME-ess --gvc GVC_NAME -o yaml`. The health check is `GET /about`.
@@ -257,6 +257,15 @@ steps:
                 severity: info
                 message: >-
                   This opens the admin API to the whole internet. Allow only the address ranges that need it.
+          - type: note
+            text: >-
+              Reach the admin API privately with
+              `cpln port-forward RELEASE_NAME-ess PORT:PORT --gvc GVC_NAME`, where PORT is the admin API port
+              (3004 by default).
+            textExpression: >-
+              'Reach the admin API privately with `cpln port-forward ' + context.releaseName + '-ess ' +
+              string(self.port) + ':' + string(self.port) + ' --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
           - path: port
             type: integer
             label: Admin API port

@@ -59,7 +59,8 @@ steps:
             itemLabel: "item.secret + ' → ' + item.target.type + ' ' + item.target.name"
             description: >-
               Each entry adds one environment variable per key of a dictionary secret to one GVC, or to one
-              container of a workload. A variable with the same name as a key is overwritten.
+              container of a workload. Every key of the secret becomes a variable name, so use keys that are
+              valid variable names. A variable with the same name as a key is overwritten.
             help: >-
               Adding a key to a secret adds a variable at the next run, which redeploys the workloads that
               receive it. Rotating the value of an existing key does not: the reference stays the same, so the
@@ -77,11 +78,6 @@ steps:
                   options:
                     - { value: gvc, label: GVC }
                     - { value: workload, label: Workload }
-                - path: target.name
-                  type: string
-                  label: GVC or workload name
-                  required: true
-                  example: true
                 - path: target.gvc
                   type: ref
                   absent: true
@@ -90,6 +86,11 @@ steps:
                   when: item.target.type == 'workload'
                   description: Needed for every workload target, also one in this release's GVC.
                   ref: { kind: gvc, format: name, mustExist: error }
+                - path: target.name
+                  type: string
+                  label: GVC or workload name
+                  required: true
+                  example: true
                 - path: target.container
                   type: string
                   absent: true
@@ -123,6 +124,12 @@ steps:
               'A cron workload runs in every location of its GVC, so each of this GVC' + "'" + 's ' +
               string(size(context.gvcLocations)) + ' locations runs the same sync on the same schedule, against
               the same targets.'
+          - type: note
+            text: >-
+              To run a sync now, start the job by hand: `cpln workload cron start RELEASE_NAME-sevs --gvc GVC_NAME`.
+            textExpression: >-
+              'To run a sync now, start the job by hand: `cpln workload cron start ' + context.releaseName +
+              '-sevs --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
           - path: schedule
             type: string
             format: cron
@@ -130,9 +137,6 @@ steps:
             widget: cron
             required: true
             description: Runs never overlap; a tick that arrives while a run is still active is skipped.
-            help: >-
-              To run a sync now, start the job by hand: `cpln workload cron start RELEASE_NAME-sevs --gvc
-              GVC_NAME`.
             docs: "#schedule-and-timeout"
           - path: resources
             type: resources
@@ -161,5 +165,6 @@ steps:
             required: true
             advanced: true
             description: >-
-              Written to the workload's `timeoutSeconds`, which the platform documents as a request timeout.
+              Written to the workload's `timeoutSeconds`, which the platform documents as a request timeout. It
+              does not limit how long a sync run takes.
             docs: "/reference/workload/general#timeout-seconds"

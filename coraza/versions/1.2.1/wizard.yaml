@@ -7,7 +7,7 @@ title: Coraza WAF
 steps:
   - id: target
     title: Protected workload
-    description: The workload the WAF sits in front of. Every request is inspected, then forwarded to it.
+    description: The workload the WAF sits in front of, and where clients reach the WAF instead.
     sections:
       - title: Proxy target
         docs: "#proxy-target"
@@ -50,12 +50,13 @@ steps:
         rules:
           # The WAF's external outbound firewall is closed (workload.yaml: outboundAllowCIDR and
           # outboundAllowHostname are []), so only an internal address can work; short names resolve only
-          # for some workload types.
-          - rule: self.targetWorkload.matches('^[a-z0-9]([a-z0-9-]*[a-z0-9])?\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?\\.cpln\\.local$')
+          # for some workload types. Per-replica addresses (replica-N.WORKLOAD.LOCATION.GVC.cpln.local) are fine too.
+          - rule: self.targetWorkload.matches('^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.){2,}cpln\\.local$')
             severity: warning
             paths: [targetWorkload]
             message: >-
-              Enter the full internal address of the workload, WORKLOAD_NAME.GVC_NAME.cpln.local. A short name
+              Enter the full internal address of the workload, WORKLOAD_NAME.GVC_NAME.cpln.local (or a
+              per-replica address such as replica-0.WORKLOAD_NAME.LOCATION.GVC_NAME.cpln.local). A short name
               does not resolve reliably, and the WAF cannot reach addresses outside Control Plane because its
               outbound internet access is closed.
           - when: context.gvc != null
@@ -67,39 +68,18 @@ steps:
               of the workload to protect.
           - when: >-
               context.gvc != null &&
-              self.targetWorkload.matches('^[a-z0-9-]+\\.[a-z0-9-]+\\.cpln\\.local$') &&
-              self.targetWorkload.split('.')[1] != context.gvc
+              self.targetWorkload.matches('^([a-z0-9-]+\\.){2,}cpln\\.local$') &&
+              self.targetWorkload.split('.')[size(self.targetWorkload.split('.')) - 3] != context.gvc
             rule: "false"
             severity: info
             paths: [targetWorkload]
             messageExpression: >-
-              'This workload is in the GVC ' + self.targetWorkload.split('.')[1] + ', not ' + context.gvc +
+              'This workload is in the GVC ' + self.targetWorkload.split('.')[size(self.targetWorkload.split('.')) - 3] + ', not ' + context.gvc +
               '. Same GVC on its firewall does not cover the WAF: use Same org, or add //gvc/' + context.gvc +
               '/workload/' + context.releaseName + '-coraza-waf to its workload list.'
             message: >-
               This workload is in another GVC. Same GVC on its firewall does not cover the WAF: use Same org,
               or add this WAF workload to its workload list.
-      - title: Lock the protected workload
-        docs: "#locking-the-protected-workload"
-        fields:
-          - type: note
-            text: >-
-              The WAF only inspects traffic that passes through it. If the protected workload keeps its own
-              public endpoint, clients can skip the WAF. Close that workload to the internet and allow only
-              `//gvc/GVC_NAME/workload/RELEASE_NAME-coraza-waf` on its internal firewall. If it was installed
-              from another template, do this with the access settings of that template, so its next upgrade does
-              not reopen it.
-            textExpression: >-
-              'The WAF only inspects traffic that passes through it. If the protected workload keeps its own
-              public endpoint, clients can skip the WAF. Close that workload to the internet and allow only
-              `//gvc/' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '/workload/' + context.releaseName +
-              '-coraza-waf` on its internal firewall. If it was installed from another template, do this with
-              the access settings of that template, so its next upgrade does not reopen it.'
-
-  - id: network
-    title: Network
-    description: Where clients reach the WAF.
-    sections:
       - title: Public endpoint
         docs: "#connecting"
         fields:
@@ -133,6 +113,22 @@ steps:
               # The startup hook configures Caddy through its admin API on 127.0.0.1:2019 (secret-startup.yaml).
               - rule: self.WAFPort != 2019
                 message: Port 2019 is used by the Caddy admin API inside the container; choose another, such as 80.
+      - title: Lock the protected workload
+        docs: "#locking-the-protected-workload"
+        fields:
+          - type: note
+            text: >-
+              The WAF only inspects traffic that passes through it. If the protected workload keeps its own
+              public endpoint, clients can skip the WAF. Close that workload to the internet and allow only
+              `//gvc/GVC_NAME/workload/RELEASE_NAME-coraza-waf` on its internal firewall. If it was installed
+              from another template, do this with the access settings of that template, so its next upgrade does
+              not reopen it.
+            textExpression: >-
+              'The WAF only inspects traffic that passes through it. If the protected workload keeps its own
+              public endpoint, clients can skip the WAF. Close that workload to the internet and allow only
+              `//gvc/' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '/workload/' + context.releaseName +
+              '-coraza-waf` on its internal firewall. If it was installed from another template, do this with
+              the access settings of that template, so its next upgrade does not reopen it.'
 
   - id: rules
     title: Rule set
@@ -154,12 +150,7 @@ steps:
             text: >-
               Before 1.2.0 the startup hook could leave the reverse proxy unconfigured while the WAF reported
               ready. Since 1.2.0 a failed check restarts the container on purpose and logs a [FATAL] line that
-              names the cause: `cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-coraza-waf"} |= "FATAL"' --since 10m`.
-            textExpression: >-
-              'Before 1.2.0 the startup hook could leave the reverse proxy unconfigured while the WAF reported
-              ready. Since 1.2.0 a failed check restarts the container on purpose and logs a [FATAL] line that
-              names the cause: `cpln logs ' + "'" + '{gvc="' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
-              '", workload="' + context.releaseName + '-coraza-waf"} |= "FATAL"' + "'" + ' --since 10m`.'
+              names the cause; the note below the image shows where to read it.
           - path: image
             type: string
             format: image
@@ -194,6 +185,21 @@ steps:
                 message: >-
                   This upgrade changes the image, and with it the Core Rule Set release. Newer rules can block
                   requests the old ones allowed, so test your application's traffic through the WAF afterwards.
+          - type: note
+            text: >-
+              If the WAF does not become ready, a startup check failed and restarts the container on purpose.
+              Look for the [FATAL] line that names the cause with
+              `cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-coraza-waf"} |= "FATAL"' --since 10m`.
+              An nginx or apache image writes no [FATAL] line: the container exits with code 127, which
+              `cpln workload get-deployments RELEASE_NAME-coraza-waf --gvc GVC_NAME -o yaml` shows.
+            textExpression: >-
+              'If the WAF does not become ready, a startup check failed and restarts the container on purpose.
+              Look for the [FATAL] line that names the cause with `cpln logs ' + "'" + '{gvc="' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '", workload="' + context.releaseName +
+              '-coraza-waf"} |= "FATAL"' + "'" + ' --since 10m`. An nginx or apache image writes no [FATAL]
+              line: the container exits with code 127, which `cpln workload get-deployments ' +
+              context.releaseName + '-coraza-waf --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              ' -o yaml` shows.'
       - title: Custom rules
         docs: "#changing-custom-rules"
         fields:

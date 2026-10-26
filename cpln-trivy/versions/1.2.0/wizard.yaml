@@ -10,6 +10,17 @@ steps:
     title: Secrets and access
     description: The two prerequisite secrets and the service account Trivy pulls images with.
     fields:
+      # _helpers.tpl: cpln-trivy.daemon.name and cpln-trivy.webserver.name are the fixed strings daemon and web-server.
+      - type: note
+        severity: warning
+        when: context.mode == 'install'
+        text: >-
+          Install this template **only once per GVC**: its workloads are always named `daemon` and `web-server`,
+          whatever the release name, so a second release in the same GVC collides with the first.
+        textExpression: >-
+          'Install this template **only once per GVC**: its workloads are always named `daemon` and `web-server`,
+          whatever the release name, so a second release in ' + (context.gvc != null ? context.gvc : 'the same GVC') +
+          ' collides with any release already there.'
       - type: note
         severity: warning
         when: >-
@@ -41,7 +52,7 @@ steps:
           Version 1.2.0 moved the report post token out of the values into an opaque secret you own, because
           it guards an upload endpoint on the public internet. **Before you upgrade**, copy the token the
           release uses today, because the upgrade deletes the secret that holds it:
-          `cpln secret reveal RELEASE_NAME-secret -o json | jq -r .data.POST_TOKEN | cpln secret create-opaque --name POST_TOKEN_SECRET_NAME --encoding plain -f -`.
+          `cpln secret reveal RELEASE_NAME-secret -o json | jq -j .data.POST_TOKEN | cpln secret create-opaque --name POST_TOKEN_SECRET_NAME --encoding plain -f -`.
           Then choose that secret below. If the token is `changeme`, the published default of earlier versions,
           create the secret with a new random token instead
           (`printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name POST_TOKEN_SECRET_NAME --encoding plain -f -`):
@@ -51,7 +62,7 @@ steps:
           'Version 1.2.0 moved the report post token out of the values into an opaque secret you own, because
           it guards an upload endpoint on the public internet. **Before you upgrade**, copy the token the
           release uses today, because the upgrade deletes the secret that holds it: `cpln secret reveal ' +
-          context.releaseName + '-secret -o json | jq -r .data.POST_TOKEN | cpln secret create-opaque --name
+          context.releaseName + '-secret -o json | jq -j .data.POST_TOKEN | cpln secret create-opaque --name
           POST_TOKEN_SECRET_NAME --encoding plain -f -`. Then choose that secret below. If the token is
           `changeme`, the published default of earlier versions, create the secret with a new random token
           instead (`printf "%s" "$(openssl rand -hex 32)" | cpln secret create-opaque --name POST_TOKEN_SECRET_NAME
@@ -68,19 +79,19 @@ steps:
           Version 1.1.0 changed how Trivy finds the service account key: it now reads the whole value of an
           **opaque** secret. If the release pasted the key into the values (`trivyAuth.type: inline`), copy it
           before you upgrade, because the upgrade deletes the secret that holds it:
-          `cpln secret reveal RELEASE_NAME-secret -o json | jq -r .data.SERVICE_ACCOUNT_KEY | cpln secret create-opaque --name REGISTRY_SECRET_NAME --encoding plain -f -`.
+          `cpln secret reveal RELEASE_NAME-secret -o json | jq -j .data.SERVICE_ACCOUNT_KEY | cpln secret create-opaque --name REGISTRY_SECRET_NAME --encoding plain -f -`.
           If it read a dictionary secret (`trivyAuth.type: existingSecret`), copy that key into an opaque secret
-          the same way (`jq -r .data.KEY_NAME`); a dictionary secret does not work any more. A key that was in
+          the same way (`jq -j .data.KEY_NAME`); a dictionary secret does not work any more. A key that was in
           the values was stored in the Helm release: consider adding a new key to the service account and
           deleting the old one.
         textExpression: >-
           'Version 1.1.0 changed how Trivy finds the service account key: it now reads the whole value of an
           **opaque** secret. If the release pasted the key into the values (`trivyAuth.type: inline`), copy it
           before you upgrade, because the upgrade deletes the secret that holds it: `cpln secret reveal ' +
-          context.releaseName + '-secret -o json | jq -r .data.SERVICE_ACCOUNT_KEY | cpln secret create-opaque
+          context.releaseName + '-secret -o json | jq -j .data.SERVICE_ACCOUNT_KEY | cpln secret create-opaque
           --name REGISTRY_SECRET_NAME --encoding plain -f -`. If it read a dictionary secret
           (`trivyAuth.type: existingSecret`), copy that key into an opaque secret the same way
-          (`jq -r .data.KEY_NAME`); a dictionary secret does not work any more. A key that was in the values
+          (`jq -j .data.KEY_NAME`); a dictionary secret does not work any more. A key that was in the values
           was stored in the Helm release: consider adding a new key to the service account and deleting the
           old one.'
       - path: postToken.secretName
@@ -168,7 +179,6 @@ steps:
       - rule: >-
           context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '1.2.0') >= 0 ||
           self.postToken.secretName != context.releaseName + '-secret'
-        severity: warning
         paths: [postToken.secretName]
         message: >-
           The installed version created this secret itself, and the upgrade deletes it. Copy the token into an
@@ -176,7 +186,6 @@ steps:
       - rule: >-
           context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '1.2.0') >= 0 ||
           self.trivyAuth.secretName != context.releaseName + '-secret'
-        severity: warning
         paths: [trivyAuth.secretName]
         message: >-
           The installed version created this secret itself, and the upgrade deletes it. Copy the key into an
@@ -187,6 +196,12 @@ steps:
         message: >-
           Choose two different secrets. With one secret, the service account key would also be the bearer token
           of the public upload endpoint.
+      - rule: self.serviceAccountName != 'controlplane'
+        severity: warning
+        paths: [serviceAccountName]
+        message: >-
+          controlplane is the org's built-in service account, used by Control Plane itself. Create a service
+          account for Trivy instead, so the pull and view grants on every image go to an account you own.
       - rule: >-
           oldSelf == null || context.fromVersion == null || semverCompare(context.fromVersion, '1.2.0') < 0 ||
           self.postToken.secretName == oldSelf.postToken.secretName
@@ -207,6 +222,9 @@ steps:
             widget: cards
             required: true
             docs: "#storage"
+            description: >-
+              Choose it once: switching later leaves the reports stored so far in the old storage, unserved, and
+              the identity keeps its old cloud binding until a reinstall.
             options:
               - value: s3
                 label: AWS S3
@@ -231,18 +249,12 @@ steps:
       - title: AWS S3
         when: self.storage.type == 's3'
         fields:
-          - path: storage.s3.bucket
-            type: string
-            label: Bucket
-            required: true
-            example: true
-            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
-          - path: storage.s3.region
-            type: string
-            label: Bucket region
-            required: true
-            placeholder: us-east-1
-            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - type: note
+            severity: warning
+            text: >-
+              The AWS cloud account, the bucket and the bucket-scoped IAM policy must exist **before** you install;
+              the template creates none of them. The steps and the policy JSON are under
+              [Prerequisites](/template-catalog/templates/cpln-trivy#prerequisites) (Prepare report storage).
           - path: storage.s3.cloudAccountName
             type: ref
             label: Cloud account
@@ -253,6 +265,20 @@ steps:
               format: name
               filter: { provider: [aws] }
               mustExist: error
+          - path: storage.s3.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+            patternMessage: Enter the bucket name, 3 to 63 lowercase letters, digits, dots and hyphens.
+          - path: storage.s3.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+            patternMessage: Enter an AWS region code, such as us-east-1.
           - path: storage.s3.policyName
             type: string
             label: IAM policy name
@@ -261,9 +287,8 @@ steps:
             description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
             help: >-
               The policy allows `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` and `s3:ListBucket` on the
-              bucket and on its objects; the docs page has the full JSON under
-              [Prerequisites](/template-catalog/templates/cpln-trivy#prerequisites). The identity carries no
-              other AWS policy.
+              bucket and on its objects; the note above links the full JSON. The identity carries no other AWS
+              policy.
             pattern: '^[A-Za-z0-9+=,.@_-]+$'
             patternMessage: "Enter the name of your IAM policy, using letters, digits and + = , . @ _ -."
         rules:
@@ -274,6 +299,22 @@ steps:
       - title: Azure file share
         when: self.storage.type == 'azureFileshare'
         fields:
+          - type: note
+            severity: warning
+            text: >-
+              The Azure cloud account, the storage account and its file share must exist **before** you install;
+              the template creates none of them. The steps are under
+              [Prerequisites](/template-catalog/templates/cpln-trivy#prerequisites) (Prepare report storage).
+          - path: storage.azureFileshare.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An Azure [cloud account](/guides/create-cloud-account) for the subscription that holds the storage account."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [azure] }
+              mustExist: error
           - path: storage.azureFileshare.accountName
             type: string
             label: Storage account
@@ -294,16 +335,6 @@ steps:
             placeholder: /subscriptions/SUBSCRIPTION_ID/resourceGroups/RESOURCE_GROUP/providers/Microsoft.Storage/storageAccounts/STORAGE_ACCOUNT
             description: >-
               The template grants the identity the **Reader and Data Access** role at exactly this scope.
-          - path: storage.azureFileshare.cloudAccountName
-            type: ref
-            label: Cloud account
-            required: true
-            help: "An Azure [cloud account](/guides/create-cloud-account) for the subscription that holds the storage account."
-            ref:
-              kind: cloudaccount
-              format: name
-              filter: { provider: [azure] }
-              mustExist: error
         rules:
           - rule: self.storage.azureFileshare.scope != null && self.storage.azureFileshare.scope != ''
             mirrors: cpln-trivy.validateStorage
@@ -355,8 +386,9 @@ steps:
         label: Schedule (UTC)
         required: true
         description: >-
-          Runs never overlap: a long run over a large registry delays the next one instead of starting a
-          second.
+          The default `*/59 * * * *` fires at minute 0 and minute 59 of every hour; for hourly runs use
+          `0 * * * *`. Runs never overlap: a long run over a large registry delays the next one instead of
+          starting a second.
         suggestions:
           - { value: "0 * * * *", label: "Every hour" }
           - { value: "0 */6 * * *", label: "Every 6 hours" }
@@ -426,7 +458,7 @@ steps:
     title: Report web server
     description: Who can open the reports, and the scale of the web server that stores and serves them.
     sections:
-      - title: Report access
+      - title: Network access
         docs: "#connecting"
         fields:
           - type: note
@@ -440,12 +472,21 @@ steps:
             widget: tags
             unique: true
             description: >-
-              Addresses allowed to reach the web server, both to open reports and to upload them. Narrow it to
-              keep reports private, but keep the range the daemon's traffic leaves from, or uploads stop.
-              Firewall changes take up to a few minutes to take effect.
+              Addresses allowed to reach the web server, both to open reports and to upload them. The daemon's
+              uploads arrive from addresses this template does not fix, so keep `0.0.0.0/0` unless you have
+              confirmed where the daemon's traffic comes from. Firewall changes take up to a few minutes to take
+              effect.
             help: >-
               Read the public address from `status.canonicalEndpoint` in
               `cpln workload get web-server --gvc GVC_NAME -o yaml`.
+            item: { type: string, format: cidr }
+          - path: webServer.firewall.outboundAllowCIDR
+            type: list
+            label: Web server outbound CIDRs
+            widget: tags
+            unique: true
+            advanced: true
+            description: Where the web server may connect; it must reach your S3 bucket or Azure storage.
             item: { type: string, format: cidr }
         rules:
           - rule: size(self.webServer.firewall.inboundAllowCIDR) > 0
@@ -453,15 +494,22 @@ steps:
             paths: [webServer.firewall.inboundAllowCIDR]
             message: >-
               With no inbound CIDRs nothing reaches the web server, including the daemon, which uploads every
-              report through it. Allow at least the range the daemon's traffic leaves from.
+              report through it. Keep 0.0.0.0/0 in the list.
+          - when: self.storage.type == 's3'
+            rule: size(self.webServer.firewall.outboundAllowCIDR) > 0
+            severity: warning
+            paths: [webServer.firewall.outboundAllowCIDR]
+            message: >-
+              With no outbound CIDRs the web server cannot reach the S3 bucket, so no report is stored or served.
+              Allow at least the bucket's addresses, for example 0.0.0.0/0.
           - rule: >-
               size(self.webServer.firewall.inboundAllowCIDR) == 0 ||
               self.webServer.firewall.inboundAllowCIDR.exists(c, c == '0.0.0.0/0')
             severity: info
             paths: [webServer.firewall.inboundAllowCIDR]
             message: >-
-              The daemon uploads reports through this same public endpoint. Make sure the list includes the
-              range its traffic leaves from, or no new report is stored.
+              The daemon uploads reports through this same public endpoint, from addresses this template does
+              not fix. Without 0.0.0.0/0 its uploads may be refused and no new report is stored.
       - title: Scale and resources
         fields:
           - path: webServer.autoscaling.minScale
@@ -488,25 +536,10 @@ steps:
             advanced: true
             cpu: { min: 25m }
             memory: { min: 32Mi }
-          - path: webServer.firewall.outboundAllowCIDR
-            type: list
-            label: Web server outbound CIDRs
-            widget: tags
-            unique: true
-            advanced: true
-            description: Where the web server may connect; it must reach your S3 bucket or Azure storage.
-            item: { type: string, format: cidr }
         rules:
           - rule: self.webServer.autoscaling.maxScale >= self.webServer.autoscaling.minScale
             paths: [webServer.autoscaling.maxScale]
             message: The maximum replicas must be at least the minimum replicas.
-          - when: self.storage.type == 's3'
-            rule: size(self.webServer.firewall.outboundAllowCIDR) > 0
-            severity: warning
-            paths: [webServer.firewall.outboundAllowCIDR]
-            message: >-
-              With no outbound CIDRs the web server cannot reach the S3 bucket, so no report is stored or served.
-              Allow at least the bucket's addresses, for example 0.0.0.0/0.
 
 migrations:
   # 1.1.0 replaced trivyAuth.type (inline or existingSecret, a dictionary key) with one opaque secret.

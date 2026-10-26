@@ -15,17 +15,15 @@ steps:
     fields:
       - type: note
         severity: warning
-        when: >-
-          context.mode == 'install' ||
-          (context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') < 0)
+        when: context.mode == 'install'
         text: >-
-          The secret must exist **before** you install or upgrade. If it is missing, the deployment waits on
+          The secret must exist **before** you install. If it is missing, the deployment waits on
           it and looks broken: `cpln logs` shows nothing, because the container never starts. The reason is in
           `status.versions[].message` of `cpln workload get-deployments RELEASE_NAME-tailscale --gvc GVC_NAME -o yaml`.
           Once the secret exists, the gateway starts on its own within about 10 minutes, or at once with
           `cpln workload force-redeployment RELEASE_NAME-tailscale --gvc GVC_NAME`.
         textExpression: >-
-          'The secret must exist **before** you install or upgrade. If it is missing, the deployment waits on
+          'The secret must exist **before** you install. If it is missing, the deployment waits on
           it and looks broken: `cpln logs` shows nothing, because the container never starts. The reason is in
           `status.versions[].message` of `cpln workload get-deployments ' + context.releaseName +
           '-tailscale --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml`.
@@ -42,8 +40,9 @@ steps:
           deletes the secret the chart created for the old `AuthKey` value, so give the new secret another name.
           To reuse the current key, read it first with `cpln secret reveal SECRET_NAME -o yaml` (key `authkey`);
           the old key is also kept in the Helm history of this release, so a newly generated key is the safer choice.
-          After the upgrade the gateway can take up to about 10 minutes to start on the new secret while its
-          access to it is applied; after 5 minutes, `cpln workload force-redeployment` skips the wait. See
+          After the upgrade the gateway usually starts on the new secret within a minute. If the platform first
+          refuses the new secret, it retries on its own and can take up to about 10 minutes;
+          `cpln workload force-redeployment RELEASE_NAME-tailscale --gvc GVC_NAME` skips the wait. See
           [Upgrading from 1.2.x](/template-catalog/templates/tailscale#upgrading-from-1-2-x).
         textExpression: >-
           'Version 1.3.0 moved the auth key out of the values and into an opaque secret you create. The upgrade
@@ -52,9 +51,9 @@ steps:
           To reuse the current key, read it first with `cpln secret reveal ' +
           (semverCompare(context.fromVersion, '1.2.0') < 0 ? context.releaseName : context.releaseName + '-tailscale') +
           ' -o yaml` (key `authkey`); the old key is also kept in the Helm history of this release, so a newly
-          generated key is the safer choice. After the upgrade the gateway can take up to about 10 minutes to
-          start on the new secret while its access to it is applied; after 5 minutes,
-          `cpln workload force-redeployment ' + context.releaseName + '-tailscale --gvc ' +
+          generated key is the safer choice. After the upgrade the gateway usually starts on the new secret
+          within a minute. If the platform first refuses the new secret, it retries on its own and can take up
+          to about 10 minutes; `cpln workload force-redeployment ' + context.releaseName + '-tailscale --gvc ' +
           (context.gvc != null ? context.gvc : 'GVC_NAME') + '` skips the wait. See
           [Upgrading from 1.2.x](/template-catalog/templates/tailscale#upgrading-from-1-2-x).'
       - path: authKeySecretName
@@ -116,13 +115,13 @@ steps:
         severity: info
         paths: [authKeySecretName]
         message: >-
-          The gateway rejoins the tailnet with the key from the new secret when this upgrade restarts it. It can
-          take up to about 10 minutes to start while its access to the new secret is applied; after 5 minutes,
-          a forced redeployment skips the wait.
+          The gateway rejoins the tailnet with the key from the new secret when this upgrade restarts it,
+          usually within a minute. If the platform first refuses the new secret, it retries on its own and can
+          take up to about 10 minutes; a forced redeployment skips the wait.
 
   - id: gateway
     title: Gateway
-    description: Where the gateway runs, and the name it shows on your tailnet.
+    description: Where the gateway runs, the name it shows on your tailnet, and how devices reach workloads.
     sections:
       - title: Location
         docs: "#location"
@@ -245,46 +244,53 @@ steps:
                     !item.value.matches('(: |:$| #|^[\\[\\]{}&*!|>\\x27\\x22%@`,?#]|^- |^-$|^\\s|\\s$)')
                   paths: [value]
                   message: >-
-                    The chart writes this value without quotes, so YAML would read it as a number, a boolean or
-                    null, cut it short, or fail to render the workload. Rephrase it.
+                    This chart version writes the value without quotes, so YAML would read it as a number, a
+                    boolean or null, cut it short, or fail to render the workload. Such values cannot be passed
+                    with this version; a later chart version will quote them.
 
-  - id: access
-    title: Access
-    description: How tailnet devices reach workloads, and the example target.
-    fields:
-      - type: note
-        severity: warning
-        when: >-
-          context.mode == 'upgrade' && context.fromVersion != null &&
-          semverCompare(context.fromVersion, '1.2.0') < 0
-        text: >-
-          Version 1.2.0 renamed the gateway workload from `RELEASE_NAME` to `RELEASE_NAME-tailscale`, and the
-          example from `httpbin` to `RELEASE_NAME-httpbin`. Workloads that allow the gateway by its old name in
-          their internal firewall must allow `//gvc/GVC_NAME/workload/RELEASE_NAME-tailscale` instead, or the
-          tailnet loses access to them.
-        textExpression: >-
-          'Version 1.2.0 renamed the gateway workload from `' + context.releaseName + '` to `' +
-          context.releaseName + '-tailscale`, and the example from `httpbin` to `' + context.releaseName +
-          '-httpbin`. Workloads that allow the gateway by its old name in their internal firewall must allow
-          `//gvc/' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '/workload/' + context.releaseName +
-          '-tailscale` instead, or the tailnet loses access to them.'
-      - type: note
-        text: >-
-          Tailnet devices reach a workload at `WORKLOAD_NAME.GVC_NAME.cpln.local` only when its internal
-          firewall admits the gateway: Same GVC does, and with Specific workloads the list must include
-          `//gvc/GVC_NAME/workload/RELEASE_NAME-tailscale`.
-        textExpression: >-
-          'Tailnet devices reach a workload at `WORKLOAD_NAME.' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
-          '.cpln.local` only when its internal firewall admits the gateway: Same GVC does, and with Specific
-          workloads the list must include `//gvc/' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
-          '/workload/' + context.releaseName + '-tailscale`.'
-      - path: deployHttpbinExample
-        type: boolean
-        label: Deploy the httpbin example
-        description: >-
-          A small HTTP service, RELEASE_NAME-httpbin, that only the gateway may reach. Call it from a tailnet
-          device to prove the routes, split DNS and gateway work, then turn it off.
-        docs: "#example-workload"
+      - title: Access
+        docs: "#connecting"
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.2.0') < 0
+            text: >-
+              Version 1.2.0 renamed the gateway workload from `RELEASE_NAME` to `RELEASE_NAME-tailscale`, and the
+              example from `httpbin` to `RELEASE_NAME-httpbin`. Workloads that allow the gateway by its old name in
+              their internal firewall must allow `//gvc/GVC_NAME/workload/RELEASE_NAME-tailscale` instead, or the
+              tailnet loses access to them.
+            textExpression: >-
+              'Version 1.2.0 renamed the gateway workload from `' + context.releaseName + '` to `' +
+              context.releaseName + '-tailscale`, and the example from `httpbin` to `' + context.releaseName +
+              '-httpbin`. Workloads that allow the gateway by its old name in their internal firewall must allow
+              `//gvc/' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '/workload/' + context.releaseName +
+              '-tailscale` instead, or the tailnet loses access to them.'
+          - type: note
+            text: >-
+              Tailnet devices reach a workload at `WORKLOAD_NAME.GVC_NAME.cpln.local` only when its internal
+              firewall admits the gateway: Same GVC does, and with Specific workloads the list must include
+              `//gvc/GVC_NAME/workload/RELEASE_NAME-tailscale`.
+            textExpression: >-
+              'Tailnet devices reach a workload at `WORKLOAD_NAME.' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '.cpln.local` only when its internal firewall admits the gateway: Same GVC does, and with Specific
+              workloads the list must include `//gvc/' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '/workload/' + context.releaseName + '-tailscale`.'
+          - path: deployHttpbinExample
+            type: boolean
+            label: Deploy the httpbin example
+            description: >-
+              A small HTTP service that only the gateway may reach. Call it from a tailnet device to prove the
+              routes, split DNS and gateway work, then turn it off.
+            docs: "#example-workload"
+          - type: note
+            when: self.deployHttpbinExample
+            text: >-
+              Test the path from a tailnet device with `curl http://RELEASE_NAME-httpbin.GVC_NAME.cpln.local/headers`.
+            textExpression: >-
+              'Test the path from a tailnet device with `curl http://' + context.releaseName + '-httpbin.' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '.cpln.local/headers`.'
 
   - id: advanced
     title: Advanced

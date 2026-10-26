@@ -1196,6 +1196,18 @@ steps:
                   every restart. Leave it empty.
 
 rules:
+  # Workload names are limited to 49 characters; the longest workload suffix is -postgres-pgbouncer (19),
+  # then -postgres-backup (16, logical backups), -postgres-proxy (15) and -postgres (9).
+  - when: context.releaseName != null
+    rule: >-
+      size(context.releaseName) <= (self.pgbouncer.enabled ? 30 : (self.backup.enabled && self.backup.mode == 'logical') ? 33 : self.proxy.enabled ? 34 : 40)
+    messageExpression: >-
+      'The release name has ' + string(size(context.releaseName)) + ' characters. Workload names are limited to 49
+      characters and this chart names one `' + context.releaseName + (self.pgbouncer.enabled ? '-postgres-pgbouncer' : (self.backup.enabled && self.backup.mode == 'logical') ? '-postgres-backup' : self.proxy.enabled ? '-postgres-proxy' : '-postgres') + '`, so use a release name of at most ' +
+      string((self.pgbouncer.enabled ? 30 : (self.backup.enabled && self.backup.mode == 'logical') ? 33 : self.proxy.enabled ? 34 : 40)) + ' characters.'
+    message: >-
+      Workload names are limited to 49 characters, so use a release name of at most 30 characters (more without
+      PgBouncer).
   - rule: context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '2.0.0') >= 0
     message: >-
       Do not upgrade a 1.x release to 2.0.0: the upgrade deletes the GVC that the 1.x chart created, with every

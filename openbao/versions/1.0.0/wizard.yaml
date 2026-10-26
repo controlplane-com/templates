@@ -1,0 +1,418 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: OpenBao
+# One stateful replica with single-node raft on its own volume and no location handling: every GVC
+# location would run an independent server with its own data behind one internal name.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: seal
+    title: Seal
+    description: How OpenBao unseals itself on every boot, and what must exist before you install.
+    sections:
+      - fields:
+          - path: seal.type
+            type: enum
+            label: Unseal with
+            widget: cards
+            required: true
+            immutable: >-
+              The seal wraps the data already stored; changing it needs an OpenBao seal migration, not a
+              values change.
+            description: >-
+              Every mode unseals the server on its own after each restart. Fixed once the release is
+              installed: the seal wraps the stored data, and moving to another mode needs an OpenBao seal
+              migration.
+            docs: "#seal-and-auto-unseal"
+            options:
+              - value: static
+                label: Key in a Control Plane secret
+                description: >-
+                  A 32-byte key in an opaque secret you create before installing. No cloud account
+                  needed.
+              - value: awskms
+                label: AWS KMS
+                description: >-
+                  Keyless, through a symmetric KMS key, an AWS cloud account and an IAM policy scoped to
+                  the key.
+              - value: gcpckms
+                label: GCP Cloud KMS
+                description: >-
+                  Keyless, through a Cloud KMS key and a GCP cloud account. Needs a grant on the key after
+                  install.
+        rules:
+          - rule: self.seal.type in ['static', 'awskms', 'gcpckms']
+            mirrors: openbao.validate
+            paths: [seal.type]
+            message: Choose a static key, AWS KMS or GCP Cloud KMS as the seal.
+
+      - id: static
+        title: Unseal key secret
+        when: self.seal.type == 'static'
+        docs: "#static-seal"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The secret must exist **before** you install. If it is missing, the deployment waits
+              silently and `cpln logs` shows nothing; `cpln workload get-deployments
+              RELEASE_NAME-openbao --gvc GVC_NAME -o yaml` shows why under `status.versions[].message`.
+              Creating the secret repairs the deployment on its own within about 10 minutes, or
+              `cpln workload force-redeployment RELEASE_NAME-openbao --gvc GVC_NAME` skips the wait.
+            textExpression: >-
+              'The secret must exist **before** you install. If it is missing, the deployment waits
+              silently and `cpln logs` shows nothing; `cpln workload get-deployments ' + context.releaseName +
+              '-openbao --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml` shows why
+              under `status.versions[].message`. Creating the secret repairs the deployment on its own
+              within about 10 minutes, or `cpln workload force-redeployment ' + context.releaseName +
+              '-openbao --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '` skips the wait.'
+          - type: note
+            severity: warning
+            text: >-
+              The key is **write-once**. It wraps OpenBao's encryption barrier: changing the secret's value
+              or deleting the secret makes every stored secret permanently unrecoverable. Keep a copy outside
+              Control Plane (`cpln secret reveal SECRET_NAME -o yaml` prints it). Uninstalling the release
+              leaves the secret in place.
+          - path: seal.static.secretName
+            type: ref
+            label: Unseal key secret
+            required: true
+            description: >-
+              An opaque secret (encoding plain) whose content is a 32-byte key, hex-encoded, with no line
+              break.
+            help: >-
+              Create the secret with:
+              `printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name SECRET_NAME --encoding plain -f -`
+              Use `printf`, not `echo`: a trailing line break becomes part of the key.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-openbao-unseal-key'"
+                hint: "Generate the content with: openssl rand -hex 32 (paste it without a line break)"
+        rules:
+          - rule: self.seal.static.secretName != null && self.seal.static.secretName != ''
+            mirrors: openbao.validate
+            paths: [seal.static.secretName]
+            message: The unseal key secret is required with a static key seal.
+          - rule: >-
+              oldSelf == null || oldSelf.seal.type != 'static' ||
+              self.seal.static.secretName == oldSelf.seal.static.secretName
+            severity: info
+            paths: [seal.static.secretName]
+            message: >-
+              OpenBao unseals only with the key it was initialized under. The other secret must hold exactly
+              the same key, or the server cannot unseal its data after the restart.
+
+      - id: aws
+        title: AWS KMS
+        when: self.seal.type == 'awskms'
+        description: >-
+          The workload identity reaches the key through your cloud account with only the platform's
+          cpln-connector policy and the IAM policy below, so no grant is needed after install.
+        docs: "#kms-auto-unseal-setup"
+        fields:
+          - path: seal.aws.kmsKeyId
+            type: string
+            label: KMS key
+            required: true
+            example: true
+            description: The ARN of a symmetric KMS key; a key ID or an alias also works.
+          - path: seal.aws.region
+            type: string
+            label: Key region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+            patternMessage: Enter an AWS region such as us-east-1.
+          - path: seal.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) for the AWS account that holds the key."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: seal.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the key (an AWS object, not a Control Plane policy).
+            help: >-
+              The policy allows `kms:Encrypt`, `kms:Decrypt` and `kms:DescribeKey` on the key's ARN and
+              nothing else; the JSON is under
+              [KMS auto-unseal setup](/template-catalog/templates/openbao#kms-auto-unseal-setup). A wrong key
+              or policy does not stop the server from booting; it shows when `bao operator init` fails.
+            pattern: '^[A-Za-z0-9+=,.@_-]+$'
+            patternMessage: "Enter the name of your IAM policy, using letters, digits and + = , . @ _ -."
+        rules:
+          # openbao.validate's AWS checks are all "required" (on each field); this restates one for the mirror.
+          - rule: self.seal.aws.kmsKeyId != null && self.seal.aws.kmsKeyId != ''
+            mirrors: openbao.validate
+            paths: [seal.aws.kmsKeyId]
+            message: The KMS key is required with AWS KMS.
+          - when: self.seal.aws.kmsKeyId != null && self.seal.aws.kmsKeyId.startsWith('arn:') && size(self.seal.aws.kmsKeyId.split(':')) > 3
+            rule: self.seal.aws.kmsKeyId.split(':')[3] == self.seal.aws.region
+            severity: warning
+            paths: [seal.aws.region]
+            messageExpression: >-
+              'The key ARN is in ' + self.seal.aws.kmsKeyId.split(':')[3] + ', but the key region is ' +
+              self.seal.aws.region + '. OpenBao looks the key up in the key region, so set it to ' +
+              self.seal.aws.kmsKeyId.split(':')[3] + '.'
+            message: The key ARN names another region than the key region. Set the key region to the region in the ARN.
+          - rule: >-
+              oldSelf == null || oldSelf.seal.type != 'awskms' ||
+              (self.seal.aws.kmsKeyId == oldSelf.seal.aws.kmsKeyId && self.seal.aws.region == oldSelf.seal.aws.region)
+            severity: info
+            paths: [seal.aws.kmsKeyId]
+            message: >-
+              An initialized server unseals only with the KMS key it was initialized under. Change the key
+              only if bao operator init has not run yet, or the server cannot unseal its data.
+
+      - id: gcp
+        title: GCP Cloud KMS
+        when: self.seal.type == 'gcpckms'
+        description: >-
+          The workload identity reaches the key through your cloud account. The chart attaches no IAM
+          binding, so the key stays private until you grant the identity access to it after install.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              After install, grant the service account of the identity `roles/cloudkms.cryptoKeyEncrypterDecrypter`
+              and `roles/cloudkms.viewer` on this one key, never project-wide. Until both exist the workload
+              crash-loops with `PermissionDenied … cloudkms.cryptoKeys.get`; it recovers on its own once they
+              do. Read the account name with `cpln identity get RELEASE_NAME-openbao-identity --gvc GVC_NAME
+              -o json | jq -r .status.objectName` (the service account is
+              `OBJECT_NAME@PROJECT.iam.gserviceaccount.com`), then run `gcloud kms keys add-iam-policy-binding`
+              once per role. See
+              [KMS auto-unseal setup](/template-catalog/templates/openbao#kms-auto-unseal-setup).
+            textExpression: >-
+              'After install, grant the service account of the identity `roles/cloudkms.cryptoKeyEncrypterDecrypter`
+              and `roles/cloudkms.viewer` on this one key, never project-wide. Until both exist the workload
+              crash-loops with `PermissionDenied … cloudkms.cryptoKeys.get`; it recovers on its own once they
+              do. Read the account name with `cpln identity get ' + context.releaseName + '-openbao-identity --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o json | jq -r .status.objectName`, then run
+              this once for each of the two roles: `gcloud kms keys add-iam-policy-binding ' +
+              self.seal.gcp.cryptoKey + ' --keyring ' + self.seal.gcp.keyRing + ' --location ' +
+              self.seal.gcp.region + ' --project ' + self.seal.gcp.project +
+              ' --member serviceAccount:OBJECT_NAME@' + self.seal.gcp.project +
+              '.iam.gserviceaccount.com --role ROLE`. See
+              [KMS auto-unseal setup](/template-catalog/templates/openbao#kms-auto-unseal-setup).'
+          - path: seal.gcp.project
+            type: string
+            label: Project
+            required: true
+            example: true
+            description: The GCP project that holds the key ring.
+          - path: seal.gcp.region
+            type: string
+            label: Key ring location
+            required: true
+            suggestions: [global, us, europe, us-east1, us-central1, europe-west1]
+          - path: seal.gcp.keyRing
+            type: string
+            label: Key ring
+            required: true
+            example: true
+            pattern: '^[A-Za-z0-9_-]{1,63}$'
+            patternMessage: Enter the key ring name, using letters, digits, _ and -.
+          - path: seal.gcp.cryptoKey
+            type: string
+            label: Crypto key
+            required: true
+            example: true
+            description: A symmetric encrypt/decrypt key in the key ring.
+            pattern: '^[A-Za-z0-9_-]{1,63}$'
+            patternMessage: Enter the crypto key name, using letters, digits, _ and -.
+          - path: seal.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "A GCP [cloud account](/guides/create-cloud-account) for the project that holds the key."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+        rules:
+          # openbao.validate's GCP checks are all "required" (on each field); this restates one for the mirror.
+          - rule: self.seal.gcp.cryptoKey != null && self.seal.gcp.cryptoKey != ''
+            mirrors: openbao.validate
+            paths: [seal.gcp.cryptoKey]
+            message: The crypto key is required with GCP Cloud KMS.
+          - rule: >-
+              oldSelf == null || oldSelf.seal.type != 'gcpckms' ||
+              (self.seal.gcp.project == oldSelf.seal.gcp.project && self.seal.gcp.region == oldSelf.seal.gcp.region &&
+              self.seal.gcp.keyRing == oldSelf.seal.gcp.keyRing && self.seal.gcp.cryptoKey == oldSelf.seal.gcp.cryptoKey)
+            severity: info
+            paths: [seal.gcp.cryptoKey]
+            message: >-
+              An initialized server unseals only with the KMS key it was initialized under. Change the key
+              only if bao operator init has not run yet, or the server cannot unseal its data. A new key also
+              needs the two role grants.
+
+  - id: server
+    title: Server
+    description: The OpenBao image and the compute of its single stateful replica.
+    fields:
+      - type: note
+        when: context.mode == 'upgrade'
+        text: >-
+          Changing the image or the resources restarts the single OpenBao server. It unseals itself on the
+          way back up, so plan for a short outage, not a manual unseal.
+      - path: openbao.image
+        type: string
+        format: image
+        label: OpenBao image
+        required: true
+        description: >-
+          Pinned to the 2.6 line on purpose: OpenBao 2.7 moved the AWS and GCP KMS seals into external
+          plugins, which this template does not install.
+        docs: "#openbao-server"
+      - path: openbao.resources
+        type: resources
+        label: Resources
+        required: true
+        description: A single stateful replica.
+        maxRatio: 4
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+    rules:
+      - when: self.seal.type != 'static'
+        rule: "!self.openbao.image.matches(':(2[.]([7-9]|[1-9][0-9])|[3-9]|[1-9][0-9])([.-]|$)')"
+        severity: warning
+        paths: [openbao.image]
+        message: >-
+          OpenBao 2.7 and later moved the AWS and GCP KMS seals into external plugins that this template does
+          not install, so the server cannot unseal. Keep the image on the 2.6 line.
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds the raft data.
+    fields:
+      - path: volumeset.capacity
+        type: integer
+        label: Initial capacity
+        unit: GiB
+        min: 10
+        required: true
+        suggestions: [10, 20, 50, 100]
+        description: >-
+          Every secret, auth method, policy and the cluster state live here, and survive restarts and
+          upgrades.
+        help: >-
+          Uninstalling the release deletes the volume set; a final snapshot is kept for 7 days. The chart
+          schedules no backups: take volume set or raft snapshots yourself, as described under
+          [Backing up](/template-catalog/templates/openbao#backing-up). A snapshot is readable only under the
+          same seal key.
+        docs: "#storage"
+    rules:
+      - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: access
+    title: Access
+    description: Who can reach the OpenBao API and web UI, from the internet and from other workloads.
+    sections:
+      - title: Public API and web UI
+        fields:
+          - type: note
+            when: context.mode == 'install'
+            text: >-
+              After install the server is reachable but uninitialized. Run `bao operator init` once with
+              `cpln workload exec RELEASE_NAME-openbao --gvc GVC_NAME --container openbao -- bao operator init`
+              and store the recovery keys and the root token it prints: they are shown once and stored
+              nowhere. Reach the web UI at `http://localhost:8200/ui/` through
+              `cpln port-forward RELEASE_NAME-openbao 8200:8200 --gvc GVC_NAME`. See
+              [First run](/template-catalog/templates/openbao#first-run).
+            textExpression: >-
+              'After install the server is reachable but uninitialized. Run `bao operator init` once with
+              `cpln workload exec ' + context.releaseName + '-openbao --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + ' --container openbao -- bao operator init`
+              and store the recovery keys and the root token it prints: they are shown once and stored
+              nowhere. Reach the web UI at `http://localhost:8200/ui/` through `cpln port-forward ' +
+              context.releaseName + '-openbao 8200:8200 --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '`. See [First run](/template-catalog/templates/openbao#first-run).'
+          - path: publicAccess.enabled
+            type: boolean
+            label: Publish to the internet
+            description: >-
+              Serves the API and the web UI over HTTPS on the workload's canonical endpoint. Access changes
+              take from about 30 seconds to 10 minutes to take effect.
+            help: >-
+              Read the address from `status.canonicalEndpoint` in
+              `cpln workload get RELEASE_NAME-openbao --gvc GVC_NAME -o yaml`; the web UI is at `/ui/`.
+          - type: note
+            severity: warning
+            when: context.mode == 'install' && self.publicAccess.enabled
+            text: >-
+              A fresh server is uninitialized, and whoever reaches it first can initialize it and hold its
+              root token. Install it private, initialize it and set up authentication through
+              `cpln port-forward`, then turn this on with an upgrade.
+      - title: Other workloads
+        docs: /reference/workload/firewall
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: >-
+              Clients inside Control Plane connect to `http://RELEASE_NAME-openbao.GVC_NAME.cpln.local:8200`.
+              Access changes take from about 30 seconds to 10 minutes to take effect.
+            options:
+              - value: none
+                label: Nobody
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            when: self.internalAccess.type == 'workload-list'
+            description: The whole allow-list; no other workload can connect.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+        rules:
+          - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+            mirrors: openbao.validate
+            paths: [internalAccess.type]
+            message: Choose who can connect to OpenBao.
+          - when: self.internalAccess.type == 'workload-list'
+            rule: size(self.internalAccess.workloads) > 0
+            severity: info
+            paths: [internalAccess.workloads]
+            message: With Specific workloads and an empty list, no workload can connect to OpenBao.
+          - when: self.internalAccess.type == 'none' && !self.publicAccess.enabled
+            rule: "false"
+            severity: info
+            paths: [internalAccess.type]
+            message: >-
+              With "Nobody" and the internet off, only cpln port-forward reaches OpenBao; no application can
+              read secrets from it.

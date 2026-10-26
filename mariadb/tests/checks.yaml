@@ -4,8 +4,8 @@
 # (maria_workload, maria_user, maria_password, maria_db, maria_root_password). maria_workload exists
 # because 1.0.0 and 1.1.0 name the workload after the release alone.
 #
-# Every connection is TCP to the replica's own IP, so the server checks the password (a `localhost`
-# connection would use the socket instead).
+# Every connection is TCP (--protocol=TCP to 127.0.0.1), so the server checks the password over the
+# network path rather than the socket. The image has no `hostname`, so the replica's own IP is not used.
 checks:
   - id: write-read
     description: A row written by the application user over TCP reads back.
@@ -15,13 +15,12 @@ checks:
       shell: bash
       script: |
         set -e
-        H=$(hostname -i | awk '{print $1}')
         M="e2e-$(date +%s%N)"
         export MYSQL_PWD='{maria_password}'
-        mariadb -h "$H" -P 3306 -u {maria_user} {maria_db} -e "
+        mariadb -h 127.0.0.1 -P 3306 --protocol=TCP -u {maria_user} {maria_db} -e "
           create table if not exists e2e (id int auto_increment primary key, version varchar(32) not null, marker varchar(64) not null);
           insert into e2e (version, marker) values ('{version}', '$M');"
-        mariadb -h "$H" -P 3306 -u {maria_user} {maria_db} -N -B -e "select marker from e2e where marker = '$M'" | grep -qx "$M" && echo "READ $M"
+        mariadb -h 127.0.0.1 -P 3306 --protocol=TCP -u {maria_user} {maria_db} -N -B -e "select marker from e2e where marker = '$M'" | grep -qx "$M" && echo "READ $M"
     expect:
       stdout: "^READ e2e-"
     retries: 4
@@ -34,8 +33,7 @@ checks:
       container: mariadb
       shell: bash
       script: |
-        H=$(hostname -i | awk '{print $1}')
-        MYSQL_PWD='{maria_root_password}' mariadb -h "$H" -P 3306 -u root -N -B -e "select concat('ROOT ', current_user())"
+        MYSQL_PWD='{maria_root_password}' mariadb -h 127.0.0.1 -P 3306 --protocol=TCP -u root -N -B -e "select concat('ROOT ', current_user())"
     expect:
       stdout: "^ROOT root@"
 
@@ -46,8 +44,7 @@ checks:
       container: mariadb
       shell: bash
       script: |
-        H=$(hostname -i | awk '{print $1}')
-        MYSQL_PWD=wrong-password mariadb -h "$H" -P 3306 -u {maria_user} {maria_db} -e "select 1" 2>&1
+        MYSQL_PWD=wrong-password mariadb -h 127.0.0.1 -P 3306 --protocol=TCP -u {maria_user} {maria_db} -e "select 1" 2>&1
         echo "EXIT=$?"
     expect:
       stdout: "Access denied for user"
@@ -62,9 +59,10 @@ checks:
       container: mariadb
       shell: bash
       script: |
-        H=$(hostname -i | awk '{print $1}')
-        n=$(MYSQL_PWD='{maria_password}' mariadb -h "$H" -P 3306 -u {maria_user} {maria_db} -N -B \
-          -e "select count(*) from e2e where version = '{installed_version}'" 2>&1)
-        [ "${n:-0}" -ge 1 ] 2>/dev/null && echo PERSISTED || echo "MISSING (rows for {installed_version}: ${n:-none})"
+        n=$(MYSQL_PWD='{maria_password}' mariadb -h 127.0.0.1 -P 3306 --protocol=TCP -u {maria_user} {maria_db} -N -B \
+          -e "select count(*) from e2e where version = '{installed_version}'" 2>/tmp/e2e.err)
+        [ "${n:-0}" -ge 1 ] 2>/dev/null && echo PERSISTED || echo "MISSING (rows for {installed_version}: ${n:-none}) $(cat /tmp/e2e.err)"
     expect:
       stdout: "^PERSISTED$"
+    retries: 6
+    retryDelaySeconds: 20

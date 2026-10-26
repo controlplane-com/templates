@@ -22,6 +22,19 @@ spec:
           protocol: http
         - number: 8405
           protocol: http
+      # Ready only while a leader is routable (/healthz fails when no server in
+      # the backend passes /primary). On an upgrade this keeps the old proxy
+      # replicas serving until a new one can actually reach the primary.
+      readinessProbe:
+        httpGet:
+          path: /healthz
+          port: 8404
+          scheme: HTTP
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        timeoutSeconds: 3
+        failureThreshold: 3
+        successThreshold: 1
       volumes:
         - path: /proxy/start.sh
           uri: cpln://secret/{{ include "tsdb-ha.secretProxyStartup.name" . }}.payload

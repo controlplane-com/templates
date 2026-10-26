@@ -24,9 +24,12 @@ values:
         enabled: true
         name: "{secrets.auth.name}"
 
-# 1.1.0 and 1.2.0 are the versions customers run (inline password). The upgrade moves the password to a
-# secret with the same value, as the README recommends.
+# 1.4.3 is the oldest version that starts on today's image, so it is the upgrade path that must work.
+# 1.2.0 and 1.1.0 are the versions customers run (inline password); they cannot start a node on today's
+# redis:7.2 at all, so their rows fail until the maintainer rules on them.
 upgradeFrom:
+  - version: 1.4.3
+    values: new
   - version: 1.2.0
     values: new
   - version: 1.1.0

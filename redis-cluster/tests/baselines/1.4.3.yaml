@@ -1,0 +1,16 @@
+# redis-cluster 1.4.3 — the oldest version that still starts on today's redis:7.2 image (1.0.0-1.4.2
+# announce a hostname as cluster-announce-ip, which Redis 7.2.14+ refuses), with the password inline in
+# values. Used as the working upgrade source, so an upgrade regression still blocks.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  redispw: hex
+
+vars:
+  rc_workload: "{release}-redis-cluster"
+  rc_password: "{gen.redispw}"
+
+values:
+  redis:
+    password: "{gen.redispw}"

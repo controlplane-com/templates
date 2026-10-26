@@ -40,6 +40,8 @@ client can speak the Redis Cluster protocol and follow `MOVED`/`ASK` redirects.
 
 ## Troubleshooting traps
 
+- **1.4.2 and older cannot start a node on today's `redis:7.2`.** They announce a hostname as `cluster-announce-ip`, which Redis 7.2.14+ refuses: exit 1 with zero log lines (reproduced 2026-10-26; fixed in 1.4.3). A customer on 1.1.0/1.2.0 crash-loops on the next restart, and 1.3.0 renamed every resource (`{release}` → `{release}-redis-cluster`), so upgrading in place does not carry the data. Maintainer ruling 2026-10-26: old versions are documented, not fixed; the README says to install a new release and move the data.
+
 - **Authentication is OFF by default.** No `requirepass`, so anything `internalAccess` admits has full access.
   This is why the credential audit did not flag it — there is no weak default password because there is no
   password at all. An inline `redis.password` creates the auth secret and is written into the config secret

@@ -250,6 +250,7 @@ RDB files are portable. The upstream-documented way to read one is to start a st
 
   **The failure is close to invisible**, which is the reason this is not merely "your call". The start script discards server output, so `cpln logs` returns **zero lines** for the failing node and the deployment message is empty — there is nothing to read but a node that never becomes ready. Migrate with dump/restore or replication instead of relying on the switch.
 - **The default `250Mi` per node is a floor, not a recommendation.** A cache left at the default will begin evicting almost immediately under real load.
+- **Do not `helm upgrade` from 1.2.x or older.** Those versions cannot start a node on today's `redis:7.2` image, and 1.3.0 renamed the workload and its resources (`RELEASE_NAME` → `RELEASE_NAME-redis-cluster`), so an in-place upgrade does not carry the data. Install a new release of this version and move the data across.
 
 ### Links
 

@@ -117,10 +117,15 @@ steps:
             description: >-
               The dashboard and the public status pages (under /status/) on the canonical *.cpln.app endpoint.
               The dashboard is behind Uptime Kuma's own login; status pages need no login.
-            help: >-
-              Read the address from `status.canonicalEndpoint` in
-              `cpln workload get RELEASE_NAME-uptime-kuma --gvc GVC_NAME -o yaml`. Turning it on or off takes
-              30 seconds to a few minutes to take effect.
+            help: Turning it on or off takes 30 seconds to a few minutes to take effect.
+          - type: note
+            when: self.publicAccess.enabled
+            textExpression: >-
+              'Read the public address from status.canonicalEndpoint in `cpln workload get ' + context.releaseName +
+              '-uptime-kuma --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml`.'
+            text: >-
+              Read the public address from status.canonicalEndpoint in
+              `cpln workload get RELEASE_NAME-uptime-kuma --gvc GVC_NAME -o yaml`.
           - type: note
             severity: warning
             when: self.publicAccess.enabled && (oldSelf == null || !oldSelf.publicAccess.enabled)

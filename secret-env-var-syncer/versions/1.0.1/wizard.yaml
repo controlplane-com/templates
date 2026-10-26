@@ -1,0 +1,165 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Secret Env Var Syncer
+# No gvc limits: the chart has no location handling, and a cron workload runs in every location of its GVC.
+# Extra locations only repeat the same idempotent sync, so the Schedule step says so instead of refusing them.
+
+steps:
+  - id: entries
+    title: Sync entries
+    description: Which dictionary secrets become environment variables, and on which GVCs and workloads.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            text: >-
+              The secrets and targets named here must exist **before** the sync runs; the syncer creates
+              neither. Entries run in order and the first one that fails ends the run, so every later entry
+              stays unsynced until it is fixed. Errors show only in the logs of the `RELEASE_NAME-sevs`
+              workload (look for `entry.error`).
+            textExpression: >-
+              'The secrets and targets named here must exist **before** the sync runs; the syncer creates
+              neither. Entries run in order and the first one that fails ends the run, so every later entry
+              stays unsynced until it is fixed. Errors show only in the job logs: `cpln logs ' +
+              "'" + '{gvc="' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '", workload="' +
+              context.releaseName + '-sevs"} |= "entry.error"' + "'" + ' --since 30m`.'
+          - type: note
+            text: >-
+              **What each target needs.** Nothing has to be tagged: the syncer changes only the GVCs and
+              workloads named in these entries. It writes references (`cpln://secret/SECRET.KEY`), not values,
+              and each workload that receives them resolves them with its **own** identity, so that identity
+              needs `reveal` on the source secret. Without it the workload stops rolling out once the
+              references are added, and the reason shows only in `status.versions[].message` of
+              `cpln workload get-deployments WORKLOAD_NAME --gvc GVC_NAME`. A GVC target reaches only the
+              containers that have `inheritEnv: true`. See
+              [Prerequisites](/template-catalog/templates/secret-env-var-syncer#prerequisites) for a policy
+              that grants `reveal` on one secret.
+          - type: note
+            text: >-
+              The syncer's identity is granted `reveal` on every secret and `edit` on every GVC and workload
+              in the org (three Control Plane policies with `target: all`), whatever the entries name. Treat the
+              release as privileged, and restrict who can edit it and its `RELEASE_NAME-sevs-config` secret.
+            textExpression: >-
+              'The syncer' + "'" + 's identity is granted `reveal` on every secret and `edit` on every GVC and
+              workload in the org (three Control Plane policies with `target: all`), whatever the entries name.
+              Treat the release as privileged, and restrict who can edit it and its `' + context.releaseName +
+              '-sevs-config` secret.'
+          - type: note
+            when: context.mode == 'upgrade'
+            text: >-
+              Removing an entry does not remove the environment variables it already wrote; delete them from
+              the target yourself. Changed entries apply from the next run.
+          - path: sevsConfig.entries
+            type: list
+            label: Entries
+            required: true
+            widget: table
+            newItem: { target: { type: workload, name: "" }, secret: "" }
+            itemLabel: "item.secret + ' → ' + item.target.type + ' ' + item.target.name"
+            description: >-
+              Each entry adds one environment variable per key of a dictionary secret to one GVC, or to one
+              container of a workload. A variable with the same name as a key is overwritten.
+            help: >-
+              Adding a key to a secret adds a variable at the next run, which redeploys the workloads that
+              receive it. Rotating the value of an existing key does not: the reference stays the same, so the
+              syncer changes nothing and the targets keep the old value. After a rotation, run
+              `cpln workload force-redeployment WORKLOAD_NAME --gvc GVC_NAME` for each target workload. The
+              syncer never deletes a variable, not even after a key is removed from the secret.
+            docs: "#sync-entries"
+            item:
+              type: object
+              fields:
+                - path: target.type
+                  type: enum
+                  label: Target
+                  required: true
+                  options:
+                    - { value: gvc, label: GVC }
+                    - { value: workload, label: Workload }
+                - path: target.name
+                  type: string
+                  label: GVC or workload name
+                  required: true
+                  example: true
+                - path: target.gvc
+                  type: ref
+                  absent: true
+                  label: Workload GVC
+                  required: true
+                  when: item.target.type == 'workload'
+                  description: Needed for every workload target, also one in this release's GVC.
+                  ref: { kind: gvc, format: name, mustExist: error }
+                - path: target.container
+                  type: string
+                  absent: true
+                  label: Container
+                  required: true
+                  when: item.target.type == 'workload'
+                  description: The one container whose environment receives the variables.
+                - path: secret
+                  type: ref
+                  label: Dictionary secret
+                  required: true
+                  description: Every key becomes a variable name, so use keys that are valid variable names.
+                  ref:
+                    kind: secret
+                    format: name
+                    filter: { secretType: [dictionary] }
+                    mustExist: error
+                    allowCreate: true
+
+  - id: schedule
+    title: Schedule and resources
+    description: How often the sync job runs, and its container.
+    sections:
+      - fields:
+          - type: note
+            when: context.gvcLocations != null && size(context.gvcLocations) > 1
+            text: >-
+              A cron workload runs in every location of its GVC, so each location of this GVC runs the same
+              sync on the same schedule, against the same targets.
+            textExpression: >-
+              'A cron workload runs in every location of its GVC, so each of this GVC' + "'" + 's ' +
+              string(size(context.gvcLocations)) + ' locations runs the same sync on the same schedule, against
+              the same targets.'
+          - path: schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            widget: cron
+            required: true
+            description: Runs never overlap; a tick that arrives while a run is still active is skipped.
+            help: >-
+              To run a sync now, start the job by hand: `cpln workload cron start RELEASE_NAME-sevs --gvc
+              GVC_NAME`.
+            docs: "#schedule-and-timeout"
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            description: Limits of the sync container, which runs once per tick and exits.
+            docs: "#image-and-resources"
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: image
+            type: string
+            format: image
+            label: Syncer image
+            required: true
+            advanced: true
+            description: Pinned to the syncer release this chart was built for.
+          # defaultOptions.timeoutSeconds. The platform documents it as a request timeout; the chart sets no
+          # job.activeDeadlineSeconds, so nothing here bounds a run. 3600 is the platform maximum for
+          # non-serverless workloads (as in mariadb 1.4.1).
+          - path: timeoutSeconds
+            type: integer
+            label: Timeout
+            unit: seconds
+            min: 1
+            max: 3600
+            required: true
+            advanced: true
+            description: >-
+              Written to the workload's `timeoutSeconds`, which the platform documents as a request timeout.
+            docs: "/reference/workload/general#timeout-seconds"

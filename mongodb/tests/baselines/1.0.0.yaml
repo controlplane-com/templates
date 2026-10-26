@@ -1,0 +1,18 @@
+# mongodb 1.0.0 — a customer install as it looks today (mongo:6.0, credentials inline in values, the
+# database fixed to `test` by the chart). Used as the starting point of an upgrade to a newer version.
+locations: [aws-us-east-1]
+timeoutSeconds: 600
+
+generated:
+  mongopw: hex
+
+vars:
+  mongo_workload: "{release}"
+  mongo_user: e2e
+  mongo_password: "{gen.mongopw}"
+  mongo_db: test
+
+values:
+  config:
+    username: e2e
+    password: "{gen.mongopw}"

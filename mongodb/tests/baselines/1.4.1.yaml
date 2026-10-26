@@ -1,0 +1,39 @@
+# mongodb 1.4.1 — the recommended install: credentials in a prerequisite secret.
+# Prod shape for this template (one instance on a volumeset, one location) at its default size.
+locations: [aws-us-east-1]
+timeoutSeconds: 600
+
+generated:
+  mongopw: hex
+
+secrets:
+  creds:
+    type: dictionary
+    entries:
+      username: e2e
+      password: "{gen.mongopw}"
+      database: test
+
+vars:
+  mongo_workload: "{release}-mongo"
+  mongo_user: e2e
+  mongo_password: "{gen.mongopw}"
+  mongo_db: test
+
+values:
+  config:
+    credentialsSecretName: "{secrets.creds.name}"
+
+# 1.3.2 is the last version with plaintext config.* credentials, which 1.4.0 refuses, so the upgrade
+# switches to this baseline's values, with a secret holding the same password, as the README says.
+# 1.0.0 is the version almost every customer runs.
+upgradeFrom:
+  - version: 1.3.2
+    values: new
+  - version: 1.0.0
+    values: new
+    knownIssue:
+      note: >-
+        1.2.0 renamed the workload and volume set ({release} → {release}-mongo-vs), so upgrading
+        from 1.1.x or older starts on a new, empty volume and the data written on 1.0.0 is gone.
+        Left as is by maintainer ruling 2026-10-26; the README says not to upgrade in place.

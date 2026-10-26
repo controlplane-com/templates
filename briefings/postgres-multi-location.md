@@ -65,13 +65,31 @@
 
 - Default image `patroni-postgres:0.7` -> **`0.8`**: the same spilo-17 4.0-p3 base with the PGDG
   `postgresql-{13..17}-pgvector` packages upgraded 0.8.0 -> **0.8.7** (and ca-certificates/curl refreshed).
-  Dockerfile: `images/patroni/dockerfile`. Nothing else changes; the render diff is the image and labels.
+  Dockerfile: `images/patroni/dockerfile`.
 - **`pg-ml.validateImage`** refuses `controlplanecorporation/patroni-postgres` plain-version tags 0.1-0.7
   (with or without `docker.io/`), because the Console stores `image` in release values and an upgrade
   with them would keep the vulnerable image silently. Digests, other registries and non-version tags pass.
   The wizard image field mirrors it.
 - Upgrade in place; it is an ordinary restart (all members together, ~2 min of writes). `\dx` keeps
   showing the old `vector` version until `ALTER EXTENSION vector UPDATE;` per database — record only.
+- **HAProxy startup fixed (2026-10-26).** Through 2.0.0 the proxy's start script waited for EVERY member in
+  EVERY location to answer :8008 (900 s timeout) and the proxy had no readiness probe, so an upgrade retired
+  the old proxies while the new ones sat in the gate (131 s refused, leader back after 44 s). 2.0.1 waits at
+  most 120 s for ANY member, re-resolves server names at runtime (`resolvers mesh`, as pgedge), and has a
+  readinessProbe on `/stats` :8405 (HAProxy listening). Measured across east+west: the proxy's share of an
+  upgrade gap is ≤ 3.2 s after the leader is UP; a proxy redeploy with a member hung costs 0 s; hang
+  failovers 45-49 s (the leaderless window), 0 proxy restarts in 3/3.
+  - **Readiness must NOT be `/healthz` :8404** (false with no routable leader): tried first; the platform
+    restarted proxy replicas after every leaderless window (1, 3, 1 replicas in three runs) while clients
+    were still routed to them.
+  - HAProxy 2.9 starts every server as UP until its first check (≤ 3 s). Never observed to misroute a
+    write; `init-state down` (HAProxy 3.1+) would close it.
+- **An upgrade can LOSE acknowledged writes (pre-existing, work item 5396).** All members restart together,
+  so the leader has no caught-up replica for its switchover; whichever member returns first is promoted,
+  and if that is the async replica, the old leader's last writes are rewound away. Measured 2026-10-26:
+  45 and 40 acknowledged writes lost in two upgrades, 0 in a third where the old leader returned first.
+  README + wizard now say to stop writes for an upgrade; the fix (synchronous_mode or one location at a
+  time) is 5396.
 
 ## 2.0.0 — GVC removal (2026-08-28)
 
@@ -258,9 +276,9 @@ curl 7.81, `/usr/bin/timeout`), 2026-08-28, by running the rendered script again
   to remove the location instead. (The backup cron uses `suspend` deliberately, and has no inbound
   callers, so the trap does not apply there.)
 - **Give cross-region discovery ~2 minutes** after a cold install before believing anything is
-  unreachable. The HAProxy startup gate exists for exactly this: it refuses to start haproxy until
-  every Patroni endpoint in every location answers on :8008 (timeout raised to 900 s from `pg-ha`'s
-  600 s), because HAProxy resolves server names once and mesh DNS never returns NXDOMAIN.
+  unreachable. Through 2.0.0 an HAProxy startup gate waited for every member in every location (900 s);
+  2.0.1 replaced it with runtime DNS re-resolution and a bounded wait (see 2.0.1 above). The mesh still
+  answers a not-yet-registered name with a placeholder (192.168.x) for a few seconds on a cold install.
 - **The first `helm upgrade` after install bounces the bundled etcd tier** even when the render is
   byte-identical. Check whether the consensus store is restarting before diagnosing Postgres.
 - **`failover_priority` alone never placed the primary on a fresh install — fixed in 1.0.2.** Patroni
@@ -307,7 +325,7 @@ curl 7.81, `/usr/bin/timeout`), 2026-08-28, by running the rendered script again
 | `backup.location` | logical cron fired in **exactly one** location (without it, one duplicate backup per location) |
 
 ## Troubleshooting traps
-- **The upgrade outage is the headline risk.** `rolloutOptions.maxUnavailableReplicas` is silently dropped by the API, so nothing serialises the restart. This is platform behaviour, not something the chart can fix; do not promise rolling upgrades.
+- **The upgrade outage is the headline risk.** `rolloutOptions.maxUnavailableReplicas` is silently dropped by the API, so nothing serialises the restart. This is platform behaviour, not something the chart can fix; do not promise rolling upgrades — and an upgrade can lose the last acknowledged writes (5396).
 - **`failsafe_mode` is not a guarantee.** It needs the primary to reach EVERY member's REST API; replica readiness flipping is enough to break that and demote the primary.
 - **`etcd3.hosts`, never `etcd3.host`.** Patroni's `host` takes ONE endpoint; a comma-joined list makes it exit with `ValueError` before Postgres starts, crash-looping every member in every location. This shipped and was caught only by running it — the chart renders perfectly either way.
 - **wal-g's first base backup used to be up to 6 h late** (the sidecar slept the full interval when Patroni had not yet taken the lock). Fixed: it now retries every 60 s until a push succeeds, so a newly promoted leader also backs up promptly.

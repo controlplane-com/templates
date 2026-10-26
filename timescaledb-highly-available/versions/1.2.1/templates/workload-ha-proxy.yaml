@@ -22,13 +22,15 @@ spec:
           protocol: http
         - number: 8405
           protocol: http
-      # Ready only while a leader is routable (/healthz fails when no server in
-      # the backend passes /primary). On an upgrade this keeps the old proxy
-      # replicas serving until a new one can actually reach the primary.
+      # Ready once HAProxy is listening (its stats page answers), so an upgrade
+      # keeps the old proxy replicas serving until a new one has started. Not
+      # /healthz :8404: that fails whenever no leader is routable, and during a
+      # failover the platform restarted every proxy after ~60 s of failed
+      # readiness, doubling the outage (measured 2026-10-26).
       readinessProbe:
         httpGet:
-          path: /healthz
-          port: 8404
+          path: /stats
+          port: 8405
           scheme: HTTP
         initialDelaySeconds: 5
         periodSeconds: 10

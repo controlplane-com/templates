@@ -140,8 +140,8 @@ steps:
             required: true
             suggestions: [10, 20, 50, 100, 250, 500]
             description: >-
-              Holds the SQLite database, uploaded files and PocketBase's local backup archives. It is fixed
-              once the volume set is created, so size it for your uploads now.
+              Holds the SQLite database, uploaded files and PocketBase's local backup archives. Changing it
+              later does not resize the installed volume, so size it for your uploads now.
             help: >-
               Sizes only a new volume: an existing volume keeps its size. Uninstalling the release deletes the
               volume set.
@@ -202,17 +202,19 @@ steps:
               The superuser exists before the server starts listening, and new collections are
               superuser-only until you write an API rule.
             help: >-
-              Read the address from `status.canonicalEndpoint` in
-              `cpln workload get RELEASE_NAME-pocketbase --gvc GVC_NAME -o yaml`. Access changes can take a few
+              Realtime subscriptions are closed after ten minutes per connection, so clients must reconnect and
+              resubscribe; the official PocketBase SDKs do this automatically. Access changes can take a few
               minutes to take effect.
           - type: note
             severity: info
-            when: context.mode == 'install'
+            when: self.publicAccess.enabled
+            textExpression: >-
+              'Read the public address from status.canonicalEndpoint in `cpln workload get ' +
+              context.releaseName + '-pocketbase --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              ' -o yaml`.'
             text: >-
-              After the install, sign in at `/_/` with the email and password from the secret and set
-              **Settings › Application › Application URL** to the address you serve PocketBase on:
-              verification and password-reset emails build their links from it. SMTP and OAuth2 providers are
-              also set there, in the dashboard.
+              Read the public address from status.canonicalEndpoint in
+              `cpln workload get RELEASE_NAME-pocketbase --gvc GVC_NAME -o yaml`.
           - type: note
             severity: info
             when: "!self.publicAccess.enabled"
@@ -226,14 +228,19 @@ steps:
               http://localhost:8090/_/.
       - title: Internal access
         fields:
+          - type: note
+            severity: info
+            textExpression: >-
+              'Workloads reach the API at `http://' + context.releaseName + '-pocketbase.' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '.cpln.local:8090`.'
+            text: >-
+              Workloads reach the API at `http://RELEASE_NAME-pocketbase.GVC_NAME.cpln.local:8090`.
           - path: internalAccess.type
             type: enum
             label: Who can connect
             widget: cards
             required: true
-            description: >-
-              Workloads that call the API from inside Control Plane, at
-              `http://RELEASE_NAME-pocketbase.GVC_NAME.cpln.local:8090`.
+            description: Workloads that call the API from inside Control Plane.
             options:
               - value: none
                 label: None
@@ -282,6 +289,16 @@ steps:
             mirrors: pocketbase.validate
             paths: [cors.allowedOrigins]
             message: List at least one origin, or * to allow any.
+      - when: context.mode == 'install'
+        fields:
+          - type: note
+            severity: info
+            when: context.mode == 'install'
+            text: >-
+              After the install, sign in at `/_/` with the email and password from the secret and set
+              **Settings › Application › Application URL** to the address you serve PocketBase on:
+              verification and password-reset emails build their links from it. SMTP and OAuth2 providers are
+              also set there, in the dashboard.
     rules:
       - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
         mirrors: pocketbase.validate

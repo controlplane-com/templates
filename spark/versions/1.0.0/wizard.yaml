@@ -20,6 +20,15 @@ steps:
           UIs are served behind it. It keeps no data, so losing it costs minutes of downtime, not data.
         docs: "#master"
         fields:
+          - type: note
+            text: >-
+              Drivers submit to the master's cluster port 7077 from inside the GVC, and every driver must set
+              `spark.driver.host` to its own IP, or executors cannot connect back and the job stalls.
+            textExpression: >-
+              'Drivers submit with --master spark://' + context.releaseName + '-spark-master.' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '.cpln.local:7077 from inside the GVC. Every driver must also pass --conf spark.driver.host= with its own IP,' +
+              ' or executors cannot connect back and the job keeps relaunching them.'
           - path: master
             type: resources
             label: Master resources
@@ -48,14 +57,6 @@ steps:
             min: 1
             suggestions: [1, 2, 4, 8]
             description: The task slots each worker offers to executors.
-          - path: workers.memory
-            type: string
-            label: Memory offered per worker
-            required: true
-            placeholder: 2g
-            description: >-
-              Spark's offer to executors, in Spark's units (`512m`, `2g`). It is not the container limit: the
-              worker process itself needs memory on top of it, inside the maximum memory below.
           - path: workers
             type: resources
             label: Worker resources
@@ -63,6 +64,14 @@ steps:
             description: Per worker.
             cpu: { min: 25m }
             memory: { min: 32Mi }
+          - path: workers.memory
+            type: string
+            label: Memory offered per worker
+            required: true
+            placeholder: 2g
+            description: >-
+              Spark's offer to executors, in Spark's units (`512m`, `2g`). It is not the container limit: the
+              worker process itself needs memory on top of it, inside the maximum memory above.
         rules:
           - rule: >-
               (oldSelf != null && self.workers.memory == oldSelf.workers.memory) ||
@@ -108,6 +117,18 @@ steps:
               'Clients connect to sc://' + context.releaseName + '-spark-connect.' +
               (context.gvc != null ? context.gvc : 'GVC_NAME') +
               '.cpln.local:15002 from inside the GVC. Match the client PySpark version to Spark 4.0.'
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              An upgrade that restarts the master leaves Spark Connect ready but cut off from the cluster: it waits
+              for the old master and runs nothing. Once the master is ready again, redeploy Spark Connect with
+              `cpln workload force-redeployment RELEASE_NAME-spark-connect --gvc GVC_NAME`.
+            textExpression: >-
+              'An upgrade that restarts the master leaves Spark Connect ready but cut off from the cluster: it waits' +
+              ' for the old master and runs nothing. Once the master is ready again, redeploy Spark Connect with' +
+              ' cpln workload force-redeployment ' + context.releaseName + '-spark-connect --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '.'
           - path: connect
             type: resources
             label: Spark Connect resources
@@ -166,6 +187,26 @@ steps:
               kind: cloudaccount
               format: name
               mustExist: error
+          - path: storage.region
+            type: string
+            label: Bucket region
+            required: true
+            when: self.storage.provider == 'aws'
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: storage.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            when: self.storage.provider == 'aws'
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            help: >-
+              The policy needs the eight S3 actions listed under
+              [Prerequisites](/template-catalog/templates/spark#prerequisites), on the bucket and on its objects.
+              The identity carries only `cpln-connector` and this policy.
+            pattern: '^[A-Za-z0-9+=,.@_-]+$'
+            patternMessage: "Enter the name of your IAM policy, using letters, digits and + = , . @ _ -."
           - path: historyServer
             type: resources
             label: History Server resources
@@ -186,35 +227,18 @@ steps:
             mirrors: spark.validate
             paths: [storage.cloudAccountName]
             message: The cloud account is required when the History Server is on.
+          # Keyed on the installed cloud account, not on historyServer.enabled: a release that turned the
+          # History Server off still carries its identity's cloud binding (the API merges, never removes).
+          # An empty name (console install with History off) or the chart placeholder means no binding was made.
           - rule: >-
-              oldSelf == null || !oldSelf.historyServer.enabled ||
+              oldSelf == null || oldSelf.storage.cloudAccountName == null ||
+              oldSelf.storage.cloudAccountName in ['', 'my-spark-cloud-account'] ||
               self.storage.provider == oldSelf.storage.provider
             severity: warning
             paths: [storage.provider]
             message: >-
               Switching the event log storage between S3 and GCS needs a new install: on an upgrade the identity
               keeps its old cloud binding. Uninstall the release, then install it again with the new storage.
-      - title: AWS S3
-        when: self.historyServer.enabled && self.storage.provider == 'aws'
-        fields:
-          - path: storage.region
-            type: string
-            label: Bucket region
-            required: true
-            placeholder: us-east-1
-            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
-          - path: storage.policyName
-            type: string
-            label: IAM policy name
-            required: true
-            example: true
-            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
-            help: >-
-              The policy needs the eight S3 actions listed under
-              [Prerequisites](/template-catalog/templates/spark#prerequisites), on the bucket and on its objects.
-              The identity carries only `cpln-connector` and this policy.
-            pattern: '^[A-Za-z0-9+=,.@_-]+$'
-            patternMessage: "Enter the name of your IAM policy, using letters, digits and + = , . @ _ -."
     rules:
       - when: oldSelf != null && oldSelf.historyServer.enabled
         rule: self.historyServer.enabled
@@ -289,11 +313,16 @@ steps:
               Puts the master UI (and the History Server UI, when on) on public cpln.app endpoints with no login:
               anyone with the address sees the cluster and its applications. Workers, the cluster port and
               Spark Connect stay internal.
-            help: >-
-              Read the address from `status.canonicalEndpoint` in
-              `cpln workload get RELEASE_NAME-spark-master --gvc GVC_NAME -o yaml`. Jobs you submit then need
-              `--conf spark.ui.reverseProxyUrl=` with that address, so the links in their own UI resolve. A change
-              takes up to a few minutes to take effect.
+            help: A change takes up to a few minutes to take effect.
+          - type: note
+            when: self.publicAccess.enabled
+            text: >-
+              Read the public address from status.canonicalEndpoint of the master workload. Jobs you submit then
+              need --conf spark.ui.reverseProxyUrl= with that address, so the links in their own UI resolve.
+            textExpression: >-
+              'Read the public address with cpln workload get ' + context.releaseName + '-spark-master --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml (status.canonicalEndpoint). Jobs you' +
+              ' submit then need --conf spark.ui.reverseProxyUrl= with that address, so the links in their own UI resolve.'
           - type: note
             severity: warning
             when: self.publicAccess.enabled
@@ -318,15 +347,15 @@ steps:
         severity: warning
         paths: [internalAccess.workloads]
         messageExpression: >-
-          'The master, workers and Spark Connect talk to each other through this firewall, and the chart does not
-          add them to the list. Add ' +
+          'The master' + (self.connect.enabled ? ', workers and Spark Connect' : ' and workers') +
+          ' talk to each other through this firewall, and the chart does not add them to the list. Add ' +
           (['master', 'worker'] + (self.connect.enabled ? ['connect'] : [])).filter(n,
           !(('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-spark-' + n) in self.internalAccess.workloads)).map(n,
           '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-spark-' + n).join(', ') +
           ', or the cluster cannot form.'
         message: >-
-          The master, workers and Spark Connect talk to each other through this firewall, and the chart does not
-          add them to the list. Add them, or the cluster cannot form.
+          The cluster's own workloads talk to each other through this firewall, and the chart does not add them
+          to the list. Add them, or the cluster cannot form.
         fix:
           path: internalAccess.workloads
           items: >-

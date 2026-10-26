@@ -1,0 +1,45 @@
+# mysql 1.5.2 — the recommended install: application credentials and the root password in
+# prerequisite secrets. Prod shape for this template (one instance on a volumeset, one location) at its
+# default size; phpMyAdmin stays at its default, off.
+locations: [aws-us-east-1]
+timeoutSeconds: 600
+
+generated:
+  apppw: hex
+  rootpw: hex
+
+secrets:
+  creds:
+    type: dictionary
+    entries:
+      username: e2e
+      password: "{gen.apppw}"
+      database: e2e
+  root:
+    type: opaque
+    payload: "{gen.rootpw}"
+
+vars:
+  mysql_workload: "{release}-mysql"
+  mysql_user: e2e
+  mysql_password: "{gen.apppw}"
+  mysql_db: e2e
+  mysql_root_password: "{gen.rootpw}"
+
+values:
+  credentialsSecretName: "{secrets.creds.name}"
+  rootPasswordSecretName: "{secrets.root.name}"
+
+# 1.4.0 and 1.0.0 are the versions customers run. Both set credentials in `config`, which 1.5.0 refuses,
+# so the upgrade switches to this baseline's values, with secrets holding the same passwords, as the
+# README says.
+upgradeFrom:
+  - version: 1.4.0
+    values: new
+  - version: 1.0.0
+    values: new
+    knownIssue:
+      note: >-
+        1.2.0 renamed the workload and volume set ({release} → {release}-mysql-vs), so upgrading
+        from 1.1.x or older starts on a new, empty volume and the data written on 1.0.0 is gone.
+        Left as is by maintainer ruling 2026-10-26; the README says not to upgrade in place.

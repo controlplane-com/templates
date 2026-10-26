@@ -211,14 +211,26 @@ steps:
               context.releaseName + '-trino --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
               ' -o yaml` under `status.versions[].message`. It recovers on its own within about 10 minutes of ' +
               'creating the secret, or at once with `cpln workload force-redeployment ' + context.releaseName +
-              '-trino --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '` (and the same for ' +
-              context.releaseName + '-trino-worker).'
+              '-trino --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '`' +
+              (self.workers.replicas != null && self.workers.replicas > 0 ?
+              ' (and the same for ' + context.releaseName + '-trino-worker).' : '.')
             text: >-
               Both secrets must exist **before** you install or upgrade. If one is missing, the deployment waits
               on it and `cpln logs` shows nothing at all; the reason is in
               `cpln workload get-deployments RELEASE_NAME-trino --gvc GVC_NAME -o yaml` under
               `status.versions[].message`. It recovers on its own within about 10 minutes of creating the
               secret, or at once with `cpln workload force-redeployment`.
+          - type: note
+            when: ui.access == 'public'
+            textExpression: >-
+              'With login on, clients inside Control Plane must also connect through the public HTTPS endpoint and ' +
+              'sign in there. Trino refuses password logins over plain HTTP, so the internal address ' +
+              context.releaseName + '-trino.' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '.cpln.local:8080 answers them with 401 Password not allowed for insecure authentication.'
+            text: >-
+              With login on, clients inside Control Plane must also connect through the public HTTPS endpoint and
+              sign in there. Trino refuses password logins over plain HTTP, so the internal address answers them
+              with 401 Password not allowed for insecure authentication.
           - path: auth.passwordFileSecretName
             type: ref
             label: Password file secret
@@ -376,25 +388,25 @@ steps:
               (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml` under `status.versions[].message`. ' +
               'It recovers on its own within about 10 minutes of creating the secret, or at once with ' +
               '`cpln workload force-redeployment`. After you change a secret value later, force a redeployment of ' +
-              context.releaseName + '-trino and ' + context.releaseName + '-trino-worker: a running node keeps ' +
-              'the value it started with.'
+              context.releaseName + '-trino' +
+              (self.workers.replicas != null && self.workers.replicas > 0 ? ' and ' + context.releaseName + '-trino-worker' : '') +
+              ': a running node keeps the value it started with.'
             text: >-
               Every secret a catalog names must exist **before** you install or upgrade. If one is missing, the
               deployment waits on it and `cpln logs` shows nothing at all; the reason is in
               `cpln workload get-deployments RELEASE_NAME-trino --gvc GVC_NAME -o yaml` under
-              `status.versions[].message`. After you change a secret value later, force a redeployment of both
-              workloads: a running node keeps the value it started with.
+              `status.versions[].message`. After you change a secret value later, force a redeployment of the
+              coordinator and any workers: a running node keeps the value it started with.
           - path: catalogs
             type: list
             label: Catalogs
-            widget: table
             uniqueBy: [name]
             newItem:
               name: ""
               properties: "connector.name=postgresql\nconnection-url=jdbc:postgresql://WORKLOAD_NAME.GVC_NAME.cpln.local:5432/postgres\nconnection-user=postgres\nconnection-password=${ENV:PG_PASSWORD}\n"
               secrets:
                 - { env: PG_PASSWORD, secretName: "", secretKey: password }
-            itemLabel: "item.name + ' (' + string(size(item.secrets)) + ' secrets)'"
+            itemLabel: "item.name + ' (' + string(size(item.secrets)) + (size(item.secrets) == 1 ? ' secret)' : ' secrets)')"
             description: >-
               One entry per data source, queried as `name.schema.table`. Reach sibling templates at
               `WORKLOAD_NAME.GVC_NAME.cpln.local`.
@@ -423,10 +435,10 @@ steps:
                   label: Secrets
                   widget: table
                   uniqueBy: [env]
-                  newItem: { env: "", secretName: "", secretKey: "" }
+                  newItem: { env: "", secretName: "", secretKey: password }
                   description: >-
                     Each maps a secret into an environment variable that the properties read as `${ENV:NAME}`.
-                    An opaque secret is read whole; for a dictionary secret, name the key.
+                    For a dictionary secret, the key holds the value; for an opaque secret, the key is `payload`.
                   item:
                     type: object
                     fields:
@@ -447,14 +459,17 @@ steps:
                           filter: { secretType: [opaque, dictionary] }
                           mustExist: error
                           allowCreate: true
-                          requiredKeysFrom: "item.secretKey != null && item.secretKey != '' ? [item.secretKey] : []"
+                          requiredKeysFrom: "item.secretKey != null && item.secretKey != '' && item.secretKey != 'payload' ? [item.secretKey] : []"
                           create:
                             secretType: dictionary
                       - path: secretKey
                         type: string
                         label: Key
+                        required: true
                         placeholder: password
-                        description: Empty for an opaque secret.
+                        description: >-
+                          The dictionary key that holds the value, such as `password`. For an opaque secret, enter
+                          `payload`.
                     rules:
                       - rule: item.secretName != null && item.secretName != ''
                         mirrors: trino.validate
@@ -492,7 +507,7 @@ steps:
                     or with its own host name.
                 - rule: item.secrets.all(s, s.env == null || !s.env.matches('^[A-Z][A-Z0-9_]*$') || item.properties == null || item.properties.contains('${ENV:' + s.env + '}'))
                   severity: info
-                  paths: [secrets]
+                  paths: [properties]
                   messageExpression: >-
                     'The properties never read ' +
                     item.secrets.filter(s, s.env != null && s.env.matches('^[A-Z][A-Z0-9_]*$') && !item.properties.contains('${ENV:' + s.env + '}')).map(s, '${ENV:' + s.env + '}').join(', ') +
@@ -504,7 +519,7 @@ steps:
                     !p.substring(0, p.indexOf('}')).matches('^[A-Z][A-Z0-9_]*$') ||
                     p.substring(0, p.indexOf('}')) in item.secrets.map(s, s.env))
                   severity: warning
-                  paths: [secrets]
+                  paths: [properties]
                   messageExpression: >-
                     'The properties read ' +
                     item.properties.split('${ENV:').filter(p, p.indexOf('}') >= 0 &&

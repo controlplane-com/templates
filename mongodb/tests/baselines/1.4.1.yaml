@@ -32,3 +32,8 @@ upgradeFrom:
     values: new
   - version: 1.0.0
     values: new
+    knownIssue:
+      note: >-
+        1.2.0 renamed the workload and volume set ({release} → {release}-mongo-vs), so upgrading
+        from 1.1.x or older starts on a new, empty volume and the data written on 1.0.0 is gone.
+        Left as is by maintainer ruling 2026-10-26; the README says not to upgrade in place.

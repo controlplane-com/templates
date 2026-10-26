@@ -24,7 +24,9 @@ checks:
         '
     expect:
       stdout: "^MEMBERS 3 LEADERS 1 STREAMING 2$"
-    retries: 8
+    # About five minutes: long enough for a member restarting after an upgrade to rejoin, so a failure
+    # here means a member that does not come back, not one that is slow.
+    retries: 20
     retryDelaySeconds: 15
 
   - id: write-read-via-proxy

@@ -1,0 +1,25 @@
+# mariadb 1.0.0 — the version customers run: mariadb:10, credentials inline in `config`, and the
+# workload and volumeset named after the release alone.
+# Used as the starting point of an upgrade to a newer version. phpMyAdmin is left off so CI never
+# publishes a login form.
+locations: [aws-us-east-1]
+timeoutSeconds: 600
+
+generated:
+  apppw: hex
+  rootpw: hex
+
+vars:
+  maria_workload: "{release}"
+  maria_user: e2e
+  maria_password: "{gen.apppw}"
+  maria_db: e2e
+  maria_root_password: "{gen.rootpw}"
+
+values:
+  enablePhpMyAdmin: false
+  config:
+    db: e2e
+    user: e2e
+    password: "{gen.apppw}"
+    rootPassword: "{gen.rootpw}"

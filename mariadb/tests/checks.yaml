@@ -1,0 +1,70 @@
+# Feature checks for the mariadb template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
+# (maria_workload, maria_user, maria_password, maria_db, maria_root_password). maria_workload exists
+# because 1.0.0 and 1.1.0 name the workload after the release alone.
+#
+# Every connection is TCP to the replica's own IP, so the server checks the password (a `localhost`
+# connection would use the socket instead).
+checks:
+  - id: write-read
+    description: A row written by the application user over TCP reads back.
+    exec:
+      workload: "{maria_workload}"
+      container: mariadb
+      shell: bash
+      script: |
+        set -e
+        H=$(hostname -i | awk '{print $1}')
+        M="e2e-$(date +%s%N)"
+        export MYSQL_PWD='{maria_password}'
+        mariadb -h "$H" -P 3306 -u {maria_user} {maria_db} -e "
+          create table if not exists e2e (id int auto_increment primary key, version varchar(32) not null, marker varchar(64) not null);
+          insert into e2e (version, marker) values ('{version}', '$M');"
+        mariadb -h "$H" -P 3306 -u {maria_user} {maria_db} -N -B -e "select marker from e2e where marker = '$M'" | grep -qx "$M" && echo "READ $M"
+    expect:
+      stdout: "^READ e2e-"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: root-login
+    description: The root password from the install authenticates over TCP.
+    exec:
+      workload: "{maria_workload}"
+      container: mariadb
+      shell: bash
+      script: |
+        H=$(hostname -i | awk '{print $1}')
+        MYSQL_PWD='{maria_root_password}' mariadb -h "$H" -P 3306 -u root -N -B -e "select concat('ROOT ', current_user())"
+    expect:
+      stdout: "^ROOT root@"
+
+  - id: rejects-bad-password
+    description: A wrong password is refused over TCP (the control for the checks above).
+    exec:
+      workload: "{maria_workload}"
+      container: mariadb
+      shell: bash
+      script: |
+        H=$(hostname -i | awk '{print $1}')
+        MYSQL_PWD=wrong-password mariadb -h "$H" -P 3306 -u {maria_user} {maria_db} -e "select 1" 2>&1
+        echo "EXIT=$?"
+    expect:
+      stdout: "Access denied for user"
+      notStdout: "^EXIT=0$"
+
+  - id: data-survives-upgrade
+    description: >-
+      The row written on the version this scenario installed first is still there. On a fresh install
+      that is the same version; after an upgrade it proves the data directory carried over.
+    exec:
+      workload: "{maria_workload}"
+      container: mariadb
+      shell: bash
+      script: |
+        H=$(hostname -i | awk '{print $1}')
+        n=$(MYSQL_PWD='{maria_password}' mariadb -h "$H" -P 3306 -u {maria_user} {maria_db} -N -B \
+          -e "select count(*) from e2e where version = '{installed_version}'" 2>&1)
+        [ "${n:-0}" -ge 1 ] 2>/dev/null && echo PERSISTED || echo "MISSING (rows for {installed_version}: ${n:-none})"
+    expect:
+      stdout: "^PERSISTED$"

@@ -19,6 +19,13 @@ steps:
         text: >-
           An upgrade that changes the members restarts them, and nothing limits the rollout of a
           stateful workload, so plan for a short write outage.
+      - type: note
+        severity: info
+        when: context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '2.8.1') < 0
+        text: >-
+          This version moves to patroni-postgres 0.8, with pgvector 0.8.7 (CVE-2026-103484). The fix takes
+          effect when the members restart. In each database that has the vector extension, `\dx` shows the old
+          version until you run `ALTER EXTENSION vector UPDATE;`, which only updates that record.
       - path: replicas
         type: integer
         label: PostgreSQL members
@@ -101,8 +108,7 @@ steps:
         required: true
         description: A dictionary secret with the keys `username`, `password` and `database`.
         help: >-
-          PostgreSQL reads these values only when the cluster is first created. To change the
-          password later, follow the README's rotation steps: the replication user shares it.
+          PostgreSQL reads these values only when the cluster is first created.
         docs: "#credentials"
         ref:
           kind: secret
@@ -632,6 +638,22 @@ steps:
             message: >-
               backup.minio.accessKey and backup.minio.secretKey were removed in 2.5.0. Put them in the
               MinIO credentials secret and remove them from the values.
+
+rules:
+  # Workload names are limited to 49 characters, and the chart's longest workload suffix is
+  # -postgres-ha-backup (19, logical backups), then -postgres-ha-proxy (18, proxy or PgBouncer).
+  - rule: >-
+      size(context.releaseName) <= ((self.backup.enabled && self.backup.mode == 'logical') ? 30 :
+      ((self.proxy.enabled || self.pgbouncer.enabled) ? 31 : 37))
+    messageExpression: >-
+      'The release name has ' + string(size(context.releaseName)) + ' characters. Workload names are limited to 49
+      characters and this chart names one `' + context.releaseName +
+      ((self.backup.enabled && self.backup.mode == 'logical') ? '-postgres-ha-backup' : ((self.proxy.enabled || self.pgbouncer.enabled) ?
+      '-postgres-ha-proxy' : '-postgres-ha')) + '`, so use a release name of at most ' +
+      string((self.backup.enabled && self.backup.mode == 'logical') ? 30 : ((self.proxy.enabled || self.pgbouncer.enabled) ? 31 : 37)) + ' characters.'
+    message: >-
+      Workload names are limited to 49 characters, so use a release name of at most 30 characters (31 without
+      logical backups).
 
 migrations:
   - fromVersions: "<2.5.0"

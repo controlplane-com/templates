@@ -1,0 +1,33 @@
+# redis-cluster 1.7.0 — the recommended install: the password from a prerequisite secret.
+# Prod shape for this template (six nodes, three shards with a replica each, one location) at its
+# default size.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  redispw: hex
+
+secrets:
+  auth:
+    type: dictionary
+    entries:
+      password: "{gen.redispw}"
+
+vars:
+  rc_workload: "{release}-redis-cluster"
+  rc_password: "{gen.redispw}"
+
+values:
+  redis:
+    auth:
+      fromSecret:
+        enabled: true
+        name: "{secrets.auth.name}"
+
+# 1.4.3 is the oldest version that starts on today's image, so it is the upgrade path that must work.
+# 1.2.0 and older are not tested: on today's redis:7.2 a node announces its hostname as
+# cluster-announce-ip, Redis 7.2.14+ refuses it, and the starting install never becomes ready. Old
+# versions are documented, not fixed (maintainer ruling 2026-10-26); the README says not to upgrade them.
+upgradeFrom:
+  - version: 1.4.3
+    values: new

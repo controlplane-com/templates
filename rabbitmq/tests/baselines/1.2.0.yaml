@@ -1,0 +1,33 @@
+# rabbitmq 1.2.0 — the default user in a prerequisite secret, default sizes.
+locations: [aws-us-east-1]
+timeoutSeconds: 600
+
+generated:
+  rmqpw: hex
+
+secrets:
+  creds:
+    type: dictionary
+    entries:
+      username: e2e
+      password: "{gen.rmqpw}"
+
+vars:
+  rmq_workload: "{release}-rabbitmq"
+  rmq_user: e2e
+  rmq_password: "{gen.rmqpw}"
+
+values:
+  credentialsSecretName: "{secrets.creds.name}"
+
+# Both upgrade with the new baseline's values: 1.2.0 refuses the old inline credential and firewall
+# keys at render, so a user upgrading has to switch to the secret, as the README says. The secret holds
+# the same username and password the old version was installed with, since RabbitMQ creates the default
+# user only on a fresh data directory.
+#  - 1.1.1: the previous version.
+#  - 1.0.0: the version customers run (6 installs).
+upgradeFrom:
+  - version: 1.1.1
+    values: new
+  - version: 1.0.0
+    values: new

@@ -1,0 +1,343 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Tailscale
+# One stateless gateway pinned to the single `location` value; the workload is suspended in every other
+# location of the GVC (workload-tailscale.yaml defaultOptions.suspend), so a GVC with several locations
+# runs one gateway, not one per location. Nothing here is stateful, so the GVC may have more locations.
+gvc:
+  minLocations: 1
+
+steps:
+  - id: authkey
+    title: Auth key
+    description: The prerequisite secret that holds your Tailscale auth key.
+    fields:
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'install' ||
+          (context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') < 0)
+        text: >-
+          The secret must exist **before** you install or upgrade. If it is missing, the deployment waits on
+          it and looks broken: `cpln logs` shows nothing, because the container never starts. The reason is in
+          `status.versions[].message` of `cpln workload get-deployments RELEASE_NAME-tailscale --gvc GVC_NAME -o yaml`.
+          Once the secret exists, the gateway starts on its own within about 10 minutes, or at once with
+          `cpln workload force-redeployment RELEASE_NAME-tailscale --gvc GVC_NAME`.
+        textExpression: >-
+          'The secret must exist **before** you install or upgrade. If it is missing, the deployment waits on
+          it and looks broken: `cpln logs` shows nothing, because the container never starts. The reason is in
+          `status.versions[].message` of `cpln workload get-deployments ' + context.releaseName +
+          '-tailscale --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml`.
+          Once the secret exists, the gateway starts on its own within about 10 minutes, or at once with
+          `cpln workload force-redeployment ' + context.releaseName + '-tailscale --gvc ' +
+          (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '1.3.0') < 0
+        text: >-
+          Version 1.3.0 moved the auth key out of the values and into an opaque secret you create. The upgrade
+          deletes the secret the chart created for the old `AuthKey` value, so give the new secret another name.
+          To reuse the current key, read it first with `cpln secret reveal SECRET_NAME -o yaml` (key `authkey`);
+          the old key is also kept in the Helm history of this release, so a newly generated key is the safer choice.
+          After the upgrade the gateway can take up to about 10 minutes to start on the new secret while its
+          access to it is applied; after 5 minutes, `cpln workload force-redeployment` skips the wait. See
+          [Upgrading from 1.2.x](/template-catalog/templates/tailscale#upgrading-from-1-2-x).
+        textExpression: >-
+          'Version 1.3.0 moved the auth key out of the values and into an opaque secret you create. The upgrade
+          deletes `' + (semverCompare(context.fromVersion, '1.2.0') < 0 ? context.releaseName : context.releaseName + '-tailscale') +
+          '`, the secret the chart created for the old `AuthKey` value, so give the new secret another name.
+          To reuse the current key, read it first with `cpln secret reveal ' +
+          (semverCompare(context.fromVersion, '1.2.0') < 0 ? context.releaseName : context.releaseName + '-tailscale') +
+          ' -o yaml` (key `authkey`); the old key is also kept in the Helm history of this release, so a newly
+          generated key is the safer choice. After the upgrade the gateway can take up to about 10 minutes to
+          start on the new secret while its access to it is applied; after 5 minutes,
+          `cpln workload force-redeployment ' + context.releaseName + '-tailscale --gvc ' +
+          (context.gvc != null ? context.gvc : 'GVC_NAME') + '` skips the wait. See
+          [Upgrading from 1.2.x](/template-catalog/templates/tailscale#upgrading-from-1-2-x).'
+      - path: authKeySecretName
+        type: ref
+        label: Auth key secret
+        required: true
+        description: >-
+          An opaque secret (encoding plain) whose whole value is a Tailscale auth key. Generate the key in the
+          Tailscale admin console under Settings › Keys with both **Reusable** and **Ephemeral** on: the
+          gateway keeps no Tailscale state, so it joins the tailnet with this key on every container start.
+        help: >-
+          Secret names are org-wide, so give each release its own. Auth keys expire (90 days by default) and an
+          expired key surfaces at the next restart. To replace the key, update the secret, then run
+          `cpln workload force-redeployment RELEASE_NAME-tailscale --gvc GVC_NAME`: a running gateway does
+          not pick up the new value by itself. Create the secret with:
+          `printf '%s' 'tskey-auth-YOUR-KEY-HERE' | cpln secret create-opaque --name SECRET_NAME --encoding plain -f -`
+        docs: "#auth-key"
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [opaque] }
+          mustExist: error
+          allowCreate: true
+          create:
+            encoding: plain
+            suggestName: "context.releaseName + '-tailscale-authkey'"
+            hint: "Paste an auth key from https://login.tailscale.com/admin/settings/keys (Reusable and Ephemeral)."
+    rules:
+      # ts.validate: authKeySecretName must be set (required on the field; restated for the mirror).
+      - rule: self.authKeySecretName != null && self.authKeySecretName != ''
+        mirrors: ts.validate
+        paths: [authKeySecretName]
+        message: The auth key secret is required.
+      # ts.validate: the removed AuthKey value is refused at render.
+      - rule: "!has(self.AuthKey)"
+        mirrors: ts.validate
+        paths: [authKeySecretName]
+        message: >-
+          AuthKey was removed in 1.3.0. Put the auth key in an opaque secret, choose it as the auth key secret,
+          and remove AuthKey from the values.
+      # The upgrade prunes the chart-owned secret of 1.2.x (RELEASE-tailscale) or 1.0.x/1.1.x (RELEASE).
+      - when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '1.3.0') < 0
+        rule: >-
+          self.authKeySecretName == '' ||
+          self.authKeySecretName != (semverCompare(context.fromVersion, '1.2.0') < 0 ?
+          context.releaseName : context.releaseName + '-tailscale')
+        paths: [authKeySecretName]
+        messageExpression: >-
+          self.authKeySecretName + ' is the secret the chart created for the old AuthKey value, and this
+          upgrade deletes it. Create an opaque secret with another name and choose that one.'
+        message: >-
+          This is the secret the chart created for the old AuthKey value, and this upgrade deletes it. Create
+          an opaque secret with another name and choose that one.
+      - rule: >-
+          oldSelf == null || context.fromVersion == null || semverCompare(context.fromVersion, '1.3.0') < 0 ||
+          self.authKeySecretName == oldSelf.authKeySecretName
+        severity: info
+        paths: [authKeySecretName]
+        message: >-
+          The gateway rejoins the tailnet with the key from the new secret when this upgrade restarts it. It can
+          take up to about 10 minutes to start while its access to the new secret is applied; after 5 minutes,
+          a forced redeployment skips the wait.
+
+  - id: gateway
+    title: Gateway
+    description: Where the gateway runs, and the name it shows on your tailnet.
+    sections:
+      - title: Location
+        docs: "#location"
+        fields:
+          - path: location
+            type: ref
+            label: Location
+            required: true
+            description: >-
+              The one location of the GVC the gateway runs in; it is suspended in the others. Tailnet devices
+              still reach workloads in every location of the GVC through it.
+            ref: { kind: location, scope: gvc, format: name, mustExist: error }
+          - type: note
+            severity: warning
+            text: >-
+              In the Tailscale admin console, approve the three routes the gateway advertises
+              (`192.168.0.0/16`, `240.240.0.0/16` and the `/32` of this location's DNS server), or auto-approve
+              them with `autoApprovers` in the tailnet policy file, and add that DNS server as a custom
+              nameserver restricted to `cpln.local`. Until then the gateway joins the tailnet but carries no
+              traffic to the GVC. See [Prerequisites](/template-catalog/templates/tailscale#prerequisites).
+            textExpression: >-
+              self.location != '' && self.location in self.locationDNS ?
+              'In the Tailscale admin console, approve the three routes the gateway advertises (`192.168.0.0/16`,
+              `240.240.0.0/16` and `' + self.locationDNS[self.location] + '/32`), or auto-approve them with
+              `autoApprovers` in the tailnet policy file, and add `' + self.locationDNS[self.location] +
+              '` as a custom nameserver restricted to `cpln.local`. Until then the gateway joins the tailnet but
+              carries no traffic to the GVC. See [Prerequisites](/template-catalog/templates/tailscale#prerequisites).' :
+              'In the Tailscale admin console, approve the three routes the gateway advertises
+              (`192.168.0.0/16`, `240.240.0.0/16` and the `/32` of the DNS server of the location),
+              or auto-approve them with `autoApprovers` in the tailnet policy file, and add that DNS server as a
+              custom nameserver restricted to `cpln.local`. Until then the gateway joins the tailnet but carries
+              no traffic to the GVC. See [Prerequisites](/template-catalog/templates/tailscale#prerequisites).'
+          - path: locationDNS
+            type: map
+            label: Location DNS servers
+            advanced: true
+            widget: kv
+            description: >-
+              The internal DNS server of each location. The entry of the chosen location becomes the advertised
+              `/32` route and the address for split DNS. Add an entry only when your location is missing.
+            docs: "#location-dns"
+            keys:
+              label: Location
+              pattern: '^[a-z0-9]+(-[a-z0-9]+)*$'
+            values:
+              type: string
+              pattern: '^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$'
+              patternMessage: Enter an IPv4 address, such as 172.20.0.10.
+        rules:
+          - rule: context.gvcLocations == null || self.location == '' || self.location in context.gvcLocations
+            paths: [location]
+            message: >-
+              This location is not one of the target GVC's locations. The platform accepts it without an error,
+              and the gateway would run nowhere. Choose one of the GVC's locations.
+          # workload-tailscale.yaml builds TS_ROUTES from `index .Values.locationDNS .Values.location`; a missing
+          # entry renders a bare `/32` route.
+          - rule: self.location == '' || self.location in self.locationDNS
+            paths: [location]
+            messageExpression: >-
+              'Location DNS servers has no entry for ' + self.location + ', so the gateway would advertise a bare
+              /32 route. Add the internal DNS server of ' + self.location + ' under Location DNS servers.'
+            message: >-
+              Location DNS servers has no entry for this location, so the gateway would advertise a bare /32
+              route. Add its internal DNS server under Location DNS servers.
+      - title: Tailnet device
+        docs: "#extra-environment-variables"
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.3.0') < 0 &&
+              (oldSelf == null || !oldSelf.extraEnv.exists(e, e.name == 'TS_HOSTNAME' && e.value != 'cpln-test-new'))
+            text: >-
+              Earlier versions named this device `cpln-test-new` on your tailnet (1.0.0: `cpln-test`), a name
+              left over from testing. This version names it `cpln-tailscale`, as `TS_HOSTNAME` below shows. Set
+              `TS_HOSTNAME` back to the old name if anything on your tailnet refers to it.
+          - path: extraEnv
+            type: list
+            label: Environment variables
+            widget: table
+            uniqueBy: [name]
+            newItem: { name: "", value: "" }
+            itemLabel: "item.name"
+            description: >-
+              Extra environment variables for the Tailscale container. `TS_HOSTNAME` is the name the gateway
+              shows on your tailnet; give each release its own.
+            item:
+              type: object
+              label: Environment variable
+              fields:
+                - path: name
+                  type: string
+                  label: Name
+                  required: true
+                  pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+                  patternMessage: Use letters, digits and underscores, not starting with a digit.
+                - path: value
+                  type: string
+                  label: Value
+                  required: true
+              rules:
+                - rule: item.name == '' || !item.name.startsWith('CPLN_')
+                  paths: [name]
+                  message: Names starting with CPLN_ are reserved by the platform, which refuses the workload.
+                # workload-tailscale.yaml sets these itself; a second entry with the same name conflicts.
+                - rule: >-
+                    !(item.name in ['KUBERNETES_SERVICE_HOST', 'TS_ACCEPT_DNS', 'TS_AUTHKEY', 'TS_KUBE_SECRET',
+                    'TS_ROUTES', 'TS_USERSPACE'])
+                  paths: [name]
+                  messageExpression: >-
+                    'The chart already sets ' + item.name + ' for the gateway to work; a second entry with this
+                    name conflicts with it. Remove it.'
+                  message: The chart already sets this variable for the gateway to work. Remove it.
+                # workload-tailscale.yaml writes `value: {{ .value }}` unquoted: YAML then reads these as
+                # another type, cuts them at " #", or fails to parse the workload.
+                - rule: >-
+                    item.value == '' ||
+                    !item.value.matches('^(true|false|True|False|TRUE|FALSE|yes|no|Yes|No|YES|NO|on|off|On|Off|ON|OFF|y|n|Y|N|null|Null|NULL|~|[-+]?[0-9][0-9_]*|[-+]?([0-9_]*\\.[0-9_]+|[0-9_]+\\.[0-9_]*)([eE][-+]?[0-9]+)?|[-+]?[0-9]+(:[0-5]?[0-9])+|[-+]?\\.(inf|Inf|INF)|\\.(nan|NaN|NAN)|0x[0-9a-fA-F_]+|0o[0-7]+|0b[01_]+)$') &&
+                    !item.value.matches('(: |:$| #|^[\\[\\]{}&*!|>\\x27\\x22%@`,?#]|^- |^-$|^\\s|\\s$)')
+                  paths: [value]
+                  message: >-
+                    The chart writes this value without quotes, so YAML would read it as a number, a boolean or
+                    null, cut it short, or fail to render the workload. Rephrase it.
+
+  - id: access
+    title: Access
+    description: How tailnet devices reach workloads, and the example target.
+    fields:
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '1.2.0') < 0
+        text: >-
+          Version 1.2.0 renamed the gateway workload from `RELEASE_NAME` to `RELEASE_NAME-tailscale`, and the
+          example from `httpbin` to `RELEASE_NAME-httpbin`. Workloads that allow the gateway by its old name in
+          their internal firewall must allow `//gvc/GVC_NAME/workload/RELEASE_NAME-tailscale` instead, or the
+          tailnet loses access to them.
+        textExpression: >-
+          'Version 1.2.0 renamed the gateway workload from `' + context.releaseName + '` to `' +
+          context.releaseName + '-tailscale`, and the example from `httpbin` to `' + context.releaseName +
+          '-httpbin`. Workloads that allow the gateway by its old name in their internal firewall must allow
+          `//gvc/' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '/workload/' + context.releaseName +
+          '-tailscale` instead, or the tailnet loses access to them.'
+      - type: note
+        text: >-
+          Tailnet devices reach a workload at `WORKLOAD_NAME.GVC_NAME.cpln.local` only when its internal
+          firewall admits the gateway: Same GVC does, and with Specific workloads the list must include
+          `//gvc/GVC_NAME/workload/RELEASE_NAME-tailscale`.
+        textExpression: >-
+          'Tailnet devices reach a workload at `WORKLOAD_NAME.' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+          '.cpln.local` only when its internal firewall admits the gateway: Same GVC does, and with Specific
+          workloads the list must include `//gvc/' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+          '/workload/' + context.releaseName + '-tailscale`.'
+      - path: deployHttpbinExample
+        type: boolean
+        label: Deploy the httpbin example
+        description: >-
+          A small HTTP service, RELEASE_NAME-httpbin, that only the gateway may reach. Call it from a tailnet
+          device to prove the routes, split DNS and gateway work, then turn it off.
+        docs: "#example-workload"
+
+  - id: advanced
+    title: Advanced
+    description: The Tailscale image and the gateway's compute.
+    sections:
+      - title: Image and resources
+        docs: "#image-and-resources"
+        fields:
+          - type: note
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.3.0') < 0
+            text: >-
+              Earlier versions used the floating `stable` tag (1.0.0: `latest`). This version pins the image,
+              so the gateway runs the same Tailscale build after every restart; a tag this release set itself
+              is kept.
+          - path: image.repository
+            type: string
+            label: Image repository
+            required: true
+            pattern: '^(//image/)?[a-z0-9]+([._/-][a-z0-9]+)*(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)*$'
+            patternMessage: Enter an image repository without a tag, such as tailscale/tailscale.
+          - path: image.tag
+            type: string
+            label: Image tag
+            required: true
+            pattern: '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'
+            patternMessage: Enter a tag of letters, digits, dots, dashes and underscores, such as v1.102.3.
+          - path: resources
+            type: resources
+            label: Gateway resources
+            required: true
+            description: A single replica in the chosen location.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: "!(self.image.tag in ['stable', 'latest'])"
+            severity: info
+            paths: [image.tag]
+            message: >-
+              This tag floats: two restarts can run different Tailscale builds. Pin a version, such as v1.102.3.
+
+migrations:
+  # 1.2.0 moved the default location from aws-eu-central-1 to aws-us-east-1. A 1.0.x or 1.1.x release on the
+  # old default runs in aws-eu-central-1, which may be the only location of its GVC: keep it.
+  - fromVersions: "<1.2.0"
+    to: location
+    valueExpr: self.location
+    note: The gateway stays in the location it runs in.
+  # 1.3.0 moved the auth key into a prerequisite secret (ts.validate refuses AuthKey).
+  - fromVersions: "<1.3.0"
+    from: AuthKey
+    note: >-
+      The auth key moved to an opaque secret you create; choose it under Auth key. The upgrade deletes the
+      secret the chart created for this value, so give the new secret another name. The old key stays in this
+      release's Helm history: generating a new Reusable and Ephemeral key is safer than reusing it.

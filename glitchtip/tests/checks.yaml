@@ -1,0 +1,111 @@
+# Feature checks for the glitchtip template. Each runs after install (and after each upgrade) on every version
+# in its since/until range. Add a check with `since: <new version>` for every change you ship. Placeholders:
+# {release} {gvc} {org} {version} {installed_version}, and the baseline vars (pg_user, pg_password, pg_db,
+# admin_email).
+#
+# Every check runs in a Patroni member, which carries curl and psql. Database checks go through the HAProxy
+# endpoint, the address GlitchTip uses, so they only pass when the proxy routes to the current leader.
+checks:
+  - id: app-healthy
+    description: >-
+      GlitchTip answers on its internal port: /_health/ succeeds and /api/settings/ returns the app's settings
+      with self-signup off (the baseline's registration.enabled), which only the running app serves.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        U=http://{release}-glitchtip.{gvc}.cpln.local:8000
+        curl -sf -m 10 -o /dev/null "$U/_health/" && echo HEALTH_OK
+        curl -s -m 10 "$U/api/settings/" 2>&1
+    expect:
+      stdout: '(?s)^HEALTH_OK$.*"enableUserRegistration"\s*:\s*false'
+    retries: 12
+    retryDelaySeconds: 15
+
+  - id: superuser-seeded
+    description: >-
+      The worker's first boot migrated the schema and created the superuser from the auth secret's adminEmail.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "select 'SUPERUSER ' || email from users_user where is_superuser" 2>&1
+    expect:
+      stdout: "^SUPERUSER {admin_email}$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: rejects-bad-password
+    description: A wrong database password is refused through the proxy (the control for the checks above).
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        PGPASSWORD=wrong-password psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -c "select 1" 2>&1
+        echo "EXIT=$?"
+    expect:
+      stdout: "password authentication failed"
+      notStdout: "^EXIT=0$"
+
+  - id: write-read-via-proxy
+    description: A row written as GlitchTip's database user through the proxy reads back.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        set -e
+        export PGPASSWORD='{pg_password}'
+        P={release}-postgres-ha-proxy.{gvc}.cpln.local
+        M="e2e-$(date +%s%N)"
+        psql -h "$P" -U {pg_user} -d {pg_db} -v ON_ERROR_STOP=1 -qtA \
+          -c "create table if not exists e2e (id serial primary key, version text not null, marker text not null)" \
+          -c "insert into e2e (version, marker) values ('{version}', '$M')" >/dev/null
+        psql -h "$P" -U {pg_user} -d {pg_db} -qtA -c "select marker from e2e where marker = '$M'" | grep -qx "$M" && echo "READ $M"
+    expect:
+      stdout: "^READ e2e-"
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: data-survives-upgrade
+    description: >-
+      The row written on the version this scenario installed first is still there. On a fresh install that is
+      the same version; after an upgrade it proves the database carried over.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        n=$(psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "select count(*) from e2e where version = '{installed_version}'" 2>&1)
+        [ "${n:-0}" -ge 1 ] 2>/dev/null && echo PERSISTED || echo "MISSING (rows for {installed_version}: ${n:-none})"
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 4
+
+  - id: pgvector-0-8-7-available
+    description: >-
+      The HA database runs patroni-postgres 0.8, whose pgvector is 0.8.7 (CVE-2026-103484), the image 1.4.1
+      moved to. Read on the leader, through the proxy.
+    issue: "#5376"
+    since: 1.4.1
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "select 'AVAIL ' || default_version from pg_available_extensions where name = 'vector'" 2>&1
+    expect:
+      stdout: "^AVAIL 0\\.8\\.7$"
+    # After an upgrade the members restart one by one and the proxy can briefly reach a member still on the
+    # old image; this runs long enough for the rollout to finish.
+    retries: 12
+    retryDelaySeconds: 15

@@ -1,0 +1,207 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: TiDB
+# createsGvc: true — the chart creates its own GVC from gvc.name, so there is no target GVC to limit (§14.2).
+# 1.1.1 exists only to give 1.1.0 releases the local server readiness probe; new installs go to the latest version.
+
+steps:
+  - id: cluster
+    title: Cluster
+    description: The GVC this release created, the locations it runs in, and the compute of each tier.
+    sections:
+      - id: gvc
+        fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              1.1.1 makes each TiDB server check only itself, so losing one TiKV node no longer restarts every
+              TiDB server at once, and lets the first PD member start again after a restart. Every workload
+              restarts once: PD and TiKV restart in every location at the same time, so writes pause for a few
+              minutes. Upgrade in a quiet period, with clients that retry, and keep every value as it is.
+          - path: gvc.name
+            type: string
+            label: GVC name
+            required: true
+            immutable: true
+            description: >-
+              The GVC this release created and runs in. Changing it would create a new, empty GVC and delete
+              this one with everything in it.
+          - path: gvc.locations
+            type: list
+            label: Locations
+            required: true
+            minItems: 1
+            uniqueBy: [name]
+            widget: table
+            newItem: { name: "", replicas: 2 }
+            itemLabel: "item.name + ' × ' + (item.replicas == null ? '?' : string(item.replicas))"
+            description: >-
+              The locations of the GVC. Each runs one PD member, and the given number of TiKV nodes and TiDB
+              servers.
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: ref
+                  label: Location
+                  required: true
+                  ref: { kind: location, format: name, mustExist: error }
+                - path: replicas
+                  type: integer
+                  label: TiKV nodes and TiDB servers
+                  required: true
+                  min: 0
+                  suggestions: [1, 2, 3]
+              rules:
+                # templates/workload-tikv.yaml, workload-server.yaml: replicas 0 renders localOptions[].suspend.
+                - rule: item.replicas == null || item.replicas != 0
+                  severity: warning
+                  paths: [replicas]
+                  message: >-
+                    0 suspends this location, and a suspended location's workloads stay unreachable from the other
+                    locations even after it is resumed. Remove the location instead.
+        rules:
+          - when: oldSelf != null
+            rule: >-
+              oldSelf == null ||
+              (size(self.gvc.locations) == size(oldSelf.gvc.locations) &&
+              self.gvc.locations.all(l, oldSelf.gvc.locations.exists(o, o.name == l.name)))
+            severity: warning
+            paths: [gvc.locations]
+            message: >-
+              The locations changed. Adding or removing a location adds or removes a PD member and TiKV nodes
+              of a running cluster; upgrade to 1.1.1 with the locations unchanged.
+      - id: compute
+        title: Compute
+        description: The defaults are sized for testing.
+        fields:
+          - path: resources.pd
+            type: resources
+            label: PD resources
+            required: true
+            description: Per PD member. For production, PD wants 4 to 8 CPU and 8 to 16Gi.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: resources.tikv
+            type: resources
+            label: TiKV resources
+            required: true
+            description: Per TiKV node. For production, TiKV wants 8 to 16 CPU and 32 to 64Gi, memory for caching.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: resources.server
+            type: resources
+            label: TiDB server resources
+            required: true
+            description: >-
+              Per TiDB server. For production, 8 to 16 CPU and 16 to 32Gi; it scales with concurrent
+              connections.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+
+  - id: database
+    title: Database
+    description: The root password and the application database and user created when the cluster first starts.
+    sections:
+      - id: credentials
+        fields:
+          - path: database.rootPassword
+            type: string
+            label: Root password
+            required: true
+            sensitive: true
+          - path: database.user
+            type: string
+            label: Application user
+            required: true
+          - path: database.password
+            type: string
+            label: Application user password
+            required: true
+            sensitive: true
+          - path: database.db
+            type: string
+            label: Database name
+            required: true
+        rules:
+          # secret-db-config.yaml: the database and user are created once, when the cluster first starts.
+          - when: oldSelf != null
+            rule: >-
+              oldSelf == null ||
+              (self.database.rootPassword == oldSelf.database.rootPassword &&
+              self.database.user == oldSelf.database.user &&
+              self.database.password == oldSelf.database.password &&
+              self.database.db == oldSelf.database.db)
+            severity: info
+            paths: [database]
+            message: >-
+              These are applied only when the cluster first starts. Changing them here does not change the
+              passwords, user or database of a running cluster.
+
+  - id: storage
+    title: Storage
+    description: The initial size of each PD and TiKV volume.
+    sections:
+      - fields:
+          - path: volumeset.tikv.capacity
+            type: integer
+            label: TiKV volume
+            required: true
+            unit: GiB
+            min: 10
+          - path: volumeset.pd.capacity
+            type: integer
+            label: PD volume
+            required: true
+            unit: GiB
+            min: 10
+
+  - id: access
+    title: Access
+    description: Who can reach the TiDB servers on port 4000.
+    sections:
+      - fields:
+          - path: internal_access.type
+            type: enum
+            label: Allowed callers
+            required: true
+            widget: segmented
+            options:
+              - { value: same-gvc, label: Same GVC }
+              - { value: same-org, label: Same org }
+              - { value: workload-list, label: Listed workloads }
+          - path: internal_access.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internal_access.type in ['same-gvc', 'workload-list']
+            widget: tags
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+          - path: exposeServer
+            type: boolean
+            label: Public status port
+            advanced: true
+            description: >-
+              Opens the TiDB servers to the internet. Only the unauthenticated status port (10080) is served
+              publicly; the MySQL port is not.
+            rules:
+              - rule: "!self.exposeServer"
+                severity: warning
+                message: >-
+                  This exposes TiDB's unauthenticated status and API port to the internet. Reach the servers over
+                  the internal name instead.
+
+rules:
+  # 1.1.1 is a patch for 1.1.0 releases; a fresh 1.x install creates its own GVC, which the latest version no longer does.
+  # Warning, not error: a warning still blocks Install, and an error rule must hold on the chart defaults (§8.10).
+  - when: context.mode == 'install'
+    rule: context.mode != 'install'
+    severity: warning
+    message: >-
+      1.1.1 is only an upgrade for releases on 1.1.0. Install the latest TiDB version instead; it deploys into
+      a GVC you choose.

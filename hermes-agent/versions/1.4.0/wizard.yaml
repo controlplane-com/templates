@@ -1,0 +1,636 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Hermes Agent
+# One stateful replica on its own volume and no location handling: every GVC location would run its own
+# agent with its own memory, each answering the same chat channels.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: secret
+    title: Secret
+    description: The prerequisite secret that holds your model key and the agent's own credentials.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            textExpression: >-
+              'The secret must exist **before** you install or upgrade. If it is missing, the deployment waits on it and ' +
+              '`cpln logs` shows nothing at all; the reason is in `status.versions[].message` of ' +
+              '`cpln workload get-deployments ' + context.releaseName + '-hermes-agent --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml`. Once the secret exists the ' +
+              'deployment recovers on its own within about ten minutes, or at once with ' +
+              '`cpln workload force-redeployment ' + context.releaseName + '-hermes-agent --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
+            text: >-
+              The secret must exist **before** you install or upgrade. If it is missing, the deployment waits on
+              it and `cpln logs` shows nothing at all; the reason is in `status.versions[].message` of
+              `cpln workload get-deployments RELEASE_NAME-hermes-agent --gvc GVC_NAME -o yaml`. Once the secret
+              exists the deployment recovers on its own within about ten minutes, or at once with
+              `cpln workload force-redeployment RELEASE_NAME-hermes-agent --gvc GVC_NAME`.
+          - path: secret.name
+            type: ref
+            label: Secret
+            required: true
+            description: >-
+              A dictionary secret with the API key for the provider you choose on the next step and the token
+              clients present to the gateway API, plus the dashboard password while the dashboard is on and the webhook signing
+              secret while webhooks are on. The token must be at least 16 characters, or the API never
+              serves and the workload never becomes ready.
+            help: >-
+              Create it with
+              `cpln secret create-dictionary --name SECRET_NAME --entry "api-key=YOUR-LLM-API-KEY" --entry "api-server-key=$(openssl rand -hex 32)" --entry "dashboard-password=$(openssl rand -hex 32)"`,
+              adding `--entry "webhook-secret=$(openssl rand -hex 32)"` for webhooks. Whoever signs in to the
+              dashboard or holds the token operates an agent that can run commands, so use long random values.
+              A changed value reaches the running agent only after
+              `cpln workload force-redeployment RELEASE_NAME-hermes-agent --gvc GVC_NAME`.
+            docs: "#secret"
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeysFrom: >-
+                [self.secret.keys.apiKey, self.secret.keys.apiServerKey] +
+                (self.dashboard.enabled ? [self.secret.keys.dashboardPassword] : []) +
+                (self.webhooks.enabled ? [self.secret.keys.webhookSecret] : [])
+              create:
+                suggestName: "context.releaseName + '-hermes-secret'"
+                hint: "Generate api-server-key and dashboard-password with: openssl rand -hex 32"
+      - id: key-names
+        title: Key names
+        advanced: true
+        description: >-
+          The keys inside your secret that hold each value. Change them only to match a secret that uses
+          other names; the dashboard password and webhook secret keys sit with their features.
+        fields:
+          - path: secret.keys.apiKey
+            type: string
+            label: LLM API key
+            required: true
+            description: The key holding your provider's API key.
+          - path: secret.keys.apiServerKey
+            type: string
+            label: Gateway API token
+            required: true
+            description: The key holding the bearer token clients present to the gateway API.
+    rules:
+      # hermes-agent.validate refuses an empty secret.name (required above); restated for the mirror.
+      - rule: self.secret.name != null && self.secret.name != ''
+        mirrors: hermes-agent.validate
+        paths: [secret.name]
+        message: The prerequisite secret is required.
+
+  - id: model
+    title: Model
+    description: The LLM provider and model the agent runs on.
+    fields:
+      - path: model.provider
+        type: enum
+        label: Provider
+        widget: cards
+        required: true
+        description: The secret's LLM API key must be a key for this provider.
+        options:
+          - value: anthropic
+            label: Anthropic
+            description: >-
+              Claude models. Create the key inside an Anthropic workspace; other keys fail every request
+              with "anthropic-workspace-id is required".
+          - value: openai
+            label: OpenAI
+            description: GPT models through the OpenAI API.
+          - value: custom
+            label: OpenAI-compatible endpoint
+            description: Any other OpenAI-compatible API, such as OpenRouter, Ollama, vLLM or LiteLLM.
+      - path: model.baseUrl
+        type: string
+        format: url
+        label: Base URL
+        when: self.model.provider != 'anthropic' || (self.model.baseUrl != null && self.model.baseUrl != '')
+        placeholder: https://openrouter.ai/api/v1
+        description: >-
+          The endpoint's OpenAI-compatible base URL, usually ending in `/v1`. With OpenAI, empty uses
+          `https://api.openai.com/v1`.
+      - path: model.name
+        type: string
+        label: Model ID
+        placeholder: claude-opus-4-6
+        description: >-
+          The model ID exactly as your provider lists it; empty uses Hermes's built-in default, an Anthropic
+          model. With Anthropic,
+          give the bare ID: the chart adds the `anthropic/` prefix.
+      - path: model.reasoningEffort
+        type: enum
+        label: Reasoning effort
+        widget: segmented
+        required: true
+        description: >-
+          Hermes sends it with every request. Models without reasoning, such as gpt-4o, reject it with
+          "Unsupported parameter: reasoning.effort", so choose None for them.
+        options:
+          - { value: none, label: None }
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+    rules:
+      - rule: self.model.provider in ['anthropic', 'openai', 'custom']
+        mirrors: hermes-agent.validate
+        paths: [model.provider]
+        message: Choose Anthropic, OpenAI or an OpenAI-compatible endpoint as the provider.
+      - rule: self.model.provider != 'custom' || (self.model.baseUrl != null && self.model.baseUrl != '')
+        mirrors: hermes-agent.validate
+        paths: [model.baseUrl]
+        message: An OpenAI-compatible endpoint needs its base URL.
+      - rule: self.model.provider != 'anthropic' || self.model.baseUrl == null || self.model.baseUrl == ''
+        mirrors: hermes-agent.validate
+        paths: [model.baseUrl]
+        message: >-
+          The Anthropic client ignores the base URL, and the chart refuses it. Clear it, or choose an
+          OpenAI-compatible endpoint to route the model through a proxy.
+      - rule: self.model.reasoningEffort in ['none', 'low', 'medium', 'high']
+        mirrors: hermes-agent.validate
+        paths: [model.reasoningEffort]
+        message: Choose None, Low, Medium or High as the reasoning effort.
+      - when: self.model.provider == 'anthropic'
+        rule: >-
+          (oldSelf != null && self.model.name == oldSelf.model.name) ||
+          self.model.name == null || !self.model.name.startsWith('anthropic/')
+        severity: warning
+        paths: [model.name]
+        message: >-
+          Give the bare model ID without "anthropic/": the chart adds that prefix itself, and a doubled
+          prefix names a model that does not exist.
+      - when: self.model.provider == 'anthropic'
+        rule: self.model.name == null || !self.model.name.contains('.')
+        severity: info
+        paths: [model.name]
+        message: Anthropic model IDs use hyphens, not dots, for example claude-opus-4-6.
+      - when: self.model.provider != 'anthropic'
+        rule: self.model.name != null && self.model.name != ''
+        severity: info
+        paths: [model.name]
+        message: >-
+          Set the model ID for this provider. Without one, Hermes falls back to its own default model,
+          which is an Anthropic model.
+
+  - id: dashboard
+    title: Dashboard and MCP
+    description: The optional web dashboard and Control Plane MCP server.
+    sections:
+      - id: dashboard
+        title: Dashboard
+        toggle: dashboard.enabled
+        description: >-
+          A web UI on port 9119 behind a basic-auth login, where you manage MCP servers, webhooks and
+          WhatsApp pairing. Whoever signs in operates the agent, so use a long random
+          password. Where it can be reached is decided under Network.
+        docs: "#dashboard"
+        fields:
+          - type: note
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.2.1') < 0
+            text: >-
+              Before 1.2.1, signing in to an OAuth MCP server from the public dashboard failed with
+              "cleartext http redirect_uris are only allowed for loopback hosts". This version gives the
+              dashboard its public address, so Authenticate now returns to it.
+          - path: dashboard.username
+            type: string
+            label: Username
+            required: true
+            description: The basic-auth username; the password comes from the secret.
+          - path: secret.keys.dashboardPassword
+            type: string
+            label: Password key in the secret
+            required: true
+            description: The key in your secret that holds the dashboard password.
+          - path: dashboard.publicUrl
+            type: string
+            format: url
+            label: Custom domain URL
+            advanced: true
+            placeholder: https://hermes.example.com
+            description: >-
+              Set it only when you serve the dashboard on your own domain, so MCP sign-ins return there.
+              Empty uses the public endpoint while it serves the dashboard.
+      - id: cpln-mcp
+        title: Control Plane MCP
+        toggle: cplnMcp.enabled
+        description: >-
+          Registers the Control Plane MCP server so the agent can read and manage resources in your org.
+          Nothing reaches your org until someone signs in with Authenticate; from then on the agent acts as
+          that person, including creating and deleting infrastructure, and the tokens stay on the volume.
+        docs: "#control-plane-mcp"
+        fields:
+          - type: note
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.4.0') < 0
+            text: >-
+              Version 1.4.0 added this server and turned it on by default. It appears on the dashboard's MCP
+              page and stays inert until someone clicks Authenticate. Turn it off to skip registering it. See
+              [Upgrading From 1.3.0 or Earlier](/template-catalog/templates/hermes-agent#upgrading-from-1-3-0-or-earlier).
+          - type: note
+            when: "!self.dashboard.enabled"
+            textExpression: >-
+              'With the dashboard off, sign in from a terminal: `cpln workload connect ' + context.releaseName +
+              '-hermes-agent --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              ' --container hermes`, then `hermes mcp login cpln`. Open the printed URL, and paste the address ' +
+              'it finally lands on (a connection error on 127.0.0.1:27890) back into the shell.'
+            text: >-
+              With the dashboard off, sign in from a terminal: `cpln workload connect RELEASE_NAME-hermes-agent
+              --gvc GVC_NAME --container hermes`, then `hermes mcp login cpln`. Open the printed URL, and paste
+              the address it finally lands on (a connection error on 127.0.0.1:27890) back into the shell.
+
+  - id: tools
+    title: Tools and channels
+    description: Optional browser automation, a webhook listener and a WhatsApp bridge.
+    sections:
+      - fields:
+          - type: note
+            textExpression: >-
+              'Telegram, Slack, Discord and other chat platforms are not set here: set them up after install ' +
+              'with `cpln workload exec ' + context.releaseName + '-hermes-agent --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + ' --container hermes -- hermes gateway setup`. ' +
+              'Their tokens are stored on the volume.'
+            text: >-
+              Telegram, Slack, Discord and other chat platforms are not set here: set them up after install
+              with `cpln workload exec RELEASE_NAME-hermes-agent --gvc GVC_NAME --container hermes -- hermes gateway setup`.
+              Their tokens are stored on the volume.
+          - type: note
+            severity: warning
+            text: >-
+              Version 1.4.1 fixed chat-platform and webhook turns that replied they could not connect to the
+              AI model, found on its newer image. This version's startup script lacks that fix; if a chat
+              platform or webhook answers that way, upgrade to 1.4.1.
+          # The first 1.3.0 publish had webhooks.publicUrl and webhooks.directLoadBalancer, removed in place a
+          # day later; no published values.yaml has them now, so they are noted here rather than migrated.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && oldSelf != null &&
+              (has(oldSelf.webhooks.directLoadBalancer) || has(oldSelf.webhooks.publicUrl))
+            text: >-
+              This release still has `webhooks.publicUrl` or `webhooks.directLoadBalancer` in its values. Both
+              were removed and nothing reads them: the dedicated webhook load balancer is gone after this
+              upgrade. Serve the listener on the public endpoint (Network, Public surface: Webhook listener) or
+              on your own domain routed to port 8644, and delete the two keys in YAML mode.
+      - id: browser
+        title: Browser automation
+        toggle: browser.enabled
+        description: >-
+          Adds a headless Chromium container that the agent drives over loopback. The Hermes image has no
+          browser of its own, so without it browser tools fall back to fetching page text. It is a second
+          container with its own CPU and memory.
+        docs: "#browser-automation"
+        fields:
+          - path: browser.image
+            type: string
+            format: image
+            label: Chromium image
+            required: true
+            advanced: true
+          - path: browser.cdpPort
+            type: integer
+            label: DevTools port
+            required: true
+            advanced: true
+            min: 1
+            max: 65535
+            description: >-
+              The loopback port of Chrome's DevTools protocol, shared with the Hermes container; nothing
+              outside the replica reaches it.
+          - path: browser.resources
+            type: resources
+            label: Chromium resources
+            required: true
+            advanced: true
+            description: A sidecar in the stateful Hermes workload.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          # The sidecar shares the replica's network with Hermes (8642, 9119, 8644) and the platform's own
+          # components, which hold the ports the platform reserves.
+          - rule: >-
+              !(self.browser.cdpPort in [8642, 9119, 8644, 8012, 8022, 9090, 9091, 15000, 15001, 15006,
+              15020, 15021, 15090, 41000])
+            paths: [browser.cdpPort]
+            messageExpression: >-
+              'Port ' + string(self.browser.cdpPort) + ' is taken by Hermes (8642, 9119, 8644) or reserved by
+              the platform, and Chromium shares their network. Choose another port, such as 9222.'
+            message: >-
+              This port is taken by Hermes (8642, 9119, 8644) or reserved by the platform, and Chromium
+              shares their network. Choose another port, such as 9222.
+      - id: webhooks
+        title: Webhook listener
+        toggle: webhooks.enabled
+        description: >-
+          Accepts HMAC-signed events on port 8644 and starts an agent turn for each. Other workloads reach
+          it inside the GVC; from the internet it needs the public endpoint (Network) or your own domain
+          routed to port 8644.
+        docs: "#webhook-listener"
+        fields:
+          - type: note
+            severity: warning
+            textExpression: >-
+              'Add the key `' + self.secret.keys.webhookSecret + '` with a signing secret ' +
+              '(`openssl rand -hex 32`) to the secret' +
+              (self.secret.name != null && self.secret.name != '' ? ' `' + self.secret.name + '`' : '') +
+              ' before you install or upgrade with webhooks on.'
+            text: >-
+              Add the webhook signing secret key to your secret (`openssl rand -hex 32`) before you install or
+              upgrade with webhooks on.
+          - path: secret.keys.webhookSecret
+            type: string
+            label: Signing secret key in the secret
+            required: true
+            description: >-
+              The key in your secret that holds the shared signing secret, available in the container as
+              `$WEBHOOK_SECRET`.
+            help: >-
+              Each subscription you create (on the dashboard's Webhooks page or with `hermes webhook
+              subscribe`) gets its own signing secret; pass `--secret "$WEBHOOK_SECRET"` to use this shared
+              one instead. The dashboard shows every subscription as `http://localhost:8644/webhooks/NAME`
+              however it is exposed: callers use the same `/webhooks/NAME` path on your public endpoint or
+              domain.
+      - id: whatsapp
+        title: WhatsApp
+        toggle: whatsapp.enabled
+        description: >-
+          Links the agent to a personal WhatsApp account through the image's built-in bridge, and the agent
+          then answers as that account. You pair it after install by scanning a QR code; the session is kept
+          on the volume.
+        docs: "#whatsapp"
+        fields:
+          - type: note
+            textExpression: >-
+              'After install, scan the QR code from the dashboard WhatsApp setup with your phone (Linked ' +
+              'devices), or print it in a terminal with `cpln workload exec ' + context.releaseName +
+              '-hermes-agent --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              ' --container hermes -- hermes whatsapp`. The first pairing installs the bridge from ' +
+              'registry.npmjs.org onto the volume. ' + (self.dashboard.enabled ?
+              'People who message the number get a pairing code that you approve on the dashboard Pairing page.' :
+              'With the dashboard off, set the allowlist of who may message the agent during that terminal setup.')
+            text: >-
+              After install, scan the QR code from the dashboard WhatsApp setup with your phone (Linked
+              devices), or print it in a terminal with
+              `cpln workload exec RELEASE_NAME-hermes-agent --gvc GVC_NAME --container hermes -- hermes whatsapp`.
+              The first pairing installs the bridge from registry.npmjs.org onto the volume. People who
+              message the number get a pairing code that you approve on the dashboard Pairing page, or that an
+              allowlist set during setup admits.
+
+  - id: server
+    title: Server and storage
+    description: The Hermes image, the compute of its single stateful replica, and the volume with its memory.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            text: >-
+              This version's default image, `nousresearch/hermes-agent:v2026.8.31`, has an upstream
+              session-store defect that can corrupt the session database on some installs, including through
+              the dashboard at startup. Version 1.4.1 moves to an image that fixes it.
+          - path: image
+            type: string
+            format: image
+            label: Hermes image
+            required: true
+            description: >-
+              This version's startup script was tested only with the default image. After changing it, check
+              that the workload becomes ready and that a chat request gets an answer.
+          - path: resources
+            type: resources
+            label: Hermes resources
+            required: true
+            description: A single stateful replica; it idles at the minimum and bursts during agent turns.
+            docs: "#resources"
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250]
+            description: >-
+              Holds the memory database, sessions, skills, config, MCP tokens and the WhatsApp session.
+            help: >-
+              The initial capacity sizes only a new volume. Uninstalling the release deletes the volume set
+              with everything the agent remembers; its final snapshot is kept for 7 days.
+            docs: "/reference/volumeset#capacity-and-billing"
+        rules:
+          - rule: "!has(self.resources.cpu) && !has(self.resources.memory)"
+            mirrors: hermes-agent.validateResourceKnobs
+            paths: [resources]
+            message: >-
+              resources.cpu and resources.memory were renamed to resources.maxCpu and resources.maxMemory in
+              1.1.0, and the chart refuses the old names. Remove them from the values.
+          - rule: oldSelf == null || self.image == oldSelf.image
+            severity: info
+            paths: [image]
+            message: >-
+              A new image restarts the single replica, so the agent is offline until it is ready again. Its
+              state stays on the volume.
+          - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+            paths: [volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - id: autoscaling
+        title: Grow the volume automatically
+        toggle: volumeset.autoscaling.enabled
+        description: The volume set grows by the scaling factor whenever its free space falls below the threshold.
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [50, 100, 250, 500, 1000]
+          - path: volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
+            mirrors: hermes-agent.validate
+            paths: [volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+
+  - id: network
+    title: Network
+    description: Whether the agent is on the internet, which surface its public endpoint serves, and who reaches it inside.
+    sections:
+      # expose only orders the ports when public access is off (the first port is the one the canonical
+      # endpoint fronts), so it sits in the public access section.
+      - id: public
+        title: Public access
+        toggle: publicAccess.enabled
+        description: >-
+          Puts one surface on the workload's public HTTPS endpoint. Whoever gets past its login or token
+          operates an agent that can run commands with full file access, so use long random credentials.
+          Off, every surface is reachable only inside Control Plane.
+        docs: "#access"
+        fields:
+          - type: note
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.3.0') < 0 && oldSelf != null &&
+              oldSelf.publicAccess.enabled == true
+            text: >-
+              Before 1.3.0 the public endpoint served the API unless you chose otherwise, and this release
+              keeps serving what it served. New installs default to the dashboard. See
+              [Upgrading From 1.2.1 or Earlier](/template-catalog/templates/hermes-agent#upgrading-from-1-2-1-or-earlier).
+          - path: publicAccess.expose
+            type: enum
+            label: Public surface
+            widget: cards
+            required: true
+            description: >-
+              A workload has one public endpoint, and it serves one of these; the others stay internal.
+              Access changes take up to a few minutes to take effect.
+            options:
+              - value: api
+                label: Gateway API
+                description: The OpenAI-compatible API on port 8642, behind the bearer token.
+              - value: dashboard
+                label: Dashboard
+                description: The web dashboard on port 9119, behind its basic-auth login.
+              - value: webhooks
+                label: Webhook listener
+                description: >-
+                  Only the HMAC-signed webhook listener on port 8644, over HTTPS; the API and dashboard stay
+                  internal.
+        rules:
+          - when: self.publicAccess.expose == 'dashboard'
+            rule: self.dashboard.enabled
+            mirrors: hermes-agent.validate
+            paths: [publicAccess.expose]
+            message: >-
+              The dashboard is off, so there is nothing to serve. Turn it on under Dashboard and MCP, or
+              choose another surface.
+          - when: self.publicAccess.expose == 'webhooks'
+            rule: self.webhooks.enabled
+            mirrors: hermes-agent.validate
+            paths: [publicAccess.expose]
+            message: >-
+              The webhook listener is off, so there is nothing to serve. Turn it on under Tools and channels,
+              or choose another surface.
+      - fields:
+          - type: note
+            when: >-
+              self.dashboard.enabled && !(self.publicAccess.enabled && self.publicAccess.expose == 'dashboard')
+            text: >-
+              The dashboard is not on the public endpoint, so only workloads inside Control Plane reach it.
+              To use it in a browser, turn on public access with the Dashboard surface.
+          - type: note
+            when: >-
+              self.cplnMcp.enabled && self.dashboard.enabled &&
+              !(self.publicAccess.enabled && self.publicAccess.expose == 'dashboard') &&
+              (self.dashboard.publicUrl == null || self.dashboard.publicUrl == '')
+            textExpression: >-
+              'Without a public dashboard address, Authenticate on the MCP page cannot return to the dashboard. ' +
+              'Sign in to the Control Plane MCP server from a terminal instead: `cpln workload connect ' +
+              context.releaseName + '-hermes-agent --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              ' --container hermes`, then `hermes mcp login cpln`, and paste the address the sign-in finally ' +
+              'lands on (a connection error on 127.0.0.1:27890) back into the shell.'
+            text: >-
+              Without a public dashboard address, Authenticate on the MCP page cannot return to the dashboard.
+              Sign in to the Control Plane MCP server from a terminal instead: `cpln workload connect
+              RELEASE_NAME-hermes-agent --gvc GVC_NAME --container hermes`, then `hermes mcp login cpln`, and
+              paste the address the sign-in finally lands on (a connection error on 127.0.0.1:27890) back into
+              the shell.
+      - title: Other workloads
+        fields:
+          - type: note
+            textExpression: >-
+              'Other workloads call the API at `http://' + context.releaseName + '-hermes-agent.' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '.cpln.local:8642` with the gateway API token ' +
+              'as the bearer token.'
+            text: >-
+              Other workloads call the API at `http://RELEASE_NAME-hermes-agent.GVC_NAME.cpln.local:8642` with
+              the gateway API token as the bearer token.
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: Access changes take up to a few minutes to take effect.
+            options:
+              - value: none
+                label: Nobody
+                description: No workload can connect over the internal network.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          # The chart writes the list only with workload-list (workload.yaml), so it is shown only then.
+          - path: internalAccess.workloads
+            when: self.internalAccess.type == 'workload-list'
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: The whole allow-list; workloads in other GVCs can be listed too.
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+    rules:
+      - rule: self.publicAccess.expose in ['api', 'dashboard', 'webhooks']
+        mirrors: hermes-agent.validate
+        paths: [publicAccess.enabled]
+        message: >-
+          publicAccess.expose must be api, dashboard or webhooks; the chart checks it even with public access
+          off. Correct it in YAML mode.
+      - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+        mirrors: hermes-agent.validate
+        paths: [internalAccess.type]
+        message: Choose Nobody, Same GVC, Same org or Specific workloads.
+      - when: self.internalAccess.type == 'workload-list'
+        rule: size(self.internalAccess.workloads) > 0
+        severity: info
+        paths: [internalAccess.workloads]
+        message: With no workloads listed, no workload can connect, as with Nobody.
+
+migrations:
+  # 1.1.0 named the limits maxCpu and maxMemory (same defaults as 1.0.0's cpu and memory).
+  - { fromVersions: "<1.1.0", from: resources.cpu, to: resources.maxCpu }
+  - { fromVersions: "<1.1.0", from: resources.memory, to: resources.maxMemory }
+  # 1.2.0 added publicAccess.expose with the default api (before it, the public endpoint always served the
+  # API), and 1.3.0 changed the default to dashboard. Carrying only changed values would move a public
+  # release's endpoint from the API to the dashboard: keep the surface it serves.
+  - fromVersions: "<1.3.0"
+    to: publicAccess.expose
+    valueExpr: >-
+      self.publicAccess.enabled == true ? (has(self.publicAccess.expose) ? self.publicAccess.expose : 'api') :
+      (has(self.publicAccess.expose) && self.publicAccess.expose != 'api' ? self.publicAccess.expose : 'dashboard')
+    note: >-
+      A public release keeps serving the surface it served; before 1.3.0 that was the API unless you chose the
+      dashboard. New installs default to the dashboard.

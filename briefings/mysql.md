@@ -40,6 +40,8 @@ env values on the backup job — they are not credentials; bucket access comes f
 
 ## Troubleshooting traps
 
+- **Upgrading from 1.1.x or older loses the data.** 1.2.0 renamed the workload and volume set (`{release}` → `{release}-mysql` / `-mysql-vs`), so `helm upgrade` starts on an empty volume and removes the old one. Proven by the e2e CI (5161). Maintainer ruling 2026-10-26: keep today's names, no chart fix; the README tells users to install a new release and move the data. No customer has been seen upgrading these.
+
 - **Both prerequisite secrets must exist before install.** Missing either leaves the workload wedged on
   an unresolvable `cpln://secret/...` reference — it looks like a crash, it is a missing secret.
 - **Credentials are only honoured when the volume is first initialized.** Rotating the secret and

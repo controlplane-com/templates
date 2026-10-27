@@ -1,0 +1,45 @@
+# mariadb 1.4.1 — the recommended install: application credentials and the root password in
+# prerequisite secrets. Prod shape for this template (one instance on a volumeset, one location) at its
+# default size; phpMyAdmin stays at its default, off.
+locations: [aws-us-east-1]
+timeoutSeconds: 600
+
+generated:
+  apppw: hex
+  rootpw: hex
+
+secrets:
+  creds:
+    type: dictionary
+    entries:
+      username: e2e
+      password: "{gen.apppw}"
+      database: e2e
+  root:
+    type: opaque
+    payload: "{gen.rootpw}"
+
+vars:
+  maria_workload: "{release}-maria"
+  maria_user: e2e
+  maria_password: "{gen.apppw}"
+  maria_db: e2e
+  maria_root_password: "{gen.rootpw}"
+
+values:
+  credentialsSecretName: "{secrets.creds.name}"
+  rootPasswordSecretName: "{secrets.root.name}"
+
+# 1.3.2 is the last version with credentials in `config`, which 1.4.0 refuses; 1.0.0 is the version
+# customers run. Both upgrade with this baseline's values, with secrets holding the same passwords, as
+# the README says.
+upgradeFrom:
+  - version: 1.3.2
+    values: new
+  - version: 1.0.0
+    values: new
+    knownIssue:
+      note: >-
+        1.2.0 renamed the workload and volume set ({release} → {release}-maria-vs), so upgrading
+        from 1.1.x or older starts on a new, empty volume and the data written on 1.0.0 is gone.
+        Left as is by maintainer ruling 2026-10-26; the README says not to upgrade in place.

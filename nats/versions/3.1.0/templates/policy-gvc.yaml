@@ -1,0 +1,20 @@
+{{- /*
+Each NATS server reads its own GVC at boot to confirm the GVC really has every
+location this release declares. The platform does not validate localOptions
+locations: an entry naming a location the GVC lacks is accepted, stored and
+inert, so the servers declared there never start while every other server keeps
+retrying route and gateway URLs that can never answer. Scoped to the ONE install
+GVC; never `target: all`, which would grant view on every GVC in the org.
+*/}}
+kind: policy
+name: {{ include "nats.policy.gvc.name" . }}
+description: NATS GVC read policy
+tags: {{- include "nats.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - view
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "nats.identity.name" . }}
+targetKind: gvc
+targetLinks:
+  - //gvc/{{ .Values.global.cpln.gvc }}

@@ -1,0 +1,84 @@
+# Feature checks for the rabbitmq template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
+# (rmq_workload, rmq_user, rmq_password). rmq_workload exists because 1.0.0 names the workload after
+# the release alone.
+#
+# The image ships rabbitmqadmin, which drives the management API on the container's own loopback with
+# the default user, so every check authenticates with the credentials the install applied.
+checks:
+  - id: amqp-listener
+    description: The AMQP port is listening.
+    exec:
+      workload: "{rmq_workload}"
+      container: rabbitmq
+      shell: bash
+      script: rabbitmq-diagnostics -q check_port_listener 5672 && echo LISTENING
+    expect:
+      stdout: "^LISTENING$"
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: publish-consume
+    description: A persistent message published to a durable queue is consumed back unchanged.
+    exec:
+      workload: "{rmq_workload}"
+      container: rabbitmq
+      shell: bash
+      script: |
+        set -e
+        a() { rabbitmqadmin -u {rmq_user} -p '{rmq_password}' "$@"; }
+        M="e2e-$(date +%s%N)"
+        a declare queue name=e2e-rw durable=true >/dev/null
+        a publish exchange=amq.default routing_key=e2e-rw payload="$M" properties='{"delivery_mode":2}' >/dev/null
+        got=$(a -f raw_json get queue=e2e-rw ackmode=ack_requeue_false count=1 | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["payload"])')
+        [ "$got" = "$M" ] && echo "READ $M"
+    expect:
+      stdout: "^READ e2e-"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: persistent-marker
+    description: Leaves one persistent message on a durable queue named after this version, for the check below.
+    exec:
+      workload: "{rmq_workload}"
+      container: rabbitmq
+      shell: bash
+      script: |
+        set -e
+        a() { rabbitmqadmin -u {rmq_user} -p '{rmq_password}' "$@"; }
+        a declare queue name=e2e-{version} durable=true >/dev/null
+        a publish exchange=amq.default routing_key=e2e-{version} payload=marker properties='{"delivery_mode":2}' >/dev/null
+        echo MARKED
+    expect:
+      stdout: "^MARKED$"
+
+  - id: rejects-bad-password
+    description: A wrong password is refused (the control for the checks above).
+    exec:
+      workload: "{rmq_workload}"
+      container: rabbitmq
+      shell: bash
+      script: |
+        rabbitmqadmin -u {rmq_user} -p wrong-password list queues 2>&1
+        echo "EXIT=$?"
+    expect:
+      stdout: "401|Access refused|not_authorised"
+      notStdout: "^EXIT=0$"
+
+  - id: data-survives-upgrade
+    description: >-
+      The message left on the version this scenario installed first is still queued. On a fresh install
+      that is the same version; after an upgrade it proves the durable queue and its message carried over.
+    exec:
+      workload: "{rmq_workload}"
+      container: rabbitmq
+      shell: bash
+      script: |
+        n=$(rabbitmqadmin -u {rmq_user} -p '{rmq_password}' -f raw_json list queues name messages 2>/tmp/e2e.err \
+          | python3 -c 'import json,sys; print(sum(q.get("messages") or 0 for q in json.load(sys.stdin) if q["name"] == "e2e-{installed_version}"))' 2>>/tmp/e2e.err)
+        [ "${n:-0}" -ge 1 ] 2>/dev/null && echo PERSISTED || echo "MISSING (messages on e2e-{installed_version}: ${n:-none}) $(cat /tmp/e2e.err)"
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 6
+    retryDelaySeconds: 20

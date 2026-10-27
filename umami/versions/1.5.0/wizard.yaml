@@ -153,8 +153,8 @@ steps:
             severity: info
             paths: [app.twoFactorKeySecretName]
             message: >-
-              Changing or removing the two-factor key breaks two-factor login for every enrolled user. Keep the
-              installed secret unless no one uses 2FA.
+              Changing or removing the two-factor key locks every user who enrolled in 2FA, admin included, out of
+              their account until the same key is restored. Keep the installed secret unless no one uses 2FA.
       - title: Tracker
         docs: "#tracker"
         description: Custom paths for the tracking script and the collect endpoint make ad blockers less likely to block them.
@@ -163,7 +163,7 @@ steps:
             type: string
             label: Tracking script path
             placeholder: s.js
-            description: Leave empty for the default `/script.js`.
+            description: Leave empty for the default `/script.js`. Do not use `recorder.js`, which Umami serves for session replay.
           - path: tracker.collectEndpoint
             type: string
             label: Collect endpoint path

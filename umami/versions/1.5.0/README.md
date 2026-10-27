@@ -45,7 +45,7 @@ Optional, for two-factor authentication (`app.twoFactorKeySecretName`, opaque) �
 printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name my-umami-2fa-key --encoding plain -f -
 ```
 
-Keep it for the life of the install — a different key breaks two-factor login for every enrolled user.
+Keep it for the life of the install — changing or removing it locks every enrolled user, admin included, out of their account until the same key is restored.
 
 Optional, only if you turn on backups: a cloud account + bucket (AWS/GCP), or — for `provider: minio` — a `dictionary` secret holding the S3-compatible endpoint's keys (see **Storage setup**).
 
@@ -77,7 +77,7 @@ app:
 
 ```yaml
 tracker:
-  scriptName: ""      # custom tracker script path, e.g. "s.js" (dodges ad blockers); "" = default /script.js
+  scriptName: ""      # custom tracker script path, e.g. "s.js" (dodges ad blockers); "" = default /script.js; not "recorder.js" (Umami's session-replay script)
   collectEndpoint: "" # custom collect API path, e.g. "/api/track"; "" = default /api/send
 ```
 

@@ -23,12 +23,12 @@ app:
   disableTelemetry: true # opt out of Umami's anonymous usage telemetry
   # Optional opaque secret holding a 64-character hex key (`openssl rand -hex 32`) that encrypts
   # two-factor (TOTP) secrets, e.g. my-umami-2fa-key. "" = two-factor authentication unavailable.
-  # Keep it stable: a different key breaks the 2FA of every enrolled user.
+  # Keep it stable: changing or removing it locks every enrolled user (admin included) out until the same key is back.
   twoFactorKeySecretName: ""
 
 # ─── Tracker ──────────────────────────────────────────────────────────────────
 tracker:
-  scriptName: ""      # custom tracker script path, e.g. "s.js" (dodges ad blockers); "" = default /script.js
+  scriptName: ""      # custom tracker script path, e.g. "s.js" (dodges ad blockers); "" = default /script.js; not "recorder.js" (Umami's session-replay script)
   collectEndpoint: "" # custom collect API path, e.g. "/api/track"; "" = default /api/send
 
 # ─── Backing Store: single-instance PostgreSQL (default) ───────────────────────

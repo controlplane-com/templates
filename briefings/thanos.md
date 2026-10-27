@@ -23,7 +23,7 @@
 - Each install is independent; multiple regions just reuse the same `stores:` list. No coordination between Query instances.
 
 ## Key knobs
-`replicas` (1 → set 2+ for HA) | `stores` (list of gRPC Store API endpoints — the interface Prometheus sidecars expose to Thanos — port :10901) | `queryReplicaLabels` (default `replica`, matches the prometheus template) | `publicAccess.enabled` (default **false**) | `storeGateway.enabled` / `compactor.enabled` (+ `compactor.retention.*`) | `storage.type` aws/gcp/minio (keyless cloud identity for aws/gcp)
+`replicas` (1 → set 2+ for HA) | `stores` (list of gRPC Store API endpoints — the interface Prometheus sidecars expose to Thanos — port :10901) | `queryReplicaLabels` (default `replica`; set the same label in each Prometheus's `externalLabels` — the prometheus template ships none by default) | `publicAccess.enabled` (default **false**) | `storeGateway.enabled` / `compactor.enabled` (+ `compactor.retention.*`) | `storage.type` aws/gcp/minio (keyless cloud identity for aws/gcp)
 
 ## Availability posture
 - Query is fully stateless and horizontally scalable in the free edition — `replicas: 2+` gives a zero-downtime query tier; tested with rolling-restart and replica-kill continuity checks.

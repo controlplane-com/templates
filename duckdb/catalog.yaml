@@ -11,7 +11,8 @@ summary: >-
   and keeps no database file between runs. The script can read and write Parquet, CSV and JSON on
   Amazon S3 (keyless through a cloud account) or any S3-compatible endpoint, and attach PostgreSQL,
   MySQL or SQLite databases with passwords from secrets. Pick it for scheduled ETL, exports and file
-  conversions that fit in one container's memory, not as a query server.
+  conversions that fit in one container's memory, not as a query server. Install into a single-location
+  GVC: a cron job runs once per location.
 
 keywords:
   - batch sql

@@ -111,6 +111,7 @@ internalAccess:               # internal firewall scope (in-GVC callers of the A
 ## Important Notes
 
 - **Single instance, no HA — this does not scale horizontally.** PocketBase is single-server by design (embedded SQLite, no clustering), and each stateful replica on this platform would get its own volume and therefore its own empty database. There is deliberately no `replicas` knob. Every `helm upgrade` that changes the container spec, every forced redeployment (including after a secret rotation) and every reschedule is a short full outage — typically a minute or two — while the one replica hands its volume over; requests fail with 503 meanwhile. Data is not at risk — the same volume reattaches.
+- **Install into a single-location GVC.** PocketBase is one SQLite instance on one volume; each extra GVC location would run its own separate database behind the same endpoint, so the Console wizard refuses a GVC with more than one location.
 - **The superuser password is re-applied from the secret on EVERY start.** Changing it in the dashboard is reverted at the next restart — change it in the secret instead, and note that this changes your login.
 - **After updating the credentials secret you must force a redeployment — the workload does NOT pick it up on its own.** Until you do, the old password keeps authenticating and the workload stays `ready: true`, with no error and no warning, so a rotation looks like it worked while the old credential stays valid indefinitely. Apply it with:
 

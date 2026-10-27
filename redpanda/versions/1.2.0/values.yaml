@@ -32,7 +32,7 @@ redpanda:
 
   # To disable all traffic, comment out the corresponding rule. Docs: https://docs.controlplane.com/concepts/security#firewall
   firewall:
-    internal_inboundAllowType: "same-gvc" # Options: same-org / same-gvc
+    internal_inboundAllowType: "same-gvc" # Options: same-org / same-gvc / workload-list / none
     # external_inboundAllowCIDR: 0.0.0.0/0
     # inboundAllowWorkload:
     #   - //gvc/my-gvc/workload/my-app

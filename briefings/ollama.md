@@ -37,7 +37,7 @@ Does not create a GVC.
 - **Models live on the volumeset, and uninstall deletes it** — every model is re-downloaded on the next
   install. A default-sized volume fills quickly once a second model is pulled.
 - **Both images floated until 1.1.2.** `open-webui:main` is a branch build, and the Ollama image carried no
-  tag at all. An install from before 1.1.2 is not reproducible.
+  tag at all. An install from before 1.1.2 is not reproducible. Moving such a release to the pins can DOWNGRADE it: measured 2026-10-26, a default 1.1.1 release ran Open WebUI 0.12.4 from `main`, and the pinned v0.11.0 then failed its DB migrations (`Can't locate revision`). The 1.1.2 wizard therefore carries the running image tags on upgrade, and the README tells users to pin a tag at least as new as the running one.
 - **1.2.0 refuses an Open WebUI tag below `v0.12.4`** (`ollama.validateImage`, mirrored by a wizard rule on the
   image field). It matches `ghcr.io/open-webui/open-webui` and the Docker Hub mirror `openwebui/open-webui`
   (with or without `docker.io/`); a minor-only tag (`0.11`) counts as that minor's latest patch; digests, other

@@ -68,7 +68,7 @@ prerequisites:
     valuesPath: storage.cloudAccountName
     required: false
     when: historyServer.enabled
-    description: AWS or GCP cloud account for keyless bucket access; on GCP, grant its service account object admin on the bucket.
+    description: AWS or GCP cloud account for keyless bucket access; on GCP, grant its service account the Storage Admin role (roles/storage.admin).
   - kind: other
     valuesPath: storage.policyName
     required: false

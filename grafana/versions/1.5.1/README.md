@@ -89,6 +89,7 @@ Exactly one of the two databases must be enabled (the chart enforces this at ren
 ```yaml
 postgresHA:                   # default: highly available PostgreSQL
   enabled: true
+  image: controlplanecorporation/patroni-postgres:0.8   # pgvector 0.8.7; tags 0.1-0.7 are refused (CVE-2026-103484)
   config:
     credentialsSecretName: my-grafana-db-credentials # PREREQUISITE dictionary secret (username, password, database), must exist BEFORE install
   replicas: 3
@@ -209,6 +210,15 @@ This complements the built-in workload dashboards rather than replacing them —
 | Login | `admin.user` / the payload of the `admin.passwordSecretName` secret |
 | Postgres (internal, HA mode) | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432`, credentials from your `postgresHA.config.credentialsSecretName` secret (`cpln secret reveal SECRET_NAME -o yaml`) |
 | Postgres (internal, single mode) | `{release}-postgres.{gvc}.cpln.local:5432`, credentials from your `postgres.config.credentialsSecretName` secret |
+
+## Upgrading from 1.5.0 or earlier
+
+1.5.1 moves the HA database (`postgresHA`) to `controlplanecorporation/patroni-postgres:0.8`, which carries
+pgvector 0.8.7 (CVE-2026-103484). The fix is in the server library and takes effect when the upgrade restarts
+the Patroni members; existing data needs nothing. Nothing limits the rollout of a stateful workload, so expect a
+short database outage while the members and the proxy restart, and upgrade in a quiet window. If you pinned
+`postgresHA.image` in your values, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render. Grafana itself does not need pgvector. If you created the `vector` extension in a database yourself, `\dx` keeps reporting the old version there until you run `ALTER EXTENSION vector UPDATE;`, which only updates that record.
+Single-instance mode (`postgres`) is unchanged.
 
 ## Upgrading from 1.4.1
 

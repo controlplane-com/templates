@@ -1,0 +1,135 @@
+# Feature checks for the grafana template. Each runs after install (and after each upgrade) on every version
+# in its since/until range. Add a check with `since: <new version>` for every change you ship. Placeholders:
+# {release} {gvc} {org} {version} {installed_version}, and the baseline vars (pg_user, pg_password, pg_db,
+# admin_password).
+#
+# Every check runs in a Patroni member, which carries curl and psql. Database checks go through the HAProxy
+# endpoint, the address Grafana uses, so they only pass when the proxy routes to the current leader.
+checks:
+  - id: app-healthy
+    description: Grafana's /api/health answers on its internal port and reports its database ok.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        curl -s -m 10 http://{release}-grafana.{gvc}.cpln.local:3000/api/health 2>&1
+    expect:
+      stdout: '"database"\s*:\s*"ok"'
+    retries: 12
+    retryDelaySeconds: 15
+
+  - id: admin-login
+    description: The admin logs in with the password from the prerequisite secret and is a server admin.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        curl -s -m 10 -u 'admin:{admin_password}' http://{release}-grafana.{gvc}.cpln.local:3000/api/user 2>&1
+    expect:
+      stdout: '"isGrafanaAdmin"\s*:\s*true'
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: rejects-unknown-login
+    description: >-
+      Basic auth with an unknown user is refused (the control for admin-login; an unknown user, so failed
+      attempts never count toward locking out the real admin).
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        curl -s -m 10 -u 'e2e-nobody:wrong-password' http://{release}-grafana.{gvc}.cpln.local:3000/api/user 2>&1
+    expect:
+      stdout: '(?i)invalid username or password|unauthorized'
+      notStdout: '"isGrafanaAdmin"'
+
+  - id: state-in-postgres
+    description: >-
+      Grafana keeps its state in the bundled PostgreSQL, not a local SQLite file: its user table there holds the
+      admin account.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "select 'ADMIN ' || login from \"user\" where is_admin" 2>&1
+    expect:
+      stdout: "^ADMIN admin$"
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: rejects-bad-password
+    description: A wrong database password is refused through the proxy (the control for the checks above).
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        PGPASSWORD=wrong-password psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -c "select 1" 2>&1
+        echo "EXIT=$?"
+    expect:
+      stdout: "password authentication failed"
+      notStdout: "^EXIT=0$"
+
+  - id: write-read-via-proxy
+    description: A row written as Grafana's database user through the proxy reads back.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        set -e
+        export PGPASSWORD='{pg_password}'
+        P={release}-postgres-ha-proxy.{gvc}.cpln.local
+        M="e2e-$(date +%s%N)"
+        psql -h "$P" -U {pg_user} -d {pg_db} -v ON_ERROR_STOP=1 -qtA \
+          -c "create table if not exists e2e (id serial primary key, version text not null, marker text not null)" \
+          -c "insert into e2e (version, marker) values ('{version}', '$M')" >/dev/null
+        psql -h "$P" -U {pg_user} -d {pg_db} -qtA -c "select marker from e2e where marker = '$M'" | grep -qx "$M" && echo "READ $M"
+    expect:
+      stdout: "^READ e2e-"
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: data-survives-upgrade
+    description: >-
+      The row written on the version this scenario installed first is still there. On a fresh install that is
+      the same version; after an upgrade it proves the database carried over.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        n=$(psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "select count(*) from e2e where version = '{installed_version}'" 2>&1)
+        [ "${n:-0}" -ge 1 ] 2>/dev/null && echo PERSISTED || echo "MISSING (rows for {installed_version}: ${n:-none})"
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 4
+
+  - id: pgvector-0-8-7-available
+    description: >-
+      The HA database runs patroni-postgres 0.8, whose pgvector is 0.8.7 (CVE-2026-103484), the image 1.5.1
+      moved to. Read on the leader, through the proxy.
+    issue: "#5376"
+    since: 1.5.1
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "select 'AVAIL ' || default_version from pg_available_extensions where name = 'vector'" 2>&1
+    expect:
+      stdout: "^AVAIL 0\\.8\\.7$"
+    # After an upgrade the members restart one by one and the proxy can briefly reach a member still on the
+    # old image; this runs long enough for the rollout to finish.
+    retries: 12
+    retryDelaySeconds: 15

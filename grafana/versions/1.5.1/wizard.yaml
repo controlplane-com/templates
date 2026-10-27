@@ -442,6 +442,13 @@ steps:
             text: >-
               The credentials secret must exist **before** you install. If it is missing, the deployment waits and
               `cpln logs` shows nothing at all.
+          - type: note
+            severity: info
+            when: >-
+              oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.5.1') < 0
+            text: >-
+              This version moves the HA database to patroni-postgres 0.8, with pgvector 0.8.7 (CVE-2026-103484).
+              The fix takes effect when the members restart. If you created the vector extension in a database, `\dx` shows the old version there until you run `ALTER EXTENSION vector UPDATE;`, which only updates that record.
           - path: postgresHA.config.credentialsSecretName
             type: ref
             label: Database credentials secret
@@ -469,6 +476,23 @@ steps:
             min: 1
             required: true
             suggestions: [1, 3, 5]
+          - path: postgresHA.image
+            type: string
+            format: image
+            label: Patroni PostgreSQL image
+            required: true
+            advanced: true
+            description: The PostgreSQL image of the HA database.
+            rules:
+              - rule: >-
+                  !self.postgresHA.enabled || (has(self.postgresHA.image) && self.postgresHA.image != '' && (
+                  !(self.postgresHA.image.split(':')[0] in ['controlplanecorporation/patroni-postgres', 'docker.io/controlplanecorporation/patroni-postgres']) ||
+                  size(self.postgresHA.image.split(':')) < 2 ||
+                  !self.postgresHA.image.split(':')[1].matches('^0[.][0-7]([.][0-9]+)?$')))
+                mirrors: grafana.validatePostgresHAImage
+                message: >-
+                  This image carries a pgvector older than 0.8.7, which is open to CVE-2026-103484: a database user who
+                  can create an IVFFlat index can run arbitrary code. Use controlplanecorporation/patroni-postgres:0.8.
           - path: postgresHA.volumeset.capacity
             type: integer
             label: Initial capacity per replica

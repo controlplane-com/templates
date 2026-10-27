@@ -1,0 +1,218 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: NATS
+# createsGvc: true. 1.0.1 creates one GVC per entry of gvcs (templates/01-gvcs.yaml) and runs one nats-server per
+# location in each (templates/05-workloads.yaml, min/maxScale 1), joined across GVCs by gateways; there is no target
+# GVC to limit and no gvc block (guide 14.2). The chart writes nats.conf itself (templates/03-nats-secrets.yaml) and
+# runs the image's nats-server on it. It has no `fail` defines; the rules below mirror what fails to render
+# (an entry without nats or loadBalancer: nil pointer in helm template, reproduced) and hazards in the render.
+# Each entry is a free-form object (locationLinks is a list inside a list item), so gvcs is a yaml field.
+
+steps:
+  - id: gvcs
+    title: GVCs
+    description: The GVCs this release creates; each runs one NATS server per location.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'install'
+            text: >-
+              This version creates one GVC per entry below, named by the entry. Use names no GVC in the org has:
+              the release adopts an existing GVC of that name, and uninstalling the release then deletes that GVC
+              with every workload in it. The default entries are named after locations (aws-us-west-2,
+              aws-us-east-2, gcp-us-central1, gcp-me-west1), names an org may already use for its own GVCs.
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Renaming or removing an entry deletes that GVC with every workload in it.
+          - path: gvcs
+            type: yaml
+            yamlType: list
+            label: GVCs
+            required: true
+            description: >-
+              One entry per GVC. Each entry needs name (the GVC name), locationLinks (for example
+              //location/aws-us-east-1), loadBalancer and nats; the last two may be empty maps. The GVCs are joined
+              into a super cluster over NATS gateways; cross-region gateway traffic is billed.
+            help: >-
+              Per entry, nats.resources.cpu and nats.resources.memory size the server (500m and 256Mi when unset),
+              and nats.port, nats.cluster, nats.gateway and nats.websocket override the defaults on the Network
+              step for that GVC. nats.gateway.extraGateways adds gateways outside this release; the default
+              gcp-us-central1 entry carries one to nats://external.example.com:7522, a placeholder address to
+              remove. loadBalancer.dedicated and loadBalancer.trustedProxies set the GVC's load balancer. The
+              chart does not read nats.natsBox or nats.multiZone. Leave each entry's nats.loadBalancer.enabled
+              false: it renders the direct load balancer ports as bare numbers.
+            rules:
+              - rule: size(self.gvcs) > 0
+                severity: warning
+                message: With no entries this version creates nothing. Add at least one GVC.
+              # templates/05-workloads.yaml reads $gvc.nats.port and templates/01-gvcs.yaml reads
+              # $gvc.loadBalancer.dedicated; a missing map is a nil pointer and helm template fails (reproduced).
+              - rule: self.gvcs.all(g, has(g.nats) && g.nats != null && has(g.loadBalancer) && g.loadBalancer != null)
+                message: >-
+                  Every entry needs a nats map and a loadBalancer map (each may be empty, {}); without them this
+                  version fails to render.
+              - rule: self.gvcs.all(g, has(g.name) && g.name != null && string(g.name) != '')
+                severity: warning
+                message: Every entry needs a name; it names the GVC the entry creates.
+              - rule: self.gvcs.all(g, has(g.locationLinks) && g.locationLinks != null && size(g.locationLinks) > 0)
+                severity: warning
+                message: >-
+                  An entry without locationLinks creates a GVC with no location, so no NATS server runs in it. Add
+                  one location, for example //location/aws-us-east-1.
+              - rule: >-
+                  self.gvcs.all(g, !has(g.name) || self.gvcs.filter(h, has(h.name) && h.name == g.name).size() == 1)
+                severity: warning
+                message: Two entries share a name, so both render the same GVC. Give every entry its own name.
+              - rule: >-
+                  self.gvcs.all(g, !has(g.locationLinks) || g.locationLinks == null || size(g.locationLinks) <= 1)
+                severity: info
+                message: >-
+                  This version gives every server of one GVC the same server_name and writes no routes between
+                  them. Give each entry one location, and add an entry per location instead.
+
+  - id: server
+    title: Server
+    description: The NATS workload and image.
+    sections:
+      - fields:
+          - type: note
+            when: context.mode == 'upgrade'
+            text: >-
+              Every upgrade that changes the workload restarts the servers; core NATS clients reconnect on
+              their own.
+          - path: nats.workloadName
+            type: string
+            label: Workload name
+            required: true
+            description: >-
+              The name of the NATS workload in every GVC. Clients connect to WORKLOAD.GVC.cpln.local.
+            pattern: '^[a-z][a-z0-9-]{0,61}[a-z0-9]$'
+            patternMessage: >-
+              Use lowercase letters, digits and hyphens, starting with a letter and ending with a letter or digit.
+          - path: nats.image
+            type: string
+            format: image
+            label: NATS image
+            required: true
+            help: >-
+              The chart runs nats-server from this image on the config it writes. Only the default image was
+              rendered with this version; check another image with a test release first.
+            rules:
+              - rule: self.nats.image.contains(':') || self.nats.image.contains('@')
+                severity: info
+                message: >-
+                  An image without a tag means its latest tag, which moves with every NATS release. Pin a tag you
+                  have tested.
+          - type: note
+            text: >-
+              This version fixes the rest of the workload: the identity nats-id in each GVC, internal access for
+              every workload in the org, no public inbound addresses and no volume. It configures no NATS
+              authentication; an auth string under nats.defaults in YAML mode is written into the server config
+              as is, for example authorization { user: a, password: b }.
+
+  - id: network
+    title: Network
+    description: The listener ports, and the WebSocket listener.
+    sections:
+      - title: Listeners
+        fields:
+          - path: nats.defaults.port
+            type: integer
+            label: Client port
+            required: true
+            min: 1
+            max: 65535
+          - path: nats.defaults.cluster.port
+            type: integer
+            label: Route port
+            required: true
+            description: The route listener of each server.
+            min: 1
+            max: 65535
+          - path: nats.defaults.cluster.listen
+            type: string
+            label: Route listen address
+            required: true
+            advanced: true
+            description: The address the route listener binds, as host:port. Keep its port equal to the route port.
+          - path: nats.defaults.gateway.port
+            type: integer
+            label: Gateway port
+            required: true
+            description: Connections between the GVCs.
+            min: 1
+            max: 65535
+          - path: nats.defaults.gateway.listen
+            type: string
+            label: Gateway listen address
+            required: true
+            advanced: true
+            description: The address the gateway listener binds, as host:port. Keep its port equal to the gateway port.
+        rules:
+          - rule: >-
+              ![8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090, 41000].exists(p,
+              p == self.nats.defaults.port || p == self.nats.defaults.cluster.port ||
+              p == self.nats.defaults.gateway.port ||
+              (self.nats.defaults.websocket.enabled && p == self.nats.defaults.websocket.port))
+            severity: warning
+            paths: [nats.defaults.port]
+            message: >-
+              A listener uses a port Control Plane reserves (8012, 8022, 9090, 9091, 15000, 15001, 15006,
+              15020, 15021, 15090, 41000), which the platform refuses at install. Pick another port.
+          - rule: >-
+              ([self.nats.defaults.port, self.nats.defaults.cluster.port, self.nats.defaults.gateway.port] +
+              (self.nats.defaults.websocket.enabled ? [self.nats.defaults.websocket.port] : []))
+              .all(p, ([self.nats.defaults.port, self.nats.defaults.cluster.port, self.nats.defaults.gateway.port] +
+              (self.nats.defaults.websocket.enabled ? [self.nats.defaults.websocket.port] : []))
+              .filter(q, q == p).size() == 1)
+            severity: warning
+            paths: [nats.defaults.port]
+            message: >-
+              Two listeners share a port, so the server cannot open both. Give each listener its own port.
+          - rule: >-
+              self.nats.defaults.cluster.listen.endsWith(':' + string(self.nats.defaults.cluster.port)) &&
+              self.nats.defaults.gateway.listen.endsWith(':' + string(self.nats.defaults.gateway.port))
+            severity: warning
+            paths: [nats.defaults.cluster.listen]
+            message: >-
+              A listen address and its port disagree: the server binds the listen address, while the workload
+              opens the port and the other GVCs dial the gateway port. Make the port in each listen address match.
+      - id: websocket
+        title: WebSocket
+        toggle: nats.defaults.websocket.enabled
+        description: >-
+          A WebSocket listener for browser and edge clients. This version opens no public inbound addresses, so
+          it serves workloads in the org only.
+        fields:
+          - type: note
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.0.1') < 0
+            text: >-
+              NATS 1.0.0 had no WebSocket listener, and this version turns one on by default. Turn it off here to
+              keep the servers as they were.
+          - path: nats.defaults.websocket.port
+            type: integer
+            label: WebSocket port
+            required: true
+            min: 1
+            max: 65535
+          - path: nats.defaults.websocket.compression
+            type: boolean
+            label: Compression
+
+yamlOnly:
+  - path: org.name
+    reason: Not read by this version.
+  - path: nats.natsBoxImage
+    reason: Not read by this version.
+  - path: nats.defaults.allowNonTls
+    reason: Not honoured; this version writes allow_non_tls true whatever the value.
+  - path: nats.defaults.cluster.noAdvertise
+    reason: Not honoured; this version always starts the server with --no_advertise.
+  - path: nats.defaults.websocket.noTls
+    reason: Not honoured; this version writes no_tls true unless WebSocket TLS files are set.

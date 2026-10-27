@@ -1,0 +1,13 @@
+# elasticsearch 1.0.0 — the default three-node cluster with Kibana, sized down to keep the run cheap (the
+# chart's defaults are 2 CPU / 6Gi per node). Security is off by design in this template: the platform's
+# mesh carries the network security, so there are no credentials to test.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+values:
+  jvmHeap: 1g
+  resources:
+    minCpu: 250m
+    minMemory: 1Gi
+    maxCpu: 1
+    maxMemory: 2Gi

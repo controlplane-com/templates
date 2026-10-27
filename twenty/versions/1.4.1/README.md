@@ -172,6 +172,7 @@ Set `postgres.enabled: false` and `postgresHA.enabled: true`. Exactly one databa
 ```yaml
 postgresHA:
   enabled: false
+  image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7; tags 0.1-0.7 are refused
   config:
     credentialsSecretName: my-twenty-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   replicas: 3
@@ -311,6 +312,10 @@ Redis keeps no password on disk: it takes the password from the secret each time
 2. Redeploy Redis, the worker and the server together: `cpln workload force-redeployment RELEASE_NAME-twenty-redis --gvc GVC_NAME`, then the same for `RELEASE_NAME-twenty-worker` and `RELEASE_NAME-twenty`. None of them picks up the change without its redeploy.
 
 Expect a short interruption: until all three have restarted, Redis and the app hold different passwords, so queued jobs wait and the server cannot reach its cache.
+
+## Upgrading from 1.4.0 or earlier (HA mode)
+
+1.4.1 runs the highly available database (`postgresHA`) on `controlplanecorporation/patroni-postgres:0.8`, which carries pgvector 0.8.7 (CVE-2026-103484); earlier versions ran `0.7`. The upgrade restarts the Patroni members one at a time, with a leader handover, and existing data needs nothing. Twenty does not use the `vector` extension; if you created it yourself in a database, `\dx` keeps reporting the old version until you run `ALTER EXTENSION vector UPDATE;` there. If you set `postgresHA.image` in your values, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render. Single-instance installs (`postgres`) are unaffected.
 
 ## Upgrading from 1.3.x
 

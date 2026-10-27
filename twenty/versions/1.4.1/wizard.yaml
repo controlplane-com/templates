@@ -448,6 +448,21 @@ steps:
             min: 1
             suggestions: [3, 5]
             description: Patroni replicas; one is the leader, the others are standbys ready to take over.
+          - path: postgresHA.image
+            type: string
+            format: image
+            label: Patroni PostgreSQL image
+            required: true
+            description: The PostgreSQL server image the HA members run.
+            rules:
+              - rule: >-
+                  !(self.postgresHA.image.split(':')[0] in ['controlplanecorporation/patroni-postgres', 'docker.io/controlplanecorporation/patroni-postgres']) ||
+                  size(self.postgresHA.image.split(':')) < 2 ||
+                  !self.postgresHA.image.split(':')[1].matches('^0[.][0-7]([.][0-9]+)?$')
+                mirrors: twenty.validatePostgresHAImage
+                message: >-
+                  This image carries a pgvector older than 0.8.7, which is open to CVE-2026-103484: a database user who can
+                  create an IVFFlat index can run arbitrary code. Use controlplanecorporation/patroni-postgres:0.8.
           - path: postgresHA.resources
             type: resources
             label: PostgreSQL resources

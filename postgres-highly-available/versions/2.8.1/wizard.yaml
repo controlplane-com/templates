@@ -642,7 +642,9 @@ steps:
 rules:
   # Workload names are limited to 49 characters, and the chart's longest workload suffix is
   # -postgres-ha-backup (19, logical backups), then -postgres-ha-proxy (18, proxy or PgBouncer).
-  - rule: >-
+  - when: context.releaseName != null
+    paths: [proxy.enabled, pgbouncer.enabled, backup.enabled]
+    rule: >-
       size(context.releaseName) <= ((self.backup.enabled && self.backup.mode == 'logical') ? 30 :
       ((self.proxy.enabled || self.pgbouncer.enabled) ? 31 : 37))
     messageExpression: >-

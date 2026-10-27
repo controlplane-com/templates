@@ -1,0 +1,55 @@
+---
+kind: workload
+name: {{ include "chatwoot.worker.name" . }}
+description: Chatwoot Sidekiq worker — background jobs; also runs database migrations and the first-run bootstrap
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "chatwoot.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "chatwoot.identity.name" . }}
+  containers:
+    - name: chatwoot-worker
+      image: {{ .Values.chatwoot.image }}
+      command: /bin/sh
+      args:
+        - /cpln/start.sh
+      inheritEnv: false
+      minCpu: {{ .Values.worker.resources.minCpu | quote }}
+      cpu: {{ .Values.worker.resources.maxCpu | quote }}
+      minMemory: {{ .Values.worker.resources.minMemory | quote }}
+      memory: {{ .Values.worker.resources.maxMemory | quote }}
+      env:
+        {{- include "chatwoot.env.common" . | trim | nindent 8 }}
+        # ── Sidekiq ── also sets this process's Postgres connection-pool size
+        - name: SIDEKIQ_CONCURRENCY
+          value: {{ .Values.worker.concurrency | quote }}
+      volumes:
+        - path: /cpln/start.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "chatwoot.secret.workerStart.name" . }}.payload
+      # No probes: Sidekiq exposes no port, and its failure mode is process exit
+      # (set -eu makes a failed migration fatal), which restarts the container.
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      # Fixed single replica: this workload also runs the migrations and the
+      # first-run onboarding bootstrap, which are not concurrency-safe on a
+      # fresh database. Scale throughput with worker.concurrency instead.
+      minScale: 1
+      maxScale: 1
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      # Outbound only — SMTP delivery, object storage, webhook deliveries.
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      inboundAllowCIDR: []
+    internal:
+      inboundAllowType: none
+  supportDynamicTags: false

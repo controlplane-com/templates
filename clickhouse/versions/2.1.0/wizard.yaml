@@ -1,0 +1,482 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: ClickHouse
+# createsGvc: true. The chart creates its own GVC from gvc.name and gvc.locations (templates/gvc.yaml), so there is
+# no target GVC to limit and no gvc block (guide 14.2); the location rules work on gvc.locations instead.
+steps:
+  - id: locations
+    title: GVC and locations
+    description: >-
+      The GVC this release creates, the locations ClickHouse runs in and the server replicas in each: one shard
+      per location.
+    fields:
+      - type: note
+        severity: warning
+        when: context.mode == 'install'
+        text: >-
+          This version creates its own GVC with the name below. Use a name no GVC in the org has: the release
+          adopts an existing GVC of that name, and uninstalling the release then deletes that GVC with every
+          workload in it. Uninstall the release against the GVC you install it into, not the GVC it creates.
+      - path: gvc.name
+        type: string
+        label: GVC name
+        required: true
+        immutable: >-
+          The release runs in the GVC it created; another name would create a new, empty GVC and delete this one
+          with everything in it.
+        description: The GVC this release creates and runs in. Give every install its own.
+        pattern: '^[a-z][a-z0-9-]{0,61}[a-z0-9]$'
+        patternMessage: >-
+          Use lowercase letters, digits and hyphens, starting with a letter and ending with a letter or digit.
+        rules:
+          - rule: self.gvc.name != 'clickhouse-gvc'
+            severity: info
+            messageExpression: >-
+              'GVC names are org-wide, so a second release on the default name would adopt the GVC of the first.
+              Give each release its own, for example ' + context.releaseName + '-clickhouse.'
+            message: >-
+              GVC names are org-wide, so a second release on the default name would adopt the first release's
+              GVC. Give each release its own.
+      - path: gvc.locations
+        type: list
+        label: Locations
+        required: true
+        minItems: 3
+        uniqueBy: [name]
+        widget: table
+        newItem: { name: "", replicas: 1 }
+        itemLabel: "item.name + ' × ' + (item.replicas == null ? '?' : string(item.replicas))"
+        description: >-
+          The locations of the GVC, at least three. One shard per location, in list order: a location's
+          position is its shard number, and the first three locations also host the Keeper members.
+        item:
+          type: object
+          fields:
+            - path: name
+              type: ref
+              label: Location
+              required: true
+              ref: { kind: location, format: name, mustExist: error }
+            - path: replicas
+              type: integer
+              label: Server replicas
+              required: true
+              min: 0
+              widget: stepper
+          rules:
+            # workload-server.yaml: replicas 0 renders localOptions[].suspend for that location.
+            - rule: item.replicas == null || item.replicas != 0
+              severity: warning
+              paths: [replicas]
+              message: >-
+                0 suspends the server in this location, but the location keeps its shard number and Keeper
+                slot. Remove the location instead.
+        rules:
+          - rule: size(self.gvc.locations) >= 3
+            mirrors: clickhouse.validateLocations
+            message: This version needs at least 3 locations, one shard per location.
+          - rule: >-
+              oldSelf == null ||
+              (self.gvc.locations.map(l, l.name).join(',') + ',').startsWith(oldSelf.gvc.locations.map(l, l.name).join(',') + ',') ||
+              (oldSelf.gvc.locations.map(l, l.name).join(',') + ',').startsWith(self.gvc.locations.map(l, l.name).join(',') + ',')
+            severity: info
+            message: >-
+              This upgrade changes which location holds an installed position in the list. A location's
+              position is its shard number, which its nodes use as their `{shard}` macro, and the first
+              three locations are the Keeper members, so a moved location's nodes get another shard number
+              than the one their replicated tables were created with, and a new location takes over another
+              location's shard number and Keeper slot. Keep the installed locations first, in their order,
+              and add new ones after them.
+          # templates/gvc.yaml: staticPlacement.locationLinks is the list, so a removed location leaves the GVC.
+          - rule: >-
+              oldSelf == null || oldSelf.gvc.locations.all(o, self.gvc.locations.exists(l, l.name == o.name))
+            severity: info
+            message: >-
+              This upgrade removes a location from the GVC the release created, with the server replicas and
+              the Keeper member that ran there and their volumes.
+      - type: note
+        when: size(self.gvc.locations) >= 3
+        text: >-
+          A multi-shard cluster with one shard per location and three Keeper members in the first three
+          locations, which tolerate the loss of one.
+        textExpression: >-
+          'Multi-shard cluster: ' + string(size(self.gvc.locations)) + ' shards, one per location, and three Keeper members in the first three locations, which tolerate the loss of one.'
+      - type: note
+        when: size(self.gvc.locations) >= 3 && self.gvc.locations.exists(l, l.replicas == 1)
+        text: >-
+          With one server replica in a location, losing that shard fails every distributed query, not only
+          the rows on that shard. Add replicas there if partial results are not acceptable.
+      - path: clusterName
+        type: string
+        label: Cluster name
+        required: true
+        description: The name of the cluster in `ON CLUSTER` DDL and in `Distributed` table definitions.
+        rules:
+          # secret-server-config.yaml writes it as an XML element name and unquoted into the CREATE DATABASE ... ON
+          # CLUSTER statement; this chart does not check it, so an installed value is left alone.
+          - rule: >-
+              (oldSelf != null && self.clusterName == oldSelf.clusterName) ||
+              self.clusterName.matches('^[A-Za-z_][A-Za-z0-9_]*$')
+            severity: warning
+            message: >-
+              Use letters, digits and underscores only, not starting with a digit, such as my_cluster: the name
+              becomes an XML element name and is used unquoted in `ON CLUSTER` DDL.
+          - rule: oldSelf == null || self.clusterName == oldSelf.clusterName
+            severity: info
+            message: >-
+              Renaming the cluster orphans existing `Distributed` tables: they keep pointing at the old
+              cluster name and fail with `Code: 701`. Recreate them after the upgrade.
+
+  - id: credentials
+    title: Database
+    description: The password of the built-in `default` user and the name of the database to create.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          This version takes the password as a plain value, so it is stored in the Helm release and in a
+          secret the chart creates. 2.6.0 and later read it from a dictionary secret you create.
+      - path: database.password
+        type: string
+        label: Password
+        required: true
+        sensitive: true
+        widget: password
+        example: true
+        description: The password of the built-in `default` user, which every client connects as.
+        help: >-
+          The server writes the password into `users.xml` at every start, so a new password here restarts the
+          servers with it; update your clients after the upgrade. `ALTER USER` cannot change it, because
+          `default` is defined in `users.xml`. It is written unescaped into the XML configuration, so keep `<`
+          and `&` out of it.
+        rules:
+          # secret-database-config.yaml:8 writes the password unquoted into YAML (quoted from 2.3.0).
+          - rule: >-
+              (oldSelf != null && self.database.password == oldSelf.database.password) ||
+              (self.database.password.matches('^[A-Za-z0-9_]') &&
+              !self.database.password.contains(': ') && !self.database.password.contains(' #') &&
+              !self.database.password.endsWith(':') &&
+              !(self.database.password.lowerAscii() in ['true','false','yes','no','on','off','y','n','null','~']) &&
+              !self.database.password.matches('^[-+]?([0-9][0-9_]*(\\.[0-9_]*)?([eE][-+]?[0-9]+)?|0x[0-9a-fA-F_]+|0o?[0-7_]+|0b[01_]+)$'))
+            severity: warning
+            message: >-
+              This version writes the password unquoted into YAML, so it must read as plain text: start with a
+              letter, digit or underscore, no ": " or " #", no trailing ":", and not a number, true, false, yes,
+              no, on, off or null. 2.3.0 and later quote it.
+          # The defaults published in the template repository: mypw (1.0.0) and mypassword (2.0.0 to 2.5.0).
+          # On install, example: true already refuses the default.
+          - when: oldSelf != null
+            rule: self.database.password != 'mypassword' && self.database.password != 'mypw'
+            severity: warning
+            message: >-
+              This is the default password published in the template repository. Choose your own, and update
+              your clients after the upgrade.
+          - rule: oldSelf == null || self.database.password == oldSelf.database.password
+            severity: info
+            message: The servers restart with the new password, so clients need it from then on.
+      - path: database.name
+        type: string
+        label: Database name
+        required: true
+        description: Created at start when it does not exist.
+        rules:
+          # secret-server-config.yaml puts it unquoted into CREATE DATABASE; the chart does not check it.
+          - rule: >-
+              (oldSelf != null && self.database.name == oldSelf.database.name) ||
+              (self.database.name.matches('^[A-Za-z_][A-Za-z0-9_]*$') &&
+              !(self.database.name.lowerAscii() in ['true','false','yes','no','on','off','y','n','null','~']))
+            severity: warning
+            message: >-
+              Use letters, digits and underscores only, not starting with a digit and not true, false, yes, no,
+              on, off or null, such as mydatabase: the chart writes the name unquoted into YAML and the startup
+              script puts it unquoted into SQL.
+          - rule: oldSelf == null || self.database.name == oldSelf.database.name
+            severity: info
+            message: Another name creates another database next to the existing one; the existing one stays.
+
+  - id: storage
+    title: Object storage
+    description: >-
+      Where ClickHouse keeps its table data; the server volume holds its metadata. Turn on exactly one
+      provider.
+    sections:
+      - fields:
+          - type: note
+            text: >-
+              Give each release its own bucket: the chart writes to a fixed path in it, so two
+              releases on one bucket would share a data path. Keep the locations and the bucket in the same cloud
+              provider and region family: cross-region traffic to object storage is billed on every query
+              that misses the local cache.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.0.0') < 0
+            text: >-
+              1.0.0 had no object storage. Tables created on 1.0.0 keep their parts on the server volume, while
+              from 2.0.0 the chart sets a default storage policy that contains only the object storage disk, so
+              this upgrade path is unproven. Install a new release and copy the data across instead.
+      - id: aws
+        title: AWS S3
+        toggle: aws.enabled
+        description: The workload identity reaches the bucket through the cloud account and the AWS IAM policy.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              This version also attaches the AWS managed policy `aws::ReadOnlyAccess` to the identity, which can
+              read every bucket in the AWS account. 2.6.1 removes it.
+          - path: aws.s3.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: aws.s3.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: aws.s3.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            docs: "/guides/create-cloud-account"
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: aws.s3.policyName
+            type: string
+            label: AWS IAM policy
+            required: true
+            example: true
+            description: >-
+              The name of the AWS IAM policy you created for the bucket (an AWS object, not a Control Plane
+              policy).
+            help: >-
+              Allow `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket`, `s3:GetObjectVersion`,
+              `s3:DeleteObjectVersion`, `s3:GetBucketLocation`, `s3:AbortMultipartUpload`,
+              `s3:ListBucketMultipartUploads` and `s3:ListMultipartUploadParts` on `arn:aws:s3:::BUCKET` and
+              `arn:aws:s3:::BUCKET/*`.
+            pattern: '^[\w+=,.@-]{1,128}$'
+            patternMessage: Use up to 128 letters, digits and the characters + = , . @ _ -.
+        rules:
+          - rule: oldSelf == null || oldSelf.aws.enabled != true || self.aws.s3.bucket == oldSelf.aws.s3.bucket
+            severity: info
+            paths: [aws.s3.bucket]
+            message: >-
+              The table data stays in the installed bucket, and the volume holds metadata that points
+              there; another bucket does not move the data.
+          - rule: oldSelf == null || oldSelf.aws.enabled != true || self.aws.s3.region == oldSelf.aws.s3.region
+            severity: info
+            paths: [aws.s3.region]
+            message: >-
+              The bucket and its table data stay in their installed region, and the volume holds metadata
+              that points there; another region does not move them.
+      - id: gcp
+        title: Google Cloud Storage
+        toggle: gcp.enabled
+        description: >-
+          ClickHouse reaches GCS through its S3-compatible interface with an interoperability HMAC key; no cloud
+          account is needed.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              This version takes the HMAC key as plain values, so it is stored in the Helm release and in a
+              configuration secret the chart creates. 2.7.0 and later read it from a dictionary secret you create.
+          - path: gcp.gcs.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
+          - path: gcp.gcs.accessKeyId
+            type: string
+            label: HMAC access key ID
+            required: true
+            example: true
+            description: >-
+              The HMAC key from the bucket project's Interoperability settings, for a service account with
+              Storage Object Admin.
+          - path: gcp.gcs.secretAccessKey
+            type: string
+            label: HMAC secret
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+        rules:
+          - rule: oldSelf == null || oldSelf.gcp.enabled != true || self.gcp.gcs.bucket == oldSelf.gcp.gcs.bucket
+            severity: info
+            paths: [gcp.gcs.bucket]
+            message: >-
+              The table data stays in the installed bucket, and the volume holds metadata that points
+              there; another bucket does not move the data.
+    rules:
+      - rule: "!(self.aws.enabled && self.gcp.enabled)"
+        mirrors: clickhouse.validateStorage
+        paths: [gcp.enabled]
+        message: Turn on only one provider, AWS S3 or Google Cloud Storage.
+      # The chart refuses neither on too, but its defaults have both off, so this one is a warning (guide 8.10).
+      - rule: self.aws.enabled || self.gcp.enabled
+        mirrors: clickhouse.validateStorage
+        severity: warning
+        paths: [aws.enabled]
+        message: Turn on one provider, AWS S3 or Google Cloud Storage.
+      - rule: >-
+          oldSelf == null || !(oldSelf.aws.enabled == true || oldSelf.gcp.enabled == true) ||
+          (self.aws.enabled == oldSelf.aws.enabled && self.gcp.enabled == oldSelf.gcp.enabled)
+        paths: [aws.enabled]
+        message: >-
+          Switch object storage providers with a fresh install: the table data stays in the old storage, and
+          the release's identity keeps a cloud binding once it has one.
+
+  - id: server
+    title: Server
+    description: >-
+      The ClickHouse server's compute, volume and who can connect to it. This version runs
+      clickhouse/clickhouse-server:25.10, set by the chart.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Every upgrade restarts every server replica in every location at once: nothing serialises a
+              rolling restart of a stateful workload, so plan the upgrade as a query interruption.
+          - path: server.resources
+            type: resources
+            label: Server resources
+            required: true
+            description: Per server replica.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: volumeset.server.capacity
+            type: integer
+            label: Server volume capacity
+            unit: GiB
+            min: 10
+            required: true
+            description: >-
+              Holds each replica's metadata and the object storage disk metadata; table data lives in object
+              storage.
+            docs: "#volumes"
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            rules:
+              - rule: oldSelf == null || self.volumeset.server.capacity >= oldSelf.volumeset.server.capacity
+                message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - id: server-access
+        title: Who can connect
+        description: Firewall changes take up to about five minutes to propagate.
+        fields:
+          - path: server.internal_access.type
+            type: enum
+            label: Who can connect to the server
+            widget: cards
+            required: true
+            options:
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this release's GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Blocks all internal traffic in this version (fixed in 3.0.0).
+            rules:
+              # workload-server.yaml renders inboundAllowWorkload: [] whatever the values say (CHANGELOG, clickhouse 3.0.0).
+              - rule: self.server.internal_access.type != 'workload-list'
+                severity: warning
+                message: >-
+                  This version never applies the workload list, so Specific workloads blocks every client and
+                  the server replicas from each other. 3.0.0 fixes it. Choose Same GVC or
+                  Same org.
+
+  - id: keeper
+    title: Keeper
+    description: >-
+      ClickHouse Keeper, the Raft coordination service of the cluster, with three members in the first three
+      locations. This version runs clickhouse/clickhouse-keeper:25.10, set by the chart.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Every upgrade restarts the Keeper members too, and changing a Keeper setting costs about 60
+              seconds of coordination outage. Plan it as a query interruption.
+          - path: keeper.resources
+            type: resources
+            label: Keeper resources
+            required: true
+            description: Per Keeper member.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: volumeset.keeper.capacity
+            type: integer
+            label: Keeper volume capacity
+            unit: GiB
+            min: 10
+            required: true
+            description: Holds each member's Raft log and snapshots.
+            docs: "#volumes"
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            rules:
+              - rule: oldSelf == null || self.volumeset.keeper.capacity >= oldSelf.volumeset.keeper.capacity
+                message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - id: keeper-access
+        title: Who can connect
+        description: Firewall changes take up to about five minutes to propagate.
+        fields:
+          - path: keeper.internal_access.type
+            type: enum
+            label: Who can connect to Keeper
+            widget: cards
+            required: true
+            options:
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this release's GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Blocks all internal traffic in this version (fixed in 3.0.0).
+            rules:
+              # workload-keeper.yaml renders inboundAllowWorkload: [] whatever the values say.
+              - rule: self.keeper.internal_access.type != 'workload-list'
+                severity: warning
+                message: >-
+                  This version never applies the workload list, so Specific workloads blocks the ClickHouse
+                  servers and the other Keeper members, and the cluster cannot coordinate. 3.0.0 fixes it.
+                  Choose Same GVC or Same org.
+
+yamlOnly:
+  - path: server.internal_access.workloads
+    reason: This version never applies it (the server firewall's workload list is always empty); fixed in 3.0.0.
+  - path: keeper.internal_access.workloads
+    reason: This version never applies it (the Keeper firewall's workload list is always empty); fixed in 3.0.0.
+
+migrations:
+  # 1.0.0 named the cluster my_cluster in the chart itself.
+  - fromVersions: "<2.0.0"
+    assume: { clusterName: my_cluster }
+  # Before 2.1.0 the chart sized both volume sets at 10 GiB itself.
+  - fromVersions: "<2.1.0"
+    assume: { volumeset.server.capacity: 10, volumeset.keeper.capacity: 10 }
+  # 1.0.0 shipped other defaults (mydb, mypw); keep what the running release uses, even when it kept them.
+  - fromVersions: "<2.0.0"
+    to: database.name
+    valueExpr: self.database.name
+    note: The release keeps its installed database name; another name would create another database.
+  - fromVersions: "<2.0.0"
+    to: database.password
+    valueExpr: self.database.password
+    note: The release keeps its installed password; choose a new one if it is the published default mypw.

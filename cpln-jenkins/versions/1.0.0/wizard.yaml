@@ -1,0 +1,475 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Jenkins
+# One stateful controller on its own volume set and no location handling: every GVC location would run an
+# independent Jenkins with its own jobs. The agent GVC must also have exactly one location, and by default it
+# is this GVC.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: admin
+    title: Admin login
+    description: The prerequisite secret with the admin password, and the admin login name.
+    fields:
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'install' ||
+          (oldSelf != null && self.admin.passwordSecretName != oldSelf.admin.passwordSecretName)
+        textExpression: >-
+          'The admin password secret must exist **before** you install or switch to it. If it is missing, the ' +
+          'deployment waits on it and `cpln logs` shows nothing at all; the reason is in ' +
+          '`status.versions[].message` of `cpln workload get-deployments ' + context.releaseName +
+          '-jenkins --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml`. Once the secret ' +
+          'exists it recovers on its own within about 10 minutes, or at once with ' +
+          '`cpln workload force-redeployment ' + context.releaseName + '-jenkins --gvc ' +
+          (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
+        text: >-
+          The admin password secret must exist **before** you install or switch to it. If it is missing, the
+          deployment waits on it and `cpln logs` shows nothing at all; the reason is in
+          `status.versions[].message` of `cpln workload get-deployments RELEASE_NAME-jenkins --gvc GVC_NAME -o yaml`.
+          Once the secret exists it recovers on its own within about 10 minutes, or at once with
+          `cpln workload force-redeployment RELEASE_NAME-jenkins --gvc GVC_NAME`.
+      - path: admin.passwordSecretName
+        type: ref
+        label: Admin password secret
+        required: true
+        description: >-
+          An opaque secret (encoding plain) holding only the admin password. Whoever holds it controls your CI
+          and everything it deploys, so use a strong one.
+        help: >-
+          Jenkins applies the password from this secret at every start. To change it, update the secret, then
+          run `cpln workload force-redeployment RELEASE_NAME-jenkins --gvc GVC_NAME`: the running controller keeps
+          the old password until it restarts. Create the secret with:
+          `printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name SECRET_NAME --encoding plain -f -`
+        docs: "#admin-login"
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [opaque] }
+          mustExist: error
+          allowCreate: true
+          create:
+            encoding: plain
+            suggestName: "context.releaseName + '-jenkins-admin-password'"
+            hint: "Generate the password with: openssl rand -hex 32"
+      - path: admin.username
+        type: string
+        label: Admin login name
+        required: true
+        description: Not sensitive. You sign in with this name and the password from the secret.
+      - type: note
+        severity: warning
+        when: oldSelf != null && self.admin.username != oldSelf.admin.username
+        textExpression: >-
+          'Jenkins creates the login ' + self.admin.username + ' at the next start, but does not remove the old ' +
+          'login ' + oldSelf.admin.username + ': it keeps full admin rights and its current password, and later ' +
+          'password changes do not reach it. After the upgrade, sign in as ' + self.admin.username +
+          ' and delete ' + oldSelf.admin.username + ' under **Manage Jenkins › Users**.'
+        text: >-
+          Jenkins creates the new login at the next start, but does not remove the old one: it keeps full admin
+          rights and its current password, and later password changes do not reach it. After the upgrade, sign
+          in with the new name and delete the old login under **Manage Jenkins › Users**.
+    rules:
+      - rule: self.admin.passwordSecretName != null && self.admin.passwordSecretName != ''
+        mirrors: cpln-jenkins.validate
+        paths: [admin.passwordSecretName]
+        message: The admin password secret is required.
+      - when: oldSelf != null
+        rule: self.admin.passwordSecretName == oldSelf.admin.passwordSecretName
+        severity: info
+        paths: [admin.passwordSecretName]
+        message: >-
+          Jenkins applies the password at every start, so the password in the new secret becomes the admin
+          login once this upgrade restarts the controller.
+
+  - id: cloud
+    title: Build agents
+    description: The Control Plane cloud that creates a workload for each build, and how those agents are sized.
+    sections:
+      - id: cloud
+        title: Control Plane cloud
+        toggle: cloud.enabled
+        description: >-
+          Jenkins creates each build agent as a workload in the agent GVC and deletes it once idle. The
+          controller runs no builds itself, so with this off builds have nowhere to run. These settings are
+          applied at every start: edits made under Manage Jenkins, Clouds are lost at the next restart.
+        docs: "#control-plane-cloud"
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'install' || oldSelf == null || !oldSelf.cloud.enabled ||
+              self.cloud.apiKeySecretName != oldSelf.cloud.apiKeySecretName
+            textExpression: >-
+              'The API key secret must exist **before** you install or switch to it. If it is missing, the ' +
+              'deployment waits on it and `cpln logs` shows nothing at all; the reason is in ' +
+              '`status.versions[].message` of `cpln workload get-deployments ' + context.releaseName +
+              '-jenkins --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml`. Once the ' +
+              'secret exists it recovers on its own within about 10 minutes, or at once with ' +
+              '`cpln workload force-redeployment ' + context.releaseName + '-jenkins --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
+            text: >-
+              The API key secret must exist **before** you install or switch to it. If it is missing, the
+              deployment waits on it and `cpln logs` shows nothing at all; the reason is in
+              `status.versions[].message` of `cpln workload get-deployments RELEASE_NAME-jenkins --gvc GVC_NAME -o yaml`.
+              Once the secret exists it recovers on its own within about 10 minutes, or at once with
+              `cpln workload force-redeployment RELEASE_NAME-jenkins --gvc GVC_NAME`.
+          - type: note
+            severity: warning
+            text: >-
+              The service account needs a policy granting `view`, `create` and `delete` on workloads in the agent
+              GVC, plus `view` on GVCs, identities and volume sets. A key without them signs in but provisions
+              nothing: the Jenkins UI shows an idle cloud, and only the controller log shows
+              `Failed to list workloads: 403`.
+          - path: cloud.apiKeySecretName
+            type: ref
+            label: API key secret
+            required: true
+            description: >-
+              An opaque secret (encoding plain) holding only a Control Plane service account key. Jenkins
+              uses it to create, list and delete the agent workloads.
+            help: >-
+              Create a service account and a key with
+              `cpln serviceaccount add-key SERVICE_ACCOUNT_NAME --description jenkins` (the `key` is shown once),
+              then store it with
+              `printf '%s' 'THE-KEY-VALUE' | cpln secret create-opaque --name SECRET_NAME --encoding plain -f -`.
+              To rotate the key, update the secret, then run
+              `cpln workload force-redeployment RELEASE_NAME-jenkins --gvc GVC_NAME`: the running controller
+              keeps the old key until it restarts.
+            docs: "#prerequisites"
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-jenkins-cpln-api-key'"
+                hint: "Paste the key printed by: cpln serviceaccount add-key SERVICE_ACCOUNT_NAME --description jenkins"
+          - path: cloud.gvc
+            type: ref
+            label: Agent GVC
+            description: >-
+              Where the agent workloads run. Empty uses the GVC Jenkins is installed into. It must have exactly
+              one location: the plugin refuses a GVC with several.
+            help: >-
+              Agents in another GVC dial back to the controller's internal address, so set Who can connect under
+              Access to Same org. The service account's policy must cover this GVC.
+            ref:
+              kind: gvc
+              format: name
+              mustExist: warning
+        rules:
+          - rule: self.cloud.apiKeySecretName != null && self.cloud.apiKeySecretName != ''
+            mirrors: cpln-jenkins.validate
+            paths: [cloud.apiKeySecretName]
+            message: The API key secret is required while the Control Plane cloud is on.
+      - title: Agents
+        when: self.cloud.enabled
+        docs: "#running-builds-on-control-plane-agents"
+        fields:
+          - path: cloud.labels
+            type: string
+            label: Labels
+            description: >-
+              Space-separated. A job that asks for one of these labels (`agent { label 'cpln' }`) runs on a
+              Control Plane agent.
+            placeholder: cpln
+          - path: cloud.allowJobsWithoutLabels
+            type: boolean
+            label: Also run jobs without a label
+            description: Off sends only jobs that ask for one of the labels above to Control Plane agents.
+          - path: cloud.useUniqueAgents
+            type: boolean
+            label: One agent per job
+            description: Every queued job gets its own agent workload. Off reuses one agent per label.
+          - path: cloud.executors
+            type: integer
+            label: Builds per agent
+            min: 0
+            required: true
+            suggestions: [1, 2, 4]
+          - path: cloud.cpu
+            type: integer
+            label: Agent CPU
+            unit: millicores
+            min: 50
+            required: true
+            suggestions: [200, 300, 500, 1000, 2000]
+          - path: cloud.memory
+            type: integer
+            label: Agent memory
+            unit: MiB
+            min: 128
+            required: true
+            suggestions: [256, 512, 1024, 2048, 4096]
+          - path: cloud.retentionMins
+            type: integer
+            label: Delete idle agents after
+            unit: minutes
+            min: 1
+            required: true
+            suggestions: [1, 5, 15, 60]
+          - path: cloud.provisioningCooldownSecs
+            type: integer
+            label: Wait between provisions
+            unit: seconds
+            min: 0
+            required: true
+            advanced: true
+            description: Keeps Jenkins from creating more agents than the queue needs.
+          - path: cloud.agentImage
+            type: string
+            format: image
+            label: Agent image
+            required: true
+            advanced: true
+            description: >-
+              The image every agent runs; your build tools must be in it. It must start a Jenkins inbound agent,
+              as `jenkins/inbound-agent` does.
+          - path: cloud.agentWorkload
+            type: string
+            label: Agent workload name prefix
+            required: true
+            advanced: true
+            description: >-
+              Agent workloads are named from it, followed by the job's label and, with one agent per job, a
+              random suffix.
+        rules:
+          - rule: self.cloud.cpu >= 50
+            mirrors: cpln-jenkins.validate
+            paths: [cloud.cpu]
+            message: The agent CPU must be at least 50 millicores; below that the agent JVM does not start.
+          - rule: self.cloud.memory >= 128
+            mirrors: cpln-jenkins.validate
+            paths: [cloud.memory]
+            message: The agent memory must be at least 128 MiB; below that the agent JVM is killed for lack of memory.
+          - rule: self.cloud.retentionMins >= 1
+            mirrors: cpln-jenkins.validate
+            paths: [cloud.retentionMins]
+            message: Idle agents must be kept for at least 1 minute.
+          - rule: self.cloud.cpu < 50 || self.cloud.cpu >= 200
+            severity: info
+            paths: [cloud.cpu]
+            message: Below 200 millicores the agent can start slowly or fail; 200 or more is recommended.
+          - rule: self.cloud.memory < 128 || self.cloud.memory >= 256
+            severity: info
+            paths: [cloud.memory]
+            message: Below 256 MiB the agent can run out of memory; 256 or more is recommended.
+          - rule: self.cloud.executors > 0
+            severity: info
+            paths: [cloud.executors]
+            message: With 0 builds per agent the cloud creates no agents, and queued builds wait.
+          - rule: self.cloud.allowJobsWithoutLabels || (self.cloud.labels != null && self.cloud.labels.trim() != '')
+            severity: info
+            paths: [cloud.labels]
+            message: With no labels and jobs without a label turned off, no job runs on a Control Plane agent.
+          # The plugin's own form checks (Cloud.java doCheckLabels, doCheckAgentWorkload). Configuration as Code
+          # skips them, and the label and the prefix become part of the agent workload's name. An unchanged
+          # installed value is left alone (guide §8.8).
+          - rule: >-
+              self.cloud.labels == null || (oldSelf != null && self.cloud.labels == oldSelf.cloud.labels) ||
+              self.cloud.labels.matches('^([a-z][-a-z0-9]+( [a-z][-a-z0-9]+)*)?$')
+            paths: [cloud.labels]
+            message: >-
+              Use lowercase labels of at least 2 characters, each starting with a letter and holding only
+              letters, digits and dashes, separated by single spaces.
+          - rule: >-
+              (oldSelf != null && self.cloud.agentWorkload == oldSelf.cloud.agentWorkload) ||
+              self.cloud.agentWorkload.matches('^[a-z][-a-z0-9]+$')
+            paths: [cloud.agentWorkload]
+            message: >-
+              Use at least 2 lowercase letters, digits and dashes, starting with a letter; agent workloads are
+              named from it.
+
+  - id: controller
+    title: Controller
+    description: The compute of the single Jenkins controller and the volume set that holds its jobs.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Jenkins runs one controller replica, so an upgrade that changes it (a cloud setting included)
+              restarts Jenkins: the UI is down and running builds are interrupted. Jobs, build history and
+              plugins survive on the volume set.
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            description: >-
+              One stateful replica; it is not clustered. Builds run on agents, so build capacity grows with the
+              agents rather than with the controller. The Jenkins controller is a Java process: give it at least
+              1Gi of memory.
+            docs: "#controller-resources-and-storage"
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: image
+            type: string
+            format: image
+            label: Jenkins image
+            required: true
+            advanced: true
+            description: >-
+              Jenkins with the Control Plane cloud plugin and Configuration as Code built in. Another image must
+              include both, and run as uid 1000 like this one.
+            docs: "#image"
+        rules:
+          - rule: self.resources.maxMemory == null || memoryBytes(self.resources.maxMemory) >= memoryBytes('1Gi')
+            severity: info
+            paths: [resources]
+            message: >-
+              The Jenkins controller is a Java process; at least 1Gi of memory is recommended.
+      - title: Storage
+        fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250]
+            description: >-
+              Holds `JENKINS_HOME`: jobs, build history and installed plugins. Uninstalling the release deletes
+              the volume set.
+            help: >-
+              There are no scheduled snapshots; the only automatic one is taken when the volume set is deleted,
+              and kept for 7 days. Take one yourself with `cpln volumeset snapshot create`.
+            docs: "/reference/volumeset#capacity-and-billing"
+        rules:
+          - rule: self.volumeset.capacity >= 10
+            mirrors: cpln-jenkins.validate
+            paths: [volumeset.capacity]
+            message: The capacity must be at least 10 GiB.
+          - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+            paths: [volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: access
+    title: Access
+    description: Whether the Jenkins UI is on the internet, and which workloads inside Control Plane can reach it.
+    sections:
+      - title: Public access
+        docs: "#connecting"
+        fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Publish to the internet
+            description: >-
+              Puts the Jenkins login on the workload's canonical HTTPS endpoint. A CI server holds credentials
+              for everything it deploys, so leave it off unless you need it.
+            help: >-
+              Read the public address from `status.canonicalEndpoint` in
+              `cpln workload get RELEASE_NAME-jenkins --gvc GVC_NAME -o yaml`. A change takes a few minutes to
+              take effect.
+          - type: note
+            severity: info
+            when: "!self.publicAccess.enabled"
+            textExpression: >-
+              'To open the UI from your computer, run `cpln port-forward ' + context.releaseName +
+              '-jenkins 8080:8080 --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '`, browse to http://localhost:8080 and sign in with the admin login. There is no setup wizard' +
+              (self.cloud.enabled ? ', and the Control Plane cloud is already configured.' : '.')
+            text: >-
+              To open the UI from your computer, run
+              `cpln port-forward RELEASE_NAME-jenkins 8080:8080 --gvc GVC_NAME`, browse to http://localhost:8080
+              and sign in with the admin login. There is no setup wizard.
+      - title: Internal access
+        docs: "#access"
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: >-
+              Workloads that reach `http://RELEASE_NAME-jenkins.GVC_NAME.cpln.local:8080`, build agents included:
+              they dial back to the controller on this address. `cpln port-forward` works with every choice. A
+              change takes a few minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect, build agents included.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC, which covers agents in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org, which also covers agents in another GVC.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          # workload.yaml writes the list into inboundAllowWorkload only with workload-list.
+          - path: internalAccess.workloads
+            when: self.internalAccess.type == 'workload-list'
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: The whole allow-list; only these workloads can connect.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+          - type: note
+            severity: info
+            when: >-
+              self.internalAccess.type == 'workload-list' && self.cloud.enabled && !self.cloud.useUniqueAgents
+            textExpression: >-
+              'The build agents connect back to the controller, so they must be in the list: ' +
+              ((self.cloud.allowJobsWithoutLabels ? [''] : []) +
+              (self.cloud.labels == null ? [] : self.cloud.labels.split(' ').filter(l, l != '').map(l, '-' + l)))
+              .map(x, '//gvc/' + (self.cloud.gvc != null && self.cloud.gvc != '' ? self.cloud.gvc :
+              (context.gvc != null ? context.gvc : 'GVC_NAME')) + '/workload/' + self.cloud.agentWorkload + x)
+              .join(', ') + '.'
+            text: >-
+              The build agents connect back to the controller, so they must be in the list: add each agent
+              workload of the agent GVC, named from the agent workload name prefix followed by a dash and the
+              job's label (just the prefix for jobs without a label).
+    rules:
+      - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+        mirrors: cpln-jenkins.validate
+        paths: [internalAccess.type]
+        message: Choose None, Same GVC, Same org or Specific workloads.
+      - when: self.cloud.enabled
+        rule: self.internalAccess.type != 'none'
+        severity: warning
+        paths: [internalAccess.type]
+        message: >-
+          None also blocks the build agents, which connect back to the controller like any other workload, so
+          no build would run. Choose Same GVC, or Same org for agents in another GVC.
+      - when: self.cloud.enabled && self.cloud.useUniqueAgents
+        rule: self.internalAccess.type != 'workload-list'
+        severity: warning
+        paths: [internalAccess.type]
+        message: >-
+          With one agent per job, every agent workload gets a random name suffix, so a fixed list cannot let
+          the agents connect back to the controller. Choose Same GVC, or Same org for agents in another GVC.
+      - when: >-
+          self.cloud.enabled && context.gvc != null && self.cloud.gvc != null && self.cloud.gvc != '' &&
+          self.cloud.gvc != context.gvc
+        rule: self.internalAccess.type != 'same-gvc'
+        severity: warning
+        paths: [internalAccess.type]
+        message: >-
+          The agents run in another GVC, and Same GVC does not let them connect back to the controller.
+          Choose Same org.
+      - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+        severity: info
+        paths: [internalAccess.workloads]
+        message: With Specific workloads and an empty list, no workload can connect.
+      - when: self.internalAccess.type == 'none'
+        rule: self.publicAccess.enabled
+        severity: info
+        paths: [internalAccess.type]
+        message: With None and public access off, only cpln port-forward reaches the UI.

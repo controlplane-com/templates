@@ -40,7 +40,7 @@
 - **No blocks in the bucket yet**: blocks are cut every `blockDuration` (default 2h) — first upload can take up to ~3h after install. Not a bug before that.
 - **Never enable out-of-order ingestion** (accepting late-timestamped samples): it corrupts the sidecar's upload/compaction contract (prometheus issue #13112). Deliberately no knob.
 - **Data survives upgrades, not uninstall**: changing retention/labels via upgrade is safe; uninstall deletes the volumeset (only a final snapshot is kept, 7 days) — durable history needs object-storage upload.
-- **Multi-location GVC = one independent Prometheus per location** (stateful, min/maxScale 1, no `localOptions`): stored data is split across locations. Chart follow-up candidate; advise a single-location GVC.
+- **Multi-location GVC = one independent Prometheus per location** (stateful, min/maxScale 1, no `localOptions`): stored data is split across locations. The console wizard requires a single-location GVC; the CLI does not. Chart follow-up candidate.
 - **1.1.0 renamed `resources.cpu`/`memory` → `maxCpu`/`maxMemory`** (both blocks) with no render guard — old keys are silently ignored and the defaults apply.
 - **MinIO endpoint default `my-minio:9000` is a short-name placeholder** — users must supply the FQDN `{workload}.{gvc}.cpln.local:9000`. The policy also grants reveal on `minio.credentialsSecretName` whenever `type: minio`, even with object storage disabled.
 - **HA pair dedup broken?** The two installs must differ ONLY in the `replica` label — both must override the auto `prometheus` label to the same shared value.

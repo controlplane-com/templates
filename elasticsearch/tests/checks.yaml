@@ -11,10 +11,11 @@ checks:
       workload: "{release}-elasticsearch"
       container: elasticsearch
       script: |
-        curl -s 'localhost:9200/_cluster/health?wait_for_status=green&timeout=30s' \
-          | sed -n 's/.*"status":"\([a-z]*\)".*"number_of_nodes":\([0-9]*\).*/STATUS \1 NODES \2/p'
+        h=$(curl -s -m 40 'localhost:9200/_cluster/health?wait_for_status=green&timeout=30s' 2>&1)
+        echo "$h" | grep -q '"status":"green"' && echo "$h" | grep -q '"number_of_nodes":3,' && echo "GREEN 3" \
+          || echo "NOT GREEN: ${h:-no response (curl exit $?)}"
     expect:
-      stdout: "^STATUS green NODES 3$"
+      stdout: "^GREEN 3$"
     retries: 10
     retryDelaySeconds: 15
 
@@ -68,8 +69,9 @@ checks:
       workload: "{release}-elasticsearch"
       container: elasticsearch
       script: |
-        n=$(curl -s 'localhost:9200/e2e/_count?q=version:"{installed_version}"' | sed -n 's/.*"count":\([0-9]*\).*/\1/p')
-        [ "${n:-0}" -ge 1 ] 2>/dev/null && echo PERSISTED || echo "MISSING (documents for {installed_version}: ${n:-none})"
+        r=$(curl -s -m 30 -G localhost:9200/e2e/_count --data-urlencode 'q=version:"{installed_version}"' 2>&1)
+        n=$(echo "$r" | sed -n 's/.*"count":\([0-9]*\).*/\1/p')
+        [ "${n:-0}" -ge 1 ] 2>/dev/null && echo PERSISTED || echo "MISSING (documents for {installed_version}: ${n:-none}) $r $(curl -s -m 10 'localhost:9200/_cat/indices/e2e?v' 2>&1)"
     expect:
       stdout: "^PERSISTED$"
     retries: 6

@@ -105,8 +105,22 @@ http://RELEASE_NAME-ollama.GVC_NAME.cpln.local:11434
 - [Open WebUI Documentation](https://github.com/open-webui/open-webui)
 - [Ollama Model Library](https://ollama.com/library)
 
+### Upgrading from 1.1.1 or earlier
+
+Version 1.1.2 pins both images (`open-webui:v0.11.0`, `ollama/ollama:0.32.15`); earlier versions ran the moving `open-webui:main` build and an untagged `ollama/ollama`. A release on `main` may already run a newer Open WebUI than `v0.11.0`, and Open WebUI cannot read a database that a newer version migrated. When upgrading, keep the image the release runs, or pin a tag at least as new as its running version (Open WebUI shows it under Settings › About):
+
+```yaml
+workload:
+  containers:
+    ui:
+      image: ghcr.io/open-webui/open-webui:main # or a release tag at least as new as the running one
+```
+
+Take a volume set snapshot first: `cpln volumeset snapshot create RELEASE_NAME-ollama-vs --gvc GVC_NAME --snapshot-name before-upgrade`.
+
 ### Important Notes
 
+- **Register the Open WebUI admin account right after install.** Open WebUI has no preset account, and the first person to register becomes its administrator; with inbound open to `0.0.0.0/0`, that can be anyone who reaches the endpoint first.
 - **Quotas are the usual first blocker.** CPU and memory beyond the org defaults need a quota increase, and GPU access must be enabled explicitly — see the Warning above.
 - **Models are large and live on the volume set.** Size it for what you intend to pull; a default-sized volume fills quickly once you add a second model.
 - **Pull `defaultModel` once after the first start — the template does not download it.** Run `cpln workload exec RELEASE_NAME-ollama --gvc GVC_NAME --container ollama -- ollama pull llama3` (or use Open WebUI's model settings); models are large, so the first pull is slow. It lands on the volume set and survives restarts.

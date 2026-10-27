@@ -29,34 +29,28 @@ spec:
         - number: 4000
           protocol: tcp
       readinessProbe:
+        {{- /*
+          Gate on THIS server's own health (TiDB's /status on :10080), never on
+          cluster-wide TiKV state. The workload has no liveness probe, so the
+          platform also uses this probe as liveness. The 1.1.0 probe required
+          every TiKV store to be Up, so one store going down (a node scale-down
+          evicting a TiKV replica) failed it on every server at once and the
+          platform restarted the whole SQL tier in every location together.
+          /status is local: a server keeps serving through a store loss and
+          routes around it. Same probe as 2.1.0+.
+        */}}
         exec:
           command:
             - /bin/sh
             - '-c'
             - >-
-              for loc in {{ range .Values.gvc.locations }}{{ .name }} {{ end }};
-              do
-                pd_endpoint="replica-0.{{ .Release.Name }}-pd.${loc}.{{ .Values.gvc.name }}.cpln.local:2379";
-                stores=$(curl -sf "http://${pd_endpoint}/pd/api/v1/stores" 2>/dev/null || echo "");
-                if [ -z "$stores" ]; then
-                  echo "No stores found at $pd_endpoint yet. Retrying..."; continue;
-                fi;
-                # Normalize JSON to avoid spacing issues
-                stores_clean=$(echo "$stores" | sed 's/"state_name":[[:space:]]*"/"state_name":"/g');
-                up_count=$(echo "$stores_clean" | grep -o '"state_name":"Up"' | wc -l);
-                total_count=$(echo "$stores_clean" | grep -o '"state_name":' | wc -l);
-                echo "$up_count / $total_count TiKV stores Up at $pd_endpoint";
-                if [ "$total_count" -gt 0 ] && [ "$up_count" -eq "$total_count" ]; then
-                  echo "All TiKV stores are healthy.";
-                  exit 0;
-                fi;
-              done;
-              echo "TiKV not ready yet"; exit 1
+              curl -sf --max-time 4 http://localhost:10080/status
+              | grep -q '"version"'
         failureThreshold: 3
         initialDelaySeconds: 15
         periodSeconds: 10
         successThreshold: 1
-        timeoutSeconds: 3
+        timeoutSeconds: 5
       volumes:
         - path: /scripts/server-startup.sh
           uri: cpln://secret/{{ .Release.Name }}-tidb-server-startup.payload

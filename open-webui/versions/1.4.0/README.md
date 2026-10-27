@@ -2,10 +2,11 @@
 
 > **Upgrading from 1.3.0:** Open WebUI moves from v0.11.0 to v0.12.4, which fixes Critical CVEs. The database
 > migrates on the first start and rolling back to 1.3.0 afterwards is not supported, so snapshot the data volume
-> first: `cpln volumeset snapshot create {release}-open-webui-data --snapshot-name before-1-4-0 --gvc {gvc}`.
+> first: `cpln volumeset snapshot create {release}-open-webui-data --snapshot-name before-1-4-0 --gvc {gvc}`, and wait
+> until `cpln volumeset snapshot get {release}-open-webui-data --snapshot-name before-1-4-0 --gvc {gvc}` shows `Completed`.
 > Values that pin `image` to a `ghcr.io/open-webui/open-webui` tag below v0.12.4 are refused; remove `image` or set it to `ghcr.io/open-webui/open-webui:v0.12.4`.
 > Custom tools and functions now run on Python 3.12, and packages the image no longer ships (such as `nltk` and `pymongo`) must be listed in their own requirements.
-> Tool servers that users saved in their own Settings → Integrations stop being used in chats until an admin turns on Direct Integrations in Settings → Admin → Connections; the Control Plane server is an admin tool server and is not affected.
+> Tool servers that users saved in their own Settings → Integrations stop being used in chats until an admin turns on Direct Integrations in Settings → Admin → Integrations; the Control Plane server is an admin tool server and is not affected.
 
 > **Upgrading from 1.2.0:** create the admin secret (see Prerequisites) before upgrading — 1.3.0 requires it,
 > though an install that already has accounts ignores it and keeps every login. Remove `auth.enableSignup`

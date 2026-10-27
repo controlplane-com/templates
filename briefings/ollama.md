@@ -44,6 +44,14 @@ Does not create a GVC.
   registries and non-version tags (`main`, `latest`) pass. A release still pinning `v0.11.0` in stored values
   fails the upgrade render with a message naming the tag to use.
 
+- **Open WebUI v0.12.4 needs 2Gi, not 1Gi** (measured 2026-10-27). At 1Gi the UI container sat at its limit
+  (`memory.events max` > 5000, ~900 MB resident vs ~737 MB on v0.11.0) and 8 of 11 navigation runs hit an
+  intermittent 503 (`upstream connect error or disconnect/reset before headers`) on a random API call. 1.2.0 raises
+  the default to 2Gi (`tw carry` moves a stored 1Gi). At 2Gi it still happened in 1 of 6 runs, and a fresh 1Gi
+  container below its limit saw it too, so memory is not the whole cause — suspected upstream (uvicorn 0.54 /
+  `--ws-per-message-deflate`). User impact: a sidebar item fails to load until a reload; no crash.
+- **The 1.1.2 → 1.2.0 upgrade signs every user out once** (old session tokens get 401).
+
 ## Version history
 
 - **1.1.2** — pinned both images (`open-webui:v0.11.0`, `ollama/ollama:0.32.15`); wizard keeps the moving tags

@@ -9,7 +9,7 @@ workload:
       port: 8080
       resources:
         cpu: 500m
-        memory: 1Gi
+        memory: 2Gi # Open WebUI v0.12 needs more than 1Gi; at 1Gi it sits at the limit and API calls intermittently fail
     api:
       name: ollama
       image: ollama/ollama:0.32.15 # pinned: an untagged image resolves to `latest`

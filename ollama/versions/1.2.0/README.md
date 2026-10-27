@@ -39,7 +39,7 @@ workload:
       image: ghcr.io/open-webui/open-webui:v0.12.4 # pinned: `main` is a moving branch build; v0.12.4 or newer is required
       resources:
         cpu: 500m
-        memory: 1Gi
+        memory: 2Gi # Open WebUI v0.12 needs more than 1Gi; at 1Gi it sits at the limit and API calls intermittently fail
 ```
 
 **API container** — configure the Ollama image, resources, and GPU:
@@ -109,8 +109,10 @@ http://RELEASE_NAME-ollama.GVC_NAME.cpln.local:11434
 
 Version 1.2.0 moves Open WebUI from `v0.11.0` to `v0.12.4`, whose image fixes Critical CVEs. The chart refuses an official Open WebUI tag older than `v0.12.4`, so a `workload.containers.ui.image` in your values that pins one must be changed or removed.
 
-- **Open WebUI migrates its database on the first start, and rolling back to 1.1.2 is not supported**: `v0.11.0` cannot read the migrated database. Take a volume set snapshot first: `cpln volumeset snapshot create RELEASE_NAME-ollama-vs --gvc GVC_NAME --snapshot-name before-upgrade`.
-- **Tool servers that users saved under Settings › Integrations stop being used in chats** until an admin turns on Direct Integrations in Admin Settings › Connections.
+- **Open WebUI migrates its database on the first start, and rolling back to 1.1.2 is not supported**: `v0.11.0` cannot read the migrated database. Take a volume set snapshot first: `cpln volumeset snapshot create RELEASE_NAME-ollama-vs --gvc GVC_NAME --snapshot-name before-upgrade`, then wait until `cpln volumeset snapshot get RELEASE_NAME-ollama-vs --gvc GVC_NAME --snapshot-name before-upgrade` shows `Completed`.
+- **Tool servers that users saved under Settings › Integrations stop being used in chats** until an admin turns on Direct Integrations in Admin Settings › Integrations.
+- **Every user is signed out once** by the upgrade and signs in again.
+- **Open WebUI's memory default rises from 1Gi to 2Gi.** A `workload.containers.ui.resources.memory` of 1Gi in your values keeps the old limit, at which v0.12.4 intermittently fails API calls.
 - **Custom functions and tools that install pip packages need versions that support Python 3.12**, which the image now runs.
 
 ### Upgrading from 1.1.1 or earlier

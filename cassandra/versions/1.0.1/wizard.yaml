@@ -1,0 +1,714 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Apache Cassandra
+# Stateful nodes with no location handling: every GVC location would run its own cluster on its own volumes.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: credentials
+    title: Credentials
+    description: The superuser password, the application role and its keyspace.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          This version takes the credentials as plain values. They are stored in the Helm release and in the
+          `RELEASE_NAME-cassandra-credentials` and `RELEASE_NAME-cassandra-init` secrets the chart creates,
+          and the superuser password also in the command of the repair job, when it is on. Version 1.1.0
+          reads them from a dictionary secret you create instead.
+        textExpression: >-
+          'This version takes the credentials as plain values. They are stored in the Helm release and in the
+          `' + context.releaseName + '-cassandra-credentials` and `' + context.releaseName +
+          '-cassandra-init` secrets the chart creates, and the superuser password also in the command of the
+          repair job, when it is on. Version 1.1.0 reads them from a dictionary secret you create instead.'
+      - path: superuserPassword
+        type: string
+        label: Superuser password
+        required: true
+        sensitive: true
+        example: true
+        description: >-
+          The password of the built-in `cassandra` role, used for JMX and by the optional repair and backup
+          jobs. The default is published in the template repository; replace it.
+        help: >-
+          Node 0 sets it once, on the cluster's first boot. It is still written into each node's JMX password
+          file and node 0's start check at every start, and into the repair and backup jobs.
+        pattern: '^[A-Za-z0-9_](?:[^\s"''`$\\]*[^\s"''`$\\:])?$'
+        patternMessage: >-
+          Start with a letter, digit or underscore, do not end with a colon, and leave out spaces, quotes ("
+          and '), backticks, dollar signs and backslashes: the chart writes the value unquoted into a YAML
+          secret, inside double quotes in shell scripts and inside single quotes in CQL.
+      - path: username
+        type: string
+        label: Application username
+        required: true
+        description: The login role created on the first boot, with all permissions on the keyspace below.
+        pattern: '^[A-Za-z0-9_](?:[^\s"''`$\\]*[^\s"''`$\\:])?$'
+        patternMessage: >-
+          Start with a letter, digit or underscore, do not end with a colon, and leave out spaces, quotes ("
+          and '), backticks, dollar signs and backslashes: the chart writes the value unquoted into a YAML
+          secret, inside double quotes in shell scripts and inside single quotes in CQL.
+      - path: password
+        type: string
+        label: Application password
+        required: true
+        sensitive: true
+        example: true
+        description: The default is published in the template repository; replace it.
+        pattern: '^[A-Za-z0-9_](?:[^\s"''`$\\]*[^\s"''`$\\:])?$'
+        patternMessage: >-
+          Start with a letter, digit or underscore, do not end with a colon, and leave out spaces, quotes ("
+          and '), backticks, dollar signs and backslashes: the chart writes the value unquoted into a YAML
+          secret, inside double quotes in shell scripts and inside single quotes in CQL.
+      - path: keyspaceName
+        type: string
+        label: Keyspace
+        required: true
+        description: The application keyspace, created on the first boot.
+        pattern: '^[a-z][a-z0-9_]*$'
+        patternMessage: >-
+          Use lowercase letters, digits and underscores, starting with a letter: the first-boot script writes
+          the keyspace into CQL unquoted.
+    rules:
+      # secret-credentials.yaml writes these four values unquoted, so YAML types such a value.
+      - rule: "!self.superuserPassword.matches('^(0[xX][0-9a-fA-F]+|0[oO]?[0-7]+|[-+]?[0-9][0-9_]*([.][0-9_]*)?([eE][-+]?[0-9]+)?|[yY]|[yY][eE][sS]|[nN]|[nN][oO]|[tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[oO][nN]|[oO][fF][fF]|[nN][uU][lL][lL])$')"
+        severity: warning
+        paths: [superuserPassword]
+        messageExpression: >-
+          'The chart writes this value unquoted into the ' + context.releaseName + '-cassandra-credentials
+          secret, where a value that is only a number, or a word such as true, yes, on, off or null, is read
+          as a number, boolean or null instead of text. Add a letter or another character so it stays text.'
+        message: >-
+          The chart writes this value unquoted into the RELEASE_NAME-cassandra-credentials secret, where a
+          value that is only a number, or a word such as true, yes, on, off or null, is read as a number,
+          boolean or null instead of text. Add a letter or another character so it stays text.
+      - rule: "!self.username.matches('^(0[xX][0-9a-fA-F]+|0[oO]?[0-7]+|[-+]?[0-9][0-9_]*([.][0-9_]*)?([eE][-+]?[0-9]+)?|[yY]|[yY][eE][sS]|[nN]|[nN][oO]|[tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[oO][nN]|[oO][fF][fF]|[nN][uU][lL][lL])$')"
+        severity: warning
+        paths: [username]
+        messageExpression: >-
+          'The chart writes this value unquoted into the ' + context.releaseName + '-cassandra-credentials
+          secret, where a value that is only a number, or a word such as true, yes, on, off or null, is read
+          as a number, boolean or null instead of text. Add a letter or another character so it stays text.'
+        message: >-
+          The chart writes this value unquoted into the RELEASE_NAME-cassandra-credentials secret, where a
+          value that is only a number, or a word such as true, yes, on, off or null, is read as a number,
+          boolean or null instead of text. Add a letter or another character so it stays text.
+      - rule: "!self.password.matches('^(0[xX][0-9a-fA-F]+|0[oO]?[0-7]+|[-+]?[0-9][0-9_]*([.][0-9_]*)?([eE][-+]?[0-9]+)?|[yY]|[yY][eE][sS]|[nN]|[nN][oO]|[tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[oO][nN]|[oO][fF][fF]|[nN][uU][lL][lL])$')"
+        severity: warning
+        paths: [password]
+        messageExpression: >-
+          'The chart writes this value unquoted into the ' + context.releaseName + '-cassandra-credentials
+          secret, where a value that is only a number, or a word such as true, yes, on, off or null, is read
+          as a number, boolean or null instead of text. Add a letter or another character so it stays text.'
+        message: >-
+          The chart writes this value unquoted into the RELEASE_NAME-cassandra-credentials secret, where a
+          value that is only a number, or a word such as true, yes, on, off or null, is read as a number,
+          boolean or null instead of text. Add a letter or another character so it stays text.
+      - rule: "!self.keyspaceName.matches('^(0[xX][0-9a-fA-F]+|0[oO]?[0-7]+|[-+]?[0-9][0-9_]*([.][0-9_]*)?([eE][-+]?[0-9]+)?|[yY]|[yY][eE][sS]|[nN]|[nN][oO]|[tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[oO][nN]|[oO][fF][fF]|[nN][uU][lL][lL])$')"
+        severity: warning
+        paths: [keyspaceName]
+        messageExpression: >-
+          'The chart writes this value unquoted into the ' + context.releaseName + '-cassandra-credentials
+          secret, where a value that is only a number, or a word such as true, yes, on, off or null, is read
+          as a number, boolean or null instead of text. Add a letter or another character so it stays text.'
+        message: >-
+          The chart writes this value unquoted into the RELEASE_NAME-cassandra-credentials secret, where a
+          value that is only a number, or a word such as true, yes, on, off or null, is read as a number,
+          boolean or null instead of text. Add a letter or another character so it stays text.
+      - rule: oldSelf == null || self.superuserPassword == oldSelf.superuserPassword
+        severity: info
+        paths: [superuserPassword]
+        message: >-
+          Cassandra keeps the superuser password it was given on the first boot; this value does not change
+          it. Change it inside Cassandra first (ALTER USER cassandra WITH PASSWORD ...). Otherwise node 0
+          fails its start check, which accepts only this value or the stock cassandra password, and
+          restarts after 300 seconds, and the repair and backup jobs cannot authenticate.
+      - rule: >-
+          oldSelf == null || (self.username == oldSelf.username && self.password == oldSelf.password &&
+          self.keyspaceName == oldSelf.keyspaceName)
+        severity: info
+        paths: [username, password, keyspaceName]
+        message: >-
+          Node 0 creates the application role and keyspace only on the cluster's first boot, so this change
+          does not alter them in Cassandra. Change the role or keyspace inside Cassandra with cqlsh and keep
+          these values equal to it; the logical backup job backs up the keyspace named here.
+
+  - id: cluster
+    title: Cluster
+    description: How many nodes run, how many copies of each partition they keep, and the Cassandra image.
+    fields:
+      - path: replicas
+        type: integer
+        label: Nodes
+        required: true
+        min: 1
+        suggestions: [1, 3, 5]
+        description: Each node is a stateful replica with its own volume and a slice of the token ring.
+        docs: "#cluster-size-and-replication"
+        help: >-
+          Adding nodes after the first install does not rebalance the existing data: after raising the
+          count, run `nodetool rebuild` on each new node and then `nodetool cleanup` on each existing one.
+      - path: replicationFactor
+        type: integer
+        label: Replication factor
+        required: true
+        min: 1
+        suggestions: [1, 2, 3]
+        description: >-
+          Copies of each partition in the application keyspace. The chart applies it once, when it creates
+          the keyspace on the first boot.
+      - path: image
+        type: string
+        format: image
+        label: Cassandra image
+        required: true
+        description: The optional repair job runs this image too.
+        docs: "#image-and-resources"
+      - path: multiZone.enabled
+        type: boolean
+        label: Spread nodes across zones
+        required: true
+        description: >-
+          Control Plane spreads the nodes across the availability zones of the location. Check that the
+          location supports multiple zones first.
+        help: >-
+          This places nodes, not copies: the chart creates the keyspaces with `SimpleStrategy` and puts
+          every node in rack `rack1`, so with more nodes than the replication factor, several copies of a
+          partition can land in one zone.
+        docs: "#multi-zone"
+      - path: clusterName
+        type: string
+        label: Cluster name
+        required: true
+        immutable: >-
+          Cassandra stores the cluster name on each node's volume at first start and refuses to start
+          under another name.
+        advanced: true
+        description: >-
+          Cassandra keeps it on each node's volume from the first start, so it cannot change after the
+          install.
+        pattern: '^[^''\x00-\x1f\x7f-\x9f\u2028\u2029\ufffe\uffff]*$'
+        patternMessage: Leave out single quotes ('), line breaks and control characters.
+    rules:
+      - rule: self.replicationFactor <= self.replicas
+        mirrors: cassandra.validate
+        paths: [replicationFactor]
+        messageExpression: >-
+          'The replication factor (' + string(self.replicationFactor) + ') cannot exceed the number of
+          nodes (' + string(self.replicas) + ').'
+        message: The replication factor cannot exceed the number of nodes.
+      # Install only: the chart applies the factor when it creates the keyspace on the first boot;
+      # on upgrade the rule after the next one speaks.
+      - when: oldSelf == null
+        rule: self.replicationFactor >= 3
+        severity: info
+        paths: [replicationFactor]
+        messageExpression: >-
+          'The application keyspace keeps ' + string(self.replicationFactor) +
+          (self.replicationFactor == 1 ? ' copy' : ' copies') + ' of each partition. For production use a
+          replication factor of 3, with at least 3 nodes, so the cluster can survive a node failure while
+          still achieving quorum.'
+        message: >-
+          For production use a replication factor of 3, with at least 3 nodes, so the cluster can survive
+          a node failure while still achieving quorum.
+      - rule: oldSelf == null || self.replicationFactor == oldSelf.replicationFactor
+        severity: info
+        paths: [replicationFactor]
+        message: >-
+          The chart applies the replication factor only when it creates the keyspace on the first boot, so
+          this change does not alter the existing keyspace. Change the keyspace itself with `ALTER KEYSPACE`
+          in cqlsh, then run `nodetool repair` on every node after raising it or `nodetool cleanup` after
+          lowering it, and keep this value equal to its factor.
+      - rule: oldSelf == null || self.replicas <= oldSelf.replicas
+        severity: info
+        paths: [replicas]
+        message: >-
+          Adding nodes does not rebalance the existing data. After the upgrade, run `nodetool rebuild` on
+          each new node, then `nodetool cleanup` on each node that was there before.
+      - rule: oldSelf == null || self.replicas >= oldSelf.replicas
+        severity: info
+        paths: [replicas]
+        message: >-
+          Lowering the node count stops the highest-numbered nodes without decommissioning them (a
+          stopping node only runs `nodetool drain`), so they stay in the ring as down. Before you upgrade,
+          run `nodetool decommission` on each node you remove. Cassandra refuses to decommission below a
+          keyspace's replication factor, and the chart created `system_auth` with one copy per node on the
+          first boot, so first lower it, and any keyspace above the new count, with `ALTER KEYSPACE`.
+      - rule: oldSelf == null || self.image == oldSelf.image
+        severity: info
+        paths: [image]
+        message: A new Cassandra image restarts every node, one at a time; the repair job, when on, runs it too.
+
+  - id: resources
+    title: Resources and storage
+    description: The compute, JVM heap and data volume of each node.
+    sections:
+      - title: Node resources
+        docs: "#image-and-resources"
+        fields:
+          - path: cpu
+            type: quantity
+            quantity: cpu
+            label: CPU per node
+            required: true
+            min: 25m
+            suggestions: ["500m", "1", "2", "4"]
+          - path: memory
+            type: quantity
+            quantity: memory
+            label: Memory per node
+            required: true
+            min: 32Mi
+            suggestions: [2Gi, 4Gi, 8Gi, 16Gi]
+          - path: jvmHeapSize
+            type: string
+            label: JVM heap size
+            required: true
+            pattern: '^[1-9][0-9]{0,6}[kKmMgG]$'
+            patternMessage: Enter a size with its unit, such as 2G or 2048M.
+            suggestions: [1G, 2G, 4G, 8G]
+            description: >-
+              Cassandra keeps bloom filters, caches and the OS page cache outside the heap, in the rest of
+              the node's memory.
+        rules:
+          - rule: memoryBytes(self.memory) <= cpuMillicores(self.cpu) * 8388608
+            paths: [memory]
+            messageExpression: >-
+              'With ' + string(cpuMillicores(self.cpu)) + 'm of CPU, the memory can be at most ' +
+              string(cpuMillicores(self.cpu) * 8) + 'Mi (8 MiB per millicore). Raise the CPU or lower the memory.'
+            message: The memory can be at most 8 MiB per millicore of CPU. Raise the CPU or lower the memory.
+          - when: self.jvmHeapSize.matches('^[1-9][0-9]{0,6}[kKmMgG]$')
+            rule: >-
+              (self.jvmHeapSize.matches('[gG]$') ? int(self.jvmHeapSize.substring(0, size(self.jvmHeapSize) - 1)) * 1073741824 :
+              self.jvmHeapSize.matches('[mM]$') ? int(self.jvmHeapSize.substring(0, size(self.jvmHeapSize) - 1)) * 1048576 :
+              int(self.jvmHeapSize.substring(0, size(self.jvmHeapSize) - 1)) * 1024) < memoryBytes(self.memory)
+            paths: [jvmHeapSize]
+            message: >-
+              The JVM heap must be smaller than the memory per node; Cassandra also needs memory outside
+              the heap.
+          # Only between half and all of the memory: at or above it, the error rule above speaks.
+          - when: self.jvmHeapSize.matches('^[1-9][0-9]{0,6}[kKmMgG]$')
+            rule: >-
+              (self.jvmHeapSize.matches('[gG]$') ? int(self.jvmHeapSize.substring(0, size(self.jvmHeapSize) - 1)) * 1073741824 :
+              self.jvmHeapSize.matches('[mM]$') ? int(self.jvmHeapSize.substring(0, size(self.jvmHeapSize) - 1)) * 1048576 :
+              int(self.jvmHeapSize.substring(0, size(self.jvmHeapSize) - 1)) * 1024) * 2 <= memoryBytes(self.memory) ||
+              (self.jvmHeapSize.matches('[gG]$') ? int(self.jvmHeapSize.substring(0, size(self.jvmHeapSize) - 1)) * 1073741824 :
+              self.jvmHeapSize.matches('[mM]$') ? int(self.jvmHeapSize.substring(0, size(self.jvmHeapSize) - 1)) * 1048576 :
+              int(self.jvmHeapSize.substring(0, size(self.jvmHeapSize) - 1)) * 1024) >= memoryBytes(self.memory)
+            severity: info
+            paths: [jvmHeapSize]
+            message: >-
+              The heap is more than half the memory per node. The chart recommends a heap of about 50% of
+              the memory, leaving the rest for bloom filters, caches and the OS page cache.
+          - rule: oldSelf == null || cpuMillicores(self.cpu) == cpuMillicores(oldSelf.cpu)
+            severity: info
+            paths: [cpu]
+            message: Changing the CPU restarts every node, one at a time.
+          - rule: oldSelf == null || memoryBytes(self.memory) == memoryBytes(oldSelf.memory)
+            severity: info
+            paths: [memory]
+            message: Changing the memory restarts every node, one at a time.
+          - rule: oldSelf == null || self.jvmHeapSize == oldSelf.jvmHeapSize
+            severity: info
+            paths: [jvmHeapSize]
+            message: Changing the JVM heap size restarts every node, one at a time.
+      - title: Data volume
+        docs: "#storage"
+        fields:
+          - path: volumes.data.initialCapacity
+            type: integer
+            label: Initial capacity per node
+            unit: GiB
+            required: true
+            min: 10
+            max: 65536
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            description: Each node has its own volume for its data, commit log and saved caches.
+            help: Uninstalling the release deletes the volume set with the data.
+            docs: "/reference/volumeset#capacity-and-billing"
+        rules:
+          - rule: oldSelf == null || self.volumes.data.initialCapacity >= oldSelf.volumes.data.initialCapacity
+            paths: [volumes.data.initialCapacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - title: Volume autoscaling
+        description: Each volume grows by the scaling factor whenever its free space drops below the threshold.
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: volumes.data.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            required: true
+            min: 10
+            max: 65536
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: volumes.data.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            required: true
+            min: 1
+            max: 100
+            suggestions: [10, 20, 30]
+          - path: volumes.data.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            required: true
+            min: 1.1
+            step: 0.1
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2×" }
+              - { value: 1.5, label: "1.5× (default)" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.volumes.data.autoscaling.maxCapacity >= self.volumes.data.initialCapacity
+            paths: [volumes.data.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+
+  - id: network
+    title: Network
+    description: Which workloads can connect to Cassandra.
+    fields:
+      - path: internal_access.type
+        type: enum
+        label: Who can connect
+        widget: cards
+        required: true
+        options:
+          - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+          - { value: same-org, label: Same org, description: Any workload in this org. }
+          - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+      - path: internal_access.workloads
+        type: list
+        label: Allowed workloads
+        widget: tags
+        unique: true
+        description: >-
+          Workloads allowed to connect besides the choice above, for example from another GVC; with
+          Specific workloads, the only ones.
+        docs: /reference/workload/firewall
+        item:
+          type: ref
+          ref:
+            kind: workload
+            gvc: any
+            format: relativeLink
+            mustExist: warning
+            excludeTargetGvcWhen: self.internal_access.type == 'same-gvc'
+    rules:
+      - when: self.internal_access.type == 'same-gvc' && context.gvc != null
+        rule: "!self.internal_access.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+        severity: info
+        paths: [internal_access.workloads]
+        messageExpression: >-
+          'Same GVC already allows every workload in this GVC: ' +
+          self.internal_access.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+          ' can be removed from the list.'
+        message: >-
+          Same GVC already allows every workload in this GVC, so those entries can be removed from the
+          list.
+      # workload-cassandra.yaml:129-130 writes any non-empty list into inboundAllowWorkload, whatever the type.
+      - when: self.internal_access.type == 'same-org'
+        rule: size(self.internal_access.workloads) == 0
+        severity: info
+        paths: [internal_access.workloads]
+        message: Same org already lets every workload of the org connect, so these entries add nothing.
+      - when: self.internal_access.type == 'none'
+        rule: size(self.internal_access.workloads) == 0
+        severity: warning
+        paths: [internal_access.workloads]
+        message: >-
+          The chart still writes these workloads into the firewall, where the platform checks every entry, but "None" lets none of them connect. Remove them.
+      - when: self.internal_access.type == 'workload-list'
+        rule: size(self.internal_access.workloads) > 0
+        severity: warning
+        paths: [internal_access.workloads]
+        message: With "Specific workloads" and no allowed workloads listed, no client can connect.
+      - when: >-
+          self.internal_access.type == 'workload-list' && context.gvc != null &&
+          self.backup.enabled == true && self.backup.type == 'logical'
+        rule: >-
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-cassandra-backup') in
+          self.internal_access.workloads
+        severity: warning
+        paths: [internal_access.workloads]
+        messageExpression: >-
+          'The chart does not add its own workloads to the list. Add //gvc/' + context.gvc + '/workload/' +
+          context.releaseName + '-cassandra-backup, or the logical backup job cannot reach the cluster.'
+        message: >-
+          The chart does not add its own workloads to the list. Add the logical backup job's workload, or
+          it cannot reach the cluster.
+        fix:
+          path: internal_access.workloads
+          items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-cassandra-backup']"
+
+  - id: maintenance
+    title: Repair and backups
+    description: Scheduled anti-entropy repair and backups to object storage, each optional.
+    sections:
+      - id: repair
+        title: Scheduled repair
+        toggle: repair.enabled
+        description: >-
+          A cron job runs `nodetool repair` on every node in turn. Repair must complete on every node at
+          least once within `gc_grace_seconds` (10 days by default), or deleted data can reappear after a
+          node recovers from downtime, so keep it on in production.
+        docs: "#repair"
+        fields:
+          - path: repair.schedule
+            type: string
+            format: cron
+            label: Repair schedule (UTC)
+            required: true
+            pattern: '^(?![\s\S]*/0+(?![0-9]))\S(?:[\s\S]*\S)?$'
+            patternMessage: Leave out a step of 0 and any spaces or line breaks at the start or end.
+            help: >-
+              Repair is resource-intensive on large datasets; schedule it for a low-traffic window rather
+              than turning it off.
+        rules:
+          - when: size(self.repair.schedule.split(' ')) == 5
+            rule: >-
+              self.repair.schedule.split(' ')[3] == '*' &&
+              (self.repair.schedule.split(' ')[2] == '*' || self.repair.schedule.split(' ')[4] != '*')
+            severity: info
+            paths: [repair.schedule]
+            message: >-
+              The repair schedule may leave more than 10 days between repairs. Repair must complete on every node
+              at least once within `gc_grace_seconds` (10 days by default), or deleted data can reappear;
+              the default weekly schedule fits with margin.
+      - id: backup
+        title: Scheduled backups
+        toggle: backup.enabled
+        description: >-
+          Backs up the application keyspace (logical) or every node's SSTables (physical) to S3 or GCS.
+          Neither restore path has been verified end to end with this template: rehearse a restore on a
+          scratch install before you rely on it.
+        docs: "#backup"
+        fields:
+          - path: backup.type
+            type: enum
+            label: Backup type
+            widget: cards
+            required: true
+            options:
+              - value: logical
+                label: Logical (cqlsh COPY TO)
+                description: >-
+                  A cron job exports each table of the application keyspace as a gzipped CSV. Suits smaller
+                  datasets, or when portability matters.
+              - value: physical
+                label: Physical (nodetool snapshot)
+                description: >-
+                  A sidecar on every node uploads SSTable snapshots, which are restored node by node. The
+                  Cassandra workload gets outbound internet access.
+          - path: backup.provider
+            type: enum
+            label: Destination
+            widget: segmented
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+          - path: backup.schedule
+            type: string
+            format: cron
+            label: Backup schedule (UTC)
+            required: true
+            pattern: '^(?![\s\S]*/0+(?![0-9]))\S(?:[\s\S]*\S)?$'
+            patternMessage: Leave out a step of 0 and any spaces or line breaks at the start or end.
+          - path: backup.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+          - path: backup.resources
+            type: resources
+            label: Backup resources
+            required: true
+            advanced: true
+            description: For the logical backup job, or for the sidecar on each node with physical backups.
+        rules:
+          # With physical backups the sidecar runs in every node's pod (workload-cassandra.yaml:74-100):
+          # a change to its image, schedule, resources, provider or prefix rolls every node.
+          - when: >-
+              oldSelf != null && self.backup.type == 'physical' && oldSelf.backup.enabled == true &&
+              oldSelf.backup.type == 'physical'
+            rule: >-
+              oldSelf == null || self.backup.image == oldSelf.backup.image
+            severity: info
+            paths: [backup.image]
+            message: >-
+              Changing the backup image restarts every node, one at a time: with physical backups the backup
+              sidecar runs on every node.
+          - when: >-
+              oldSelf != null && self.backup.type == 'physical' && oldSelf.backup.enabled == true &&
+              oldSelf.backup.type == 'physical'
+            rule: >-
+              oldSelf == null || self.backup.schedule == oldSelf.backup.schedule
+            severity: info
+            paths: [backup.schedule]
+            message: >-
+              Changing the backup schedule restarts every node, one at a time: with physical backups it is
+              part of the backup sidecar on every node.
+          - when: >-
+              oldSelf != null && self.backup.type == 'physical' && oldSelf.backup.enabled == true &&
+              oldSelf.backup.type == 'physical'
+            rule: >-
+              oldSelf == null ||
+              (cpuMillicores(self.backup.resources.cpu) == cpuMillicores(oldSelf.backup.resources.cpu) &&
+              memoryBytes(self.backup.resources.memory) == memoryBytes(oldSelf.backup.resources.memory))
+            severity: info
+            paths: [backup.resources]
+            message: >-
+              Changing the backup resources restarts every node, one at a time: with physical backups they
+              size the backup sidecar on every node.
+          - when: >-
+              oldSelf != null && self.backup.type == 'physical' && oldSelf.backup.enabled == true &&
+              oldSelf.backup.type == 'physical'
+            rule: >-
+              oldSelf == null || self.backup.provider == oldSelf.backup.provider
+            severity: info
+            paths: [backup.provider]
+            message: >-
+              Changing the backup destination restarts every node, one at a time: with physical backups it is
+              part of the backup sidecar on every node.
+      - id: aws
+        title: AWS S3
+        when: self.backup.enabled == true && self.backup.provider == 'aws'
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              This version also attaches the AWS managed policy `aws::ReadOnlyAccess` to the backup identity,
+              which grants read access to every bucket in your AWS account, not just the backup bucket.
+              Version 1.1.1 removes it.
+          - path: backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+            patternMessage: >-
+              Use 3 to 63 lowercase letters, digits, dots and dashes, starting and ending with a letter or
+              digit.
+          - path: backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            pattern: '^[^\x00-\x1f\x7f-\x9f\u2028\u2029\ufffe\uffff]*$'
+            patternMessage: Leave out line breaks and control characters.
+            help: >-
+              Allow `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket`,
+              `s3:GetObjectVersion` and `s3:DeleteObjectVersion` on the bucket and its objects. The chart
+              attaches it to the release's identity together with `cpln-connector` and `aws::ReadOnlyAccess`.
+          - path: backup.aws.prefix
+            type: string
+            label: Folder prefix
+            pattern: '^[^\x00-\x1f\x7f-\x9f\u2028\u2029\ufffe\uffff]*$'
+            patternMessage: Leave out line breaks and control characters.
+            rules:
+              # `quote` on a null prefix renders BACKUP_PREFIX with no value (workload-backup.yaml:25,
+              # workload-cassandra.yaml:93).
+              - rule: self.backup.aws.prefix != null
+                message: The S3 folder prefix is null. Write an empty prefix as "".
+        rules:
+          - when: >-
+              oldSelf != null && self.backup.type == 'physical' && oldSelf.backup.enabled == true &&
+              oldSelf.backup.type == 'physical' &&
+              oldSelf.backup.provider == 'aws'
+            rule: oldSelf == null || self.backup.aws.prefix == oldSelf.backup.aws.prefix
+            severity: info
+            paths: [backup.aws.prefix]
+            message: >-
+              Changing the S3 folder prefix restarts every node, one at a time: with physical backups it is
+              part of the backup sidecar on every node.
+      - id: gcs
+        title: Google Cloud Storage
+        when: self.backup.enabled == true && self.backup.provider == 'gcp'
+        fields:
+          - path: backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^(?:[a-z0-9][a-z0-9_-]{1,61}[a-z0-9]|(?=.{3,222}$)[a-z0-9](?:[a-z0-9_-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9_-]{0,61}[a-z0-9])?)+)$'
+            patternMessage: >-
+              Use 3 to 63 lowercase letters, digits, dashes and underscores, starting and ending with a
+              letter or digit; a name with dots may have up to 222 characters, at most 63 between dots.
+          - path: backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the Storage
+              Admin role. The chart also binds the backup identity to `roles/storage.objectAdmin` on the
+              bucket.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            pattern: '^[^\x00-\x1f\x7f-\x9f\u2028\u2029\ufffe\uffff]*$'
+            patternMessage: Leave out line breaks and control characters.
+            rules:
+              # `quote` on a null prefix renders BACKUP_PREFIX with no value (workload-backup.yaml:29,
+              # workload-cassandra.yaml:97).
+              - rule: self.backup.gcp.prefix != null
+                message: The GCS folder prefix is null. Write an empty prefix as "".
+        rules:
+          - when: >-
+              oldSelf != null && self.backup.type == 'physical' && oldSelf.backup.enabled == true &&
+              oldSelf.backup.type == 'physical' &&
+              oldSelf.backup.provider == 'gcp'
+            rule: oldSelf == null || self.backup.gcp.prefix == oldSelf.backup.gcp.prefix
+            severity: info
+            paths: [backup.gcp.prefix]
+            message: >-
+              Changing the GCS folder prefix restarts every node, one at a time: with physical backups it is
+              part of the backup sidecar on every node.
+    rules:
+      # The physical sidecar comes and goes with the backups switch, or with the type while backups stay on.
+      - when: oldSelf != null && self.backup.enabled != oldSelf.backup.enabled
+        rule: >-
+          oldSelf == null ||
+          (self.backup.enabled == true && self.backup.type == 'physical') ==
+          (oldSelf.backup.enabled == true && oldSelf.backup.type == 'physical')
+        severity: info
+        paths: [backup.enabled]
+        message: >-
+          Adding or removing the physical backup sidecar restarts every node, one at a time.
+      - when: oldSelf != null && self.backup.enabled == oldSelf.backup.enabled
+        rule: >-
+          oldSelf == null ||
+          (self.backup.enabled == true && self.backup.type == 'physical') ==
+          (oldSelf.backup.enabled == true && oldSelf.backup.type == 'physical')
+        severity: info
+        paths: [backup.type]
+        message: >-
+          Adding or removing the physical backup sidecar restarts every node, one at a time.

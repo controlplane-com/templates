@@ -353,6 +353,9 @@ and non-version tags pass.
 {{- define "temporal.validatePostgresHAImage" -}}
 {{- if .Values.postgresHA.enabled -}}
 {{- $raw := .Values.postgresHA.image | default "" | toString -}}
+{{- if not $raw -}}
+{{- fail "temporal: postgresHA.image is required — without it the database subchart falls back to controlplanecorporation/patroni-postgres:0.7, whose pgvector is open to CVE-2026-103484. Set postgresHA.image to controlplanecorporation/patroni-postgres:0.8, or remove it from your values to use the chart default." -}}
+{{- end -}}
 {{- $image := trimPrefix "docker.io/" $raw -}}
 {{- $prefix := "controlplanecorporation/patroni-postgres:" -}}
 {{- if hasPrefix $prefix $image -}}

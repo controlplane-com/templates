@@ -473,9 +473,10 @@ steps:
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
         rules:
           - rule: >-
+              !self.postgresHA.enabled || (has(self.postgresHA.image) && self.postgresHA.image != '' && (
               !(self.postgresHA.image.split(':')[0] in ['controlplanecorporation/patroni-postgres', 'docker.io/controlplanecorporation/patroni-postgres']) ||
               size(self.postgresHA.image.split(':')) < 2 ||
-              !self.postgresHA.image.split(':')[1].matches('^0[.][0-7]([.][0-9]+)?$')
+              !self.postgresHA.image.split(':')[1].matches('^0[.][0-7]([.][0-9]+)?$')))
             mirrors: temporal.validatePostgresHAImage
             paths: [postgresHA.image]
             message: >-

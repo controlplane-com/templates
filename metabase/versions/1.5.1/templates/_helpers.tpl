@@ -69,6 +69,7 @@ value that both sides read.
 {{/* Validation */}}
 
 {{- define "metabase.validate" -}}
+{{- include "metabase.validatePostgresHAImage" . -}}
 {{- include "metabase.validateResourceKnobs" . -}}
 {{- if not .Values.encryptionKey.secretName -}}
 {{- fail "metabase: encryptionKey.secretName is required — the name of a pre-created opaque secret (encoding: plain) holding the encryption key (min 16 chars)" -}}
@@ -158,3 +159,27 @@ with no signal.
 {{- fail "metabase: resources.memory was RENAMED to resources.maxMemory. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+The bundled postgres-highly-available subchart defaults to controlplanecorporation/patroni-postgres:0.7,
+whose pgvector (0.8.0) is open to CVE-2026-103484. This chart sets postgresHA.image to 0.8 (pgvector 0.8.7)
+and refuses patroni-postgres tags 0.1-0.7, matching pg-ha.validateImage in postgres-highly-available 2.8.1.
+A release's stored values carry the image forward on a helm upgrade -f, so an old pin would otherwise keep
+the vulnerable image. An empty value would fall back to the subchart's 0.7 default, so it is refused too.
+Other registries, digests and non-version tags pass.
+*/}}
+{{- define "metabase.validatePostgresHAImage" -}}
+{{- if .Values.postgresHA.enabled -}}
+{{- $raw := .Values.postgresHA.image | default "" | toString -}}
+{{- if not $raw -}}
+{{- fail "metabase: postgresHA.image is required — without it the database subchart falls back to controlplanecorporation/patroni-postgres:0.7, whose pgvector is open to CVE-2026-103484. Set postgresHA.image to controlplanecorporation/patroni-postgres:0.8, or remove it from your values to use the chart default." -}}
+{{- end -}}
+{{- $image := trimPrefix "docker.io/" $raw -}}
+{{- $prefix := "controlplanecorporation/patroni-postgres:" -}}
+{{- if hasPrefix $prefix $image -}}
+{{- if regexMatch "^0\\.[0-7](\\.[0-9]+)?$" (trimPrefix $prefix $image) -}}
+{{- fail (printf "metabase: postgresHA.image %s carries a pgvector older than 0.8.7, which is open to CVE-2026-103484 (a database user who can create an IVFFlat index can run arbitrary code). Set postgresHA.image to controlplanecorporation/patroni-postgres:0.8, or remove it from your values to use the chart default." $raw) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end }}

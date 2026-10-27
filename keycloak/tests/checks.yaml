@@ -5,7 +5,8 @@
 #
 # The Keycloak image ships no curl or psql, so every check runs in the HA database's patroni-postgres
 # container, which has both and reaches Keycloak over the GVC (internalAccess same-gvc). Database checks
-# go through the HAProxy endpoint, the address Keycloak itself uses.
+# go through the HAProxy endpoint, the address Keycloak itself uses. That container's python3 is 3.10, so
+# no backslashes inside f-string expressions.
 checks:
   - id: admin-token
     description: The bootstrap admin from the prerequisite secret gets an access token from the master realm.
@@ -21,7 +22,7 @@ checks:
         import json, sys
         d = json.load(sys.stdin)
         t = d.get("access_token", "")
-        print(f"TOKEN {d.get(\"token_type\")} {len(t) > 100}" if t else "NO TOKEN " + json.dumps(d))
+        print("TOKEN %s %s" % (d.get("token_type"), len(t) > 100) if t else "NO TOKEN " + json.dumps(d))
         '
     expect:
       stdout: "^TOKEN Bearer True$"

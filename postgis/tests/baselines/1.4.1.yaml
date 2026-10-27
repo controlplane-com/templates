@@ -1,0 +1,39 @@
+# postgis 1.4.1 — the recommended install: credentials in a prerequisite secret.
+# Prod shape for this template (one instance on a volumeset, one location) at its default size.
+locations: [aws-us-east-1]
+timeoutSeconds: 600
+
+generated:
+  pgpw: hex
+
+secrets:
+  creds:
+    type: dictionary
+    entries:
+      username: e2e
+      password: "{gen.pgpw}"
+      database: e2e
+
+vars:
+  pg_workload: "{release}-postgis"
+  pg_user: e2e
+  pg_password: "{gen.pgpw}"
+  pg_db: e2e
+
+values:
+  config:
+    credentialsSecretName: "{secrets.creds.name}"
+
+# 1.3.2 is the last version with credentials in `config`, which 1.4.0 refuses; 1.0.0 is the version
+# customers run. Both upgrade with this baseline's values, with a secret holding the same password, as
+# the README says.
+upgradeFrom:
+  - version: 1.3.2
+    values: new
+  - version: 1.0.0
+    values: new
+    knownIssue:
+      note: >-
+        1.2.0 renamed the workload and volume set ({release} → {release}-postgis-vs), so upgrading
+        from 1.1.x or older starts on a new, empty volume and the data written on 1.0.0 is gone.
+        Left as is by maintainer ruling 2026-10-26; the README says not to upgrade in place.

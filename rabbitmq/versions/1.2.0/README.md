@@ -114,6 +114,7 @@ cpln port-forward RELEASE_NAME-rabbitmq 15672:15672 --gvc GVC_NAME
 - A change to `internalAccess.type` takes up to a couple of minutes to propagate — re-test before concluding it did not apply.
 - Single node, single replica: an upgrade or a reschedule is a short outage for every connected client, so give your producers and consumers a reconnect policy.
 - Queue data lives on the volume set and survives redeploys; `cpln helm uninstall` deletes it.
+- **Do not `helm upgrade` from 1.0.0.** 1.1.0 renamed the workload and volume set (`RELEASE_NAME` → `RELEASE_NAME-rabbitmq` and `RELEASE_NAME-rabbitmq-vs`), so an in-place upgrade starts the broker on a new, empty volume and removes the old one, with every queued message. Install a new release of this version instead, move producers and consumers over once the old queues have drained, then remove the old release.
 
 ## Links
 

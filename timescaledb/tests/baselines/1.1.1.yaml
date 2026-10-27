@@ -1,0 +1,25 @@
+# timescaledb 1.1.1 — the previous version, also on a prerequisite secret.
+# Used as the starting point of an upgrade to a newer version.
+locations: [aws-us-east-1]
+timeoutSeconds: 600
+
+generated:
+  pgpw: hex
+
+secrets:
+  creds:
+    type: dictionary
+    entries:
+      username: e2e
+      password: "{gen.pgpw}"
+      database: e2e
+
+vars:
+  pg_workload: "{release}-timescaledb"
+  pg_user: e2e
+  pg_password: "{gen.pgpw}"
+  pg_db: e2e
+
+values:
+  config:
+    credentialsSecretName: "{secrets.creds.name}"

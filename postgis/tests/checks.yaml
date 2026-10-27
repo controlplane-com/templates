@@ -1,0 +1,73 @@
+# Feature checks for the postgis template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
+# (pg_workload, pg_user, pg_password, pg_db).
+#
+# Every connection goes to the replica's own IP, not 127.0.0.1: the image trusts loopback without a
+# password, so a loopback connection would pass the auth checks whatever the password was.
+checks:
+  - id: write-read
+    description: A row written over an authenticated TCP connection reads back.
+    exec:
+      workload: "{pg_workload}"
+      container: postgis
+      shell: bash
+      script: |
+        set -e
+        export PGPASSWORD='{pg_password}'
+        H=$(hostname -i | awk '{print $1}')
+        M="e2e-$(date +%s%N)"
+        psql -h "$H" -U {pg_user} -d {pg_db} -v ON_ERROR_STOP=1 -qtA \
+          -c "create table if not exists e2e (id serial primary key, version text not null, marker text not null)" \
+          -c "insert into e2e (version, marker) values ('{version}', '$M')" >/dev/null
+        psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c "select marker from e2e where marker = '$M'" | grep -qx "$M" && echo "READ $M"
+    expect:
+      stdout: "^READ e2e-"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: extension-works
+    description: A spatial query runs with the PostGIS extension the image installed (Paris to London is about 344 km).
+    exec:
+      workload: "{pg_workload}"
+      container: postgis
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        H=$(hostname -i | awk '{print $1}')
+        psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c "select 'EXT ' || extversion from pg_extension where extname = 'postgis'" \
+          -c "select 'KM ' || round(ST_Distance(ST_GeogFromText('POINT(2.3522 48.8566)'), ST_GeogFromText('POINT(-0.1276 51.5072)')) / 1000)"
+    expect:
+      stdout: "(?s)^EXT \\d.*^KM 34[0-9]$"
+    retries: 3
+    retryDelaySeconds: 15
+
+  - id: rejects-bad-password
+    description: A wrong password is refused over TCP (the control for the checks above).
+    exec:
+      workload: "{pg_workload}"
+      container: postgis
+      shell: bash
+      script: |
+        H=$(hostname -i | awk '{print $1}')
+        PGPASSWORD=wrong-password psql -h "$H" -U {pg_user} -d {pg_db} -c "select 1" 2>&1
+        echo "EXIT=$?"
+    expect:
+      stdout: "password authentication failed"
+      notStdout: "^EXIT=0$"
+
+  - id: data-survives-upgrade
+    description: >-
+      The row written on the version this scenario installed first is still there. On a fresh install
+      that is the same version; after an upgrade it proves the data directory carried over.
+    exec:
+      workload: "{pg_workload}"
+      container: postgis
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        H=$(hostname -i | awk '{print $1}')
+        n=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c "select count(*) from e2e where version = '{installed_version}'" 2>&1)
+        [ "${n:-0}" -ge 1 ] 2>/dev/null && echo PERSISTED || echo "MISSING (rows for {installed_version}: ${n:-none})"
+    expect:
+      stdout: "^PERSISTED$"

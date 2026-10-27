@@ -59,3 +59,16 @@ prerequisites:
     valuesPath: secretKey.secretName
     required: true
     description: Opaque secret whose payload signs preference cookies and CSRF tokens. Create it before installing; when it is missing the workload never starts and logs nothing.
+  - kind: secret
+    secretType: dictionary
+    keys: [password]
+    valuesPath: redis.redis.auth.fromSecret.name
+    required: false
+    when: redis.enabled with redis.redis.auth.fromSecret.enabled (Redis auth; off by default)
+    description: Password for the bundled Redis; Redis, its Sentinel and SearXNG read it. Use URL-safe characters. Create it before turning Redis auth on.
+  - kind: secret
+    secretType: opaque
+    valuesPath: metrics.secretName
+    required: false
+    when: metrics.secretName set (opens /metrics; closed by default)
+    description: Opaque secret whose payload is the HTTP basic-auth password for /metrics. Without it /metrics stays closed (404).

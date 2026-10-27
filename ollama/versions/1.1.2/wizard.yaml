@@ -70,6 +70,19 @@ steps:
             text: >-
               Changing the model only changes what Open WebUI preselects; pull a new model once by hand. Any change
               restarts the single replica, so Open WebUI and the API are down until it is ready again.
+        rules:
+          # workload.yaml writes `value: {{ .Values.defaultModel }}` unquoted (measured with helm template:
+          # defaultModel=123 renders an integer env value).
+          - when: oldSelf == null || self.defaultModel != oldSelf.defaultModel
+            rule: >-
+              !self.defaultModel.matches('^[0-9][0-9._]*$') && !self.defaultModel.matches('^0[xXoO]') &&
+              !(self.defaultModel.lowerAscii() in ['true', 'false', 'yes', 'no', 'on', 'off', 'y', 'n', 'null'])
+            severity: warning
+            paths: [defaultModel]
+            message: >-
+              The chart writes the model name into the workload unquoted, so a name that is only a number or a
+              word such as true, yes or null reaches Open WebUI as a number, a boolean or nothing. Use a library
+              model name such as llama3.
       - title: Ollama server
         docs: "#containers"
         fields:

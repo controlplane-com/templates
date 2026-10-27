@@ -1,5 +1,7 @@
 # Unleash
 
+> **Upgrading from 1.5.0 or earlier:** the HA database moves to patroni-postgres 0.8 (pgvector 0.8.7) — see [Upgrading from 1.5.0 or earlier](#upgrading-from-150-or-earlier).
+>
 > **Upgrading from 1.4.0:** the database credentials are now a secret you create before upgrading,
 > under a **new** name — see [Upgrading from 1.4.0](#upgrading-from-140).
 
@@ -102,6 +104,7 @@ Exactly one of the two databases must be enabled (the chart enforces this at ren
 ```yaml
 postgresHA:                   # default: highly available PostgreSQL
   enabled: true
+  image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7 (CVE-2026-103484); tags 0.1-0.7 are refused
   config:
     credentialsSecretName: my-unleash-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   replicas: 3
@@ -135,6 +138,10 @@ postgres:                     # dev/lightweight: single-instance PostgreSQL
 | Login | `username` / `password` from your `admin.secretName` secret — `cpln secret reveal my-unleash-admin -o yaml` |
 | Postgres (internal, HA mode) | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432`, credentials from your `postgresHA.config.credentialsSecretName` secret (`cpln secret reveal SECRET_NAME -o yaml`) |
 | Postgres (internal, single mode) | `{release}-postgres.{gvc}.cpln.local:5432`, credentials from your `postgres.config.credentialsSecretName` secret |
+
+## Upgrading from 1.5.0 or earlier
+
+1.5.1 moves the HA database to `controlplanecorporation/patroni-postgres:0.8`, which carries pgvector 0.8.7 (CVE-2026-103484). The upgrade restarts the Patroni members one at a time and the leader hands over, so Unleash can briefly reconnect to its database; existing data needs nothing. If you pinned `postgresHA.image`, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render. Unleash does not use the `vector` extension; if you created it yourself in a database, run `ALTER EXTENSION vector UPDATE;` there, which only updates the version `\dx` reports. Single-instance mode is unchanged.
 
 ## Upgrading from 1.4.0
 

@@ -1,0 +1,673 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Apache Kafka
+# The brokers are stateful and the chart has no location handling: every location of the GVC would run
+# its own independent cluster.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: cluster
+    title: Cluster
+    description: The Kafka image, the number of brokers and the compute each one gets.
+    sections:
+      - id: brokers
+        title: Brokers
+        fields:
+          # workload-kafka-cluster.yaml starts the brokers with /opt/bitnami/scripts/kafka/entrypoint.sh and run.sh, and
+          # secret-init.yaml writes /opt/bitnami/kafka/config/server.properties.
+          - path: kafka.image
+            type: string
+            format: image
+            label: Kafka image
+            required: true
+            description: A Bitnami Kafka image; the chart starts the brokers with its scripts.
+          # secret-controller-configuration.yaml fails on 2 and lists at most the first 5 brokers as controller voters;
+          # secret-init.yaml makes brokers 0 to 4 controllers and brokers and later ones brokers only.
+          - path: kafka.replicas
+            type: integer
+            label: Brokers
+            min: 1
+            required: true
+            widget: stepper
+            description: >-
+              The cluster size. The first five brokers are also the controllers, so up to five it also sets the controller
+              quorum.
+          # workload-kafka-cluster.yaml writes it quoted and no template parses it.
+          - path: kafka.cpu
+            type: quantity
+            quantity: cpu
+            label: CPU
+            required: true
+            min: 25m
+            suggestions: ["1000m", "2"]
+            description: Per broker.
+          - path: kafka.memory
+            type: string
+            label: Memory
+            required: true
+            maxLength: 20
+            # _helpers.tpl:17-28 reads Mi with sprig's int, which takes a leading 0 as octal, and multiplies Gi by 1024
+            # with sprig's mul, which drops the fraction first (1.5Gi gives the heap of 1Gi); any other unit writes the
+            # helper's own comment into KAFKA_HEAP_OPTS. The heap is -Xmx and -Xms of the whole value.
+            suggestions: ["2000Mi", "4000Mi"]
+            description: Per broker. The chart sets the JVM heap (`-Xmx` and `-Xms`) to all of it.
+            rules:
+              - rule: >-
+                  (oldSelf != null && self.kafka.memory == oldSelf.kafka.memory) ||
+                  self.kafka.memory.matches('^[1-9][0-9]*(Mi|Gi)$')
+                message: The brokers' memory must be a whole number of Mi or Gi without a leading zero, such as `4000Mi` or `4Gi`.
+              - when: self.kafka.memory.matches('^[1-9][0-9]*(Mi|Gi)$')
+                rule: memoryBytes(self.kafka.memory) >= 33554432
+                message: The brokers' memory must be at least 32Mi, the platform's minimum.
+        rules:
+          - rule: self.kafka.replicas != 2
+            paths: [kafka.replicas]
+            message: A KRaft cluster cannot have 2 brokers, and the chart refuses it. Use 1, 3 or more.
+          - rule: self.kafka.replicas <= 5
+            severity: info
+            paths: [kafka.replicas]
+            message: Only the first five brokers are controllers; the others are brokers only.
+          - rule: self.kafka.replicas > 1
+            severity: info
+            paths: [kafka.replicas]
+            message: A single-broker cluster keeps one copy of each partition, so it has no failover.
+          # The controller quorum needs a majority of its voters; shrinking a running cluster below it makes it unavailable.
+          - rule: >-
+              oldSelf == null || self.kafka.replicas >= ((oldSelf.kafka.replicas > 5 ? 5 : oldSelf.kafka.replicas) / 2 + 1)
+            severity: warning
+            paths: [kafka.replicas]
+            message: >-
+              This many brokers is below the controller quorum of the running cluster, which then becomes unavailable.
+          - rule: oldSelf == null || self.kafka.image == oldSelf.kafka.image
+            severity: info
+            paths: [kafka.image]
+            message: A new Kafka image restarts the brokers.
+      - id: topic-defaults
+        title: Topic defaults
+        fields:
+          # secret-controller-configuration.yaml writes the four values below into server.properties.
+          - path: kafka.configurations.default_replication_factor
+            type: integer
+            label: Replication factor
+            required: true
+            min: 1
+            description: The number of copies of a new topic's partitions.
+          - path: kafka.configurations.auto_create_topics_enable
+            type: boolean
+            label: Create topics on first use
+            required: true
+          - path: kafka.configurations.log_retention_hours
+            type: integer
+            label: Keep messages for
+            unit: hours
+            required: true
+            min: 1
+        rules:
+          # Kafka refuses to create a topic with more replicas than brokers.
+          - rule: self.kafka.configurations.default_replication_factor <= self.kafka.replicas
+            severity: warning
+            paths: [kafka.configurations.default_replication_factor]
+            message: >-
+              The replication factor cannot exceed the number of brokers: Kafka refuses to create topics with it.
+      - id: broker-expert
+        title: Expert broker settings
+        advanced: true
+        fields:
+          - path: kafka.minReadySeconds
+            type: integer
+            label: Minimum ready time
+            unit: seconds
+            min: 0
+            required: true
+            docs: "/reference/workload/general#minreadyseconds"
+          # workload-kafka-cluster.yaml passes it to the broker container as BITNAMI_DEBUG.
+          - path: kafka.debug
+            type: boolean
+            label: Debug start-up logs
+            description: Sets `BITNAMI_DEBUG` on the brokers, the Bitnami image's switch for more detailed start-up logs.
+          - path: kafka.suspend
+            type: boolean
+            label: Suspend the brokers
+            # workload-kafka-cluster.yaml prints it as is (suspend: {{ … }}); a YAML null reaches the platform.
+            required: true
+            description: Stops every broker. The volume sets and their data stay.
+
+  - id: access
+    title: Access
+    description: How clients log in, and the cluster's own secrets.
+    sections:
+      - id: client-listener
+        title: Client listener
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The passwords on this step are plain values: they land in the Helm release and in the secret the chart
+              creates from it, and the Kafka UI also gets the client password as a plain environment variable. Replace
+              the published defaults.
+          # secret-controller-configuration.yaml and the workloads use SASL only when the protocol is SASL_PLAINTEXT and a
+          # client password is set; otherwise the client listener is plaintext.
+          - path: kafka.configurations.client_listener_security_protocol
+            type: enum
+            label: Protocol
+            widget: segmented
+            required: true
+            options:
+              - value: SASL_PLAINTEXT
+                label: SASL login
+                description: Clients log in as `kafka-admin` with the client password.
+              - value: PLAINTEXT
+                label: Plaintext
+                description: No login on this listener.
+          - path: kafka.configurations.client_port
+            type: integer
+            label: Port
+            required: true
+            min: 80
+            max: 65535
+          # secret-secrets.yaml writes it unquoted into the cluster secret; secret-init.yaml splits KAFKA_CLIENT_PASSWORDS
+          # at commas, semicolons and blanks and substitutes only the first part, with sed s|…|…|, into a double-quoted
+          # JAAS string for the user kafka-admin; workload-kafka-cluster.yaml (exporter) and workload-kafka-ui.yaml use the
+          # whole value.
+          - path: kafka.secrets.client_passwords
+            type: string
+            label: Client password
+            sensitive: true
+            widget: password
+            example: true
+            when: self.kafka.configurations.client_listener_security_protocol == 'SASL_PLAINTEXT'
+            description: The password of the client user `kafka-admin`.
+        rules:
+          - when: self.kafka.configurations.client_listener_security_protocol == 'SASL_PLAINTEXT'
+            rule: self.kafka.secrets.client_passwords != null && self.kafka.secrets.client_passwords != ''
+            severity: warning
+            paths: [kafka.secrets.client_passwords]
+            message: >-
+              Without a client password the chart runs the client listener as plaintext, with no login. Enter a password.
+          - when: >-
+              self.kafka.secrets.client_passwords != null && self.kafka.secrets.client_passwords != '' &&
+              (oldSelf == null || self.kafka.secrets.client_passwords != oldSelf.kafka.secrets.client_passwords)
+            rule: >-
+              self.kafka.secrets.client_passwords.matches('^[A-Za-z]([!#-%(-+\\--:<-\\[\\]-{}~]*[!#-%(-+\\--9<-\\[\\]-{}~])?$') &&
+              !(self.kafka.secrets.client_passwords.lowerAscii() in ['y', 'n', 'yes', 'no', 'on', 'off', 'true', 'false', 'null'])
+            paths: [kafka.secrets.client_passwords]
+            message: >-
+              A new client password must start with a letter, use printable ASCII characters other than spaces, quotes,
+              commas, semicolons, pipes, ampersands and backslashes, not end with a colon, and not be a YAML word such as
+              `true`, `yes` or `null`: the chart writes it into YAML unquoted, splits it at commas and semicolons, and
+              copies it into a JAAS string with sed. An installed password is accepted as it is.
+          # values.yaml and README.md:36 publish fkor3Dro52oodA as the kafka-admin password.
+          - when: >-
+              oldSelf == null || self.kafka.secrets.client_passwords != oldSelf.kafka.secrets.client_passwords
+            rule: self.kafka.secrets.client_passwords != 'fkor3Dro52oodA'
+            severity: warning
+            paths: [kafka.secrets.client_passwords]
+            message: >-
+              The client password is the default the chart publishes (`fkor3Dro52oodA` in the values file and the
+              README): anyone who can reach the client listener can log in as `kafka-admin` with it. Choose your own.
+          - when: oldSelf != null && self.kafka.secrets.client_passwords == oldSelf.kafka.secrets.client_passwords
+            rule: self.kafka.secrets.client_passwords != 'fkor3Dro52oodA'
+            severity: info
+            paths: [kafka.secrets.client_passwords]
+            message: >-
+              The client password is still the published default `fkor3Dro52oodA`. Choose your own, and update the
+              clients.
+          # Platform port.ts reserves these ports, and the broker container also opens 9093 (controller), 9094
+          # (inter-broker) and, with the exporter, 9308 in the same workload.
+          - rule: "!(self.kafka.configurations.client_port in [8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090, 41000])"
+            paths: [kafka.configurations.client_port]
+            message: >-
+              The platform reserves 8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090 and 41000. Choose
+              another port.
+          - rule: "!(self.kafka.configurations.client_port in ([9093, 9094] + (self.kafka_exporter != null ? [9308] : [])))"
+            paths: [kafka.configurations.client_port]
+            message: >-
+              The brokers already use 9093 and 9094 (and 9308 for the Kafka exporter). Choose another port.
+          # workload-kafka-ui.yaml always connects to port 9092.
+          - when: self.kafka_ui != null
+            rule: self.kafka.configurations.client_port == 9092
+            severity: warning
+            paths: [kafka.configurations.client_port]
+            message: >-
+              The Kafka UI always connects to the brokers on port 9092, so with another client port it cannot reach
+              them. Keep 9092, or turn the Kafka UI off.
+      - id: cluster-secrets
+        title: Cluster secrets
+        description: Values the chart stores in the dictionary secret of the cluster.
+        fields:
+          # secret-secrets.yaml writes the ID unquoted. kafka-storage.sh random-uuid prints a 22-character base64url ID.
+          - path: kafka.secrets.kraft_cluster_id
+            type: string
+            label: KRaft cluster ID
+            required: true
+            placeholder: bkdDtS1Rsf536si7BGM0JY
+            pattern: '^(?!-?0[xX][0-9a-fA-F_]*$)(?!-?0[oO][0-7_]*$)(?!-?0[bB][01_]*$)(?=.*[A-DF-Za-df-z])[A-Za-z0-9_-]{22}$'
+            patternMessage: >-
+              Enter the 22-character ID that `kafka-storage.sh random-uuid` prints. The chart writes it into YAML
+              unquoted, so it must contain a letter other than e and must not read as a hexadecimal, octal or binary
+              number.
+          - path: kafka.secrets.inter_broker_password
+            type: string
+            label: Inter-broker password
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+          - path: kafka.secrets.controller_password
+            type: string
+            label: Controller password
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+        rules:
+          # Written unquoted into the dictionary secret and substituted with sed s|…|…| into double-quoted JAAS strings
+          # (secret-init.yaml, secret-controller-configuration.yaml).
+          - when: oldSelf == null || self.kafka.secrets.inter_broker_password != oldSelf.kafka.secrets.inter_broker_password
+            rule: >-
+              self.kafka.secrets.inter_broker_password.matches('^[A-Za-z]([!#-%(-\\[\\]-{}~]*[!#-%(-9;-\\[\\]-{}~])?$') &&
+              !(self.kafka.secrets.inter_broker_password.lowerAscii() in ['y', 'n', 'yes', 'no', 'on', 'off', 'true', 'false', 'null'])
+            paths: [kafka.secrets.inter_broker_password]
+            message: >-
+              A new inter-broker password must start with a letter, use printable ASCII characters other than spaces,
+              quotes, pipes, ampersands and backslashes, not end with a colon, and not be a YAML word such as `true`, `yes`
+              or `null`. An installed password is accepted as it is.
+          - when: oldSelf == null || self.kafka.secrets.controller_password != oldSelf.kafka.secrets.controller_password
+            rule: >-
+              self.kafka.secrets.controller_password.matches('^[A-Za-z]([!#-%(-\\[\\]-{}~]*[!#-%(-9;-\\[\\]-{}~])?$') &&
+              !(self.kafka.secrets.controller_password.lowerAscii() in ['y', 'n', 'yes', 'no', 'on', 'off', 'true', 'false', 'null'])
+            paths: [kafka.secrets.controller_password]
+            message: >-
+              A new controller password must start with a letter, use printable ASCII characters other than spaces,
+              quotes, pipes, ampersands and backslashes, not end with a colon, and not be a YAML word such as `true`, `yes`
+              or `null`. An installed password is accepted as it is.
+          # values.yaml publishes HfcgCHp32e and ayd8iJwqXe; the brokers accept them for inter_broker_user (port 9094) and
+          # controller_user (port 9093), which every workload the internal firewall admits can reach.
+          - when: oldSelf == null || self.kafka.secrets.inter_broker_password != oldSelf.kafka.secrets.inter_broker_password
+            rule: self.kafka.secrets.inter_broker_password != 'HfcgCHp32e'
+            severity: warning
+            paths: [kafka.secrets.inter_broker_password]
+            message: >-
+              The inter-broker password is the default the chart publishes (`HfcgCHp32e`): any workload the brokers'
+              internal firewall admits can log in as `inter_broker_user` on port 9094 with it. Choose your own.
+          - when: oldSelf == null || self.kafka.secrets.controller_password != oldSelf.kafka.secrets.controller_password
+            rule: self.kafka.secrets.controller_password != 'ayd8iJwqXe'
+            severity: warning
+            paths: [kafka.secrets.controller_password]
+            message: >-
+              The controller password is the default the chart publishes (`ayd8iJwqXe`): any workload the brokers'
+              internal firewall admits can log in as `controller_user` on port 9093 with it. Choose your own.
+          - when: oldSelf != null
+            rule: >-
+              self.kafka.secrets.inter_broker_password != 'HfcgCHp32e' && self.kafka.secrets.controller_password != 'ayd8iJwqXe'
+            severity: info
+            paths: [kafka.secrets.inter_broker_password]
+            message: >-
+              The inter-broker or controller password is still a published default. Choose your own, with Suspend the
+              brokers on in the upgrade that changes it.
+          # Kafka keeps the cluster ID its storage was formatted with (meta.properties).
+          - rule: oldSelf == null || self.kafka.secrets.kraft_cluster_id == oldSelf.kafka.secrets.kraft_cluster_id
+            severity: info
+            paths: [kafka.secrets.kraft_cluster_id]
+            message: >-
+              The brokers keep the cluster ID their storage was formatted with: a changed ID only reaches a broker or log
+              directory formatted later, which then cannot join the cluster. Keep the installed cluster ID.
+          # The brokers restart with the new password while the others still use the old one, and they cannot log in
+          # to each other until all have restarted; with the brokers suspended they all start on the new password.
+          - rule: >-
+              oldSelf == null || self.kafka.suspend == true || oldSelf.kafka.suspend == true ||
+              (self.kafka.secrets.inter_broker_password == oldSelf.kafka.secrets.inter_broker_password &&
+              self.kafka.secrets.controller_password == oldSelf.kafka.secrets.controller_password)
+            severity: warning
+            paths: [kafka.secrets.inter_broker_password]
+            message: >-
+              Until every broker runs on the new inter-broker or controller password, the restarted brokers and the
+              others cannot log in to each other. Turn on Suspend the brokers in the upgrade that changes the password,
+              then turn it off in the next upgrade.
+
+  - id: storage
+    title: Storage
+    description: The volume sets that hold the topic logs, one per log directory.
+    sections:
+      - id: log-volumes
+        title: Log volumes
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Uninstalling the release deletes the log volume sets, and with them the topic logs they hold.
+          # volumesets.yaml and workload-kafka-cluster.yaml create and mount <release>-logs-<n> per directory, by
+          # position; secret-controller-configuration.yaml writes the value as log.dirs as given.
+          - path: kafka.logDirs
+            type: list
+            serialize: csv
+            label: Log directories
+            required: true
+            unique: true
+            minItems: 1
+            # Platform: at most 15 volumes per container; the broker container also mounts two files.
+            maxItems: 13
+            description: >-
+              The chart creates one volume set per directory, named `<release>-logs-<n>`. Use new folders, such as
+              `/opt/bitnami/kafka/logs-2`.
+            item:
+              type: string
+              label: Log directory
+              pattern: '^(?!.*(//|/\.\.?(/|$)))/(?!(dev|dev/log|tmp|var|var/log)/*$)[A-Za-z0-9._/-]+$'
+              patternMessage: >-
+                Enter an absolute path of letters, digits, dots, underscores, hyphens and single slashes, with no `.` or
+                `..` segment, other than `/dev`, `/dev/log`, `/tmp`, `/var` and `/var/log`, which the platform reserves.
+            rules:
+              - rule: >-
+                  self.kafka.logDirs.map(x, x.endsWith('/') ? x.substring(0, size(x) - 1) : x).all(a,
+                  !(['/configmaps/server.properties', '/scripts/kafka-init.sh'] + self.kafka.logDirs.map(x, x.endsWith('/') ? x.substring(0, size(x) - 1) : x)).exists(b,
+                  a != b && ((a + '/').startsWith(b + '/') || (b + '/').startsWith(a + '/'))))
+                message: >-
+                  A log directory cannot be inside another one, or contain `/configmaps/server.properties` or
+                  `/scripts/kafka-init.sh`, which the chart mounts in the same container. Use separate folders.
+              # workload-kafka-cluster.yaml runs /bin/bash, cp and chmod, writes /tmp/kafka-init.sh and starts
+              # /opt/bitnami/scripts/kafka/entrypoint.sh and run.sh; secret-init.yaml writes
+              # /opt/bitnami/kafka/config/server.properties, and Kafka's scripts in /opt/bitnami/kafka/bin load
+              # /opt/bitnami/kafka/libs. Other image files (such as the image's Java) are not checked.
+              - rule: >-
+                  self.kafka.logDirs.map(x, x.endsWith('/') ? x.substring(0, size(x) - 1) : x).all(a, !['/proc', '/sys',
+                  '/bin', '/usr/bin', '/lib', '/usr/lib', '/opt/bitnami/scripts', '/opt/bitnami/kafka/bin',
+                  '/opt/bitnami/kafka/libs', '/opt/bitnami/kafka/config'].exists(p, (a + '/').startsWith(p + '/') ||
+                  (p + '/').startsWith(a + '/')) && !['/tmp/kafka-init.sh'].exists(p, (p + '/').startsWith(a + '/')))
+                message: >-
+                  A log directory cannot be in, on or above `/proc`, `/sys` or a folder the brokers start from (`/bin`,
+                  `/usr/bin`, `/lib`, `/usr/lib`, `/opt/bitnami/scripts`, `/opt/bitnami/kafka/bin`,
+                  `/opt/bitnami/kafka/libs` or `/opt/bitnami/kafka/config`), or on or above `/tmp/kafka-init.sh`. Use a
+                  new folder, such as `/opt/bitnami/kafka/logs-2`.
+              - rule: >-
+                  oldSelf == null || size(self.kafka.logDirs) >= size(oldSelf.kafka.logDirs) ||
+                  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].filter(i, i < size(self.kafka.logDirs)).all(i,
+                  self.kafka.logDirs[i] == oldSelf.kafka.logDirs[i])
+                severity: warning
+                message: >-
+                  Only the last log directories can be removed. Otherwise each later directory mounts the volume set of
+                  the one listed before it. Put the directories back and remove only the last ones, after moving their
+                  partitions away.
+              - when: context.releaseName != null
+                rule: oldSelf == null || size(self.kafka.logDirs) >= size(oldSelf.kafka.logDirs)
+                severity: info
+                message: >-
+                  The chart names its log volume sets by position (`<release>-logs-0`, `-1`, …), so removing directories
+                  deletes the volume sets of the last ones with their data. Move their partitions away first.
+          - path: kafka.volumes.logs.initialCapacity
+            type: integer
+            label: Initial capacity
+            unit: GB
+            required: true
+            min: 10
+            max: 65536
+            help: Sizes only new volumes; an existing volume keeps its size.
+          - path: kafka.volumes.logs.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GB
+            required: true
+            min: 10
+            max: 65536
+            description: The volumes grow by 10% when free space falls below the minimum, up to this size.
+          - path: kafka.volumes.logs.minFreePercentage
+            type: integer
+            label: Minimum free space
+            unit: "%"
+            required: true
+            min: 1
+            max: 100
+          - path: kafka.volumes.logs.performanceClass
+            type: enum
+            label: Disk class
+            required: true
+            immutable: The disk class of a volume set cannot change after it is created.
+            options:
+              - { value: general-purpose-ssd, label: General purpose SSD }
+              - { value: high-throughput-ssd, label: High throughput SSD }
+          - path: kafka.volumes.logs.fileSystemType
+            type: enum
+            label: File system
+            widget: segmented
+            required: true
+            immutable: The file system of a volume set cannot change after it is created.
+            advanced: true
+            options:
+              - { value: ext4, label: ext4 }
+              - { value: xfs, label: XFS }
+        rules:
+          - rule: self.kafka.volumes.logs.maxCapacity >= self.kafka.volumes.logs.initialCapacity
+            paths: [kafka.volumes.logs.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+          # Platform volumeSet.ts (PerformanceClasses): high-throughput-ssd has a minCapacity of 200 GB.
+          - rule: >-
+              self.kafka.volumes.logs.performanceClass != 'high-throughput-ssd' ||
+              self.kafka.volumes.logs.initialCapacity >= 200
+            paths: [kafka.volumes.logs.initialCapacity]
+            message: A high throughput SSD for the log volumes needs an initial capacity of at least 200 GB.
+          - rule: oldSelf == null || self.kafka.volumes.logs.initialCapacity >= oldSelf.kafka.volumes.logs.initialCapacity
+            paths: [kafka.volumes.logs.initialCapacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volumes.
+      - id: log-snapshots
+        title: Snapshots
+        fields:
+          # volumesets.yaml writes all three keys while the block is set.
+          - path: kafka.volumes.logs.snapshots
+            type: object
+            optional: true
+            label: Scheduled snapshots
+            docs: "/reference/volumeset#snapshots"
+            fields:
+              - path: createFinalSnapshot
+                type: boolean
+                label: Snapshot on deletion
+                required: true
+              - path: retentionDuration
+                type: string
+                format: retention
+                label: Keep snapshots for
+                required: true
+                placeholder: 7d
+              - path: schedule
+                type: string
+                format: cron
+                label: Schedule (UTC)
+                required: true
+                # Platform: snapshots run at most hourly, so one fixed minute.
+                pattern: '^\s*[0-5]?[0-9][ \t]+[^ \t]+[ \t]+[^ \t]+[ \t]+[^ \t]+[ \t]+[^ \t]+\s*$'
+                patternMessage: Use one minute value, because snapshots run at most hourly, such as `0 2 * * *`.
+                description: The default `0 0 9 * *` runs at 00:00 UTC on the 9th day of each month.
+
+  - id: network
+    title: Network
+    description: Who can reach the brokers from inside Control Plane and from the internet.
+    sections:
+      - id: cluster-firewall
+        title: Firewall
+        docs: "/reference/workload/firewall"
+        fields:
+          - type: note
+            text: Setting either external CIDR list renders both; the other one becomes empty.
+          - path: kafka.firewall.internal_inboundAllowType
+            type: enum
+            label: Internal access to the brokers
+            widget: cards
+            required: true
+            options:
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC (recommended). }
+          - path: kafka.firewall.external_inboundAllowCIDR
+            type: list
+            absent: true
+            serialize: csv
+            label: Public inbound CIDRs
+            maxItems: 250
+            item: { type: string, format: cidr, pattern: '^(?:[^:/]*(/(0|[1-9][0-9]?))?|[^/]*:[^/]*(/[0-9]{1,3})?)$', patternMessage: "Write an IPv4 prefix length without a leading zero, such as `/8`." }
+          - path: kafka.firewall.external_outboundAllowCIDR
+            type: list
+            absent: true
+            serialize: csv
+            label: Outbound CIDRs
+            description: Addresses the brokers may connect to outside the platform.
+            item: { type: string, format: cidr, pattern: '^(?:[^:/]*(/(0|[1-9][0-9]?))?|[^/]*:[^/]*(/[0-9]{1,3})?)$', patternMessage: "Write an IPv4 prefix length without a leading zero, such as `/8`." }
+
+  - id: components
+    title: Add-ons
+    description: The metrics exporter, the Kafka UI and the test client, each on by default.
+    sections:
+      - id: exporter
+        title: Kafka exporter
+        fields:
+          - path: kafka_exporter
+            type: object
+            optional: true
+            label: Kafka exporter
+            description: Runs next to every broker and exposes topic, partition and consumer group metrics for Prometheus.
+            fields:
+              - path: image
+                type: string
+                format: image
+                label: Kafka exporter image
+                required: true
+              # workload-kafka-cluster.yaml passes it to the exporter container as BITNAMI_DEBUG.
+              - path: debug
+                type: boolean
+                label: Kafka exporter debug logs
+                description: Sets `BITNAMI_DEBUG` on the exporter.
+              - path: cpu
+                type: string
+                label: Kafka exporter CPU
+                required: true
+                # Written unquoted: a number of cores would reach the platform as a YAML number; millicores stay text.
+                maxLength: 20
+                pattern: '^(2[5-9]|[3-9][0-9]|[1-9][0-9]{2,})m$'
+                patternMessage: Enter millicores of at least 25m, such as `50m`.
+              - path: memory
+                type: string
+                label: Kafka exporter memory
+                required: true
+                maxLength: 20
+                pattern: '^([0-9]+Mi|[0-9]+(\.[0-9]{1,3})?Gi)$'
+                patternMessage: Enter a whole number of Mi, or a number of Gi with up to 3 decimals, such as `128Mi`.
+                rules:
+                  - rule: memoryBytes(self.kafka_exporter.memory) >= 33554432
+                    message: The Kafka exporter's memory must be at least 32Mi, the platform's minimum.
+      - id: kafka-ui
+        title: Kafka UI
+        fields:
+          - type: note
+            severity: warning
+            when: self.kafka_ui != null
+            text: >-
+              The Kafka UI has no login. It connects as `kafka-admin` with the client password, which the chart writes
+              into the UI workload as a plain environment variable, and its default public inbound CIDR `0.0.0.0/0` lets
+              anyone on the internet use it. Narrow or clear its public inbound CIDRs, or turn it off.
+          # workload-kafka-ui.yaml renders the workload while kafka_ui is set, always with provectuslabs/kafka-ui:latest.
+          - path: kafka_ui
+            type: object
+            optional: true
+            label: Kafka UI
+            description: A web console for the cluster (provectuslabs/kafka-ui), on port 8080.
+            fields:
+              - path: cpu
+                type: string
+                label: Kafka UI CPU
+                required: true
+                maxLength: 20
+                pattern: '^(2[5-9]|[3-9][0-9]|[1-9][0-9]{2,})m$'
+                patternMessage: Enter millicores of at least 25m, such as `250m`.
+              - path: memory
+                type: string
+                label: Kafka UI memory
+                required: true
+                maxLength: 20
+                pattern: '^([0-9]+Mi|[0-9]+(\.[0-9]{1,3})?Gi)$'
+                patternMessage: Enter a whole number of Mi, or a number of Gi with up to 3 decimals, such as `1Gi`.
+                rules:
+                  - rule: memoryBytes(self.kafka_ui.memory) >= 33554432
+                    message: The Kafka UI's memory must be at least 32Mi, the platform's minimum.
+              - path: firewall.external_inboundAllowCIDR
+                type: list
+                serialize: csv
+                label: Kafka UI public inbound CIDRs
+                maxItems: 250
+                description: Addresses allowed to open the UI from the internet; empty keeps it inside Control Plane.
+                item: { type: string, format: cidr, pattern: '^(?:[^:/]*(/(0|[1-9][0-9]?))?|[^/]*:[^/]*(/[0-9]{1,3})?)$', patternMessage: "Write an IPv4 prefix length without a leading zero, such as `/8`." }
+                rules:
+                  - rule: "!self.kafka_ui.firewall.external_inboundAllowCIDR.exists(c, c == '0.0.0.0/0' || c == '::/0')"
+                    severity: warning
+                    message: >-
+                      The Kafka UI has no login and holds the `kafka-admin` login, so every address can use it as the
+                      Kafka admin. Allow only your own addresses, or clear the list.
+      - id: kafka-client
+        title: Test client
+        fields:
+          - path: kafka_client
+            type: object
+            optional: true
+            label: Run a test client
+            description: A workload with the Kafka command-line tools, for testing from inside the GVC.
+            fields:
+              - path: image
+                type: string
+                format: image
+                label: Client image
+                required: true
+              - path: cpu
+                type: string
+                label: Client CPU
+                required: true
+                maxLength: 20
+                pattern: '^(2[5-9]|[3-9][0-9]|[1-9][0-9]{2,})m$'
+                patternMessage: Enter millicores of at least 25m, such as `125m`.
+              - path: memory
+                type: string
+                label: Client memory
+                required: true
+                maxLength: 20
+                pattern: '^([0-9]+Mi|[0-9]+(\.[0-9]{1,3})?Gi)$'
+                patternMessage: Enter a whole number of Mi, or a number of Gi with up to 3 decimals, such as `150Mi`.
+                rules:
+                  - rule: memoryBytes(self.kafka_client.memory) >= 33554432
+                    message: The client's memory must be at least 32Mi, the platform's minimum.
+
+yamlOnly:
+  - path: kafka.name
+    reason: Only suffixes the broker workload's name (`<release>-<name>`). There is no reason to change it, and a new name is a different workload.
+  - path: kafka_exporter.name
+    reason: No template reads it.
+  - path: kafka_ui.name
+    reason: Only suffixes the Kafka UI workload's name (`<release>-<name>`).
+  - path: kafka_ui.image
+    reason: Not read by this version; the Kafka UI workload always runs provectuslabs/kafka-ui:latest.
+  - path: kafka_client.name
+    reason: Only suffixes the test client workload's name (`<release>-<name>`).
+
+rules:
+  # identity.yaml and policy.yaml write `name: <release>` unquoted, which YAML reads as a boolean or null for `true`,
+  # `false` or `null`.
+  - when: context.releaseName != null
+    rule: "!(context.releaseName in ['true', 'false', 'null'])"
+    message: >-
+      The release name cannot be `true`, `false` or `null`: the chart writes it unquoted into the names of its
+      identity and policy. Choose another release name.
+  # Platform workload.ts (Workload): a workload name has at most 49 characters and cannot end with -headless; the
+  # chart names its workloads <release>-<name>.
+  - when: context.releaseName != null
+    rule: >-
+      ([context.releaseName + '-' + self.kafka.name] +
+      (self.kafka_ui != null ? [context.releaseName + '-' + self.kafka_ui.name] : []) +
+      (self.kafka_client != null ? [context.releaseName + '-' + self.kafka_client.name] : [])).all(n,
+      size(n) <= 49 && !n.endsWith('-headless'))
+    message: >-
+      The chart names its workloads `<release>-<component>`, and a workload name has at most 49 characters and cannot
+      end with `-headless`. Use a shorter release name.
+  - rule: >-
+      ([self.kafka.name] + (self.kafka_ui != null ? [self.kafka_ui.name] : []) +
+      (self.kafka_client != null ? [self.kafka_client.name] : [])).all(n, type(n) == string && n.matches('^[-a-z0-9]*[a-z0-9]$'))
+    message: >-
+      A component name set in YAML mode (`kafka.name`, `kafka_ui.name` or `kafka_client.name`) may use only lower case
+      letters, digits and hyphens and must not end with a hyphen, because the chart builds workload names from it.

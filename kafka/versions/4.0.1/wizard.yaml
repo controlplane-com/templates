@@ -25,7 +25,9 @@ steps:
               3.0.0 dropped the Bitnami images of Kafka and Kafka Connect in favour of the Apache upstream
               images, and the chart now refuses a Kafka or Kafka Connect image with `bitnami` in its name. A
               release that kept the default image moves to `apache/kafka:3.9.1` with this upgrade; if you set a
-              Bitnami image, set an `apache/kafka` image instead.
+              Bitnami image, set an `apache/kafka` image instead. A release that kept the default log directories also
+              moves them from `/opt/bitnami/kafka/logs-N` to `/opt/kafka/logs-N`. Moving a 2.x Bitnami release's data
+              onto 3.x is unverified: plan a new release and mirror the topics into it instead.
           - path: kafka.image
             type: string
             format: image
@@ -140,7 +142,7 @@ steps:
           - rule: oldSelf == null || self.kafka.image == oldSelf.kafka.image
             severity: info
             paths: [kafka.image]
-            message: A new Kafka image restarts the brokers, one at a time.
+            message: A new Kafka image restarts the brokers.
           # Platform limits (nodelibs/schema/src/workload.ts:33-84, :441-505): CPU at least 25 millicores, memory at
           # least 32 MiB, at most 8 MiB of memory per millicore; on a stateful workload the maximum is at most 4 times
           # the minimum and at most 4000 millicores or 4096 MiB above it. The platform converts cores and Gi with
@@ -180,7 +182,6 @@ steps:
               at most 4 times the minimum and at most 4096Mi above it.
       - id: availability
         title: Availability
-        docs: "#scaling-and-availability"
         fields:
           - path: kafka.multiZone
             type: boolean
@@ -1407,17 +1408,16 @@ steps:
               brokers cannot format their storage and do not start. Enter a 22-character cluster ID, such as one from
               `kafka-storage.sh random-uuid`.
           # secret-controller-configuration.yaml:38 and :60 take the password a broker sends and the one it accepts from
-          # one placeholder, which secret-init.yaml:115-116 fills when the broker starts; the brokers roll one at a time
-          # (workload-kafka-cluster.yaml rolloutOptions.maxUnavailableReplicas '1'), so a restarted broker and one not
-          # yet restarted cannot log in to each other. With the brokers suspended, they all start on the new password.
+          # one placeholder, which secret-init.yaml:115-116 fills when the broker starts;
+          # until every broker has restarted, a restarted broker and one not yet restarted cannot log in to each other. With the brokers suspended, they all start on the new password.
           - rule: >-
               oldSelf == null || self.kafka.suspend == true || oldSelf.kafka.suspend == true ||
               self.kafka.secrets.inter_broker_password == oldSelf.kafka.secrets.inter_broker_password
             severity: warning
             paths: [kafka.secrets.inter_broker_password]
             message: >-
-              The brokers restart one at a time, and until every broker runs on the new inter-broker password, the restarted
-              brokers and the others cannot log in to each other, so the cluster is degraded during the rollout and,
+              Until every broker has restarted on the new inter-broker password, the restarted brokers and the others cannot
+              log in to each other, so the cluster is degraded during the rollout and,
               with the health sidecar on, the rollout stalls. Turn on Suspend the brokers in the upgrade that changes the
               password, then turn it off in the next upgrade.
           - rule: >-
@@ -1426,8 +1426,8 @@ steps:
             severity: warning
             paths: [kafka.secrets.controller_password]
             message: >-
-              The brokers restart one at a time, and until every broker runs on the new controller password, the restarted
-              brokers and the others cannot log in to each other, so the cluster is degraded during the rollout and,
+              Until every broker has restarted on the new controller password, the restarted brokers and the others cannot
+              log in to each other, so the cluster is degraded during the rollout and,
               with the health sidecar on, the rollout stalls. Turn on Suspend the brokers in the upgrade that changes the
               password, then turn it off in the next upgrade.
           - when: oldSelf == null || self.kafka.secrets.controller_password != oldSelf.kafka.secrets.controller_password
@@ -2051,6 +2051,7 @@ steps:
           - path: kafka_rest_proxy.jaas_conf
             type: string
             label: JAAS configuration
+            sensitive: true
             multiline: true
             required: true
             # Written with nindent into a folded (>-) YAML block of the proxy's JAAS secret (kafka-rest-proxy.yaml:36),
@@ -2490,7 +2491,6 @@ steps:
     sections:
       - id: connectors
         title: Connect clusters
-        docs: "#kafka-connect"
         description: >-
           A Connect cluster is a stateful workload with its own plugin volume and the connectors you configure.
           Leave the list empty to run no Kafka Connect.
@@ -3922,7 +3922,7 @@ migrations:
       set its public inbound CIDRs under Kafbat UI on the Web UI and REST step.
   - fromVersions: ">=2.0.0 <3.1.1"
     to: kafka.firewall.external_inboundAllowCIDR
-    valueExpr: "'external_inboundAllowCIDR' in self.kafka.firewall ? self.kafka.firewall.external_inboundAllowCIDR : null"
+    valueExpr: "'external_inboundAllowCIDR' in self.kafka.firewall ? (type(self.kafka.firewall.external_inboundAllowCIDR) == list ? dyn(dyn(self.kafka.firewall.external_inboundAllowCIDR).join(',')) : dyn(self.kafka.firewall.external_inboundAllowCIDR)) : null"
     note: >-
       These versions allowed 0.0.0.0/0 from the internet on the brokers by default, and the value is carried so
       the release keeps its public access. Newer versions set nothing by default: narrow it or clear it under

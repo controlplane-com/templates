@@ -18,8 +18,11 @@ checks:
         fi
     expect:
       stdout: "^GREEN 3$"
-    retries: 10
-    retryDelaySeconds: 15
+    # The nodes start one at a time (OrderedReady, ~2 min each), and `helm install --wait` returns once
+    # the workload reports ready, which is when the FIRST node is. Measured 2026-10-27: the third node
+    # joined ~4 min after the install returned. Eight minutes covers that with room to spare.
+    retries: 24
+    retryDelaySeconds: 20
 
   - id: index-replicates
     description: A document indexed with two replicas is stored on all three nodes and reads back through the service.

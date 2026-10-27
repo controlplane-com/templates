@@ -9,6 +9,13 @@
 > upgrade whose values omit `publicAccess` makes the dashboard and status pages private. Pass
 > `--set publicAccess.enabled=true` to keep them public.
 
+> **Upgrading from 1.2.0 or earlier:** the image moves to Uptime Kuma 2.5.8, which migrates the
+> SQLite database on its first start. Rolling back to the previous image afterwards is not
+> supported, so snapshot the volume set before upgrading
+> (`cpln volumeset snapshot create RELEASE_NAME-uptime-kuma-data --gvc GVC_NAME --snapshot-name NAME`). TCP Port monitors that checked TLS or
+> STARTTLS become plain TCP checks. Values that pin an `image` older than 2.5.8 are refused at
+> render; set `image: louislam/uptime-kuma:2.5.8` or remove `image` from your values.
+
 
 This app deploys [Uptime Kuma](https://github.com/louislam/uptime-kuma), a self-hosted uptime monitoring tool — HTTP(s)/TCP/DNS checks, alerts through 90+ notification providers, and public status pages. A single stateful workload with its SQLite database on a persistent volume. It installs private; once you have claimed the admin account, public access serves the dashboard and status pages on the canonical `*.cpln.app` endpoint.
 
@@ -27,7 +34,7 @@ None for a default install.
 ### Uptime Kuma
 
 ```yaml
-image: louislam/uptime-kuma:2.4.0
+image: louislam/uptime-kuma:2.5.8
 
 resources:
   maxCpu: 500m
@@ -63,7 +70,7 @@ cpln port-forward RELEASE_NAME-uptime-kuma 3001:3001 --gvc GVC_NAME
 # 2. open http://localhost:3001 and complete the setup wizard
 
 # 3. only then expose it, if you want public status pages
-cpln helm upgrade RELEASE_NAME ./uptime-kuma/versions/1.2.0 --gvc GVC_NAME \
+cpln helm upgrade RELEASE_NAME ./uptime-kuma/versions/1.3.0 --gvc GVC_NAME \
   --set publicAccess.enabled=true
 ```
 

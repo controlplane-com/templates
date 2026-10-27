@@ -54,7 +54,10 @@ jobs:
       - run: pip install --quiet pyyaml
       - id: plan
         run: |
-          base="${{ github.event.pull_request.base.sha }}"
+          # On a PR the checkout is the PR merged onto today's main, so its first parent is the base.
+          # (pull_request.base.sha is main as of when the PR was opened: everything merged since would count.)
+          base=""
+          if git rev-parse -q --verify HEAD^2 >/dev/null; then base="$(git rev-parse HEAD^1)"; fi
           [ -n "$base" ] || base="$(git merge-base origin/main HEAD)"
           targets=$(python3 .github/e2e/run.py plan --base "$base" --targets "${{ inputs.targets }}")
           echo "targets=$targets" >> "$GITHUB_OUTPUT"

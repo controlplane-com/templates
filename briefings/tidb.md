@@ -35,6 +35,33 @@
 | `backup.*` | off, `provider: aws`, `location: aws-us-east-1` | `location` must be one of `locations` — refused at render otherwise |
 | `proxysql.*` (2.1.0) | off, `3.0.11`, `replicas: 2`/location, 500m / 512Mi | Optional pooler tier per location → `{release}-proxysql:4000`. Requires `autoCreateDatabase.enabled` (refused at render otherwise) |
 
+## 1.1.1 (2026-10-27) — a patch for releases still on 1.1.0
+- **Why it exists:** a production 1.1.0 install (3 locations, 2 TiKV + 2 servers each) lost its whole SQL tier every time a node
+  scale-down evicted one TiKV replica. 1.1.0's server readiness required EVERY store `Up`; the workload has no liveness probe, so
+  the platform reuses readiness as liveness and restarted all servers in every location together. Reproduced here: one frozen
+  store → all 6 servers restarted within 19 s, ~100 s with no SQL endpoint.
+- **The change:** server readiness = `curl localhost:10080/status` (the 2.1.0+ probe), `timeoutSeconds` 3 → 5. Nothing else, so
+  `kind: gvc` stays in the manifest and the upgrade prunes nothing. Measured 1.1.0 → 1.1.1 via CLI: every resource `Updated`,
+  nothing deleted, only the servers rolled (new before old), TiKV/PD start times unchanged, 0 failed queries. Then a 131 s frozen
+  store and an unplanned gcp TiKV restart: servers ready throughout, 0 failed queries (client in aws-us-east-1 only).
+- **Its wizard blocks INSTALL** (a warning-severity root rule; error severity would fail lint on the defaults): 1.1.1 is an upgrade
+  target only. `gvc.name` is immutable in it.
+- **1.1.0's fresh install is flaky:** 1 of 2 multi-location test installs bootstrapped with store `1` `Down` and two stores never
+  registered (the same shape as the 2.0.0 brick below). Irrelevant to existing releases; another reason new installs go to 2.x.
+
+## In-place `helm upgrade` 1.x → 2.2.0 into the chart-created GVC (measured 2026-10-27 — never tell a user to do this)
+- With 1.x values the guard refuses (exit 1, nothing touched). With 2.x-style values and `--gvc <the 1.x GVC>` it RUNS: identity,
+  volumesets and workloads share names and are updated in place, the old policy is deleted, then pruning `kind: gvc` fails —
+  `GVC … cannot be deleted because it contains at least one volume set` (400). **Only that platform guard saved the data**
+  (pgedge measured a GVC delete going through in 6 s, so do not rely on it).
+- Result: `cpln` exits 1, the release is stuck `pending-upgrade`, all 3 PDs restart at once, TiKV rolls everywhere, and the SQL
+  tier was down **9 m 23 s** — mostly the new servers waiting on the reveal-authorization cache for the new credentials secret.
+  Data survived (same cluster id, identical checksum, now v8.5.7). The cluster also stays NOT region-aware: PD persisted 1.x's
+  `[replication]` (no `location-labels`) at bootstrap.
+- A release record is a standard Helm release in org secret `cpln-helm-release-{name}-{suffix}-v{n}` (gzip+base64 JSON with
+  `manifest`). Removing `kind: gvc` from the latest record's manifest is the candidate "detach" so an upgrade cannot prune it —
+  NOT YET TESTED.
+
 ## What 2.0.0 changed
 - **No `kind: gvc`.** Deploys into the install GVC; `gvc.locations` → `locations`, `gvc.pdReplicas` → `pdReplicas`, `gvc.name` gone.
 - **Three-layer defence against a location mismatch**: (1) a render-time `fail` if the `gvc` values key is still present, so an in-place 1.x upgrade cannot run; (2) `defaultOptions.minScale/maxScale: 0` on every tier with `localOptions` carrying the real counts, so an undeclared GVC location starts nothing; (3) a boot-time GVC read in PD's startup script (`$CPLN_ENDPOINT/org/$CPLN_ORG/gvc/$CPLN_GVC`, `view` scoped by `targetLinks` to that one GVC) that hard-fails on a fresh data directory and warns on an initialised one. PD and TiKV also refuse to start in a location not in `locations`.

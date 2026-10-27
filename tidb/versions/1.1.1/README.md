@@ -57,5 +57,13 @@ The cluster automatically handles data distribution and replication across your 
 
 This template creates a GVC with a default name defined in the `values.yaml`. If you plan to deploy multiple instances of this template, you **must assign a unique GVC name** for each deployment.
 
+## Upgrading from 1.1.0
+
+1.1.1 changes only the TiDB server health check. In 1.1.0 every TiDB server was healthy only while every TiKV node was up, so losing one TiKV node (for example a node scale-down moving it) restarted every TiDB server in every location at once. In 1.1.1 each server checks only itself and keeps serving while a TiKV node is away.
+
+- Upgrade with the **same values** you installed 1.1.0 with. Do not change `gvc.name` or `gvc.locations`: the GVC belongs to this release.
+- Only the TiDB servers restart, and each location starts its new servers before stopping the old ones. PD and TiKV keep running.
+- **Do not `helm upgrade` this release to 2.x.** 2.x does not create a GVC, so an in-place upgrade tries to delete this one. To move to 2.x, follow *Migrating from 1.x* in the latest version's README.
+
 ### Supported External Services
 - [TiDB Documentation](https://docs.pingcap.com/tidb/stable/)

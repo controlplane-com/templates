@@ -97,6 +97,7 @@ internalAccess:
 # Enable exactly one of postgresHA / postgres.
 postgresHA:
   enabled: true
+  image: controlplanecorporation/patroni-postgres:0.8   # pgvector 0.8.7; tags 0.1-0.7 are refused (CVE-2026-103484)
   config:
     # REQUIRED PREREQUISITE SECRET (HA mode) — CREATE IT BEFORE YOU INSTALL. If
     # it does not exist the deployment WEDGES silently and looks like a platform

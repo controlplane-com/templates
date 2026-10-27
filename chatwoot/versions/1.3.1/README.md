@@ -153,6 +153,7 @@ Enable exactly one of `postgresHA` (default) and `postgres`.
 ```yaml
 postgresHA:
   enabled: true
+  image: controlplanecorporation/patroni-postgres:0.8   # pgvector 0.8.7; tags 0.1-0.7 are refused (CVE-2026-103484)
   config:
     credentialsSecretName: my-chatwoot-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   replicas: 3
@@ -304,6 +305,15 @@ Redis keeps no password on disk: it takes the password from the secret each time
 3. Then redeploy `RELEASE_NAME-chatwoot-worker`, then `RELEASE_NAME-chatwoot`, the same way. The web workload must restart after Redis in any case (see Important Notes).
 
 Chatwoot cannot reach Redis from step 2 until its own redeploys finish, so expect a few minutes of interruption and rotate in a quiet window.
+
+## Upgrading from 1.3.0 or earlier
+
+1.3.1 moves the HA database (`postgresHA`) to `controlplanecorporation/patroni-postgres:0.8`, which carries
+pgvector 0.8.7 (CVE-2026-103484). The fix is in the server library and takes effect when the upgrade restarts
+the Patroni members; existing data needs nothing. Nothing limits the rollout of a stateful workload, so expect a
+short database outage while the members and the proxy restart, and upgrade in a quiet window. If you pinned
+`postgresHA.image` in your values, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render. Chatwoot's schema creates the `vector` extension, so in the Chatwoot database `\dx` keeps reporting the old version until you run `ALTER EXTENSION vector UPDATE;` as the database user, through the proxy endpoint `RELEASE_NAME-postgres-ha-proxy.GVC_NAME.cpln.local:5432`; it only updates that record.
+Single-instance mode (`postgres`) is unchanged.
 
 ## Upgrading from 1.2.x
 

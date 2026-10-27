@@ -67,6 +67,7 @@ that both sides read.
 {{/* Validation */}}
 
 {{- define "listmonk.validate" -}}
+{{- include "listmonk.validatePostgresHAImage" . -}}
 {{- include "listmonk.validateResourceKnobs" . -}}
 {{- include "listmonk.validateAdmin" . -}}
 {{- include "listmonk.validateDatabaseSecret" . -}}
@@ -146,3 +147,27 @@ with no signal.
 {{- fail "listmonk: resources.memory was RENAMED to resources.maxMemory. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+In HA mode, refuse controlplanecorporation/patroni-postgres 0.1-0.7 for the
+postgres-highly-available subchart: they carry a pgvector older than 0.8.7
+(CVE-2026-103484). The vendored subchart (2.5.0) defaults to 0.7, so this chart
+overrides postgresHA.image to 0.8, and an emptied value would fall back to the
+vulnerable default. Same matching as pg-ha.validateImage in
+postgres-highly-available 2.8.1: other registries, digests and non-version tags pass.
+*/}}
+{{- define "listmonk.validatePostgresHAImage" -}}
+{{- if .Values.postgresHA.enabled -}}
+{{- $raw := (.Values.postgresHA).image | default "" | toString -}}
+{{- if not $raw -}}
+{{- fail "listmonk: postgresHA.image is required in HA mode — the bundled postgres-highly-available subchart would otherwise fall back to controlplanecorporation/patroni-postgres:0.7, whose pgvector is open to CVE-2026-103484. Set postgresHA.image to controlplanecorporation/patroni-postgres:0.8, or remove the override from your values to use this chart's default." -}}
+{{- end -}}
+{{- $image := trimPrefix "docker.io/" $raw -}}
+{{- $prefix := "controlplanecorporation/patroni-postgres:" -}}
+{{- if hasPrefix $prefix $image -}}
+{{- if regexMatch "^0\\.[0-7](\\.[0-9]+)?$" (trimPrefix $prefix $image) -}}
+{{- fail (printf "listmonk: postgresHA.image %s carries a pgvector older than 0.8.7, which is open to CVE-2026-103484 (a database user who can create an IVFFlat index can run arbitrary code). Set postgresHA.image to controlplanecorporation/patroni-postgres:0.8, or remove it from your values to use this chart's default." $raw) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end }}

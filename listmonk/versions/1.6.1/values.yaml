@@ -91,6 +91,7 @@ postgres:
 # automatic failover and an HAProxy leader endpoint.
 postgresHA:
   enabled: false
+  image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7 (CVE-2026-103484); 0.1-0.7 are refused
   config:
     # REQUIRED PREREQUISITE SECRET (HA mode) — the same kind of `dictionary`
     # secret as postgres.config.credentialsSecretName above (keys: username,

@@ -1,0 +1,130 @@
+# Feature checks for the listmonk template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (pg_user,
+# pg_password, pg_db, admin_user, admin_password).
+#
+# Every check runs from the HA database's patroni-postgres container, which has curl, psql and python3,
+# and calls listmonk at its internal address. listmonk keeps its users, sessions and lists in PostgreSQL,
+# so a login and a list read back only pass when the server and its database both work.
+# (Inside scripts, write $VAR rather than the braced form: the runner fills {name} placeholders.)
+checks:
+  - id: cluster-healthy
+    description: Patroni reports exactly one leader and every other member streaming from it.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        curl -s localhost:8008/cluster | python3 -c '
+        import json, sys
+        m = json.load(sys.stdin)["members"]
+        leaders = [x["name"] for x in m if x["role"] == "leader"]
+        streaming = [x["name"] for x in m if x["role"] in ("replica", "sync_standby")
+                     and (x["state"] == "streaming" or (x["state"] == "running" and isinstance(x.get("lag"), int)))]
+        print(f"MEMBERS {len(m)} LEADERS {len(leaders)} STREAMING {len(streaming)}")
+        '
+    expect:
+      stdout: "^MEMBERS 3 LEADERS 1 STREAMING 2$"
+    retries: 20
+    retryDelaySeconds: 15
+
+  - id: listmonk-healthy
+    description: listmonk answers its health endpoint on its internal address.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        curl -s -m 10 http://{release}-listmonk.{gvc}.cpln.local:9000/health
+    expect:
+      stdout: '"data":\s*true'
+    retries: 10
+    retryDelaySeconds: 15
+
+  - id: admin-login-and-list
+    description: >-
+      The bootstrapped Super Admin logs in through the login form, creates a mailing list named after the
+      running version, and reads it back through the API.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        U=http://{release}-listmonk.{gvc}.cpln.local:9000
+        N="e2e-$(echo '{version}' | tr . -)"
+        # Status codes and the session cookie come from the header dump (curl's write-out variables look
+        # like runner placeholders), and the cookie is sent as a header so a Secure flag cannot drop it.
+        H=$(curl -s -m 15 -o /dev/null -D - --data-urlencode 'username={admin_user}' \
+          --data-urlencode 'password={admin_password}' --data-urlencode 'next=/admin' "$U/admin/login" | tr -d '\r')
+        echo "LOGIN $(echo "$H" | awk 'NR==1 {print $2}')"
+        C=$(echo "$H" | awk -F'[: ;]+' 'tolower($1) == "set-cookie" && $2 ~ /^session=/ {print $2}' | paste -sd ';' -)
+        found() {
+          curl -s -m 15 -H "Cookie: $C" -G --data-urlencode "query=$N" --data-urlencode per_page=all "$U/api/lists" |
+            python3 -c 'import json, sys; n = sys.argv[1]; print(sum(1 for l in json.load(sys.stdin)["data"]["results"] if l["name"] == n))' "$N"
+        }
+        # Create the list once per version, so a re-run or a no-op upgrade does not add duplicates.
+        if [ "$(found)" = 0 ]; then
+          curl -s -m 15 -o /dev/null -H "Cookie: $C" -H 'Content-Type: application/json' \
+            -d "{\"name\":\"$N\",\"type\":\"private\",\"optin\":\"single\"}" "$U/api/lists"
+        fi
+        echo "LISTS $N $(found)"
+    expect:
+      stdout: "^LOGIN 302$[\\s\\S]*^LISTS e2e-\\S+ [1-9][0-9]*$"
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: rejects-bad-password
+    description: A wrong Super Admin password gets no session (the control for the check above).
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        H=$(curl -s -m 15 -o /dev/null -D - --data-urlencode 'username={admin_user}' \
+          --data-urlencode 'password=wrong-password' --data-urlencode 'next=/admin' \
+          http://{release}-listmonk.{gvc}.cpln.local:9000/admin/login | tr -d '\r')
+        S=$(echo "$H" | grep -ci '^set-cookie: session=')
+        echo "LOGIN $(echo "$H" | awk 'NR==1 {print $2}') SESSIONS $S"
+    expect:
+      stdout: "^LOGIN \\d+ SESSIONS 0$"
+      notStdout: "^LOGIN 302 "
+
+  - id: data-survives-upgrade
+    description: >-
+      The list created on the version this scenario installed first is still there. On a fresh install
+      that is the same version; after an upgrade it proves the lists carried over.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        U=http://{release}-listmonk.{gvc}.cpln.local:9000
+        N="e2e-$(echo '{installed_version}' | tr . -)"
+        C=$(curl -s -m 15 -o /dev/null -D - --data-urlencode 'username={admin_user}' \
+          --data-urlencode 'password={admin_password}' --data-urlencode 'next=/admin' "$U/admin/login" | tr -d '\r' |
+          awk -F'[: ;]+' 'tolower($1) == "set-cookie" && $2 ~ /^session=/ {print $2}' | paste -sd ';' -)
+        n=$(curl -s -m 15 -H "Cookie: $C" -G --data-urlencode "query=$N" --data-urlencode per_page=all "$U/api/lists" |
+          python3 -c 'import json, sys; n = sys.argv[1]; print(sum(1 for l in json.load(sys.stdin)["data"]["results"] if l["name"] == n))' "$N" 2>&1)
+        echo "LISTS $N $n"
+    expect:
+      stdout: "^LISTS e2e-\\S+ [1-9][0-9]*$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: pgvector-0-8-7-available
+    description: The HA leader runs patroni-postgres 0.8, with pgvector 0.8.7 (CVE-2026-103484), from 1.6.1.
+    issue: "#5376"
+    since: 1.6.1
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "select 'AVAIL ' || default_version from pg_available_extensions where name = 'vector'" 2>&1
+    expect:
+      stdout: "^AVAIL 0\\.8\\.7$"
+    # After the upgrade the members restart one at a time; this runs long enough to reach the new leader.
+    retries: 8
+    retryDelaySeconds: 15

@@ -1,0 +1,291 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Coraza WAF
+# Stateless: one standard workload with no volume set, so every GVC location runs an identical proxy. No gvc limits.
+
+steps:
+  - id: target
+    title: Protected workload
+    description: The workload the WAF sits in front of, and where clients reach the WAF instead.
+    sections:
+      - title: Proxy target
+        docs: "#proxy-target"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The workload to protect must already exist and serve plain HTTP. Its internal firewall must let
+              the WAF in: Same GVC, Same org, or a workload list that includes
+              `//gvc/GVC_NAME/workload/RELEASE_NAME-coraza-waf`. With None, the WAF cannot reach it.
+            textExpression: >-
+              'The workload to protect must already exist and serve plain HTTP. Its internal firewall must let
+              the WAF in: Same GVC, Same org, or a workload list that includes `//gvc/' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '/workload/' + context.releaseName +
+              '-coraza-waf`. With None, the WAF cannot reach it.'
+          # The chart puts the value into BACKEND (http://<value>:<port>), the Caddy upstream dial and the
+          # Host header (secret-startup.yaml), so it is a host name, not a workload name: a workload picker
+          # cannot fill it.
+          - path: targetWorkload
+            type: string
+            format: hostname
+            label: Workload address
+            required: true
+            example: true
+            placeholder: my-app.my-gvc.cpln.local
+            description: >-
+              The internal address of the workload to protect, `WORKLOAD_NAME.GVC_NAME.cpln.local`. Use the
+              full address, never the short workload name.
+            help: >-
+              The address follows the [internal endpoint format](/reference/workload/general#internal-endpoint-formatting).
+              The WAF sends it as the Host header to the workload.
+          - path: targetPort
+            type: integer
+            label: Workload port
+            required: true
+            min: 1
+            max: 65535
+            description: The port the workload serves on. The WAF forwards to it over plain HTTP.
+            suggestions: [80, 3000, 5000, 8000, 8080]
+        rules:
+          # The WAF's external outbound firewall is closed (workload.yaml: outboundAllowCIDR and
+          # outboundAllowHostname are []), so only an internal address can work; short names resolve only
+          # for some workload types. Per-replica addresses (replica-N.WORKLOAD.LOCATION.GVC.cpln.local) are fine too.
+          - rule: self.targetWorkload.matches('^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.){2,}cpln\\.local$')
+            severity: warning
+            paths: [targetWorkload]
+            message: >-
+              Enter the full internal address of the workload, WORKLOAD_NAME.GVC_NAME.cpln.local (or a
+              per-replica address such as replica-0.WORKLOAD_NAME.LOCATION.GVC_NAME.cpln.local). A short name
+              does not resolve reliably, and the WAF cannot reach addresses outside Control Plane because its
+              outbound internet access is closed.
+          - when: context.gvc != null
+            rule: self.targetWorkload != context.releaseName + '-coraza-waf.' + context.gvc + '.cpln.local'
+            severity: warning
+            paths: [targetWorkload]
+            message: >-
+              The workload address points at this WAF itself, so every request would loop. Enter the address
+              of the workload to protect.
+          - when: >-
+              context.gvc != null &&
+              self.targetWorkload.matches('^([a-z0-9-]+\\.){2,}cpln\\.local$') &&
+              self.targetWorkload.split('.')[size(self.targetWorkload.split('.')) - 3] != context.gvc
+            rule: "false"
+            severity: info
+            paths: [targetWorkload]
+            messageExpression: >-
+              'This workload is in the GVC ' + self.targetWorkload.split('.')[size(self.targetWorkload.split('.')) - 3] + ', not ' + context.gvc +
+              '. Same GVC on its firewall does not cover the WAF: use Same org, or add //gvc/' + context.gvc +
+              '/workload/' + context.releaseName + '-coraza-waf to its workload list.'
+            message: >-
+              This workload is in another GVC. Same GVC on its firewall does not cover the WAF: use Same org,
+              or add this WAF workload to its workload list.
+      - title: Public endpoint
+        docs: "#connecting"
+        fields:
+          - type: note
+            text: >-
+              The WAF is always open to the internet on its canonical endpoint, and workloads in the same GVC
+              can reach it too; the chart has no setting for either. Send clients to the canonical endpoint,
+              which `cpln workload get RELEASE_NAME-coraza-waf --gvc GVC_NAME -o yaml` shows under
+              `status.canonicalEndpoint`.
+            textExpression: >-
+              'The WAF is always open to the internet on its canonical endpoint, and workloads in the same GVC
+              can reach it too; the chart has no setting for either. Send clients to the canonical endpoint,
+              which `cpln workload get ' + context.releaseName + '-coraza-waf --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml` shows under
+              `status.canonicalEndpoint`.'
+          - path: WAFPort
+            type: integer
+            label: WAF port
+            required: true
+            min: 1
+            max: 65535
+            advanced: true
+            description: >-
+              The container port the WAF listens on, behind its public endpoint. Clients use the endpoint's
+              HTTPS address, so there is rarely a reason to change it.
+            rules:
+              - rule: "!(self.WAFPort in [8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090, 41000])"
+                message: >-
+                  Control Plane reserves this port (8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021,
+                  15090 and 41000 are refused at install); choose another, such as 80.
+              # The startup hook configures Caddy through its admin API on 127.0.0.1:2019 (secret-startup.yaml).
+              - rule: self.WAFPort != 2019
+                message: Port 2019 is used by the Caddy admin API inside the container; choose another, such as 80.
+      - title: Lock the protected workload
+        docs: "#locking-the-protected-workload"
+        fields:
+          - type: note
+            text: >-
+              The WAF only inspects traffic that passes through it. If the protected workload keeps its own
+              public endpoint, clients can skip the WAF. Close that workload to the internet and allow only
+              `//gvc/GVC_NAME/workload/RELEASE_NAME-coraza-waf` on its internal firewall. If it was installed
+              from another template, do this with the access settings of that template, so its next upgrade does
+              not reopen it.
+            textExpression: >-
+              'The WAF only inspects traffic that passes through it. If the protected workload keeps its own
+              public endpoint, clients can skip the WAF. Close that workload to the internet and allow only
+              `//gvc/' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '/workload/' + context.releaseName +
+              '-coraza-waf` on its internal firewall. If it was installed from another template, do this with
+              the access settings of that template, so its next upgrade does not reopen it.'
+
+  - id: rules
+    title: Rule set
+    description: The OWASP Core Rule Set that inspects every request, and your own rules on top of it.
+    sections:
+      - title: Rule engine and image
+        docs: "#rule-engine-and-tuning"
+        fields:
+          - type: note
+            text: >-
+              Coraza runs in blocking mode: a request that trips a rule gets a 403 and never reaches the
+              workload. The chart has no detection-only mode and no paranoia-level setting; the Core Rule Set
+              runs with the defaults of the image. Tune it with custom rules, below.
+          # secret-startup.yaml: a non-200 PATCH logs [WARN] and the hook exits 0 (CHANGELOG coraza 1.2.x entry).
+          - type: note
+            severity: warning
+            text: >-
+              In this version, when the startup hook fails to apply its configuration, it logs a [WARN] line and
+              exits normally, so the WAF can report ready without its proxy configured. Version 1.2.0 checks each
+              step and restarts the container with a [FATAL] log line instead. After installing, send one request that the example rule blocks (a URI containing
+              `attack`) and one ordinary request through the WAF.
+          - path: image
+            type: string
+            format: image
+            label: Coraza CRS image
+            required: true
+            docs: "#image"
+            description: >-
+              The Core Rule Set release comes from the image, so a new CRS release reaches the WAF only when
+              you change it. Use a `*-caddy-alpine-*` build of `coraza-crs`, pinned by digest or by a datecode
+              tag.
+            help: >-
+              This version's startup hook patches the fixed position `…/handle/1` in the image's Caddy configuration, so an image other
+              than the default is unproven here: a different layout can silently replace the WAF handler. After
+              any change, confirm that a request to `/attack` still returns 403. Tags such as `caddy-alpine` are
+              repointed upstream, which changes the image under a running WAF. The available tags are listed in the
+              [coraza-crs-docker](https://github.com/coreruleset/coraza-crs-docker) repository.
+            rules:
+              # The startup hook configures the proxy through Caddy's admin API; the nginx and apache variants
+              # have no Caddy.
+              - rule: >-
+                  self.image.contains('@') ||
+                  !(self.image.split('/')[size(self.image.split('/')) - 1].contains('nginx') ||
+                  self.image.split('/')[size(self.image.split('/')) - 1].contains('apache'))
+                message: >-
+                  Only the caddy-alpine builds of coraza-crs work with this template: the startup hook configures
+                  the proxy through Caddy, which the nginx and apache builds do not have. Choose a caddy-alpine tag.
+              - rule: self.image.contains('@sha256:') || self.image.matches('-[0-9]{12}$')
+                severity: info
+                message: >-
+                  This tag may be repointed upstream, which changes the image under a running WAF. Pin a digest
+                  or a datecode tag.
+              # secret-startup.yaml PATCHes the fixed position …/handle/1; only the default digest is known to match it.
+              - rule: self.image == 'ghcr.io/coreruleset/coraza-crs@sha256:eed7280e0de4820507b500b1ee10de820c175165d5cce329609bf34f32977af8'
+                severity: info
+                message: >-
+                  An image other than this version's default is unproven here: the startup hook patches a fixed
+                  handler layout, and a different one can silently replace the WAF handler. After the change,
+                  confirm that a request to /attack still returns 403, and test your application's traffic.
+      - title: Custom rules
+        docs: "#changing-custom-rules"
+        fields:
+          - type: note
+            text: >-
+              Your own rules live in the secret `RELEASE_NAME-coraza-custom-rules`, which loads after the Core
+              Rule Set; it is not a setting here. It starts with one example rule that blocks any request whose
+              URI contains `attack`. After you edit it, run
+              `cpln workload force-redeployment RELEASE_NAME-coraza-waf --gvc GVC_NAME`: running replicas keep
+              the rules they started with. Keep your rule file under version control and check the secret after
+              every upgrade, since the chart also writes this secret.
+            textExpression: >-
+              'Your own rules live in the secret `' + context.releaseName + '-coraza-custom-rules`, which loads
+              after the Core Rule Set; it is not a setting here. It starts with one example rule that blocks any
+              request whose URI contains `attack`. After you edit it, run `cpln workload force-redeployment ' +
+              context.releaseName + '-coraza-waf --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '`: running replicas keep the rules they started with. Keep your rule file under version control
+              and check the secret after every upgrade, since the chart also writes this secret.'
+          - type: note
+            text: >-
+              Clients that upload large bodies often send `Expect: 100-continue`, which CRS rule 920450 blocks
+              with a 403. If yours do, add `SecRuleRemoveById 920450` to the custom rules. Give your own rules
+              IDs outside the CRS ranges: a rule whose ID matches a CRS rule silently replaces it.
+
+  - id: resources
+    title: Resources and scaling
+    description: The compute that sets how large a request body the WAF can inspect in time.
+    sections:
+      - title: Request inspection
+        fields:
+          # workload.yaml: defaultOptions.timeoutSeconds: 5 (made a value in 1.2.0); briefing measured 504 at 50 KB.
+          - type: note
+            severity: warning
+            text: >-
+              This version fixes the request timeout at 5 seconds. At the default 50m CPU, POST bodies above
+              a few tens of KB take longer than that to inspect and return 504 from the WAF. Raise the CPU if
+              your clients send larger bodies; version 1.2.0 makes the timeout a setting and raises the defaults.
+          # On: secret-startup.yaml runs mkdir -p /tmp/coraza. Off: CORAZA_REQ_BODY_NOFILES_LIMIT is set, which the
+          # briefing measured as inert, and no directory is made (on the 4.7.0 image a 600 KB POST then returned 500).
+          - path: diskBodyInspection
+            type: boolean
+            label: Buffer large request bodies to disk
+            description: >-
+              Creates `/tmp/coraza`, where Coraza buffers request bodies above its in-memory limit so that it
+              can inspect them in full. Keep it on.
+            rules:
+              - rule: self.diskBodyInspection
+                severity: info
+                message: >-
+                  Without this directory, request bodies above Coraza's in-memory limit fail with a 500 on
+                  images that do not create it themselves, including this version's default image.
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            description: >-
+              Per replica. Coraza inspects request bodies on the CPU, so CPU sets how fast a body is inspected,
+              and memory use grows with body size.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+            rules:
+              - rule: cpuMillicores(self.resources.cpu) >= 250
+                severity: info
+                message: >-
+                  Below about 250m CPU, inspection slows down far more than in proportion, and POST requests
+                  with larger bodies start returning 504 from the WAF.
+          - type: note
+            text: >-
+              As a rule of thumb, the largest request body the WAF inspects within the 5-second timeout is about
+              120 KB × CPU cores × 5; a larger one returns 504. GET requests are unaffected.
+              Coraza never inspects bodies above 12.5 MiB, a limit fixed in the image.
+            textExpression: >-
+              'At this CPU the largest request body the WAF inspects within the 5-second timeout is about ' +
+              (cpuMillicores(self.resources.cpu) * 600 >= 1000000 ?
+              string(cpuMillicores(self.resources.cpu) * 600 / 100000 / 10) + '.' +
+              string(cpuMillicores(self.resources.cpu) * 600 / 100000 % 10) + ' MB' :
+              string(cpuMillicores(self.resources.cpu) * 600 / 1000) + ' KB') +
+              ' (120 KB × CPU cores × 5 seconds, a rule of thumb); a larger one returns 504. GET requests are
+              unaffected. Coraza never inspects bodies above 12.5 MiB, a limit fixed in the image.'
+      - title: Placement
+        docs: "#placement"
+        description: >-
+          The WAF autoscales on CPU between one and three replicas; the chart fixes those bounds. With a single
+          replica running, a redeployment briefly interrupts traffic to the protected workload.
+        fields:
+          - path: multiZone
+            type: boolean
+            label: Spread replicas across zones
+            description: Not every location supports multiple zones; check yours before you turn it on.
+
+migrations:
+  # 1.0.0 hardcoded the image in the workload; 1.1.0 made it a value with the same digest.
+  - fromVersions: "<1.1.0"
+    assume:
+      image: ghcr.io/coreruleset/coraza-crs@sha256:eed7280e0de4820507b500b1ee10de820c175165d5cce329609bf34f32977af8
+  # 1.0.0 defaulted multiZone to true and 1.1.0 to false. A rename-free key keeps changed values only, so carry the
+  # zone setting a 1.0.0 release runs with even when it is the old default.
+  - fromVersions: "<1.1.0"
+    to: multiZone
+    valueExpr: self.multiZone
+    note: The release keeps its zone setting; 1.0.0 spread replicas across zones by default, later versions do not.

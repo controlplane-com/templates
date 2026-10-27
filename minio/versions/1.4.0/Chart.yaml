@@ -1,0 +1,17 @@
+apiVersion: v2
+name: minio
+description: MinIO S3-compatible object storage in distributed mode with erasure coding across replicas
+
+type: application
+version: 1.4.0
+appVersion: "RELEASE.2026-10-18T00-00-00Z"
+
+annotations:
+  created: "2025-11-19"
+  lastModified: "2026-10-23"
+  createsGvc: false
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

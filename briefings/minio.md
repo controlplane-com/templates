@@ -31,7 +31,7 @@ No probes, and no cloud bindings on the identity — there is no `aws::ReadOnlyA
 
 | Knob | Default | Meaning |
 |---|---|---|
-| `image` | `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z` | Quay, **not** Docker Hub — see the registry trap below |
+| `image` | `pgsty/silo:RELEASE.2026-10-18T00-00-00Z` | Silo fork on Docker Hub — see the image trap below |
 | `replicas` | `6` | Must be **even and ≥ 4**; above the default org replica quota |
 | `admin.credentialsSecretName` | `my-minio-credentials` | **REQUIRED prerequisite `dictionary` secret** with `username`, `password` |
 | `resources.minCpu`/`maxCpu` | `1` / `2` | Block exposes both, so min/max naming is correct here |
@@ -59,14 +59,26 @@ No probes, and no cloud bindings on the identity — there is no `aws::ReadOnlyA
 - **`helm uninstall` deletes the volume sets** — objects do not survive a reinstall. The credentials
   secret is the user's and is left alone. Rotating it needs a restart to apply, and is fleet-wide:
   every client and every template holding those keys must be updated in the same window.
-- **The image is pinned to `quay.io`, NOT Docker Hub — do not "fix" it back.** MinIO withdrew
-  `minio/minio` (and `mc`) from Docker Hub in 2025: `docker.io/minio/minio` now returns
-  `insufficient_scope` / "repository does not exist", and the repo is gone from the `minio` Docker Hub
-  namespace (operator/warp/mint remain). The identical release tag stays **public on
-  `quay.io/minio/minio`** (still hotfixed into 2026 — e.g. `…Z.hotfix.7aa24e772`, Apr 2026). 1.3.0
-  shipped the now-dead Docker Hub ref, so every fresh install `ErrImagePull`ed; 1.3.1 repoints to quay,
-  same tag, verified pulling on-platform. MinIO is visibly deprioritizing the community edition, so a
-  catalog replacement (SeaweedFS is already in-catalog as an S3-compatible option) is under review.
+- **The image is Silo (`pgsty/silo`), not MinIO — do not "fix" it back (1.4.0, 2026-10-23).** MinIO
+  stopped publishing a public image: `docker.io/minio/minio` and `minio/mc` are gone (404), and since
+  2026-10 `quay.io/minio/minio` refuses anonymous pulls (token with empty `actions`; the quay org now
+  lists only the commercial `aistor/*` repos). `github.com/minio/minio` was archived 2026-04 and its
+  last release was source-only. So every 1.0.0–1.3.1 install fails `ErrImagePull` on any fresh pull.
+  Silo is Pigsty's maintained AGPL fork (2M pulls): same S3 API, `MINIO_*` env, `/minio/*` health
+  routes and `.minio.sys` data format; root uid, RHEL 9 UBI base with bash/coreutils. **Its binary is
+  `/usr/bin/silo` — there is no `minio` on PATH**, so the start script runs `command -v silo || command
+  -v minio` (a user's own upstream image keeps working). Do not pick the `-distroless` Silo tag: no
+  bash. Ruled out: Chainguard (free tier is `latest`-only, non-root 65532), frozen community rebuilds
+  (pgsty/minio, coollabsio, bitnamilegacy — CVE-heavy), quay with a pull secret (paid AIStor account).
+  Fork changes are whole-cluster: no downgrade to 1.3.x and no mixed binaries in one pool.
+- **The 1.3.x → 1.4.0 upgrade is a partial S3 outage — measured.** A Silo node refuses a pool running a
+  different binary (`Expected Silo binary checksum: …, seen: …`, `Waiting for at least 2 remote servers
+  with valid configuration`) and stays out until enough peers run Silo. The chart has no probes, so those
+  waiting nodes still take traffic: at 6 replicas ~35% of writes / ~23% of reads failed for ~3m40s,
+  0 failures before, 3/239 after; ~100 s per node, ~10.5 min total; all data byte-identical after.
+  **Do NOT fix it with a `/minio/health/ready` readiness probe:** a not-ready replicaDirect replica is
+  unreachable (CLAUDE.md), so waiting nodes could never find peers and the rollout would deadlock. Silo
+  documents no setting to relax the check ("do not guarantee arbitrary upstream mixed-version operation").
 - **~8 templates' READMEs still say "for the MinIO template these are its `admin.username` and
   `admin.password`"** (postgres 3.4.x, postgres-multi-location, postgres-highly-available, docmost,
   twenty, sftpgo). Those value names no longer exist. Sweeping them is a follow-up, not this change.
@@ -87,3 +99,7 @@ was also the first on-platform deploy of the 1.3.0 shape: `replicas=4` + a prere
 secret pulled the quay image with no `ErrImagePull`, the 4-node erasure pool formed, and the workload
 reached `ready: true` (inter-replica grid 503s during formation are normal startup churn). Only the
 image registry changed; everything else is 1.3.0 verbatim.
+
+**1.4.0 (2026-10-23):** image → `pgsty/silo:RELEASE.2026-10-18T00-00-00Z` because MinIO's images are no
+longer publicly pullable (work item 5376); start script runs `silo` or `minio`, whichever the image
+has; wizard info rule also flags `quay.io/minio/minio`. Everything else is 1.3.1 verbatim.

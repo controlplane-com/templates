@@ -85,6 +85,7 @@ Both hold the same three keys — username, password, database.
 {{- define "n8n.validate" -}}
 {{- include "n8n.validateRemovedKeys" . -}}
 {{- include "n8n.validateImage" . -}}
+{{- include "n8n.validatePostgresHAImage" . -}}
 {{- if not .Values.encryptionKey.secretName -}}
 {{- fail "n8n: encryptionKey.secretName is required — the name of a pre-created opaque secret (encoding: plain) holding the credential-encryption key" -}}
 {{- end -}}
@@ -151,4 +152,24 @@ Common tags
 */}}
 {{- define "n8n.tags" -}}
 {{- include "cpln-common.tags" . }}
+{{- end }}
+
+{{/*
+Refuse controlplanecorporation/patroni-postgres 0.1-0.7 for the HA database: they carry a pgvector
+older than 0.8.7 (CVE-2026-103484). The vendored postgres-highly-available 2.5.0 defaults to 0.7 and
+has no guard of its own, so this chart sets postgresHA.image to 0.8 and refuses an older tag carried
+in stored or hand-written values. Same matching as pg-ha.validateImage in postgres-highly-available
+2.8.1: other registries, digests and non-version tags pass.
+*/}}
+{{- define "n8n.validatePostgresHAImage" -}}
+{{- if .Values.postgresHA.enabled -}}
+{{- $raw := .Values.postgresHA.image | default "" | toString -}}
+{{- $image := trimPrefix "docker.io/" $raw -}}
+{{- $prefix := "controlplanecorporation/patroni-postgres:" -}}
+{{- if hasPrefix $prefix $image -}}
+{{- if regexMatch "^0\\.[0-7](\\.[0-9]+)?$" (trimPrefix $prefix $image) -}}
+{{- fail (printf "n8n: postgresHA.image %s carries a pgvector older than 0.8.7, which is open to CVE-2026-103484 (a database user who can create an IVFFlat index can run arbitrary code). Set postgresHA.image to controlplanecorporation/patroni-postgres:0.8, or remove it from your values to use the chart default." $raw) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end }}

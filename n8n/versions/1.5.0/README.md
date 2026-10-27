@@ -110,6 +110,7 @@ postgresHA:                   # default: highly available PostgreSQL
   config:
     credentialsSecretName: my-n8n-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   replicas: 3
+  image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7 (CVE-2026-103484); tags 0.1-0.7 are refused
   volumeset:
     capacity: 10              # GiB per replica
   backup:
@@ -229,6 +230,7 @@ pgx N curl -s -XPOST -d '{"force": true}' localhost:8008/reinitialize
 - **The n8n main instance is single-replica by upstream design** — the default HA Postgres backend removes the database as a failure point.
 - **Upgrades restart the single replica** — expect about two minutes of editor/webhook downtime per `helm upgrade` while the replica is recreated and its volume reattaches; the first upgrade after an install also re-applies the bundled database, which can add a couple of minutes.
 - **Upgrading from 1.4.0**: n8n moves from 2.29.8 to 2.45.4 and migrates its database on the first start. Rolling back to 1.4.0 is not supported, so back up the database first. Schedule Triggers set to "every N seconds/minutes" now run N apart from when the workflow was activated, instead of on clock boundaries.
+- **Upgrading from 1.4.0 (HA mode)**: the database moves to `controlplanecorporation/patroni-postgres:0.8`, which carries pgvector 0.8.7 (CVE-2026-103484). The upgrade restarts the Patroni members one at a time and the leader hands over to a standby. n8n's own tables do not use the `vector` extension, but a PGVector Vector Store node pointed at this database creates it: if it exists, run `ALTER EXTENSION vector UPDATE;` in that database after the upgrade. If your values set `postgresHA.image`, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render.
 - **Upgrading from 1.2.0 (HA mode)**: `postgresHA.postgres.username/password/database` were removed. Put those values, **unchanged**, into the database credentials secret (Prerequisites) and name it in `postgresHA.config.credentialsSecretName`. `postgresHA.backup.minio.accessKey`/`secretKey` were replaced by `postgresHA.backup.minio.credentialsSecretName` (see Backup storage setup).
 - **Upgrading from 1.1.0**: `postgres.config.username/password/database` were removed. Put those values, **unchanged**, into the database credentials secret (Prerequisites) and name it in `postgres.config.credentialsSecretName`. `postgres.backup.minio.accessKey`/`secretKey` were removed the same way (see Backup storage setup).
 - **Upgrading from 1.0.x**: `owner.email` and `owner.password` were removed, and the render fails naming the replacement if either is still set. Put the email and a bcrypt hash of **the password you use today** into the prerequisite dictionary secret — the owner is re-applied from it at the next start, so a different password there silently becomes the new login.

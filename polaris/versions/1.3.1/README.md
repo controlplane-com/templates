@@ -185,6 +185,7 @@ postgres:
   enabled: false
 postgresHA: # set postgresHA.enabled: true for near-zero-downtime upgrades and failover
   enabled: true
+  image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7; tags 0.1-0.7 are refused
   config:
     credentialsSecretName: my-polaris-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   replicas: 3
@@ -319,6 +320,10 @@ cpln secret create-dictionary --name my-polaris-minio-credentials \
   --entry accessKey=YOUR_ACCESS_KEY \
   --entry secretKey=YOUR_SECRET_KEY
 ```
+
+## Upgrading from 1.3.0 or earlier (HA mode)
+
+1.3.1 runs the highly available database (`postgresHA`) on `controlplanecorporation/patroni-postgres:0.8`, which carries pgvector 0.8.7 (CVE-2026-103484); earlier versions ran `0.7`. The upgrade restarts the Patroni members one at a time, with a leader handover, and existing data needs nothing. Polaris does not use the `vector` extension; if you created it yourself in a database, `\dx` keeps reporting the old version until you run `ALTER EXTENSION vector UPDATE;` there. If you set `postgresHA.image` in your values, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render. Single-instance installs (`postgres`) are unaffected.
 
 ## Upgrading from 1.2.1
 

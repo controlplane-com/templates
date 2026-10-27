@@ -1,0 +1,265 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: RabbitMQ
+# One stateful replica on its own volume: every GVC location would run an independent broker.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: credentials
+    title: Credentials
+    description: The RabbitMQ default user, written into the broker's rabbitmq.conf.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          This version takes the default user as plain values: the username and password are stored in the Helm
+          release and written in plaintext into the `RELEASE_NAME-rabbitmq-config` secret. Version 1.2.0 takes
+          them from a prerequisite secret instead. Never keep the published default password `changeMe`.
+        textExpression: >-
+          'This version takes the default user as plain values: the username and password are stored in the Helm
+          release and written in plaintext into the `' + context.releaseName + '-rabbitmq-config` secret.
+          Version 1.2.0 takes them from a prerequisite secret instead. Never keep the published default password
+          `changeMe`.'
+      - path: rabbitmq_conf.default_user
+        type: string
+        label: Username
+        required: true
+        description: >-
+          The management UI login and the AMQP user your producers and consumers put in their connection
+          strings.
+      - path: rabbitmq_conf.default_pass
+        type: string
+        label: Password
+        required: true
+        sensitive: true
+        widget: password
+        example: true
+        description: Stored in the release values.
+        help: >-
+          RabbitMQ creates the default user only when its volume is first initialized; changing these values
+          later does not change the broker. To change the password, run
+          `cpln workload exec RELEASE_NAME-rabbitmq --gvc GVC_NAME -- rabbitmqctl change_password USERNAME 'NEW-STRONG-PASSWORD'`,
+          then set the same password here.
+    rules:
+      - rule: >-
+          oldSelf == null ||
+          (self.rabbitmq_conf.default_user == oldSelf.rabbitmq_conf.default_user &&
+          self.rabbitmq_conf.default_pass == oldSelf.rabbitmq_conf.default_pass)
+        severity: info
+        paths: [rabbitmq_conf.default_pass]
+        message: >-
+          RabbitMQ creates the default user only when its volume is first initialized; new values here do not
+          change the broker's user or password. Run rabbitmqctl change_password first so the broker matches, or
+          your clients cannot sign in with the new values.
+
+  - id: broker
+    title: Broker
+    description: The RabbitMQ image, the compute of its single stateful replica, and its listener.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Every upgrade restarts the broker, which runs as a single replica: every connected client sees a
+              short outage, so give your producers and consumers a reconnect policy.
+          - path: image.repository
+            type: string
+            format: image
+            label: RabbitMQ image
+            required: true
+            description: >-
+              Keep a `-management` tag: the template serves the management UI on port 15672 and Prometheus
+              metrics on 15692.
+            docs: "#image"
+            rules:
+              - rule: oldSelf == null || self.image.repository == oldSelf.image.repository
+                severity: info
+                message: >-
+                  A new image restarts the broker, a short outage for every connected client. Export the
+                  definitions with rabbitmqctl export_definitions first, so you can recreate the topology.
+          - path: cpu
+            type: quantity
+            quantity: cpu
+            label: CPU
+            required: true
+            min: 25m
+            suggestions: ["200m", "500m", "1", "2"]
+          - path: memory
+            type: quantity
+            quantity: memory
+            label: Memory
+            required: true
+            min: 32Mi
+            suggestions: [256Mi, 512Mi, 1Gi, 2Gi]
+          - type: note
+            severity: warning
+            text: >-
+              This version ignores the request timeout (under Advanced): the workload always uses 5 seconds.
+              Version 1.2.0 applies the value set there.
+          - path: timeoutSeconds
+            type: integer
+            label: Request timeout
+            unit: seconds
+            min: 1
+            max: 3600
+            required: true
+            advanced: true
+            description: Not applied by this version; the workload uses 5 seconds.
+      - title: RabbitMQ configuration
+        fields:
+          # The listener is also the readiness probe's TCP port: the platform's probe and container port
+          # schema allows 80 to 65535, minus the reserved ports in the rule below.
+          - path: rabbitmq_conf.listeners_tcp_default
+            type: integer
+            label: AMQP port
+            required: true
+            min: 80
+            max: 65535
+            description: >-
+              Written into `rabbitmq.conf`; clients connect on it, and the readiness check probes it.
+            help: >-
+              The platform reserves some ports; see [blocked ports](/reference/workload/containers#number).
+            rules:
+              - rule: >-
+                  !(self.rabbitmq_conf.listeners_tcp_default in [8012, 8022, 9090, 9091, 15000, 15001, 15006,
+                  15020, 15021, 15090, 41000])
+                messageExpression: >-
+                  'Port ' + string(self.rabbitmq_conf.listeners_tcp_default) + ' is reserved by the platform,
+                  which refuses a workload that uses it. Choose another port.'
+                message: >-
+                  The AMQP port is reserved by the platform, which refuses a workload that uses it. Choose
+                  another port.
+              - rule: "!(self.rabbitmq_conf.listeners_tcp_default in [15672, 15692])"
+                message: >-
+                  The AMQP port must differ from 15672 (management UI) and 15692 (Prometheus metrics), which
+                  the workload already uses.
+              - rule: >-
+                  oldSelf == null || oldSelf.rabbitmq_conf.listeners_tcp_default == null ||
+                  self.rabbitmq_conf.listeners_tcp_default == oldSelf.rabbitmq_conf.listeners_tcp_default
+                severity: info
+                message: >-
+                  Every producer and consumer must switch to the new AMQP port; connections on the old port
+                  stop when the broker restarts.
+          - path: env
+            type: map
+            label: Environment variables
+            widget: kv
+            advanced: true
+            description: >-
+              Extra environment variables for the broker. `RABBITMQ_CONFIG_FILE` is also where `rabbitmq.conf`
+              is mounted, so it must stay set.
+            keys:
+              label: Name
+            values: { type: string }
+            rules:
+              - rule: self.env.all(k, !k.startsWith('CPLN_'))
+                message: >-
+                  Environment variable names starting with CPLN_ are reserved by the platform, which refuses
+                  the workload. Rename the variable.
+              - rule: >-
+                  'RABBITMQ_CONFIG_FILE' in self.env && self.env['RABBITMQ_CONFIG_FILE'].startsWith('/')
+                severity: warning
+                message: >-
+                  Set RABBITMQ_CONFIG_FILE to an absolute path, for example /etc/rabbitmq/rabbitmq.conf: the
+                  template mounts rabbitmq.conf at this path, so without it the config file gets an empty or
+                  relative mount path.
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds the queues, messages and users.
+    fields:
+      - path: volumeset.volume.performanceClass
+        type: enum
+        label: Performance class
+        widget: cards
+        required: true
+        description: Fixed once the volume set is created.
+        immutable: The performance class of a volume set cannot change after it is created.
+        docs: "/reference/volumeset#performance-classes"
+        options:
+          - value: high-throughput-ssd
+            label: High throughput SSD
+            description: For sustained heavy I/O; a much larger minimum size.
+          - value: general-purpose-ssd
+            label: General purpose SSD
+            description: Suits most brokers.
+      - path: volumeset.volume.fileSystemType
+        type: enum
+        label: File system
+        widget: segmented
+        required: true
+        description: Fixed once the volume set is created.
+        immutable: The file system of a volume set cannot change after it is created.
+        options:
+          - { value: ext4, label: ext4 }
+          - { value: xfs, label: xfs }
+      - path: volumeset.volume.initialCapacity
+        type: integer
+        label: Initial capacity
+        unit: GiB
+        min: 10
+        required: true
+        suggestions: [10, 20, 50, 100, 250, 500, 1000]
+        help: >-
+          The data lives on the volume set and survives redeploys. Uninstalling the release deletes the volume
+          set, and every queue, message and user with it. The template schedules no snapshots,
+          so take your own backups.
+        docs: "#storage"
+        rules:
+          - rule: >-
+              self.volumeset.volume.performanceClass != 'high-throughput-ssd' ||
+              self.volumeset.volume.initialCapacity >= 1000
+            message: A high throughput SSD volume set needs an initial capacity of at least 1000 GiB.
+          - rule: >-
+              oldSelf == null || oldSelf.volumeset.volume.initialCapacity == null ||
+              self.volumeset.volume.initialCapacity >= oldSelf.volumeset.volume.initialCapacity
+            message: >-
+              Keep the capacity at or above the installed value. Lowering it would not shrink the existing
+              volume.
+
+  - id: network
+    title: Network
+    description: Which workloads can reach the broker.
+    fields:
+      - path: firewall.internal_inboundAllowType
+        type: enum
+        label: Who can connect
+        widget: cards
+        required: true
+        description: >-
+          Applies to AMQP, the management UI and the metrics endpoint alike. Access changes take up to a
+          couple of minutes to take effect.
+        help: >-
+          External inbound stays closed unless `firewall.external_inboundAllowCIDR` is set in YAML mode. To open
+          the management UI from your machine without publishing it, tunnel to it with
+          `cpln port-forward RELEASE_NAME-rabbitmq 15672:15672 --gvc GVC_NAME`, then browse
+          `http://localhost:15672` and sign in with the default user.
+        options:
+          - value: none
+            label: None
+            description: No workload can connect.
+          - value: same-gvc
+            label: Same GVC
+            description: Any workload in this GVC.
+          - value: same-org
+            label: Same org
+            description: Any workload in this org.
+
+rules:
+  - rule: context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '1.1.0') >= 0
+    message: >-
+      Do not upgrade a 1.0.0 release in place: 1.1.0 renamed the workload, the volume set and the config secret,
+      so the upgrade deletes the volume set that holds the queues, messages and users and starts RabbitMQ on an
+      empty one. Install this version as a new release, export the definitions from the old broker with
+      rabbitmqctl export_definitions and import them into the new one, move your clients over once the old
+      queues are drained, then uninstall the old release.
+
+yamlOnly:
+  - path: diskCapacity
+    reason: >-
+      Read by no template in this version, so it has no effect; the volume size is the initial capacity under
+      Storage.

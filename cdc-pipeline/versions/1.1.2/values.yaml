@@ -33,7 +33,7 @@ postgres-highly-available:
     maxCpu: 1
     maxMemory: 2Gi
 
-  image: controlplanecorporation/patroni-postgres:0.7
+  image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7 (CVE-2026-103484); tags 0.1-0.7 are refused
 
   # Debezium's pgoutput decoding needs wal_level = logical; the chart refuses anything else.
   walLevel: logical

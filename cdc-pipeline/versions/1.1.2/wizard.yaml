@@ -26,6 +26,10 @@ imports:
       # Fixed to logical: Debezium cannot decode changes otherwise (a read-only field in Change capture).
       - walLevel
     override:
+      image:
+        help: >-
+          1.1.2 moves to patroni-postgres 0.8, with pgvector 0.8.7 (CVE-2026-103484). Tags 0.1 to 0.7 are
+          refused.
       internal_access.type:
         description: >-
           Debezium connects to the database through the HAProxy endpoint like any other workload: keep
@@ -473,6 +477,15 @@ rules:
     paths: [postgres-highly-available.internal_access.workloads]
     messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-debezium, or Debezium cannot reach the database.'"
     message: Add the Debezium workload to the list, or Debezium cannot reach the database.
+  - rule: >-
+      !(self['postgres-highly-available'].image.split(':')[0] in ['controlplanecorporation/patroni-postgres', 'docker.io/controlplanecorporation/patroni-postgres']) ||
+      size(self['postgres-highly-available'].image.split(':')) < 2 ||
+      !self['postgres-highly-available'].image.split(':')[1].matches('^0[.][0-7]([.][0-9]+)?$')
+    mirrors: cdc.validatePostgresHAImage
+    paths: [postgres-highly-available.image]
+    message: >-
+      This image carries a pgvector older than 0.8.7, which is open to CVE-2026-103484: a database user who can
+      create an IVFFlat index can run arbitrary code. Use controlplanecorporation/patroni-postgres:0.8.
   - rule: self['postgres-highly-available'].proxy.enabled || self['postgres-highly-available'].pgbouncer.enabled
     paths: [postgres-highly-available.proxy.enabled]
     message: Debezium connects through the HAProxy leader endpoint; keep it on.

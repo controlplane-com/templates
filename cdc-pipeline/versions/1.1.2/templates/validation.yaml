@@ -1,5 +1,6 @@
 {{- include "cdc.validateRemovedKeys" . -}}
 {{- include "cdc.validateCredentialsSecret" . -}}
 {{- include "cdc.validateWalLevel" . -}}
+{{- include "cdc.validatePostgresHAImage" . -}}
 {{- include "cdc.validateKafkaCredentials" . -}}
 {{- include "cdc.validateKafkaSecretRefs" . -}}

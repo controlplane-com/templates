@@ -1,0 +1,122 @@
+# Feature checks for the cdc-pipeline template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (pg_user,
+# pg_password, pg_db, kafka_admin_password).
+#
+# Database checks run in the patroni-postgres container (it has psql) and go through the HAProxy endpoint
+# Debezium uses. The Kafka check runs in the kafka chart's client workload (it has the Kafka CLI). The
+# checks run in order: `row-written` inserts a row tagged with the running version, and
+# `change-event-delivered` then finds that row's change event on Kafka, which only a working pipeline
+# (logical WAL, slot, Debezium, Kafka SASL) produces.
+checks:
+  - id: cluster-healthy
+    description: Patroni reports exactly one leader and every other member streaming from it.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        curl -s localhost:8008/cluster | python3 -c '
+        import json, sys
+        m = json.load(sys.stdin)["members"]
+        leaders = [x["name"] for x in m if x["role"] == "leader"]
+        streaming = [x["name"] for x in m if x["role"] in ("replica", "sync_standby")
+                     and (x["state"] == "streaming" or (x["state"] == "running" and isinstance(x.get("lag"), int)))]
+        print(f"MEMBERS {len(m)} LEADERS {len(leaders)} STREAMING {len(streaming)}")
+        '
+    expect:
+      stdout: "^MEMBERS 3 LEADERS 1 STREAMING 2$"
+    retries: 20
+    retryDelaySeconds: 15
+
+  - id: row-written
+    description: A row tagged with the running version is written through the HAProxy endpoint and reads back.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        set -e
+        export PGPASSWORD='{pg_password}'
+        P={release}-postgres-ha-proxy.{gvc}.cpln.local
+        M="e2e-$(date +%s%N)"
+        psql -h "$P" -U {pg_user} -d {pg_db} -v ON_ERROR_STOP=1 -qtA \
+          -c "create table if not exists e2e (id serial primary key, version text not null, marker text not null)" \
+          -c "insert into e2e (version, marker) values ('{version}', '$M')" >/dev/null
+        psql -h "$P" -U {pg_user} -d {pg_db} -qtA -c "select marker from e2e where marker = '$M'" | grep -qx "$M" && echo "READ $M"
+    expect:
+      stdout: "^READ e2e-"
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: change-event-delivered
+    description: >-
+      Debezium delivered the change event of a row written on the running version to the Kafka topic
+      dbserver1.public.e2e.
+    exec:
+      workload: "{release}-client"
+      container: kafka
+      shell: bash
+      script: |
+        cd /opt/kafka/bin
+        printf '%s\n' 'security.protocol=SASL_PLAINTEXT' 'sasl.mechanism=PLAIN' \
+          'sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="{kafka_admin_password}";' > /tmp/e2e.properties
+        ./kafka-console-consumer.sh --bootstrap-server {release}-cluster.{gvc}.cpln.local:9092 \
+          --consumer.config /tmp/e2e.properties --topic dbserver1.public.e2e --from-beginning --timeout-ms 60000 2>/dev/null \
+          | grep -qF '"version":"{version}"' && echo "EVENT version {version}"
+    expect:
+      stdout: "^EVENT version "
+    # Debezium streams within seconds once it runs, but after an install or upgrade it may still be
+    # starting (and the topic is created by its first event).
+    retries: 8
+    retryDelaySeconds: 30
+    timeoutSeconds: 180
+
+  - id: rejects-bad-password
+    description: A wrong password is refused through the proxy (the control for the database checks).
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        PGPASSWORD=wrong-password psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -c "select 1" 2>&1
+        echo "EXIT=$?"
+    expect:
+      stdout: "password authentication failed"
+      notStdout: "^EXIT=0$"
+
+  - id: data-survives-upgrade
+    description: >-
+      The row written on the version this scenario installed first is still there. On a fresh install
+      that is the same version; after an upgrade it proves the database carried over.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        n=$(psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "select count(*) from e2e where version = '{installed_version}'" 2>&1)
+        [ "${n:-0}" -ge 1 ] 2>/dev/null && echo PERSISTED || echo "MISSING (rows for {installed_version}: ${n:-none})"
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: pgvector-0-8-7-available
+    description: The leader runs patroni-postgres 0.8, with pgvector 0.8.7 (CVE-2026-103484), from 1.1.2.
+    issue: "#5376"
+    since: 1.1.2
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "select 'AVAIL ' || default_version from pg_available_extensions where name = 'vector'" 2>&1
+    expect:
+      stdout: "^AVAIL 0\\.8\\.7$"
+    # After the upgrade the members restart one at a time; this runs long enough to reach the new leader.
+    retries: 8
+    retryDelaySeconds: 15

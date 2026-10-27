@@ -88,6 +88,7 @@ kafka:
 postgres-highly-available:
   replicas: 3
   resources: { minCpu: 500m, minMemory: 1Gi, maxCpu: 1, maxMemory: 2Gi }
+  image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7 (CVE-2026-103484); tags 0.1-0.7 are refused
   volumeset:
     capacity: 10 # GiB per member; a quarter of it caps the WAL a replication slot may hold back
   proxy:
@@ -178,6 +179,16 @@ kafka:
 |---|---|---|
 | Change events | Kafka topics `<serverName>.<schema>.<table>` at `RELEASE_NAME-cluster.GVC_NAME.cpln.local:9092` (SASL_PLAINTEXT, PLAIN) | `admin` with the secret's `kafkaAdminPassword`, or another user of `kafka.kafka.listeners.client.sasl` |
 | Source database | `RELEASE_NAME-postgres-ha-proxy.GVC_NAME.cpln.local:5432` | `username`/`password`/`database` of the credentials secret |
+
+## Upgrading from 1.1.1 or earlier
+
+1.1.2 moves the database to `controlplanecorporation/patroni-postgres:0.8`, which carries pgvector 0.8.7
+(CVE-2026-103484). The upgrade restarts the Patroni members one at a time and the leader hands over;
+Debezium resumes on the new leader from its failover replication slot, and changes around a leader change
+can be delivered twice. Existing data needs nothing. If you pinned
+`postgres-highly-available.image`, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render. The
+pipeline does not use the `vector` extension; if you created it in your database, run
+`ALTER EXTENSION vector UPDATE;` there, which only updates the version `\dx` reports.
 
 ## Upgrading from 1.0.4
 

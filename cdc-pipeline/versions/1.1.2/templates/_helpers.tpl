@@ -51,6 +51,24 @@ Debezium's pgoutput decoding needs wal_level = logical on the bundled cluster.
 {{- end -}}
 
 {{/*
+Refuse controlplanecorporation/patroni-postgres 0.1-0.7: they carry a pgvector older than 0.8.7
+(CVE-2026-103484). The bundled postgres-highly-available 2.8.0 defaults to 0.7 and 1.1.1 pinned 0.7
+here, so 1.1.2 pins 0.8; a values file still pinning an older tag would otherwise keep the vulnerable
+image. Same matching as postgres-highly-available 2.8.1's pg-ha.validateImage: other registries, digests
+and non-version tags pass.
+*/}}
+{{- define "cdc.validatePostgresHAImage" -}}
+{{- $raw := index .Values "postgres-highly-available" "image" | default "" | toString -}}
+{{- $image := trimPrefix "docker.io/" $raw -}}
+{{- $prefix := "controlplanecorporation/patroni-postgres:" -}}
+{{- if hasPrefix $prefix $image -}}
+{{- if regexMatch "^0\\.[0-7](\\.[0-9]+)?$" (trimPrefix $prefix $image) -}}
+{{- fail (printf "cdc-pipeline: postgres-highly-available.image %s carries a pgvector older than 0.8.7, which is open to CVE-2026-103484 (a database user who can create an IVFFlat index can run arbitrary code). Set postgres-highly-available.image to controlplanecorporation/patroni-postgres:0.8, or remove it from your values to use the chart default." $raw) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Debezium's Kafka user must exist on the client listener, and, while Kafka
 enforces ACLs, be a super user: the kafka chart cannot declare ACLs, so
 without that the connector authenticates and is then refused every write.

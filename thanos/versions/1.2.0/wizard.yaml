@@ -79,7 +79,7 @@ steps:
             label: Store Gateway resources
             required: true
             advanced: true
-            description: A single stateful replica.
+            description: Per replica; one stateful replica runs in each location of the GVC.
             maxRatio: 4
             cpu: { min: 25m }
             memory: { min: 32Mi }
@@ -135,7 +135,7 @@ steps:
             label: Compactor resources
             required: true
             advanced: true
-            description: A single stateful replica.
+            description: Per replica; one stateful replica runs in each location of the GVC.
             maxRatio: 4
             cpu: { min: 25m }
             memory: { min: 32Mi }

@@ -276,12 +276,14 @@ Or use a [Langfuse SDK](https://langfuse.com/docs/observability/sdk/overview): P
 Before you upgrade:
 
 1. A release older than 1.3.0 goes to 1.3.0 first, following that version's README.
-2. Check that every Langfuse background migration has finished. This must print no rows; if it does, wait or retry them in the UI (Langfuse version tag → **Background Migrations**), because Langfuse 4 drops the tables they copy from:
+2. Check that every Langfuse 3 background migration has finished, because Langfuse 4 drops the tables they copy from. The five `20260701_v4_step_*` migrations are already listed on 1.3.0 but run only on Langfuse 4, so the query leaves them out; it must print no rows:
 
 ```bash
 cpln workload exec RELEASE_NAME-postgres --gvc GVC_NAME --container postgresql -- \
-  sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT name, failed_reason FROM background_migrations WHERE finished_at IS NULL;"'
+  sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT name, failed_reason FROM background_migrations WHERE finished_at IS NULL AND name NOT LIKE '"'"'20260701_v4_step_%'"'"';"'
 ```
+
+   If it prints rows, check the UI (Langfuse version tag → **Background Migrations**). The worker runs background migrations only when it starts, and gives up if PostgreSQL is not reachable yet, so rows that never started are run by restarting it: `cpln workload force-redeployment RELEASE_NAME-langfuse-worker --gvc GVC_NAME`.
 
 3. Back up PostgreSQL (see [Backing up the bundled database](#backing-up-the-bundled-database)) and check the backup object is not empty.
 4. Choose the write mode. It decides what keeps working from Langfuse 3:

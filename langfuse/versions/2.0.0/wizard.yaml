@@ -261,9 +261,9 @@ steps:
               semverCompare(context.fromVersion, '2.0.0') < 0
             text: >-
               This upgrade moves Langfuse 3 to 4, and its database migrations are one-way: rolling back to 1.3.0
-              means restoring a backup. Before you upgrade, back up PostgreSQL and confirm that every background
-              migration has finished (`SELECT name FROM background_migrations WHERE finished_at IS NULL;` returns
-              no rows). Producers on Python SDK v2 or JS/TS SDK v3, the legacy read APIs and trace-level evaluators
+              means restoring a backup. Before you upgrade, back up PostgreSQL and confirm that every Langfuse 3
+              background migration has finished: `SELECT name FROM background_migrations WHERE finished_at IS NULL
+              AND name NOT LIKE '20260701_v4_step_%';` returns no rows (the README has the full command). Producers on Python SDK v2 or JS/TS SDK v3, the legacy read APIs and trace-level evaluators
               keep working only with the dual or legacy write mode below. See "Upgrading from 1.3.0" in the README.
           - path: langfuse.migration.writeMode
             type: enum

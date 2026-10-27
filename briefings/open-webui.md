@@ -1,7 +1,7 @@
 # Open WebUI — Maintainer Briefing
 
 ## What it is
-- Self-hosted, ChatGPT-style chat UI for LLMs (users, RAG, model management) that talks to Ollama and any OpenAI-compatible API. Pinned image `ghcr.io/open-webui/open-webui:v0.11.0`.
+- Self-hosted, ChatGPT-style chat UI for LLMs (users, RAG, model management) that talks to Ollama and any OpenAI-compatible API. Pinned image `ghcr.io/open-webui/open-webui:v0.12.4` (1.4.0).
 - **License: "Open WebUI License" = BSD-3-Clause (a permissive open-source license) PLUS a branding clause.** Plain effect: free to self-host and run in production at any scale — no fee, key, or registration; the ONLY added rule is you must keep the "Open WebUI" branding visible in the UI **unless** your deployment serves 50 or fewer users, or you get enterprise permission. This is mild source-available (not pure open-source). Surfaced in README Prerequisites + Important Notes.
 - **1.1.0 is a security release**: the UI is no longer public by default, and the session/JWT signing key moved out of values into a required prerequisite secret.
 - **1.3.0 makes it public by default, safely** (work item 5278): the admin comes from a required prerequisite dictionary secret (`admin.secretName`, keys `email`/`password`) via `WEBUI_ADMIN_EMAIL`/`WEBUI_ADMIN_PASSWORD`, so an admin exists before the UI serves and there is no unclaimed sign-up to race for. `auth.enableSignup` is removed (a hard `fail`).
@@ -25,10 +25,11 @@
 - Single-replica by design: default embedded SQLite is single-writer and volumesets are per-replica.
 - Model backends: `ollama` over internal DNS (`{workload}.{gvc}.cpln.local:11434`) and/or an OpenAI-compatible endpoint (key = prerequisite secret, referenced by name).
 
-## Key knobs (shipped defaults, 1.3.0)
+## Key knobs (shipped defaults, 1.4.0)
 
 | Knob | Default | Effect |
 |---|---|---|
+| `image` | `ghcr.io/open-webui/open-webui:v0.12.4` | Tags of that repo below v0.12.4 (any `v`/suffix form, and `0.11`-style minor tags) are refused at render and in the wizard (`open-webui.validateImage`); other registries, digests, `main`/`latest`/`git-*` pass |
 | `auth.secretKeyName` | `my-openwebui-secret-key` | Name of the REQUIRED opaque secret holding the session/JWT signing key — must exist before install |
 | `admin.secretName` | `my-openwebui-admin` | Name of the REQUIRED dictionary secret (`email`, `password`) the admin is created from at first boot — must exist before install; ignored once any account exists |
 | `publicAccess.enabled` | `true` | Chat UI and sign-in form on the canonical URL; `false` = not reachable from the internet |
@@ -61,3 +62,9 @@
 - **Sub-agents overflow small models**: delegation on Qwen2.5-7B (32k context, before the 64k retest) never finished in the feature pass; normal chats are fine.
 - **Health/readiness = `GET /health`** on 8080 — same endpoint the image's own Docker HEALTHCHECK uses. Cold boot to `ready: true` measured at ~60-80 s.
 - **Drift**: a no-op `helm upgrade` right after install reports the volumeset `Updated` once (the known first-upgrade re-apply); every later no-op upgrade is fully `Unchanged`, workload included.
+
+## Version history
+- **1.4.0 (2026-10-27, work item 5376)** — image `v0.11.0` → `v0.12.4` for Critical CVEs. Trivy Critical/High: v0.11.0 = 32/599, v0.12.4 = 10/131. Fixed: pillow ×5, nltk ×3, GitPython, brotli, certifi, uv, perl, mbedtls, zlib, sqlite. **Still open upstream (known, nothing the chart can do):** unstructured CVE-2026-71428, chromadb ×2, PyJWT CVE-2026-102268, sentence-transformers, mariadb client libs, libxml2, linux-libc-dev.
+  - Upstream changes that touch this chart: 11 new alembic migrations across v0.11.1/v0.12.0/v0.12.1 run on first start (rollback = restore the pre-upgrade snapshot); Python 3.11 → 3.12 on Debian 13 (custom tools/functions with pip requirements); nltk, pymongo, langchain-community no longer in the image; v0.12.4 stops using user-saved (personal Integrations) tool servers while Direct Integrations is off (admin tool servers such as the Control Plane one are referenced by `tool_ids`, not the gated `tool_servers` request field, by source reading); `MCP_INITIALIZE_TIMEOUT` (10 s) now also bounds MCP tool listing; MFA added (an admin with MFA on makes the MCP-registration sign-in return a challenge, which the start script reports as "skipped").
+  - Unchanged on the new tag (registry config + source): USER `0:0`, CMD `bash start.sh`, WORKDIR `/app/backend`, port 8080, `/health` → `{"status": true}`, binds `HOST` (default 0.0.0.0, not `HOSTNAME`), `create_admin_user` from `WEBUI_ADMIN_EMAIL`/`WEBUI_ADMIN_PASSWORD`, `VECTOR_DB` default `chroma` (pgvector only on slim), `DATA_DIR`/`DATABASE_URL` defaults, and the start script's three API calls (`/api/v1/auths/signin`, `/api/v1/configs/tool_servers`, `/api/v1/configs/oauth/clients/register?type=mcp`).
+  - Guard: `open-webui.validateImage` refuses vulnerable `ghcr.io/open-webui/open-webui` tags, because the Console wizard stores `image` in release values and a `helm upgrade -f` would otherwise keep v0.11.0 silently.

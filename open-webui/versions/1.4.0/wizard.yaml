@@ -228,11 +228,35 @@ steps:
         when: context.mode == 'upgrade'
         text: >-
           Every upgrade restarts the single replica, so the UI is down for about a minute.
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '1.4.0') < 0
+        text: >-
+          1.4.0 moves Open WebUI to v0.12.4, which migrates the database on its first start. Rolling back to
+          an earlier version afterwards is not supported, so take a snapshot of the data volume first. See
+          [Upgrading from 1.3.0](#upgrading-from-1-3-0).
       - path: image
         type: string
         format: image
         label: Open WebUI image
         required: true
+        description: >-
+          Tags of `ghcr.io/open-webui/open-webui` below v0.12.4 carry Critical CVEs and are refused.
+        rules:
+          - rule: >-
+              self.image.split(':')[0] != 'ghcr.io/open-webui/open-webui' ||
+              size(self.image.split(':')) < 2 ||
+              !self.image.split(':')[1].matches('^v?0[.](([0-9]|1[01])([.][0-9]+)?|12[.][0-3])(-.*)?$')
+            mirrors: open-webui.validateImage
+            messageExpression: >-
+              'Open WebUI before v0.12.4 carries Critical CVEs fixed there. Use ghcr.io/open-webui/open-webui:v0.12.4' +
+              (self.image.split(':')[1].matches('-') ? '-' + self.image.split(':')[1].split('-')[1] : '') +
+              '. The upgrade migrates the database, so take a snapshot first.'
+            message: >-
+              Open WebUI before v0.12.4 carries Critical CVEs fixed there. Use ghcr.io/open-webui/open-webui:v0.12.4,
+              keeping any -cuda, -ollama or -slim suffix.
       - path: resources
         type: resources
         label: Resources

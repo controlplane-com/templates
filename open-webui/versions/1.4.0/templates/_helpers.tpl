@@ -40,6 +40,7 @@ Open WebUI Policy Name
 
 {{- define "open-webui.validate" -}}
 {{- include "open-webui.validateResourceKnobs" . -}}
+{{- include "open-webui.validateImage" . -}}
 {{- if not (has .Values.internalAccess.type (list "none" "same-gvc" "same-org" "workload-list")) -}}
 {{- fail (printf "open-webui: internalAccess.type must be 'none', 'same-gvc', 'same-org', or 'workload-list', got '%s'" .Values.internalAccess.type) -}}
 {{- end -}}
@@ -99,7 +100,27 @@ with no signal.
 {{- end -}}
 {{- end -}}
 
-{{/* The Control Plane MCP tool-server connection (Open WebUI v0.11 TOOL_SERVER_CONNECTIONS schema). */}}
+{{/*
+Refuse a ghcr.io/open-webui/open-webui tag older than v0.12.4 (with or without the
+leading v, any variant suffix such as -cuda, -ollama or -slim, and the 0.11-style
+minor tags, which are frozen at a vulnerable release). The wizard stores `image` in
+release values, so a helm upgrade -f would otherwise keep the vulnerable image
+silently. Other registries, digest references and non-version tags (main, latest,
+git-*) pass. The same regex is mirrored by the wizard's image rule.
+*/}}
+{{- define "open-webui.validateImage" -}}
+{{- $raw := .Values.image | default "" | toString -}}
+{{- $parts := splitList ":" $raw -}}
+{{- if and (eq (first $parts) "ghcr.io/open-webui/open-webui") (ge (len $parts) 2) -}}
+{{- $tag := index $parts 1 -}}
+{{- if regexMatch "^v?0[.](([0-9]|1[01])([.][0-9]+)?|12[.][0-3])(-.*)?$" $tag -}}
+{{- $suffix := regexFind "-.*$" $tag -}}
+{{- fail (printf "open-webui: image %s is older than Open WebUI v0.12.4 and carries Critical CVEs fixed there. Set image to ghcr.io/open-webui/open-webui:v0.12.4%s, or remove `image` from your values to use the chart default. The upgrade migrates the database, so take a snapshot first." $raw $suffix) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/* The Control Plane MCP tool-server connection (Open WebUI TOOL_SERVER_CONNECTIONS schema, unchanged from v0.11 to v0.12). */}}
 {{- define "open-webui.cplnMcpConnection" -}}
 {{- $info := dict "id" "cpln" "name" "Control Plane" "description" "Manage your Control Plane org: workloads, GVCs, secrets, logs and more" -}}
 {{- dict "type" "mcp" "url" "https://mcp.cpln.io/mcp" "path" "" "auth_type" "oauth_2.1" "key" "" "config" (dict "enable" true) "info" $info | toJson -}}

@@ -1,5 +1,5 @@
 # ─── Image & Resources ────────────────────────────────────────────────────────
-image: ghcr.io/open-webui/open-webui:v0.11.0
+image: ghcr.io/open-webui/open-webui:v0.12.4 # tags below v0.12.4 of this image are refused (Critical CVEs)
 
 resources:
   maxCpu: 1        # max vCPU

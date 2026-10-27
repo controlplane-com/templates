@@ -13,7 +13,7 @@ checks:
       script: |
         h=$(curl -s -m 20 localhost:9200/_cluster/health 2>&1); rc=$?
         echo "$h" | grep -q '"status":"green"' && echo "$h" | grep -q '"number_of_nodes":3,' && echo "GREEN 3" \
-          || echo "NOT GREEN: ${h:-no response (curl exit $rc)}"
+          || echo "NOT GREEN: $(echo "$h" | grep -o '"status":"[a-z]*"\|"number_of_nodes":[0-9]*' | tr '\n' ' ')${h:-no response (curl exit $rc)} on $HOSTNAME"
     expect:
       stdout: "^GREEN 3$"
     retries: 10

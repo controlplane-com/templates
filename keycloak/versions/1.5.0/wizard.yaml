@@ -93,8 +93,18 @@ steps:
               allowCreate: true
               requiredKeys: [username, password]
               create:
-                suggestName: "context.releaseName + '-keycloak-admin'"
+                suggestName: "context.releaseName + '-keycloak-admin-credentials'"
         rules:
+          # 1.0.x rendered its own admin secret named <release>-keycloak-admin; upgrading to 1.1.0 or later
+          # prunes it, so a release pointed at that name would reference a secret the upgrade deletes.
+          - rule: >-
+              context.mode != 'upgrade' || context.fromVersion == null ||
+              semverCompare(context.fromVersion, '1.1.0') >= 0 ||
+              self.admin.secretName != context.releaseName + '-keycloak-admin'
+            paths: [admin.secretName]
+            message: >-
+              That secret belongs to the 1.0.x release, and this upgrade deletes it. Create a new dictionary
+              secret with the same username and password keys and choose it here.
           - rule: "!has(self.admin.username) && !has(self.admin.password)"
             mirrors: keycloak.validateAdmin
             paths: [admin.secretName]
@@ -208,8 +218,14 @@ steps:
             type: ref
             label: Database credentials secret
             required: true
-            description: A dictionary secret with the keys `username`, `password` and `database`; the database name must be URL-safe (letters, digits, `_`).
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`. Use lowercase letters,
+              digits and `_` for the database name, letters, digits and `_` for the user, and no `"` or `\` in
+              the password.
             help: >-
+              The highly available database writes the user and password inside double quotes in its config and
+              creates the database with an unquoted CREATE DATABASE, which folds the name to lowercase while
+              Keycloak connects with it as typed.
               PostgreSQL reads these values only when its data is first initialized, and Keycloak connects with
               them. To change the password later, change it in the database first, then update the secret and
               force a redeployment.

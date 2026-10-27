@@ -1,0 +1,100 @@
+{{- include "pgvector.validate" . -}}
+kind: workload
+name: {{ include "pgvector.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: pgvector Database
+tags: {{- include "pgvector.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "pgvector.identity.name" . }}
+  containers:
+    - name: pgvector
+      env:
+        - name: PGDATA
+          value: "/var/lib/postgresql/data/pg_data"
+        # All three come from the user-created prerequisite secret, so no
+        # database credential is ever written into the Helm release.
+        - name: POSTGRES_DB
+          value: 'cpln://secret/{{ .Values.config.credentialsSecretName }}.database'
+        - name: POSTGRES_PASSWORD
+          value: 'cpln://secret/{{ .Values.config.credentialsSecretName }}.password'
+        - name: POSTGRES_USER
+          value: 'cpln://secret/{{ .Values.config.credentialsSecretName }}.username'
+      image: {{ .Values.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      ports:
+        - number: 5432
+          protocol: tcp
+      volumes:
+        - path: /var/lib/postgresql/data
+          uri: 'cpln://volumeset/{{ include "pgvector.volume.name" . }}'
+        # First-boot SQL. The entrypoint runs everything in this directory once,
+        # only when PGDATA is empty; this is what creates the vector extension.
+        - path: /docker-entrypoint-initdb.d/00-pgvector.sql
+          uri: 'cpln://secret/{{ include "pgvector.secret.init.name" . }}.payload'
+      readinessProbe:
+        exec:
+          command:
+            - sh
+            - '-c'
+            {{- /*
+            -h 127.0.0.1 forces a TCP check, and that is deliberate. During
+            first boot the entrypoint runs a TEMPORARY server bound to the unix
+            socket only, so a bare `pg_isready` reports ready while the init SQL
+            is still running — measured 2026-08-26: socket rc=0 while TCP rc=2
+            mid-init. Only the real server listens on TCP, after the extension
+            has been created. The larger budget below (15 + 18x10 = 195s) pays
+            for initdb plus that SQL; 18 is inside the platform's cap of 20.
+            */}}
+            - 'pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER} -d ${POSTGRES_DB}'
+        failureThreshold: 18
+        initialDelaySeconds: 15
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 3
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+    capacityAI: false
+  firewallConfig:
+    {{- /* Every field is declared, empty lists included: the API backfills them,
+    so omitting one makes a default install drift from the moment it is created. */}}
+    external:
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if and .Values.internalAccess.workloads (has .Values.internalAccess.type (list "same-gvc" "workload-list")) }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- else }}
+      inboundAllowWorkload: []
+      {{- end }}
+  {{- if .Values.publicAccess.enabled }}
+  loadBalancer:
+    direct:
+      enabled: true
+      ports:
+        - containerPort: 5432
+          externalPort: 5432
+          protocol: TCP
+          scheme: tcp
+  {{- end }}

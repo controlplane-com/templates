@@ -1,0 +1,89 @@
+{{- include "pgvector.validate" . -}}
+{{- if .Values.backup.enabled }}
+kind: workload
+name: {{ include "pgvector.backup.name" . }}
+description: pgvector Backup
+tags: {{- include "pgvector.tags" . | nindent 4 }}
+spec:
+  type: cron
+  containers:
+    - name: backup-pgvector
+      cpu: {{ .Values.backup.resources.cpu | quote }}
+      memory: {{ .Values.backup.resources.memory | quote }}
+      env:
+      {{- if eq .Values.backup.provider "aws" }}
+        - name: AWS_REGION
+          value: {{ .Values.backup.aws.region | quote }}
+        - name: BACKUP_PROVIDER
+          value: aws
+        - name: BACKUP_BUCKET
+          value: {{ .Values.backup.aws.bucket | quote }}
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.aws.prefix | quote }}
+      {{- end }}
+      {{- if eq .Values.backup.provider "gcp" }}
+        - name: BACKUP_PROVIDER
+          value: gcp
+        - name: BACKUP_BUCKET
+          value: {{ .Values.backup.gcp.bucket | quote }}
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.gcp.prefix | quote }}
+      {{- end }}
+      {{- if eq .Values.backup.provider "minio" }}
+        - name: BACKUP_PROVIDER
+          value: minio
+        - name: BACKUP_BUCKET
+          value: {{ .Values.backup.minio.bucket | quote }}
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.minio.prefix | quote }}
+        - name: MINIO_ENDPOINT
+          value: {{ .Values.backup.minio.endpoint | quote }}
+        - name: MINIO_ACCESS_KEY
+          value: 'cpln://secret/{{ .Values.backup.minio.credentialsSecretName }}.accessKey'
+        - name: MINIO_SECRET_KEY
+          value: 'cpln://secret/{{ .Values.backup.minio.credentialsSecretName }}.secretKey'
+      {{- end }}
+        # Fully qualified: the bare short name is not reliable and resolves
+        # NXDOMAIN for some workload types.
+        - name: PG_HOST
+          value: {{ include "pgvector.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local
+        - name: PG_PASSWORD
+          value: 'cpln://secret/{{ .Values.config.credentialsSecretName }}.password'
+        - name: PG_PORT
+          value: '5432'
+        - name: PG_USER
+          value: 'cpln://secret/{{ .Values.config.credentialsSecretName }}.username'
+      image: {{ .Values.backup.image }}
+      inheritEnv: false
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: none
+      inboundAllowWorkload: []
+  identityLink: //identity/{{ include "pgvector.identity.name" . }}
+  job:
+    concurrencyPolicy: Forbid
+    historyLimit: 5
+    restartPolicy: Never
+    schedule: {{ .Values.backup.schedule | quote }}
+  supportDynamicTags: false
+{{- end }}

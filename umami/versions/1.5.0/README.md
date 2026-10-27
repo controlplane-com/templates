@@ -110,6 +110,7 @@ postgresHA:           # durable HA: 3-replica Patroni store with an HAProxy lead
   config:
     credentialsSecretName: my-umami-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   replicas: 3
+  image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7 (CVE-2026-103484); tags 0.1-0.7 are refused
   volumeset:
     capacity: 10      # GiB per replica
   backup:
@@ -226,6 +227,7 @@ pgx N curl -s -XPOST -d '{"force": true}' localhost:8008/reinitialize
 - The image moves from Umami 3.2.0 to **3.4.1**, which fixes Critical vulnerabilities in its bundled Next.js. The chart refuses any `ghcr.io/umami-software/umami` tag below 3.4.1, so if your values pin `image`, set it to `ghcr.io/umami-software/umami:3.4.1` or remove it.
 - Umami migrates its database on first start (two-factor, session linking, annotations, API keys). Rolling back to 1.4.0 afterwards is not supported — take a backup first if you need a way back.
 - Two-factor authentication (new in Umami 3.3) needs the optional key secret — see [Prerequisites](#prerequisites). If you add it in the same upgrade, the new version can wait several minutes with `is not allowed to reveal the secret` in `get-deployments` while the new grant propagates; the previous version keeps serving.
+- HA mode (`postgresHA`) only: the database moves to `controlplanecorporation/patroni-postgres:0.8`, which carries pgvector 0.8.7 (CVE-2026-103484). The upgrade restarts the Patroni members one at a time and the leader hands over to a standby. Umami does not use the `vector` extension; if you created it yourself in a database, run `ALTER EXTENSION vector UPDATE;` there after the upgrade. If your values set `postgresHA.image`, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render.
 
 ## Upgrading from 1.3.x
 

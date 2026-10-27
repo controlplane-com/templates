@@ -1,0 +1,100 @@
+# Feature checks for the umami template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (pg_user,
+# pg_password, pg_db).
+#
+# The baselines use the HA store, so every check runs in its patroni-postgres container, which has curl
+# and psql and reaches Umami over the GVC (internalAccess same-gvc; public access is off). Database checks
+# go through the HAProxy endpoint, the address Umami itself uses.
+checks:
+  - id: admin-login
+    description: The seeded admin logs in to Umami's API and gets a token, which needs the database and the app secret.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        curl -s -m 20 -X POST http://{release}-umami.{gvc}.cpln.local:3000/api/auth/login \
+          -H 'Content-Type: application/json' -d '{"username":"admin","password":"umami"}' \
+        | python3 -c '
+        import json, sys
+        try: d = json.load(sys.stdin)
+        except Exception: d = {}
+        u = (d.get("user") or {}).get("username")
+        print("LOGIN " + u if d.get("token") and u else "NO TOKEN " + json.dumps(d))
+        '
+    expect:
+      stdout: "^LOGIN admin$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: rejects-bad-password
+    description: A wrong admin password gets no token (the control for the check above).
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        out=$(curl -s -m 20 -o /dev/null -D - -X POST http://{release}-umami.{gvc}.cpln.local:3000/api/auth/login \
+          -H 'Content-Type: application/json' -d '{"username":"admin","password":"wrong-password"}')
+        echo "$out" | awk 'NR==1 {print "STATUS " $2}'
+        curl -s -m 20 -X POST http://{release}-umami.{gvc}.cpln.local:3000/api/auth/login \
+          -H 'Content-Type: application/json' -d '{"username":"admin","password":"wrong-password"}'
+    expect:
+      stdout: "^STATUS 401"
+      notStdout: '"token"'
+
+  - id: admin-in-database
+    description: Umami's schema and its seeded admin are in the HA database, read through the HAProxy endpoint.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "select 'USER ' || username from \"user\" where username = 'admin'" 2>&1
+    expect:
+      stdout: "^USER admin$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: data-survives-upgrade
+    description: >-
+      Writes a row tagged with the running version into Umami's database, then reads the row written on the
+      version this scenario installed first. After an upgrade that proves the HA database carried over.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        P={release}-postgres-ha-proxy.{gvc}.cpln.local
+        psql -h "$P" -U {pg_user} -d {pg_db} -v ON_ERROR_STOP=1 -qtA \
+          -c "create table if not exists e2e (version text not null)" \
+          -c "insert into e2e (version) values ('{version}')" >/dev/null || { echo "WRITE FAILED"; exit 1; }
+        n=$(psql -h "$P" -U {pg_user} -d {pg_db} -qtA -c "select count(*) from e2e where version = '{installed_version}'" 2>&1)
+        [ "${n:-0}" -ge 1 ] 2>/dev/null && echo PERSISTED || echo "MISSING (rows for {installed_version}: ${n:-none})"
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: pgvector-0-8-7-available
+    description: The HA database image ships pgvector 0.8.7 (CVE-2026-103484), the image 1.5.0 moved to.
+    issue: "#5376"
+    since: 1.5.0
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "select 'AVAIL ' || default_version from pg_available_extensions where name = 'vector'" 2>&1
+    expect:
+      stdout: "^AVAIL 0\\.8\\.7$"
+    # After an upgrade the HAProxy endpoint can briefly route to a member still on the old image while the
+    # Patroni members restart one at a time; this runs long enough to reach the new leader.
+    retries: 12
+    retryDelaySeconds: 15

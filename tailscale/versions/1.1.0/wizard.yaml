@@ -1,0 +1,257 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Tailscale
+# One stateless gateway pinned to the single `location` value; the workload is suspended in every other
+# location of the GVC (cpln.yaml defaultOptions.suspend), so a GVC with several locations
+# runs one gateway, not one per location. Nothing here is stateful, so the GVC may have more locations.
+gvc:
+  minLocations: 1
+
+steps:
+  - id: authkey
+    title: Auth key
+    description: The Tailscale auth key the gateway joins your tailnet with.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          In this version the auth key is a plain value: it is stored in the Helm release and in a secret the
+          chart creates (`RELEASE_NAME`). Version 1.3.0 and later read it from a secret you create, so it never
+          enters the release.
+        textExpression: >-
+          'In this version the auth key is a plain value: it is stored in the Helm release and in a secret the
+          chart creates (`' + context.releaseName + '`). Version 1.3.0 and later read it from a secret you
+          create, so it never enters the release.'
+      - path: AuthKey
+        type: string
+        label: Auth key
+        widget: password
+        required: true
+        example: true
+        sensitive: true
+        description: >-
+          A Tailscale auth key. Generate it in the Tailscale admin console under Settings › Keys with both
+          **Reusable** and **Ephemeral** on: the gateway keeps no Tailscale state, so it joins the tailnet with
+          this key on every container start.
+        help: >-
+          Auth keys expire (90 days by default) and an expired key surfaces at the next restart. To replace the
+          key, enter the new one here and upgrade the release: the chart updates its secret and restarts the
+          gateway with it. Keys are created at https://login.tailscale.com/admin/settings/keys.
+    rules:
+      # secret.yaml writes `authkey: {{ .Values.AuthKey }}` unquoted (quoted from 1.2.0): " #" cuts the key
+      # short and ": " fails the render. A Tailscale key is tskey- followed by letters, digits and dashes, and an
+      # OAuth client secret may add ?ephemeral=...&preauthorized=... parameters, which render intact.
+      - when: oldSelf == null || self.AuthKey != oldSelf.AuthKey
+        rule: self.AuthKey == '' || self.AuthKey.matches('^tskey-[A-Za-z0-9_-]+(\\?[A-Za-z0-9_.=&-]+)?$')
+        severity: warning
+        paths: [AuthKey]
+        message: >-
+          A Tailscale auth key is tskey- followed by letters, digits and dashes, optionally followed by
+          ?ephemeral=…&preauthorized=… parameters. Paste the key from the
+          Tailscale admin console (Settings › Keys); this version writes it into its secret unquoted, so other
+          characters can cut it short or break the install.
+
+  - id: gateway
+    title: Gateway
+    description: Where the gateway runs, the name it shows on your tailnet, and how devices reach workloads.
+    sections:
+      - title: Location
+        fields:
+          - path: location
+            type: ref
+            label: Location
+            required: true
+            description: >-
+              The one location of the GVC the gateway runs in; it is suspended in the others. Tailnet devices
+              still reach workloads in every location of the GVC through it.
+            ref: { kind: location, scope: gvc, format: name, mustExist: error }
+          - type: note
+            severity: warning
+            text: >-
+              In the Tailscale admin console, approve the three routes the gateway advertises
+              (`192.168.0.0/16`, `240.240.0.0/16` and the `/32` of this location's DNS server), or auto-approve
+              them with `autoApprovers` in the tailnet policy file, and add that DNS server as a custom
+              nameserver restricted to `cpln.local`. Until then the gateway joins the tailnet but carries no
+              traffic to the GVC.
+            textExpression: >-
+              self.location != '' && self.location in self.locationDNS ?
+              'In the Tailscale admin console, approve the three routes the gateway advertises (`192.168.0.0/16`,
+              `240.240.0.0/16` and `' + self.locationDNS[self.location] + '/32`), or auto-approve them with
+              `autoApprovers` in the tailnet policy file, and add `' + self.locationDNS[self.location] +
+              '` as a custom nameserver restricted to `cpln.local`. Until then the gateway joins the tailnet but
+              carries no traffic to the GVC.' :
+              'In the Tailscale admin console, approve the three routes the gateway advertises
+              (`192.168.0.0/16`, `240.240.0.0/16` and the `/32` of the DNS server of the location),
+              or auto-approve them with `autoApprovers` in the tailnet policy file, and add that DNS server as a
+              custom nameserver restricted to `cpln.local`. Until then the gateway joins the tailnet but carries
+              no traffic to the GVC.'
+          - path: locationDNS
+            type: map
+            label: Location DNS servers
+            advanced: true
+            widget: kv
+            description: >-
+              The internal DNS server of each location. The entry of the chosen location becomes the advertised
+              `/32` route and the address for split DNS. Add an entry only when your location is missing.
+            docs: "#location-dns"
+            keys:
+              label: Location
+              pattern: '^[a-z0-9]+(-[a-z0-9]+)*$'
+            values:
+              type: string
+              pattern: '^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$'
+              patternMessage: Enter an IPv4 address, such as 172.20.0.10.
+        rules:
+          - rule: context.gvcLocations == null || self.location == '' || self.location in context.gvcLocations
+            paths: [location]
+            message: >-
+              This location is not one of the target GVC's locations. The platform accepts it without an error,
+              and the gateway would run nowhere. Choose one of the GVC's locations.
+          # cpln.yaml builds TS_ROUTES from `index .Values.locationDNS .Values.location`; a missing
+          # entry renders a bare `/32` route.
+          - rule: self.location == '' || self.location in self.locationDNS
+            paths: [location]
+            messageExpression: >-
+              'Location DNS servers has no entry for ' + self.location + ', so the gateway would advertise a bare
+              /32 route. Add the internal DNS server of ' + self.location + ' under Location DNS servers.'
+            message: >-
+              Location DNS servers has no entry for this location, so the gateway would advertise a bare /32
+              route. Add its internal DNS server under Location DNS servers.
+      - title: Tailnet device
+        fields:
+          - type: note
+            text: >-
+              `TS_HOSTNAME` below is the name the gateway shows on your tailnet. This version's default,
+              `cpln-test-new`, is a name left over from testing; set your own, and give each release its own.
+          - path: extraEnv
+            type: list
+            label: Environment variables
+            widget: table
+            uniqueBy: [name]
+            newItem: { name: "", value: "" }
+            itemLabel: "item.name"
+            description: >-
+              Extra environment variables for the Tailscale container. `TS_HOSTNAME` is the name the gateway
+              shows on your tailnet.
+            item:
+              type: object
+              label: Environment variable
+              fields:
+                - path: name
+                  type: string
+                  label: Name
+                  required: true
+                  pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+                  patternMessage: Use letters, digits and underscores, not starting with a digit.
+                - path: value
+                  type: string
+                  label: Value
+                  required: true
+              rules:
+                - rule: item.name == '' || !item.name.startsWith('CPLN_')
+                  paths: [name]
+                  message: Names starting with CPLN_ are reserved by the platform, which refuses the workload.
+                # cpln.yaml sets these itself; a second entry with the same name conflicts.
+                - rule: >-
+                    !(item.name in ['KUBERNETES_SERVICE_HOST', 'TS_ACCEPT_DNS', 'TS_AUTHKEY', 'TS_KUBE_SECRET',
+                    'TS_ROUTES', 'TS_USERSPACE'])
+                  paths: [name]
+                  messageExpression: >-
+                    'The chart already sets ' + item.name + ' for the gateway to work; a second entry with this
+                    name conflicts with it. Remove it.'
+                  message: The chart already sets this variable for the gateway to work. Remove it.
+                # cpln.yaml writes `value: {{ .value }}` unquoted: YAML then reads these as
+                # another type, cuts them at " #", or fails to parse the workload.
+                - rule: >-
+                    item.value == '' ||
+                    !item.value.matches('^(true|false|True|False|TRUE|FALSE|yes|no|Yes|No|YES|NO|on|off|On|Off|ON|OFF|y|n|Y|N|null|Null|NULL|~|[-+]?[0-9][0-9_]*|[-+]?([0-9_]*\\.[0-9_]+|[0-9_]+\\.[0-9_]*)([eE][-+]?[0-9]+)?|[-+]?[0-9]+(:[0-5]?[0-9])+|[-+]?\\.(inf|Inf|INF)|\\.(nan|NaN|NAN)|0x[0-9a-fA-F_]+|0o[0-7]+|0b[01_]+)$') &&
+                    !item.value.matches('(: |:$| #|^[\\[\\]{}&*!|>\\x27\\x22%@`,?#]|^- |^-$|^\\s|\\s$)')
+                  paths: [value]
+                  message: >-
+                    This chart version writes the value without quotes, so YAML would read it as a number, a
+                    boolean or null, cut it short, or fail to render the workload. Such values cannot be passed
+                    with this version.
+
+      - title: Access
+        fields:
+          - type: note
+            text: >-
+              Tailnet devices reach a workload at `WORKLOAD_NAME.GVC_NAME.cpln.local` only when its internal
+              firewall admits the gateway: Same GVC does, and with Specific workloads the list must include
+              `//gvc/GVC_NAME/workload/RELEASE_NAME` (in this version the gateway workload is named after the
+              release).
+            textExpression: >-
+              'Tailnet devices reach a workload at `WORKLOAD_NAME.' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '.cpln.local` only when its internal firewall admits the gateway: Same GVC does, and with Specific
+              workloads the list must include `//gvc/' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '/workload/' + context.releaseName + '` (in this version the gateway workload is named after the
+              release).'
+          - path: deployHttpbinExample
+            type: boolean
+            label: Deploy the httpbin example
+            description: >-
+              A small HTTP service that only the gateway may reach. Call it from a tailnet device to prove the
+              routes, split DNS and gateway work, then turn it off. In this version it is named `httpbin` in
+              every release, so only one release per GVC can deploy it.
+          - type: note
+            when: self.deployHttpbinExample
+            text: >-
+              Test the path from a tailnet device with `curl http://httpbin.GVC_NAME.cpln.local/headers`.
+            textExpression: >-
+              'Test the path from a tailnet device with `curl http://httpbin.' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '.cpln.local/headers`.'
+        rules:
+          # cpln.yaml names the gateway workload after the release and the example `httpbin`: a release named
+          # httpbin renders two workloads with the same name.
+          - rule: "!self.deployHttpbinExample || context.releaseName != 'httpbin'"
+            severity: warning
+            paths: [deployHttpbinExample]
+            message: >-
+              This version names the gateway workload after the release and the example workload httpbin, so a
+              release named httpbin renders two workloads with the same name. Choose another release name or
+              turn the example off.
+
+  - id: advanced
+    title: Advanced
+    description: The Tailscale image and the gateway's compute.
+    sections:
+      - title: Image and resources
+        fields:
+          - path: image.repository
+            type: string
+            label: Image repository
+            required: true
+            pattern: '^(//image/)?[a-z0-9]+([._/-][a-z0-9]+)*(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)*$'
+            patternMessage: Enter an image repository without a tag, such as tailscale/tailscale.
+          - path: image.tag
+            type: string
+            label: Image tag
+            required: true
+            description: >-
+              This version defaults to the floating `stable` tag. Another tag is unproven with this chart
+              version: after changing it, check that the gateway shows as connected on the Tailscale Machines
+              page.
+            pattern: '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'
+            patternMessage: Enter a tag of letters, digits, dots, dashes and underscores, such as stable.
+          - path: resources
+            type: resources
+            label: Gateway resources
+            required: true
+            description: A single replica in the chosen location.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: "!(self.image.tag in ['stable', 'latest'])"
+            severity: info
+            paths: [image.tag]
+            message: >-
+              This tag floats: two restarts can run different Tailscale builds. A version tag keeps every
+              restart on one build.
+
+migrations:
+  # 1.0.0 had no extraEnv and hard-coded TS_HOSTNAME=cpln-test; 1.1.0 added extraEnv with cpln-test-new.
+  - fromVersions: "<1.1.0"
+    to: extraEnv
+    valueExpr: "[{'name': 'TS_HOSTNAME', 'value': 'cpln-test'}]"
+    note: The gateway keeps the tailnet name cpln-test it had in 1.0.0.

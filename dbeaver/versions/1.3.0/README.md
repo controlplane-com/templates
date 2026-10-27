@@ -50,7 +50,13 @@ internalAccess:
   workloads: []               # used with workload-list, e.g. //gvc/GVC_NAME/workload/NAME
 ```
 
-`publicAccess.enabled: false` is the default because this is a database administration console: with it off, the UI is reachable only from inside the GVC. Turn it on only if you accept a login form on the public internet, and give the admin account a strong password first.
+`publicAccess.enabled: false` is the default because this is a database administration console. With it off, reach the UI through a tunnel. First run:
+
+1. Install with `publicAccess.enabled: false`.
+2. Run `cpln port-forward RELEASE_NAME-dbeaver 8978:8978 --gvc GVC_NAME`, open `http://localhost:8978` and sign in with the admin login.
+3. Only if you need it, upgrade the release with `publicAccess.enabled: true` and allow a few minutes for the firewall change.
+
+Turn it on only if you accept a login form on the public internet, and give the admin account a strong password first.
 
 ### Resources and storage
 
@@ -72,6 +78,13 @@ volumeset:
 | Admin credentials | `admin.name` (values) + the payload of your `admin.passwordSecretName` secret | The password is never stored in the Helm release. |
 
 Add database connections from the UI after logging in. Point them at in-GVC hosts using internal DNS, e.g. `WORKLOAD_NAME.GVC_NAME.cpln.local:5432`.
+
+## Upgrading from 1.2.1 or earlier
+
+- **The inline password is dropped.** `admin.password` no longer exists; create the opaque secret from Prerequisites and set `admin.passwordSecretName`.
+- **The chart's `RELEASE_NAME-dbeaver-admin-config` secret is deleted by the upgrade.** To reuse the current password, read it first with `cpln secret reveal RELEASE_NAME-dbeaver-admin-config -o yaml` (key `admin_password`), and give the new secret a different name.
+- **The login is kept from the original setup.** You still sign in with the old name and password (by default `adminusername` / `Password123`); keep the old `admin.name`, and if the password is still the published default, change it in the UI right after the upgrade.
+- **The console becomes private.** Earlier versions were always public; set `publicAccess.enabled: true` only if you still need the internet-facing address, otherwise use `cpln port-forward`.
 
 ## Important Notes
 

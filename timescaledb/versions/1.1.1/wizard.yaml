@@ -1,0 +1,642 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: TimescaleDB
+# One stateful replica on its own volume: every GVC location would run an independent copy.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: credentials
+    title: Credentials
+    description: The prerequisite secret with the database user, password and name.
+    fields:
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'install' ||
+          (context.fromVersion != null && semverCompare(context.fromVersion, '1.1.0') < 0)
+        text: >-
+          The credentials secret must exist **before** you install or upgrade. If it is missing, the
+          deployment waits on it and `cpln logs` shows nothing at all.
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '1.1.0') < 0
+        textExpression: >-
+          'Version 1.1.0 moved the database credentials out of the values and into the secret below. Before you
+          upgrade, read the credentials the database already uses, because the upgrade deletes or rewrites the
+          secret that holds them: `cpln secret reveal ' + context.releaseName + '-tsdb-config -o yaml` (keys
+          `username` and `password`). The database name is the `config.database` value of this release
+          (default `test`). Create the secret with those same three values: the database keeps the credentials
+          stored on its volume. 1.0.0 shipped the published defaults `username` and `password`, shared by every
+          install. If the reveal shows them, treat them as compromised: after the upgrade, change the password with
+          `ALTER ROLE`, then update the secret to match. See
+          [Upgrading From Earlier Versions](/template-catalog/templates/timescaledb#upgrading-from-earlier-versions).'
+        text: >-
+          Version 1.1.0 moved the database credentials out of the values and into the secret below. Before you
+          upgrade, read the credentials the database already uses, because the upgrade deletes or rewrites the
+          secret that holds them: `cpln secret reveal RELEASE_NAME-tsdb-config -o yaml` (keys `username` and
+          `password`). The database name is the `config.database` value of this release (default `test`). Create
+          the secret with those same three values: the database keeps the credentials stored on its volume. 1.0.0
+          shipped the published defaults `username` and `password`, shared by every install. If the reveal shows
+          them, treat them as compromised: after the upgrade, change the password with `ALTER ROLE`, then update
+          the secret to match. See
+          [Upgrading From Earlier Versions](/template-catalog/templates/timescaledb#upgrading-from-earlier-versions).
+      - path: config.credentialsSecretName
+        type: ref
+        label: Database credentials secret
+        required: true
+        description: >-
+          A dictionary secret with the keys `username`, `password` and `database`. TimescaleDB creates this user
+          and database on first boot, with the extension enabled in it; put this credential in your applications'
+          connection strings.
+        help: >-
+          TimescaleDB reads the credentials only when the volume is first initialized. To change the password
+          later, run `ALTER ROLE ... PASSWORD` inside the database, then update the secret to match. Create the
+          secret with:
+          `cpln secret create-dictionary --name SECRET_NAME --entry username=myuser --entry password='YOUR-STRONG-PASSWORD' --entry database=mydb`
+        docs: "#credentials"
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeys: [username, password, database]
+          create:
+            suggestName: "context.releaseName + '-timescaledb-credentials'"
+    rules:
+      # timescaledb.validate refuses the removed plaintext keys and an empty secret name.
+      - rule: "!has(self.config.username) && !has(self.config.password)"
+        mirrors: timescaledb.validate
+        paths: [config.credentialsSecretName]
+        message: >-
+          config.username and config.password were removed in 1.1.0. Put the credentials in a dictionary secret
+          with the keys username, password and database, and remove them from the values.
+      - rule: self.config.credentialsSecretName != null && self.config.credentialsSecretName != ''
+        mirrors: timescaledb.validate
+        paths: [config.credentialsSecretName]
+        message: The database credentials secret is required.
+      - when: context.releaseName != null
+        rule: self.config.credentialsSecretName != context.releaseName + '-tsdb-config'
+        severity: warning
+        paths: [config.credentialsSecretName]
+        messageExpression: >-
+          context.releaseName + '-tsdb-config is the name of the secret this chart creates for its backup settings,
+          so it rewrites or deletes that secret. Create a secret of your own with the keys username, password and
+          database, and choose that one.'
+        message: >-
+          That is the name of the secret this chart creates for its backup settings, so it rewrites or deletes that
+          secret. Create a secret of your own with the keys username, password and database, and choose that one.
+      - rule: >-
+          oldSelf == null || context.fromVersion == null || semverCompare(context.fromVersion, '1.1.0') < 0 ||
+          self.config.credentialsSecretName == oldSelf.config.credentialsSecretName
+        severity: info
+        paths: [config.credentialsSecretName]
+        message: >-
+          TimescaleDB reads the credentials only when the volume is first initialized; pointing at another secret
+          does not change the existing user, password or database. The new secret must keep the same username and
+          database; run ALTER ROLE first so its password matches, or PgBouncer, the backup job and every
+          application that reads this secret cannot sign in.
+
+  - id: server
+    title: Server
+    description: The TimescaleDB image and the compute of its single stateful replica.
+    fields:
+      - type: note
+        severity: warning
+        when: context.mode == 'upgrade'
+        text: >-
+          Every upgrade restarts the server. Nothing limits the rollout of a stateful workload, so plan a short
+          write outage.
+      - path: image
+        type: string
+        format: image
+        label: TimescaleDB image
+        required: true
+        description: >-
+          The `-pgNN` suffix of the tag is the PostgreSQL major version. Keep the default (Community) tag series:
+          the `-oss` tags leave out compression, continuous aggregates and retention policies.
+        help: >-
+          The data directory is specific to a PostgreSQL major version: a different major on an existing volume
+          does not start.
+        docs: "#image-and-resources"
+      - path: resources
+        type: resources
+        label: Resources
+        required: true
+        description: A single stateful replica.
+        help: >-
+          `timescaledb-tune` sizes the memory and worker settings from the maximum memory at first boot only,
+          while the volume is empty.
+        maxRatio: 4
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+    rules:
+      - rule: >-
+          oldSelf == null || !self.image.matches('-pg[0-9]+(-oss)?$') || !oldSelf.image.matches('-pg[0-9]+(-oss)?$') ||
+          self.image.split('-pg')[size(self.image.split('-pg')) - 1].split('-')[0] ==
+          oldSelf.image.split('-pg')[size(oldSelf.image.split('-pg')) - 1].split('-')[0]
+        severity: warning
+        paths: [image]
+        message: >-
+          The data directory belongs to the installed PostgreSQL major version; an image with a different -pgNN
+          suffix does not start on it. Upgrade with a dump and restore instead.
+      - rule: "!self.image.endsWith('-oss')"
+        severity: info
+        paths: [image]
+        message: >-
+          The -oss tags are Apache-only builds without compression, continuous aggregates and retention policies.
+      - rule: >-
+          oldSelf == null || memoryBytes(self.resources.maxMemory) == memoryBytes(oldSelf.resources.maxMemory)
+        severity: info
+        paths: [resources]
+        message: >-
+          timescaledb-tune sized the memory settings from the maximum memory when the volume was first initialized;
+          changing it now does not retune them. Change them with ALTER SYSTEM inside the database instead.
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds the data directory.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            help: >-
+              The data lives on the volume set and survives redeploys. Uninstalling the release deletes the volume
+              set; a final snapshot is kept for 7 days.
+            docs: "/reference/volumeset#capacity-and-billing"
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: volumeset.autoscaling.enabled
+        description: The volume set grows by the scaling factor whenever its free space falls below the threshold.
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
+            paths: [volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+    rules:
+      - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: backup
+    title: Backups
+    description: Scheduled database dumps to object storage.
+    sections:
+      - id: backup
+        title: Scheduled backups
+        toggle: backup.enabled
+        description: >-
+          A cron workload runs pg_dumpall on a schedule and uploads a gzipped SQL dump of every database and role to
+          an S3 bucket, a GCS bucket or an S3-compatible endpoint. The bucket and its access (a cloud account, for S3
+          also an IAM policy, or for MinIO an access key and secret key) must exist before you turn it on.
+        fields:
+          - path: backup.provider
+            type: enum
+            label: Destination
+            widget: cards
+            required: true
+            options:
+              - value: aws
+                label: AWS S3
+                description: Through an AWS cloud account and a bucket-scoped IAM policy.
+              - value: gcp
+                label: Google Cloud Storage
+                description: Through a GCP cloud account; no stored keys.
+              - value: minio
+                label: MinIO or S3-compatible
+                description: An S3 endpoint with an access key and secret key.
+          - path: backup.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+          - path: backup.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+            description: Tag 18.x.x for a -pg18 server image, 17.x.x for -pg17.
+          - path: backup.resources
+            type: resources
+            label: Backup job resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: self.backup.provider in ['aws', 'gcp', 'minio']
+            mirrors: timescaledb.validateBackupConfig
+            paths: [backup.provider]
+            message: Choose AWS S3, Google Cloud Storage or MinIO as the backup destination.
+          - rule: >-
+              !self.image.matches('-pg[0-9]+(-oss)?$') || imageMajor(self.backup.image) < 0 ||
+              imageMajor(self.backup.image) >=
+              int(self.image.split('-pg')[size(self.image.split('-pg')) - 1].split('-')[0])
+            severity: warning
+            paths: [backup.image]
+            message: >-
+              The backup image's major version must be at least the PostgreSQL major version of the server image
+              (the -pgNN suffix); an older pg_dumpall cannot dump a newer server.
+      - title: AWS S3
+        when: self.backup.enabled && self.backup.provider == 'aws'
+        docs: "#aws-s3"
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.1.1') < 0 && oldSelf != null &&
+              oldSelf.backup.enabled == true && oldSelf.backup.provider == 'aws'
+            text: >-
+              This version removes `aws::ReadOnlyAccess` from the backup identity. That managed policy granted read
+              access to every bucket in your AWS account and was silently supplying any read action your
+              bucket-scoped policy omitted. **Before you upgrade**, update your IAM policy to the full action list
+              under [AWS S3](/template-catalog/templates/timescaledb#aws-s3); if it already matches, no action is
+              needed.
+          - path: backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) for the AWS account that holds the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            help: >-
+              The policy needs the ten S3 actions listed under
+              [AWS S3](/template-catalog/templates/timescaledb#aws-s3), on the bucket and on its objects. The backup
+              identity carries only `cpln-connector` and this policy, so an action missing from it is missing for the
+              backup job.
+            pattern: '^[A-Za-z0-9+=,.@_-]+$'
+            patternMessage: "Enter the name of your IAM policy, using letters, digits and + = , . @ _ -."
+          - path: backup.aws.prefix
+            type: string
+            label: Folder prefix
+            required: true
+        rules:
+          - rule: >-
+              oldSelf != null && self.backup.aws.prefix == oldSelf.backup.aws.prefix ||
+              !self.backup.aws.prefix.startsWith('/')
+            severity: warning
+            paths: [backup.aws.prefix]
+            message: Leave out the leading / of the folder prefix.
+      - title: Google Cloud Storage
+        when: self.backup.enabled && self.backup.provider == 'gcp'
+        docs: "#gcs"
+        fields:
+          - path: backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
+          - path: backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the Storage Admin role.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            required: true
+        rules:
+          - rule: >-
+              oldSelf != null && self.backup.gcp.prefix == oldSelf.backup.gcp.prefix ||
+              !self.backup.gcp.prefix.startsWith('/')
+            severity: warning
+            paths: [backup.gcp.prefix]
+            message: Leave out the leading / of the folder prefix.
+      - title: MinIO or S3-compatible
+        when: self.backup.enabled && self.backup.provider == 'minio'
+        fields:
+          - type: note
+            severity: warning
+            textExpression: >-
+              'This version takes the MinIO access key and secret key as values: they are stored in the Helm release
+              and in the secret `' + (context.releaseName == null || context.releaseName == '' ? 'RELEASE_NAME' :
+              context.releaseName) + '-tsdb-config`, which the chart creates. 1.2.0 and later read them from a
+              dictionary secret you create instead.'
+            text: >-
+              This version takes the MinIO access key and secret key as values: they are stored in the Helm release
+              and in the secret `RELEASE_NAME-tsdb-config`, which the chart creates. 1.2.0 and later read them from
+              a dictionary secret you create instead.
+          - path: backup.minio.endpoint
+            type: string
+            format: url
+            label: S3 endpoint
+            required: true
+            example: true
+            placeholder: http://my-minio-workload.GVC_NAME.cpln.local:9000
+            description: The S3 API address including the port.
+          - path: backup.minio.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: backup.minio.accessKey
+            type: string
+            label: Access key
+            required: true
+            example: true
+            description: For the minio template, its admin user name.
+          - path: backup.minio.secretKey
+            type: string
+            label: Secret key
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            description: For the minio template, its admin password.
+          - path: backup.minio.prefix
+            type: string
+            label: Folder prefix
+            required: true
+        rules:
+          - rule: self.backup.minio.accessKey != null && self.backup.minio.accessKey != ''
+            mirrors: timescaledb.validateBackupConfig
+            paths: [backup.minio.accessKey]
+            message: The MinIO access key is required.
+          - rule: self.backup.minio.secretKey != null && self.backup.minio.secretKey != ''
+            mirrors: timescaledb.validateBackupConfig
+            paths: [backup.minio.secretKey]
+            message: The MinIO secret key is required.
+          - rule: >-
+              oldSelf != null && self.backup.minio.prefix == oldSelf.backup.minio.prefix ||
+              !self.backup.minio.prefix.startsWith('/')
+            severity: warning
+            paths: [backup.minio.prefix]
+            message: Leave out the leading / of the folder prefix.
+
+  - id: network
+    title: Network
+    description: Who can connect to the database, and an optional connection pooler.
+    sections:
+      - title: Internal access
+        docs: "#internal-access"
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: Firewall changes can take several minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          # Shown for every type once it holds entries: workload-timescaledb.yaml:63-65 and workload-pgbouncer.yaml:49-51
+          # write any non-empty list into inboundAllowWorkload, and the platform validates every entry, though it
+          # applies the workload links only with same-gvc and workload-list.
+          - path: internalAccess.workloads
+            when: self.internalAccess.type in ['same-gvc', 'workload-list'] || size(self.internalAccess.workloads) > 0
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: >-
+              Extra workloads allowed to connect, for example from another GVC. The platform applies the list with
+              Same GVC and Specific workloads.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internalAccess.type == 'same-gvc'
+      - title: Public access
+        docs: "#public-access"
+        fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Publish port 5432 to the internet
+            description: >-
+              A direct TCP load balancer on port 5432, open to every address. Connections are unencrypted: the image
+              ships no TLS certificates. Leave it off and connect from inside the GVC, or through `cpln port-forward`.
+            help: >-
+              Read the public address from `status.canonicalEndpoint` in
+              `cpln workload get RELEASE_NAME-timescaledb --gvc GVC_NAME -o yaml`. PgBouncer is not published.
+      - id: pgbouncer
+        title: Connection pooler (PgBouncer)
+        toggle: pgbouncer.enabled
+        description: >-
+          PgBouncer multiplexes many application connections into a small pool of database connections. When on, it
+          becomes the endpoint your applications connect to.
+        docs: "#pgbouncer"
+        fields:
+          - type: note
+            textExpression: >-
+              'Applications connect to ' + context.releaseName + '-pgbouncer.' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '.cpln.local:5432. PgBouncer uses the same
+              credentials secret and identity as TimescaleDB, and the same "Who can connect" setting for its own
+              firewall.'
+            text: >-
+              Applications connect to RELEASE_NAME-pgbouncer.GVC_NAME.cpln.local:5432. PgBouncer uses the same
+              credentials secret and identity as TimescaleDB, and the same "Who can connect" setting for its own
+              firewall.
+          - path: pgbouncer.poolMode
+            type: enum
+            label: Pool mode
+            widget: segmented
+            required: true
+            help: >-
+              **Transaction** holds a connection for one transaction: best for most web and API workloads, but not
+              compatible with `SET` variables, temporary tables or advisory locks. **Session** holds it for the whole
+              client session: compatible with everything, less reuse. **Statement** returns it after every
+              statement: transactions are not supported.
+            options:
+              - { value: session, label: Session }
+              - { value: transaction, label: Transaction }
+              - { value: statement, label: Statement }
+          - path: pgbouncer.defaultPoolSize
+            type: integer
+            label: Server connections per pool
+            min: 1
+            required: true
+            suggestions: [10, 25, 50, 100]
+          - path: pgbouncer.maxClientConn
+            type: integer
+            label: Max client connections
+            min: 1
+            required: true
+            suggestions: [100, 500, 1000, 5000]
+          - path: pgbouncer.replicas
+            type: integer
+            label: Replicas
+            min: 1
+            required: true
+            suggestions: [1, 2, 3]
+          - path: pgbouncer.image
+            type: string
+            format: image
+            label: PgBouncer image
+            required: true
+            advanced: true
+          - path: pgbouncer.resources
+            type: resources
+            label: PgBouncer resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: self.pgbouncer.defaultPoolSize <= self.pgbouncer.maxClientConn
+            severity: info
+            paths: [pgbouncer.defaultPoolSize]
+            message: The pool is larger than the number of client connections PgBouncer accepts.
+    rules:
+      - when: self.internalAccess.type == 'same-gvc' && context.gvc != null
+        rule: "!self.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+        severity: info
+        paths: [internalAccess.workloads]
+        messageExpression: >-
+          'Same GVC already allows every workload in this GVC: ' +
+          self.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+          ' can be removed from the list.'
+        message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+      - when: self.internalAccess.type == 'same-org'
+        rule: size(self.internalAccess.workloads) == 0
+        severity: info
+        paths: [internalAccess.workloads]
+        message: >-
+          Same org already lets every workload of the org connect, so the listed workloads add nothing.
+      - when: self.internalAccess.type == 'none'
+        rule: size(self.internalAccess.workloads) == 0
+        severity: warning
+        paths: [internalAccess.workloads]
+        message: >-
+          The chart still writes the listed workloads into its firewall, where the platform checks every entry,
+          but "None" lets none of them connect. Remove them.
+      - when: self.internalAccess.type == 'none'
+        rule: "!self.pgbouncer.enabled && !self.backup.enabled"
+        severity: warning
+        paths: [internalAccess.type]
+        messageExpression: >-
+          '"None" also blocks ' +
+          (self.pgbouncer.enabled && self.backup.enabled ? 'PgBouncer and the backup job' :
+          self.pgbouncer.enabled ? 'PgBouncer' : 'the backup job') +
+          (self.pgbouncer.enabled ? ', and PgBouncer applies it to its own clients too.' :
+          ', which connects to TimescaleDB like any other workload.')
+        message: >-
+          "None" also blocks the optional PgBouncer and backup job, which connect to TimescaleDB like any other
+          workload.
+      - when: self.internalAccess.type == 'workload-list'
+        rule: size(self.internalAccess.workloads) > 0 || self.publicAccess.enabled
+        severity: warning
+        paths: [internalAccess.workloads]
+        message: With "Specific workloads" and an empty list, no workload can connect.
+      - when: self.internalAccess.type == 'workload-list' && context.gvc != null
+        rule: >-
+          (!self.pgbouncer.enabled ||
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgbouncer') in self.internalAccess.workloads) &&
+          (!self.backup.enabled ||
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-timescaledb-backup') in self.internalAccess.workloads)
+        severity: warning
+        paths: [internalAccess.workloads]
+        messageExpression: >-
+          'The chart does not add its own workloads to the list. Add ' +
+          (self.pgbouncer.enabled ? '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgbouncer' : '') +
+          (self.pgbouncer.enabled && self.backup.enabled ? ' and ' : '') +
+          (self.backup.enabled ? '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-timescaledb-backup' : '') +
+          ', or they cannot connect.'
+        message: >-
+          The chart does not add its own workloads to the list; add the PgBouncer and backup workloads, or they
+          cannot connect.
+        fix:
+          path: internalAccess.workloads
+          items: >-
+            (self.pgbouncer.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgbouncer'] : []) +
+            (self.backup.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-timescaledb-backup'] : [])
+
+migrations:
+  # 1.1.0 moved the database credentials into a prerequisite secret.
+  - fromVersions: "<1.1.0"
+    from: config.username
+    note: >-
+      Credentials moved to a dictionary secret with the keys username, password and database; choose it under
+      Credentials. The database keeps the user stored on its volume, so the secret must hold this same username.
+  - fromVersions: "<1.1.0"
+    from: config.password
+    note: >-
+      Credentials moved to a dictionary secret with the keys username, password and database; choose it under
+      Credentials. The database keeps the password stored on its volume. 1.0.0 shipped the published default
+      password "password": if this value is that default, change it with ALTER ROLE after the upgrade, then update
+      the secret to match.
+  - fromVersions: "<1.1.0"
+    from: config.database
+    note: >-
+      Credentials moved to a dictionary secret with the keys username, password and database; choose it under
+      Credentials. Put this same database name (1.0.0 default: test) in the secret, where the TimescaleDB extension
+      already exists.

@@ -199,6 +199,7 @@ steps:
     fields:
       - type: note
         severity: warning
+        when: context.mode == 'install'
         text: >-
           The credentials secret must exist **before** you install. If it is missing, the deployment waits on
           it and `cpln logs` shows nothing at all; the reason is under `status.versions[].message` in
@@ -1196,9 +1197,17 @@ steps:
                   every restart. Leave it empty.
 
 rules:
+  # The one thing a user must do before an upgrade: shown in Review's advice, next to Upgrade (work item 5396).
+  - when: context.mode == 'upgrade'
+    rule: "false"
+    severity: info
+    message: >-
+      Stop writes before you upgrade. The upgrade restarts every member together, and writes acknowledged just
+      before the restart can be lost when the member promoted afterwards does not have them yet.
   # Workload names are limited to 49 characters; the longest workload suffix is -postgres-pgbouncer (19),
   # then -postgres-backup (16, logical backups), -postgres-proxy (15) and -postgres (9).
   - when: context.releaseName != null
+    paths: [pgbouncer.enabled, backup.mode, proxy.enabled]
     rule: >-
       size(context.releaseName) <= (self.pgbouncer.enabled ? 30 : (self.backup.enabled && self.backup.mode == 'logical') ? 33 : self.proxy.enabled ? 34 : 40)
     messageExpression: >-

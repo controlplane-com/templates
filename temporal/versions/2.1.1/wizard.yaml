@@ -454,6 +454,15 @@ steps:
             required: true
             min: 1
             suggestions: [3, 5]
+          - path: postgresHA.image
+            type: string
+            format: image
+            label: Patroni PostgreSQL image
+            required: true
+            advanced: true
+            help: >-
+              2.1.1 moves to patroni-postgres 0.8, with pgvector 0.8.7 (CVE-2026-103484). Tags 0.1 to 0.7 are
+              refused.
           - path: postgresHA.volumeset.capacity
             type: integer
             label: Initial capacity
@@ -463,6 +472,15 @@ steps:
             description: Per replica.
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
         rules:
+          - rule: >-
+              !(self.postgresHA.image.split(':')[0] in ['controlplanecorporation/patroni-postgres', 'docker.io/controlplanecorporation/patroni-postgres']) ||
+              size(self.postgresHA.image.split(':')) < 2 ||
+              !self.postgresHA.image.split(':')[1].matches('^0[.][0-7]([.][0-9]+)?$')
+            mirrors: temporal.validatePostgresHAImage
+            paths: [postgresHA.image]
+            message: >-
+              This image carries a pgvector older than 0.8.7, which is open to CVE-2026-103484: a database user who can
+              create an IVFFlat index can run arbitrary code. Use controlplanecorporation/patroni-postgres:0.8.
           - rule: oldSelf == null || self.postgresHA.volumeset.capacity >= oldSelf.postgresHA.volumeset.capacity
             paths: [postgresHA.volumeset.capacity]
             message: A volume set cannot shrink. Keep the capacity at or above the installed size.

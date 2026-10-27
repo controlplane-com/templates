@@ -2,7 +2,7 @@ apiVersion: v2
 name: temporal
 description: Temporal durable-execution server and Web UI on highly available PostgreSQL
 type: application
-version: 2.1.0
+version: 2.1.1
 appVersion: "1.32.1"
 
 dependencies:
@@ -21,5 +21,5 @@ dependencies:
 
 annotations:
   created: "2026-07-22"
-  lastModified: "2026-10-16"
+  lastModified: "2026-10-27"
   createsGvc: false

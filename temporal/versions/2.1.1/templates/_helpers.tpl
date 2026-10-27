@@ -171,6 +171,7 @@ byte-identical to the script source. Copied from pgedge.inlineScript.
 {{- include "temporal.validateUiAccess" . -}}
 {{- include "temporal.validateArchival" . -}}
 {{- include "temporal.validateDatabaseSecret" . -}}
+{{- include "temporal.validatePostgresHAImage" . -}}
 {{- if not (has .Values.internalAccess.type (list "none" "same-gvc" "same-org" "workload-list")) -}}
 {{- fail (printf "temporal: internalAccess.type must be 'none', 'same-gvc', 'same-org', or 'workload-list', got '%s'" .Values.internalAccess.type) -}}
 {{- end -}}
@@ -342,6 +343,26 @@ validators: each required value must be set when the feature is on.
 {{/*
 Common tags
 */}}
+{{/*
+Refuse controlplanecorporation/patroni-postgres 0.1-0.7 for the HA database: they carry a pgvector older
+than 0.8.7 (CVE-2026-103484). The bundled postgres-highly-available 2.7.0 defaults to 0.7, so 2.1.1 sets
+postgresHA.image to 0.8; a values file still pinning an older tag would otherwise keep the vulnerable
+image. Same matching as postgres-highly-available 2.8.1's pg-ha.validateImage: other registries, digests
+and non-version tags pass.
+*/}}
+{{- define "temporal.validatePostgresHAImage" -}}
+{{- if .Values.postgresHA.enabled -}}
+{{- $raw := .Values.postgresHA.image | default "" | toString -}}
+{{- $image := trimPrefix "docker.io/" $raw -}}
+{{- $prefix := "controlplanecorporation/patroni-postgres:" -}}
+{{- if hasPrefix $prefix $image -}}
+{{- if regexMatch "^0\\.[0-7](\\.[0-9]+)?$" (trimPrefix $prefix $image) -}}
+{{- fail (printf "temporal: postgresHA.image %s carries a pgvector older than 0.8.7, which is open to CVE-2026-103484 (a database user who can create an IVFFlat index can run arbitrary code). Set postgresHA.image to controlplanecorporation/patroni-postgres:0.8, or remove it from your values to use the chart default." $raw) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
 {{- define "temporal.tags" -}}
 {{- include "cpln-common.tags" . }}
 {{- end }}

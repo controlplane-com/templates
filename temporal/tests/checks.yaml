@@ -1,0 +1,97 @@
+# Feature checks for the temporal template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (pg_user,
+# pg_password, pg_db).
+#
+# Every check runs from the HA database's patroni-postgres container, which has curl, psql and python3,
+# and calls the Temporal server's HTTP API at its internal address, as an in-GVC client would. Temporal
+# keeps every workflow in PostgreSQL, so a started workflow that describes back proves the server, its
+# schema and its database all work. No worker is needed: a started workflow stays Running until
+# terminated. (Inside scripts, write $VAR rather than the braced form: the runner fills {name} placeholders.)
+checks:
+  - id: default-namespace-served
+    description: The server serves the `default` namespace over its HTTP API (schema current, namespace created).
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        curl -s -m 10 http://{release}-temporal.{gvc}.cpln.local:7243/api/v1/namespaces/default | python3 -c '
+        import json, sys
+        print("NAMESPACE " + json.load(sys.stdin)["namespaceInfo"]["name"])'
+    expect:
+      stdout: "^NAMESPACE default$"
+    retries: 10
+    retryDelaySeconds: 15
+
+  - id: start-and-describe-workflow
+    description: A workflow started with an id tagged with the running version describes back as Running.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        U=http://{release}-temporal.{gvc}.cpln.local:7243/api/v1/namespaces/default/workflows
+        V='{version}'
+        W="e2e-$(echo "$V" | tr . -)"
+        # A second start of the same id (a re-run or a no-op upgrade) is refused as already started; that is fine.
+        curl -s -m 15 -o /dev/null -H 'Content-Type: application/json' \
+          -d "{\"workflowId\":\"$W\",\"workflowType\":{\"name\":\"E2ECheck\"},\"taskQueue\":{\"name\":\"e2e\"}}" "$U/$W"
+        curl -s -m 15 "$U/$W" | python3 -c '
+        import json, sys
+        i = json.load(sys.stdin)["workflowExecutionInfo"]
+        print("WF " + i["execution"]["workflowId"] + " " + str(i["status"]))'
+    expect:
+      stdout: "^WF e2e-\\S+ \\S*RUNNING"
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: unknown-workflow-not-found
+    description: Describing a workflow that was never started is refused (the control for the check above).
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        curl -s -m 15 http://{release}-temporal.{gvc}.cpln.local:7243/api/v1/namespaces/default/workflows/e2e-never-started-$(date +%s)
+    expect:
+      stdout: "(?i)not ?found"
+      notStdout: "workflowExecutionInfo"
+
+  - id: data-survives-upgrade
+    description: >-
+      The workflow started on the version this scenario installed first still describes. On a fresh
+      install that is the same version; after an upgrade it proves the workflows carried over.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        V='{installed_version}'
+        W="e2e-$(echo "$V" | tr . -)"
+        curl -s -m 15 "http://{release}-temporal.{gvc}.cpln.local:7243/api/v1/namespaces/default/workflows/$W" | python3 -c '
+        import json, sys
+        i = json.load(sys.stdin)["workflowExecutionInfo"]
+        print("WF " + i["execution"]["workflowId"] + " " + str(i["status"]))'
+    expect:
+      stdout: "^WF e2e-\\S+ \\S*RUNNING"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: pgvector-0-8-7-available
+    description: The HA leader runs patroni-postgres 0.8, with pgvector 0.8.7 (CVE-2026-103484), from 2.1.1.
+    issue: "#5376"
+    since: 2.1.1
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "select 'AVAIL ' || default_version from pg_available_extensions where name = 'vector'" 2>&1
+    expect:
+      stdout: "^AVAIL 0\\.8\\.7$"
+    # After the upgrade the members restart one at a time; this runs long enough to reach the new leader.
+    retries: 8
+    retryDelaySeconds: 15

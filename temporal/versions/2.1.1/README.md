@@ -1,5 +1,8 @@
 # Temporal
 
+> **Upgrading from 2.1.0 or earlier:** the HA database moves to patroni-postgres 0.8 (pgvector 0.8.7) — see
+> [Upgrading from 2.1.0 or earlier](#upgrading-from-210-or-earlier).
+>
 > **Upgrading from 2.0.0:** the database credentials are now a secret you create before upgrading,
 > under a **new** name — see [Upgrading from 2.0.0](#upgrading-from-200).
 
@@ -123,6 +126,7 @@ Exactly one of the two databases must be enabled (the chart enforces this at ren
 ```yaml
 postgresHA: # default: highly available PostgreSQL
   enabled: true
+  image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7 (CVE-2026-103484); tags 0.1-0.7 are refused
   config:
     credentialsSecretName: my-temporal-db-credentials # PREREQUISITE dictionary secret (username, password, database=temporal) — must exist BEFORE install
   replicas: 3
@@ -184,6 +188,10 @@ postgres: # dev/lightweight: single-instance PostgreSQL
 - **Always use the full `.cpln.local` name** in worker and client configuration; short workload names do not resolve.
 - **Python workers must guard their entrypoint with `if __name__ == "__main__":`**: the Temporal Python SDK's workflow sandbox re-imports the worker module, and an unguarded module-level `main()` crashes the worker.
 - `cpln port-forward` suits curl-level checks; a browser through it can stop loading pages after some navigation. For browser use, list your address in `ui.allowedCIDRs`.
+
+## Upgrading from 2.1.0 or earlier
+
+2.1.1 moves the HA database to `controlplanecorporation/patroni-postgres:0.8`, which carries pgvector 0.8.7 (CVE-2026-103484). The upgrade restarts the Patroni members one at a time and the leader hands over, so Temporal can briefly reconnect to its database; existing data needs nothing. If you pinned `postgresHA.image`, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render. Temporal does not use the `vector` extension; if you created it yourself in a database, run `ALTER EXTENSION vector UPDATE;` there, which only updates the version `\dx` reports. Single-instance mode is unchanged.
 
 ## Upgrading from 2.0.0
 

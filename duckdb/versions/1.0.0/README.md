@@ -52,7 +52,7 @@ sql:
   secretName: "" # opaque secret (encoding plain, payload = SQL) used INSTEAD of inline, e.g. my-duckdb-script
 ```
 
-`secretName` wins when both are set, and the inline script secret is then not created at all. Use it for scripts that are too large for a values file or that you want to update without a `helm upgrade`:
+`secretName` wins when both are set, and the inline script secret is then not created at all. Use it for scripts that are too large for a values file or that you want to update without a `helm upgrade`. After you change the secret, run `cpln workload force-redeployment RELEASE_NAME-duckdb --gvc GVC_NAME`; until then every run keeps executing the old script:
 
 ```bash
 printf '%s' "SELECT 42 AS answer;" | cpln secret create-opaque --name my-duckdb-script --encoding plain -f -
@@ -208,6 +208,7 @@ This template exposes nothing to connect to — it is a job, not a server. Obser
 
 ## Important Notes
 
+- **Install into a single-location GVC.** A cron job runs in every location of its GVC, so each extra location runs the script again against the same `s3://` paths.
 - **This is a batch job, not a query service.** Nothing is listening after install; that is correct behavior. For an always-on SQL endpoint that BI tools connect to, use the `trino` template.
 - **A run succeeded only if `duckdb-job-complete` is in the log AND the run status is `Successful`** — check both, never either alone. DuckDB's CLI can exit 0 on some failed scripts ([upstream issue #16574](https://github.com/duckdb/duckdb/issues/16574)), and a run killed at its deadline can still print the marker on the way out.
 - **Never `SET memory_limit` higher than the container.** Change `tuning.memoryLimitPercent` instead — the template derives the real limit from `resources.maxMemory`, and DuckDB left to itself targets 80% of the *host* machine and gets OOM-killed.

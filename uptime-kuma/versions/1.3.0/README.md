@@ -12,7 +12,8 @@
 > **Upgrading from 1.2.0 or earlier:** the image moves to Uptime Kuma 2.5.8, which migrates the
 > SQLite database on its first start. Rolling back to the previous image afterwards is not
 > supported, so snapshot the volume set before upgrading
-> (`cpln volumeset snapshot create RELEASE_NAME-uptime-kuma-data --gvc GVC_NAME --snapshot-name NAME`). TCP Port monitors that checked TLS or
+> (`cpln volumeset snapshot create RELEASE_NAME-uptime-kuma-data --gvc GVC_NAME --snapshot-name NAME`) and wait until
+> `cpln volumeset snapshot get RELEASE_NAME-uptime-kuma-data --gvc GVC_NAME --snapshot-name NAME` shows `Completed`. TCP Port monitors that checked TLS or
 > STARTTLS become plain TCP checks. Values that pin an `image` older than 2.5.8 are refused at
 > render; set `image: louislam/uptime-kuma:2.5.8` or remove `image` from your values.
 
@@ -91,6 +92,7 @@ Monitors, notification providers, and status pages are all configured in the app
 ## Important Notes
 
 - **Create the admin account over `cpln port-forward` before you turn on public access** (see First run). Upstream has no way to preset credentials, so until you complete the setup wizard, anyone who can reach the dashboard can create the admin account. Once one account exists the wizard is permanently disabled.
+- **TCP Port monitors cannot detect a closed or unreachable external port** — outbound connections pass through the platform's sidecar, which completes the TCP handshake itself, so such a monitor stays UP. Watch external services with HTTP(s), keyword or DNS monitors instead; HTTP monitors do report a dead port as DOWN.
 - **No HA / multi-replica** — upstream supports exactly one instance (no clustering), so the workload is pinned to 1 replica. A restart means a brief monitoring gap; monitors resume automatically on boot, and all data survives on the volumeset.
 - **No cloud backups in this version** — durability is the persistent volume plus a 7-day final snapshot on uninstall. Uninstalling and reinstalling starts a fresh instance.
 - **Forgot the admin password?** `cpln workload exec RELEASE_NAME-uptime-kuma --gvc GVC_NAME --container uptime-kuma --stdin --tty -- npm run reset-password`, then enter the new password twice (upstream's documented recovery).

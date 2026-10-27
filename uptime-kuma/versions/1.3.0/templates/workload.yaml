@@ -29,9 +29,9 @@ spec:
         - path: /app/data
           recoveryPolicy: retain
           uri: cpln://volumeset/{{ include "uptime-kuma.volume.name" . }}
-      # Upstream's own healthcheck binary: healthy == exactly HTTP 302 on
-      # 127.0.0.1:3001/ (a 200 is a failure signal). Exec it rather than
-      # re-encoding that rule in an httpGet probe.
+      # Upstream's own healthcheck binary (extra/healthcheck) decides health
+      # against 127.0.0.1:3001. Exec it rather than re-encoding its rule in an
+      # httpGet probe, which would drift from upstream between versions.
       readinessProbe:
         exec:
           command:

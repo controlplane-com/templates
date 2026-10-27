@@ -1,0 +1,144 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: DBeaver CloudBeaver
+# One stateful replica on its own volume set and no location handling: every GVC location would run an
+# independent console with its own workspace.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: admin
+    title: Admin login
+    description: The admin login name and password CloudBeaver is set up with.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          This version always publishes the console and its login form to the internet, with no setting to turn
+          that off, and ships the published default login `adminusername` / `Password123`. Replace the password
+          with a strong one before installing, or install 1.3.0 or later, which is private by default and reads
+          the password from a secret you create. See
+          [Upgrading From 1.2.1 or Earlier](/template-catalog/templates/dbeaver#upgrading-from-1-2-1-or-earlier).
+      - type: note
+        severity: warning
+        text: >-
+          The password is a plain value: it is stored in the Helm release and in a secret the chart creates
+          (`RELEASE_NAME-dbeaver-admin-config`). Version 1.3.0 and later take it from a prerequisite secret
+          instead, so it never enters the release.
+      - type: note
+        severity: warning
+        text: >-
+          CloudBeaver logs the submitted password hash, and that hash is enough to log in. At its default log
+          level the hash appears in `cpln logs`, and the API accepts it in place of the password, so anyone who
+          can read this workload's logs can authenticate as the admin. This is upstream behaviour, not something
+          the chart sets; treat log access to this workload as equivalent to database access.
+      - path: admin.name
+        type: string
+        label: Admin login name
+        required: true
+        description: >-
+          Not sensitive. Like the password, it is applied only when the workspace is first initialized.
+      - path: admin.password
+        type: string
+        label: Admin password
+        widget: password
+        required: true
+        example: true
+        sensitive: true
+        description: >-
+          Whoever holds it can query every database the console is connected to, and the console is on the
+          internet, so use a strong password. Stored in the release values.
+        help: >-
+          CloudBeaver reads the password only when the workspace is first initialized. To change it later, use
+          the CloudBeaver UI (Settings, Administration, Users); changing this value alone changes nothing.
+        docs: "#changing-the-admin-password"
+    rules:
+      - when: oldSelf != null
+        rule: self.admin.password == oldSelf.admin.password
+        severity: info
+        paths: [admin.password]
+        message: >-
+          CloudBeaver reads the password only when the workspace is first initialized; changing it here does not
+          change the admin password. Change it in the CloudBeaver UI.
+      - when: oldSelf != null
+        rule: self.admin.name == oldSelf.admin.name
+        severity: info
+        paths: [admin.name]
+        message: >-
+          CloudBeaver reads the login name only when the workspace is first initialized; changing it here does
+          not rename the existing admin account.
+
+  - id: server
+    title: Server
+    description: Access, the CloudBeaver image, its compute, and the volume set that holds its workspace.
+    sections:
+      - title: Access
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              In this version the console is always on the internet: its inbound firewall is open to every
+              address, with no setting to close it. Read the public address from `status.canonicalEndpoint` in
+              `cpln workload get RELEASE_NAME-dbeaver --gvc GVC_NAME -o yaml`.
+          - type: note
+            severity: info
+            text: >-
+              No workload inside Control Plane can reach the console: its internal firewall allows none, with no
+              setting to change it. `cpln port-forward RELEASE_NAME-dbeaver 8978:8978 --gvc GVC_NAME` still reaches
+              the UI at `http://localhost:8978`.
+          - type: note
+            severity: info
+            text: >-
+              Egress is closed. The workload's outbound firewall is empty and this template has no setting to
+              open it, so CloudBeaver can only connect to databases inside its own GVC; external or managed
+              databases (RDS, Cloud SQL) are not reachable.
+      - fields:
+          - path: image
+            type: string
+            format: image
+            label: CloudBeaver image
+            required: true
+            help: >-
+              This version was published with `dbeaver/cloudbeaver:25.2.0`. Another tag is unproven with this
+              chart; check that it starts and that you can sign in before relying on it.
+            docs: "#image"
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            description: >-
+              One stateful replica. The chart's CPU autoscaling can start up to 3 replicas under sustained load,
+              each with its own empty workspace, so size it to keep one replica below its CPU limit.
+            docs: "#scaling-and-availability"
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+      - title: Storage
+        docs: "#resources-and-storage"
+        fields:
+          - type: note
+            severity: info
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.1.0') < 0
+            text: >-
+              Version 1.0.0 configured the volume set to grow on its own; later versions do not declare that and
+              set the capacity from Initial capacity instead.
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100]
+            description: >-
+              The workspace: server configuration, saved connections and users. Uninstalling the release deletes
+              the volume set and every saved connection with it.
+            help: >-
+              There are no scheduled snapshots; the only automatic one is taken when the volume set is deleted,
+              and kept for 7 days.
+        rules:
+          - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+            paths: [volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.

@@ -35,16 +35,25 @@ imports:
 steps:
   - id: umami
     title: Umami
-    description: The Umami image, its compute, the prerequisite app secret, and the tracker paths.
+    description: The Umami image, its compute, the prerequisite app secret, the optional two-factor key, and the tracker paths.
     sections:
       - title: Server
         docs: "#application"
         fields:
+          - type: note
+            severity: info
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.5.0') < 0
+            text: >-
+              This upgrade moves Umami to 3.4.1, which migrates the database on first start. Rolling back to the
+              previous version afterwards is not supported, so take a backup first if you need a way back.
           - path: image
             type: string
             format: image
             label: Umami image
             required: true
+            description: Tags of ghcr.io/umami-software/umami before 3.4.1 are refused; they carry Critical vulnerabilities.
           - path: resources
             type: resources
             label: Resources
@@ -65,6 +74,15 @@ steps:
             type: boolean
             label: Turn off Umami's anonymous usage telemetry
         rules:
+          - rule: >-
+              !self.image.startsWith('ghcr.io/umami-software/umami:') ||
+              !self.image.substring(size('ghcr.io/umami-software/umami:')).matches('^[0-9]+[.][0-9]+[.][0-9]+') ||
+              semverCompare(self.image.substring(size('ghcr.io/umami-software/umami:')).split('@')[0].split('-')[0], '3.4.1') >= 0
+            mirrors: umami.validateImage
+            paths: [image]
+            message: >-
+              Umami before 3.4.1 bundles a Next.js with Critical vulnerabilities, among them a remote code
+              execution. Use ghcr.io/umami-software/umami:3.4.1.
           - rule: "!has(self.resources.cpu) && !has(self.resources.memory)"
             mirrors: umami.validate
             paths: [resources]
@@ -107,6 +125,36 @@ steps:
             mirrors: umami.validate
             paths: [app.appSecretName]
             message: The app secret is required.
+      - title: Two-factor authentication
+        docs: "#prerequisites"
+        description: Lets users protect their login with an authenticator app. Optional; without the key, 2FA is unavailable.
+        fields:
+          - path: app.twoFactorKeySecretName
+            type: ref
+            label: Two-factor key secret
+            description: >-
+              An opaque secret (plain encoding) holding a 64-character hex key, from `openssl rand -hex 32`. It
+              encrypts each user's authenticator secret.
+            help: >-
+              Keep it for the life of the install; a different key breaks two-factor login for every enrolled user.
+              Added on an upgrade, the new version can wait a few minutes for access to the new secret.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                suggestName: "context.releaseName + '-umami-2fa-key'"
+                hint: openssl rand -hex 32
+        rules:
+          - when: oldSelf != null && has(oldSelf.app.twoFactorKeySecretName) && oldSelf.app.twoFactorKeySecretName != ''
+            rule: self.app.twoFactorKeySecretName == oldSelf.app.twoFactorKeySecretName
+            severity: info
+            paths: [app.twoFactorKeySecretName]
+            message: >-
+              Changing or removing the two-factor key breaks two-factor login for every enrolled user. Keep the
+              installed secret unless no one uses 2FA.
       - title: Tracker
         docs: "#tracker"
         description: Custom paths for the tracking script and the collect endpoint make ad blockers less likely to block them.

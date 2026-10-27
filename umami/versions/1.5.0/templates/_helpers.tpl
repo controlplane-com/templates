@@ -59,6 +59,7 @@ value that both sides read.
 {{/* Validation */}}
 
 {{- define "umami.validate" -}}
+{{- include "umami.validateImage" . -}}
 {{- include "umami.validateDatabaseSecret" . -}}
 {{- $replicas := int .Values.replicas -}}
 {{- if lt $replicas 1 -}}
@@ -84,6 +85,25 @@ value that both sides read.
 {{- end -}}
 {{- if not .Values.app.appSecretName -}}
 {{- fail "umami: app.appSecretName is required — the name of an opaque secret (encoding: plain) that must EXIST BEFORE INSTALL and hold the app secret. Create it with: printf '%s' \"$(openssl rand -base64 32)\" | cpln secret create-opaque --name my-umami-app-secret --encoding plain -f -" -}}
+{{- end -}}
+{{- end }}
+
+
+{{/*
+Refuse an upstream Umami tag older than 3.4.1. The Console wizard stores `image`
+in the release values, so a `helm upgrade -f` with values from an earlier
+install would otherwise keep a vulnerable image (3.2.0 carries Critical CVEs in
+Next.js, among them an RCE in next/og, fixed by 3.4.1). Other registries,
+digests and non-version tags pass.
+*/}}
+{{- define "umami.validateImage" -}}
+{{- $image := .Values.image | default "" | toString -}}
+{{- $prefix := "ghcr.io/umami-software/umami:" -}}
+{{- if hasPrefix $prefix $image -}}
+{{- $ver := regexFind "^[0-9]+\\.[0-9]+\\.[0-9]+" (trimPrefix $prefix $image) -}}
+{{- if and $ver (semverCompare "<3.4.1" $ver) -}}
+{{- fail (printf "umami: image %s is Umami %s, whose bundled Next.js has Critical vulnerabilities (among them a remote code execution in next/og) fixed in Umami 3.4.1. Set image to ghcr.io/umami-software/umami:3.4.1, or remove `image` from your values to use the chart default." $image $ver) -}}
+{{- end -}}
 {{- end -}}
 {{- end }}
 

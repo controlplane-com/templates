@@ -1,7 +1,8 @@
 # Umami
 
-> **Upgrading from 1.3.x:** the database credentials are now a secret you create before upgrading,
-> under a **new** name — see [Upgrading from 1.3.x](#upgrading-from-13x).
+> **Upgrading from 1.4.0:** Umami 3.4.1 fixes Critical vulnerabilities and migrates the database on first
+> start — see [Upgrading from 1.4.0](#upgrading-from-140). **From 1.3.x:** the database credentials are now a
+> secret you create before upgrading, under a **new** name — see [Upgrading from 1.3.x](#upgrading-from-13x).
 
 This app deploys [Umami](https://umami.is/) — a privacy-first, cookieless web and product analytics platform (a self-hosted Google Analytics alternative, MIT-licensed). It runs the stateless Umami v3 app tier backed by a PostgreSQL store, serving the analytics dashboard and the tracking endpoint on one port. The install is private by default; you publish it once the admin password is changed.
 
@@ -11,7 +12,7 @@ This app deploys [Umami](https://umami.is/) — a privacy-first, cookieless web 
 - **PostgreSQL (single-instance, default)**: The `postgres` template — the backing store for all users, websites, sessions, and events.
 - **PostgreSQL (HA, optional)**: The `postgres-highly-available` template instead — 3 Patroni replicas with automatic failover and an HAProxy leader endpoint, for a durable production store.
 - **Database credentials secret** (dictionary) — *not created by this template*; you create it before install. The bundled PostgreSQL initializes from it and Umami connects with it, in either store mode.
-- **Identity and policy**: A least-privilege policy granting the workload `reveal` on exactly two secrets — the app secret and the active database's credentials secret, both of which you create.
+- **Identity and policy**: A least-privilege policy granting the workload `reveal` on exactly the secrets you create — the app secret, the active database's credentials secret and, when set, the two-factor key.
 
 ## Prerequisites
 
@@ -38,6 +39,14 @@ Keep it for the life of the install — changing it logs every user out.
 
 **If either secret does not exist at install time the deployment wedges silently.** `cpln logs` returns zero lines — the container never starts, so there is nothing to log. The only diagnostic is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-umami --gvc GVC_NAME -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the missing secret and it recovers on its own, but Umami can take up to about 12 minutes to serve again — poll rather than giving up — or skip the wait with `cpln workload force-redeployment`.
 
+Optional, for two-factor authentication (`app.twoFactorKeySecretName`, opaque) — a 64-character hex key that encrypts users' TOTP secrets. Without it, two-factor setup in **Settings** reports that 2FA is not configured:
+
+```bash
+printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name my-umami-2fa-key --encoding plain -f -
+```
+
+Keep it for the life of the install — a different key breaks two-factor login for every enrolled user.
+
 Optional, only if you turn on backups: a cloud account + bucket (AWS/GCP), or — for `provider: minio` — a `dictionary` secret holding the S3-compatible endpoint's keys (see **Storage setup**).
 
 ## Configuration
@@ -45,7 +54,7 @@ Optional, only if you turn on backups: a cloud account + bucket (AWS/GCP), or �
 ### Application
 
 ```yaml
-image: ghcr.io/umami-software/umami:3.2.0
+image: ghcr.io/umami-software/umami:3.4.1   # versions before 3.4.1 are refused (Critical CVEs)
 
 replicas: 1            # 1 = proven single-instance; 2+ = always-on, zero-downtime restarts
 
@@ -61,6 +70,7 @@ app:
   # stable — changing it logs everyone out.
   appSecretName: my-umami-app-secret
   disableTelemetry: true  # opt out of Umami's anonymous usage telemetry
+  twoFactorKeySecretName: ""  # optional opaque secret holding the two-factor key; "" = 2FA unavailable
 ```
 
 ### Tracker
@@ -210,6 +220,12 @@ Then force-redeploy `RELEASE_NAME-umami`, which keeps the old password until it 
 ```bash
 pgx N curl -s -XPOST -d '{"force": true}' localhost:8008/reinitialize
 ```
+
+## Upgrading from 1.4.0
+
+- The image moves from Umami 3.2.0 to **3.4.1**, which fixes Critical vulnerabilities in its bundled Next.js. The chart refuses any `ghcr.io/umami-software/umami` tag below 3.4.1, so if your values pin `image`, set it to `ghcr.io/umami-software/umami:3.4.1` or remove it.
+- Umami migrates its database on first start (two-factor, session linking, annotations, API keys). Rolling back to 1.4.0 afterwards is not supported — take a backup first if you need a way back.
+- Two-factor authentication (new in Umami 3.3) needs the optional key secret — see [Prerequisites](#prerequisites). If you add it in the same upgrade, the new version can wait several minutes with `is not allowed to reveal the secret` in `get-deployments` while the new grant propagates; the previous version keeps serving.
 
 ## Upgrading from 1.3.x
 

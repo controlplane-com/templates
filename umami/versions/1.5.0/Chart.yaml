@@ -2,8 +2,8 @@ apiVersion: v2
 name: umami
 description: Umami privacy-first, cookieless web and product analytics with a PostgreSQL backing store
 type: application
-version: 1.4.0
-appVersion: "3.2.0"
+version: 1.5.0
+appVersion: "3.4.1"
 
 dependencies:
   - name: cpln-common
@@ -21,5 +21,5 @@ dependencies:
 
 annotations:
   created: "2026-07-27"
-  lastModified: "2026-10-15"
+  lastModified: "2026-10-27"
   createsGvc: false

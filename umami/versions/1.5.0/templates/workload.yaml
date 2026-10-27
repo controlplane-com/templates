@@ -35,6 +35,12 @@ spec:
                Helm release. */}}
         - name: APP_SECRET
           value: 'cpln://secret/{{ .Values.app.appSecretName }}.payload'
+        {{- if .Values.app.twoFactorKeySecretName }}
+        {{- /* Encrypts users' TOTP secrets (Umami 3.3.0+); without it two-factor
+               setup reports that 2FA is not configured. */}}
+        - name: TWO_FACTOR_ENCRYPTION_KEY
+          value: 'cpln://secret/{{ .Values.app.twoFactorKeySecretName }}.payload'
+        {{- end }}
         {{- if .Values.app.disableTelemetry }}
         - name: DISABLE_TELEMETRY
           value: "1"

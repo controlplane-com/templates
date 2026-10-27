@@ -1,4 +1,4 @@
-image: ghcr.io/umami-software/umami:3.2.0
+image: ghcr.io/umami-software/umami:3.4.1
 
 # Replica count for the stateless Umami app tier.
 # 1 = proven single-instance shape. 2+ = always-on scaled tier for
@@ -21,6 +21,10 @@ app:
   # be stable for the life of the install (changing it logs everyone out).
   appSecretName: my-umami-app-secret
   disableTelemetry: true # opt out of Umami's anonymous usage telemetry
+  # Optional opaque secret holding a 64-character hex key (`openssl rand -hex 32`) that encrypts
+  # two-factor (TOTP) secrets, e.g. my-umami-2fa-key. "" = two-factor authentication unavailable.
+  # Keep it stable: a different key breaks the 2FA of every enrolled user.
+  twoFactorKeySecretName: ""
 
 # ─── Tracker ──────────────────────────────────────────────────────────────────
 tracker:

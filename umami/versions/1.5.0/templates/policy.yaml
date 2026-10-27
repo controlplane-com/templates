@@ -9,7 +9,11 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "umami.identity.name" . }}
 targetKind: secret
 targetLinks:
-  # Prerequisite secrets the user creates — the app secret and the active
-  # backing store's database credentials — granted by name, nothing broader.
+  # Prerequisite secrets the user creates — the app secret, the active
+  # backing store's database credentials and, when set, the two-factor key —
+  # granted by name, nothing broader.
   - //secret/{{ .Values.app.appSecretName }}
   - //secret/{{ include "umami.db.secretName" . }}
+  {{- if .Values.app.twoFactorKeySecretName }}
+  - //secret/{{ .Values.app.twoFactorKeySecretName }}
+  {{- end }}

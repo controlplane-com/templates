@@ -40,10 +40,20 @@
   scale-down evicted one TiKV replica. 1.1.0's server readiness required EVERY store `Up`; the workload has no liveness probe, so
   the platform reuses readiness as liveness and restarted all servers in every location together. Reproduced here: one frozen
   store → all 6 servers restarted within 19 s, ~100 s with no SQL endpoint.
-- **The change:** server readiness = `curl localhost:10080/status` (the 2.1.0+ probe), `timeoutSeconds` 3 → 5. Nothing else, so
-  `kind: gvc` stays in the manifest and the upgrade prunes nothing. Measured 1.1.0 → 1.1.1 via CLI: every resource `Updated`,
-  nothing deleted, only the servers rolled (new before old), TiKV/PD start times unchanged, 0 failed queries. Then a 131 s frozen
-  store and an unplanned gcp TiKV restart: servers ready throughout, 0 failed queries (client in aws-us-east-1 only).
+- **The changes** (`kind: gvc` stays in the manifest, so the upgrade prunes nothing):
+  - server readiness = `curl localhost:10080/status` (the 2.1.0+ probe), `timeoutSeconds` 3 → 5. A 131 s frozen store and an
+    unplanned gcp TiKV restart: servers ready throughout, 0 failed queries (client in aws-us-east-1 only).
+  - **PD self-hairpin pin** (`127.0.0.1 $SELF_FQDN` in `/etc/hosts`, as 2.1.0+). On 1.1.0 a node scale-down evicted the FIRST
+    location's PD and it crash-looped `ErrEtcdMemberList … error reading server preface` (own FQDN resolved to the address that
+    reset it, checked from inside); the cluster ran on 2 of 3 PDs. Upgrading to 1.1.1 brought it back in ~30 s.
+  - `tidb.tags` → `cpln-common.tags` (new dependency): CI's validate-charts refuses to publish without `cpln/marketplace*`.
+- **Upgrade cost: every workload restarts once, ~3 min of write unavailability** (3 locations × 2 TiKV, 11 timed-out probes,
+  data intact). Adding `cpln/marketplace-template-version` rolls PD and TiKV; locations roll concurrently, so all 3 PDs restart
+  together (PD quorum gap < 30 s) and each round takes down one store per location — on 1.x's non-region-aware placement some
+  regions lose 2 of 3 copies. Two rounds at 2 TiKV/location. A probe-only build measured 0 failed queries, but
+  **customer releases that were ever force-redeployed carry `cpln/deployTimestamp`, which a `helm upgrade` strips (briefing
+  note below) — so PD/TiKV roll anyway** and the tags cost nothing extra. A change to a mounted startup secret alone does NOT
+  roll the workload (measured 5 min, hash tag unchanged).
 - **Its wizard blocks INSTALL** (a warning-severity root rule; error severity would fail lint on the defaults): 1.1.1 is an upgrade
   target only. `gvc.name` is immutable in it.
 - **1.1.0's fresh install is flaky:** 1 of 2 multi-location test installs bootstrapped with store `1` `Down` and two stores never

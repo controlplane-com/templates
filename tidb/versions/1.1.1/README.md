@@ -59,10 +59,15 @@ This template creates a GVC with a default name defined in the `values.yaml`. If
 
 ## Upgrading from 1.1.0
 
-1.1.1 changes only the TiDB server health check. In 1.1.0 every TiDB server was healthy only while every TiKV node was up, so losing one TiKV node (for example a node scale-down moving it) restarted every TiDB server in every location at once. In 1.1.1 each server checks only itself and keeps serving while a TiKV node is away.
+1.1.1 fixes two failures:
+
+- **TiDB server health check.** In 1.1.0 every TiDB server was healthy only while every TiKV node was up, so losing one TiKV node (for example a node scale-down moving it) restarted every TiDB server in every location at once. In 1.1.1 each server checks only itself and keeps serving while a TiKV node is away.
+- **PD restart in the first location.** In 1.1.0 the first PD member could fail to start again after a restart and keep restarting. 1.1.1 lets it start, and upgrading repairs a member that is already restarting.
+
+Before you upgrade:
 
 - Upgrade with the **same values** you installed 1.1.0 with. Do not change `gvc.name` or `gvc.locations`: the GVC belongs to this release.
-- Only the TiDB servers restart, and each location starts its new servers before stopping the old ones. PD and TiKV keep running.
+- **Every workload restarts once.** PD and TiKV restart in every location at the same time, so writes pause for a few minutes while they come back. Upgrade in a quiet period, with clients that retry.
 - **Do not `helm upgrade` this release to 2.x.** 2.x does not create a GVC, so an in-place upgrade tries to delete this one. To move to 2.x, follow *Migrating from 1.x* in the latest version's README.
 
 ### Supported External Services

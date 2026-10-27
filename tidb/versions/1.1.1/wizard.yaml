@@ -13,12 +13,13 @@ steps:
       - id: gvc
         fields:
           - type: note
-            severity: info
+            severity: warning
             when: context.mode == 'upgrade'
             text: >-
-              1.1.1 changes only the TiDB server health check: each server now checks itself instead of every
-              TiKV node, so losing one TiKV node no longer restarts every TiDB server at once. Keep every other
-              value as it is.
+              1.1.1 makes each TiDB server check only itself, so losing one TiKV node no longer restarts every
+              TiDB server at once, and lets the first PD member start again after a restart. Every workload
+              restarts once: PD and TiKV restart in every location at the same time, so writes pause for a few
+              minutes. Upgrade in a quiet period, with clients that retry, and keep every value as it is.
           - path: gvc.name
             type: string
             label: GVC name

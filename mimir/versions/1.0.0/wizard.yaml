@@ -1,0 +1,432 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Grafana Mimir
+# A stateful workload with no location handling: every GVC location would run its own Mimir, all
+# writing to the one bucket.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: storage
+    title: Object storage
+    description: The bucket that holds the metric blocks, and how Mimir reaches it.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && oldSelf != null &&
+              (self.storage.type != oldSelf.storage.type ||
+              (self.storage.type == 'aws' && self.storage.aws.bucket != oldSelf.storage.aws.bucket) ||
+              (self.storage.type == 'gcp' && self.storage.gcp.bucket != oldSelf.storage.gcp.bucket) ||
+              (self.storage.type == 'minio' && (self.storage.minio.bucket != oldSelf.storage.minio.bucket ||
+              self.storage.minio.endpoint != oldSelf.storage.minio.endpoint)))
+            text: >-
+              This points Mimir at another bucket. The metrics already stored in the old bucket are not
+              copied, so queries no longer see them. A switch
+              between AWS S3 and Google Cloud Storage leaves the previous cloud access on the identity; only a
+              reinstall removes it.
+            textExpression: >-
+              'This points Mimir at another bucket. The metrics already stored in the old bucket are not ' +
+              'copied, so queries no longer see them. A switch ' +
+              'between AWS S3 and Google Cloud Storage leaves the previous cloud access on the identity; only a ' +
+              'reinstall removes it.'
+          - path: storage.type
+            type: enum
+            label: Storage backend
+            widget: cards
+            required: true
+            description: >-
+              Metric blocks live in this bucket, not on the volume, so the bucket must exist before you
+              install. Reinstalling against the same bucket resumes with its data.
+            options:
+              - value: aws
+                label: AWS S3
+                description: Keyless, through a Control Plane cloud account and an AWS IAM policy.
+              - value: gcp
+                label: Google Cloud Storage
+                description: Keyless, through a Control Plane cloud account.
+              - value: minio
+                label: S3-compatible
+                description: MinIO, R2, Wasabi and others, with an access key pair.
+      - title: AWS S3
+        when: self.storage.type == 'aws'
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The bucket, the AWS cloud account and the IAM policy must exist **before** the release uses
+              them, on install or when you switch storage. See
+              [Prerequisites](/template-catalog/templates/mimir#prerequisites) for the steps.
+          - path: storage.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: storage.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+            description: The AWS region the bucket was created in; the S3 endpoint is built from it.
+          - path: storage.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) for the AWS account that holds the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: storage.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            help: >-
+              The policy needs `s3:ListBucket`, `s3:GetObject`, `s3:PutObject` and `s3:DeleteObject` on the
+              bucket and on its objects; [Prerequisites](/template-catalog/templates/mimir#prerequisites) has
+              the JSON. Enter the bare policy name, not its ARN.
+            pattern: '^[A-Za-z0-9+=,.@_-]+$'
+            patternMessage: "Enter the bare name of your IAM policy, using letters, digits and + = , . @ _ -."
+      - title: Google Cloud Storage
+        when: self.storage.type == 'gcp'
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The bucket and the GCP cloud account must exist **before** the release uses them, on install or
+              when you switch storage. See [Prerequisites](/template-catalog/templates/mimir#prerequisites)
+              for the steps.
+          - path: storage.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
+          - path: storage.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) for the project that holds the bucket. The
+              template grants the workload `roles/storage.objectAdmin` on that bucket only.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+      - title: S3-compatible
+        when: self.storage.type == 'minio'
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The bucket must exist **before** the release uses it, on install or when you switch storage.
+              In this version the access key pair is a plain value: it is stored in the Helm release and
+              written into the Mimir configuration secret. Version 1.2.0 and later take it from a secret you create
+              instead.
+          - path: storage.minio.endpoint
+            type: string
+            label: S3 endpoint
+            required: true
+            example: true
+            placeholder: WORKLOAD_NAME.GVC_NAME.cpln.local:9000
+            description: >-
+              The S3 API address as host and port, without `http://` or `https://`. For a server running in
+              Control Plane, use its fully qualified internal name.
+          - path: storage.minio.insecure
+            type: boolean
+            label: Plain HTTP endpoint
+            description: >-
+              On for an endpoint without TLS, such as a MinIO in this GVC. Turn it off for R2, Wasabi and
+              other HTTPS services.
+          - path: storage.minio.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: storage.minio.region
+            type: string
+            label: Region
+            placeholder: us-east-1
+          - path: storage.minio.accessKey
+            type: string
+            label: Access key
+            required: true
+            example: true
+            sensitive: true
+            description: An access key that can read and write the bucket.
+          - path: storage.minio.accessSecret
+            type: string
+            label: Secret key
+            required: true
+            example: true
+            sensitive: true
+            description: The secret key of that access key.
+        rules:
+          - rule: "!self.storage.minio.endpoint.contains('://')"
+            mirrors: mimir.validate
+            paths: [storage.minio.endpoint]
+            message: Enter the S3 endpoint as host:port, without http:// or https://. Use Plain HTTP endpoint for a server without TLS.
+          - rule: self.storage.minio.accessKey != null && self.storage.minio.accessKey != ''
+            mirrors: mimir.validate
+            paths: [storage.minio.accessKey]
+            message: The access key is required for S3-compatible storage.
+          - rule: self.storage.minio.accessSecret != null && self.storage.minio.accessSecret != ''
+            mirrors: mimir.validate
+            paths: [storage.minio.accessSecret]
+            message: The secret key is required for S3-compatible storage.
+
+  - id: server
+    title: Server
+    description: The Mimir image, its replicas and compute, and the volume each replica keeps.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade' && self.replicas == 1
+            text: >-
+              When an upgrade restarts Mimir, a single replica interrupts ingest and queries for about a
+              minute. Prometheus remote write clients buffer and retry through it.
+          - path: image
+            type: string
+            format: image
+            label: Mimir image
+            required: true
+          - path: replicas
+            type: integer
+            label: Replicas
+            min: 1
+            required: true
+            suggestions: [1, 3, 5]
+            description: >-
+              One runs a single instance. Three or more form a cluster that replicates every write three
+              ways, so pushes and queries continue through a replica loss or a rolling restart.
+            docs: "#scaling-and-availability"
+          # 1.0.0 names the limits cpu and memory next to minCpu and minMemory, a shape the resources
+          # field type does not detect, so the four keys are bound one by one.
+          - type: note
+            severity: info
+            text: Resources are per replica. Memory bounds how many active series Mimir can ingest.
+          - path: resources.minCpu
+            type: quantity
+            quantity: cpu
+            label: Minimum CPU
+            required: true
+            min: 25m
+          - path: resources.cpu
+            type: quantity
+            quantity: cpu
+            label: Maximum CPU
+            required: true
+            min: 25m
+          - path: resources.minMemory
+            type: quantity
+            quantity: memory
+            label: Minimum memory
+            required: true
+            min: 32Mi
+          - path: resources.memory
+            type: quantity
+            quantity: memory
+            label: Maximum memory
+            required: true
+            min: 32Mi
+      - title: Volume
+        docs: "#volume-set"
+        fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250]
+            description: >-
+              Per replica, for the ingester write-ahead log and the compactor's workspace. The metric blocks
+              themselves live in the bucket. Can be raised later, never lowered.
+    rules:
+      - rule: self.replicas == 1 || self.replicas >= 3
+        mirrors: mimir.validate
+        paths: [replicas]
+        message: Set the replicas to 1, or to 3 or more. Two replicas have no failure tolerance under three-way replication.
+      - rule: cpuMillicores(self.resources.cpu) >= cpuMillicores(self.resources.minCpu)
+        paths: [resources.cpu]
+        message: Set the maximum CPU at or above the minimum CPU.
+      - rule: memoryBytes(self.resources.memory) >= memoryBytes(self.resources.minMemory)
+        paths: [resources.memory]
+        message: Set the maximum memory at or above the minimum memory.
+      # Mimir is a stateful workload; the platform rejects a cpu:minCpu ratio above 4:1 (CLAUDE.md limits table).
+      # The memory cap mirrors the resources field's maxRatio; it is not measured, hence a warning.
+      - rule: cpuMillicores(self.resources.cpu) <= 4 * cpuMillicores(self.resources.minCpu)
+        paths: [resources.cpu]
+        message: Mimir is a stateful workload, where the maximum CPU can be at most 4 times the minimum. Raise the minimum or lower the maximum.
+      - rule: memoryBytes(self.resources.memory) <= 4 * memoryBytes(self.resources.minMemory)
+        severity: warning
+        paths: [resources.memory]
+        message: The maximum memory can be at most 4 times the minimum. Raise the minimum or lower the maximum.
+      - when: oldSelf != null && oldSelf.replicas == 1 && self.replicas >= 3
+        rule: "false"
+        severity: info
+        paths: [replicas]
+        message: >-
+          After a live scale-up from 1 replica, metrics written shortly before it can be missing from some
+          query results for up to about 12 hours. No data is lost and new writes are unaffected; scale up at a
+          quiet time if that matters.
+      - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volumes.
+
+  - id: data
+    title: Tenancy and retention
+    description: Whether clients name a tenant on every request, and how long metric blocks are kept.
+    sections:
+      - fields:
+          - type: note
+            severity: info
+            when: >-
+              context.mode == 'upgrade' && oldSelf != null &&
+              (self.multitenancy.enabled != oldSelf.multitenancy.enabled ||
+              self.retention.period != oldSelf.retention.period)
+            text: >-
+              The replicas restart to apply this change; with one replica, ingest and queries pause briefly
+              while it comes back.
+      - title: Tenancy
+        docs: "#tenancy"
+        fields:
+          - path: multitenancy.enabled
+            type: boolean
+            label: Require a tenant on every request
+            description: >-
+              Every push and query must then send the header `X-Scope-OrgID: <tenant>`, and requests without it
+              are rejected. Tenants need no provisioning. The header separates tenants; it does not
+              authenticate anyone.
+        rules:
+          - when: oldSelf != null && !oldSelf.multitenancy.enabled && self.multitenancy.enabled
+            rule: "false"
+            severity: info
+            paths: [multitenancy.enabled]
+            message: >-
+              Add the X-Scope-OrgID header to every collector's remote write configuration and to every
+              Grafana data source first; once this takes effect, their requests without it are rejected.
+      - title: Retention
+        docs: "#retention"
+        fields:
+          - path: retention.period
+            type: string
+            label: Keep metric blocks for
+            required: true
+            suggestions: ["0", 30d, 90d, 13w, 1y]
+            description: >-
+              `0` keeps data forever. The compactor enforces it, so a shorter period also deletes existing
+              blocks that are older.
+            pattern: '^(0|[0-9]+(ms|s|m|h|d|w|y))$'
+            patternMessage: Enter 0, or a number with one unit such as 30d, 13w or 1y.
+        rules:
+          - when: oldSelf != null && self.retention.period != oldSelf.retention.period
+            rule: "false"
+            severity: info
+            paths: [retention.period]
+            message: >-
+              The new retention applies to the blocks already in the bucket too: a shorter period deletes the
+              older ones.
+
+  - id: network
+    title: Network
+    description: Which workloads can push metrics to Mimir and query it.
+    sections:
+      - title: Access
+        docs: "#internal-access"
+        fields:
+          - type: note
+            severity: info
+            text: >-
+              Collectors push to `http://RELEASE_NAME-mimir.GVC_NAME.cpln.local:8080/api/v1/push`, and PromQL
+              clients such as Grafana query `http://RELEASE_NAME-mimir.GVC_NAME.cpln.local:8080/prometheus`.
+            textExpression: >-
+              'Collectors push to `http://' + context.releaseName + '-mimir.' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '.cpln.local:8080/api/v1/push`, and PromQL ' +
+              'clients such as Grafana query `http://' + context.releaseName + '-mimir.' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '.cpln.local:8080/prometheus`.'
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: >-
+              Mimir has no authentication of its own, so this template never publishes it to the internet.
+              Access changes take a few minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          # The chart writes inboundAllowWorkload only with workload-list (workload.yaml).
+          - path: internalAccess.workloads
+            when: self.internalAccess.type == 'workload-list'
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: >-
+              The only workloads allowed to connect, including this release's own Mimir workload when it runs
+              more than one replica (the replicas reach each other through it).
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+    rules:
+      - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+        mirrors: mimir.validate
+        paths: [internalAccess.type]
+        message: Choose None, Same GVC, Same org or Specific workloads.
+      - when: self.internalAccess.type == 'workload-list'
+        rule: size(self.internalAccess.workloads) > 0
+        severity: warning
+        paths: [internalAccess.workloads]
+        message: List at least one workload when Mimir is open to specific workloads, or none can connect.
+      # Same mechanism as weaviate 1.1.1 (measured 2026-10-23): replicas of one workload reach each other
+      # through its own firewall, which workload-list without the workload itself closes. Mimir 3+ replicas
+      # join through RELEASE-mimir.GVC.cpln.local:7946 (_helpers.tpl memberlist.join_members).
+      - when: self.internalAccess.type == 'workload-list' && context.gvc != null && self.replicas > 1
+        rule: >-
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mimir') in self.internalAccess.workloads
+        severity: warning
+        paths: [internalAccess.workloads]
+        messageExpression: >-
+          'The Mimir replicas reach each other through their own workload, and the chart does not add it to the list. Add //gvc/' +
+          context.gvc + '/workload/' + context.releaseName + '-mimir, or the replicas cannot form one cluster.'
+        message: >-
+          The Mimir replicas reach each other through their own workload, and the chart does not add it to the
+          list. Add this release's Mimir workload, or the replicas cannot form one cluster.
+        fix:
+          path: internalAccess.workloads
+          items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mimir']"
+      - when: self.internalAccess.type == 'none'
+        rule: "false"
+        severity: info
+        paths: [internalAccess.type]
+        messageExpression: >-
+          'With None, no collector can push metrics and no client can query them.' +
+          (self.replicas > 1 ? ' The replicas also reach each other through their own workload, which None may close: ' +
+          'to limit access with more than one replica, prefer Specific workloads with the Mimir workload of this release in the list.' : '')
+        message: With None, no collector can push metrics and no client can query them.
+

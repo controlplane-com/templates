@@ -67,7 +67,7 @@ Set the `credentialsSecretName` of the database mode you use to that name — `p
 ### n8n
 
 ```yaml
-image: n8nio/n8n:2.29.8
+image: n8nio/n8n:2.45.4
 
 resources:
   minCpu: 250m
@@ -228,6 +228,7 @@ pgx N curl -s -XPOST -d '{"force": true}' localhost:8008/reinitialize
 - **Rotating any prerequisite secret needs a forced redeployment** (`cpln workload force-redeployment`) — a running workload keeps the values it started with.
 - **The n8n main instance is single-replica by upstream design** — the default HA Postgres backend removes the database as a failure point.
 - **Upgrades restart the single replica** — expect roughly a minute of editor/webhook downtime per `helm upgrade`; the first upgrade after an install also re-applies the bundled database, which can add a couple of minutes.
+- **Upgrading from 1.4.0**: n8n moves from 2.29.8 to 2.45.4 and migrates its database on the first start. Rolling back to 1.4.0 is not supported, so back up the database first. Schedule Triggers set to "every N seconds/minutes" now run N apart from when the workflow was activated, instead of on clock boundaries.
 - **Upgrading from 1.2.0 (HA mode)**: `postgresHA.postgres.username/password/database` were removed. Put those values, **unchanged**, into the database credentials secret (Prerequisites) and name it in `postgresHA.config.credentialsSecretName`. `postgresHA.backup.minio.accessKey`/`secretKey` were replaced by `postgresHA.backup.minio.credentialsSecretName` (see Backup storage setup).
 - **Upgrading from 1.1.0**: `postgres.config.username/password/database` were removed. Put those values, **unchanged**, into the database credentials secret (Prerequisites) and name it in `postgres.config.credentialsSecretName`. `postgres.backup.minio.accessKey`/`secretKey` were removed the same way (see Backup storage setup).
 - **Upgrading from 1.0.x**: `owner.email` and `owner.password` were removed, and the render fails naming the replacement if either is still set. Put the email and a bcrypt hash of **the password you use today** into the prerequisite dictionary secret — the owner is re-applied from it at the next start, so a different password there silently becomes the new login.

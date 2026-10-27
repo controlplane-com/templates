@@ -10,7 +10,7 @@ spec:
   containers:
     - name: n8n
       image: {{ .Values.image }}
-      # Public URLs (WEBHOOK_URL etc.) must be process env at n8n start and the
+      # Public URLs (N8N_WEBHOOK_URL etc.) must be process env at n8n start and the
       # canonical endpoint is only known at runtime, so boot goes through the
       # mounted start script instead of the image entrypoint.
       command: /bin/sh

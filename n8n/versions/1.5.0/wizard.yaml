@@ -44,11 +44,29 @@ steps:
             text: >-
               Every upgrade restarts the single n8n replica, so the editor and webhooks are down for about a
               minute.
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.5.0') < 0
+            text: >-
+              This upgrade moves n8n from 2.29.8 to 2.45.4, which migrates the database on its first start. Rolling
+              back to an earlier chart version is not supported, so back up the database first. Schedule Triggers
+              set to "every N seconds/minutes" then run N apart from when the workflow was activated, instead of on
+              clock boundaries.
           - path: image
             type: string
             format: image
             label: n8n image
             required: true
+            rules:
+              - rule: >-
+                  !(self.image.split(':')[0] in ['n8nio/n8n', 'docker.io/n8nio/n8n']) ||
+                  size(self.image.split(':')) < 2 ||
+                  !self.image.split(':')[1].matches('^[0-9]+[.][0-9]+[.][0-9]+') ||
+                  semverCompare(self.image.split(':')[1].split('@')[0].split('-')[0], '2.45.4') >= 0
+                mirrors: n8n.validateImage
+                message: >-
+                  n8n before 2.45.4 carries Critical CVEs, including vm2 sandbox escapes (CVE-2026-100721,
+                  CVE-2026-47686, CVE-2026-47698). Use n8nio/n8n:2.45.4.
           - path: resources
             type: resources
             label: Resources

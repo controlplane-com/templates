@@ -84,6 +84,7 @@ Both hold the same three keys — username, password, database.
 
 {{- define "n8n.validate" -}}
 {{- include "n8n.validateRemovedKeys" . -}}
+{{- include "n8n.validateImage" . -}}
 {{- if not .Values.encryptionKey.secretName -}}
 {{- fail "n8n: encryptionKey.secretName is required — the name of a pre-created opaque secret (encoding: plain) holding the credential-encryption key" -}}
 {{- end -}}
@@ -101,6 +102,26 @@ Both hold the same three keys — username, password, database.
 {{- end -}}
 {{- if and .Values.postgresHA.enabled (not (dig "proxy" "enabled" true .Values.postgresHA)) -}}
 {{- fail "n8n: postgresHA.proxy.enabled must remain true — the HAProxy leader endpoint is n8n's stable database endpoint" -}}
+{{- end -}}
+{{- end }}
+
+
+{{/*
+Validate the image - refuse an official n8nio/n8n tag older than 2.45.4 (every
+1.x tag, and 2.x before 2.45.4). Those tags carry Critical CVEs, including vm2
+sandbox escapes (CVE-2026-100721, CVE-2026-47686, CVE-2026-47698). Values stored
+by an earlier install (the wizard stores image) would otherwise keep the old tag
+through a helm upgrade -f. 3.x, digests, other registries and non-version tags pass.
+*/}}
+{{- define "n8n.validateImage" -}}
+{{- $raw := .Values.image | default "" | toString -}}
+{{- $image := trimPrefix "docker.io/" $raw -}}
+{{- $prefix := "n8nio/n8n:" -}}
+{{- if hasPrefix $prefix $image -}}
+{{- $ver := regexFind "^[0-9]+\\.[0-9]+\\.[0-9]+" (trimPrefix $prefix $image) -}}
+{{- if and $ver (semverCompare "<2.45.4" $ver) -}}
+{{- fail (printf "n8n: image %s is n8n %s, which carries Critical CVEs (vm2 sandbox escapes CVE-2026-100721, CVE-2026-47686 and CVE-2026-47698, among others). Set image to n8nio/n8n:2.45.4, or remove `image` from your values to use the chart default." $raw $ver) -}}
+{{- end -}}
 {{- end -}}
 {{- end }}
 

@@ -103,6 +103,7 @@ steps:
         help: >-
           Postgres reads these values only when its data directory is first initialized. To
           rotate the password later, run `ALTER ROLE ... PASSWORD` and then update the secret.
+          The username and database must not contain spaces, or the readiness probe never passes.
         docs: "#credentials"
         ref:
           kind: secret
@@ -407,6 +408,8 @@ steps:
           - path: backup.aws.prefix
             type: string
             label: Folder prefix
+            required: true
+            description: The backup job stops with an error when the prefix is empty.
             pattern: "^(?!/)"
             patternMessage: Leave out the leading /.
       - title: Google Cloud Storage
@@ -435,6 +438,8 @@ steps:
           - path: backup.gcp.prefix
             type: string
             label: Folder prefix
+            required: true
+            description: The backup job stops with an error when the prefix is empty.
             pattern: "^(?!/)"
             patternMessage: Leave out the leading /.
       - title: MinIO or S3-compatible
@@ -452,7 +457,7 @@ steps:
             label: S3 endpoint
             required: true
             example: true
-            placeholder: http://my-minio-workload:9000
+            placeholder: http://my-minio-workload.GVC_NAME.cpln.local:9000
             description: The URL including the port.
           - path: backup.minio.bucket
             type: string
@@ -474,6 +479,8 @@ steps:
           - path: backup.minio.prefix
             type: string
             label: Folder prefix
+            required: true
+            description: The backup job stops with an error when the prefix is empty.
             pattern: "^(?!/)"
             patternMessage: Leave out the leading /.
         rules:
@@ -483,6 +490,10 @@ steps:
             message: >-
               backup.minio.accessKey and backup.minio.secretKey were removed in 3.4.0. Put them in
               a dictionary secret and remove them from the values.
+          - rule: "!(self.backup.enabled && self.backup.provider == 'minio' && self.backup.image.startsWith('controlplanecorporation/'))"
+            severity: warning
+            paths: [backup.image]
+            message: MinIO needs ghcr.io/controlplane-com/backup-images/postgres-backup; this image has no MinIO support.
     rules:
       - rule: "!self.backup.enabled || imageMajor(self.image) < 0 || imageMajor(self.image) >= 17"
         severity: warning
@@ -550,6 +561,21 @@ migrations:
     to: resources.maxMemory
     valueExpr: self.resources.memory
     note: The single memory value is now the maximum; the minimum is a new setting, and the maximum can be at most 4 times it.
+  # The new minimums (200m, 128Mi) would leave the carried maximums (500m, 1024Mi by default) above the
+  # 4:1 stateful ratio: raise each minimum to a quarter of its maximum when needed, and to the maximum
+  # itself when the maximum is below the new minimum.
+  - fromVersions: "<2.2.0"
+    to: resources.minCpu
+    valueExpr: >-
+      cpuMillicores(self.resources.cpu) < 200 ? string(cpuMillicores(self.resources.cpu)) + 'm' :
+      cpuMillicores(self.resources.cpu) > 800 ? string((cpuMillicores(self.resources.cpu) + 3) / 4) + 'm' : '200m'
+    note: The minimum CPU is set so the maximum stays within 4 times it.
+  - fromVersions: "<2.2.0"
+    to: resources.minMemory
+    valueExpr: >-
+      memoryBytes(self.resources.memory) < 134217728 ? string(memoryBytes(self.resources.memory)) :
+      memoryBytes(self.resources.memory) > 536870912 ? string((memoryBytes(self.resources.memory) + 4194303) / 4194304) + 'Mi' : '128Mi'
+    note: The minimum memory is set so the maximum stays within 4 times it.
   - fromVersions: ">=2.2.0 <3.1.0"
     to: backup.provider
     valueExpr: "self.backup.gcp.enabled && !self.backup.aws.enabled ? 'gcp' : 'aws'"

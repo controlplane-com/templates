@@ -1,0 +1,179 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: PostgreSQL
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: server
+    title: Server
+    description: The compute of the single stateful Postgres replica.
+    fields:
+      - type: note
+        severity: warning
+        when: context.mode == 'upgrade'
+        text: >-
+          Every upgrade restarts the server. Nothing limits the rollout of a stateful workload,
+          so plan a short write outage.
+      - type: note
+        text: >-
+          This version runs the image `postgres:17` and lets any workload in this GVC connect on
+          port 5432; it has no setting for either. 3.0.0 and later add both.
+      - path: resources
+        type: resources
+        label: Resources
+        required: true
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+
+  - id: credentials
+    title: Credentials
+    description: The database user, password and name Postgres creates on first start.
+    fields:
+      - type: note
+        severity: warning
+        textExpression: >-
+          'This version takes the database credentials as values: they are stored in the Helm release
+          and in the secret `' +
+          (context.releaseName == null || context.releaseName == '' ? 'RELEASE_NAME' : context.releaseName) +
+          '-pg-config`, which the chart creates. 3.4.0 and later read them from a dictionary secret you create instead.'
+        text: >-
+          This version takes the database credentials as values: they are stored in the Helm release
+          and in the secret `RELEASE_NAME-pg-config`, which the chart creates. 3.4.0 and later read
+          them from a dictionary secret you create instead.
+      - path: config.username
+        type: string
+        label: Username
+        required: true
+        immutable: Postgres creates the user once, when the data directory is first initialized.
+      - path: config.password
+        type: string
+        label: Password
+        required: true
+        sensitive: true
+        widget: password
+        example: true
+        help: >-
+          Postgres reads the password only when its data directory is first initialized. To
+          change it later, run `ALTER ROLE ... PASSWORD` first and then set the same value here.
+      - path: config.database
+        type: string
+        label: Database name
+        required: true
+        immutable: Postgres creates the database once, when the data directory is first initialized.
+    rules:
+      - when: oldSelf == null || self.config.username != oldSelf.config.username
+        rule: >-
+          !self.config.username.matches('^\\s') && !self.config.username.matches('^[!&*%@`"\\[\\]{}|>,#]') && !self.config.username.startsWith("'") &&
+          !self.config.username.matches('^[-?:](\\s|$)') && !self.config.username.matches('\\t') && !self.config.username.contains(': ') && !self.config.username.contains(' #') &&
+          !self.config.username.endsWith(':') && !self.config.username.endsWith(' ') &&
+          !(self.config.username in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+          !self.config.username.matches('^[-+]?([0-9][0-9_]*(\\.[0-9_]*)?|\\.[0-9][0-9_]*)([eE][-+]?[0-9]+)?$') &&
+          !self.config.username.matches('^[-+]?0(x[0-9a-fA-F_]+|o[0-7_]+|b[01_]+)$') &&
+          !self.config.username.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.config.username.matches('^\\.(nan|NaN|NAN)$') &&
+          !self.config.username.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+        severity: warning
+        paths: [config.username]
+        message: >-
+          This version writes the user name into its secret unquoted, so some values break the install or
+          are stored as a number, date, true/false or nothing. Do not start it with a space, a
+          quote or a YAML symbol such as ! & * % @ [ { | > , # (or with - ? : and a space), leave out
+          ': ', ' #', tabs and a trailing ':' or space, and do not use a plain number, a date, true,
+          false or null. 3.1.0 and later quote it.
+      - when: oldSelf == null || self.config.password != oldSelf.config.password
+        rule: >-
+          !self.config.password.matches('^\\s') && !self.config.password.matches('^[!&*%@`"\\[\\]{}|>,#]') && !self.config.password.startsWith("'") &&
+          !self.config.password.matches('^[-?:](\\s|$)') && !self.config.password.matches('\\t') && !self.config.password.contains(': ') && !self.config.password.contains(' #') &&
+          !self.config.password.endsWith(':') && !self.config.password.endsWith(' ') &&
+          !(self.config.password in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+          !self.config.password.matches('^[-+]?([0-9][0-9_]*(\\.[0-9_]*)?|\\.[0-9][0-9_]*)([eE][-+]?[0-9]+)?$') &&
+          !self.config.password.matches('^[-+]?0(x[0-9a-fA-F_]+|o[0-7_]+|b[01_]+)$') &&
+          !self.config.password.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.config.password.matches('^\\.(nan|NaN|NAN)$') &&
+          !self.config.password.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+        severity: warning
+        paths: [config.password]
+        message: >-
+          This version writes the password into its secret unquoted, so some values break the install or
+          are stored as a number, date, true/false or nothing. Do not start it with a space, a
+          quote or a YAML symbol such as ! & * % @ [ { | > , # (or with - ? : and a space), leave out
+          ': ', ' #', tabs and a trailing ':' or space, and do not use a plain number, a date, true,
+          false or null. 3.1.0 and later quote it.
+      - when: oldSelf == null || self.config.database != oldSelf.config.database
+        rule: >-
+          !self.config.database.matches('^\\s') && !self.config.database.matches('^[!&*%@`"\\[\\]{}|>,#]') && !self.config.database.startsWith("'") &&
+          !self.config.database.matches('^[-?:](\\s|$)') && !self.config.database.matches('\\t') && !self.config.database.contains(': ') && !self.config.database.contains(' #') &&
+          !self.config.database.endsWith(':') && !self.config.database.endsWith(' ') &&
+          !(self.config.database in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+          !self.config.database.matches('^[-+]?([0-9][0-9_]*(\\.[0-9_]*)?|\\.[0-9][0-9_]*)([eE][-+]?[0-9]+)?$') &&
+          !self.config.database.matches('^[-+]?0(x[0-9a-fA-F_]+|o[0-7_]+|b[01_]+)$') &&
+          !self.config.database.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.config.database.matches('^\\.(nan|NaN|NAN)$') &&
+          !self.config.database.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+        severity: warning
+        paths: [config.database]
+        message: >-
+          This version writes the database name into the Postgres workload unquoted, so some values break the install or
+          are stored as a number, date, true/false or nothing. Do not start it with a space, a
+          quote or a YAML symbol such as ! & * % @ [ { | > , # (or with - ? : and a space), leave out
+          ': ', ' #', tabs and a trailing ':' or space, and do not use a plain number, a date, true,
+          false or null. 3.1.0 and later quote it.
+      - rule: oldSelf == null || self.config.password == oldSelf.config.password
+        severity: info
+        paths: [config.password]
+        message: >-
+          Postgres reads the password only when the data directory is first initialized, so
+          changing it here does not change it in the database. Run ALTER ROLE ... PASSWORD with the
+          new password first.
+      - when: oldSelf != null
+        rule: self.config.password != 'password'
+        severity: info
+        paths: [config.password]
+        message: >-
+          The password is still the published default "password". Change it with ALTER ROLE ...
+          PASSWORD, then set the same value here.
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds the data directory.
+    sections:
+      - fields:
+          - type: note
+            severity: info
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.1.0') < 0 && semverCompare(context.fromVersion, '2.0.0') >= 0
+            text: >-
+              2.0.0 created the volume set with 20 GiB and let it grow automatically up to 1000 GiB.
+              This chart keeps 20 GiB but sets no automatic growth; 3.1.0 and later have settings for it.
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            help: >-
+              Uninstalling the release deletes the volume set, so the data does not survive a
+              reinstall.
+            docs: "/reference/volumeset#capacity-and-billing"
+    rules:
+      - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+rules:
+  - rule: >-
+      context.mode != 'upgrade' || context.fromVersion == null ||
+      semverCompare(context.fromVersion, '2.0.0') >= 0
+    message: >-
+      Do not upgrade a 1.x release in place: its volume set was named after the release, and
+      this chart names it with a `-pg-vs` suffix, so the upgrade deletes the volume set holding
+      your data. Install this version as a new release, restore a dump into it, then uninstall
+      the old release.
+
+migrations:
+  - fromVersions: ">=2.0.0 <2.1.0"
+    to: volumeset.capacity
+    valueExpr: "20"
+    note: 2.0.0 created the volume set with 20 GiB, and the existing volume would not shrink, so 20 is kept.

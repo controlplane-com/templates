@@ -5,7 +5,7 @@ workload:
   containers:
     ui:
       name: ollama-ui
-      image: ghcr.io/open-webui/open-webui:v0.11.0 # pinned: `main` is a moving branch build
+      image: ghcr.io/open-webui/open-webui:v0.12.4 # pinned: `main` is a moving branch build; v0.12.4 or newer is required
       port: 8080
       resources:
         cpu: 500m

@@ -1,3 +1,4 @@
+{{- include "ollama.validate" . }}
 kind: workload
 name: {{ include "ollama.name" . }}
 tags: {{- include "ollama.tags" . | nindent 2 }}

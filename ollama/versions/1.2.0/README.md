@@ -36,7 +36,7 @@ Common alternatives: `llava`, `gemma`, `mistral`, `phi3`
 workload:
   containers:
     ui:
-      image: ghcr.io/open-webui/open-webui:v0.11.0 # pinned: `main` is a moving branch build
+      image: ghcr.io/open-webui/open-webui:v0.12.4 # pinned: `main` is a moving branch build; v0.12.4 or newer is required
       resources:
         cpu: 500m
         memory: 1Gi
@@ -105,9 +105,17 @@ http://RELEASE_NAME-ollama.GVC_NAME.cpln.local:11434
 - [Open WebUI Documentation](https://github.com/open-webui/open-webui)
 - [Ollama Model Library](https://ollama.com/library)
 
+### Upgrading from 1.1.2
+
+Version 1.2.0 moves Open WebUI from `v0.11.0` to `v0.12.4`, whose image fixes Critical CVEs. The chart refuses an official Open WebUI tag older than `v0.12.4`, so a `workload.containers.ui.image` in your values that pins one must be changed or removed.
+
+- **Open WebUI migrates its database on the first start, and rolling back to 1.1.2 is not supported**: `v0.11.0` cannot read the migrated database. Take a volume set snapshot first: `cpln volumeset snapshot create RELEASE_NAME-ollama-vs --gvc GVC_NAME --snapshot-name before-upgrade`.
+- **Tool servers that users saved under Settings › Integrations stop being used in chats** until an admin turns on Direct Integrations in Admin Settings › Connections.
+- **Custom functions and tools that install pip packages need versions that support Python 3.12**, which the image now runs.
+
 ### Upgrading from 1.1.1 or earlier
 
-Version 1.1.2 pins both images (`open-webui:v0.11.0`, `ollama/ollama:0.32.15`); earlier versions ran the moving `open-webui:main` build and an untagged `ollama/ollama`. A release on `main` may already run a newer Open WebUI than `v0.11.0`, and Open WebUI cannot read a database that a newer version migrated. When upgrading, keep the image the release runs, or pin a tag at least as new as its running version (Open WebUI shows it under Settings › About):
+Versions before 1.1.2 ran the moving `open-webui:main` build and an untagged `ollama/ollama`; this version pins `open-webui:v0.12.4` and `ollama/ollama:0.32.15`. A release on `main` may already run a newer Open WebUI than `v0.12.4`, and Open WebUI cannot read a database that a newer version migrated. When upgrading, keep the image the release runs, or pin a tag at least as new as its running version (Open WebUI shows it under Settings › About):
 
 ```yaml
 workload:

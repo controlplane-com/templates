@@ -23,7 +23,7 @@ steps:
               self.workload.containers.api.image == 'ollama/ollama')
             text: >-
               This release runs the moving image tags of versions before 1.1.2 (`open-webui:main`, untagged
-              `ollama/ollama`), and the upgrade keeps them: moving to the 1.1.2 pins (`v0.11.0`, `0.32.15`) would
+              `ollama/ollama`), and the upgrade keeps them: moving to this version's pins (`v0.12.4`, `0.32.15`) could
               downgrade a release that already runs a newer Open WebUI, which then cannot read its own database.
               To pin a tag, read the running versions first (Open WebUI's Settings › About, and
               `cpln workload exec RELEASE_NAME-ollama --gvc GVC_NAME --container ollama -- ollama --version`), then
@@ -31,7 +31,7 @@ steps:
               [Upgrading from 1.1.1 or Earlier](/template-catalog/templates/ollama#upgrading-from-1-1-1-or-earlier).
             textExpression: >-
               'This release runs the moving image tags of versions before 1.1.2 (open-webui:main, untagged ollama/ollama), ' +
-              'and the upgrade keeps them: moving to the 1.1.2 pins (v0.11.0, 0.32.15) would downgrade a release that ' +
+              'and the upgrade keeps them: moving to this version\'s pins (v0.12.4, 0.32.15) could downgrade a release that ' +
               'already runs a newer Open WebUI, which then cannot read its own database. To pin a tag, read the running ' +
               'versions first (Open WebUI Settings › About, and `cpln workload exec ' + context.releaseName + '-ollama --gvc ' +
               (context.gvc != null ? context.gvc : 'GVC_NAME') + ' --container ollama -- ollama --version`), then set image ' +
@@ -190,6 +190,25 @@ steps:
               whole model.
       - title: Open WebUI
         fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.1.2') >= 0 && semverCompare(context.fromVersion, '1.2.0') < 0
+            text: >-
+              This upgrade moves Open WebUI from v0.11.0 to v0.12.4, which migrates its database on the first start:
+              rolling back to 1.1.2 is not supported, so take a volume set snapshot first. Tool servers users saved
+              under Settings › Integrations stop being used in chats until an admin turns on Direct Integrations
+              (Admin Settings › Connections), and custom functions that install pip packages need versions that
+              support Python 3.12. See
+              [Upgrading from 1.1.2](/template-catalog/templates/ollama#upgrading-from-1-1-2).
+            textExpression: >-
+              'This upgrade moves Open WebUI from v0.11.0 to v0.12.4, which migrates its database on the first start: ' +
+              'rolling back to 1.1.2 is not supported, so take a volume set snapshot first (`cpln volumeset snapshot create ' +
+              context.releaseName + '-ollama-vs --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              ' --snapshot-name before-upgrade`). Tool servers users saved under Settings › Integrations stop being used ' +
+              'in chats until an admin turns on Direct Integrations (Admin Settings › Connections), and custom functions ' +
+              'that install pip packages need versions that support Python 3.12.'
           - path: workload.containers.ui.resources
             type: resources
             label: Open WebUI resources
@@ -203,7 +222,20 @@ steps:
             label: Open WebUI image
             required: true
             advanced: true
-            description: Pin a release tag; `main` is a moving branch build.
+            description: Pin a release tag, v0.12.4 or newer; `main` is a moving branch build.
+        rules:
+          - rule: >-
+              self.workload.containers.ui.image.contains('@') ||
+              !(self.workload.containers.ui.image.split(':')[0] in
+              ['ghcr.io/open-webui/open-webui', 'openwebui/open-webui', 'docker.io/openwebui/open-webui']) ||
+              size(self.workload.containers.ui.image.split(':')) < 2 ||
+              !(self.workload.containers.ui.image.split(':')[1].matches('^v?0[.]([0-9]|1[01])([^0-9]|$)') ||
+              self.workload.containers.ui.image.split(':')[1].matches('^v?0[.]12[.][0-3]([^0-9]|$)'))
+            mirrors: ollama.validateImage
+            paths: [workload.containers.ui.image]
+            message: >-
+              Open WebUI images older than v0.12.4 carry Critical CVEs. Use ghcr.io/open-webui/open-webui:v0.12.4
+              or a newer tag.
 
   - id: storage
     title: Storage
@@ -444,8 +476,8 @@ rules:
     rule: "false"
     severity: info
     message: >-
-      The release keeps the moving image tags it runs (open-webui:main, untagged ollama/ollama) rather than the 1.1.2
-      pins, which could be older and downgrade it. To pin, set tags at least as new as the running versions under
+      The release keeps the moving image tags it runs (open-webui:main, untagged ollama/ollama) rather than this
+      version's pins, which could be older and downgrade it. To pin, set tags at least as new as the running versions under
       Model and compute.
   - when: context.gvcLocations != null && size(context.gvcLocations) > 1
     rule: "false"
@@ -461,12 +493,13 @@ rules:
 migrations:
   # Before 1.1.2 the defaults were the moving open-webui:main and an untagged ollama/ollama. Measured on a
   # default 1.1.1 release: main served Open WebUI 0.12.4, and the 1.1.2 pin v0.11.0 then failed its database
-  # migrations ("Can't locate revision"). Keep whatever image the release runs; Ollama is kept the same way.
+  # migrations ("Can't locate revision"). main keeps moving past the 1.2.0 pin v0.12.4 too, so keep whatever
+  # image the release runs; Ollama is kept the same way.
   - fromVersions: "<1.1.2"
     to: workload.containers.ui.image
     valueExpr: self.workload.containers.ui.image
     note: >-
-      The release keeps the Open WebUI image it runs. Moving a newer main build to the pinned v0.11.0 would
+      The release keeps the Open WebUI image it runs. Moving a newer main build to the pinned v0.12.4 could
       downgrade it, and Open WebUI cannot read a database a newer version migrated. Pin a tag at least as new
       as the running version.
   - fromVersions: "<1.1.2"

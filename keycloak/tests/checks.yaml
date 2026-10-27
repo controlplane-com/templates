@@ -1,0 +1,112 @@
+# Feature checks for the keycloak template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (admin_user,
+# admin_password, pg_user, pg_password, pg_db).
+#
+# The Keycloak image ships no curl or psql, so every check runs in the HA database's patroni-postgres
+# container, which has both and reaches Keycloak over the GVC (internalAccess same-gvc). Database checks
+# go through the HAProxy endpoint, the address Keycloak itself uses.
+checks:
+  - id: admin-token
+    description: The bootstrap admin from the prerequisite secret gets an access token from the master realm.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        curl -s -m 20 -X POST http://{release}-keycloak.{gvc}.cpln.local:8080/realms/master/protocol/openid-connect/token \
+          -d grant_type=password -d client_id=admin-cli \
+          --data-urlencode 'username={admin_user}' --data-urlencode 'password={admin_password}' \
+        | python3 -c '
+        import json, sys
+        d = json.load(sys.stdin)
+        t = d.get("access_token", "")
+        print(f"TOKEN {d.get(\"token_type\")} {len(t) > 100}" if t else "NO TOKEN " + json.dumps(d))
+        '
+    expect:
+      stdout: "^TOKEN Bearer True$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: rejects-bad-password
+    description: A wrong admin password gets no token (the control for the check above).
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        curl -s -m 20 -X POST http://{release}-keycloak.{gvc}.cpln.local:8080/realms/master/protocol/openid-connect/token \
+          -d grant_type=password -d client_id=admin-cli \
+          --data-urlencode 'username={admin_user}' --data-urlencode 'password=wrong-password'
+    expect:
+      stdout: "invalid_grant"
+      notStdout: "access_token"
+
+  - id: realm-in-database
+    description: Keycloak's schema and master realm are in the HA database, read through the HAProxy endpoint.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "select 'REALM ' || name from realm where name = 'master'" 2>&1
+    expect:
+      stdout: "^REALM master$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: realm-survives-upgrade
+    description: >-
+      Creates a realm named after the running version through the admin API, then reads back the realm
+      created on the version this scenario installed first. After an upgrade that proves Keycloak's data
+      carried over; on a fresh install it is the realm just created.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        K=http://{release}-keycloak.{gvc}.cpln.local:8080
+        V=e2e-$(echo '{version}' | tr . -)
+        I=e2e-$(echo '{installed_version}' | tr . -)
+        T=$(curl -s -m 20 -X POST $K/realms/master/protocol/openid-connect/token \
+          -d grant_type=password -d client_id=admin-cli \
+          --data-urlencode 'username={admin_user}' --data-urlencode 'password={admin_password}' \
+          | python3 -c 'import json,sys; print(json.load(sys.stdin).get("access_token",""))')
+        [ -n "$T" ] || { echo "NO TOKEN"; exit 1; }
+        # 201 = created, 409 = already there (a retry, or the starting version's own run)
+        code=$(curl -s -m 20 -o /dev/null -D - -X POST $K/admin/realms \
+          -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
+          -d "{\"realm\":\"$V\",\"enabled\":true}" | awk 'NR==1 {print $2}')
+        case "$code" in 201|409) echo "CREATE $V $code" ;; *) echo "CREATE FAILED $V ${code:-none}"; exit 1 ;; esac
+        curl -s -m 20 $K/realms/$I | python3 -c '
+        import json, sys
+        try: d = json.load(sys.stdin)
+        except Exception: d = {}
+        print("PERSISTED " + d["realm"] if d.get("realm") else "MISSING")
+        '
+    expect:
+      stdout: "^PERSISTED e2e-"
+      notStdout: "^CREATE FAILED"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: pgvector-0-8-7-available
+    description: The HA database image ships pgvector 0.8.7 (CVE-2026-103484), the image 1.5.1 moved to.
+    issue: "#5376"
+    since: 1.5.1
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "select 'AVAIL ' || default_version from pg_available_extensions where name = 'vector'" 2>&1
+    expect:
+      stdout: "^AVAIL 0\\.8\\.7$"
+    # After an upgrade the HAProxy endpoint can briefly route to a member still on the old image while the
+    # Patroni members restart one at a time; this runs long enough to reach the new leader.
+    retries: 12
+    retryDelaySeconds: 15

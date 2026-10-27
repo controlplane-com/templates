@@ -9,12 +9,7 @@ Create chart name and version as used by the chart label.
 Common labels
 */}}
 {{- define "tidb.tags" -}}
-helm.sh/chart: {{ include "tidb.chart" . }}
-{{ include "tidb.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.cpln.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.cpln.io/managed-by: {{ .Release.Service }}
+{{- include "cpln-common.tags" . }}
 {{- end }}
 
 {{/*

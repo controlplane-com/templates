@@ -102,9 +102,10 @@ database.
 - **Database image `patroni-postgres:0.7` → `0.8`** (pgvector 0.8.0 → 0.8.7, CVE-2026-103484) by bumping the
   `postgres-highly-available.image` pin this chart already carried; the vendored pg-ha stays **2.8.0** because
   2.8.1 was not published yet. `cdc.validatePostgresHAImage` (in `validation.yaml`) refuses `patroni-postgres`
-  tags 0.1–0.7 with pg-ha 2.8.1's matching; a top-level wizard rule mirrors it (the image field comes from the
-  pg-ha import, with an override help line). The pipeline does not use pgvector. The upgrade is a Patroni
-  rolling restart with leader changes; Debezium resumes from its failover slot (at-least-once, as above).
+  tags 0.1–0.7 with pg-ha 2.8.1's matching, and an empty value (which would fall back to the subchart's 0.7);
+  a top-level wizard rule mirrors it (the image field comes from the pg-ha import, with an override help line).
+  The pipeline does not use pgvector. The upgrade restarts the Patroni members (unconstrained stateful rollout)
+  and the proxy: a short database outage; Debezium resumes from its failover slot (at-least-once, as above).
   Drop the pin, or keep it equal to pg-ha's default, once the chart vendors pg-ha 2.8.1+.
 - **E2E onboarded** (`cdc-pipeline/tests/`): a row written through HAProxy must arrive as a change event on
   `dbserver1.public.e2e` (consumed from the kafka chart's `-client` workload), plus wrong-password, upgrade

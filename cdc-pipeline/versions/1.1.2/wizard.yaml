@@ -478,9 +478,10 @@ rules:
     messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-debezium, or Debezium cannot reach the database.'"
     message: Add the Debezium workload to the list, or Debezium cannot reach the database.
   - rule: >-
+      ('image' in self['postgres-highly-available'] && self['postgres-highly-available'].image != '' && (
       !(self['postgres-highly-available'].image.split(':')[0] in ['controlplanecorporation/patroni-postgres', 'docker.io/controlplanecorporation/patroni-postgres']) ||
       size(self['postgres-highly-available'].image.split(':')) < 2 ||
-      !self['postgres-highly-available'].image.split(':')[1].matches('^0[.][0-7]([.][0-9]+)?$')
+      !self['postgres-highly-available'].image.split(':')[1].matches('^0[.][0-7]([.][0-9]+)?$')))
     mirrors: cdc.validatePostgresHAImage
     paths: [postgres-highly-available.image]
     message: >-

@@ -166,7 +166,7 @@ steps:
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             help: >-
               The data lives on the volume set and survives redeploys. Uninstalling the release deletes
-              the volume set, and the database with it.
+              the volume set; a final snapshot is kept for 7 days.
             docs: "/reference/volumeset#capacity-and-billing"
       - id: autoscaling
         title: Grow storage automatically
@@ -331,6 +331,11 @@ steps:
             format: cron
             label: Schedule (UTC)
             required: true
+            pattern: '^\s*[0-9][0-9,/-]*(\s+[0-9A-Za-z*,/-]+){4}\s*$'
+            patternMessage: >-
+              Use five fields that start with a digit: this version writes the schedule unquoted, so a
+              schedule that starts with * (such as */15 * * * *) fails to install. Write 0,15,30,45 * * * *
+              instead.
           - path: backup.image
             type: string
             format: image
@@ -413,6 +418,8 @@ steps:
           - path: backup.aws.prefix
             type: string
             label: Folder prefix
+            required: true
+            description: The backup job stops with an error when the prefix is empty.
             pattern: '^(?!/)'
             patternMessage: Leave out the leading /.
       - title: Google Cloud Storage
@@ -440,6 +447,8 @@ steps:
           - path: backup.gcp.prefix
             type: string
             label: Folder prefix
+            required: true
+            description: The backup job stops with an error when the prefix is empty.
             pattern: '^(?!/)'
             patternMessage: Leave out the leading /.
     rules:

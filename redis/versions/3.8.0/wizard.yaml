@@ -1587,3 +1587,45 @@ migrations:
   - fromVersions: "<3.6.0"
     from: sentinel.resources.memory
     to: sentinel.resources.maxMemory
+  # 3.0.2 to 3.3.0 defaulted to 2 Redis nodes (3.4.0 changed the default to 3): keep the count the release runs.
+  - fromVersions: ">=3.0.2 <3.4.0"
+    to: redis.replicas
+    valueExpr: self.redis.replicas
+    note: The release keeps the number of Redis nodes it runs; raise it here if you want more.
+  # 3.0.3 defaulted multiZone to true (3.0.4 changed it to false): keep the placement the release runs.
+  - fromVersions: "=3.0.3"
+    to: redis.multiZone
+    valueExpr: self.redis.multiZone
+  - fromVersions: "=3.0.3"
+    to: sentinel.multiZone
+    valueExpr: self.sentinel.multiZone
+  # 3.0.0 and 3.0.1 defaulted to Redis Stack (3.0.2 changed the default to plain Redis): keep the server the data was written by.
+  - fromVersions: ">=3.0.0 <3.0.2"
+    to: redis.image
+    valueExpr: self.redis.image
+    note: The release keeps the image it runs; data written by Redis Stack can hold module types that plain Redis cannot load.
+  - fromVersions: ">=3.0.0 <3.0.2"
+    to: sentinel.image
+    valueExpr: self.sentinel.image
+  - fromVersions: ">=3.0.0 <3.0.2"
+    to: redis.serverCommand
+    valueExpr: self.redis.serverCommand
+  # 3.0.0 and 3.0.1 set both external CIDR lists to 0.0.0.0/0 by default; 3.0.2 left them unset. Keep what the release runs.
+  - fromVersions: ">=3.0.0 <3.0.2"
+    to: redis.firewall.external_inboundAllowCIDR
+    valueExpr: "(type(self.redis.firewall.external_inboundAllowCIDR) == list ? dyn(dyn(self.redis.firewall.external_inboundAllowCIDR).join(',')) : dyn(self.redis.firewall.external_inboundAllowCIDR))"
+    note: >-
+      The release keeps the external CIDRs it runs; 3.0.0 and 3.0.1 allowed 0.0.0.0/0 by default. Clear the
+      list under Network to close external access.
+  - fromVersions: ">=3.0.0 <3.0.2"
+    to: redis.firewall.external_outboundAllowCIDR
+    valueExpr: "(type(self.redis.firewall.external_outboundAllowCIDR) == list ? dyn(dyn(self.redis.firewall.external_outboundAllowCIDR).join(',')) : dyn(self.redis.firewall.external_outboundAllowCIDR))"
+  - fromVersions: ">=3.0.0 <3.0.2"
+    to: sentinel.firewall.external_inboundAllowCIDR
+    valueExpr: "(type(self.sentinel.firewall.external_inboundAllowCIDR) == list ? dyn(dyn(self.sentinel.firewall.external_inboundAllowCIDR).join(',')) : dyn(self.sentinel.firewall.external_inboundAllowCIDR))"
+    note: >-
+      The release keeps the external CIDRs it runs; 3.0.0 and 3.0.1 allowed 0.0.0.0/0 by default. Clear the
+      list under Network to close external access.
+  - fromVersions: ">=3.0.0 <3.0.2"
+    to: sentinel.firewall.external_outboundAllowCIDR
+    valueExpr: "(type(self.sentinel.firewall.external_outboundAllowCIDR) == list ? dyn(dyn(self.sentinel.firewall.external_outboundAllowCIDR).join(',')) : dyn(self.sentinel.firewall.external_outboundAllowCIDR))"

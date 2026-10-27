@@ -1,0 +1,177 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Redis
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: server
+    title: Server
+    description: A single Redis node, with no password and no failover.
+    sections:
+      - fields:
+          - path: image.repository
+            type: string
+            format: image
+            label: Redis image
+            required: true
+            description: The chart runs the image's own start command, with Redis on port 6379.
+            help: >-
+              This version was published with `docker.io/redis:7.2`; another image is unproven here. The health
+              check runs `/bin/bash -c "redis-cli ping"`, so the image needs bash and redis-cli.
+            rules:
+              - rule: "!self.image.repository.contains('alpine')"
+                severity: warning
+                message: >-
+                  The -alpine Redis images have no bash, which this chart's health check runs. Use a Debian-based
+                  tag such as `docker.io/redis:7.2`.
+          - path: cpu
+            type: quantity
+            quantity: cpu
+            label: CPU limit
+            required: true
+            min: 25m
+            suggestions: ["250m", "500m", "1000m"]
+            rules:
+              - rule: "!string(self.cpu).matches('^[0-9]+([.][0-9]+)?$')"
+                severity: warning
+                message: >-
+                  Give the CPU value a unit, such as `1000m` for one core. This version writes it unquoted, so a
+                  bare number reaches the platform as a number and the workload is rejected at install.
+          - path: memory
+            type: quantity
+            quantity: memory
+            label: Memory limit
+            required: true
+            min: 64Mi
+            suggestions: [512Mi, 1024Mi, 2048Mi]
+          - path: capacityAI
+            type: boolean
+            label: Capacity AI
+            advanced: true
+            description: Lets the platform lower the reserved CPU and memory to what Redis uses.
+
+  - id: storage
+    title: Storage
+    description: An optional volume that keeps the data across restarts.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: self.volumeset == null || size(self.volumeset) == 0
+            text: >-
+              Without a volume, Redis keeps its data only in the container, so it is lost when the workload
+              restarts or is redeployed.
+          - path: volumeset
+            type: object
+            optional: true
+            label: Persistent volume
+            docs: /reference/volumeset
+            newValue:
+              volume: { initialCapacity: 25, fileSystemType: ext4, performanceClass: general-purpose-ssd }
+              snapshots: { createFinalSnapshot: "true", retentionDuration: 7d, schedule: "0 1 * * *" }
+            fields:
+              - path: volume.initialCapacity
+                absent: true
+                type: integer
+                label: Initial capacity
+                unit: GiB
+                min: 10
+                max: 65536
+                required: true
+                suggestions: [10, 25, 50, 100, 250]
+              - path: volume.performanceClass
+                absent: true
+                type: enum
+                label: Disk class
+                widget: segmented
+                required: true
+                immutable: The disk class is fixed when the volume set is created.
+                options:
+                  - { value: general-purpose-ssd, label: General purpose SSD }
+                  - { value: high-throughput-ssd, label: High throughput SSD }
+              - path: volume.fileSystemType
+                absent: true
+                type: enum
+                label: File system
+                widget: segmented
+                required: true
+                immutable: The file system is fixed when the volume set is created.
+                options:
+                  - { value: ext4, label: ext4 }
+                  - { value: xfs, label: XFS }
+              - path: snapshots.schedule
+                absent: true
+                type: string
+                format: cron
+                label: Snapshot schedule (UTC)
+                required: true
+                pattern: '^[0-5]?[0-9] [^ ]+ [^ ]+ [^ ]+ [^ ]+$'
+                patternMessage: >-
+                  Start with one fixed minute, such as `0 1 * * *`. A snapshot can run at most once an hour, and
+                  this version writes the schedule unquoted, so one that starts with `*` stops the chart from rendering.
+              - path: snapshots.retentionDuration
+                absent: true
+                type: string
+                format: retention
+                label: Keep snapshots for
+                required: true
+                placeholder: 7d
+              - path: snapshots.createFinalSnapshot
+                absent: true
+                type: enum
+                label: Final snapshot on delete
+                widget: segmented
+                required: true
+                description: Take a last snapshot when the volume set is deleted.
+                options:
+                  - { value: "true", label: "Yes" }
+                  - { value: "false", label: "No" }
+            rules:
+              - rule: >-
+                  self.volumeset == null || size(self.volumeset) == 0 ||
+                  self.volumeset.volume.performanceClass != 'high-throughput-ssd' || self.volumeset.volume.initialCapacity >= 200
+                paths: [volumeset.volume.initialCapacity]
+                message: A high throughput SSD needs an initial capacity of at least 200 GiB.
+              - rule: >-
+                  oldSelf == null || oldSelf.volumeset == null || size(oldSelf.volumeset) == 0 ||
+                  self.volumeset == null || size(self.volumeset) == 0 ||
+                  self.volumeset.volume.initialCapacity >= oldSelf.volumeset.volume.initialCapacity
+                paths: [volumeset.volume.initialCapacity]
+                message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+              - rule: >-
+                  oldSelf == null || oldSelf.volumeset == null || size(oldSelf.volumeset) == 0 ||
+                  (self.volumeset != null && size(self.volumeset) > 0)
+                severity: info
+                paths: [volumeset]
+                message: Removing the volume deletes the volume set and the data on it.
+
+  - id: network
+    title: Network
+    sections:
+      - fields:
+          - path: firewall.internal_inboundAllowType
+            type: enum
+            label: Internal access to Redis
+            docs: "/reference/workload/firewall#internal"
+            widget: cards
+            required: true
+            description: Redis has no password in this version, so anyone allowed here can read and write the data.
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC (recommended). }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: none, label: Nobody, description: No workload can connect. }
+
+yamlOnly:
+  - path: containerName
+    reason: The container's name inside the workload; nothing connects to it by name.
+  - path: port
+    reason: The chart does not pass this port to Redis, which listens on 6379; another value declares a port with nothing behind it.
+  - path: inheritEnv
+    reason: Whether the container inherits the GVC's environment variables; the chart sets none and Redis reads none.
+  - path: supportDynamicTags
+    reason: A platform option for redeploying when an image tag moves; leave it off for a database.
+  - path: timeoutSeconds
+    reason: Not read by this version; the chart always sets a 5 second request timeout.

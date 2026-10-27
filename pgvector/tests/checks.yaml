@@ -88,5 +88,7 @@ checks:
         psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c "select 'AVAIL ' || default_version from pg_available_extensions where name = 'vector'" 2>&1
     expect:
       stdout: "^AVAIL 0\\.8\\.7$"
-    retries: 3
+    # After an upgrade the outgoing replica can still answer for a while, and exec then reports
+    # `container not found` while the new one starts; this runs long enough to reach the new one.
+    retries: 8
     retryDelaySeconds: 15

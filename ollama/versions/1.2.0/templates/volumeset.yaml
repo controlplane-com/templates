@@ -1,0 +1,17 @@
+kind: volumeset
+name: {{ include "ollama.volume.name" . }}
+tags: {{- include "ollama.tags" . | nindent 2 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.initialCapacity }}
+  {{- if .Values.volumeset.autoscaling.enabled }}
+  autoscaling:
+    maxCapacity: {{ .Values.volumeset.autoscaling.maxCapacity }}
+    minFreePercentage: {{ .Values.volumeset.autoscaling.minFreePercentage }}
+    scalingFactor: {{ .Values.volumeset.autoscaling.scalingFactor }}
+  {{- end }}
+  performanceClass: {{ .Values.volumeset.performanceClass }}
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: {{ .Values.volumeset.snapshots.retentionDuration }}

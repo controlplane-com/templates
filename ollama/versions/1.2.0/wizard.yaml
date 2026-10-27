@@ -1,0 +1,520 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Ollama
+# One stateful replica per location with no location handling. The README and the docs page present
+# several GPU locations behind one endpoint as a supported shape (docs "Scaling and Availability"), so
+# there is no maximum; a root info rule says what each extra location means.
+gvc:
+  minLocations: 1
+
+steps:
+  - id: compute
+    title: Model and compute
+    description: The model Open WebUI preselects, the GPU, and the CPU and memory of Ollama and the Open WebUI sidecar.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.1.2') < 0 &&
+              (self.workload.containers.ui.image == 'ghcr.io/open-webui/open-webui:main' ||
+              self.workload.containers.api.image == 'ollama/ollama')
+            text: >-
+              This release runs the moving image tags of versions before 1.1.2 (`open-webui:main`, untagged
+              `ollama/ollama`), and the upgrade keeps them: moving to this version's pins (`v0.12.4`, `0.32.15`) could
+              downgrade a release that already runs a newer Open WebUI, which then cannot read its own database.
+              To pin a tag, read the running versions first (Open WebUI's Settings › About, and
+              `cpln workload exec RELEASE_NAME-ollama --gvc GVC_NAME --container ollama -- ollama --version`), then
+              set image tags at least that new under the Advanced group of each section below. See
+              [Upgrading from 1.1.1 or Earlier](/template-catalog/templates/ollama#upgrading-from-1-1-1-or-earlier).
+            textExpression: >-
+              'This release runs the moving image tags of versions before 1.1.2 (open-webui:main, untagged ollama/ollama), ' +
+              'and the upgrade keeps them: moving to this version\'s pins (v0.12.4, 0.32.15) could downgrade a release that ' +
+              'already runs a newer Open WebUI, which then cannot read its own database. To pin a tag, read the running ' +
+              'versions first (Open WebUI Settings › About, and `cpln workload exec ' + context.releaseName + '-ollama --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + ' --container ollama -- ollama --version`), then set image ' +
+              'tags at least that new in the Advanced group of each section below.'
+      - title: Model
+        fields:
+          - path: defaultModel
+            type: string
+            label: Default model
+            required: true
+            pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]*$'
+            patternMessage: Enter a model name from the Ollama library, such as llama3 or mistral:7b.
+            description: >-
+              Any model from the [Ollama library](https://ollama.com/library), with an optional tag
+              (`llama3:70b`). Open WebUI preselects it; the template does **not** download it.
+            suggestions: [llama3, mistral, gemma, llava, phi3]
+            docs: "#default-model"
+          - type: note
+            severity: warning
+            when: context.mode == 'install' || oldSelf == null || self.defaultModel != oldSelf.defaultModel
+            text: >-
+              After the workload is ready, pull the model once:
+              `cpln workload exec RELEASE_NAME-ollama --gvc GVC_NAME --container ollama -- ollama pull MODEL`.
+              It lands on the volume set and survives restarts. Models are several GiB, so the pull takes minutes,
+              and it needs outbound internet access (Network).
+            textExpression: >-
+              'After the workload is ready, pull the model once: `cpln workload exec ' + context.releaseName +
+              '-ollama --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              (context.gvcLocations != null && size(context.gvcLocations) > 1 ? ' --location LOCATION' : '') +
+              ' --container ollama -- ollama pull ' + (self.defaultModel != null && self.defaultModel != '' ? self.defaultModel : 'MODEL') +
+              '`. It lands on the volume set and survives restarts' +
+              (context.gvcLocations != null && size(context.gvcLocations) > 1 ? '; each location has its own volume, so pull it in every location' : '') +
+              '. Models are several GiB, so the pull takes minutes, and it needs outbound internet access (Network).'
+          - type: note
+            when: context.mode == 'upgrade'
+            text: >-
+              Changing the model only changes what Open WebUI preselects; pull a new model once by hand. Any change
+              restarts the single replica, so Open WebUI and the API are down until it is ready again.
+      - title: Ollama server
+        docs: "#containers"
+        fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'install'
+            text: >-
+              The default asks for one NVIDIA T4, 6 CPU and 8Gi of memory for Ollama, plus 500m and 2Gi for Open
+              WebUI. GPU access must be enabled for your org by Control Plane support, and the CPU and memory must
+              fit your org quota, or the workload never starts. Turn the GPU off below to run on CPU alone.
+          - path: workload.containers.api.gpu
+            type: object
+            optional: true
+            label: NVIDIA GPU
+            description: >-
+              Off runs inference on the CPU alone, which is much slower. A model that does not fit in GPU memory
+              (16 GB on a T4, 24 GB on an A10G) runs partly from the server's memory. Turning it off clears the GPU
+              model and count; turning it back on starts from one T4.
+            newValue: { nvidia: { model: t4, quantity: 1 } }
+            fields:
+              - path: nvidia.model
+                type: enum
+                label: GPU model
+                widget: cards
+                required: true
+                options:
+                  - value: t4
+                    label: NVIDIA T4
+                    description: 16 GB per GPU, 1 to 4 GPUs.
+                  - value: a10g
+                    label: NVIDIA A10G
+                    description: 24 GB, one GPU.
+              - path: nvidia.quantity
+                type: integer
+                label: GPUs
+                min: 1
+                max: 4
+                required: true
+                widget: stepper
+          - path: workload.containers.api.resources
+            type: resources
+            label: Ollama resources
+            required: true
+            description: >-
+              Size the memory for the models you run: weights that do not fit in GPU memory are held here.
+              A GPU raises the CPU and memory the container needs.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: workload.containers.api.image
+            type: string
+            format: image
+            label: Ollama image
+            required: true
+            advanced: true
+            description: Pin a release tag; an untagged image resolves to `latest`.
+        rules:
+          # Platform GPU limits (docs reference/workload/containers#gpu): the API rejects a container outside them.
+          - when: >-
+              self.workload.containers.api.gpu != null && self.workload.containers.api.gpu.nvidia != null &&
+              self.workload.containers.api.gpu.nvidia.model == 'a10g'
+            rule: self.workload.containers.api.gpu.nvidia.quantity == null || self.workload.containers.api.gpu.nvidia.quantity == 1
+            paths: [workload.containers.api.gpu]
+            message: An A10G container takes exactly 1 GPU.
+          - when: >-
+              self.workload.containers.api.gpu != null && self.workload.containers.api.gpu.nvidia != null &&
+              self.workload.containers.api.gpu.nvidia.model == 'a10g'
+            rule: >-
+              cpuMillicores(self.workload.containers.api.resources.cpu) >= 6000 &&
+              cpuMillicores(self.workload.containers.api.resources.cpu) <= 8000
+            paths: [workload.containers.api.resources]
+            message: With an A10G the Ollama CPU must be 6000m to 8000m.
+          - when: >-
+              self.workload.containers.api.gpu != null && self.workload.containers.api.gpu.nvidia != null &&
+              self.workload.containers.api.gpu.nvidia.model == 'a10g'
+            rule: >-
+              memoryBytes(self.workload.containers.api.resources.memory) >= memoryBytes('8Gi') &&
+              memoryBytes(self.workload.containers.api.resources.memory) <= memoryBytes('62Gi')
+            paths: [workload.containers.api.resources]
+            message: With an A10G the Ollama memory must be 8Gi to 62Gi.
+          - when: >-
+              self.workload.containers.api.gpu != null && self.workload.containers.api.gpu.nvidia != null &&
+              self.workload.containers.api.gpu.nvidia.model == 't4' &&
+              self.workload.containers.api.gpu.nvidia.quantity != null
+            rule: >-
+              cpuMillicores(self.workload.containers.api.resources.cpu) >=
+              (self.workload.containers.api.gpu.nvidia.quantity > 1 ||
+              memoryBytes(self.workload.containers.api.resources.memory) > memoryBytes('14Gi') ? 4000 : 2000) *
+              self.workload.containers.api.gpu.nvidia.quantity &&
+              cpuMillicores(self.workload.containers.api.resources.cpu) <= 8000 * self.workload.containers.api.gpu.nvidia.quantity
+            paths: [workload.containers.api.resources]
+            messageExpression: >-
+              'With ' + string(self.workload.containers.api.gpu.nvidia.quantity) + ' T4 GPU(s) and this memory the Ollama CPU must be ' +
+              string((self.workload.containers.api.gpu.nvidia.quantity > 1 ||
+              memoryBytes(self.workload.containers.api.resources.memory) > memoryBytes('14Gi') ? 4000 : 2000) *
+              self.workload.containers.api.gpu.nvidia.quantity) + 'm to ' +
+              string(8000 * self.workload.containers.api.gpu.nvidia.quantity) + 'm.'
+            message: >-
+              With a T4 the Ollama CPU must be 2000m to 8000m per GPU, and 4000m per GPU with more than one GPU or
+              more than 14Gi of memory.
+          - when: >-
+              self.workload.containers.api.gpu != null && self.workload.containers.api.gpu.nvidia != null &&
+              self.workload.containers.api.gpu.nvidia.model == 't4' &&
+              self.workload.containers.api.gpu.nvidia.quantity != null
+            rule: >-
+              memoryBytes(self.workload.containers.api.resources.memory) >= memoryBytes('7Gi') * self.workload.containers.api.gpu.nvidia.quantity &&
+              memoryBytes(self.workload.containers.api.resources.memory) <= memoryBytes('31Gi') * self.workload.containers.api.gpu.nvidia.quantity
+            paths: [workload.containers.api.resources]
+            messageExpression: >-
+              'With ' + string(self.workload.containers.api.gpu.nvidia.quantity) + ' T4 GPU(s) the Ollama memory must be ' +
+              string(7 * self.workload.containers.api.gpu.nvidia.quantity) + 'Gi to ' +
+              string(31 * self.workload.containers.api.gpu.nvidia.quantity) + 'Gi.'
+            message: With a T4 the Ollama memory must be 7Gi to 31Gi per GPU.
+          - rule: self.workload.containers.api.gpu != null
+            severity: info
+            paths: [workload.containers.api.gpu]
+            message: >-
+              Without a GPU, Ollama runs models on the CPU, which is much slower. Give it enough memory for the
+              whole model.
+      - title: Open WebUI
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.1.2') >= 0 && semverCompare(context.fromVersion, '1.2.0') < 0
+            text: >-
+              This upgrade moves Open WebUI from v0.11.0 to v0.12.4, which migrates its database on the first start:
+              rolling back to 1.1.2 is not supported, so take a volume set snapshot first. Tool servers users saved
+              under Settings › Integrations stop being used in chats until an admin turns on Direct Integrations
+              (Admin Settings › Integrations), and custom functions that install pip packages need versions that
+              support Python 3.12. See
+              [Upgrading from 1.1.2](/template-catalog/templates/ollama#upgrading-from-1-1-2).
+            textExpression: >-
+              'This upgrade moves Open WebUI from v0.11.0 to v0.12.4, which migrates its database on the first start: ' +
+              'rolling back to 1.1.2 is not supported, so take a volume set snapshot first (`cpln volumeset snapshot create ' +
+              context.releaseName + '-ollama-vs --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              ' --snapshot-name before-upgrade`). Tool servers users saved under Settings › Integrations stop being used ' +
+              'in chats until an admin turns on Direct Integrations (Admin Settings › Integrations), and custom functions ' +
+              'that install pip packages need versions that support Python 3.12.'
+          - path: workload.containers.ui.resources
+            type: resources
+            label: Open WebUI resources
+            required: true
+            description: The chat UI, a sidecar in the same workload.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: workload.containers.ui.image
+            type: string
+            format: image
+            label: Open WebUI image
+            required: true
+            advanced: true
+            description: Pin a release tag, v0.12.4 or newer; `main` is a moving branch build.
+        rules:
+          - rule: >-
+              self.workload.containers.ui.image.contains('@') ||
+              !(self.workload.containers.ui.image.split(':')[0] in
+              ['ghcr.io/open-webui/open-webui', 'openwebui/open-webui', 'docker.io/openwebui/open-webui']) ||
+              size(self.workload.containers.ui.image.split(':')) < 2 ||
+              !(self.workload.containers.ui.image.split(':')[1].matches('^v?0[.]([0-9]|1[01])([^0-9]|$)') ||
+              self.workload.containers.ui.image.split(':')[1].matches('^v?0[.]12[.][0-3]([^0-9]|$)'))
+            mirrors: ollama.validateImage
+            paths: [workload.containers.ui.image]
+            message: >-
+              Open WebUI images older than v0.12.4 carry Critical CVEs. Use ghcr.io/open-webui/open-webui:v0.12.4
+              or a newer tag.
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds the pulled models and Open WebUI's data.
+    sections:
+      - fields:
+          - type: note
+            when: self.volumeset.initialCapacity != null && self.volumeset.initialCapacity < 20 && !self.volumeset.autoscaling.enabled
+            text: >-
+              Models are large: `llama3` (8B) takes about 4.7 GB and a 70B model about 40 GB. A volume this small
+              fills once a second model is pulled; start larger or let the volume grow automatically.
+            textExpression: >-
+              'Models are large: llama3 (8B) takes about 4.7 GB and a 70B model about 40 GB. A ' +
+              string(self.volumeset.initialCapacity) + ' GiB volume fills once a second model is pulled; start larger ' +
+              'or let the volume grow automatically.'
+          - path: volumeset.performanceClass
+            type: enum
+            label: Performance class
+            required: true
+            immutable: A volume set keeps the performance class it was created with.
+            description: Fixed once the volume set is created. High throughput needs at least 200 GiB.
+            options:
+              - { value: general-purpose-ssd, label: General purpose SSD }
+              - { value: high-throughput-ssd, label: High throughput SSD }
+          - path: volumeset.initialCapacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            description: >-
+              One volume holds every pulled model and Open WebUI's users, chats and documents.
+            help: >-
+              The data survives restarts and redeploys. Uninstalling the release deletes the volume set (keeping only a
+              final snapshot): models can be pulled again, but a reinstall starts Open WebUI without its accounts and chats.
+            docs: "/reference/volumeset#capacity-and-billing"
+          - path: volumeset.snapshots.retentionDuration
+            type: string
+            format: retention
+            label: Keep snapshots for
+            required: true
+            placeholder: 7d
+            advanced: true
+            description: >-
+              The chart schedules no snapshots. This keeps the final snapshot taken when the volume set is deleted,
+              and any snapshot you take by hand.
+            docs: "#backing-up"
+        rules:
+          - rule: self.volumeset.performanceClass != 'high-throughput-ssd' || self.volumeset.initialCapacity >= 200
+            paths: [volumeset.initialCapacity]
+            message: A high throughput SSD volume set needs at least 200 GiB.
+          - rule: >-
+              oldSelf == null || oldSelf.volumeset.initialCapacity == null ||
+              self.volumeset.initialCapacity >= oldSelf.volumeset.initialCapacity
+            paths: [volumeset.initialCapacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: volumeset.autoscaling.enabled
+        description: >-
+          The volume set grows by the scaling factor whenever its free space falls below the threshold, so new
+          models fit without a manual resize.
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.initialCapacity
+            paths: [volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+
+  - id: network
+    title: Network
+    description: Who reaches Open WebUI from the internet, who reaches the Ollama API inside Control Plane, and where the workload may connect out to.
+    sections:
+      - title: Internet
+        docs: "#firewall"
+        fields:
+          - type: note
+            severity: warning
+            when: size(self.firewall.external.inboundAllowCIDR) > 0
+            text: >-
+              Open WebUI has no preset account: the first person to register becomes its administrator. With
+              inbound open, register your admin account right after the workload is ready. See
+              [First Run](/template-catalog/templates/ollama#first-run).
+          - path: firewall.external.inboundAllowCIDR
+            type: list
+            label: Inbound CIDRs
+            widget: tags
+            description: >-
+              Internet addresses that can open Open WebUI at the workload's endpoint; `0.0.0.0/0` is everyone.
+              Empty keeps it off the internet, and you reach it with `cpln port-forward`.
+            help: >-
+              The public endpoint serves Open WebUI only; the Ollama API on port 11434 is not published. Read the
+              address from `status.canonicalEndpoint` in `cpln workload get RELEASE_NAME-ollama --gvc GVC_NAME -o yaml`.
+              Firewall changes take up to a few minutes to take effect.
+            item:
+              type: string
+              format: cidr
+          - path: firewall.external.outboundAllowCIDR
+            type: list
+            label: Outbound CIDRs
+            widget: tags
+            description: >-
+              Internet addresses the workload may connect to. Pulling a model needs the Ollama registry, which the
+              default `0.0.0.0/0` allows.
+            item:
+              type: string
+              format: cidr
+        rules:
+          - rule: size(self.firewall.external.outboundAllowCIDR) > 0
+            severity: info
+            paths: [firewall.external.outboundAllowCIDR]
+            message: With no outbound addresses, ollama pull cannot reach the model registry, so no model can be downloaded.
+          - when: size(self.firewall.external.inboundAllowCIDR) == 0
+            rule: "false"
+            severity: info
+            paths: [firewall.external.inboundAllowCIDR]
+            messageExpression: >-
+              'Open WebUI is not on the internet. Reach it with: cpln port-forward ' + context.releaseName +
+              '-ollama 8080:8080 --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + ', then open http://localhost:8080.'
+            message: Open WebUI is not on the internet. Reach it with cpln port-forward on port 8080.
+      - title: Internal access
+        docs: "#internal-access"
+        fields:
+          - type: note
+            severity: warning
+            when: self.internal_access.type != 'none'
+            text: >-
+              The Ollama API on port 11434 has no authentication: every workload allowed here can run, pull and
+              delete models. Open WebUI on port 8080 is reachable to the same workloads.
+          - type: note
+            when: self.internal_access.type != 'none'
+            text: >-
+              Allowed workloads reach the API at `http://RELEASE_NAME-ollama.GVC_NAME.cpln.local:11434`.
+            textExpression: >-
+              'Allowed workloads reach the API at `http://' + context.releaseName + '-ollama.' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '.cpln.local:11434`.'
+          - path: internal_access.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: Access changes take up to a few minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          # Shown for every type when non-empty: workload.yaml writes any non-empty list into
+          # inboundAllowWorkload, and the platform applies it with same-gvc and workload-list.
+          - path: internal_access.workloads
+            when: self.internal_access.type in ['same-gvc', 'workload-list'] || size(self.internal_access.workloads) > 0
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: >-
+              With Specific workloads, the only workloads that can connect. With Same GVC, extra workloads from
+              other GVCs. Open WebUI talks to Ollama inside the workload and needs no entry.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internal_access.type == 'same-gvc'
+        rules:
+          - rule: self.internal_access.type != 'workload-list' || size(self.internal_access.workloads) > 0
+            severity: warning
+            paths: [internal_access.workloads]
+            message: With Specific workloads and an empty list, no workload can connect. List at least one workload.
+          - when: self.internal_access.type == 'same-gvc' && context.gvc != null
+            rule: "!self.internal_access.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+            severity: info
+            paths: [internal_access.workloads]
+            messageExpression: >-
+              'Same GVC already allows every workload in this GVC: ' +
+              self.internal_access.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+              ' can be removed from the list.'
+            message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+          - when: self.internal_access.type == 'same-org'
+            rule: size(self.internal_access.workloads) == 0
+            severity: info
+            paths: [internal_access.workloads]
+            message: Same org already lets every workload of the org connect, so the listed workloads add nothing.
+          - when: self.internal_access.type == 'none'
+            rule: size(self.internal_access.workloads) == 0
+            severity: warning
+            paths: [internal_access.workloads]
+            message: >-
+              The chart still writes the listed workloads into the firewall, where the platform checks every entry,
+              but "None" lets none of them connect. Remove them.
+
+rules:
+  - rule: context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '1.1.0') >= 0
+    message: >-
+      Do not upgrade a 1.0.0 release in place: 1.1.0 renamed the workload and the volume set, so the upgrade deletes
+      the volume set with every pulled model and Open WebUI's accounts and chats, and starts on an empty one. Install
+      this version as a new release, pull your models into it, then uninstall the old release.
+  - when: >-
+      context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.1.2') < 0 &&
+      (self.workload.containers.ui.image == 'ghcr.io/open-webui/open-webui:main' || self.workload.containers.api.image == 'ollama/ollama')
+    rule: "false"
+    severity: info
+    message: >-
+      The release keeps the moving image tags it runs (open-webui:main, untagged ollama/ollama) rather than this
+      version's pins, which could be older and downgrade it. To pin, set tags at least as new as the running versions under
+      Model and compute.
+  - when: context.gvcLocations != null && size(context.gvcLocations) > 1
+    rule: "false"
+    severity: info
+    messageExpression: >-
+      'This GVC has ' + string(size(context.gvcLocations)) + ' locations, so the template runs ' +
+      string(size(context.gvcLocations)) + ' independent Ollama servers, each with its own GPU, volume and Open WebUI. ' +
+      'Pull every model in each location, and expect users routed to another location to see different accounts and chats.'
+    message: >-
+      With several locations the template runs an independent Ollama server, GPU, volume and Open WebUI in each.
+      Pull every model in each location, and expect users routed to another location to see different accounts and chats.
+
+migrations:
+  # Before 1.1.2 the defaults were the moving open-webui:main and an untagged ollama/ollama. Measured on a
+  # default 1.1.1 release: main served Open WebUI 0.12.4, and the 1.1.2 pin v0.11.0 then failed its database
+  # migrations ("Can't locate revision"). main keeps moving past the 1.2.0 pin v0.12.4 too, so keep whatever
+  # image the release runs; Ollama is kept the same way.
+  - fromVersions: "<1.1.2"
+    to: workload.containers.ui.image
+    valueExpr: self.workload.containers.ui.image
+    note: >-
+      The release keeps the Open WebUI image it runs. Moving a newer main build to the pinned v0.12.4 could
+      downgrade it, and Open WebUI cannot read a database a newer version migrated. Pin a tag at least as new
+      as the running version.
+  - fromVersions: "<1.1.2"
+    to: workload.containers.api.image
+    valueExpr: self.workload.containers.api.image
+    note: The release keeps the Ollama image it runs. Pin a tag at least as new as the running version.
+
+yamlOnly:
+  - path: workload.containers.ui.name
+    reason: The container name; the docs and every exec command use ollama-ui, and nothing needs another name.
+  - path: workload.containers.ui.port
+    reason: The port Open WebUI listens on (8080); the chart does not tell the image to listen elsewhere, so another value breaks the probes and the endpoint.
+  - path: workload.containers.api.name
+    reason: The container name; the docs and the model pull command use ollama, and nothing needs another name.
+  - path: workload.containers.api.port
+    reason: The port Ollama listens on (11434); the chart does not tell the server to listen elsewhere, so another value breaks Open WebUI's connection and the probes.
+  - path: entrypoint
+    reason: The startup script that runs ollama serve; replacing it is a YAML-mode change for custom first-boot behaviour.

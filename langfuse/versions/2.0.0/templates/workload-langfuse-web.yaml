@@ -15,6 +15,15 @@ spec:
       cpu: {{ .Values.langfuse.web.resources.maxCpu | quote }}
       minMemory: {{ .Values.langfuse.web.resources.minMemory | quote }}
       memory: {{ .Values.langfuse.web.resources.maxMemory | quote }}
+      # dumb-init stays PID 1 as in the image; the inline script waits for a
+      # Langfuse 4-capable ClickHouse, then runs the image's own entrypoint.
+      command: dumb-init
+      args:
+        - "--"
+        - /bin/sh
+        - -c
+        - |-
+{{ include "langfuse.inlineScript" (include "langfuse.script.web" .) | trim | indent 10 }}
       env:
         # Postgres — all three values come from the prerequisite secret and are
         # assembled into the URL at container start through $(VAR) expansion.
@@ -91,6 +100,8 @@ spec:
           value: cpln://secret/{{ .Values.langfuse.auth.secretName }}.adminEmail
         - name: LANGFUSE_INIT_USER_PASSWORD
           value: cpln://secret/{{ .Values.langfuse.auth.secretName }}.adminPassword
+        # Langfuse 4 data-model migration (write mode and historic backfill).
+        {{- include "langfuse.migrationEnv" . | nindent 8 }}
         # Object store (AWS)
         {{- if eq .Values.objectStore.provider "aws" }}
         - name: LANGFUSE_S3_EVENT_UPLOAD_BUCKET
@@ -145,9 +156,16 @@ spec:
           path: /api/public/health
           port: 3000
           scheme: HTTP
-        failureThreshold: 10
+        {{- /*
+        The platform derives a startup probe from this one and restarts a
+        replica that is not ready after about initialDelaySeconds + 30 x
+        periodSeconds (here 630 s): room for the ClickHouse gate (300 s) plus
+        the Langfuse 4 schema migrations on an upgrade. failureThreshold stays
+        small, so a sick replica leaves rotation after about a minute.
+        */}}
+        failureThreshold: 3
         initialDelaySeconds: 30
-        periodSeconds: 10
+        periodSeconds: 20
         successThreshold: 1
         timeoutSeconds: 5
   defaultOptions:

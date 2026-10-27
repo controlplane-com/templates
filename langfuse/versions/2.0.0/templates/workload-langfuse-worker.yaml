@@ -15,6 +15,16 @@ spec:
       cpu: {{ .Values.langfuse.worker.resources.maxCpu | quote }}
       minMemory: {{ .Values.langfuse.worker.resources.minMemory | quote }}
       memory: {{ .Values.langfuse.worker.resources.maxMemory | quote }}
+      # dumb-init stays PID 1 as in the image; the inline script sets the public
+      # URL, waits for the Langfuse 4 ClickHouse schema, then runs the image's
+      # own entrypoint.
+      command: dumb-init
+      args:
+        - "--"
+        - /bin/sh
+        - -c
+        - |-
+{{ include "langfuse.inlineScript" (include "langfuse.script.worker" .) | trim | indent 10 }}
       env:
         # Postgres — all three values come from the prerequisite secret and are
         # assembled into the URL at container start through $(VAR) expansion.
@@ -46,6 +56,16 @@ spec:
         - name: REDIS_AUTH
           value: cpln://secret/{{ include "langfuse.secret.redis.name" . }}.password
         # Auth
+        # Links in emails, Slack messages and alerts are built from NEXTAUTH_URL,
+        # which upstream asks for on the worker too. With public access and no
+        # custom domain, the start script derives it from the web endpoint.
+        {{- if .Values.langfuse.publicUrl }}
+        - name: NEXTAUTH_URL
+          value: {{ .Values.langfuse.publicUrl | quote }}
+        {{- else if not .Values.publicAccess.enabled }}
+        - name: NEXTAUTH_URL
+          value: http://{{ include "langfuse.web.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:3000
+        {{- end }}
         - name: AUTH_TRUST_HOST
           value: "true"
         # Same prerequisite secret as the web tier: the worker decrypts the same
@@ -56,6 +76,9 @@ spec:
           value: cpln://secret/{{ .Values.langfuse.auth.secretName }}.encryptionKey
         - name: SALT
           value: cpln://secret/{{ .Values.langfuse.auth.secretName }}.salt
+        # Langfuse 4 data-model migration: the worker runs the dual write and the
+        # historic backfill, so it takes the same settings as the web tier.
+        {{- include "langfuse.migrationEnv" . | nindent 8 }}
         # Object store (AWS)
         {{- if eq .Values.objectStore.provider "aws" }}
         - name: LANGFUSE_S3_EVENT_UPLOAD_BUCKET

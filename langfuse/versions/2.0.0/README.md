@@ -77,14 +77,6 @@ Both ClickHouse and Langfuse use one bucket with separate key prefixes (`clickho
 
 ### AWS S3
 
-
-<b>Upgrading from 1.2.0:</b> this version removes <code>aws::ReadOnlyAccess</code> from the Langfuse identity — the one that reaches your object-store bucket when <code>objectStore.provider</code> is <code>aws</code>.
-That managed policy granted read access to every bucket in your AWS account and contained no write actions,
-so it was never carrying the object-store writes itself — but it <i>was</i> silently supplying any read action your
-bucket-scoped policy happened to omit. <b>Update your IAM policy to the full action list in this section before
-upgrading</b>; if it already matches, no action is needed. Nothing else changes.
-
-
 1. Create your bucket. Set `objectStore.aws.bucket` to its name and `objectStore.aws.region` to its region.
 
 2. If you do not have one, [create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account) for your AWS account. Set `objectStore.aws.cloudAccountName` to its name.
@@ -173,7 +165,7 @@ objectStore:
 langfuse:
   publicUrl: "" # custom domain, with scheme; empty = derived from the platform endpoint
   web:
-    image: langfuse/langfuse:3.225.2
+    image: langfuse/langfuse:4.70.1 # 4.70.1 or newer: the chart refuses older tags (Critical CVEs)
     minReplicas: 2 # Keep at 2+ for zero-downtime rolling deploys
     maxReplicas: 5
     resources:
@@ -182,7 +174,7 @@ langfuse:
       minMemory: 1Gi
       maxMemory: 2Gi
   worker:
-    image: langfuse/langfuse-worker:3.225.2
+    image: langfuse/langfuse-worker:4.70.1 # 4.70.1 or newer, same as the web image
     replicas: 1
     resources:
       minCpu: 250m
@@ -193,6 +185,9 @@ langfuse:
     secretName: my-langfuse-auth # REQUIRED prerequisite secret — create it BEFORE installing
     disableSignup: true # false opens self-service registration to anyone who can reach the UI
     organizationName: Langfuse # organization created for the first-run admin
+  migration: # keep the defaults on a fresh install; see "Upgrading from 1.3.0"
+    writeMode: events_only # events_only (v4 default) | dual (old + new tables) | legacy (v3 behaviour)
+    historicBackfill: true # copy traces stored before the upgrade into the v4 tables; must be false with legacy
 ```
 
 ### Access
@@ -232,7 +227,7 @@ redis:
     capacity: 10 # initial capacity in GiB (minimum is 10)
 
 clickhouse:
-  image: clickhouse/clickhouse-server:25.10
+  image: clickhouse/clickhouse-server:26.8 # Langfuse 4 needs 25.12 or newer; the chart refuses older tags
   resources:
     minCpu: 1
     maxCpu: 2
@@ -254,53 +249,56 @@ clickhouse:
 | ClickHouse / Redis | Internal only; credentials come from your `clickhouse.credentialsSecretName` and `redis.credentialsSecretName` secrets |
 | PostgreSQL | Internal only, `RELEASE_NAME-postgres.GVC_NAME.cpln.local:5432`; `username` / `password` / `database` from your `postgres.config.credentialsSecretName` secret |
 
-Send traces with the public API once you have a project key pair:
+Langfuse 4 ingests traces over OpenTelemetry. Send one with a project key pair:
 
 ```bash
-curl -X POST https://YOUR_LANGFUSE_ENDPOINT/api/public/traces \
+NOW=$(date +%s)
+curl -X POST https://YOUR_LANGFUSE_ENDPOINT/api/public/otel/v1/traces \
   -H "Content-Type: application/json" \
+  -H "x-langfuse-ingestion-version: 4" \
   -u "YOUR_PUBLIC_KEY:YOUR_SECRET_KEY" \
-  -d '{"name": "my-first-trace", "input": "Hello", "output": "Hello back"}'
+  -d '{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"my-app"}}]},
+       "scopeSpans":[{"scope":{"name":"curl"},"spans":[{"traceId":"0123456789abcdef0123456789abcdef",
+       "spanId":"0123456789abcdef","name":"my-first-trace","kind":1,
+       "startTimeUnixNano":"'"$NOW"'000000000","endTimeUnixNano":"'"$NOW"'500000000",
+       "attributes":[{"key":"langfuse.observation.input","value":{"stringValue":"Hello"}},
+                     {"key":"langfuse.observation.output","value":{"stringValue":"Hello back"}}]}]}]}]}'
 ```
 
-Or use a [Langfuse SDK](https://langfuse.com/docs/sdk/overview).
+Or use a [Langfuse SDK](https://langfuse.com/docs/observability/sdk/overview): Python SDK v4 or newer, or JS/TS SDK v5 or newer.
 
-## Upgrading from 1.2.x
+## Upgrading from 1.3.0
 
-`postgres.credentials` was removed: the database credentials are now a prerequisite secret, the same one the `postgres` template requires on its own. Carrying the old key forward fails the render.
+2.0.0 moves Langfuse 3 to Langfuse 4, and ClickHouse 25.10 to 26.8 (Langfuse 4 needs 25.12 or newer). It is an in-place `helm upgrade` of the existing release: the data stays where it is, the web and worker workloads wait until ClickHouse reports the new version, and the web workload then applies the Langfuse 4 database migrations at start.
 
-1.2.x created the database secret itself, so **this upgrade deletes it**. Before upgrading, create a secret under a **new** name holding the values your database was initialized with — not new ones, or Langfuse loses its database connection:
+**The upgrade is one-way.** After the migrations, a 1.3.0 web container exits at start, and moving ClickHouse back to 25.10 on the same data is not supported. Going back means restoring PostgreSQL from a backup; this template has no ClickHouse backup. Langfuse documents a [manual schema rewind](https://langfuse.com/self-hosting/upgrade/upgrade-guides/upgrade-v3-to-v4#rollback) for the time before the cutover.
+
+Before you upgrade:
+
+1. A release older than 1.3.0 goes to 1.3.0 first, following that version's README.
+2. Check that every Langfuse background migration has finished. This must print no rows; if it does, wait or retry them in the UI (Langfuse version tag → **Background Migrations**), because Langfuse 4 drops the tables they copy from:
 
 ```bash
-cpln secret create-dictionary --name RELEASE_NAME-langfuse-db \
-  --entry username='YOUR_CURRENT_USERNAME' --entry password='YOUR_CURRENT_PASSWORD' --entry database='YOUR_CURRENT_DATABASE'
+cpln workload exec RELEASE_NAME-postgres --gvc GVC_NAME --container postgresql -- \
+  sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT name, failed_reason FROM background_migrations WHERE finished_at IS NULL;"'
 ```
 
-Then upgrade with `postgres.config.credentialsSecretName` set to that name and `postgres.credentials` removed. Your current values are in `postgres.credentials` of the 1.2.x release, and also in the old secret, the one named by `postgres.config.credentialsSecretName` in 1.2.x (`cpln secret reveal SECRET_NAME -o yaml`), until the upgrade deletes it.
+3. Back up PostgreSQL (see [Backing up the bundled database](#backing-up-the-bundled-database)) and check the backup object is not empty.
+4. Choose the write mode. It decides what keeps working from Langfuse 3:
 
-`redis.auth.password` and `clickhouse.config.password` were removed too: each datastore now reads a prerequisite secret, and carrying either old key forward fails the render. 1.2.x kept both passwords in `RELEASE_NAME-langfuse-config` (keys `redisPassword`, `clickhousePassword`), which **this upgrade also deletes**, so use other names. Create them holding your current passwords, so the old and new versions keep talking to each other during the rollout:
+| `langfuse.migration.writeMode` | Choose it when |
+|---|---|
+| `events_only` (default) | Every producer runs Python SDK v4 or newer, JS/TS SDK v5 or newer, or plain OpenTelemetry, and nothing uses the legacy APIs or trace-level evaluators. Writes only the new tables. |
+| `dual` | Some producers still run older SDKs, or you want the old tables kept as a safety net. Writes the old and the new tables; data from older SDKs shows up after about 15 minutes. |
+| `legacy` | You want Langfuse 4 with Langfuse 3 behaviour for now. Writes only the old tables. Set `historicBackfill: false`. |
 
-```bash
-cpln secret create-dictionary --name RELEASE_NAME-langfuse-redis-credentials \
-  --entry password='YOUR_CURRENT_REDIS_PASSWORD'
+With `events_only`, the following stop working: Python SDK v2 and JS/TS SDK v3 (rejected at ingestion), the legacy read endpoints such as `GET /api/public/traces` and `GET /api/public/observations` (404), every `POST /api/public/ingestion` event except scores, trace-level LLM-as-a-judge evaluators, and the "Traces and observations (legacy)" export source.
 
-cpln secret create-dictionary --name RELEASE_NAME-langfuse-clickhouse-credentials \
-  --entry username=default --entry password='YOUR_CURRENT_CLICKHOUSE_PASSWORD'
-```
+`historicBackfill: true` copies the traces stored before the upgrade into the new tables, once, in the worker, newest first: older traces appear gradually, and the progress is under **Background Migrations**. While it runs the bucket holds up to about three times the current ClickHouse data. With `dual`, Langfuse suggests leaving it off until the dual write is confirmed working, then turning it on in a later `helm upgrade`. With `legacy` it must be off.
 
-Your current values are `redis.auth.password` and `clickhouse.config.password` of the 1.2.x release, and also in `cpln secret reveal RELEASE_NAME-langfuse-config -o yaml` until the upgrade deletes it. Upgrade with `redis.credentialsSecretName` and `clickhouse.credentialsSecretName` set to those names and `redis.auth` and `clickhouse.config.password` removed.
+When every producer and consumer has moved, cut over with a `helm upgrade` setting `writeMode: events_only` (and `historicBackfill: true` if it has not run). From then on new data lands only in the new tables, so this is the point of no return.
 
-The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), so Langfuse loses its database for about a minute and a half; it reconnects by itself. The new version of a workload can also wait about 10 minutes with `is not allowed to reveal the secret` in `get-deployments`, while access to the new secret propagates; the previous version keeps serving meanwhile, and it clears by itself.
-
-## Upgrading from 1.1.0
-
-`postgres.config.username`, `.password` and `.database` were removed. Put the values your
-database was initialized with into a database credentials secret as under Prerequisites
-(keys `username`, `password`, `database`), under any name except `RELEASE_NAME-pg-config` (the
-secret 1.1.0 created, which this upgrade deletes). Set `postgres.config.credentialsSecretName` to
-it and remove the three keys. The Redis and ClickHouse passwords move to prerequisite secrets
-too: follow [Upgrading from 1.2.x](#upgrading-from-12x) for them (1.1.0 keeps them in the same
-`RELEASE_NAME-langfuse-config` secret). The auth path is unchanged.
+The traces list is now an **Observations** view filtered to `Is Root Observation = true`, one row per trace; clear the filter to see every observation.
 
 ## Rotating the Redis and ClickHouse passwords
 
@@ -359,6 +357,7 @@ Check the object size before restoring from one.
 - Changing `publicAccess` or `internalAccess` takes up to a couple of minutes to propagate — re-test before concluding the knob did not work.
 - Give each Langfuse release its own database, Redis and ClickHouse secrets. Secret names are org-wide, so two releases pointed at one secret share a password, and rotating it for one breaks the other.
 - The first `helm upgrade` after an install re-applies the bundled PostgreSQL, which briefly interrupts the app while it restarts.
+- Upgrading from 1.3.0 is one-way and changes what older SDKs and the legacy APIs can do: read [Upgrading from 1.3.0](#upgrading-from-130) before you upgrade.
 
 ## Links
 
@@ -366,4 +365,5 @@ Check the object size before restoring from one.
 - [Self-hosting guide](https://langfuse.com/self-hosting)
 - [Self-hosting configuration reference](https://langfuse.com/self-hosting/configuration)
 - [Headless initialization](https://langfuse.com/self-hosting/administration/headless-initialization)
+- [Upgrade guide, Langfuse v3 to v4](https://langfuse.com/self-hosting/upgrade/upgrade-guides/upgrade-v3-to-v4)
 - [Create a Control Plane cloud account](https://docs.controlplane.com/guides/create-cloud-account)

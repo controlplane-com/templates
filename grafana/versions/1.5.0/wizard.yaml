@@ -149,19 +149,23 @@ steps:
               memoryBytes(self.redis.sentinel.resources.memory) <= 4 * memoryBytes(self.redis.sentinel.resources.minMemory)
             paths: [redis.sentinel.resources.minCpu, redis.sentinel.resources.minMemory]
             message: The Sentinel maximum CPU and memory can each be at most 4 times their minimum on a stateful workload.
+          # Read through a bound variable: redis.redis.auth comes from the redis subchart's defaults, which
+          # this descriptor does not import. The chart fails only when an enabled flag is true.
           - rule: >-
-              !has(self.redis.redis.auth) ||
-              ((!has(self.redis.redis.auth.password) || !has(self.redis.redis.auth.password.enabled)) &&
-              (!has(self.redis.redis.auth.fromSecret) || !has(self.redis.redis.auth.fromSecret.enabled)))
+              [self.redis.redis].all(r, !has(r.auth) ||
+              ((!has(r.auth.password) || !has(r.auth.password.enabled) || r.auth.password.enabled != true) &&
+              (!has(r.auth.fromSecret) || !has(r.auth.fromSecret.enabled) || r.auth.fromSecret.enabled != true)))
             mirrors: grafana.validate
             paths: [redis.redis.replicas]
             message: >-
               Redis authentication is not supported in this version: remove redis.redis.auth from the values (the
               same-GVC firewall is the boundary).
+          # Read through a bound variable: redis.sentinel.auth comes from the redis subchart's defaults, which
+          # this descriptor does not import. The chart fails only when an enabled flag is true.
           - rule: >-
-              !has(self.redis.sentinel.auth) ||
-              ((!has(self.redis.sentinel.auth.password) || !has(self.redis.sentinel.auth.password.enabled)) &&
-              (!has(self.redis.sentinel.auth.fromSecret) || !has(self.redis.sentinel.auth.fromSecret.enabled)))
+              [self.redis.sentinel].all(r, !has(r.auth) ||
+              ((!has(r.auth.password) || !has(r.auth.password.enabled) || r.auth.password.enabled != true) &&
+              (!has(r.auth.fromSecret) || !has(r.auth.fromSecret.enabled) || r.auth.fromSecret.enabled != true)))
             mirrors: grafana.validate
             paths: [redis.sentinel.replicas]
             message: >-

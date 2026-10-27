@@ -1,0 +1,577 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Prometheus
+# One stateful replica on its own volume and no location handling: every GVC location would run an
+# independent Prometheus with its own data.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: server
+    title: Prometheus
+    description: The Prometheus image and the compute of its single stateful replica.
+    fields:
+      - type: note
+        when: context.mode == 'upgrade'
+        text: >-
+          An upgrade that changes the workload restarts Prometheus. After a restart it replays its
+          write-ahead log, and on a large TSDB it can take minutes to report ready again.
+      - path: image
+        type: string
+        format: image
+        label: Prometheus image
+        required: true
+        description: Changing it restarts the server.
+      - path: resources.minCpu
+        type: quantity
+        quantity: cpu
+        label: Prometheus minimum CPU
+        required: true
+        min: 25m
+      - path: resources.cpu
+        type: quantity
+        quantity: cpu
+        label: Prometheus maximum CPU
+        required: true
+        min: 25m
+      - path: resources.minMemory
+        type: quantity
+        quantity: memory
+        label: Prometheus minimum memory
+        required: true
+        min: 32Mi
+      - path: resources.memory
+        type: quantity
+        quantity: memory
+        label: Prometheus maximum memory
+        required: true
+        description: Memory grows with the number of active series.
+        min: 32Mi
+    rules:
+      - rule: >-
+          cpuMillicores(self.resources.cpu) <= 4 * cpuMillicores(self.resources.minCpu) &&
+          memoryBytes(self.resources.memory) <= 4 * memoryBytes(self.resources.minMemory)
+        paths: [resources.minCpu, resources.minMemory]
+        message: The Prometheus maximum CPU and memory can each be at most 4 times their minimum on a stateful workload.
+      - rule: cpuMillicores(self.resources.minCpu) <= cpuMillicores(self.resources.cpu) && memoryBytes(self.resources.minMemory) <= memoryBytes(self.resources.memory)
+        paths: [resources.minCpu, resources.minMemory]
+        severity: warning
+        message: Keep the Prometheus minimum CPU and memory at or below their maximum.
+
+  - id: storage
+    title: Storage
+    description: How long samples stay on the local volume, and the size of that volume.
+    sections:
+      - title: Retention
+        docs: "#tsdb-and-retention"
+        fields:
+          - path: retention.time
+            type: string
+            label: Keep samples for
+            required: true
+            placeholder: 15d
+            suggestions: [7d, 15d, 30d, 90d, 1y]
+            description: Older samples are deleted from the volume; with object storage on, the bucket keeps them.
+          - path: retention.size
+            type: string
+            label: Size cap
+            placeholder: 15GB
+            description: >-
+              Optional. The oldest blocks are deleted once the TSDB grows past it; leave it empty for no cap.
+              Keep it below the volume capacity.
+        rules:
+          - rule: self.retention.time.matches('^([0-9]+(ms|s|m|h|d|w|y))+$')
+            mirrors: prometheus.validate
+            paths: [retention.time]
+            message: Enter the retention as a duration such as 15d, 30d or 1y.
+          - rule: >-
+              (oldSelf != null && self.retention.size == oldSelf.retention.size) ||
+              self.retention.size == null || self.retention.size == '' ||
+              self.retention.size.matches('^([0-9]*[.]?[0-9]+(B|KB|MB|GB|TB|PB|EB|KiB|MiB|GiB|TiB|PiB|EiB))+$')
+            paths: [retention.size]
+            message: Enter the size cap as a number with a unit, such as 15GB, 1.5GB or 512MiB (Prometheus counts GB as 1024³ bytes), or leave it empty.
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Volume capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500]
+            help: >-
+              The TSDB lives on the volume set and survives redeploys. Uninstalling the release deletes the
+              volume set; only its final snapshot, kept 7 days, and blocks already uploaded to your bucket
+              remain. There are no scheduled snapshots.
+            docs: "/reference/volumeset#capacity-and-billing"
+    rules:
+      - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: metrics
+    title: Metrics
+    description: What Prometheus scrapes, the labels it stamps on outgoing data, and where it forwards samples.
+    sections:
+      - title: Scraping and labels
+        docs: "#metrics"
+        fields:
+          - type: note
+            when: context.mode == 'upgrade'
+            text: >-
+              These settings and remote write live in the configuration file, which Prometheus reads only at
+              start. An upgrade that changes them restarts Prometheus with the new file; on a large TSDB it can
+              take minutes to report ready again.
+          - path: scrapeInterval
+            type: string
+            label: Scrape interval
+            required: true
+            suggestions: [15s, 30s, 1m]
+            pattern: '^([0-9]+(ms|s|m|h|d|w|y))+$'
+            patternMessage: Enter a duration such as 15s, 30s or 1m.
+            description: Applies to the self-scrape and to every extra scrape job without its own interval.
+          - path: extraScrapeConfigs
+            type: string
+            multiline: true
+            label: Extra scrape jobs
+            placeholder: |-
+              - job_name: my-app
+                static_configs:
+                  - targets: ["my-app.my-gvc.cpln.local:8080"]
+            description: >-
+              A raw YAML list of `scrape_configs` entries, added after the built-in self-scrape. Address
+              targets by their fully qualified name, `WORKLOAD_NAME.GVC_NAME.cpln.local:PORT`.
+            help: >-
+              The text is inserted as it is, so a YAML error stops Prometheus from starting. The
+              [configuration reference](https://prometheus.io/docs/prometheus/latest/configuration/configuration/#scrape_config)
+              lists every option of a scrape job. To check what Prometheus loaded, open `/config` or `/targets`
+              on port 9095 through `cpln port-forward`.
+          - path: externalLabels
+            type: map
+            label: External labels
+            widget: kv
+            description: >-
+              Stamped on every series that leaves this server (remote write, the Thanos Store API, bucket
+              uploads), never on local query results. The chart adds `prometheus` with the workload name;
+              a `prometheus` key here replaces it.
+            help: >-
+              For an HA pair, install the template twice with identical values except a `replica` label
+              (`a` and `b`), and set `prometheus` to the same value on both so the two label sets differ only
+              in `replica`. A Thanos Query tier then deduplicates on `replica`.
+            docs: "#high-availability"
+            keys:
+              label: Label
+              pattern: '^[a-zA-Z_][a-zA-Z0-9_]*$'
+            values: { type: string }
+        rules:
+          - rule: self.externalLabels.all(k, !k.startsWith('__'))
+            paths: [externalLabels]
+            message: External label names starting with __ are reserved by Prometheus.
+      - title: Remote write
+        docs: "#remote-write"
+        description: >-
+          Forward every sample to Mimir or another store that accepts Prometheus remote write. This is the
+          usual way to keep history elsewhere if you turn the Thanos sidecar off (next step).
+        fields:
+          - type: note
+            severity: warning
+            when: self.remoteWrite.exists(r, r.basicAuth != null)
+            text: >-
+              Each password secret must exist **before** you install or upgrade. If one is missing, the
+              deployment waits silently and `cpln logs` shows nothing; `cpln workload get-deployments
+              RELEASE_NAME-prometheus --gvc GVC_NAME -o yaml` shows why under `status.versions[].message`.
+              Creating the secret repairs the deployment on its own within about 10 minutes, or at once with
+              `cpln workload force-redeployment`.
+            textExpression: >-
+              'Each password secret must exist **before** you ' + (context.mode == 'upgrade' ? 'upgrade' : 'install') +
+              '. If one is missing, the deployment waits silently and `cpln logs` shows nothing; `cpln workload get-deployments ' +
+              context.releaseName + '-prometheus --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              ' -o yaml` shows why under `status.versions[].message`. Creating the secret repairs the deployment on its own within about 10 minutes, or at once with `cpln workload force-redeployment ' +
+              context.releaseName + '-prometheus --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
+          - path: remoteWrite
+            type: list
+            label: Remote write endpoints
+            widget: table
+            newItem: { url: "" }
+            uniqueBy: [url]
+            itemLabel: "item.url"
+            item:
+              type: object
+              label: Endpoint
+              fields:
+                - path: url
+                  type: string
+                  format: url
+                  label: URL
+                  required: true
+                  placeholder: http://my-mimir.my-gvc.cpln.local:8080/api/v1/push
+                - path: basicAuth
+                  type: object
+                  optional: true
+                  label: Basic auth
+                  newValue: { username: "", passwordSecretName: "" }
+                  fields:
+                    - path: username
+                      type: string
+                      label: Username
+                      required: true
+                    - path: passwordSecretName
+                      type: ref
+                      label: Password secret
+                      required: true
+                      description: An opaque secret (encoding plain) holding only the password.
+                      help: >-
+                        Create it with:
+                        `printf '%s' 'YOUR-REMOTE-WRITE-PASSWORD' | cpln secret create-opaque --name SECRET_NAME --encoding plain -f -`.
+                        After you change its content, force a redeployment of the workload; a running
+                        server keeps the password it started with.
+                      ref:
+                        kind: secret
+                        format: name
+                        filter: { secretType: [opaque] }
+                        mustExist: error
+                        allowCreate: true
+                        create:
+                          encoding: plain
+                          suggestName: "context.releaseName + '-prometheus-remote-write'"
+              rules:
+                - rule: item.url != null && item.url != ''
+                  mirrors: prometheus.validate
+                  paths: [url]
+                  message: Every remote write endpoint needs a URL.
+                - rule: item.basicAuth == null || (item.basicAuth.username != null && item.basicAuth.username != '')
+                  mirrors: prometheus.validate
+                  paths: [basicAuth.username]
+                  message: Basic auth needs a username.
+                - rule: item.basicAuth == null || (item.basicAuth.passwordSecretName != null && item.basicAuth.passwordSecretName != '')
+                  mirrors: prometheus.validate
+                  paths: [basicAuth.passwordSecretName]
+                  message: Basic auth needs the secret that holds the password.
+
+  - id: thanos
+    title: Thanos
+    description: The optional Thanos sidecar, and block uploads to object storage through it.
+    sections:
+      - id: sidecar
+        title: Thanos sidecar
+        toggle: thanos.sidecar.enabled
+        description: >-
+          A second container in the workload that serves the Thanos Store API, so a Thanos Query tier can
+          read this server. It is also what uploads blocks to object storage. Without it, use remote write
+          to keep history elsewhere.
+        fields:
+          - type: note
+            text: >-
+              Point a Thanos Query tier at `RELEASE_NAME-prometheus.GVC_NAME.cpln.local:10901` (gRPC, no
+              scheme). A caller in another GVC also needs Same org or Specific workloads under Network.
+            textExpression: >-
+              'Point a Thanos Query tier at `' + context.releaseName + '-prometheus.' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '.cpln.local:10901` (gRPC, no scheme). A caller in another GVC also needs Same org or Specific workloads under Network.'
+          - path: thanos.sidecar.image
+            type: string
+            format: image
+            label: Thanos sidecar image
+            required: true
+            advanced: true
+          - path: thanos.sidecar.resources.minCpu
+            type: quantity
+            quantity: cpu
+            label: Thanos sidecar minimum CPU
+            required: true
+            advanced: true
+            min: 25m
+          - path: thanos.sidecar.resources.cpu
+            type: quantity
+            quantity: cpu
+            label: Thanos sidecar maximum CPU
+            required: true
+            advanced: true
+            min: 25m
+          - path: thanos.sidecar.resources.minMemory
+            type: quantity
+            quantity: memory
+            label: Thanos sidecar minimum memory
+            required: true
+            advanced: true
+            min: 32Mi
+          - path: thanos.sidecar.resources.memory
+            type: quantity
+            quantity: memory
+            label: Thanos sidecar maximum memory
+            required: true
+            advanced: true
+            min: 32Mi
+        rules:
+          - rule: >-
+              cpuMillicores(self.thanos.sidecar.resources.cpu) <= 4 * cpuMillicores(self.thanos.sidecar.resources.minCpu) &&
+              memoryBytes(self.thanos.sidecar.resources.memory) <= 4 * memoryBytes(self.thanos.sidecar.resources.minMemory)
+            paths: [thanos.sidecar.resources.minCpu, thanos.sidecar.resources.minMemory]
+            message: The Thanos sidecar maximum CPU and memory can each be at most 4 times their minimum on a stateful workload.
+          - rule: cpuMillicores(self.thanos.sidecar.resources.minCpu) <= cpuMillicores(self.thanos.sidecar.resources.cpu) && memoryBytes(self.thanos.sidecar.resources.minMemory) <= memoryBytes(self.thanos.sidecar.resources.memory)
+            paths: [thanos.sidecar.resources.minCpu, thanos.sidecar.resources.minMemory]
+            severity: warning
+            message: Keep the Thanos sidecar minimum CPU and memory at or below their maximum.
+      - id: object-storage
+        title: Upload blocks to object storage
+        toggle: thanos.objectStorage.enabled
+        # Always shown: the chart refuses uploads without the sidecar, which the step rule says.
+        description: >-
+          The Thanos sidecar uploads every completed TSDB block to your bucket, so history survives the
+          volume and a Thanos tier can query it. Needs the sidecar on; the bucket and its access must exist
+          before you turn it on.
+        fields:
+          - path: thanos.objectStorage.type
+            type: enum
+            label: Destination
+            widget: cards
+            required: true
+            options:
+              - value: aws
+                label: AWS S3
+                description: Keyless access through a Control Plane cloud account.
+              - value: gcp
+                label: Google Cloud Storage
+                description: Keyless access through a Control Plane cloud account.
+              - value: minio
+                label: S3-compatible
+                description: MinIO, R2, Wasabi and others, with an access key pair in a secret.
+          - path: thanos.objectStorage.blockDuration
+            type: string
+            label: Block duration
+            required: true
+            advanced: true
+            description: >-
+              How often a block is cut and uploaded; the first upload comes at least this long after install.
+              Leave it at 2h unless you know you need another value.
+        rules:
+          - rule: self.thanos.objectStorage.type in ['aws', 'gcp', 'minio']
+            mirrors: prometheus.validate
+            paths: [thanos.objectStorage.type]
+            message: Choose AWS S3, Google Cloud Storage or S3-compatible as the destination.
+          - rule: self.thanos.objectStorage.blockDuration.matches('^([0-9]+(ms|s|m|h|d|w|y))+$')
+            mirrors: prometheus.validate
+            paths: [thanos.objectStorage.blockDuration]
+            message: Enter the block duration as a duration such as 2h.
+          # Single-unit durations only (15d, 2h); anything else is not compared.
+          - rule: >-
+              !(self.retention.time.matches('^[0-9]+(ms|s|m|h|d|w|y)$') &&
+              self.thanos.objectStorage.blockDuration.matches('^[0-9]+(ms|s|m|h|d|w|y)$')) ||
+              (self.retention.time.endsWith('ms') ? int(self.retention.time.substring(0, size(self.retention.time) - 2)) / 1000 :
+              int(self.retention.time.substring(0, size(self.retention.time) - 1)) *
+              (self.retention.time.endsWith('s') ? 1 : self.retention.time.endsWith('m') ? 60 :
+              self.retention.time.endsWith('h') ? 3600 : self.retention.time.endsWith('d') ? 86400 :
+              self.retention.time.endsWith('w') ? 604800 : 31536000)) >=
+              3 * (self.thanos.objectStorage.blockDuration.endsWith('ms') ?
+              int(self.thanos.objectStorage.blockDuration.substring(0, size(self.thanos.objectStorage.blockDuration) - 2)) / 1000 :
+              int(self.thanos.objectStorage.blockDuration.substring(0, size(self.thanos.objectStorage.blockDuration) - 1)) *
+              (self.thanos.objectStorage.blockDuration.endsWith('s') ? 1 : self.thanos.objectStorage.blockDuration.endsWith('m') ? 60 :
+              self.thanos.objectStorage.blockDuration.endsWith('h') ? 3600 : self.thanos.objectStorage.blockDuration.endsWith('d') ? 86400 :
+              self.thanos.objectStorage.blockDuration.endsWith('w') ? 604800 : 31536000))
+            severity: info
+            paths: [thanos.objectStorage.type]
+            message: >-
+              Keep the retention (under Storage) at least three times the block duration, so blocks stay on the
+              volume long enough for the sidecar to upload them.
+      - title: AWS S3
+        when: self.thanos.objectStorage.enabled && self.thanos.objectStorage.type == 'aws'
+        fields:
+          - path: thanos.objectStorage.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: thanos.objectStorage.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: thanos.objectStorage.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) for the AWS account that holds the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: thanos.objectStorage.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            help: >-
+              The policy needs `s3:ListBucket`, `s3:GetObject`, `s3:PutObject` and `s3:DeleteObject` on the
+              bucket and on its objects; the JSON is under
+              [Backing up](/template-catalog/templates/prometheus#backing-up). Enter the bare name, not the ARN.
+            pattern: '^[A-Za-z0-9+=,.@_-]+$'
+            patternMessage: "Enter the name of your IAM policy, using letters, digits and + = , . @ _ -."
+        rules:
+          - rule: >-
+              self.thanos.objectStorage.aws.bucket != '' && self.thanos.objectStorage.aws.region != '' &&
+              self.thanos.objectStorage.aws.cloudAccountName != '' && self.thanos.objectStorage.aws.policyName != ''
+            mirrors: prometheus.validate
+            paths: [thanos.objectStorage.aws.bucket]
+            message: AWS S3 needs the bucket, its region, the cloud account and the IAM policy name.
+      - title: Google Cloud Storage
+        when: self.thanos.objectStorage.enabled && self.thanos.objectStorage.type == 'gcp'
+        fields:
+          - path: thanos.objectStorage.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
+            description: The workload identity gets `roles/storage.objectAdmin` on this bucket only.
+          - path: thanos.objectStorage.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "A GCP [cloud account](/guides/create-cloud-account) for the project that holds the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+        rules:
+          - rule: self.thanos.objectStorage.gcp.bucket != '' && self.thanos.objectStorage.gcp.cloudAccountName != ''
+            mirrors: prometheus.validate
+            paths: [thanos.objectStorage.gcp.bucket]
+            message: Google Cloud Storage needs the bucket and the cloud account.
+      - title: S3-compatible
+        when: self.thanos.objectStorage.enabled && self.thanos.objectStorage.type == 'minio'
+        fields:
+          - path: thanos.objectStorage.minio.endpoint
+            type: string
+            label: Endpoint
+            required: true
+            example: true
+            placeholder: my-minio.my-gvc.cpln.local:9000
+            description: >-
+              The S3 API as `host:port`, with no scheme. For a server on Control Plane use its fully qualified
+              name, `WORKLOAD_NAME.GVC_NAME.cpln.local:9000`.
+          - path: thanos.objectStorage.minio.insecure
+            type: boolean
+            label: Plain HTTP
+            description: Turn on when the endpoint serves HTTP rather than HTTPS.
+          - path: thanos.objectStorage.minio.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: thanos.objectStorage.minio.region
+            type: string
+            label: Region
+            placeholder: us-east-1
+          - type: note
+            severity: warning
+            text: >-
+              In this version the access key pair is a plain value: it is stored in the Helm release and
+              written into the `RELEASE_NAME-prometheus-objstore` secret. Version 1.2.0 and later read it from
+              a dictionary secret you create instead.
+            textExpression: >-
+              'In this version the access key pair is a plain value: it is stored in the Helm release and
+              written into the `' + context.releaseName + '-prometheus-objstore` secret. Version 1.2.0 and later read it from
+              a dictionary secret you create instead.'
+          - path: thanos.objectStorage.minio.accessKey
+            type: string
+            label: Access key
+            required: true
+            sensitive: true
+            example: true
+            description: The access key of a key pair that can read and write the bucket.
+          - path: thanos.objectStorage.minio.accessSecret
+            type: string
+            label: Secret key
+            required: true
+            sensitive: true
+            example: true
+            description: The secret key of the same pair.
+        rules:
+          - rule: "!self.thanos.objectStorage.minio.endpoint.contains('://')"
+            mirrors: prometheus.validate
+            paths: [thanos.objectStorage.minio.endpoint]
+            message: Enter the endpoint as host:port, without http:// or https://.
+          - rule: self.thanos.objectStorage.minio.endpoint != '' && self.thanos.objectStorage.minio.bucket != ''
+            mirrors: prometheus.validate
+            paths: [thanos.objectStorage.minio.bucket]
+            message: S3-compatible storage needs the endpoint and the bucket.
+          - rule: self.thanos.objectStorage.minio.accessKey != '' && self.thanos.objectStorage.minio.accessSecret != ''
+            mirrors: prometheus.validate
+            paths: [thanos.objectStorage.minio.accessKey]
+            message: S3-compatible storage needs the access key and the secret key.
+    rules:
+      - rule: "!self.thanos.objectStorage.enabled || self.thanos.sidecar.enabled"
+        mirrors: prometheus.validate
+        paths: [thanos.sidecar.enabled]
+        message: Uploading blocks to object storage needs the Thanos sidecar, which does the uploads. Turn the sidecar on, or turn uploads off.
+
+  - id: network
+    title: Network
+    description: Which workloads can reach Prometheus; it is never published to the internet.
+    sections:
+      - title: Access
+        docs: "#access"
+        fields:
+          - type: note
+            text: >-
+              Prometheus has no authentication: any workload allowed here can read every metric and run any
+              query on port 9095, which also serves the web UI. To open the UI from your machine, run
+              `cpln port-forward RELEASE_NAME-prometheus 9095:9095 --gvc GVC_NAME` and browse to
+              `http://localhost:9095`.
+            textExpression: >-
+              'Prometheus has no authentication: any workload allowed here can read every metric and run any
+              query on port 9095, which also serves the web UI. To open the UI from your machine, run
+              `cpln port-forward ' + context.releaseName + '-prometheus 9095:9095 --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '` and browse to `http://localhost:9095`.'
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: >-
+              Senders, Grafana and a Thanos Query tier all connect through this. Access changes can take a
+              few minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org, in any GVC.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below, from any GVC.
+          - path: internalAccess.workloads
+            when: self.internalAccess.type == 'workload-list'
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: The whole allow-list; workloads not listed here cannot connect.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+    rules:
+      - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+        mirrors: prometheus.validate
+        paths: [internalAccess.type]
+        message: Choose who can connect.
+      - when: self.internalAccess.type == 'workload-list'
+        rule: size(self.internalAccess.workloads) > 0
+        severity: info
+        paths: [internalAccess.workloads]
+        message: With no workloads listed, nothing can connect to Prometheus. List the senders and readers, or choose None.
+
